@@ -429,13 +429,165 @@ impl StashTarget {
 #[cfg(test)]
 pub(crate) mod tests {
     use std::num::NonZeroI64;
+    use std::time::Duration;
 
     use mz_compute_types::dyncfgs::{
         PEEK_RESPONSE_STASH_BATCH_MAX_RUNS, PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES,
     };
+    use mz_dyncfg::{ConfigUpdates, ConfigVal};
+    use mz_ore::cast::CastLossy;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::rpc::PubSubClientConnection;
     use mz_repr::{Datum, Row, SqlScalarType};
 
     use super::*;
+
+    /// How many turns a test gives blob storage to catch up before it declares a deletion lost.
+    ///
+    /// Deleting the parts of an abandoned upload is scheduled rather than awaited, and the write
+    /// that earns the handle to delete runs partly on persist's isolated runtime, so a test can
+    /// only wait for it. Bounded by turns rather than by a deadline, so a deletion that never
+    /// happens fails the test rather than hanging the suite.
+    const BLOB_TURNS: usize = 1_000;
+
+    /// A run limit above what any upload here produces, so that its builder never merges runs.
+    ///
+    /// A merge writes parts of its own and leaves the parts it merged from behind, both of which
+    /// are persist's business rather than the upload's. Raising the limit past the runs a test
+    /// produces is what makes the parts it counts the parts the upload is answerable for.
+    const NO_RUN_MERGING: usize = 64;
+
+    /// A persist client cache whose blob traffic a test can count.
+    ///
+    /// Configured so that every row an upload takes becomes a part in blob storage rather than
+    /// bytes inlined into shard state, which is what makes "the parts an upload wrote" something a
+    /// test can observe at all. The counts are read off the registry because persist keeps its own
+    /// metric handles private.
+    pub(crate) struct CountedBlob {
+        registry: MetricsRegistry,
+        clients: Arc<PersistClientCache>,
+    }
+
+    impl CountedBlob {
+        pub(crate) fn new() -> Self {
+            let cfg = PersistConfig::new_for_tests();
+
+            let mut updates = ConfigUpdates::default();
+            for (name, val) in [
+                // A part per row, so a walk that has pushed anything has put a key in blob
+                // storage.
+                ("persist_blob_target_size", ConfigVal::Usize(0)),
+                // Without this persist keeps a small part in shard state, where no blob counter
+                // sees it and no delete has anything to remove.
+                (
+                    "persist_inline_writes_single_max_bytes",
+                    ConfigVal::Usize(0),
+                ),
+                // A part per row means a builder that stalls waiting for its outstanding writes,
+                // and a task aborted inside that stall leaves persist's `Pending` in the
+                // `Blocking` state it panics on when the cleanup later finishes the batch. Raising
+                // the bound past the parts a test produces keeps the stall out of the way, so what
+                // an abort test measures is this module's cleanup rather than that hazard. See the
+                // finding recorded for this layer.
+                (
+                    "persist_batch_builder_max_outstanding_parts",
+                    ConfigVal::Usize(8_192),
+                ),
+            ] {
+                assert!(
+                    cfg.entry(name).is_some(),
+                    "persist no longer has a config named {name}"
+                );
+                updates.add_dynamic(name, val);
+            }
+            updates.apply(&cfg);
+
+            let registry = MetricsRegistry::new();
+            let clients = Arc::new(PersistClientCache::new(cfg, &registry, |_, _| {
+                PubSubClientConnection::noop()
+            }));
+            Self { registry, clients }
+        }
+
+        pub(crate) fn clients(&self) -> &Arc<PersistClientCache> {
+            &self.clients
+        }
+
+        /// Blob keys written.
+        pub(crate) fn written(&self) -> u64 {
+            self.succeeded("blob_set")
+        }
+
+        /// Blob keys deleted.
+        pub(crate) fn deleted(&self) -> u64 {
+            self.succeeded("blob_delete")
+        }
+
+        /// Deletes that found nothing to delete, which is how a delete of a key that was never
+        /// written shows up.
+        pub(crate) fn deletes_of_nothing(&self) -> u64 {
+            self.counter("mz_persist_external_blob_delete_noop_count", &[])
+        }
+
+        /// Waits until every key written has been deleted, which is what an upload that reaches no
+        /// reader owes.
+        pub(crate) async fn wait_until_nothing_is_left(&self, what: &str) {
+            for _ in 0..BLOB_TURNS {
+                let written = self.written();
+                if written > 0 && self.deleted() == written {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            panic!(
+                "{what} left {} of {} blob keys behind after {BLOB_TURNS} turns",
+                self.written() - self.deleted(),
+                self.written(),
+            );
+        }
+
+        /// Waits until at least one part has reached blob storage.
+        pub(crate) async fn wait_until_something_is_written(&self, what: &str) {
+            for _ in 0..BLOB_TURNS {
+                if self.written() > 0 {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            panic!("{what} wrote no blob key within {BLOB_TURNS} turns");
+        }
+
+        fn succeeded(&self, op: &str) -> u64 {
+            self.counter("mz_persist_external_succeeded_count", &[("op", op)])
+        }
+
+        /// Sums the counter series named `name` whose labels include all of `labels`, reading zero
+        /// for a series that has not been incremented yet.
+        fn counter(&self, name: &str, labels: &[(&str, &str)]) -> u64 {
+            let Some(family) = self
+                .registry
+                .gather()
+                .into_iter()
+                .find(|m| m.name() == name)
+            else {
+                return 0;
+            };
+            family
+                .get_metric()
+                .iter()
+                .filter(|metric| {
+                    labels.iter().all(|(name, value)| {
+                        metric
+                            .get_label()
+                            .iter()
+                            .any(|label| label.name() == *name && label.value() == *value)
+                    })
+                })
+                .map(|metric| u64::cast_lossy(metric.get_counter().value()))
+                .sum()
+        }
+    }
 
     /// The description of the single-column result every peek here asks for.
     fn result_desc() -> RelationDesc {
@@ -455,10 +607,28 @@ pub(crate) mod tests {
 
     /// An upload of a peek that can use `max_rows` rows, opened against `clients`.
     async fn open_upload(clients: &PersistClientCache, max_rows: Option<usize>) -> StashUpload {
+        open_upload_with_runs(
+            clients,
+            max_rows,
+            *PEEK_RESPONSE_STASH_BATCH_MAX_RUNS.default(),
+        )
+        .await
+    }
+
+    /// An upload whose batch builder holds at most `batch_max_runs` runs.
+    ///
+    /// A builder that has more runs than that merges them, which writes parts of its own and
+    /// leaves the parts it merged from behind. A test counting what an upload wrote raises the
+    /// limit above the runs it produces, so that the parts it counts are the parts the upload owns.
+    async fn open_upload_with_runs(
+        clients: &PersistClientCache,
+        max_rows: Option<usize>,
+        batch_max_runs: usize,
+    ) -> StashUpload {
         StashUpload::open(
             clients,
             PersistLocation::new_in_mem(),
-            *PEEK_RESPONSE_STASH_BATCH_MAX_RUNS.default(),
+            batch_max_runs,
             Uuid::new_v4(),
             result_desc(),
             max_rows,
@@ -667,5 +837,219 @@ pub(crate) mod tests {
             vec![0, 1, 2],
             "the rows carried inline are not written to the batch as well"
         );
+    }
+
+    /// An upload built by hand, so that a test can hold the bounds [`StashUpload::open`] never
+    /// produces.
+    ///
+    /// Opening fixes the lower, the upper and the timestamp every row is written at, and that
+    /// combination is one persist always accepts. The rejection arms exist all the same, because
+    /// the alternative to reporting a rejection is a panic in a promoted walk, which lands in the
+    /// dead-task arm and takes the worker down with it in a test build.
+    async fn upload_with_bounds(
+        clients: &PersistClientCache,
+        lower: Timestamp,
+        upper: Timestamp,
+    ) -> StashUpload {
+        let client = clients
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("the in-memory location opens");
+        let shard_id = ShardId::try_from(format!("s{}", Uuid::new_v4())).expect("can parse");
+        let relation_desc = result_desc();
+        let write_schemas: Schemas<SourceData, ()> = Schemas {
+            id: None,
+            key: Arc::new(relation_desc.clone()),
+            val: Arc::new(UnitSchema),
+        };
+        let batch_builder = client
+            .batch_builder::<SourceData, (), Timestamp, i64>(
+                shard_id,
+                write_schemas,
+                Antichain::from_elem(lower),
+                Some(NO_RUN_MERGING),
+            )
+            .await;
+
+        StashUpload {
+            relation_desc,
+            shard_id,
+            batch_builder: Some(batch_builder),
+            upper: Antichain::from_elem(upper),
+            max_rows: None,
+            num_rows: 0,
+            runtime: Handle::current(),
+        }
+    }
+
+    /// An upload a driver gives up on deletes the parts it had already written.
+    ///
+    /// This is the path a walk takes when the peek is answered with something other than these
+    /// rows, an error from the walk itself or a cancellation the walk observed.
+    #[mz_ore::test(tokio::test)]
+    async fn a_discarded_upload_deletes_the_parts_it_wrote() {
+        let blob = CountedBlob::new();
+        let mut upload = open_upload_with_runs(blob.clients(), None, NO_RUN_MERGING).await;
+
+        assert_eq!(push(&mut upload, batch(0..4, 1)).await, UploadDemand::Wants);
+        blob.wait_until_something_is_written("an upload holding four rows")
+            .await;
+
+        upload.discard();
+
+        blob.wait_until_nothing_is_left("a discarded upload").await;
+        assert_eq!(
+            blob.deletes_of_nothing(),
+            0,
+            "the deletes must name the keys the upload wrote"
+        );
+    }
+
+    /// An upload that is only dropped deletes the parts it had already written, which is the whole
+    /// cleanup a walk aborted mid-upload gets: an aborted task is dropped rather than polled
+    /// again, so nothing it would have called runs.
+    #[mz_ore::test(tokio::test)]
+    async fn a_dropped_upload_deletes_the_parts_it_wrote() {
+        let blob = CountedBlob::new();
+        let mut upload = open_upload_with_runs(blob.clients(), None, NO_RUN_MERGING).await;
+
+        assert_eq!(push(&mut upload, batch(0..4, 1)).await, UploadDemand::Wants);
+        blob.wait_until_something_is_written("an upload holding four rows")
+            .await;
+
+        drop(upload);
+
+        blob.wait_until_nothing_is_left("a dropped upload").await;
+        assert_eq!(
+            blob.deletes_of_nothing(),
+            0,
+            "the deletes must name the keys the upload wrote"
+        );
+    }
+
+    /// A finished batch that never reaches the response naming it is deleted.
+    ///
+    /// This is the window between persist handing the batch over and the response taking it: a
+    /// cancellation that lands there leaves a batch no reader will ever be told how to find, and
+    /// persist's own `Drop for Batch` logs the keys and leaves them.
+    #[mz_ore::test(tokio::test)]
+    async fn a_finished_batch_that_reaches_no_response_is_deleted() {
+        let blob = CountedBlob::new();
+        let mut upload = open_upload_with_runs(blob.clients(), None, NO_RUN_MERGING).await;
+
+        assert_eq!(push(&mut upload, batch(0..4, 1)).await, UploadDemand::Wants);
+        let delivered = upload
+            .finish_batch()
+            .await
+            .expect("persist finishes the batch");
+        assert!(
+            blob.written() > 0,
+            "a finished batch has written the parts it holds"
+        );
+        assert_eq!(
+            blob.deleted(),
+            0,
+            "a batch still on its way to a response is not deleted"
+        );
+
+        drop(delivered);
+
+        blob.wait_until_nothing_is_left("an unclaimed delivery")
+            .await;
+        assert_eq!(
+            blob.deletes_of_nothing(),
+            0,
+            "the deletes must name the keys the batch wrote"
+        );
+    }
+
+    /// An upload that finishes into a response leaves its parts alone, because the response is
+    /// what a reader finds them by.
+    ///
+    /// The other tests here would all pass against an upload that deleted everything it wrote
+    /// unconditionally, which is the shape of cleanup that costs every stashed peek its answer.
+    #[mz_ore::test(tokio::test)]
+    async fn a_finished_upload_leaves_its_parts_for_the_response() {
+        let blob = CountedBlob::new();
+        let mut upload = open_upload_with_runs(blob.clients(), None, NO_RUN_MERGING).await;
+
+        assert_eq!(push(&mut upload, batch(0..4, 1)).await, UploadDemand::Wants);
+        let response = finish(upload, RowBatch::new()).await;
+
+        // Every chance for a deletion that should not happen to happen.
+        for _ in 0..BLOB_TURNS {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            blob.written() > 0,
+            "a finished upload has written the parts it holds"
+        );
+        assert_eq!(
+            blob.deleted(),
+            0,
+            "the parts of a finished upload belong to the response that names them"
+        );
+        assert_eq!(
+            stashed_values(blob.clients(), response).await,
+            vec![0, 1, 2, 3],
+            "the response must still name a readable batch"
+        );
+    }
+
+    /// A write persist rejects is reported rather than raised.
+    ///
+    /// The unit that fails is the peek, whose driver answers it with the error. A panic here would
+    /// instead end the task driving a promoted walk, and the worker reads a dead task as a defect.
+    #[mz_ore::test(tokio::test)]
+    async fn a_rejected_write_is_reported_rather_than_raised() {
+        let clients = PersistClientCache::new_no_metrics();
+        // A lower past the timestamp the upload writes its rows at, which is the one thing
+        // `BatchBuilder::add` refuses.
+        let mut upload = upload_with_bounds(
+            &clients,
+            Timestamp::default().step_forward(),
+            Timestamp::default().step_forward().step_forward(),
+        )
+        .await;
+
+        let rejection = upload.push(batch(0..2, 1)).await;
+
+        assert!(
+            rejection
+                .as_ref()
+                .is_err_and(|error| error.contains("not beyond batch lower")),
+            "persist must reject the write and the upload must report it: {rejection:?}",
+        );
+    }
+
+    /// A batch persist rejects is reported rather than raised, and the upload that held it does
+    /// not go on to tear down a builder persist has already taken.
+    ///
+    /// A rejected finish leaves the parts behind, which [`StashUpload::finish`] states: persist
+    /// keeps the builder it was asked to finish and hands back no handle to what it holds. The
+    /// upload is dropped here all the same, because a second teardown of a builder that is already
+    /// gone is what the `expect` this arm replaced would have panicked on.
+    #[mz_ore::test(tokio::test)]
+    async fn a_rejected_batch_is_reported_rather_than_raised() {
+        let clients = PersistClientCache::new_no_metrics();
+        // An upper the rows the upload holds are not below, which is the one thing
+        // `BatchBuilder::finish` refuses.
+        let mut upload =
+            upload_with_bounds(&clients, Timestamp::default(), Timestamp::default()).await;
+
+        assert_eq!(push(&mut upload, batch(0..2, 1)).await, UploadDemand::Wants);
+        let rejection = upload.finish(RowBatch::new()).await;
+
+        assert!(
+            rejection
+                .as_ref()
+                .is_err_and(|error| error.contains("beyond the expected batch upper")),
+            "persist must reject the batch and the upload must report it: {rejection:?}",
+        );
+
+        // Every chance for a teardown the rejection left behind to run and fail.
+        for _ in 0..BLOB_TURNS {
+            tokio::task::yield_now().await;
+        }
     }
 }
