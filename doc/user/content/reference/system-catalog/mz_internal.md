@@ -1280,7 +1280,7 @@ debugging.
 | `name`                   | [`text`]                        | The name of the sink.                                                                                            |
 | `type`                   | [`text`]                        | The type of the sink.                                                                                            |
 | `last_status_change_at`  | [`timestamp with time zone`]    | Wall-clock timestamp of the sink status change.                                                                  |
-| `status`                 | [`text`]                        | The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.              |
+| `status`                 | [`text`]                        | The status of the sink: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.              |
 | `error`                  | [`text`]                        | If the sink is in an error state, the error message.                                                             |
 | `details`                | [`jsonb`]                       | Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions. |
 
@@ -1295,7 +1295,7 @@ messages and additional metadata helpful for debugging.
 | -------------- | ------------------------------- | --------                                                                                                         |
 | `occurred_at`  | [`timestamp with time zone`]    | Wall-clock timestamp of the sink status change.                                                                  |
 | `sink_id`      | [`text`]                        | The ID of the sink. Corresponds to [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks).                           |
-| `status`       | [`text`]                        | The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.              |
+| `status`       | [`text`]                        | The status of the sink: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.              |
 | `error`        | [`text`]                        | If the sink is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions. |
 | `replica_id`   | [`text`]                        | The ID of the replica that an instance of a sink is running on.                                                  |
@@ -1402,7 +1402,7 @@ debugging.
 | `name`                   | [`text`]                        | The name of the source.                                                                                            |
 | `type`                   | [`text`]                        | The type of the source.                                                                                            |
 | `last_status_change_at`  | [`timestamp with time zone`]    | Wall-clock timestamp of the source status change.                                                                  |
-| `status`                 | [`text`]                        | The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `failed`, or `dropped`.    |
+| `status`                 | [`text`]                        | The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.              |
 | `error`                  | [`text`]                        | If the source is in an error state, the error message.                                                             |
 | `details`                | [`jsonb`]                       | Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions. |
 
@@ -1417,7 +1417,7 @@ messages and additional metadata helpful for debugging.
 | -------------- | ------------------------------- | --------                                                                                                           |
 | `occurred_at`  | [`timestamp with time zone`]    | Wall-clock timestamp of the source status change.                                                                  |
 | `source_id`    | [`text`]                        | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                       |
-| `status`       | [`text`]                        | The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `failed`, or `dropped`.    |
+| `status`       | [`text`]                        | The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.              |
 | `error`        | [`text`]                        | If the source is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions. |
 | `replica_id`   | [`text`]                        | The ID of the replica that an instance of a source is running on.                                                  |

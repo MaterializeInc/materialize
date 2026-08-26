@@ -21,8 +21,8 @@ SELECT * FROM mz_internal.mz_sink_statuses
 WHERE name = <SINK_NAME>;
 ```
 
-If your sink reports a status of `stalled` or `failed`, you likely have a
-configuration issue. The returned `error` field will provide details.
+If your sink reports a status of `stalled`, you likely have a configuration
+issue. The returned `error` field will provide details.
 
 If your sink reports a status of `starting` for more than a few minutes,
 [contact support](/support).
