@@ -1089,7 +1089,7 @@ impl ColReader {
                     .peekable();
 
                 packer
-                    .push_dict_with(|packer| {
+                    .push_indexed_dict_with(|builder| {
                         while let Some((key, i)) = kv_sorted.next() {
                             // Parquet docs state that if there are duplicate keys, the last value
                             // should be used, so skip duplicates here.
@@ -1101,8 +1101,7 @@ impl ColReader {
                                     continue;
                                 }
                             }
-                            packer.push(Datum::String(key));
-                            values.read(i, packer)?;
+                            builder.push_entry(key, |packer| values.read(i, packer))?;
                         }
                         Ok::<_, anyhow::Error>(())
                     })

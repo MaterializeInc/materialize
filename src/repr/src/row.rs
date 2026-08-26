@@ -1467,13 +1467,15 @@ fn append_count_word(data: &mut CompactBytes, count: usize, width: usize) {
 ///
 /// On entry, `data[entries_start..]` holds the dictionary's entries as a
 /// sequence of sorted `(key, value)` datum pairs. This walks those entries to
-/// compute the byte offset of each one and appends an index *suffix*. The
-/// resulting payload layout is documented on [`DatumMap`].
+/// recover the byte offset of each one, then appends the index *suffix*
+/// documented on [`DatumMap`].
 ///
-/// The suffix layout lets us append the index rather than splice it in front
-/// (no memmove), and we write each offset straight into the buffer as we go
-/// (no temporary allocation). Both matter because this runs on the hot path
-/// that decodes every `Row` out of persist.
+/// A closure passed to [`RowPacker::push_dict_with`] may fail between pushing a
+/// key and pushing its value, which leaves a trailing key with no value. Such an
+/// entry is dropped: the walk stops at the last complete pair and the orphaned
+/// key is truncated away, so the map stays readable. The caller is abandoning the
+/// row on that path anyway, and reading past the orphan would walk off the end of
+/// the entries.
 ///
 /// Empty dictionaries are left untouched so that they keep a canonical,
 /// header-free encoding (identical to [`DatumMap::empty`]). This keeps the
@@ -1484,54 +1486,53 @@ fn finish_dict(data: &mut CompactBytes, entries_start: usize) {
     if entries_end == entries_start {
         return;
     }
-    let width = offset_width(entries_end - entries_start);
 
-    // Walk the entries, appending the start offset of entries `1..count`
-    // (entry 0 is always at offset 0 and is omitted), then append the count
-    // word.
+    // Walk the entries read-only, collecting each one's start offset, then hand
+    // off to the shared appender. Nothing is written until the walk is done, so
+    // the offsets never have to be revised once a truncated entry turns up.
+    // Offsets accumulate in an inline `SmallVec`, so typical maps stay
+    // allocation-free.
+    let mut offsets: SmallVec<[u32; 32]> = SmallVec::new();
     let mut p = entries_start;
-    let mut count: usize = 0;
-    let mut prev_entry: Option<usize> = None;
+    let mut prev_key: Option<&str> = None;
     while p < entries_end {
-        if count > 0 {
-            append_offset(data, p - entries_start, width);
-        }
-        count += 1;
-        // Re-borrow `data` here (after the append above) so the borrow never
-        // overlaps a mutation; `entries_end` keeps us within the entries.
         let mut cursor: &[u8] = &data[p..entries_end];
         let before = cursor.len();
         // SAFETY: `cursor` points at the key/value datums just written by the
         // packer, which are well-formed per `push_dict_with`'s contract.
-        let key = unsafe {
-            let key = read_datum(&mut cursor);
-            read_datum(&mut cursor);
-            key
-        };
+        let key = unsafe { read_datum(&mut cursor) };
+        if cursor.is_empty() {
+            // A key with no value: the closure failed mid-entry. Stop before it.
+            break;
+        }
+        // SAFETY: as above, and the key was followed by at least one byte.
+        unsafe { read_datum(&mut cursor) };
 
         // Out-of-order keys make `DatumMap::get` miss keys that are present,
         // since it binary searches. Check here so a caller that violates
         // `push_dict_with`'s contract is caught where the map is built, rather
-        // than only if something later iterates it. Re-reading the previous
-        // key costs a second decode, so it is gated on soft assertions.
+        // than only if something later iterates it.
         if mz_ore::assert::soft_assertions_enabled() {
-            if let Some(prev) = prev_entry {
-                let mut prev_cursor: &[u8] = &data[prev..entries_end];
-                // SAFETY: as above, `prev` is a previously walked entry start.
-                let prev_key = unsafe { read_datum(&mut prev_cursor) }.unwrap_str();
+            let key = key.unwrap_str();
+            if let Some(prev_key) = prev_key {
                 mz_ore::soft_assert_no_log!(
-                    prev_key < key.unwrap_str(),
-                    "Dict keys must be unique and given in ascending order: {} came before {}",
-                    prev_key,
-                    key.unwrap_str()
+                    prev_key < key,
+                    "Dict keys must be unique and given in ascending order: \
+                     {prev_key} came before {key}"
                 );
             }
-            prev_entry = Some(p);
+            prev_key = Some(key);
         }
 
+        offsets.push(
+            u32::try_from(p - entries_start).expect("map larger than 4 GiB cannot be indexed"),
+        );
         p += before - cursor.len();
     }
-    append_count_word(data, count, width);
+
+    // Discard a truncated trailing entry, if the walk found one.
+    data.truncate(p);
+    finish_dict_from_offsets(data, entries_start, &offsets);
 }
 
 /// Appends the in-map index suffix from offsets captured while the entries were
@@ -4759,6 +4760,43 @@ mod tests {
             vec![Datum::Int64(1), Datum::Int64(2)],
         );
         assert_eq!(map.get("missing"), None);
+    }
+
+    #[mz_ore::test]
+    fn test_dict_with_failed_entry_is_readable() {
+        // A fallible closure can fail after pushing a key and before pushing its
+        // value. The index build must not walk off the end of that half-entry,
+        // and the map it leaves behind must still be readable, since callers
+        // that go on to inspect the row (a fuzz target, a `Debug` impl in an
+        // error path) would otherwise read past the entries.
+        for complete in [0_usize, 1, 2, 40] {
+            let mut row = Row::default();
+            let res: Result<(), &str> = row.packer().push_dict_with(|packer| {
+                for i in 0..complete {
+                    packer.push(Datum::String(&format!("k{i:03}")));
+                    packer.push(Datum::Int64(i64::try_from(i).unwrap()));
+                }
+                // The orphaned key, sorting after every complete entry.
+                packer.push(Datum::String("zzz"));
+                Err("value push failed")
+            });
+            assert_eq!(res, Err("value push failed"), "complete={complete}");
+
+            let datum = row.unpack_first();
+            let map = datum.unwrap_map();
+            assert_eq!(map.len(), complete, "complete={complete}");
+            assert_eq!(map.iter().count(), complete, "complete={complete}");
+            for i in 0..complete {
+                let key = format!("k{i:03}");
+                assert_eq!(
+                    map.get(&key),
+                    Some(Datum::Int64(i64::try_from(i).unwrap())),
+                    "complete={complete}",
+                );
+            }
+            // The orphaned entry is gone, not half-present.
+            assert_eq!(map.get("zzz"), None, "complete={complete}");
+        }
     }
 
     #[mz_ore::test]

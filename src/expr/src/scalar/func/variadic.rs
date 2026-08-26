@@ -880,7 +880,7 @@ fn jsonb_build_object<'a>(
     // Checked after the dedup, so duplicate keys are counted once, as they are packed.
     check_datums_fit_budget(kvs.0.iter().flat_map(|(k, v)| [*k, *v]), temp_storage)?;
     let datum = temp_storage.try_make_datum(|packer| {
-        packer.push_dict_with(|packer| {
+        packer.push_indexed_dict_with(|builder| {
             for (k, v) in kvs {
                 if k.is_null() {
                     return Err(EvalError::KeyCannotBeNull);
@@ -889,8 +889,7 @@ fn jsonb_build_object<'a>(
                     Datum::Null => Datum::JsonNull,
                     d => d,
                 };
-                packer.push(k);
-                packer.push(v);
+                builder.push_entry(k.unwrap_str(), |packer| packer.push(v));
             }
             Ok(())
         })
