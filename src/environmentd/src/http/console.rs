@@ -24,7 +24,9 @@ use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
-use mz_adapter_types::dyncfgs::{CONSOLE_OIDC_CLIENT_ID, CONSOLE_OIDC_SCOPES, OIDC_ISSUER};
+use mz_adapter_types::dyncfgs::{
+    CONSOLE_OIDC_CLIENT_ID, CONSOLE_OIDC_SCOPES, CONSOLE_ORY_SDK_URL, OIDC_ISSUER,
+};
 
 use crate::http::Delayed;
 
@@ -53,12 +55,13 @@ impl ConsoleProxyConfig {
     }
 }
 
-/// OIDC configuration values needed by the Console to initiate OIDC login.
-static CONSOLE_CONFIG_VAR_NAMES: LazyLock<[&'static str; 3]> = LazyLock::new(|| {
+/// Configuration values needed by the Console to initiate login.
+static CONSOLE_CONFIG_VAR_NAMES: LazyLock<[&'static str; 4]> = LazyLock::new(|| {
     [
         OIDC_ISSUER.name(),
         CONSOLE_OIDC_CLIENT_ID.name(),
         CONSOLE_OIDC_SCOPES.name(),
+        CONSOLE_ORY_SDK_URL.name(),
     ]
 });
 

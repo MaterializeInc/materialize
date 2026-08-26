@@ -347,6 +347,17 @@ pub const CONSOLE_OIDC_SCOPES: Config<&'static str> = Config::new(
     "Space-separated OIDC scopes requested by the web console.",
 );
 
+/// Base URL of the Ory APIs for the web console.
+///
+/// Only the operator knows where Ory was deployed, so the console cannot derive
+/// this. It must be same-site with the console or the browser drops Ory's CSRF
+/// and session cookies.
+pub const CONSOLE_ORY_SDK_URL: Config<&'static str> = Config::new(
+    "console_ory_sdk_url",
+    "",
+    "Base URL of the Ory APIs for the web console.",
+);
+
 /// Interval at which to collect per-object arrangement size snapshots for the history table.
 pub const ARRANGEMENT_SIZE_HISTORY_COLLECTION_INTERVAL: Config<Duration> = Config::new(
     "arrangement_size_history_collection_interval",
@@ -488,6 +499,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&GROUP_COMMIT_MAX_ATTEMPTS)
         .add(&CONSOLE_OIDC_CLIENT_ID)
         .add(&CONSOLE_OIDC_SCOPES)
+        .add(&CONSOLE_ORY_SDK_URL)
         .add(&ARRANGEMENT_SIZE_HISTORY_COLLECTION_INTERVAL)
         .add(&ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD)
         .add(&CATALOG_INFO_METRICS_RECONCILE_INTERVAL)

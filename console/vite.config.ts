@@ -7,10 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { readFileSync } from "node:fs";
+
 import { sentryVitePlugin } from "@sentry/vite-plugin";
 import react from "@vitejs/plugin-react";
 import browserslistToEsbuild from "browserslist-to-esbuild";
-import { defineConfig } from "vite";
+import { defineConfig, type ProxyOptions } from "vite";
 import { analyzer } from "vite-bundle-analyzer";
 import { createHtmlPlugin } from "vite-plugin-html";
 import svgr from "vite-plugin-svgr";
@@ -132,6 +134,33 @@ if (isProd) {
 
 const devServerProxyPort = process.env.DEV_SERVER_PROXY_PORT ?? 6876;
 
+const devServerTls =
+  process.env.DEV_SERVER_TLS_CERT && process.env.DEV_SERVER_TLS_KEY
+    ? {
+        cert: readFileSync(process.env.DEV_SERVER_TLS_CERT),
+        key: readFileSync(process.env.DEV_SERVER_TLS_KEY),
+      }
+    : undefined;
+
+/**
+ * Proxies Ory's self-service API through the dev server when ORY_KRATOS_URL is
+ * set, keeping the SDK same-origin so Kratos needs no CORS entry per laptop.
+ * Point VITE_ORY_SDK_URL at the dev server itself.
+ *
+ * Kratos scopes its CSRF and session cookies to its own registrable domain and
+ * marks them Secure, and an OIDC round trip returns through Kratos's own host.
+ * DEV_SERVER_HOST must therefore name a host under that same domain, served
+ * over TLS, or the browser drops those cookies partway through the flow.
+ */
+const oryTarget: ProxyOptions = {
+  target: process.env.ORY_KRATOS_URL,
+  changeOrigin: true,
+};
+
+const oryProxy: Record<string, ProxyOptions> = process.env.ORY_KRATOS_URL
+  ? { "/self-service/": oryTarget, "/sessions/": oryTarget }
+  : {};
+
 export default defineConfig({
   build: {
     // Converts browserslist format to explicit esbuild browser ranges
@@ -140,7 +169,8 @@ export default defineConfig({
   },
   define: buildDefinitions(),
   server: {
-    host: "local.dev.materialize.com",
+    host: process.env.DEV_SERVER_HOST ?? "local.dev.materialize.com",
+    https: devServerTls,
     port: 3000,
     /**
      * Proxy any requests from :3000 to environmentd/balancerd ports to avoid CORs issues.
@@ -149,6 +179,7 @@ export default defineConfig({
     proxy:
       process.env.DEV_SERVER_WITH_TLS_PROXY === "true"
         ? {
+            ...oryProxy,
             "/api/": {
               target: `https://127.0.0.1:${devServerProxyPort}`,
               secure: false,
@@ -165,6 +196,7 @@ export default defineConfig({
             },
           }
         : {
+            ...oryProxy,
             "/api/": {
               target: `http://127.0.0.1:${devServerProxyPort}`,
             },

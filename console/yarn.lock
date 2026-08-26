@@ -3244,6 +3244,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@ory/client-fetch@npm:1.22.22":
+  version: 1.22.22
+  resolution: "@ory/client-fetch@npm:1.22.22"
+  checksum: 10c0/77f41a46cce8d9d587921554f46014d438d033555288f28d57d71187963c87e4344b030e0a860cfd2045554b9522c55fffbab220e468a058523a7a99a139f464
+  languageName: node
+  linkType: hard
+
 "@pkgr/core@npm:^0.1.0":
   version: 0.1.0
   resolution: "@pkgr/core@npm:0.1.0"
@@ -10888,6 +10895,7 @@ __metadata:
     "@lezer/highlight": "npm:^1.0.0"
     "@materializeinc/sql-lexer": "npm:^26.16.0"
     "@materializeinc/sql-pretty": "npm:^26.16.0"
+    "@ory/client-fetch": "npm:1.22.22"
     "@playwright/test": "npm:^1.61.0"
     "@rehookify/datepicker": "npm:^6.6.7"
     "@segment/analytics-next": "npm:^1.82.0"

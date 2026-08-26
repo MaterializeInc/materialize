@@ -50,6 +50,7 @@
     "@lezer/highlight": "^1.0.0",
     "@materializeinc/sql-lexer": "^26.16.0",
     "@materializeinc/sql-pretty": "^26.16.0",
+    "@ory/client-fetch": "1.22.22",
     "@rehookify/datepicker": "^6.6.7",
     "@segment/analytics-next": "^1.82.0",
     "@sentry/react": "^10.45.0",
@@ -324,6 +325,12 @@
                 "@frontegg/*"
               ],
               "message": "Import from src/external-library-wrappers/frontegg.ts instead. This is to control mocking of the Frontegg library."
+            },
+            {
+              "group": [
+                "@ory/*"
+              ],
+              "message": "Import from src/external-library-wrappers/ory.ts instead. This is to control mocking of the Ory library."
             }
           ]
         }
