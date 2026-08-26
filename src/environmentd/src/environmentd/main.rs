@@ -761,6 +761,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let _failpoint_scenario = FailScenario::setup();
 
     // Configure connections.
+    let tls_proxy_ca = args.tls.proxy_ca();
     let tls = args.tls.into_config()?;
     let frontegg_oauth_issuer_url = args.frontegg.oauth_issuer_url().map(str::to_string);
     let frontegg = FronteggAuthenticator::from_args(args.frontegg, &metrics_registry)?;
@@ -1103,6 +1104,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 all_features: args.all_features,
                 // Connection options.
                 tls,
+                tls_proxy_ca,
                 tls_reload_certs: mz_server_core::default_cert_reload_ticker(),
                 external_login_password_mz_system: args.external_login_password_mz_system,
                 frontegg,

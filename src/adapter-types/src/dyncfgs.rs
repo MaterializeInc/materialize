@@ -226,6 +226,38 @@ pub const OIDC_GROUP_ROLE_SYNC_STRICT: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Trust anchors for mutual TLS client authentication: a PEM bundle of
+/// certificate authorities whose leaves are accepted.
+///
+/// A bundle rather than a single certificate so that an operator can trust
+/// several authorities at once, and can stage a CA rotation by trusting the old
+/// and the new authority simultaneously.
+pub const MTLS_CLIENT_CA: Config<Option<&'static str>> = Config::new(
+    "mtls_client_ca",
+    None,
+    "PEM bundle of certificate authorities trusted to issue client certificates for mutual TLS.",
+);
+
+/// How strictly to enforce mutual TLS on external logins: `disable`, `allow`,
+/// or `require`. See `mz_authenticator::client_cert::MtlsMode`.
+pub const MTLS_MODE: Config<&'static str> = Config::new(
+    "mtls_mode",
+    "disable",
+    "How strictly to enforce mutual TLS client authentication for external logins: \
+     'disable' ignores client certificates, 'allow' accepts a trusted certificate but does \
+     not require one, 'require' rejects logins without one.",
+);
+
+/// Which certificate field, if any, must agree with the connecting username.
+/// See `mz_authenticator::client_cert::IdentityBinding`.
+pub const MTLS_IDENTITY_BINDING: Config<&'static str> = Config::new(
+    "mtls_identity_binding",
+    "none",
+    "Which client certificate field must match the connecting username: 'none' to treat the \
+     certificate purely as an admission gate, or 'common-name' to require the leaf's Subject \
+     Common Name to equal the username.",
+);
+
 pub const PERSIST_FAST_PATH_ORDER: Config<bool> = Config::new(
     "persist_fast_path_order",
     false,
@@ -538,6 +570,9 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&OIDC_GROUP_ROLE_SYNC_ENABLED)
         .add(&OIDC_GROUP_CLAIM)
         .add(&OIDC_GROUP_ROLE_SYNC_STRICT)
+        .add(&MTLS_CLIENT_CA)
+        .add(&MTLS_MODE)
+        .add(&MTLS_IDENTITY_BINDING)
         .add(&PERSIST_FAST_PATH_ORDER)
         .add(&ENABLE_S3_TABLES_REGION_CHECK)
         .add(&ENABLE_MCP_AGENT)

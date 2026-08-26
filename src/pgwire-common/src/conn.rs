@@ -19,7 +19,7 @@ use tokio::io::{self, AsyncRead, AsyncWrite, Interest, ReadBuf, Ready};
 use tokio_openssl::SslStream;
 use tokio_postgres::error::SqlState;
 
-use crate::ErrorResponse;
+use crate::{ClientCertChain, ErrorResponse};
 
 pub const CONN_UUID_KEY: &str = "mz_connection_uuid";
 pub const MZ_FORWARDED_FOR_KEY: &str = "mz_forwarded_for";
@@ -36,6 +36,33 @@ impl<A> Conn<A> {
             Conn::Unencrypted(inner) => inner,
             Conn::Ssl(inner) => inner.get_mut(),
         }
+    }
+
+    /// The certificate chain the peer presented during the handshake, leaf
+    /// first, or `None` if the connection is unencrypted or the peer presented
+    /// no certificate.
+    ///
+    /// Possession of the leaf's private key is already proven: OpenSSL verified
+    /// the handshake's `CertificateVerify` signature. Whether the chain is
+    /// *trusted* is a separate question, answered by whoever holds the trust
+    /// anchors.
+    ///
+    /// NOTE: `SSL_get_peer_cert_chain` omits the peer's own certificate when the
+    /// peer is a client, so the leaf is fetched separately and prepended.
+    pub fn peer_cert_chain(&self) -> Option<ClientCertChain> {
+        let ssl = match self {
+            Conn::Unencrypted(_) => return None,
+            Conn::Ssl(inner) => inner.ssl(),
+        };
+        let leaf = ssl.peer_certificate()?;
+        let intermediates = ssl
+            .peer_cert_chain()
+            .map(|chain| chain.iter().map(|cert| cert.to_owned()).collect())
+            .unwrap_or_default();
+        Some(ClientCertChain {
+            leaf,
+            intermediates,
+        })
     }
 
     /// Returns an error if tls_mode is incompatible with this connection's stream type.

@@ -11,15 +11,19 @@ use std::future::Future;
 use std::net::IpAddr;
 use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::Context;
 use async_trait::async_trait;
 use mz_authenticator::GenericOidcAuthenticator;
+use mz_authenticator::client_cert::{CertSource, ProxyCa, TrustStoreCache, is_trusted_proxy};
+use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 use mz_ore::now::{SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_pgwire_common::{
-    ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, Conn, ConnectionCounter, FrontendStartupMessage,
-    MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, decode_startup,
+    ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, ClientCertChain, Conn, ConnectionCounter,
+    FrontendStartupMessage, MZ_CLIENT_CERT_KEY, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION,
+    decode_startup,
 };
 use mz_server_core::listeners::{AllowedRoles, AuthenticatorKind};
 use mz_server_core::{Connection, ConnectionHandler, ReloadingTlsConfig};
@@ -27,7 +31,7 @@ use openssl::ssl::Ssl;
 use tokio::io::AsyncWriteExt;
 use tokio_metrics::TaskMetrics;
 use tokio_openssl::SslStream;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 use crate::codec::FramedConn;
 use crate::metrics::{Metrics, MetricsConfig};
@@ -60,6 +64,22 @@ pub struct Config {
     pub helm_chart_version: Option<String>,
     /// Whether to allow reserved users (ie: mz_system).
     pub allowed_roles: AllowedRoles,
+    /// Authority that issues identities to trusted proxies.
+    ///
+    /// A peer whose own certificate chains to this authority may forward an end
+    /// client's certificate. Without it, forwarded certificates are ignored,
+    /// because nothing distinguishes a proxy from any other peer.
+    pub proxy_ca: Option<ProxyCa>,
+    /// Caches the parsed trust anchors from `mtls_client_ca`, shared across the
+    /// server's connections.
+    pub mtls_trust_cache: Arc<TrustStoreCache>,
+    /// Live system dyncfgs.
+    ///
+    /// Read directly on the connection path so the mutual TLS policy, which is
+    /// consulted before authentication, costs no coordinator round trip. The
+    /// coordinator applies `ALTER SYSTEM SET` into this set, so it stays
+    /// current.
+    pub dyncfgs: Arc<ConfigSet>,
 }
 
 /// A server that communicates with clients via the pgwire protocol.
@@ -73,6 +93,9 @@ pub struct Server {
     active_connection_counter: ConnectionCounter,
     helm_chart_version: Option<String>,
     allowed_roles: AllowedRoles,
+    proxy_ca: Option<ProxyCa>,
+    mtls_trust_cache: Arc<TrustStoreCache>,
+    dyncfgs: Arc<ConfigSet>,
 }
 
 #[async_trait]
@@ -108,6 +131,9 @@ impl Server {
             active_connection_counter: config.active_connection_counter,
             helm_chart_version: config.helm_chart_version,
             allowed_roles: config.allowed_roles,
+            proxy_ca: config.proxy_ca,
+            mtls_trust_cache: config.mtls_trust_cache,
+            dyncfgs: config.dyncfgs,
         }
     }
 
@@ -123,9 +149,15 @@ impl Server {
         let oidc = self.oidc.clone();
         let tls = self.tls.clone();
         let metrics = self.metrics.clone();
+        // The outer future reports the connection's final status; this clone is
+        // handed to `protocol::run`.
+        let inner_metrics = self.metrics.clone();
         let active_connection_counter = self.active_connection_counter.clone();
         let helm_chart_version = self.helm_chart_version.clone();
         let allowed_roles = self.allowed_roles;
+        let proxy_ca = self.proxy_ca.clone();
+        let mtls_trust_cache = Arc::clone(&self.mtls_trust_cache);
+        let dyncfgs = Arc::clone(&self.dyncfgs);
 
         // TODO(guswynn): remove this redundant_closure_call
         #[allow(clippy::redundant_closure_call)]
@@ -182,6 +214,50 @@ impl Server {
                                     "starting new pgwire connection in adapter",
                                 );
 
+                                // Resolve which certificate, if any, speaks for
+                                // the client. Removed from `params` in every
+                                // case so it can never reach the session's
+                                // variables.
+                                let forwarded_cert = params.remove(MZ_CLIENT_CERT_KEY);
+                                let peer_chain = conn.peer_cert_chain();
+                                let (client_cert, client_cert_source) =
+                                    if is_trusted_proxy(proxy_ca.as_ref(), peer_chain.as_ref()) {
+                                        // The peer authenticated as a proxy, so
+                                        // its own certificate is its identity,
+                                        // not the client's. Only what it
+                                        // forwarded can speak for the client.
+                                        let chain = forwarded_cert.as_deref().and_then(|encoded| {
+                                            ClientCertChain::decode(encoded)
+                                                .inspect_err(|e| {
+                                                    error!(
+                                                        "trusted proxy forwarded an undecodable \
+                                                         client certificate: {e}"
+                                                    );
+                                                })
+                                                .ok()
+                                        });
+                                        (chain, CertSource::ForwardedByTrustedProxy)
+                                    } else {
+                                        if forwarded_cert.is_some() {
+                                            // Client-caused, so `warn!` rather
+                                            // than `error!`: any client that can
+                                            // reach this port can set the
+                                            // parameter, and logging at `error!`
+                                            // would hand it a log-spam lever.
+                                            // The metric is the durable signal.
+                                            warn!(
+                                                "ignoring forwarded client certificate from a peer \
+                                                 that is not a trusted proxy"
+                                            );
+                                            inner_metrics
+                                                .client_cert_validation(
+                                                    "forwarded_by_untrusted_peer",
+                                                )
+                                                .inc();
+                                        }
+                                        (peer_chain, CertSource::Direct)
+                                    };
+
                                 let direct_peer_addr = conn
                                     .inner_mut()
                                     .peer_addr()
@@ -208,6 +284,11 @@ impl Server {
                                 protocol::run(protocol::RunParams {
                                     tls_mode: tls.as_ref().map(|tls| tls.mode),
                                     adapter_client,
+                                    client_cert,
+                                    client_cert_source,
+                                    mtls_trust_cache,
+                                    dyncfgs,
+                                    metrics: inner_metrics,
                                     conn: &mut conn,
                                     conn_uuid,
                                     version,

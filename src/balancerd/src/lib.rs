@@ -54,13 +54,14 @@ use mz_ore::tracing::TracingHandle;
 use mz_ore::{metric, netio};
 use mz_pgwire_common::{
     ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, Conn, ErrorResponse, FrontendMessage,
-    FrontendStartupMessage, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, VERSION_3, decode_startup,
+    FrontendStartupMessage, MZ_CLIENT_CERT_KEY, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, VERSION_3,
+    decode_startup,
 };
 use mz_server_core::{
     Connection, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
     ReloadingTlsConfig, ServeConfig, ServeDyncfg, TlsCertConfig, TlsMode, listen,
 };
-use openssl::ssl::{NameType, Ssl, SslConnector, SslMethod, SslVerifyMode};
+use openssl::ssl::{NameType, Ssl, SslConnector, SslFiletype, SslMethod, SslVerifyMode};
 use prometheus::{IntCounterVec, IntGaugeVec};
 use proxy_header::{ProxiedAddress, ProxyHeader};
 use semver::Version;
@@ -100,6 +101,12 @@ pub struct BalancerConfig {
     https_sni_addr_template: String,
     tls: Option<TlsCertConfig>,
     internal_tls: bool,
+    /// Client identity presented to `environmentd` on internal connections.
+    ///
+    /// `environmentd` only honours a forwarded client certificate from a peer it
+    /// can authenticate as a proxy, so without this the forwarded chain is
+    /// ignored and mutual TLS through the balancer cannot work.
+    internal_tls_cert: Option<TlsCertConfig>,
     metrics_registry: MetricsRegistry,
     reload_certs: BoxStream<'static, Option<oneshot::Sender<Result<(), anyhow::Error>>>>,
     launchdarkly_sdk_key: Option<String>,
@@ -123,6 +130,7 @@ impl BalancerConfig {
         https_sni_addr_template: String,
         tls: Option<TlsCertConfig>,
         internal_tls: bool,
+        internal_tls_cert: Option<TlsCertConfig>,
         metrics_registry: MetricsRegistry,
         reload_certs: ReloadTrigger,
         launchdarkly_sdk_key: Option<String>,
@@ -144,6 +152,7 @@ impl BalancerConfig {
             https_sni_addr_template,
             tls,
             internal_tls,
+            internal_tls_cert,
             metrics_registry,
             reload_certs,
             launchdarkly_sdk_key,
@@ -156,6 +165,37 @@ impl BalancerConfig {
             default_configs,
         }
     }
+}
+
+/// Builds the connector used for connections to `environmentd`.
+///
+/// `environmentd`'s certificate is not verified: in cloud the upstream address
+/// is resolved from internal DNS and reached over the cluster network, and there
+/// is no name the balancer could check it against. What the identity here buys
+/// is the other direction, letting `environmentd` authenticate the balancer as a
+/// proxy before believing a client certificate it forwards.
+fn build_internal_connector(
+    client_identity: Option<&TlsCertConfig>,
+) -> Result<SslConnector, anyhow::Error> {
+    let mut builder = SslConnector::builder(SslMethod::tls())?;
+    builder.set_verify(SslVerifyMode::NONE);
+    if let Some(identity) = client_identity {
+        builder
+            .set_certificate_chain_file(&identity.cert)
+            .with_context(|| {
+                format!(
+                    "loading internal TLS certificate {}",
+                    identity.cert.display()
+                )
+            })?;
+        builder
+            .set_private_key_file(&identity.key, SslFiletype::PEM)
+            .with_context(|| format!("loading internal TLS key {}", identity.key.display()))?;
+        builder
+            .check_private_key()
+            .context("internal TLS certificate and key do not match")?;
+    }
+    Ok(builder.build())
 }
 
 /// Prometheus monitoring metrics.
@@ -314,6 +354,20 @@ impl BalancerService {
             None => (None, None),
         };
 
+        // Built once rather than per connection: loading a certificate from disk
+        // on every connection would put file IO on the connection path.
+        //
+        // NOTE: unlike the client-facing listeners, this connector is not
+        // reloaded when certificates rotate. A rotation therefore requires a
+        // restart, which matches how `internal_tls` behaved before it carried an
+        // identity at all.
+        let internal_tls = match self.cfg.internal_tls {
+            true => Some(build_internal_connector(
+                self.cfg.internal_tls_cert.as_ref(),
+            )?),
+            false => None,
+        };
+
         let metrics = ServerMetricsConfig::register_into(&self.cfg.metrics_registry);
 
         let mut set = JoinSet::new();
@@ -336,7 +390,7 @@ impl BalancerService {
                 resolver: Arc::new(self.cfg.resolver),
                 cancellation_resolver: Arc::new(self.cfg.cancellation_resolver),
                 tls: pgwire_tls,
-                internal_tls: self.cfg.internal_tls,
+                internal_tls: internal_tls.clone(),
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
                 now: SYSTEM_TIME.clone(),
             };
@@ -371,7 +425,7 @@ impl BalancerService {
                 port,
                 metrics: Arc::from(ServerMetrics::new(metrics, "https")),
                 configs: self.configs.clone(),
-                internal_tls: self.cfg.internal_tls,
+                internal_tls,
             };
             let (handle, stream) = self.https;
             server_handles.push(handle);
@@ -506,6 +560,7 @@ struct ServerMetricsConfig {
     tenant_connection_rx: IntCounterVec,
     tenant_connection_tx: IntCounterVec,
     tenant_pgwire_sni_count: IntCounterVec,
+    client_certs_forwarded: IntCounterVec,
 }
 
 impl ServerMetricsConfig {
@@ -540,6 +595,12 @@ impl ServerMetricsConfig {
             help: "Count of pgwire connections that have and do not have SNI available per tenant.",
             var_labels: ["tenant", "has_sni"],
         ));
+        let client_certs_forwarded = registry.register(metric!(
+            name: "mz_balancer_client_certs_forwarded_total",
+            help: "Count of pgwire connections by whether the client presented a TLS certificate \
+                   for the balancer to forward.",
+            var_labels: ["source", "presented"],
+        ));
         Self {
             connection_status,
             active_connections,
@@ -547,6 +608,7 @@ impl ServerMetricsConfig {
             tenant_connection_rx,
             tenant_connection_tx,
             tenant_pgwire_sni_count,
+            client_certs_forwarded,
         }
     }
 }
@@ -565,6 +627,8 @@ impl ServerMetrics {
         // time series.
         self_.connection_status(false);
         self_.connection_status(true);
+        self_.client_certs_forwarded(false);
+        self_.client_certs_forwarded(true);
         drop(self_.active_connections());
 
         self_
@@ -608,6 +672,12 @@ impl ServerMetrics {
             .with_label_values(&[tenant, &has_sni.to_string()])
     }
 
+    fn client_certs_forwarded(&self, presented: bool) -> IntCounter {
+        self.inner
+            .client_certs_forwarded
+            .with_label_values(&[self.source, &presented.to_string()])
+    }
+
     fn status_label(is_ok: bool) -> &'static str {
         if is_ok { "success" } else { "error" }
     }
@@ -620,7 +690,8 @@ pub enum CancellationResolver {
 
 struct PgwireBalancer {
     tls: Option<ReloadingTlsConfig>,
-    internal_tls: bool,
+    /// Connector for the upstream leg, or `None` to connect in plaintext.
+    internal_tls: Option<SslConnector>,
     cancellation_resolver: Arc<CancellationResolver>,
     resolver: Arc<BalancerResolver>,
     metrics: ServerMetrics,
@@ -635,7 +706,7 @@ impl PgwireBalancer {
         params: BTreeMap<String, String>,
         resolver: &BalancerResolver,
         tls_mode: Option<TlsMode>,
-        internal_tls: bool,
+        internal_tls: Option<SslConnector>,
         metrics: &ServerMetrics,
     ) -> Result<(), io::Error>
     where
@@ -731,7 +802,7 @@ impl PgwireBalancer {
         envd_addr: SocketAddr,
         password: Option<String>,
         params: BTreeMap<String, String>,
-        internal_tls: bool,
+        internal_tls: Option<SslConnector>,
     ) -> Result<Conn<TcpStream>, anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
@@ -739,7 +810,7 @@ impl PgwireBalancer {
         let mut mz_stream = TcpStream::connect(envd_addr).await?;
         let mut buf = BytesMut::new();
 
-        let mut mz_stream = if internal_tls {
+        let mut mz_stream = if let Some(connector) = internal_tls {
             FrontendStartupMessage::SslRequest.encode(&mut buf)?;
             mz_stream.write_all(&buf).await?;
             buf.clear();
@@ -747,15 +818,7 @@ impl PgwireBalancer {
             let nread =
                 netio::read_exact_or_eof(&mut mz_stream, &mut maybe_ssl_request_response).await?;
             if nread == 1 && maybe_ssl_request_response == [ACCEPT_SSL_ENCRYPTION] {
-                // do a TLS handshake
-                let mut builder =
-                    SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
-                // environmentd doesn't yet have a cert we trust, so for now disable verification.
-                builder.set_verify(SslVerifyMode::NONE);
-                let mut ssl = builder
-                    .build()
-                    .configure()?
-                    .into_ssl(&envd_addr.to_string())?;
+                let mut ssl = connector.configure()?.into_ssl(&envd_addr.to_string())?;
                 ssl.set_connect_state();
                 Conn::Ssl(SslStream::new(ssl, mz_stream)?)
             } else {
@@ -833,7 +896,7 @@ impl mz_server_core::Server for PgwireBalancer {
         _tokio_metrics_intervals: impl Iterator<Item = TaskMetrics> + Send + 'static,
     ) -> mz_server_core::ConnectionHandler {
         let tls = self.tls.clone();
-        let internal_tls = self.internal_tls;
+        let internal_tls = self.internal_tls.clone();
         let resolver = Arc::clone(&self.resolver);
         let inner_metrics = self.metrics.clone();
         let outer_metrics = self.metrics.clone();
@@ -866,12 +929,16 @@ impl mz_server_core::Server for PgwireBalancer {
                                 Ok(addr) => addr.ip(),
                                 Err(e) => {
                                     error!("Invalid peer_addr {:?}", e);
-                                    return Ok(conn
-                                        .send(ErrorResponse::fatal(
-                                            rejected,
-                                            "invalid peer address",
-                                        ))
-                                        .await?);
+                                    conn.send(ErrorResponse::fatal(
+                                        rejected,
+                                        "invalid peer address",
+                                    ))
+                                    .await?;
+                                    // `send` only buffers, so the client would
+                                    // otherwise see the connection close with no
+                                    // diagnostic.
+                                    conn.flush().await?;
+                                    return Ok(());
                                 }
                             };
                             debug!(
@@ -881,26 +948,68 @@ impl mz_server_core::Server for PgwireBalancer {
                             let prev =
                                 params.insert(CONN_UUID_KEY.to_string(), conn_uuid.to_string());
                             if prev.is_some() {
-                                return Ok(conn
-                                    .send(ErrorResponse::fatal(
-                                        rejected,
-                                        format!("invalid parameter '{CONN_UUID_KEY}'"),
-                                    ))
-                                    .await?);
+                                conn.send(ErrorResponse::fatal(
+                                    rejected,
+                                    format!("invalid parameter '{CONN_UUID_KEY}'"),
+                                ))
+                                .await?;
+                                conn.flush().await?;
+                                return Ok(());
                             }
 
                             let forwarded_for = params.insert(
                                 MZ_FORWARDED_FOR_KEY.to_string(),
                                 peer_addr.to_string().clone(),
                             );
-                            if let Some(_) = forwarded_for {
-                                return Ok(conn
-                                    .send(ErrorResponse::fatal(
-                                        rejected,
-                                        format!("invalid parameter '{MZ_FORWARDED_FOR_KEY}'"),
-                                    ))
-                                    .await?);
+                            if forwarded_for.is_some() {
+                                conn.send(ErrorResponse::fatal(
+                                    rejected,
+                                    format!("invalid parameter '{MZ_FORWARDED_FOR_KEY}'"),
+                                ))
+                                .await?;
+                                conn.flush().await?;
+                                return Ok(());
+                            }
+
+                            // Forward the client's certificate chain, if it sent
+                            // one. The handshake proved the client holds the
+                            // leaf's private key; whether the chain is trusted
+                            // is for environmentd to decide, since only it holds
+                            // the tenant's trust anchors.
+                            //
+                            // A chain that fails to encode is dropped rather
+                            // than truncated: a partial chain would fail
+                            // validation for a reason that has nothing to do
+                            // with the client's actual certificate.
+                            let client_chain = conn.inner().peer_cert_chain();
+                            inner_metrics
+                                .client_certs_forwarded(client_chain.is_some())
+                                .inc();
+                            let encoded_chain = match &client_chain {
+                                Some(chain) => match chain.encode() {
+                                    Ok(encoded) => encoded,
+                                    Err(e) => {
+                                        error!("could not encode client certificate chain: {e}");
+                                        None
+                                    }
+                                },
+                                None => None,
                             };
+                            // Checked before inserting, so a client that supplies
+                            // the parameter is caught even when it presented no
+                            // certificate for us to overwrite it with.
+                            if params.contains_key(MZ_CLIENT_CERT_KEY) {
+                                conn.send(ErrorResponse::fatal(
+                                    rejected,
+                                    format!("invalid parameter '{MZ_CLIENT_CERT_KEY}'"),
+                                ))
+                                .await?;
+                                conn.flush().await?;
+                                return Ok(());
+                            }
+                            if let Some(encoded) = encoded_chain {
+                                params.insert(MZ_CLIENT_CERT_KEY.to_string(), encoded);
+                            }
 
                             Self::run(
                                 &mut conn,
@@ -1110,11 +1219,12 @@ async fn cancel_request(
 struct HttpsBalancer {
     resolver: Arc<TenantDnsResolver>,
     tls: Option<ReloadingSslContext>,
+    /// Connector for the upstream leg, or `None` to connect in plaintext.
+    internal_tls: Option<SslConnector>,
     resolve_template: Arc<str>,
     port: u16,
     metrics: Arc<ServerMetrics>,
     configs: ConfigSet,
-    internal_tls: bool,
 }
 
 impl HttpsBalancer {
@@ -1273,14 +1383,8 @@ impl mz_server_core::Server for HttpsBalancer {
                     mz_stream.write_all(&buf[..len]).await?;
                 }
 
-                let mut mz_stream = if internal_tls {
-                    // do a TLS handshake
-                    let mut builder =
-                        SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
-                    // environmentd doesn't yet have a cert we trust, so for now disable verification.
-                    builder.set_verify(SslVerifyMode::NONE);
-                    let mut ssl = builder
-                        .build()
+                let mut mz_stream = if let Some(connector) = internal_tls {
+                    let mut ssl = connector
                         .configure()?
                         .into_ssl(&resolved.addr.to_string())?;
                     ssl.set_connect_state();

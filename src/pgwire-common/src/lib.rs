@@ -12,12 +12,16 @@
 #![warn(clippy::as_conversions)]
 #![warn(unused_extern_crates)]
 
+mod client_cert;
 mod codec;
 mod conn;
 mod format;
 mod message;
 mod severity;
 
+pub use client_cert::{
+    ChainDecodeError, ClientCertChain, MAX_ENCODED_CHAIN_LEN, MZ_CLIENT_CERT_KEY,
+};
 pub use codec::{
     ACCEPT_SSL_ENCRYPTION, CodecError, Cursor, DecodeState, MAX_REQUEST_SIZE, Pgbuf,
     REJECT_ENCRYPTION, decode_startup, input_err, parse_frame_len,

@@ -6277,13 +6277,16 @@ dependencies = [
 name = "mz-authenticator"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "jsonwebtoken 10.3.0",
  "mz-adapter",
  "mz-adapter-types",
  "mz-auth",
+ "mz-dyncfg",
  "mz-frontegg-auth",
  "mz-ore",
  "mz-pgwire-common",
+ "openssl",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -8018,6 +8021,7 @@ dependencies = [
  "mz-adapter-types",
  "mz-auth",
  "mz-authenticator",
+ "mz-dyncfg",
  "mz-frontegg-auth",
  "mz-ore",
  "mz-pgcopy",
@@ -8041,12 +8045,15 @@ name = "mz-pgwire-common"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "byteorder",
  "bytes",
  "bytesize",
  "derivative",
  "mz-ore",
  "mz-server-core",
+ "openssl",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-openssl",
  "tokio-postgres",

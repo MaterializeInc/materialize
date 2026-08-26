@@ -3401,6 +3401,11 @@ class FlipFlagsAction(Action):
             "oidc_group_role_sync_enabled",
             "oidc_group_claim",
             "oidc_group_role_sync_strict",
+            # Flipping an admission policy would sever parallel-workload's own
+            # connections, which present no client certificate.
+            "mtls_client_ca",
+            "mtls_mode",
+            "mtls_identity_binding",
             "console_oidc_client_id",
             "console_oidc_scopes",
             "cluster_controller_tick_interval",
