@@ -38,6 +38,7 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_catalog::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_OBJECT_HYDRATION_HISTORY};
 use mz_cluster_client::ReplicaId;
+use mz_controller::clusters::ClusterStatus;
 use mz_controller_types::ClusterId;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -45,6 +46,7 @@ use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_repr::CatalogItemId;
 use mz_sql::plan::{MutationKind, Params, Plan, ReadThenWritePlan};
+use mz_storage_client::controller::IntrospectionType;
 use rand::{Rng, SeedableRng, rngs};
 use sha2::{Digest, Sha256};
 use tracing::warn;
@@ -70,12 +72,11 @@ const SCHEDULE_RECHECK_CAP: Duration = Duration::from_secs(5);
 /// is much coarser than the enabled one: nothing is waiting on it.
 const DISABLED_RECHECK_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Bound on one mutation, including the wait for its read to linearize.
+/// Bound on one replica-targeted mutation.
 ///
-/// A mutation that finds nothing to write still waits for the oracle to advance,
-/// which can take a full `default_timestamp_interval`, so this has to be well
-/// above any sane value of that parameter. Exceeding it skips the step. The next
-/// sweep recomputes from current state.
+/// Subscribe installation, replica-side progress, OCC conflict retries, and the
+/// external commit can all wait indefinitely. Exceeding the bound skips the
+/// step. The next sweep recomputes from current state.
 const MUTATION_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Rows retracted per retention step.
@@ -108,6 +109,19 @@ fn environment_schedule_offset(environment_id: &str, interval_ms: EpochMillis) -
     // `random_range` panics on an empty range, and callers clamp the interval to
     // at least one millisecond.
     rngs::SmallRng::from_seed(seed).random_range(0..interval_ms)
+}
+
+/// Returns whether a replica is ready for hydration-history collection.
+///
+/// Subscribe data is sufficient for unmanaged replicas whose status may remain
+/// offline. An online status covers a delayed restart event invalidating the
+/// probe after the replacement subscribe delivered its initial snapshot. A
+/// missing probe preserves operation when introspection subscribes are disabled.
+fn hydration_replica_ready(
+    introspection_subscribe_ready: Option<bool>,
+    replica_status: ClusterStatus,
+) -> bool {
+    introspection_subscribe_ready.unwrap_or(true) || replica_status == ClusterStatus::Online
 }
 
 impl Coordinator {
@@ -196,11 +210,28 @@ impl Coordinator {
 
         // A replica with introspection disabled is skipped: its log arrangements
         // are installed but never populated, so a subscribe would read a sealed,
-        // empty collection and find nothing, every sweep.
+        // empty collection and find nothing, every sweep. When the existing
+        // hydration-times subscribe is installed, its first data is sufficient
+        // for unmanaged replicas. A rolled-up Online status also suffices because
+        // a delayed restart event can invalidate the probe after the replacement
+        // subscribe's initial snapshot. A never-connected managed replica remains
+        // Offline and is skipped rather than parking this single-flight sweep
+        // until MUTATION_TIMEOUT. With no probe, preserve this collector's
+        // behavior independently of enable_introspection_subscribes.
         let replicas = self
             .catalog()
             .user_cluster_replicas()
             .filter(|replica| replica.config.compute.logging.enabled())
+            .filter(|replica| {
+                let subscribe_ready = self.introspection_subscribe_ready(
+                    IntrospectionType::ComputeHydrationTimes,
+                    replica.replica_id,
+                );
+                let replica_status = self
+                    .cluster_replica_statuses
+                    .get_cluster_replica_status(replica.cluster_id, replica.replica_id);
+                hydration_replica_ready(subscribe_ready, replica_status)
+            })
             .map(|replica| (replica.cluster_id, replica.replica_id))
             .sorted_by_key(|(_, replica_id)| *replica_id)
             .collect_vec();
@@ -522,14 +553,20 @@ impl Sweep {
             }
             Ok(Err(error)) => {
                 self.observe_mutation(step, "error");
-                warn!(%step, %cluster_id, %replica_id, %error, "hydration history step failed");
+                if step == "collection" && matches!(&error, AdapterError::ReadThenWriteContention) {
+                    warn!(
+                        %step, %cluster_id, %replica_id, %error,
+                        "hydration history step failed, the replica's introspection frontier \
+                         may be trailing the write frontier"
+                    );
+                } else {
+                    warn!(%step, %cluster_id, %replica_id, %error, "hydration history step failed");
+                }
                 None
             }
-            // The oracle names the timestamp to write at and the subscribe's
-            // frontier has to reach it. The log half of that frontier advances on
-            // the replica's clock, so a replica whose clock trails `environmentd`
-            // by more than its introspection interval keeps sitting below the
-            // target and waits here until this fires, every sweep.
+            // A trailing replica can repeatedly certify a target only after the
+            // oracle has advanced past it. Each refused write raises the target,
+            // and the conflict loop can continue until this timeout fires.
             Err(_) if step == "collection" => {
                 self.observe_mutation(step, "timeout");
                 warn!(
@@ -637,6 +674,16 @@ mod tests {
             Some(replicas[0])
         );
         assert_eq!(next_replica(&[], None), None);
+    }
+
+    #[mz_ore::test]
+    fn replica_readiness_uses_subscribe_data_or_online_status() {
+        let offline = ClusterStatus::Offline(None);
+
+        assert!(hydration_replica_ready(Some(true), offline));
+        assert!(hydration_replica_ready(Some(false), ClusterStatus::Online));
+        assert!(!hydration_replica_ready(Some(false), offline));
+        assert!(hydration_replica_ready(None, offline));
     }
 
     /// Every environment shares one interval, so the grid has to be shifted per

@@ -528,6 +528,25 @@ impl Coordinator {
             .map(|s| s.replica_id.to_string())
             .collect()
     }
+
+    /// Reports whether a replica's subscribe of `introspection_type` has delivered data.
+    ///
+    /// Returns `None` when no such subscribe was installed, for example when
+    /// `enable_introspection_subscribes` is disabled. Callers that use this as a
+    /// readiness probe can then preserve behavior independently of that setting.
+    pub(super) fn introspection_subscribe_ready(
+        &self,
+        introspection_type: IntrospectionType,
+        replica_id: ReplicaId,
+    ) -> Option<bool> {
+        self.introspection_subscribes
+            .values()
+            .find(|subscribe| {
+                subscribe.spec.introspection_type == introspection_type
+                    && subscribe.replica_id == replica_id
+            })
+            .map(|subscribe| subscribe.first_data_at.is_some())
+    }
 }
 
 impl Staged for IntrospectionSubscribeStage {

@@ -272,10 +272,10 @@ nothing else stops it outliving the coordinator, and the teardown that follows d
 the timestamp oracle's worker task. A sweep still running would then read a
 timestamp from a dead oracle and panic, so the coordinator owns the task handle.
 
-**Each mutation's timeout is deliberately generous.** Even a mutation with nothing
-to write waits for its read to linearize, which can take a full
-`default_timestamp_interval`, a parameter with no upper bound. A tighter bound would
-let a large timestamp interval starve retention permanently.
+**Each mutation's timeout is deliberately generous.** Subscribe installation,
+replica-side progress, OCC conflict retries, and the external commit can all wait
+indefinitely. The bound keeps one unavailable replica or service from starving
+retention and every later replica in the single-flight rotation.
 
 Replica drop, cluster drop, dependency replacement, replica failure, and timeout all
 skip the attempt, and a later sweep recomputes from current state. Read-only
@@ -305,17 +305,23 @@ frontier reaches the target. One of the subscribe's inputs is a replica-local
 introspection log whose frontier the *replica* advances from its own clock, rounded
 up to its introspection interval.
 
-So a replica whose clock trails environmentd by more than one introspection
-interval produces a frontier that keeps sitting below the target the oracle hands
-out. The mutation waits, and the sweep's own timeout ends it. The consequence is
-bounded. Nothing wrong is recorded, that replica records nothing at all, and the
-sweep stretches while it waits, which delays others in the rotation. It resolves
-itself when the clocks converge.
+For a non-empty selection, a replica whose clock trails environmentd by more than
+one introspection interval repeatedly loses the same race. Its frontier eventually
+certifies the current target, but by then keepalives or other writes have advanced
+the oracle past it. The committer refuses the stale target, the OCC loop adopts a
+new one, and the replica has to catch up again. The sweep's timeout normally ends
+that loop. A lower `max_occ_retries` can end it first with a contention error.
+
+Nothing wrong is recorded in either case. That replica records nothing at all, and
+the sweep stretches while it retries, which delays others in the rotation. Empty
+selections exit without entering the conflict loop. The condition resolves itself
+when the clocks converge.
 
 Accepted for now: skew between processes is normally milliseconds while the
-tolerance is a whole introspection interval, and the failure mode is waiting rather
-than wrong data. Because the symptom is otherwise hard to attribute, a step that
-times out logs that the replica's introspection frontier may be trailing.
+tolerance is a whole introspection interval, and the failure mode is retrying rather
+than wrong data. Because the symptom is otherwise hard to attribute, both a timeout
+and retry-budget exhaustion log that the replica's introspection frontier may be
+trailing.
 
 ## Rollout
 
