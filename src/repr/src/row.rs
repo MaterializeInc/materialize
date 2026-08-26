@@ -842,10 +842,31 @@ impl DictBuilder<'_, '_> {
     /// which may itself be a nested list or dict.
     ///
     /// Keys must be pushed in ascending order, per the [`DatumMap`] contract.
+    /// Violating that makes [`DatumMap::get`] miss keys that are present, since
+    /// it binary searches, so the order is checked here under soft assertions
+    /// rather than only when the map is later iterated.
     pub fn push_entry<F, R>(&mut self, key: &str, value: F) -> R
     where
         F: FnOnce(&mut RowPacker) -> R,
     {
+        // Read the previous entry's key back out of the buffer instead of
+        // keeping a copy, so the check needs no extra state. Both borrows end
+        // before the push below takes `data` mutably.
+        if mz_ore::assert::soft_assertions_enabled() {
+            if let Some(&prev_offset) = self.offsets.last() {
+                let at = self.entries_start + usize::cast_from(prev_offset);
+                let mut cursor: &[u8] = &self.packer.row.data[at..];
+                // SAFETY: `cursor` points at the key datum written by the
+                // preceding `push_entry`.
+                let prev_key = unsafe { read_datum(&mut cursor) }.unwrap_str();
+                mz_ore::soft_assert_no_log!(
+                    prev_key < key,
+                    "Dict keys must be unique and given in ascending order: \
+                     {prev_key} came before {key}"
+                );
+            }
+        }
+
         let offset = self.packer.row.data.len() - self.entries_start;
         self.offsets
             .push(u32::try_from(offset).expect("map larger than 4 GiB cannot be indexed"));
@@ -1470,6 +1491,7 @@ fn finish_dict(data: &mut CompactBytes, entries_start: usize) {
     // word.
     let mut p = entries_start;
     let mut count: usize = 0;
+    let mut prev_entry: Option<usize> = None;
     while p < entries_end {
         if count > 0 {
             append_offset(data, p - entries_start, width);
@@ -1481,10 +1503,32 @@ fn finish_dict(data: &mut CompactBytes, entries_start: usize) {
         let before = cursor.len();
         // SAFETY: `cursor` points at the key/value datums just written by the
         // packer, which are well-formed per `push_dict_with`'s contract.
-        unsafe {
+        let key = unsafe {
+            let key = read_datum(&mut cursor);
             read_datum(&mut cursor);
-            read_datum(&mut cursor);
+            key
+        };
+
+        // Out-of-order keys make `DatumMap::get` miss keys that are present,
+        // since it binary searches. Check here so a caller that violates
+        // `push_dict_with`'s contract is caught where the map is built, rather
+        // than only if something later iterates it. Re-reading the previous
+        // key costs a second decode, so it is gated on soft assertions.
+        if mz_ore::assert::soft_assertions_enabled() {
+            if let Some(prev) = prev_entry {
+                let mut prev_cursor: &[u8] = &data[prev..entries_end];
+                // SAFETY: as above, `prev` is a previously walked entry start.
+                let prev_key = unsafe { read_datum(&mut prev_cursor) }.unwrap_str();
+                mz_ore::soft_assert_no_log!(
+                    prev_key < key.unwrap_str(),
+                    "Dict keys must be unique and given in ascending order: {} came before {}",
+                    prev_key,
+                    key.unwrap_str()
+                );
+            }
+            prev_entry = Some(p);
         }
+
         p += before - cursor.len();
     }
     append_count_word(data, count, width);
@@ -3326,7 +3370,7 @@ impl<'a, T> DatumMap<'a, T> {
 
     /// Whether the map has no entries.
     pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
+        self.len() == 0
     }
 
     /// The number of bytes the entries occupy, i.e. the payload minus the index
@@ -3387,6 +3431,17 @@ impl<'a, T> DatumMap<'a, T> {
             }
         }
         None
+    }
+
+    /// Looks up `key`, returning its value converted via [`FromDatum`].
+    ///
+    /// The typed counterpart to [`Self::get`], as [`Self::typed_iter`] is to
+    /// [`Self::iter`].
+    pub fn get_typed(&self, key: &str) -> Option<T>
+    where
+        T: FromDatum<'a>,
+    {
+        self.get(key).map(T::from_datum)
     }
 
     pub fn iter(&self) -> DatumDictIter<'a> {
