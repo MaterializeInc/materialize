@@ -80,3 +80,12 @@ export const utilizationFilterFromUrl = (
     percent: parseFloat(match[2]),
   };
 };
+
+/**
+ * A filter stated for display, for example `CPU > 40%`. Reads as the condition
+ * it applies, so a chip or a summary needs nothing added around it.
+ */
+export const utilizationFilterLabel = (
+  heading: string,
+  value: UtilizationFilterValue,
+) => `${heading} ${value.comparison} ${value.percent}%`;

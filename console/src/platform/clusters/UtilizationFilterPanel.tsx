@@ -15,9 +15,6 @@ import {
   NumberInput,
   NumberInputField,
   NumberInputStepper,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
   Select,
   Text,
   useTheme,
@@ -26,9 +23,7 @@ import {
 import { Column } from "@tanstack/react-table";
 import React from "react";
 
-import { ChevronDownIcon } from "~/icons";
 import { MaterializeTheme } from "~/theme";
-import { viewportOverflowModifier } from "~/theme/components/Popover";
 
 import {
   DEFAULT_COMPARISON,
@@ -36,31 +31,24 @@ import {
   UtilizationFilterValue,
 } from "./utilizationFilters";
 
-/**
- * The trigger's caption: the column name alone, or the condition in force, so
- * an applied filter is readable without opening the panel.
- */
-const triggerLabel = (
-  label: string,
-  value: UtilizationFilterValue | undefined,
-) => (value ? `${label} ${value.comparison} ${value.percent}%` : label);
+export interface UtilizationFilterPanelProps<TData> {
+  /** The column to filter, whose `filterFn` must be `utilizationFilterFn`. */
+  column: Column<TData, unknown>;
+  /** Column heading, shown inside the panel to name what is being filtered. */
+  label: string;
+}
 
 /**
- * The panel's editable copy of the filter. Applied on Apply rather than on
- * every keystroke, so a half-typed threshold never reorders the table.
+ * Filters one utilization column by a percentage threshold, for the popover
+ * `UniversalTable` anchors on a column header.
  *
- * Mounted fresh on each open (the popover unmounts its content when closed), so
- * the draft starts from whatever filter is currently in force.
+ * Every utilization column reads the same way, a fraction of the replica's
+ * allocation, so one panel serves all of them.
  */
-const UtilizationFilterPanel = <TData,>({
+export const UtilizationFilterPanel = <TData,>({
   column,
   label,
-  onClose,
-}: {
-  column: Column<TData, unknown>;
-  label: string;
-  onClose: () => void;
-}) => {
+}: UtilizationFilterPanelProps<TData>) => {
   const { colors } = useTheme<MaterializeTheme>();
   const value = column.getFilterValue() as UtilizationFilterValue | undefined;
 
@@ -71,6 +59,14 @@ const UtilizationFilterPanel = <TData,>({
     value ? String(value.percent) : "",
   );
 
+  // The popover keeps its content mounted between opens, so a seed taken once
+  // would drift from the filter in force. Following the applied value keeps
+  // Clear, and a filter restored from the URL, visible on the next open.
+  React.useEffect(() => {
+    setComparison(value?.comparison ?? DEFAULT_COMPARISON);
+    setPercent(value ? String(value.percent) : "");
+  }, [value]);
+
   const parsed = Number.parseFloat(percent);
   // NOTE: no upper bound. `heap_percent` reports RAM plus swap against the heap
   // limit and can legitimately exceed 100%.
@@ -79,12 +75,10 @@ const UtilizationFilterPanel = <TData,>({
   const apply = () => {
     if (!canApply) return;
     column.setFilterValue({ comparison, percent: parsed });
-    onClose();
   };
 
   const clearFilter = () => {
     column.setFilterValue(undefined);
-    onClose();
   };
 
   return (
@@ -162,63 +156,5 @@ const UtilizationFilterPanel = <TData,>({
         </Button>
       </HStack>
     </VStack>
-  );
-};
-
-export interface UtilizationFilterProps<TData> {
-  /** The column to filter, whose `filterFn` must be `utilizationFilterFn`. */
-  column: Column<TData, unknown>;
-  /** Column name, shown on the trigger and inside the panel. */
-  label: string;
-}
-
-/**
- * Toolbar control filtering one utilization column by a percentage threshold.
- *
- * Every utilization column reads the same way, a fraction of the replica's
- * allocation, so one control serves all of them.
- */
-export const UtilizationFilter = <TData,>({
-  column,
-  label,
-}: UtilizationFilterProps<TData>) => {
-  const { colors } = useTheme<MaterializeTheme>();
-  const value = column.getFilterValue() as UtilizationFilterValue | undefined;
-  const isActive = value !== undefined;
-
-  return (
-    <Popover
-      isLazy
-      // Unmount rather than hide, so the panel's draft state is rebuilt from
-      // the filter in force each time it opens.
-      lazyBehavior="unmount"
-      gutter={2}
-      modifiers={viewportOverflowModifier}
-      variant="dropdown"
-      placement="bottom-start"
-    >
-      {({ onClose }) => (
-        <>
-          <PopoverTrigger>
-            <Button
-              size="sm"
-              variant="secondary"
-              rightIcon={<ChevronDownIcon />}
-              color={isActive ? colors.accent.brightPurple : undefined}
-              borderColor={isActive ? colors.accent.brightPurple : undefined}
-            >
-              {triggerLabel(label, value)}
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent motionProps={{ animate: false }}>
-            <UtilizationFilterPanel
-              column={column}
-              label={label}
-              onClose={onClose}
-            />
-          </PopoverContent>
-        </>
-      )}
-    </Popover>
   );
 };

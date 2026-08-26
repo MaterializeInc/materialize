@@ -12,6 +12,7 @@ import { Row } from "@tanstack/react-table";
 import {
   utilizationFilterFn,
   utilizationFilterFromUrl,
+  utilizationFilterLabel,
   utilizationFilterToUrl,
   UtilizationFilterValue,
 } from "./utilizationFilters";
@@ -140,5 +141,16 @@ describe("utilizationFilterFromUrl", () => {
     ["a comparison alone", "gt"],
   ])("rejects a parameter that is %s", (_label, raw) => {
     expect(utilizationFilterFromUrl(raw)).toBeUndefined();
+  });
+});
+
+describe("utilizationFilterLabel", () => {
+  it("reads as the condition it applies", () => {
+    expect(
+      utilizationFilterLabel("CPU", { comparison: ">", percent: 40 }),
+    ).toBe("CPU > 40%");
+    expect(
+      utilizationFilterLabel("Memory", { comparison: "<", percent: 7.5 }),
+    ).toBe("Memory < 7.5%");
   });
 });

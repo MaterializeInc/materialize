@@ -49,7 +49,8 @@ import {
   ClusterTableMeta,
 } from "./clusterTableCells";
 import { useReplicaUtilization } from "./queries";
-import { UtilizationFilter } from "./UtilizationFilter";
+import { UtilizationFilterChips } from "./UtilizationFilterChips";
+import { UtilizationFilterPanel } from "./UtilizationFilterPanel";
 import {
   utilizationFilterFn,
   utilizationFilterFromUrl,
@@ -209,6 +210,11 @@ const percentColumn = ({ id, header, read }: UtilizationColumn) =>
     sortDescFirst: true,
     filterFn: utilizationFilterFn,
     cell: (info) => <ReplicaPercentCell value={info.getValue()} />,
+    meta: {
+      renderFilter: (column) => (
+        <UtilizationFilterPanel column={column} label={header} />
+      ),
+    },
   });
 
 const columns = [
@@ -374,31 +380,31 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
   ]);
   useSyncObjectToSearchParams(urlParams);
 
+  // Every cluster contributes at least one row, and the list renders its own
+  // empty state when there are no clusters at all, so an empty row model here
+  // means the search or a filter excluded everything.
   const noMatches = table.getFilteredRowModel().rows.length === 0;
 
   return (
     <VStack spacing={4} align="stretch">
-      <HStack spacing={3} flexWrap="wrap">
-        <TableSearch
-          initialValue={initialState.globalFilter ?? ""}
-          onValueChange={table.setGlobalFilter}
-          placeholder="Search clusters..."
-        />
-        {UTILIZATION_COLUMNS.map(({ id, header }) => {
-          const column = table.getColumn(id);
-          return (
-            column && (
-              <UtilizationFilter key={id} column={column} label={header} />
-            )
-          );
-        })}
-      </HStack>
+      <TableSearch
+        initialValue={initialState.globalFilter ?? ""}
+        onValueChange={table.setGlobalFilter}
+        placeholder="Search clusters..."
+      />
+      {/*
+       * Above the table, so it outlives an empty result. The message below
+       * replaces the table and takes the column headers, and so the filter
+       * panels, with it. Removing a chip is then the only way back from a
+       * filter that matched nothing.
+       */}
+      <UtilizationFilterChips table={table} columns={UTILIZATION_COLUMNS} />
       {noMatches ? (
         <EmptyListWrapper>
           <EmptyListHeader>
             <EmptyListHeaderContents
               title="No replicas match the current search and filters"
-              helpText="Try a different search term, or clear the utilization filters."
+              helpText="Try a different search term, or remove a filter above."
             />
           </EmptyListHeader>
         </EmptyListWrapper>
