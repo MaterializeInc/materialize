@@ -187,6 +187,15 @@ CREATE SOURCE victim_schema.unexported FROM LOAD GENERATOR AUCTION (AS OF 300, U
 ----
 COMPLETE 0
 
+# Without SELECT the pre-purification gate rejects the statement. The plan-time
+# check alone would report missing ownership instead.
+
+simple conn=attacker,user=attacker
+CREATE TABLE attacker_schema.first_attach FROM SOURCE victim_schema.unexported (REFERENCE "auction"."users");
+----
+db error: ERROR: permission denied for SOURCE "materialize.victim_schema.unexported"
+DETAIL: The 'attacker' role needs SELECT privileges on SOURCE "materialize.victim_schema.unexported"
+
 simple conn=mz_system,user=mz_system
 GRANT SELECT ON victim_schema.unexported TO attacker;
 ----

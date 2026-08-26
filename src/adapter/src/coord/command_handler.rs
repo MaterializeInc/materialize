@@ -1623,6 +1623,14 @@ impl Coordinator {
                     ) {
                         return ctx.retire(Err(e.into()));
                     }
+                    if let Err(e) = rbac::check_purification_source_access(
+                        &conn_catalog,
+                        ctx.session(),
+                        &stmt,
+                        &resolved_ids,
+                    ) {
+                        return ctx.retire(Err(e.into()));
+                    }
 
                     let (result, cluster_id) = mz_sql::pure::purify_statement(
                         conn_catalog,

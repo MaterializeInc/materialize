@@ -19,7 +19,7 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, RelationVersionSelector};
-use mz_sql_parser::ast::{Ident, QualifiedReplica};
+use mz_sql_parser::ast::{Ident, QualifiedReplica, Statement};
 use mz_storage_types::sources::SourceExportDetails;
 use tracing::debug;
 
@@ -27,7 +27,7 @@ use crate::catalog::{
     CatalogItemType, ErrorMessageObjectDescription, ObjectType, SessionCatalog, SystemObjectType,
 };
 use crate::names::{
-    CommentObjectId, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
+    Aug, CommentObjectId, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
     SchemaSpecifier, SystemObjectId,
 };
 use crate::plan::{self, PlanKind};
@@ -395,6 +395,54 @@ pub fn check_usage(
         role_membership,
         session.role_metadata().current_role,
     )?;
+
+    Ok(())
+}
+
+/// Checks if a session may use the sources a statement names during
+/// purification. If not, an error is returned.
+///
+/// Purification borrows a named source's connection to contact its upstream,
+/// and that connection is not in the resolved ids [`check_usage`] covers. The
+/// privileges required here are a subset of what planning requires later.
+pub fn check_purification_source_access(
+    catalog: &impl SessionCatalog,
+    session: &dyn SessionMetadata,
+    stmt: &Statement<Aug>,
+    resolved_ids: &ResolvedIds,
+) -> Result<(), UnauthorizedError> {
+    rbac_check_preamble(catalog, session)?;
+
+    let role_id = session.role_metadata().current_role;
+    let sources = resolved_ids.items().filter(|id| {
+        catalog
+            .try_get_item(id)
+            .is_some_and(|item| item.item_type() == CatalogItemType::Source)
+    });
+
+    let mut requirements = RbacRequirements::empty();
+    match stmt {
+        Statement::AlterSource(_) => {
+            requirements.ownership = sources.map(|id| ObjectId::Item(*id)).collect();
+        }
+        _ => {
+            let role_membership = catalog.collect_role_membership(&role_id);
+            let not_owned = sources
+                .filter(|id| !check_owner_roles(&ObjectId::Item(**id), &role_membership, catalog))
+                .copied();
+            requirements.privileges = generate_read_privileges(catalog, not_owned, role_id);
+        }
+    }
+    let requirements = filter_requirements(catalog, session, requirements);
+
+    let role_membership = catalog.collect_role_membership(&role_id);
+    let unheld_ownership = requirements
+        .ownership
+        .into_iter()
+        .filter(|id| !check_owner_roles(id, &role_membership, catalog))
+        .collect();
+    ownership_err(unheld_ownership, catalog)?;
+    check_object_privileges(catalog, requirements.privileges, role_membership, role_id)?;
 
     Ok(())
 }
