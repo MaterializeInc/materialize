@@ -338,8 +338,10 @@ fn next_replica(
 /// for being inconsistent, which is deliberate: an ordering guard on cross-worker
 /// stamps rejects complete episodes permanently, since the log values never change.
 ///
-/// Needs no batch bound. The result is at most the replica's not-yet-recorded
-/// dataflows.
+/// Collection has no explicit batch bound. It returns at most one row per
+/// not-yet-recorded dataflow, and the OCC path rejects a result that exceeds
+/// `max_result_size` or `max_query_result_size`. At their 1 GiB defaults that
+/// ceiling only matters at millions of dataflows per replica.
 fn collect_sql(cluster_id: ClusterId, replica_id: ReplicaId, cutoff: &str) -> String {
     // Interpolating into SQL is safe here: the ids are catalog-internal and the
     // cutoff is an RFC 3339 timestamp we formatted ourselves. Nothing in this

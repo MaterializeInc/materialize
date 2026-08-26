@@ -50,6 +50,11 @@ It installs an internal subscribe on that replica which aggregates every worker'
 completed rows, anti-joins them against the history table, and writes the missing
 ones through the timestamped OCC read-then-write path.
 
+Collection has no explicit batch bound. It returns at most one row per
+not-yet-recorded dataflow, and the OCC path rejects a result that exceeds
+`max_result_size` or `max_query_result_size`. At their 1 GiB defaults that ceiling
+only matters at millions of dataflows per replica.
+
 Two dyncfgs control it. `hydration_history_collection_interval` sets the sweep
 cadence and disables collection at zero, which is the production default.
 `hydration_history_retention_period` bounds how long rows live, defaulting to 30
