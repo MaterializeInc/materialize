@@ -140,15 +140,21 @@ export const useUniversalTable = <TData>(
   // so the page that never existed is not shown on the way to the one that
   // does.
   //
+  // A count of zero means the table has no rows to place the index against, not
+  // that the index is wrong: data that has not arrived yet, or a filter that
+  // currently matches nothing. Clamping then would throw away a page restored
+  // from a URL before the rows that justify it exist. Leaving it alone costs
+  // nothing, since a table with no rows shows no rows on any page, and the
+  // clamp runs again once there is a count to judge against.
+  //
   // NOTE: skipped under `manualPagination`, where the page count comes from the
   // caller and -1 means "not known yet" rather than "no pages".
   const pageCount = table.getPageCount();
   const { pageIndex } = table.getState().pagination;
   React.useLayoutEffect(() => {
-    if (tableOptions.manualPagination) return;
-    const lastPage = Math.max(0, pageCount - 1);
-    if (pageIndex > lastPage) {
-      table.setPageIndex(lastPage);
+    if (tableOptions.manualPagination || pageCount < 1) return;
+    if (pageIndex > pageCount - 1) {
+      table.setPageIndex(pageCount - 1);
     }
   }, [table, tableOptions.manualPagination, pageCount, pageIndex]);
 

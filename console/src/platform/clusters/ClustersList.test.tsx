@@ -1439,7 +1439,11 @@ describe("ClustersList filter URL state", () => {
     }),
   ];
 
-  /** Renders the list at `url`, so a bookmarked query string can be replayed. */
+  /**
+   * Renders the list at `url`, so a bookmarked query string can be replayed.
+   * Settles on the table, or on the empty state when the URL's filters match
+   * nothing and there is no table to wait for.
+   */
   const renderAt = async (clusters: Cluster[], url = "/") => {
     getStore().set(allClusters, mockSubscribeState({ data: clusters }));
     const rendered = renderComponent(
@@ -1448,7 +1452,11 @@ describe("ClustersList filter URL state", () => {
       </RenderWithSearch>,
       { initialRouterEntries: [url] },
     );
-    await screen.findByRole("table");
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("table") ?? screen.queryByText(NO_MATCHES_MESSAGE),
+      ).not.toBeNull(),
+    );
     return rendered;
   };
 
@@ -1569,8 +1577,11 @@ describe("ClustersList filter URL state", () => {
     expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
   });
 
-  /** 21 replicas: two pages at a page size of 20. */
-  const twoPagesOfReplicas = (count = 21) => [
+  /**
+   * 21 replicas: two pages at a page size of 20. By default only the last one
+   * clears a 50% threshold; `cpuPercent` gives every replica the same reading.
+   */
+  const twoPagesOfReplicas = (count = 21, cpuPercent?: number) => [
     buildCluster({
       id: "u1",
       name: "compute",
@@ -1578,8 +1589,7 @@ describe("ClustersList filter URL state", () => {
         buildReplica({
           id: `u${100 + i}`,
           name: `r-${i}`,
-          // Only the last replica clears a 50% threshold.
-          cpuPercent: i === 20 ? 0.9 : 0.1,
+          cpuPercent: cpuPercent ?? (i === 20 ? 0.9 : 0.1),
         }),
       ),
     }),
@@ -1601,6 +1611,28 @@ describe("ClustersList filter URL state", () => {
     );
 
     await waitFor(() => expect(rowOrder()).toEqual(["r-0", "r-1", "r-2"]));
+  });
+
+  it("keeps a bookmarked page while the filter matches nothing yet", async () => {
+    // No replica clears a 90% threshold, so the bookmarked filter starts out
+    // matching none of them.
+    await renderAt(twoPagesOfReplicas(), "/?cpu=gt.90&page=2");
+
+    expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
+    // Nothing matches, so there is no page count to judge page 2 against.
+    // Dropping it here would lose the page before the rows that justify it are
+    // there to be counted, which is what utilization arriving late looks like.
+    await waitFor(() => expect(currentSearch().get("page")).toBe("2"));
+
+    // The readings now clear the threshold, which is what utilization arriving
+    // after the first render looks like. The bookmarked page is still there to
+    // be honoured.
+    getStore().set(
+      allClusters,
+      mockSubscribeState({ data: twoPagesOfReplicas(21, 0.95) }),
+    );
+
+    await waitFor(() => expect(rowOrder()).toEqual(["r-20"]));
   });
 
   it("resets the page when a filter shrinks the row count", async () => {

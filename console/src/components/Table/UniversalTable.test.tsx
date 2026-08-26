@@ -150,6 +150,38 @@ const TableAtPage = ({
   );
 };
 
+/**
+ * Rows arrive after the first commit, the way a query's data does. The starting
+ * page has to survive that first render, when the table has nothing in it yet.
+ */
+const LateDataTable = ({
+  pageSize = 2,
+  pageIndex,
+}: {
+  pageSize?: number;
+  pageIndex: number;
+}) => {
+  const [data, setData] = React.useState<TestCluster[]>([]);
+  React.useEffect(() => {
+    setData(testData);
+  }, []);
+  const table = useUniversalTable({
+    data,
+    columns,
+    pageSize,
+    initialState: { pagination: { pageIndex, pageSize } },
+  });
+  return (
+    <div>
+      <UniversalTable table={table} data-testid="test-table" />
+      <TablePagination table={table} itemLabel="clusters" />
+      <div data-testid="page-index">
+        {table.getState().pagination.pageIndex}
+      </div>
+    </div>
+  );
+};
+
 const footerColumns = [
   columnHelper.accessor("name", { header: "Name", footer: "Total" }),
   columnHelper.accessor("replicas", {
@@ -489,6 +521,29 @@ describe("UniversalTable", () => {
 
       expect(screen.getByTestId("page-index")).toHaveTextContent("1");
       expect(screen.getByText("page 2 of 3")).toBeInTheDocument();
+    });
+
+    it("keeps the starting page when the rows arrive after the first render", async () => {
+      await renderComponent(<LateDataTable pageIndex={2} pageSize={2} />);
+
+      // 5 rows over 3 pages, so page 3 is valid once the data lands. Clamping
+      // against the empty first render would have dropped the user to page 1
+      // before the rows that justify page 3 existed.
+      await waitFor(() =>
+        expect(screen.getByTestId("page-index")).toHaveTextContent("2"),
+      );
+      expect(screen.getByText("page 3 of 3")).toBeInTheDocument();
+    });
+
+    it("leaves the page alone when the table has no rows", async () => {
+      await renderComponent(
+        <TableAtPage data={[]} pageIndex={2} pageSize={2} />,
+      );
+
+      // No rows means no page count to judge the index against. A table with
+      // nothing in it shows nothing on any page, so holding the index costs
+      // nothing and keeps it for when rows appear.
+      expect(screen.getByTestId("page-index")).toHaveTextContent("2");
     });
 
     it("leaves the page alone under manual pagination", async () => {
