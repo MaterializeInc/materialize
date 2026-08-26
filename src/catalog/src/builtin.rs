@@ -837,6 +837,14 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION: LazyLock<SystemObject
         object_name: MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY.name.to_string(),
     });
 
+/// Identifies [`MZ_OBJECT_HYDRATION_HISTORY`] for the schema-migration guard.
+pub static MZ_OBJECT_HYDRATION_HISTORY_DESCRIPTION: LazyLock<SystemObjectDescription> =
+    LazyLock::new(|| SystemObjectDescription {
+        schema_name: MZ_OBJECT_HYDRATION_HISTORY.schema.to_string(),
+        object_type: CatalogItemType::Table,
+        object_name: MZ_OBJECT_HYDRATION_HISTORY.name.to_string(),
+    });
+
 /// Identifies [`MZ_CLUSTER_REPLICA_FRONTIERS`] for the schema-migration guard in
 /// `builtin_schema_migration.rs`, which forbids migrating this source because the 0dt
 /// caught-up gate reads the leader's shard for it to learn the live frontiers.
@@ -1477,6 +1485,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_INDEX_ADVICE),
         Builtin::View(&MZ_MCP_DATA_PRODUCTS),
         Builtin::View(&MZ_MCP_DATA_PRODUCT_DETAILS),
+        Builtin::Table(&MZ_OBJECT_HYDRATION_HISTORY),
     ];
 
     builtin_items.extend(notice::builtins());

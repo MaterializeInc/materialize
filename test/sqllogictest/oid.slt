@@ -1251,3 +1251,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17119  mz_builtin_views
 17120  mz_metric_sinks
 17121  mz_metric_sinks_ind
+17122  mz_object_hydration_history
