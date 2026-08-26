@@ -22,5 +22,6 @@ echo "<!doctype html>" > ci/www/public/index.html
 try htmltest -s ci/www/public -c doc/user/.htmltest.yml
 try ci/test/lint-docs-catalog.sh
 try ci/test/lint-metrics-catalog.sh
+try ci/test/lint-skill-metrics.sh
 
 try_status_report
