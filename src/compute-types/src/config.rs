@@ -52,3 +52,23 @@ impl ComputeReplicaLogging {
         self.interval.is_some()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::ComputeReplicaLogging;
+
+    /// Two per-replica install paths (introspection subscribes, curated metric sinks) skip a
+    /// replica on this predicate, so pin what it means.
+    #[mz_ore::test]
+    fn logging_is_enabled_exactly_when_an_interval_is_set() {
+        let logging = |interval| ComputeReplicaLogging {
+            log_logging: false,
+            interval,
+        };
+
+        assert!(logging(Some(Duration::from_secs(1))).enabled());
+        assert!(!logging(None).enabled());
+    }
+}

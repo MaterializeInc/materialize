@@ -149,5 +149,35 @@ idx_div_by_zero r1 1
   JOIN mz_cluster_replicas r ON c.replica_id = r.id
   WHERE c.count != 0
 
+# Test that no introspection subscribes are installed on a replica created with
+# introspection disabled. Its logging dataflows never run, so a subscribe there
+# would never advance and would pin the read holds it takes for the replica's
+# whole life.
+#
+# The subscribes are transient dataflows targeted at a single replica, so they
+# show up as `t%` object IDs in `mz_cluster_replica_frontiers`.
+
+> CREATE CLUSTER introspection_off (SIZE '${arg.default-replica-size}', INTROSPECTION INTERVAL 0)
+> CREATE CLUSTER introspection_on (SIZE '${arg.default-replica-size}')
+
+# The positive control is created last, so by the time its subscribes are
+# visible the ones for `introspection_off` would be too.
+> SELECT count(*) > 0
+  FROM mz_cluster_replica_frontiers f
+  JOIN mz_cluster_replicas r ON r.id = f.replica_id
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'introspection_on' AND f.object_id LIKE 't%'
+true
+
+> SELECT count(*)
+  FROM mz_cluster_replica_frontiers f
+  JOIN mz_cluster_replicas r ON r.id = f.replica_id
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'introspection_off' AND f.object_id LIKE 't%'
+0
+
+> DROP CLUSTER introspection_on
+> DROP CLUSTER introspection_off
+
 # Clean up.
 > DROP CLUSTER test

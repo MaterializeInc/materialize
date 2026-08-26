@@ -114,6 +114,25 @@ impl Coordinator {
             .collect()
     }
 
+    /// Whether `replica_id` on `cluster_id` has replica introspection (logging) enabled.
+    ///
+    /// A replica created with `INTROSPECTION INTERVAL 0` still installs its logging dataflows, but
+    /// they replay empty, so a per-replica feature reading those log relations only ever sees a
+    /// dead source. Both the introspection-subscribe and curated-metric-sink installs skip such
+    /// replicas.
+    ///
+    /// Returns `false` for a replica or cluster not in the catalog, so a caller racing a replica
+    /// drop installs nothing.
+    pub(super) fn replica_introspection_enabled(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) -> bool {
+        self.catalog
+            .try_get_cluster_replica(cluster_id, replica_id)
+            .is_some_and(|replica| replica.config.compute.logging.enabled())
+    }
+
     /// Installs introspection subscribes on all existing replicas.
     ///
     /// Meant to be invoked during coordinator bootstrapping.
@@ -132,6 +151,10 @@ impl Coordinator {
     ) {
         let dyncfgs = self.catalog().system_config().dyncfgs();
         if !ENABLE_INTROSPECTION_SUBSCRIBES.get(dyncfgs) {
+            return;
+        }
+
+        if !self.replica_introspection_enabled(cluster_id, replica_id) {
             return;
         }
 

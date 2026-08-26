@@ -132,13 +132,10 @@ impl Coordinator {
             return;
         }
 
-        // TODO: Skip replicas created with introspection disabled. Their logging dataflows never
-        // run, so a `source_sql` reading introspection relations there never advances. That is not
-        // just wasted work: the sink publishes its input frontier as its write frontier, so a
-        // never-advancing input stalls the sink's frontier at its as-of and pins the read holds it
-        // takes on those collections for the replica's whole life (replica-local, released on
-        // drop). `coord::introspection` installs subscribes on the same triggers and has the same
-        // gap.
+        if !self.replica_introspection_enabled(cluster_id, replica_id) {
+            return;
+        }
+
         for definition in CURATED {
             self.install_metric_sink(cluster_id, replica_id, definition)
                 .await;
