@@ -538,19 +538,17 @@ impl fmt::Display for DatabaseValidationError {
                             mismatch.source, reason
                         )?;
                     }
-                    if mismatch.available_count > 0 {
-                        writeln!(f)?;
-                        writeln!(
-                            f,
-                            "    {} exposes {} references. To see them all:",
-                            mismatch.source, mismatch.available_count
-                        )?;
-                        writeln!(
-                            f,
-                            "      SELECT namespace, name FROM mz_internal.mz_source_references"
-                        )?;
-                        writeln!(f, "      WHERE source_id = '{}';", mismatch.source_id)?;
-                    }
+                    writeln!(f)?;
+                    writeln!(
+                        f,
+                        "    {} exposes {} references. To see them all:",
+                        mismatch.source, mismatch.available_count
+                    )?;
+                    writeln!(
+                        f,
+                        "      SELECT namespace, name FROM mz_internal.mz_source_references"
+                    )?;
+                    writeln!(f, "      WHERE source_id = '{}';", mismatch.source_id)?;
                 }
                 writeln!(f)?;
                 writeln!(

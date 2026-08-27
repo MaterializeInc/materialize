@@ -28,7 +28,6 @@
 //! | Cluster ownership | `validate_cluster_ownership_impl` | Current role owns all production clusters that will be swapped |
 //! | Table dependencies | `validate_table_dependencies_impl` | Tables depended on by objects being deployed exist |
 //! | Source references | `validate_source_references_impl` | Each `CREATE TABLE FROM SOURCE` names an object its source can read |
-
 //!
 //! ## Batching Strategy
 //!
@@ -46,7 +45,7 @@ use crate::project::ast::Statement;
 use crate::project::ir::graph;
 use crate::project::ir::object_id::ObjectId;
 use crate::suggest::{MAX_DID_YOU_MEAN, did_you_mean};
-use crate::verbose;
+use crate::{info, verbose};
 use mz_sql_parser::ast::{CreateSinkConnection, Ident, UnresolvedItemName};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -1144,9 +1143,13 @@ pub(crate) async fn validate_source_references_impl(
         );
         verbose!("{}", sql);
         if let Err(e) = client.execute(&sql, &[]).await {
-            // The role may not own the source, or the source may not support
-            // the statement. Fall back to the recorded references and say so
-            // if a table then fails to match.
+            // The role may not own the source, or the upstream system may be
+            // unreachable. The check falls back to the recorded references, a
+            // snapshot from when the source was created, so it still runs but
+            // may be judging stale data. Say so here as well as in a mismatch:
+            // a stale snapshot that happens to match is otherwise
+            // indistinguishable from a fresh one.
+            info!("warning: could not refresh the references for {source}: {e}");
             unreadable.insert(source.clone(), e.to_string());
         }
     }
