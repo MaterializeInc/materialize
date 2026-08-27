@@ -1139,6 +1139,8 @@ async fn purify_create_source(
                 external_references,
                 text_columns,
                 exclude_columns,
+                &BTreeSet::new(),
+                false,
                 source_name,
                 initial_gtid_set.clone(),
                 &reference_policy,
@@ -1571,6 +1573,8 @@ async fn purify_alter_source_add_subsources(
                 &requested_references,
                 text_columns,
                 exclude_columns,
+                &BTreeSet::new(),
+                false,
                 &unresolved_source_name,
                 initial_gtid_set,
                 &SourceReferencePolicy::Required,
@@ -1868,7 +1872,10 @@ async fn purify_create_table_from_source(
     // Excluding constraints is only meaningful for sources whose upstream
     // tables have constraints Materialize records as keys.
     if (!exclude_constraints.is_empty() || exclude_all_constraints)
-        && !matches!(desc.connection, GenericSourceConnection::Postgres(_))
+        && !matches!(
+            desc.connection,
+            GenericSourceConnection::Postgres(_) | GenericSourceConnection::MySql(_)
+        )
     {
         sql_bail!(
             "EXCLUDE CONSTRAINTS is not supported for {} sources",
@@ -1960,6 +1967,8 @@ async fn purify_create_table_from_source(
                 &requested_references,
                 qualified_text_columns,
                 qualified_exclude_columns,
+                &exclude_constraints,
+                exclude_all_constraints,
                 &unresolved_source_name,
                 initial_gtid_set,
                 &SourceReferencePolicy::Required,
