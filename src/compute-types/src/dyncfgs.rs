@@ -633,14 +633,19 @@ pub const PEEK_ROW_ITERATION_LIMIT: Config<usize> = Config::new(
     ParameterScope::Environment,
 );
 
-/// Whether a fast-path index peek may move its walk off the timely worker.
+/// Whether a fast-path index peek may move its walk off the timely worker for latency.
 ///
-/// Off, a peek walks the arrangement to completion on the worker that owns it, so an expensive
+/// Off, a peek walks the arrangement on the worker that owns it until it answers, so an expensive
 /// peek delays every other message that worker serves. On, a peek that outruns
 /// [`INDEX_PEEK_INLINE_BUDGET`] is promoted and finishes away from the worker.
 ///
-/// The kill switch for the whole mechanism, and off by default so production placement is
-/// unchanged until the path earns trust.
+/// It gates promotion for latency and only that. A peek whose accumulated rows outgrow what it may
+/// answer with inline is promoted whichever way this is set, because the driver that writes to the
+/// peek stash is the promoted one and such a peek has no other route to an answer. Off therefore
+/// means an ordinary peek runs where it used to, not that no peek ever leaves the worker.
+///
+/// The kill switch for the placement, and off by default so production placement is unchanged
+/// until the path earns trust.
 ///
 /// Environment-scoped because it selects between two execution paths whose output-equivalence is
 /// an assumption rather than a guarantee. A peek is broadcast to every replica of its cluster and
@@ -676,8 +681,8 @@ pub const ENABLE_INDEX_PEEK_OFFLOAD: Config<bool> = Config::new(
 /// without discarding the positions they have walked.
 ///
 /// Zero walks one position rather than none. A peek granted no fuel suspends before it has walked
-/// anywhere, and a suspension holding no full batch is a promotion, so zero would promote every
-/// point lookup for a walk that visited nothing.
+/// anywhere, and a suspension is a promotion, so zero would promote every point lookup for a walk
+/// that visited nothing.
 ///
 /// Environment-scoped because the threshold decides which peeks leave the worker. A value that
 /// differs by replica selects a different execution path for the same peek exactly as

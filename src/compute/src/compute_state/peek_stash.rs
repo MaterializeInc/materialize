@@ -6,7 +6,7 @@
 //! For eligible peeks, we send the result back via the peek stash (aka persist
 //! blob), instead of inline in `ComputeResponse`.
 
-use std::num::{NonZeroI64, NonZeroU64};
+use std::num::{NonZeroI64, NonZeroU64, NonZeroUsize};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -56,6 +56,9 @@ pub struct StashingPeek {
     _abort_handle: AbortOnDropHandle<()>,
 }
 
+// A peek whose answer belongs in the stash is written there by the walk that produces it, so
+// nothing opens an upload of its own here.
+#[allow(dead_code)]
 impl StashingPeek {
     pub fn start_upload(
         persist_clients: Arc<PersistClientCache>,
@@ -148,7 +151,7 @@ impl StashingPeek {
         loop {
             let row = rows_rx.recv().await;
             match row {
-                Some(Ok(rows)) => match upload.push(rows).await {
+                Some(Ok(rows)) => match upload.push(rows).await? {
                     UploadDemand::Wants => {}
                     UploadDemand::Satisfied => {
                         // Drop the receiver so the producer's next
@@ -164,7 +167,7 @@ impl StashingPeek {
             }
         }
 
-        Ok(upload.finish().await)
+        upload.finish(RowBatch::new()).await
     }
 
     /// Pumps rows from the [PeekResultIterator] to the async task, via our
@@ -232,6 +235,10 @@ pub(super) enum UploadDemand {
 /// The rows an upload is given are the rows it writes, in the order it is given them, up to the
 /// point where the peek's finishing has all it can use. An upload dropped without
 /// [`StashUpload::finish`] leaves the parts it has already written to blob storage behind.
+///
+/// Every write reports its failure rather than raising it. The unit that fails is the peek, whose
+/// driver answers it with the error, so a rejected write costs one query its answer instead of
+/// costing the walk that produced it its task.
 pub(super) struct StashUpload {
     /// The description the stashed response reports, and the schema the batch is written under.
     relation_desc: RelationDesc,
@@ -309,7 +316,10 @@ impl StashUpload {
     /// that is where it lands, and discards the rest of them. A driver holding a walk that is still
     /// producing rows learns from the [`UploadDemand::Satisfied`] this returns that it may stop the
     /// walk rather than finish it.
-    pub(super) async fn push(&mut self, rows: RowBatch) -> UploadDemand {
+    ///
+    /// Fails where persist rejects the write, which leaves the upload unusable and the rows it
+    /// holds unanswerable.
+    pub(super) async fn push(&mut self, rows: RowBatch) -> Result<UploadDemand, String> {
         for (row, diff) in rows {
             if self.demand() == UploadDemand::Satisfied {
                 break;
@@ -321,10 +331,10 @@ impl StashUpload {
             self.batch_builder
                 .add(&SourceData(Ok(row)), &(), &Timestamp::default(), &diff)
                 .await
-                .expect("invalid usage");
+                .map_err(|err| err.to_string())?;
         }
 
-        self.demand()
+        Ok(self.demand())
     }
 
     /// Whether the upload still wants rows.
@@ -336,12 +346,27 @@ impl StashUpload {
     }
 
     /// Finishes the batch and builds the response that names it.
-    pub(super) async fn finish(self) -> PeekResponse {
+    ///
+    /// `inline_rows` are rows of the same answer that never reached the stash, which the response
+    /// carries beside the batch rather than paying a write for. They are outside the stashed row
+    /// count, which describes the batch alone, and outside the ordering the stash imposes, which is
+    /// sound because a peek reaches the stash only with an empty `order_by`.
+    ///
+    /// Fails where persist rejects the batch, in which case nothing that was written is readable.
+    pub(super) async fn finish(self, inline_rows: RowBatch) -> Result<PeekResponse, String> {
         let batch = self
             .batch_builder
             .finish(self.upper)
             .await
-            .expect("invalid usage");
+            .map_err(|err| err.to_string())?;
+
+        let inline_rows = inline_rows
+            .into_iter()
+            .map(|(row, copies)| {
+                let copies = NonZeroUsize::try_from(copies).expect("fits into usize");
+                (row, copies)
+            })
+            .collect();
 
         let stashed_response = StashedPeekResponse {
             num_rows_batches: self.num_rows,
@@ -349,15 +374,67 @@ impl StashUpload {
             relation_desc: self.relation_desc,
             shard_id: self.shard_id,
             batches: vec![batch.into_transmittable_batch()],
-            inline_rows: vec![RowCollection::new(vec![], &[])],
+            inline_rows: vec![RowCollection::new(inline_rows, &[])],
         };
-        PeekResponse::Stashed(Box::new(stashed_response))
+        Ok(PeekResponse::Stashed(Box::new(stashed_response)))
+    }
+}
+
+/// Where a peek's rows go when they may not be answered with inline, and what opening the upload
+/// that writes them takes.
+///
+/// A driver holds a target rather than an open upload, because a walk that never crosses the stash
+/// threshold must neither open a shard nor write a byte, and most walks never do. A driver is given
+/// one exactly when the scan it drives was opened stash-eligible, so a walk with no target is a
+/// walk whose scan offers no batch.
+pub(super) struct StashTarget {
+    persist_clients: Arc<PersistClientCache>,
+    persist_location: PersistLocation,
+    /// The peek's uuid, which the shard the batch belongs to is derived from.
+    peek_uuid: Uuid,
+    /// The description the rows are written under, and the one the response reports.
+    relation_desc: RelationDesc,
+    /// The number of rows the peek's finishing can use, its offset plus its limit, or `None` for a
+    /// finishing that can use every row the peek produces.
+    max_rows: Option<usize>,
+}
+
+impl StashTarget {
+    /// The stash `peek`'s rows go to, at `persist_location`.
+    pub(super) fn new(
+        peek: &Peek,
+        persist_clients: Arc<PersistClientCache>,
+        persist_location: PersistLocation,
+    ) -> Self {
+        Self {
+            persist_clients,
+            persist_location,
+            peek_uuid: peek.uuid,
+            relation_desc: peek.result_desc.clone(),
+            max_rows: peek.finishing.num_rows_needed(),
+        }
+    }
+
+    /// Opens the upload, whose batch builder holds at most `batch_max_runs` runs.
+    pub(super) async fn open(&self, batch_max_runs: usize) -> Result<StashUpload, String> {
+        StashUpload::open(
+            &self.persist_clients,
+            self.persist_location.clone(),
+            batch_max_runs,
+            self.peek_uuid,
+            self.relation_desc.clone(),
+            self.max_rows,
+        )
+        .await
     }
 }
 
 /// Tests of the incremental stash upload, over the persist location a replica would write to.
+///
+/// [`tests::stashed_rows`] is shared with the drivers that feed an upload, which read a response
+/// back the same way.
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use mz_compute_types::dyncfgs::{
         PEEK_RESPONSE_STASH_BATCH_MAX_RUNS, PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES,
     };
@@ -395,6 +472,19 @@ mod tests {
         .expect("the in-memory location opens")
     }
 
+    /// Writes `rows` to `upload`, which persist accepts for every batch built here.
+    async fn push(upload: &mut StashUpload, rows: RowBatch) -> UploadDemand {
+        upload.push(rows).await.expect("persist takes the rows")
+    }
+
+    /// Finishes `upload` beside `inline_rows`, which persist accepts for every batch built here.
+    async fn finish(upload: StashUpload, inline_rows: RowBatch) -> PeekResponse {
+        upload
+            .finish(inline_rows)
+            .await
+            .expect("persist finishes the batch")
+    }
+
     /// The values a finished upload holds, in ascending order, each repeated as often as the diff
     /// it was written with.
     ///
@@ -407,6 +497,24 @@ mod tests {
             panic!("an upload finishes into a stashed response, not {response:?}");
         };
 
+        stashed_rows(clients, *stashed)
+            .await
+            .into_iter()
+            .map(|row| row.unpack_first().unwrap_uint64())
+            .collect()
+    }
+
+    /// The rows the batches of `stashed` hold, in [`Row`] order, each repeated as often as the diff
+    /// it was written with.
+    ///
+    /// A stashed response names a persist batch rather than carrying rows, so what an upload wrote
+    /// is only visible from the batch. Read as the coordinator reads one, deletions included, and
+    /// sorted because persist consolidates a batch rather than preserving the order it was written
+    /// in. Rows the response carries in `inline_rows` are not here: they never reached a batch.
+    pub(crate) async fn stashed_rows(
+        clients: &PersistClientCache,
+        stashed: StashedPeekResponse,
+    ) -> Vec<Row> {
         // Opened out of the cache that opened the upload, because two `PersistLocation`s naming the
         // same in-memory URI reach the same blob only through one cache.
         let mut client = clients
@@ -437,23 +545,22 @@ mod tests {
             .await
             .expect("the batch is readable at the timestamp it was written at");
 
-        let mut values = Vec::new();
+        let mut rows = Vec::new();
         while let Some(updates) = cursor.next().await {
             for ((key, _val), _time, diff) in updates {
                 let row = key.0.expect("the peek stash holds no errors");
-                let value = row.unpack_first().unwrap_uint64();
                 let copies = usize::try_from(diff).expect("a stashed row carries a positive diff");
-                values.extend(std::iter::repeat_n(value, copies));
+                rows.extend(std::iter::repeat_n(row, copies));
             }
         }
-        values.sort();
+        rows.sort();
 
         // Deleted as the coordinator deletes them once it has read them. A batch dropped without
         // this leaves its blob keys behind and says so in a warning.
         for batch in cursor.into_lease() {
             batch.delete().await;
         }
-        values
+        rows
     }
 
     /// An upload with no limit to reach holds every row pushed into it, over as many pushes as the
@@ -463,10 +570,10 @@ mod tests {
         let clients = PersistClientCache::new_no_metrics();
         let mut upload = open_upload(&clients, None).await;
 
-        assert_eq!(upload.push(batch(0..3, 1)).await, UploadDemand::Wants);
-        assert_eq!(upload.push(batch(3..5, 1)).await, UploadDemand::Wants);
+        assert_eq!(push(&mut upload, batch(0..3, 1)).await, UploadDemand::Wants);
+        assert_eq!(push(&mut upload, batch(3..5, 1)).await, UploadDemand::Wants);
 
-        let response = upload.finish().await;
+        let response = finish(upload, RowBatch::new()).await;
         let PeekResponse::Stashed(stashed) = &response else {
             panic!("an upload finishes into a stashed response, not {response:?}");
         };
@@ -488,12 +595,12 @@ mod tests {
         let mut upload = open_upload(&clients, Some(4)).await;
 
         assert_eq!(
-            upload.push(batch(0..2, 3)).await,
+            push(&mut upload, batch(0..2, 3)).await,
             UploadDemand::Satisfied,
             "six copies of two rows is past a limit of four"
         );
         assert_eq!(
-            stashed_values(&clients, upload.finish().await).await,
+            stashed_values(&clients, finish(upload, RowBatch::new()).await).await,
             vec![0, 0, 0, 1, 1, 1],
             "the row that crossed the limit is written whole"
         );
@@ -511,17 +618,59 @@ mod tests {
             UploadDemand::Wants,
             "an upload that has written nothing wants rows"
         );
-        assert_eq!(upload.push(batch(0..4, 1)).await, UploadDemand::Satisfied);
         assert_eq!(
-            upload.push(batch(4..8, 1)).await,
+            push(&mut upload, batch(0..4, 1)).await,
+            UploadDemand::Satisfied
+        );
+        assert_eq!(
+            push(&mut upload, batch(4..8, 1)).await,
             UploadDemand::Satisfied,
             "a satisfied upload stays satisfied"
         );
 
         assert_eq!(
-            stashed_values(&clients, upload.finish().await).await,
+            stashed_values(&clients, finish(upload, RowBatch::new()).await).await,
             vec![0, 1],
             "the rows past the limit are discarded, in the push that crossed it and after it"
+        );
+    }
+
+    /// Rows a walk still held when it ended travel with the response rather than through the
+    /// batch, so a reader sees them beside the stashed rows and the stashed row count counts only
+    /// what the batch holds.
+    #[mz_ore::test(tokio::test)]
+    async fn rows_that_never_reached_the_stash_travel_inline() {
+        let clients = PersistClientCache::new_no_metrics();
+        let mut upload = open_upload(&clients, None).await;
+
+        assert_eq!(push(&mut upload, batch(0..3, 1)).await, UploadDemand::Wants);
+
+        let response = finish(upload, batch(3..5, 1)).await;
+        let PeekResponse::Stashed(stashed) = &response else {
+            panic!("an upload finishes into a stashed response, not {response:?}");
+        };
+        assert_eq!(
+            stashed.num_rows_batches, 3,
+            "the stashed row count describes the batch alone"
+        );
+        let expected: Vec<(Row, NonZeroUsize)> = batch(3..5, 1)
+            .into_iter()
+            .map(|(row, copies)| {
+                (
+                    row,
+                    NonZeroUsize::try_from(copies).expect("fits into usize"),
+                )
+            })
+            .collect();
+        assert_eq!(
+            stashed.inline_rows,
+            vec![RowCollection::new(expected, &[])],
+            "the rows the walk still held travel with the response"
+        );
+        assert_eq!(
+            stashed_values(&clients, response).await,
+            vec![0, 1, 2],
+            "the rows carried inline are not written to the batch as well"
         );
     }
 }

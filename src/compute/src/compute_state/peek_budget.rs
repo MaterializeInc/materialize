@@ -70,13 +70,17 @@ impl InlineBudgetConfig {
 /// scan charges: a selective filter steps the cursor without returning anything, so a row-counted
 /// budget is one such a peek never spends.
 enum ActivationBudget {
-    /// Every peek walks to completion where it started, and nothing is promoted or passed over.
+    /// Every peek walks on the worker until it answers or until its rows belong in the peek stash,
+    /// and nothing is passed over.
     ///
-    /// This is what the kill switch restores, and it has to be what the worker did before the
-    /// offload existed rather than an approximation of it. Unbounded fuel is also what makes
-    /// promotion unreachable: the scan suspends only when its fuel runs out or when it holds a
-    /// full batch, and the first cannot happen here, so the only suspension left is the one that
-    /// goes to the peek stash exactly as it did before.
+    /// This is what the kill switch restores, and it is what the worker does for a peek that
+    /// answers inline. Unbounded fuel makes promotion for latency unreachable, because a scan
+    /// suspends only when its fuel runs out or when it holds a batch bound for the stash, and the
+    /// first cannot happen here.
+    ///
+    /// The second still can, and such a peek is still promoted, because the driver that writes to
+    /// the stash is the promoted one. So what this restores is where an ordinary peek runs, not a
+    /// guarantee that no peek leaves the worker.
     Unbounded,
     /// A peek may spend `per_peek` before it is promoted, and all peeks together may spend
     /// `remaining` before the rest of this activation's work gets the worker back.
@@ -220,8 +224,9 @@ mod tests {
     }
 
     /// With the offload off, every peek is granted unbounded fuel however much the peeks before it
-    /// spent, which is what makes the kill switch restore the worker's old behaviour rather than
-    /// approximate it.
+    /// spent, which is how the kill switch keeps a peek that answers inline on the worker. It says
+    /// nothing about a peek whose rows belong in the stash, which suspends on its batch rather
+    /// than on its fuel and leaves the worker either way.
     #[mz_ore::test]
     fn the_kill_switch_grants_every_peek_an_unbounded_slice() {
         let config = mz_dyncfgs::all_dyncfgs();

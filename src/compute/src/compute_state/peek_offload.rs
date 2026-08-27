@@ -10,16 +10,19 @@
 //! permit that admitted it, which is what ties the bound on concurrent walks to the memory those
 //! walks retain: every way the task ends, including a panic, drops the two together.
 //!
-//! This driver performs no IO of its own. The task walks traces and accumulates rows, and a walk
-//! whose rows outgrow an inline answer stops and hands back rather than writing them, which leaves
-//! the writing to the worker.
+//! This driver is the only one that performs IO, and that is what keeps the scan it drives free of
+//! async colouring. A walk whose accumulated rows outgrow an inline answer hands the driver a full
+//! batch, the driver writes it to the peek stash, and the same walk carries on from where it
+//! stopped rather than starting over.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use mz_compute_client::protocol::command::Peek;
-use mz_compute_client::protocol::response::PeekResponse;
-use mz_compute_types::dyncfgs::{INDEX_PEEK_PERMITS, INDEX_PEEK_YIELD_GRANULARITY};
+use mz_compute_client::protocol::response::{PeekError, PeekResponse};
+use mz_compute_types::dyncfgs::{
+    INDEX_PEEK_PERMITS, INDEX_PEEK_YIELD_GRANULARITY, PEEK_RESPONSE_STASH_BATCH_MAX_RUNS,
+};
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_expr::ColumnOrder;
 use mz_ore::task::AbortOnDropHandle;
@@ -27,10 +30,10 @@ use timely::scheduling::SyncActivator;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
 use tracing::debug;
 
-use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::PeekRowIterationConfig;
 use crate::compute_state::peek_metrics::PeekWalkMetrics;
-use crate::compute_state::peek_scan::{IndexPeekScan, ScanOutcome};
+use crate::compute_state::peek_scan::{IndexPeekScan, RowBatch, ScanOutcome};
+use crate::compute_state::peek_stash::{StashTarget, StashUpload, UploadDemand};
 
 /// The bound on how many promoted peek walks run at once.
 ///
@@ -97,13 +100,14 @@ impl PeekPermits {
 /// `UpdateConfiguration` applies to walks that are already under way, so a walk reads what is in
 /// effect when it reads rather than what was in effect when it was promoted, and a change reaches
 /// it without discarding the cursor positions it has already visited. The yield granularity and
-/// the row iteration limit are read at every slice boundary. The permit count is read once, on the
-/// worker, because it sizes the bound the walk then queues on rather than anything the walk does
-/// between slices.
+/// the row iteration limit are read at every slice boundary, and the batch runs where the walk
+/// opens its upload. The permit count is read once, on the worker, because it sizes the bound the
+/// walk then queues on rather than anything the walk does between slices.
 #[derive(Clone, Debug)]
 pub(super) struct OffloadConfig {
     permits: ConfigValHandle<usize>,
     yield_granularity: ConfigValHandle<usize>,
+    batch_max_runs: ConfigValHandle<usize>,
     row_iteration: PeekRowIterationConfig,
 }
 
@@ -112,20 +116,21 @@ impl OffloadConfig {
         Self {
             permits: INDEX_PEEK_PERMITS.handle(config),
             yield_granularity: INDEX_PEEK_YIELD_GRANULARITY.handle(config),
+            batch_max_runs: PEEK_RESPONSE_STASH_BATCH_MAX_RUNS.handle(config),
             row_iteration: PeekRowIterationConfig::new(config),
         }
     }
 }
 
-/// What a promoted walk hands back to the worker that promoted it.
-pub enum OffloadOutcome {
-    /// The walk answered the peek.
-    Answered(PeekResponse),
-    /// The walk accumulated more rows than the peek may answer with inline, and answering it needs
-    /// them written to the peek stash. This driver performs no IO, so the walk stops here and the
-    /// worker takes the peek to the stash instead.
-    NeedsStash,
-}
+/// What a walk answers a peek with when it produced rows it may not answer with inline and has
+/// nowhere to write them.
+///
+/// Unreachable by construction: a walk is given a stash target exactly where its scan was opened
+/// stash-eligible, and a scan that is not stash-eligible offers no batch. It is answered rather
+/// than asserted because the alternative to an answer is a peek that waits forever on a walk that
+/// has stopped.
+const NO_STASH_LOCATION: &str =
+    "peek result is too large to answer inline and this replica has no peek stash location";
 
 /// An index peek whose walk is running away from the worker that owns it.
 ///
@@ -133,14 +138,8 @@ pub enum OffloadOutcome {
 /// meant to be dropped once it has been responded to.
 pub struct OffloadedPeek {
     pub(crate) peek: Peek,
-    /// The traces the walk reads.
-    ///
-    /// Retained so that the peek stash can walk the ok trace again from here when the walk hands
-    /// back. The compaction hold this bundle carries is what keeps that second walk able to read
-    /// at the peek's timestamp.
-    pub(crate) trace_bundle: TraceBundle,
-    /// The outcome of the walk, eventually.
-    pub(crate) result: oneshot::Receiver<(OffloadOutcome, Duration)>,
+    /// The peek's answer, eventually.
+    pub(crate) result: oneshot::Receiver<(PeekResponse, Duration)>,
     /// The `tracing::Span` tracking this peek's operation.
     pub(crate) span: tracing::Span,
     /// The task driving the walk. Dropping this aborts it, which drops the scan, the cursors it
@@ -151,31 +150,25 @@ pub struct OffloadedPeek {
 impl OffloadedPeek {
     /// Promotes `scan` to a task that finishes the walk away from the worker.
     ///
-    /// `peek` and `trace_bundle` stay with the worker rather than moving into the task, because
-    /// the bundle is what the stash restarts the walk from if the walk hands back.
+    /// `stash` is where the walk writes rows the peek may not answer with inline, and is `Some`
+    /// exactly where `scan` was opened stash-eligible. A walk whose scan offers a batch and holds
+    /// no target answers the peek with an error rather than stopping.
     ///
-    /// The scan must not already hold a full batch. Such a scan has nothing left to do here: its
-    /// first step reports that it needs the stash, so promoting it costs a permit and a hand-off
-    /// for a peek the worker could have diverted itself. The precondition is checked rather than
-    /// assumed, because such a scan holds a permit for the length of a hand-off and produces
-    /// nothing in return.
+    /// The scan may already hold a full batch. Such a scan makes no progress until the batch is
+    /// taken, and this driver is the one that takes it, so promoting it is how a peek whose answer
+    /// is too large to return inline reaches the stash at all.
     ///
-    /// `activator` wakes the worker once the outcome is ready, because nothing else the worker
+    /// `activator` wakes the worker once the answer is ready, because nothing else the worker
     /// waits on is disturbed by this task finishing.
     pub(super) fn promote(
         peek: Peek,
-        trace_bundle: TraceBundle,
         scan: IndexPeekScan,
+        stash: Option<StashTarget>,
         permits: &PeekPermits,
         config: OffloadConfig,
         metrics: PeekWalkMetrics,
         activator: SyncActivator,
     ) -> Self {
-        debug_assert!(
-            !scan.batch_ready(),
-            "promoted a peek scan that already holds a full batch"
-        );
-
         let (mut result_tx, result_rx) = oneshot::channel();
         let semaphore = permits.resize(config.permits.get());
 
@@ -199,8 +192,10 @@ impl OffloadedPeek {
                 };
                 queued.admitted();
 
-                let Some(outcome) =
-                    Self::walk(permit, scan, &config, &metrics, &order_by, &result_tx).await
+                let Some(response) = Self::walk(
+                    permit, scan, stash, &config, &metrics, &order_by, &result_tx,
+                )
+                .await
                 else {
                     return;
                 };
@@ -211,9 +206,9 @@ impl OffloadedPeek {
                 // something other than the walks that ended.
                 metrics.walked_offloaded();
 
-                match result_tx.send((outcome, start.elapsed())) {
+                match result_tx.send((response, start.elapsed())) {
                     Ok(()) => {}
-                    Err((_outcome, elapsed)) => {
+                    Err((_response, elapsed)) => {
                         debug!(duration = ?elapsed, "dropping result for cancelled peek {peek_uuid}")
                     }
                 }
@@ -227,17 +222,17 @@ impl OffloadedPeek {
 
         Self {
             peek,
-            trace_bundle,
             result: result_rx,
             span: tracing::Span::current(),
             _abort_handle: task_handle.abort_on_drop(),
         }
     }
 
-    /// Drives `scan` to an outcome, yielding between slices.
+    /// Drives `scan` to the peek's answer, writing what it may not answer with inline to `stash`
+    /// and yielding between slices.
     ///
     /// Returns `None` for a peek that was cancelled, which is the one way the walk ends without an
-    /// outcome to report.
+    /// answer to report.
     ///
     /// The permit is taken by value so that it lives exactly as long as the walk it admits. Every
     /// way out of here drops it, an early return and an unwind alike. It is declared ahead of the
@@ -246,22 +241,32 @@ impl OffloadedPeek {
     async fn walk(
         _permit: OwnedSemaphorePermit,
         mut scan: IndexPeekScan,
+        stash: Option<StashTarget>,
         config: &OffloadConfig,
         metrics: &PeekWalkMetrics,
         order_by: &[ColumnOrder],
-        result_tx: &oneshot::Sender<(OffloadOutcome, Duration)>,
-    ) -> Option<OffloadOutcome> {
+        result_tx: &oneshot::Sender<(PeekResponse, Duration)>,
+    ) -> Option<PeekResponse> {
+        // Opened by the first batch the scan hands over, so a walk that never crosses the stash
+        // threshold neither opens a shard nor writes a byte. Whether it is open is also what
+        // decides how the peek is answered: an upload answers with a handle, and no upload means
+        // every row the walk produced is still here to answer with.
+        let mut upload: Option<StashUpload> = None;
+
         loop {
             // Cancellation removes the pending peek, which drops the receiving end of this
             // channel, so a closed channel is the walk's cancellation signal and needs no
             // mechanism of its own. The permit goes with this task rather than with the entry that
             // was removed, so it is still accounting for these batches right up to here.
+            //
+            // NOTE: parts of an upload written before this point stay in blob storage. Deleting
+            // them is work this driver does not do.
             if result_tx.is_closed() {
                 return None;
             }
 
             // A granularity of zero would spend no fuel, and a scan stepped with no fuel makes no
-            // progress, so the walk would spin without ever reaching an outcome.
+            // progress, so the walk would spin without ever reaching an answer.
             let mut fuel = config.yield_granularity.get().max(1);
             let row_iteration_limit = config.row_iteration.current_limit();
 
@@ -273,26 +278,73 @@ impl OffloadedPeek {
                     let phases = scan.phases();
                     metrics.observe_error_phase(&phases);
                     metrics.observe_ok_phase(&phases);
-                    return Some(OffloadOutcome::Answered(
-                        metrics.rows_response(rows, order_by),
-                    ));
+                    return Some(match upload {
+                        None => metrics.rows_response(rows, order_by),
+                        Some(upload) => stashed_answer(upload, rows).await,
+                    });
                 }
+                // NOTE: a walk that fails after it has written to the stash abandons the upload,
+                // which leaves the parts already written in blob storage, the same way a
+                // cancellation does.
                 ScanOutcome::Failed(error) => {
                     metrics.observe_error_phase(&scan.phases());
-                    return Some(OffloadOutcome::Answered(PeekResponse::Error(error)));
+                    return Some(PeekResponse::Error(error));
                 }
-                // A suspension holding a full batch is not one this walk can resume. The scan
-                // stops growing its prefix once the batch is full, so stepping it again spends no
-                // fuel and advances no cursor until a driver that writes rows takes the batch, and
-                // this one cannot. Rows accumulated so far are dropped, which is sound because the
-                // stash walks the ok trace again from the trace bundle and re-produces them.
-                ScanOutcome::Suspended if scan.batch_ready() => {
-                    metrics.observe_error_phase(&scan.phases());
-                    return Some(OffloadOutcome::NeedsStash);
+                ScanOutcome::Suspended => {
+                    // A scan hands over a batch only once its accumulation has crossed the stash
+                    // threshold, which most walks never do, and a scan that has one makes no
+                    // progress until it is taken.
+                    if let Some(batch) = scan.take_batch() {
+                        let Some(stash) = &stash else {
+                            return Some(PeekResponse::Error(PeekError::unstructured(
+                                NO_STASH_LOCATION,
+                            )));
+                        };
+
+                        if upload.is_none() {
+                            match stash.open(config.batch_max_runs.get()).await {
+                                Ok(opened) => upload = Some(opened),
+                                Err(error) => {
+                                    return Some(PeekResponse::Error(PeekError::unstructured(
+                                        error,
+                                    )));
+                                }
+                            }
+                        }
+
+                        let open = upload.as_mut().expect("opened above");
+                        match open.push(batch).await {
+                            Ok(UploadDemand::Wants) => {}
+                            // The stash holds every row the peek's finishing can use, so walking
+                            // on would produce rows no answer built from this upload can contain.
+                            // Nothing is left to carry inline: the batch just written is
+                            // everything the scan was holding.
+                            Ok(UploadDemand::Satisfied) => {
+                                // The ok walk stopped short of the trace, so it reports nothing,
+                                // and only the phases that precede it are complete enough to.
+                                metrics.observe_error_phase(&scan.phases());
+                                let open = upload.take().expect("opened above");
+                                return Some(stashed_answer(open, RowBatch::new()).await);
+                            }
+                            Err(error) => {
+                                return Some(PeekResponse::Error(PeekError::unstructured(error)));
+                            }
+                        }
+                    }
+
+                    tokio::task::yield_now().await;
                 }
-                ScanOutcome::Suspended => tokio::task::yield_now().await,
             }
         }
+    }
+}
+
+/// The answer a peek whose rows reached the stash gets, over `inline_rows`, the rows the walk was
+/// still holding when it ended.
+async fn stashed_answer(upload: StashUpload, inline_rows: RowBatch) -> PeekResponse {
+    match upload.finish(inline_rows).await {
+        Ok(response) => response,
+        Err(error) => PeekResponse::Error(PeekError::unstructured(error)),
     }
 }
 
@@ -304,16 +356,21 @@ mod tests {
     use mz_expr::RowSetFinishing;
     use mz_expr::row::RowCollection;
     use mz_ore::metrics::MetricsRegistry;
-    use mz_repr::Row;
+    use mz_ore::num::NonNeg;
+    use mz_persist_client::cache::PersistClientCache;
+    use mz_persist_types::PersistLocation;
+    use mz_repr::{IntoRowIterator, Row, RowIterator, RowRef};
     use timely::WorkerConfig;
     use timely::communication::Allocator;
     use timely::worker::Worker as TimelyWorker;
 
+    use crate::arrangement::manager::TraceBundle;
     use crate::compute_state::index_peek_tests::{
         cancelling_errors, index_peek, ok_row, rows_answer, trace_bundle, trivial_finishing,
         wide_ok_rows,
     };
     use crate::compute_state::peek_scan::PeekScan;
+    use crate::compute_state::peek_stash::tests::stashed_rows;
     use crate::metrics::{ComputeMetrics, WorkerMetrics};
     use crate::server::ComputeRuntimeRole;
 
@@ -340,9 +397,42 @@ mod tests {
             .for_worker(0)
     }
 
-    /// The size the scan accounts a single-column row at.
-    fn row_size() -> usize {
-        ok_row(0).byte_len() + size_of::<NonZeroUsize>()
+    /// The size the scan accounts a row of [`wide_ok_rows`] at.
+    ///
+    /// Those rows carry the `UInt64` the peek's result description declares, which is the schema
+    /// the stash writes its batch under, so a test that reaches the stash walks them rather than
+    /// the narrower [`ok_row`].
+    fn wide_row_size() -> usize {
+        wide_ok_rows(1)[0].byte_len() + size_of::<NonZeroUsize>()
+    }
+
+    /// The stash `peek` writes to, over the in-memory location `clients` opens.
+    fn stash_target(peek: &Peek, clients: &Arc<PersistClientCache>) -> StashTarget {
+        StashTarget::new(peek, Arc::clone(clients), PersistLocation::new_in_mem())
+    }
+
+    /// The batches and the inline rows of a stashed response, as one sorted row set.
+    ///
+    /// A peek's answer is both halves together, so a test that compared only one of them would
+    /// pass on a driver that wrote the rows to the wrong half.
+    async fn stashed_answer_rows(
+        clients: &PersistClientCache,
+        response: PeekResponse,
+    ) -> (Vec<Row>, Vec<Row>) {
+        let PeekResponse::Stashed(stashed) = response else {
+            panic!(
+                "a walk that reached the stash answers with a stashed response, not {response:?}"
+            )
+        };
+
+        let mut inline: Vec<Row> = stashed
+            .inline_rows
+            .iter()
+            .flat_map(|rows| rows.clone().into_row_iter().map(RowRef::to_owned))
+            .collect();
+        inline.sort();
+
+        (stashed_rows(clients, *stashed).await, inline)
     }
 
     /// Opens a scan of `peek` over `bundle`, the way the peek path opens one.
@@ -393,7 +483,7 @@ mod tests {
     /// the trace holds its keys in.
     ///
     /// A peek carrying an order is never eligible for the peek stash, because `is_streamable`
-    /// requires an empty `order_by`, so a promoted walk of one answers rather than handing back.
+    /// requires an empty `order_by`, so a promoted walk of one answers with its rows.
     fn descending_finishing() -> RowSetFinishing {
         let mut finishing = trivial_finishing();
         finishing.order_by = vec![ColumnOrder {
@@ -419,41 +509,25 @@ mod tests {
         PeekResponse::Rows(vec![builder.build()])
     }
 
-    /// What a promoted walk handed back, in a form a test can compare whole.
+    /// Runs the runtime until `promoted`'s walk answers the peek, and reports the answer.
     ///
-    /// Mirrors [`OffloadOutcome`], which carries no comparison of its own because nothing on the
-    /// peek path compares one.
-    #[derive(Debug, PartialEq)]
-    enum HandBack {
-        Answered(PeekResponse),
-        NeedsStash,
-    }
-
-    impl From<OffloadOutcome> for HandBack {
-        fn from(outcome: OffloadOutcome) -> Self {
-            match outcome {
-                OffloadOutcome::Answered(response) => HandBack::Answered(response),
-                OffloadOutcome::NeedsStash => HandBack::NeedsStash,
-            }
-        }
-    }
-
-    /// Runs the runtime until `promoted`'s walk hands something back, and reports what.
-    ///
-    /// Bounded, so a walk that yields without ever reaching an outcome fails here rather than
-    /// hanging the suite. That is the failure a scan holding a full batch produces, which is the
-    /// case this driver's batch-ready arm exists to avoid.
-    async fn hand_back(promoted: &mut OffloadedPeek) -> HandBack {
+    /// Bounded, so a walk that never reaches an answer fails here rather than hanging the suite.
+    /// The pause between attempts is a sleep rather than a yield because a walk that reaches the
+    /// stash waits on persist, whose work does not all happen on this runtime, and a spin against
+    /// that would turn the bound into a measure of how fast the machine spins.
+    async fn answer(promoted: &mut OffloadedPeek) -> PeekResponse {
         for _ in 0..DRIVE_BOUND {
             match promoted.result.try_recv() {
-                Ok((outcome, _elapsed)) => return HandBack::from(outcome),
-                Err(oneshot::error::TryRecvError::Empty) => tokio::task::yield_now().await,
+                Ok((response, _elapsed)) => return response,
+                Err(oneshot::error::TryRecvError::Empty) => {
+                    tokio::time::sleep(Duration::from_millis(1)).await
+                }
                 Err(oneshot::error::TryRecvError::Closed) => {
-                    panic!("the promoted walk ended without handing anything back")
+                    panic!("the promoted walk ended without answering the peek")
                 }
             }
         }
-        panic!("the promoted walk handed nothing back within {DRIVE_BOUND} yields");
+        panic!("the promoted walk did not answer within {DRIVE_BOUND} attempts");
     }
 
     /// Runs the runtime until `condition` holds, where `what` names what the test is waiting for.
@@ -481,32 +555,25 @@ mod tests {
         let mut bundle = trace_bundle(&keys, cancelling_errors(2));
         let mut scan = open(&mut bundle, &peek, None);
 
-        // Two positions leave the walk suspended with nothing to hand over, which is the state
-        // the worker promotes and the only one it promotes.
+        // Two positions leave the walk suspended for want of fuel, with the rest of the trace
+        // ahead of it.
         let mut fuel = 2;
         assert_eq!(scan.step(None, &mut fuel), ScanOutcome::Suspended);
-        assert!(
-            !scan.batch_ready(),
-            "a scan holding a full batch is diverted rather than promoted"
-        );
 
         let metrics = worker_metrics();
         let worker = worker();
         let permits = PeekPermits::new(1);
         let mut promoted = OffloadedPeek::promote(
             peek.clone(),
-            bundle,
             scan,
+            None,
             &permits,
             offload_config(*INDEX_PEEK_YIELD_GRANULARITY.default()),
             PeekWalkMetrics::new(&metrics),
             worker.sync_activator_for([].into()),
         );
 
-        assert_eq!(
-            hand_back(&mut promoted).await,
-            HandBack::Answered(rows_answer((0..6).map(ok_row))),
-        );
+        assert_eq!(answer(&mut promoted).await, rows_answer((0..6).map(ok_row)),);
         assert_eq!(
             metrics.index_peek_walks_offloaded.get(),
             1,
@@ -539,8 +606,8 @@ mod tests {
         let permits = PeekPermits::new(1);
         let mut promoted = OffloadedPeek::promote(
             peek.clone(),
-            bundle,
             scan,
+            None,
             &permits,
             offload_config(*INDEX_PEEK_YIELD_GRANULARITY.default()),
             PeekWalkMetrics::new(&metrics),
@@ -548,52 +615,139 @@ mod tests {
         );
 
         assert_eq!(
-            hand_back(&mut promoted).await,
-            HandBack::Answered(ordered_rows_answer((0..6).rev().map(ok_row))),
+            answer(&mut promoted).await,
+            ordered_rows_answer((0..6).rev().map(ok_row)),
         );
     }
 
-    /// A promoted walk whose accumulated rows grow into a full batch hands the peek back rather
-    /// than stepping a scan that cannot advance.
+    /// A promoted walk whose accumulated rows grow into a full batch writes the batch to the stash
+    /// and carries on from where it stopped, so one walk produces the whole answer.
     ///
-    /// A scan holding a full batch spends no fuel and moves no cursor when stepped, and this
-    /// driver has nowhere to write the batch, so a driver that treated the suspension as resumable
-    /// would yield forever without ever reaching an outcome. The bound in [`hand_back`] is what
-    /// turns that into a failure rather than a hang.
+    /// The rows the walk was still holding when it ended travel with the response rather than
+    /// through a batch of their own, and the two halves together are every row the peek owes. The
+    /// count of stashed rows is asserted as well, because a driver that wrote the tail to both
+    /// halves would still answer with the right set.
     #[mz_ore::test(tokio::test)]
-    async fn a_promoted_walk_that_fills_a_batch_hands_back_rather_than_spinning() {
-        let keys: Vec<Row> = (0..6).map(ok_row).collect();
+    async fn a_promoted_walk_writes_full_batches_to_the_stash_and_walks_on() {
+        let keys = wide_ok_rows(8);
         let peek = index_peek(trivial_finishing(), None);
         let mut bundle = trace_bundle(&keys, cancelling_errors(0));
-        // Two rows fit under the threshold and the third crosses it, so the slice below promotes
-        // a scan with room left and the promoted walk is the one that fills the batch.
-        let mut scan = open(&mut bundle, &peek, Some(2 * row_size()));
+        // Two rows fit under the threshold and the third crosses it, so the walk fills a batch
+        // twice over and holds the last two rows when the trace runs out.
+        let mut scan = open(&mut bundle, &peek, Some(2 * wide_row_size()));
 
         let mut fuel = 2;
         assert_eq!(scan.step(None, &mut fuel), ScanOutcome::Suspended);
-        assert!(
-            !scan.batch_ready(),
-            "the inline slice must promote a scan that still has room"
+
+        let metrics = worker_metrics();
+        let worker = worker();
+        let permits = PeekPermits::new(1);
+        let clients = Arc::new(PersistClientCache::new_no_metrics());
+        let mut promoted = OffloadedPeek::promote(
+            peek.clone(),
+            scan,
+            Some(stash_target(&peek, &clients)),
+            &permits,
+            offload_config(*INDEX_PEEK_YIELD_GRANULARITY.default()),
+            PeekWalkMetrics::new(&metrics),
+            worker.sync_activator_for([].into()),
         );
+
+        let response = answer(&mut promoted).await;
+        let PeekResponse::Stashed(stashed) = &response else {
+            panic!("a walk that reached the stash answers with a handle, not {response:?}");
+        };
+        assert_eq!(
+            stashed.num_rows_batches, 6,
+            "the stashed row count covers the batches alone"
+        );
+
+        let (batched, inline) = stashed_answer_rows(&clients, response).await;
+        assert_eq!(batched, keys[..6]);
+        assert_eq!(inline, keys[6..]);
+        assert_eq!(
+            metrics.index_peek_walks_offloaded.get(),
+            1,
+            "one walk produced the whole answer"
+        );
+    }
+
+    /// A promoted walk stops once the stash holds every row the peek's finishing can use, rather
+    /// than walking the rest of a trace whose rows no answer could contain.
+    #[mz_ore::test(tokio::test)]
+    async fn a_promoted_walk_stops_where_the_finishing_has_what_it_needs() {
+        let keys = wide_ok_rows(8);
+        let mut finishing = trivial_finishing();
+        finishing.limit = Some(NonNeg::try_from(2).expect("non-negative"));
+        let peek = index_peek(finishing, None);
+        let mut bundle = trace_bundle(&keys, cancelling_errors(0));
+        // Crossed by the second row, so the first batch already holds what the limit asks for.
+        let mut scan = open(&mut bundle, &peek, Some(wide_row_size()));
+
+        let mut fuel = 1;
+        assert_eq!(scan.step(None, &mut fuel), ScanOutcome::Suspended);
+
+        let metrics = worker_metrics();
+        let worker = worker();
+        let permits = PeekPermits::new(1);
+        let clients = Arc::new(PersistClientCache::new_no_metrics());
+        let mut promoted = OffloadedPeek::promote(
+            peek.clone(),
+            scan,
+            Some(stash_target(&peek, &clients)),
+            &permits,
+            offload_config(*INDEX_PEEK_YIELD_GRANULARITY.default()),
+            PeekWalkMetrics::new(&metrics),
+            worker.sync_activator_for([].into()),
+        );
+
+        let (batched, inline) = stashed_answer_rows(&clients, answer(&mut promoted).await).await;
+        assert_eq!(batched, keys[..2], "the walk wrote what the limit asks for");
+        assert_eq!(
+            inline,
+            Vec::<Row>::new(),
+            "the batch that satisfied the stash was everything the walk held"
+        );
+        assert_eq!(
+            metrics.index_peek_row_iteration_seconds.get_sample_count(),
+            0,
+            "a walk that stopped short of the trace reports no ok phase"
+        );
+    }
+
+    /// A promoted walk that fills a batch with nowhere to write it answers the peek with an error
+    /// rather than leaving it waiting on a walk that has stopped.
+    ///
+    /// Defensive only: a walk is given a stash target exactly where its scan was opened
+    /// stash-eligible, so this pairing does not arise on the peek path. The scan here is opened
+    /// eligible and the target withheld, which is the pairing itself rather than a way of reaching
+    /// it.
+    #[mz_ore::test(tokio::test)]
+    async fn a_promoted_walk_with_nowhere_to_write_answers_with_an_error() {
+        let keys = wide_ok_rows(8);
+        let peek = index_peek(trivial_finishing(), None);
+        let mut bundle = trace_bundle(&keys, cancelling_errors(0));
+        let mut scan = open(&mut bundle, &peek, Some(2 * wide_row_size()));
+
+        let mut fuel = 2;
+        assert_eq!(scan.step(None, &mut fuel), ScanOutcome::Suspended);
 
         let metrics = worker_metrics();
         let worker = worker();
         let permits = PeekPermits::new(1);
         let mut promoted = OffloadedPeek::promote(
             peek.clone(),
-            bundle,
             scan,
+            None,
             &permits,
             offload_config(*INDEX_PEEK_YIELD_GRANULARITY.default()),
             PeekWalkMetrics::new(&metrics),
             worker.sync_activator_for([].into()),
         );
 
-        assert_eq!(hand_back(&mut promoted).await, HandBack::NeedsStash);
         assert_eq!(
-            metrics.index_peek_walks_offloaded.get(),
-            1,
-            "a hand-back is a terminal outcome of the promoted walk"
+            answer(&mut promoted).await,
+            PeekResponse::Error(PeekError::unstructured(NO_STASH_LOCATION)),
         );
     }
 
@@ -625,8 +779,8 @@ mod tests {
 
         let promoted = OffloadedPeek::promote(
             peek.clone(),
-            bundle,
             scan,
+            None,
             &permits,
             offload_config(*INDEX_PEEK_YIELD_GRANULARITY.default()),
             PeekWalkMetrics::new(&metrics),
@@ -698,9 +852,17 @@ mod tests {
         let config = offload_config(1);
         let order_by = peek.finishing.order_by.clone();
         let walk = mz_ore::task::spawn(|| "peek_offload_test::walk", async move {
-            OffloadedPeek::walk(permit, scan, &config, &walk_metrics, &order_by, &result_tx)
-                .await
-                .is_some()
+            OffloadedPeek::walk(
+                permit,
+                scan,
+                None,
+                &config,
+                &walk_metrics,
+                &order_by,
+                &result_tx,
+            )
+            .await
+            .is_some()
         });
 
         for _ in 0..DRIVE_BOUND {
@@ -756,8 +918,8 @@ mod tests {
 
         let mut promoted = OffloadedPeek::promote(
             peek.clone(),
-            bundle,
             scan,
+            None,
             &permits,
             offload_config(*INDEX_PEEK_YIELD_GRANULARITY.default()),
             PeekWalkMetrics::new(&metrics),
@@ -781,10 +943,7 @@ mod tests {
 
         drop(held);
 
-        assert_eq!(
-            hand_back(&mut promoted).await,
-            HandBack::Answered(rows_answer((0..6).map(ok_row))),
-        );
+        assert_eq!(answer(&mut promoted).await, rows_answer((0..6).map(ok_row)));
         assert_eq!(
             metrics.index_peek_permit_wait_seconds.get_sample_count(),
             1,
