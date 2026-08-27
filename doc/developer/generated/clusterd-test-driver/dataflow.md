@@ -1,6 +1,6 @@
 ---
 source: src/clusterd-test-driver/src/dataflow.rs
-revision: 94054eb165
+revision: 5b1466a2b6
 ---
 
 # mz-clusterd-test-driver::dataflow
@@ -10,6 +10,8 @@ Assembly of compute `DataflowDescription`s for the headless test driver.
 `DataflowBuilder` is the generic boundary between tests and dataflow assembly. A test describes its dataflow in terms of persist imports, index imports, MIR objects, and index/sink exports; the builder handles MIR-to-LIR lowering via `LirRelationExpr::finalize_dataflow`, `RenderPlan` conversion, `CollectionMetadata` attachment, and `SqlRelationType`/`ReprRelationType` bookkeeping, producing a `DataflowDescription<RenderPlan, CollectionMetadata>` ready to ship as `ComputeCommand::CreateDataflow`.
 
 By default the builder lowers the caller's MIR faithfully without optimization. The `optimize` method enables the MIR dataflow optimizer (`mz_transform::optimize_dataflow`) before lowering, which is required for plans containing a `Join` whose `implementation` is `Unimplemented`. When optimizing, the builder supplies an `ImportedIndexOracle` built from the dataflow's own `index_imports` so the optimizer recognizes imported arrangements.
+
+`DataflowBuilder::explain` renders the lowered LIR plan as `EXPLAIN PHYSICAL PLAN`-style text using a `DummyHumanizer`, without submitting a dataflow. It honors the `optimize` flag identically to `finish`, so the explained plan matches what would be shipped. The `ExplainConfig` has `redacted` pinned to `false` rather than derived from `ExplainConfig::default()`: `default()` derives `redacted` from the build's soft-assertion setting, which anonymizes literals in the release-profile binary and prints them verbatim in debug builds. Pinning `false` makes the golden output independent of the build profile.
 
 `index_dataflow` is sugar over `DataflowBuilder` for the common single-index shape.
 

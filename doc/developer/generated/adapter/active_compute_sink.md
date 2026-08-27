@@ -1,12 +1,13 @@
 ---
 source: src/adapter/src/active_compute_sink.rs
-revision: b0d4c751f6
+revision: a1bcaebfe6
 ---
 
 # adapter::active_compute_sink
 
 Defines the coordinator's bookkeeping for running compute sinks: `ActiveComputeSink` (an enum over `ActiveSubscribe` and `ActiveCopyTo`), `ActiveCopyFrom`, and the `ActiveComputeSinkRetireReason` enum.
 `ActiveSubscribe` processes incoming `SubscribeBatch` responses from the controller, sorts rows according to the requested output envelope, and forwards them to the client channel.
+`ActiveSubscribeOwner` is an enum distinguishing who owns a subscribe: `Session { conn_id, session_uuid }` for subscribes belonging to a SQL session, and `Background` for subscribes owned by a coordinator background task. Background subscribes are always `internal` (no `mz_subscriptions` row). `ActiveSubscribe` holds an `owner: ActiveSubscribeOwner` field replacing the former flat `conn_id`/`session_uuid` fields. `introspection_session_uuid()` returns `Some(uuid)` only for non-internal session subscribes; `connection_id()` returns `Some` only for session subscribes. `ActiveComputeSink::connection_id()` returns `Option<&ConnectionId>`, returning `None` for background subscribes and `Some` for session subscribes and copy-to sinks.
 `ActiveSubscribe` carries an `internal: bool` field; when `true`, the subscribe is not advertised via `mz_subscriptions` (builtin table updates are skipped in both `add_active_compute_sink` and `remove_active_compute_sink`).
 In the upsert envelope path, the number of value columns is computed as `self.arity.saturating_sub(order_by_keys.len())` (stored in a local `value_columns` variable) and guarded by a `soft_assert_or_log!` that the KEY column count does not exceed the relation arity, preventing a potential coordinator OOM from integer underflow if the planner were to produce an invalid plan.
 `ActiveCopyTo` holds the oneshot channel used to return the final row count once the COPY TO operation completes.

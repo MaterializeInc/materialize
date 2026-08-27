@@ -1,14 +1,14 @@
 ---
 source: src/adapter/src/frontend_read_then_write.rs
-revision: 30e4b1d241
+revision: a1bcaebfe6
 ---
 
 # adapter::frontend_read_then_write
 
 Implements `INSERT [...] SELECT`, `DELETE`, and `UPDATE` using a subscribe with optimistic concurrency control (OCC), sequenced from the session task rather than the coordinator's main loop.
-`PeekClient::frontend_read_then_write` is the main entry point. It validates the plan, acquires an OCC semaphore permit and a read hold, optimizes the selection into a subscribe dataflow, runs the OCC loop, and then handles the outcome by staging rows, submitting a blind write, or advancing the session's write timestamp.
+`PeekClient::frontend_read_then_write` is the main entry point. It validates the plan, acquires an OCC semaphore permit (unless the caller is a coordinator background task), acquires a read hold, optimizes the selection into a subscribe dataflow, runs the OCC loop, and then handles the outcome by staging rows, submitting a blind write, or advancing the session's write timestamp. The path is parameterized by an `RtwCaller` enum (`Session` or `Background { replica_id }`) that adjusts dependency validation policy, replica selection, semaphore acquisition, subscribe ownership, and write-attempt kind.
 
-The OCC semaphore serializes concurrent read-then-write operations process-wide, bounding the number that hold read holds simultaneously. The permit is acquired before the read hold so that queued operations do not pin compaction while waiting.
+The OCC semaphore serializes concurrent read-then-write operations process-wide, bounding the number that hold read holds simultaneously. The permit is acquired before the read hold so that queued operations do not pin compaction while waiting. Background callers skip the semaphore entirely: they are single-flight by construction (one sweep at a time), so acquiring a permit would unnecessarily stall user DML for the duration of a potentially slow replica subscribe.
 
 ## Whether the write reads persisted state
 
@@ -40,9 +40,10 @@ A subscribe channel that closes on its own exits via `OccOutcome::Blind`, return
 
 ## Key helpers
 
-- `validate_read_then_write`: enforces the `mz_now()` ban, the dependency cap, timeline compatibility (EpochMilliseconds only), cluster liveness, and replica pin; returns a `ValidationResult` carrying cluster, replica, timeline, and table descriptor.
+- `validate_read_then_write`: enforces the `mz_now()` ban, the dependency cap (with the policy supplied by the caller's `RtwCaller`), timeline compatibility (EpochMilliseconds only), cluster liveness, and replica pin; returns a `ValidationResult` carrying cluster, replica, timeline, and table descriptor.
 - `optimize_mir_read_then_write`: applies the mutation to the MIR selection via `apply_mutation_to_mir`, prepares unmaterializable functions one-shot, and runs the subscribe optimizer to produce a `GlobalMirPlan`.
 - `apply_mutation_to_mir`: DELETE negates the expression; UPDATE wraps it in a `Let` binding and unions negated old rows with mapped new rows; INSERT passes through unchanged.
 - `build_success_response`: builds the `ExecuteResponse` before writing, enforcing result-size caps row-by-row for RETURNING expressions to bound temporary allocation.
-- `submit_blind_write`: sends `Command::AttemptWrite` with `write_ts: None`, letting group commit choose the timestamp.
+- `submit_blind_write`: sends `Command::AttemptWrite` with `WriteAttemptKind::Session { write_ts: None }`, letting group commit choose the timestamp (session callers only; background callers always supply a timestamp).
 - `classify_write_result`: maps `WriteResult` to `WriteOutcome`, translating `TargetChanged` to `ConcurrentDependencyMutation` and `TimestampTooFarAhead` to `ReadThenWriteTimestampTooFarAhead` for consistent client-visible error codes.
+The top-level row-set finishing (`plan.finishing`) must be trivial before the OCC path runs; a non-trivial finishing (LIMIT, OFFSET, projection, ordering) would silently change the written rows, so `soft_panic_or_log!` fires and an `AdapterError::Internal` is returned instead.

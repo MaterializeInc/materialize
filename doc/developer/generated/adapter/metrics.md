@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/metrics.rs
-revision: 4f0805a4d8
+revision: a1bcaebfe6
 ---
 
 # adapter::metrics
@@ -14,5 +14,6 @@ The `mz_time_to_first_row_seconds` histogram carries an `application_name` label
 Several public metrics carry `MetricTag` annotations for categorization: `mz_query_total`, `mz_active_sessions`, `mz_active_subscribes`, and `mz_adapter_commands` carry `MetricTag::Environment`.
 Helper functions `session_type_label_value`, `statement_type_label_value`, and `subscribe_output_label_value` produce the label strings used for partitioning these metrics.
 `Metrics` includes a `subscribe_outputs` `IntCounterVec` (labeled via `subscribe_output_label_value`) counting subscribe output rows; `SessionMetrics` vends per-call counters from it via `Metrics::subscribe_outputs`.
-`Metrics` includes `active_internal_subscribes: IntGaugeVec` (labeled by `session_type`) tracking the number of active internal subscribes, which serve frontend-sequenced read-then-write operations. Internal subscribes are not reflected in `active_subscribes` or in the `mz_subscriptions` builtin table.
+`Metrics` includes `active_internal_subscribes: IntGaugeVec` (labeled by `session_type`) tracking the number of active internal subscribes, used by frontend-sequenced read-then-write operations and coordinator background maintenance. Internal subscribes are not reflected in `active_subscribes` or in the `mz_subscriptions` builtin table.
 `Metrics` includes `occ_retry_count: Histogram` recording the number of OCC retry attempts made per frontend read-then-write execution before it either succeeds or exhausts its retry budget.
+`Metrics` includes four hydration-history metrics: `hydration_history_mutations: IntCounterVec` (labeled by `operation` and `outcome`) counting collection and retention mutations; `hydration_history_retention_batch_full: IntCounter` counting sweeps whose retention batch was full (repeated increments indicate retention may not be keeping up with its schedule); `hydration_history_rows_affected: IntCounterVec` (labeled by `action`) counting rows changed by maintenance; and `hydration_history_sweep_duration_seconds: Histogram` recording the wall time of a complete collection and retention sweep. None of these carry cluster, replica, or object labels.

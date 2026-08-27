@@ -1,6 +1,6 @@
 ---
 source: src/mysql-util/src/probe.rs
-revision: de8eac0d16
+revision: c3ad2b4dd8
 ---
 
 # mysql-util::probe
@@ -10,6 +10,8 @@ revision: de8eac0d16
 ## Constants
 
 **`MAX_KEY_LENGTH`** (`u32 = 768`) — the longest key the probe bounds cover, in characters. InnoDB caps an index key at 3072 bytes, which is 768 `utf8mb4` characters. Keys longer than this (via prefix indexes or narrower charsets) are not supported; enforcement is left to the caller.
+
+**`MAX_PROBED_PREFIXES`** (`u64 = 5_000`) — hard cap on the number of partition prefix probes per table. The partitioning walk's local bookkeeping scales quadratically with the number of probes; benchmarking of 5k probes over 5k entries measured under a second of CPU. The per-table probe budget is clamped between `MIN_PROBED_PREFIXES` (64) and this value.
 
 ## `KeyProber`
 
