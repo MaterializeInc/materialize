@@ -904,6 +904,7 @@ mz_tables  source_id
 mz_type_pg_metadata  id
 mz_type_pg_metadata  typinput
 mz_type_pg_metadata  typreceive
+mz_type_pg_metadata  typsend
 mz_types  category
 mz_types  create_sql
 mz_types  id
@@ -1017,5 +1018,6 @@ pg_type_all_databases  typnotnull
 pg_type_all_databases  typowner
 pg_type_all_databases  typreceive
 pg_type_all_databases  typrelid
+pg_type_all_databases  typsend
 pg_type_all_databases  typtype
 pg_type_all_databases  typtypmod

@@ -8,7 +8,8 @@
 # by the Apache License, Version 2.0.
 
 """
-Basic test for Postgres-compatible connections from Python programming language.
+Tests the Apache Arrow ADBC PostgreSQL driver against Materialize, and hands
+the resulting Arrow tables to DuckDB.
 """
 
 from materialize.mzcompose.composition import Composition
@@ -18,11 +19,11 @@ from materialize.mzcompose.services.materialized import Materialized
 SERVICES = [
     Materialized(),
     Service(
-        name="python",
+        name="adbc",
         config={
             "image": "python:3.14.7-trixie",
             "volumes": [
-                "../../../:/workdir",
+                "../../:/workdir",
             ],
             "environment": [
                 "PGHOST=materialized",
@@ -34,4 +35,4 @@ SERVICES = [
 
 def workflow_default(c: Composition) -> None:
     c.up("materialized")
-    c.run("python", "/workdir/test/lang/python/test.sh")
+    c.run("adbc", "/workdir/test/adbc/test.sh")

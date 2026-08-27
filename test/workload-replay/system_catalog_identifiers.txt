@@ -1572,6 +1572,7 @@ typnotnull
 typowner
 typreceive
 typrelid
+typsend
 typtype
 typtypmod
 _uint2

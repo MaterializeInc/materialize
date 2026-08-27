@@ -274,6 +274,38 @@ SELECT NULL::regclass::text
 ----
 NULL
 
+# OID 0 is the absent reference, rendered as `-` like PostgreSQL's `regclassout`.
+# A nonzero OID that names no relation keeps its digits.
+query T
+SELECT 0::regclass::text
+----
+-
+
+query T
+SELECT 99999::regclass::text
+----
+99999
+
+# `-` round trips on input too. Spelled from a literal because feeding a
+# cast-derived value into the string to reg* cast hits the evaluation order
+# problem behind the cases commented out above.
+query T
+SELECT '-'::regclass::text
+----
+-
+
+query T
+SELECT '-'::regclass::oid
+----
+0
+
+# Unlike a numeric string, `-` is accepted even by the explicit text to regclass
+# cast.
+query T
+SELECT '-'::text::regclass::oid
+----
+0
+
 # ensure that all existing types can be cast to their respective names
 statement OK
 select oid, oid::regclass::text from (select oid from pg_catalog.pg_class)

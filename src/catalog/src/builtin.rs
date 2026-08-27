@@ -1655,6 +1655,112 @@ mod tests {
 
     use super::*;
 
+    /// Recomputes `mz_pgrepr::regproc::NAMES` from the builtin function registry
+    /// and fails when the checked-in copy has drifted. It is checked in as data
+    /// because `mz-pgrepr` sits below this crate in the dependency graph and so
+    /// cannot read the registry itself.
+    ///
+    /// Run with `REWRITE=1` to splice the recomputed table back into
+    /// `src/pgrepr-consts/src/regproc.rs`.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn test_regproc_names_match_builtin_functions() {
+        // `effective_search_path` unconditionally prepends these two, so a
+        // uniquely named function in either resolves from its bare name.
+        const IMPLICITLY_SEARCHED: &[&str] = &[MZ_CATALOG_SCHEMA, PG_CATALOG_SCHEMA];
+
+        // A bare name only identifies one OID when exactly one impl anywhere in
+        // the registry carries it, so count impls across schemas.
+        let mut impls_per_name: BTreeMap<&str, usize> = BTreeMap::new();
+        for func in BUILTINS::funcs() {
+            *impls_per_name.entry(func.name).or_default() += func.inner.func_impls().len();
+        }
+
+        let mut expected: BTreeMap<u32, String> = BTreeMap::new();
+        for func in BUILTINS::funcs() {
+            // Mirrors PostgreSQL's `regprocout`, which qualifies a name that
+            // would not resolve back to this OID on its own.
+            let rendered =
+                if impls_per_name[func.name] == 1 && IMPLICITLY_SEARCHED.contains(&func.schema) {
+                    func.name.to_string()
+                } else {
+                    format!("{}.{}", func.schema, func.name)
+                };
+            for details in func.inner.func_impls() {
+                let previous = expected.insert(details.oid, rendered.clone());
+                assert_eq!(
+                    previous, None,
+                    "two builtin functions share OID {}",
+                    details.oid
+                );
+            }
+        }
+
+        let table: String = expected
+            .iter()
+            .map(|(oid, name)| format!("    ({}, \"{}\"),\n", oid, name))
+            .collect();
+
+        if std::env::var_os("REWRITE").is_some() {
+            rewrite_regproc_names(&table);
+            return;
+        }
+
+        let actual: BTreeMap<u32, String> = mz_pgrepr::regproc::NAMES
+            .iter()
+            .map(|(oid, name)| (*oid, name.to_string()))
+            .collect();
+
+        if actual != expected {
+            panic!(
+                "mz_pgrepr::regproc::NAMES has drifted from the builtin function \
+                 registry. Regenerate it with:\n\n    \
+                 REWRITE=1 cargo test -p mz-catalog \
+                 test_regproc_names_match_builtin_functions\n"
+            );
+        }
+    }
+
+    /// Replaces the generated region of `mz_pgrepr::regproc::NAMES` with
+    /// `table`, leaving every other byte of the file alone.
+    ///
+    /// The path is relative to this crate's directory, which is the working
+    /// directory `cargo test` runs in.
+    ///
+    /// A splice anchored anywhere but the table would clobber the lookup
+    /// functions below it, so both markers have to appear exactly once.
+    fn rewrite_regproc_names(table: &str) {
+        const PATH: &str = "../pgrepr-consts/src/regproc.rs";
+        const BEGIN: &str = "    // BEGIN GENERATED\n";
+        const END: &str = "    // END GENERATED\n";
+
+        let contents =
+            std::fs::read_to_string(PATH).unwrap_or_else(|e| panic!("reading '{PATH}': {e}"));
+        for marker in [BEGIN, END] {
+            let count = contents.matches(marker).count();
+            assert_eq!(
+                count,
+                1,
+                "'{}' appears {} times in '{}', expected exactly once",
+                marker.trim(),
+                count,
+                PATH
+            );
+        }
+        let begin = contents.find(BEGIN).expect("checked above") + BEGIN.len();
+        let end = contents.find(END).expect("checked above");
+        assert!(
+            begin <= end,
+            "'{}' precedes '{}' in '{}'",
+            END.trim(),
+            BEGIN.trim(),
+            PATH
+        );
+
+        let rewritten = format!("{}{}{}", &contents[..begin], table, &contents[end..]);
+        std::fs::write(PATH, rewritten).unwrap_or_else(|e| panic!("writing '{PATH}': {e}"));
+    }
+
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_builtin_type_schema() {
