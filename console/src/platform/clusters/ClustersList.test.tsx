@@ -253,8 +253,8 @@ const openFilter = async (
 };
 
 /**
- * Sets `comparison` and `percent` on `label`'s filter and applies it, leaving
- * the panel closed.
+ * Sets `percent` as `label`'s threshold and applies it, leaving the panel
+ * closed.
  *
  * Applying does not close the panel, matching the Maintained Objects filters,
  * so this closes it: an open panel covers the table an assertion is about, and
@@ -263,19 +263,18 @@ const openFilter = async (
 const applyFilter = async (
   user: ReturnType<typeof userEvent.setup>,
   label: string,
-  comparison: ">" | "<",
   percent: string,
 ) => {
   const apply = await openFilter(user, label);
-  await user.selectOptions(
-    screen.getByLabelText(`${label} comparison`),
-    comparison,
-  );
   await user.clear(screen.getByLabelText(`${label} threshold percentage`));
-  await user.type(
-    screen.getByLabelText(`${label} threshold percentage`),
-    percent,
-  );
+  // `type` rejects an empty string, and an empty threshold is a real case: it
+  // is how the panel says "no filter".
+  if (percent !== "") {
+    await user.type(
+      screen.getByLabelText(`${label} threshold percentage`),
+      percent,
+    );
+  }
   await user.click(apply);
   // Nothing to close when the filter emptied the table: the header the panel
   // hung off is gone along with it.
@@ -305,7 +304,6 @@ const panelValues = async (
 ) => {
   await openFilter(user, label);
   return {
-    comparison: screen.getByLabelText(`${label} comparison`),
     percent: screen.getByLabelText(`${label} threshold percentage`),
   };
 };
@@ -1168,9 +1166,8 @@ describe("ClustersList CPU filter", () => {
 
   const applyCpuFilter = (
     user: ReturnType<typeof userEvent.setup>,
-    comparison: ">" | "<",
     percent: string,
-  ) => applyFilter(user, "CPU", comparison, percent);
+  ) => applyFilter(user, "CPU", percent);
 
   it("renders a control labelled by its column", async () => {
     await renderClustersList(twoClusters());
@@ -1182,18 +1179,9 @@ describe("ClustersList CPU filter", () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    await applyCpuFilter(user, ">", "40");
+    await applyCpuFilter(user, "40");
 
     expect(rowOrder()).toEqual(["busy", "middling"]);
-  });
-
-  it("keeps only the replicas below the threshold", async () => {
-    const user = userEvent.setup();
-    await renderClustersList(twoClusters());
-
-    await applyCpuFilter(user, "<", "40");
-
-    expect(rowOrder()).toEqual(["idle"]);
   });
 
   it("compares the reading, not its rounded display value", async () => {
@@ -1208,7 +1196,7 @@ describe("ClustersList CPU filter", () => {
       }),
     ]);
 
-    await applyCpuFilter(user, ">", "80");
+    await applyCpuFilter(user, "80");
 
     expect(rowOrder()).toEqual(["just-over"]);
   });
@@ -1224,12 +1212,11 @@ describe("ClustersList CPU filter", () => {
       }),
     ]);
 
-    // An unsampled replica sits on neither side of the threshold, so it is out
-    // of a filtered list either way.
-    await applyCpuFilter(user, "<", "50");
+    // An unsampled replica has not been seen to reach any threshold, so a
+    // filtered list leaves it out.
+    await applyCpuFilter(user, "50");
 
-    expect(rowOrder()).toEqual([]);
-    expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
+    expect(rowOrder()).toEqual(["sampled"]);
   });
 
   it("drops a cluster with no replicas", async () => {
@@ -1243,19 +1230,18 @@ describe("ClustersList CPU filter", () => {
       }),
     ]);
 
-    await applyCpuFilter(user, ">", "50");
+    await applyCpuFilter(user, "50");
 
     expect(rowOrder()).toEqual(["busy"]);
   });
 
-  it("keeps the applied condition in its panel", async () => {
+  it("keeps the applied threshold in its panel", async () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    await applyCpuFilter(user, ">", "40");
-    const { comparison, percent } = await panelValues(user, "CPU");
+    await applyCpuFilter(user, "40");
+    const { percent } = await panelValues(user, "CPU");
 
-    expect(comparison).toHaveValue(">");
     expect(percent).toHaveValue("40");
   });
 
@@ -1276,13 +1262,13 @@ describe("ClustersList CPU filter", () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    await applyCpuFilter(user, ">", "99");
+    await applyCpuFilter(user, "99");
 
     // The message replaces the table, headers and filter panels included, so
     // the chip is what is left to recover with.
     expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Remove CPU > 99%" }));
+    await user.click(screen.getByRole("button", { name: "Remove CPU ≥ 99%" }));
 
     expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
   });
@@ -1291,7 +1277,7 @@ describe("ClustersList CPU filter", () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    await applyCpuFilter(user, ">", "40");
+    await applyCpuFilter(user, "40");
     await clearFilter(user, "CPU");
 
     expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
@@ -1303,7 +1289,7 @@ describe("ClustersList CPU filter", () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    await applyCpuFilter(user, ">", "40");
+    await applyCpuFilter(user, "40");
 
     // Blank the threshold, then close without applying.
     await openFilter(user, "CPU");
@@ -1317,40 +1303,31 @@ describe("ClustersList CPU filter", () => {
     expect(rowOrder()).toEqual(["busy", "middling"]);
   });
 
-  it("reopens showing the filter in force", async () => {
-    const user = userEvent.setup();
-    await renderClustersList(twoClusters());
-
-    await applyCpuFilter(user, "<", "40");
-    const { comparison, percent } = await panelValues(user, "CPU");
-
-    expect(comparison).toHaveValue("<");
-    expect(percent).toHaveValue("40");
-  });
-
   it("clears a typed threshold that was never applied", async () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
     await openCpuFilter(user);
-    await user.selectOptions(screen.getByLabelText("CPU comparison"), "<");
     await user.type(screen.getByLabelText("CPU threshold percentage"), "50");
     await user.click(screen.getByRole("button", { name: "Clear" }));
 
     // No filter was ever applied, so Clear has no applied value to change.
     // It still has to empty the panel it is sitting in.
     expect(screen.getByLabelText("CPU threshold percentage")).toHaveValue("");
-    expect(screen.getByLabelText("CPU comparison")).toHaveValue(">");
   });
 
-  it("cannot be applied with an empty threshold", async () => {
+  it("treats applying an empty threshold as no filter", async () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    const apply = await openCpuFilter(user);
-    await user.clear(screen.getByLabelText("CPU threshold percentage"));
+    await applyCpuFilter(user, "40");
+    expect(rowOrder()).toEqual(["busy", "middling"]);
 
-    expect(apply).toBeDisabled();
+    // Matching the freshness filter: an empty or zero threshold is not a
+    // filter, so applying one lifts it rather than being rejected.
+    await applyCpuFilter(user, "");
+
+    expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
   });
 
   it("narrows the search results rather than replacing them", async () => {
@@ -1363,7 +1340,7 @@ describe("ClustersList CPU filter", () => {
     await user.type(screen.getByLabelText("Search clusters..."), "compute");
     await waitFor(() => expect(rowOrder()).toEqual(["idle", "busy"]));
 
-    await applyCpuFilter(user, ">", "40");
+    await applyCpuFilter(user, "40");
 
     // Both constraints hold: only compute's busy replica clears each.
     expect(rowOrder()).toEqual(["busy"]);
@@ -1392,10 +1369,10 @@ describe("ClustersList utilization filters", () => {
         screen.getByRole("columnheader", { name: new RegExp(`^${label}`) }),
       ).toBeInTheDocument();
 
-      // The panel names its controls from the heading, so a renamed column
-      // cannot leave its filter labelled with the old name.
-      const { comparison } = await panelValues(user, label);
-      expect(comparison).toBeInTheDocument();
+      // The panel names its input from the heading, so a renamed column cannot
+      // leave its filter labelled with the old name.
+      const { percent } = await panelValues(user, label);
+      expect(percent).toBeInTheDocument();
       await user.click(filterTrigger(label));
     }
   });
@@ -1418,7 +1395,7 @@ describe("ClustersList utilization filters", () => {
       const user = userEvent.setup();
       await renderClustersList([pair()]);
 
-      await applyFilter(user, label, ">", "50");
+      await applyFilter(user, label, "50");
 
       expect(rowOrder()).toEqual(["high"]);
     });
@@ -1427,7 +1404,7 @@ describe("ClustersList utilization filters", () => {
       const user = userEvent.setup();
       await renderClustersList([pair()]);
 
-      await applyFilter(user, label, ">", "50");
+      await applyFilter(user, label, "50");
 
       const own = await panelValues(user, label);
       expect(own.percent).toHaveValue("50");
@@ -1444,7 +1421,7 @@ describe("ClustersList utilization filters", () => {
       const user = userEvent.setup();
       await renderClustersList([pair()]);
 
-      await applyFilter(user, label, ">", "50");
+      await applyFilter(user, label, "50");
       await clearFilter(user, label);
 
       expect(rowOrder()).toEqual(["high", "low"]);
@@ -1478,8 +1455,8 @@ describe("ClustersList utilization filters", () => {
       }),
     ]);
 
-    await applyFilter(user, "CPU", ">", "50");
-    await applyFilter(user, "Memory", ">", "50");
+    await applyFilter(user, "CPU", "50");
+    await applyFilter(user, "Memory", "50");
 
     // Filters narrow each other rather than replacing one another.
     expect(rowOrder()).toEqual(["hot-both"]);
@@ -1563,33 +1540,33 @@ describe("ClustersList filter URL state", () => {
     const user = userEvent.setup();
     await renderAt(twoClusters());
 
-    await applyFilter(user, "CPU", ">", "40");
+    await applyFilter(user, "CPU", "40");
 
-    await waitFor(() => expect(currentSearch().get("cpu")).toBe("gt.40"));
+    await waitFor(() => expect(currentSearch().get("cpu")).toBe("40"));
   });
 
-  it("spells the comparison as a word rather than percent-encoding it", async () => {
+  it("writes a threshold a reader can make sense of", async () => {
     const user = userEvent.setup();
     await renderAt(twoClusters());
 
-    await applyFilter(user, "CPU", "<", "40");
+    await applyFilter(user, "CPU", "40");
 
-    // A raw ">" or "<" would reach the user's bookmark bar as %3E or %3C.
-    await waitFor(() => expect(currentSearch().get("cpu")).toBe("lt.40"));
-    expect(screen.getByTestId("search").textContent).not.toContain("%3");
+    // Nothing percent-encoded: the parameter is the threshold itself.
+    await waitFor(() => expect(currentSearch().get("cpu")).toBe("40"));
+    expect(screen.getByTestId("search").textContent).not.toContain("%");
   });
 
   it("writes one parameter per filtered column", async () => {
     const user = userEvent.setup();
     await renderAt(twoClusters());
 
-    await applyFilter(user, "CPU", ">", "40");
-    await applyFilter(user, "Memory", "<", "80");
+    await applyFilter(user, "CPU", "40");
+    await applyFilter(user, "Memory", "80");
 
     await waitFor(() => {
       const params = currentSearch();
-      expect(params.get("cpu")).toBe("gt.40");
-      expect(params.get("memory")).toBe("lt.80");
+      expect(params.get("cpu")).toBe("40");
+      expect(params.get("memory")).toBe("80");
     });
   });
 
@@ -1597,8 +1574,8 @@ describe("ClustersList filter URL state", () => {
     const user = userEvent.setup();
     await renderAt(twoClusters());
 
-    await applyFilter(user, "CPU", ">", "40");
-    await waitFor(() => expect(currentSearch().get("cpu")).toBe("gt.40"));
+    await applyFilter(user, "CPU", "40");
+    await waitFor(() => expect(currentSearch().get("cpu")).toBe("40"));
 
     await user.click(filterTrigger("CPU"));
     await user.click(await screen.findByRole("button", { name: "Clear" }));
@@ -1608,38 +1585,35 @@ describe("ClustersList filter URL state", () => {
 
   it("restores a bookmarked filter, in the rows and in the panel", async () => {
     const user = userEvent.setup();
-    await renderAt(twoClusters(), "/?cpu=gt.40");
+    await renderAt(twoClusters(), "/?cpu=40");
 
     expect(rowOrder()).toEqual(["busy", "middling"]);
 
-    const { comparison, percent } = await panelValues(user, "CPU");
-    expect(comparison).toHaveValue(">");
+    const { percent } = await panelValues(user, "CPU");
     expect(percent).toHaveValue("40");
   });
 
   it("restores a bookmarked filter for every column at once", async () => {
     const user = userEvent.setup();
-    await renderAt(twoClusters(), "/?cpu=gt.40&memory=lt.80");
+    await renderAt(twoClusters(), "/?cpu=40&memory=80");
 
-    // busy clears CPU > 40 but not Memory < 80; middling clears both.
-    expect(rowOrder()).toEqual(["middling"]);
+    // middling reaches CPU 40 but not Memory 80; busy reaches both.
+    expect(rowOrder()).toEqual(["busy"]);
 
     const cpu = await panelValues(user, "CPU");
     expect(cpu.percent).toHaveValue("40");
     await user.click(filterTrigger("CPU"));
 
     const memory = await panelValues(user, "Memory");
-    expect(memory.comparison).toHaveValue("<");
     expect(memory.percent).toHaveValue("80");
   });
 
   it("opens the panel on a bookmarked filter's own values", async () => {
     const user = userEvent.setup();
-    await renderAt(twoClusters(), "/?cpu=lt.40");
+    await renderAt(twoClusters(), "/?cpu=40");
 
-    const { comparison, percent } = await panelValues(user, "CPU");
+    const { percent } = await panelValues(user, "CPU");
 
-    expect(comparison).toHaveValue("<");
     expect(percent).toHaveValue("40");
   });
 
@@ -1659,10 +1633,10 @@ describe("ClustersList filter URL state", () => {
   });
 
   describe.each([
-    ["an unknown comparison", "/?cpu=ge.40"],
-    ["a missing threshold", "/?cpu=gt."],
-    ["a non-numeric threshold", "/?cpu=gt.abc"],
-    ["a bare number", "/?cpu=40"],
+    ["a stale comparison prefix", "/?cpu=gt.40"],
+    ["a non-numeric threshold", "/?cpu=abc"],
+    ["a negative threshold", "/?cpu=-10"],
+    ["a threshold of zero", "/?cpu=0"],
     ["an empty value", "/?cpu="],
   ])("given %s", (_label, url) => {
     it("ignores it and leaves the table unfiltered", async () => {
@@ -1723,9 +1697,9 @@ describe("ClustersList filter URL state", () => {
   });
 
   it("keeps a bookmarked page while the filter matches nothing yet", async () => {
-    // No replica clears a 90% threshold, so the bookmarked filter starts out
-    // matching none of them.
-    await renderAt(twoPagesOfReplicas(), "/?cpu=gt.90&page=2");
+    // No replica reaches 95%, so the bookmarked filter starts out matching
+    // none of them.
+    await renderAt(twoPagesOfReplicas(), "/?cpu=95&page=2");
 
     expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
     // Nothing matches, so there is no page count to judge page 2 against.
@@ -1765,14 +1739,14 @@ describe("ClustersList filter URL state", () => {
     await user.click(screen.getByRole("button", { name: "Next page" }));
     expect(rowOrder()).toEqual(["r-20"]);
 
-    await applyFilter(user, "CPU", ">", "50");
+    await applyFilter(user, "CPU", "50");
 
     expect(rowOrder()).toEqual(["r-20"]);
   });
 
   it("accepts a fractional threshold", async () => {
     const user = userEvent.setup();
-    await renderAt(twoClusters(), "/?cpu=gt.7.5");
+    await renderAt(twoClusters(), "/?cpu=7.5");
 
     expect(rowOrder()).toEqual(["busy", "middling"]);
     const { percent } = await panelValues(user, "CPU");
@@ -1829,33 +1803,33 @@ describe("ClustersList filter chips", () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    await applyFilter(user, "CPU", ">", "40");
+    await applyFilter(user, "CPU", "40");
 
     // The header trigger only signals that a filter is on, by colour, so the
     // chip is where the condition is legible.
-    expect(chips()).toEqual(["CPU > 40%"]);
+    expect(chips()).toEqual(["CPU ≥ 40%"]);
   });
 
   it("carries one chip per filtered column, in column order", async () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    await applyFilter(user, "Memory", "<", "80");
-    await applyFilter(user, "CPU", ">", "40");
+    await applyFilter(user, "Memory", "80");
+    await applyFilter(user, "CPU", "40");
 
     // CPU precedes Memory in the table, so its chip leads regardless of which
     // filter was applied first.
-    expect(chips()).toEqual(["CPU > 40%", "Memory < 80%"]);
+    expect(chips()).toEqual(["CPU ≥ 40%", "Memory ≥ 80%"]);
   });
 
   it("clears the filter when its chip is removed", async () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    await applyFilter(user, "CPU", ">", "40");
+    await applyFilter(user, "CPU", "40");
     expect(rowOrder()).toEqual(["busy", "hot-cpu"]);
 
-    await user.click(screen.getByRole("button", { name: "Remove CPU > 40%" }));
+    await user.click(screen.getByRole("button", { name: "Remove CPU ≥ 40%" }));
 
     expect(rowOrder()).toEqual(["idle", "busy", "hot-cpu"]);
     expect(chips()).toEqual([]);
@@ -1865,20 +1839,20 @@ describe("ClustersList filter chips", () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    await applyFilter(user, "CPU", ">", "40");
-    await applyFilter(user, "Memory", "<", "80");
+    await applyFilter(user, "CPU", "40");
+    await applyFilter(user, "Memory", "80");
 
-    await user.click(screen.getByRole("button", { name: "Remove CPU > 40%" }));
+    await user.click(screen.getByRole("button", { name: "Remove CPU ≥ 40%" }));
 
-    expect(chips()).toEqual(["Memory < 80%"]);
+    expect(chips()).toEqual(["Memory ≥ 80%"]);
   });
 
   it("empties the panel of a filter removed by its chip", async () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    await applyFilter(user, "CPU", ">", "40");
-    await user.click(screen.getByRole("button", { name: "Remove CPU > 40%" }));
+    await applyFilter(user, "CPU", "40");
+    await user.click(screen.getByRole("button", { name: "Remove CPU ≥ 40%" }));
 
     // The panel stays mounted between opens, so it has to follow the filter
     // rather than hold the value the chip just removed.
@@ -1889,26 +1863,26 @@ describe("ClustersList filter chips", () => {
   it("offers a chip for a filter restored from the URL", async () => {
     getStore().set(allClusters, mockSubscribeState({ data: twoClusters() }));
     renderComponent(<ClustersListPage />, {
-      initialRouterEntries: ["/?cpu=gt.40"],
+      initialRouterEntries: ["/?cpu=40"],
     });
     await screen.findByRole("table");
 
-    expect(chips()).toEqual(["CPU > 40%"]);
+    expect(chips()).toEqual(["CPU ≥ 40%"]);
   });
 
   it("keeps its chip when the filter empties the table", async () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    await applyFilter(user, "CPU", ">", "99");
+    await applyFilter(user, "CPU", "99");
 
     // The table is gone, headers and filter panels with it, so the chip is the
     // only way back.
     expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
-    expect(chips()).toEqual(["CPU > 99%"]);
+    expect(chips()).toEqual(["CPU ≥ 99%"]);
 
-    await user.click(screen.getByRole("button", { name: "Remove CPU > 99%" }));
+    await user.click(screen.getByRole("button", { name: "Remove CPU ≥ 99%" }));
 
     expect(rowOrder()).toEqual(["idle", "busy", "hot-cpu"]);
   });

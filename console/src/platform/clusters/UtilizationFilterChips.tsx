@@ -11,10 +11,7 @@ import { HStack, Tag, TagCloseButton, TagLabel } from "@chakra-ui/react";
 import { Table } from "@tanstack/react-table";
 import React from "react";
 
-import {
-  utilizationFilterLabel,
-  UtilizationFilterValue,
-} from "./utilizationFilters";
+import { utilizationFilterLabel } from "./utilizationFilters";
 
 export interface UtilizationFilterChipsProps<TData> {
   table: Table<TData>;
@@ -36,9 +33,7 @@ export const UtilizationFilterChips = <TData,>({
 }: UtilizationFilterChipsProps<TData>) => {
   const chips = columns.flatMap(({ id, header }) => {
     const column = table.getColumn(id);
-    const value = column?.getFilterValue() as
-      | UtilizationFilterValue
-      | undefined;
+    const value = column?.getFilterValue() as number | undefined;
     if (!column || !value) return [];
     return [
       {

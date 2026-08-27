@@ -15,7 +15,6 @@ import {
   NumberInput,
   NumberInputField,
   NumberInputStepper,
-  Select,
   Text,
   useTheme,
   VStack,
@@ -25,12 +24,6 @@ import React from "react";
 
 import { MaterializeTheme } from "~/theme";
 
-import {
-  DEFAULT_COMPARISON,
-  UtilizationComparison,
-  UtilizationFilterValue,
-} from "./utilizationFilters";
-
 export interface UtilizationFilterPanelProps<TData> {
   /** The column to filter, whose `filterFn` must be `utilizationFilterFn`. */
   column: Column<TData, unknown>;
@@ -39,7 +32,7 @@ export interface UtilizationFilterPanelProps<TData> {
 }
 
 /**
- * Filters one utilization column by a percentage threshold, for the popover
+ * Filters one utilization column by a lowest percentage, for the popover
  * `UniversalTable` anchors on a column header.
  *
  * Every utilization column reads the same way, a fraction of the replica's
@@ -50,31 +43,24 @@ export const UtilizationFilterPanel = <TData,>({
   label,
 }: UtilizationFilterPanelProps<TData>) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const value = column.getFilterValue() as UtilizationFilterValue | undefined;
+  const filterValue = column.getFilterValue() as number | undefined;
 
-  const [comparison, setComparison] = React.useState<UtilizationComparison>(
-    value?.comparison ?? DEFAULT_COMPARISON,
-  );
   const [percent, setPercent] = React.useState(
-    value ? String(value.percent) : "",
+    filterValue ? String(filterValue) : "",
   );
 
   // The panel is remounted on each open, so the seed above is what an opening
   // panel shows. This covers the filter changing while the panel is already
   // open, which is what removing the column's chip does.
   React.useEffect(() => {
-    setComparison(value?.comparison ?? DEFAULT_COMPARISON);
-    setPercent(value ? String(value.percent) : "");
-  }, [value]);
-
-  const parsed = Number.parseFloat(percent);
-  // NOTE: no upper bound. `heap_percent` reports RAM plus swap against the heap
-  // limit and can legitimately exceed 100%.
-  const canApply = Number.isFinite(parsed) && parsed >= 0;
+    setPercent(filterValue ? String(filterValue) : "");
+  }, [filterValue]);
 
   const apply = () => {
-    if (!canApply) return;
-    column.setFilterValue({ comparison, percent: parsed });
+    const parsed = parseFloat(percent);
+    // NOTE: no upper bound. `heap_percent` reports RAM plus swap against the
+    // heap limit and can legitimately exceed 100%.
+    column.setFilterValue(parsed > 0 ? parsed : undefined);
   };
 
   const clearFilter = () => {
@@ -82,7 +68,6 @@ export const UtilizationFilterPanel = <TData,>({
     // leaves the applied value as it was, `undefined`, so the sync effect has
     // no change to react to and a threshold typed but never applied would stay
     // on screen.
-    setComparison(DEFAULT_COMPARISON);
     setPercent("");
     column.setFilterValue(undefined);
   };
@@ -91,26 +76,12 @@ export const UtilizationFilterPanel = <TData,>({
     <VStack alignItems="stretch" spacing={0}>
       <HStack spacing={2} px={4} py={3}>
         <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
-          {label}
+          {label} ≥
         </Text>
-        <Select
-          size="sm"
-          maxW="16"
-          fontWeight="700"
-          aria-label={`${label} comparison`}
-          value={comparison}
-          focusBorderColor={colors.accent.brightPurple}
-          onChange={(e) =>
-            setComparison(e.target.value as UtilizationComparison)
-          }
-        >
-          <option value=">">&gt;</option>
-          <option value="<">&lt;</option>
-        </Select>
         <NumberInput
           size="sm"
           maxW="20"
-          min={0}
+          min={1}
           value={percent}
           focusBorderColor={colors.accent.brightPurple}
           onChange={(next) => setPercent(next)}
@@ -146,18 +117,12 @@ export const UtilizationFilterPanel = <TData,>({
           size="sm"
           variant="secondary"
           transition="none"
-          isDisabled={value === undefined && percent === ""}
+          isDisabled={filterValue === undefined && percent === ""}
           onClick={clearFilter}
         >
           Clear
         </Button>
-        <Button
-          size="sm"
-          variant="primary"
-          transition="none"
-          isDisabled={!canApply}
-          onClick={apply}
-        >
+        <Button size="sm" variant="primary" transition="none" onClick={apply}>
           Apply
         </Button>
       </HStack>

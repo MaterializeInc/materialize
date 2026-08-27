@@ -55,7 +55,6 @@ import {
   utilizationFilterFn,
   utilizationFilterFromUrl,
   utilizationFilterToUrl,
-  UtilizationFilterValue,
 } from "./utilizationFilters";
 
 /**
@@ -355,9 +354,7 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
     for (const { id, urlKey } of UTILIZATION_COLUMNS) {
       const filter = tableState.columnFilters.find((f) => f.id === id);
       if (filter) {
-        params[urlKey] = utilizationFilterToUrl(
-          filter.value as UtilizationFilterValue,
-        );
+        params[urlKey] = utilizationFilterToUrl(filter.value as number);
       }
     }
     if (tableState.globalFilter) {
