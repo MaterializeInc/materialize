@@ -400,6 +400,18 @@ hydrated_at  timestamp␠with␠time␠zone  When␠hydration␠finished.
 status  text  The␠terminal␠status.␠Currently␠always␠`hydrated`.
 
 query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_replica_hydration_history' ORDER BY position
+----
+replica_id  text  The␠ID␠of␠the␠cluster␠replica.␠May␠name␠a␠replica␠that␠no␠longer␠exists.
+cluster_id  text  The␠ID␠of␠the␠replica's␠cluster.
+started_at  timestamp␠with␠time␠zone  When␠the␠first␠object␠in␠this␠hydration␠episode␠was␠installed␠on␠the␠replica.
+finished_at  timestamp␠with␠time␠zone  When␠every␠object␠installed␠during␠the␠episode␠had␠hydrated.
+object_count  uint8  The␠number␠of␠object␠dataflows␠that␠hydrated␠during␠the␠episode.
+peak_memory_bytes  uint8  The␠largest␠process-lifetime␠cgroup␠memory␠high-water␠mark␠reported␠by␠any␠process␠when␠the␠collector␠recorded␠the␠episode.␠`NULL`␠if␠the␠platform␠reports␠no␠cgroup␠memory␠peak.
+peak_disk_bytes  uint8  The␠largest␠process-lifetime␠scratch-filesystem␠or␠swap␠high-water␠mark␠reported␠by␠any␠process␠when␠the␠collector␠recorded␠the␠episode.␠Filesystem␠peaks␠are␠sampled␠lower␠bounds.␠`NULL`␠if␠neither␠measurement␠is␠available.
+status  text  The␠terminal␠status.␠Currently␠always␠`hydrated`.
+
+query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_transitive_dependencies' ORDER BY position
 ----
 object_id  text  The␠ID␠of␠the␠dependent␠object.␠Corresponds␠to␠`mz_objects.id`.
@@ -872,6 +884,7 @@ mz_recent_activity_log_thinned
 mz_recent_sql_text
 mz_recent_sql_text_redacted
 mz_replacements
+mz_replica_hydration_history
 mz_replica_system_parameters
 mz_session_history
 mz_sessions

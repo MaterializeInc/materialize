@@ -100,7 +100,7 @@ use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{
     BUILTINS, BUILTINS_STATIC, MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY, MZ_OBJECT_HYDRATION_HISTORY,
-    MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_REPLICA_HYDRATION_HISTORY, MZ_STORAGE_USAGE_BY_SHARD,
 };
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
 use mz_catalog::durable::OpenableDurableCatalogState;
@@ -3186,6 +3186,8 @@ impl Coordinator {
                 .resolve_builtin_table(&MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY),
             self.catalog()
                 .resolve_builtin_table(&MZ_OBJECT_HYDRATION_HISTORY),
+            self.catalog()
+                .resolve_builtin_table(&MZ_REPLICA_HYDRATION_HISTORY),
         ]);
 
         let mut retraction_tasks = Vec::new();

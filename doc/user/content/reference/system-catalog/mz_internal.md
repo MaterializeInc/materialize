@@ -743,6 +743,45 @@ logical timestamp, so the recorded finish can precede the latest process's finis
 | `hydrated_at`  | [`timestamp with time zone`] | When hydration finished.                                                                                                 |
 | `status`       | [`text`]                     | The terminal status. Currently always `hydrated`.                                                                        |
 
+## `mz_replica_hydration_history`
+
+The `mz_replica_hydration_history` table records successful replica hydration
+episodes for indexes and materialized views. An episode begins when the first
+object dataflow is installed on a fully hydrated replica. Any object installed
+before every preceding object has hydrated belongs to the same episode. The
+episode finishes when all of those objects have hydrated.
+
+Collection is disabled by default. Setting
+`hydration_history_collection_interval` to a nonzero duration enables it. Rows
+are retained for 30 days by default while collection is enabled. Disabling
+collection also suspends retention. Recording is best effort, so an episode can
+be missed if its objects or replica disappear before the collector observes
+completion. Failed, canceled, and OOM-killed episodes are not recorded.
+`cluster_id` and `replica_id` may name objects that no longer exist.
+
+Resource peaks have process-lifetime scope because the operating system resets
+them when a replica process restarts, not when a hydration episode starts. They
+are read after the collector observes a completed episode, so they include all
+process work through collection rather than ending at `finished_at`. Even a
+first episode's value can include work after hydration. A later episode's value
+can additionally include an earlier peak. Kernel-maintained memory and swap
+peaks are exact for the process lifetime through collection, while the
+filesystem peak remains a sampled lower bound. Replica resource limits apply
+independently to each process, so the table records the largest process peak
+rather than a sum of peaks that may not have occurred at the same time.
+
+<!-- RELATION_SPEC mz_internal.mz_replica_hydration_history -->
+| Field               | Type                         | Meaning                                                                                                                  |
+| ------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `replica_id`        | [`text`]                     | The ID of the cluster replica. May name a replica that no longer exists.                                                 |
+| `cluster_id`        | [`text`]                     | The ID of the replica's cluster.                                                                                          |
+| `started_at`        | [`timestamp with time zone`] | When the first object in this hydration episode was installed on the replica.                                             |
+| `finished_at`       | [`timestamp with time zone`] | When every object installed during the episode had hydrated.                                                              |
+| `object_count`      | [`uint8`]                    | The number of object dataflows that hydrated during the episode.                                                         |
+| `peak_memory_bytes` | [`uint8`]                    | The largest process-lifetime cgroup memory high-water mark reported by any process when the collector recorded the episode. `NULL` if the platform reports no cgroup memory peak. |
+| `peak_disk_bytes`   | [`uint8`]                    | The largest process-lifetime scratch-filesystem or swap high-water mark reported by any process when the collector recorded the episode. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available. |
+| `status`            | [`text`]                     | The terminal status. Currently always `hydrated`.                                                                        |
+
 ## `mz_object_transitive_dependencies`
 
 The `mz_object_transitive_dependencies` view describes the transitive dependency structure between

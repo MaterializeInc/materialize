@@ -39,6 +39,7 @@ use mz_catalog::builtin::{
     BUILTIN_LOOKUP, Builtin, Fingerprint, MZ_CATALOG_RAW, MZ_CATALOG_RAW_DESCRIPTION,
     MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION, MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION,
     MZ_OBJECT_HYDRATION_HISTORY, MZ_OBJECT_HYDRATION_HISTORY_DESCRIPTION,
+    MZ_REPLICA_HYDRATION_HISTORY, MZ_REPLICA_HYDRATION_HISTORY_DESCRIPTION,
     MZ_STORAGE_USAGE_BY_SHARD, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
     RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
@@ -689,18 +690,20 @@ fn participates_in_forced_migration(
     match builtin {
         // A forced replacement allocates a fresh shard, which discards the
         // table's contents. Exclude the tables whose contents are the point:
-        // storage usage is retained for billing, and hydration history cannot
+        // storage usage is retained for billing, and hydration histories cannot
         // be rebuilt from any other source.
         //
-        // Hydration history takes part in a forced `Evolution`, which keeps the
-        // rows. It has to: dev upgrades force one for every object, and a table
-        // left out of the plan never gets its new schema registered, so
-        // `update_fingerprints` panics at open as soon as the desc changes. See
-        // the tripwire in `validate_migration_steps` for how to give up the
+        // Hydration history tables take part in a forced `Evolution`, which
+        // keeps the rows. They have to: dev upgrades force one for every object,
+        // and a table left out of the plan never gets its new schema registered.
+        // `update_fingerprints` then panics at open as soon as the desc changes.
+        // See the tripwire in `validate_migration_steps` for how to give up the
         // replacement exemption deliberately.
         Table(table) => {
             **table != *MZ_STORAGE_USAGE_BY_SHARD
-                && (mechanism != Mechanism::Replacement || **table != *MZ_OBJECT_HYDRATION_HISTORY)
+                && (mechanism != Mechanism::Replacement
+                    || (**table != *MZ_OBJECT_HYDRATION_HISTORY
+                        && **table != *MZ_REPLICA_HYDRATION_HISTORY))
         }
         MaterializedView(..) => true,
         Source(source) => **source != *MZ_CATALOG_RAW,
@@ -818,6 +821,10 @@ impl Migration {
                 assert_ne!(
                     &*MZ_OBJECT_HYDRATION_HISTORY_DESCRIPTION, object,
                     "replacing mz_object_hydration_history clears it, see the comment above"
+                );
+                assert_ne!(
+                    &*MZ_REPLICA_HYDRATION_HISTORY_DESCRIPTION, object,
+                    "replacing mz_replica_hydration_history clears it, see the comment above"
                 );
             }
 

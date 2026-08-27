@@ -29,16 +29,21 @@ use super::*;
 
 #[mz_ore::test]
 fn hydration_history_forced_migration_policy() {
-    let hydration_history = Builtin::Table(&*MZ_OBJECT_HYDRATION_HISTORY);
+    for table in [
+        &*MZ_OBJECT_HYDRATION_HISTORY,
+        &*MZ_REPLICA_HYDRATION_HISTORY,
+    ] {
+        let hydration_history = Builtin::Table(table);
 
-    assert!(participates_in_forced_migration(
-        &hydration_history,
-        Mechanism::Evolution
-    ));
-    assert!(!participates_in_forced_migration(
-        &hydration_history,
-        Mechanism::Replacement
-    ));
+        assert!(participates_in_forced_migration(
+            &hydration_history,
+            Mechanism::Evolution
+        ));
+        assert!(!participates_in_forced_migration(
+            &hydration_history,
+            Mechanism::Replacement
+        ));
+    }
 }
 
 #[test] // allow(test-attribute)
