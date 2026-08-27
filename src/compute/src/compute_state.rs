@@ -93,6 +93,13 @@ pub struct ComputeState {
     ///  * Persist sinks store their current frontier in `CollectionState::sink_write_frontier`.
     ///  * Subscribes report their frontiers through the `subscribe_response_buffer`.
     pub collections: BTreeMap<GlobalId, CollectionState>,
+    /// The exports of each installed dataflow, keyed by dataflow index.
+    ///
+    /// Timely mints indices from a per-worker counter that only increases, so an index is never
+    /// reused within a process. Maintained alongside `collections` by
+    /// [`ComputeState::insert_collection`] and [`ActiveComputeState::drop_collection`], which is
+    /// the only reason a dataflow's export set is knowable without scanning every collection.
+    dataflow_exports: BTreeMap<usize, BTreeSet<GlobalId>>,
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
     /// Shared buffer with SUBSCRIBE operator instances by which they can respond.
@@ -208,12 +215,28 @@ impl ComputeState {
             worker_config: mz_dyncfgs::all_dyncfgs().into(),
             metrics_registry,
             workers_per_process,
+            dataflow_exports: Default::default(),
             suspended_collections: Default::default(),
             server_maintenance_interval: Duration::ZERO,
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
             storage_log_reader,
         }
+    }
+
+    /// Install the state for a new collection and record it as an export of its dataflow.
+    ///
+    /// Returns the state this displaced, which is always a bug in the caller.
+    fn insert_collection(
+        &mut self,
+        id: GlobalId,
+        collection: CollectionState,
+    ) -> Option<CollectionState> {
+        self.dataflow_exports
+            .entry(collection.dataflow_index)
+            .or_default()
+            .insert(id);
+        self.collections.insert(id, collection)
     }
 
     /// Return a mutable reference to the identified collection.
@@ -624,7 +647,7 @@ impl<'a> ActiveComputeState<'a> {
         &mut self,
         dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
     ) {
-        let dataflow_index = Rc::new(self.timely_worker.next_dataflow_index());
+        let dataflow_index = self.timely_worker.next_dataflow_index();
         let as_of = dataflow.as_of.clone().unwrap();
 
         let dataflow_expiration = dataflow
@@ -689,18 +712,14 @@ impl<'a> ActiveComputeState<'a> {
         for object_id in dataflow.export_ids() {
             let is_subscribe_or_copy = subscribe_copy_ids.contains(&object_id);
             let metrics = self.compute_state.metrics.for_collection(object_id);
-            let mut collection = CollectionState::new(
-                Rc::clone(&dataflow_index),
-                is_subscribe_or_copy,
-                as_of.clone(),
-                metrics,
-            );
+            let mut collection =
+                CollectionState::new(dataflow_index, is_subscribe_or_copy, as_of.clone(), metrics);
 
             if let Some(logger) = self.compute_state.compute_logger.clone() {
                 let logging = CollectionLogging::new(
                     object_id,
                     logger,
-                    *dataflow_index,
+                    dataflow_index,
                     as_of.as_option().copied(),
                     dataflow.import_ids(),
                 );
@@ -714,7 +733,7 @@ impl<'a> ActiveComputeState<'a> {
                 lower: as_of.clone(),
             });
 
-            let existing = self.compute_state.collections.insert(object_id, collection);
+            let existing = self.compute_state.insert_collection(object_id, collection);
             if existing.is_some() {
                 error!(
                     id = ?object_id,
@@ -746,48 +765,39 @@ impl<'a> ActiveComputeState<'a> {
         // dataflow can export multiple collections and they all share one suspension token, so the
         // computation of a dataflow will only start once all its exported collections have been
         // scheduled.
-        let suspension_token = self.compute_state.suspended_collections.remove(&id);
-        // Only the last token release actually unsuspends the dataflow, and the signal holds no
-        // strong reference of its own, so this is the whole outstanding count.
-        let unsuspended = suspension_token
-            .as_ref()
-            .is_some_and(|token| Rc::strong_count(token) == 1);
-        drop(suspension_token);
-
-        if !unsuspended {
-            return;
-        }
+        self.compute_state.suspended_collections.remove(&id);
 
         // Report the start for every export of the dataflow, not just the one this command named.
         // Computation begins for all of them at this instant, so crediting each export from its
         // own `Schedule` would date the earlier ones to before their dataflow was running and
         // overstate the compute time between `started` and `snapshot_complete`.
-        let Some(dataflow_index) = self
+        let Some(collection) = self.compute_state.collections.get(&id) else {
+            return;
+        };
+        let Some(export_ids) = self
             .compute_state
-            .collections
-            .get(&id)
-            .map(|c| Rc::clone(&c.dataflow_index))
+            .dataflow_exports
+            .get(&collection.dataflow_index)
         else {
             return;
         };
-        // Two strong references, this collection's and the clone above, mean this is the
-        // dataflow's only export and there is nothing to scan for. `Schedule` arrives once per
-        // dataflow, so without this the sweep is quadratic in the number of collections, on the
-        // timely worker thread, exactly while start-up latency matters.
-        if Rc::strong_count(&dataflow_index) == 2 {
-            if let Some(collection) = self.compute_state.collections.get(&id) {
-                if let Some(logging) = &collection.logging {
-                    logging.set_hydration_start();
-                }
-            }
+
+        // An export still holding its token means the dataflow is still suspended, so there is no
+        // start to report yet.
+        let still_suspended = export_ids
+            .iter()
+            .any(|id| self.compute_state.suspended_collections.contains_key(id));
+        if still_suspended {
             return;
         }
 
-        for collection in self.compute_state.collections.values() {
-            if !Rc::ptr_eq(&collection.dataflow_index, &dataflow_index) {
-                continue;
-            }
-            if let Some(logging) = &collection.logging {
+        for export_id in export_ids {
+            let logging = self
+                .compute_state
+                .collections
+                .get(export_id)
+                .and_then(|c| c.logging.as_ref());
+            if let Some(logging) = logging {
                 logging.set_hydration_start();
             }
         }
@@ -871,8 +881,13 @@ impl<'a> ActiveComputeState<'a> {
         self.compute_state.suspended_collections.remove(&id);
 
         // Drop the dataflow, if all its exports have been dropped.
-        if let Ok(index) = Rc::try_unwrap(collection.dataflow_index) {
-            self.timely_worker.drop_dataflow(index);
+        let index = collection.dataflow_index;
+        if let Some(exports) = self.compute_state.dataflow_exports.get_mut(&index) {
+            exports.remove(&id);
+            if exports.is_empty() {
+                self.compute_state.dataflow_exports.remove(&index);
+                self.timely_worker.drop_dataflow(index);
+            }
         }
 
         // The compute protocol requires us to send a `Frontiers` response with empty frontiers
@@ -919,7 +934,6 @@ impl<'a> ActiveComputeState<'a> {
             storage_log_reader,
         );
 
-        let dataflow_index = Rc::new(dataflow_index);
         let mut log_index_ids = config.index_logs;
         for (log, trace) in traces {
             // Install trace as maintained index.
@@ -932,17 +946,13 @@ impl<'a> ActiveComputeState<'a> {
             let is_subscribe_or_copy = false;
             let as_of = Antichain::from_elem(Timestamp::MIN);
             let metrics = self.compute_state.metrics.for_collection(id);
-            let mut collection = CollectionState::new(
-                Rc::clone(&dataflow_index),
-                is_subscribe_or_copy,
-                as_of.clone(),
-                metrics,
-            );
+            let mut collection =
+                CollectionState::new(dataflow_index, is_subscribe_or_copy, as_of.clone(), metrics);
 
             let logging = CollectionLogging::new(
                 id,
                 logger.clone(),
-                *dataflow_index,
+                dataflow_index,
                 as_of.as_option().copied(),
                 std::iter::empty(),
             );
@@ -953,7 +963,7 @@ impl<'a> ActiveComputeState<'a> {
             logging.set_hydration_start();
             collection.logging = Some(logging);
 
-            let existing = self.compute_state.collections.insert(id, collection);
+            let existing = self.compute_state.insert_collection(id, collection);
             if existing.is_some() {
                 error!(
                     id = ?id,
@@ -2048,10 +2058,9 @@ pub struct CollectionState {
     reported_frontiers: ReportedFrontiers,
     /// The index of the dataflow computing this collection.
     ///
-    /// Used for dropping the dataflow when the collection is dropped.
-    /// The Dataflow index is wrapped in an `Rc`s and can be shared between collections, to reflect
-    /// the possibility that a single dataflow can export multiple collections.
-    dataflow_index: Rc<usize>,
+    /// A dataflow can compute more than one collection. Which ones is tracked by
+    /// `ComputeState::dataflow_exports`, which is also what decides when the dataflow is dropped.
+    dataflow_index: usize,
     /// Whether this collection is a subscribe or copy-to.
     ///
     /// The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
@@ -2107,7 +2116,7 @@ pub struct CollectionState {
 
 impl CollectionState {
     fn new(
-        dataflow_index: Rc<usize>,
+        dataflow_index: usize,
         is_subscribe_or_copy: bool,
         as_of: Antichain<Timestamp>,
         metrics: CollectionMetrics,
@@ -2231,7 +2240,7 @@ impl CollectionState {
     /// Allow writes for this collection.
     fn allow_writes(&self) {
         info!(
-            dataflow_index = *self.dataflow_index,
+            dataflow_index = self.dataflow_index,
             export = ?self.logging.as_ref().map(|l| l.export_id()),
             "allowing writes for dataflow",
         );
