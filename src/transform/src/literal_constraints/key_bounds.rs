@@ -457,3 +457,65 @@ pub fn literal_constrained_exprs<'a>(
     }
     found.into_iter().collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use mz_expr::func;
+    use mz_repr::{Datum, ReprScalarType};
+
+    use super::*;
+
+    /// `#col = value`, as an `Int64` equality.
+    fn eq(col: usize, value: i64) -> MirScalarExpr {
+        MirScalarExpr::column(col).call_binary(
+            MirScalarExpr::literal_ok(Datum::Int64(value), ReprScalarType::Int64),
+            func::Eq,
+        )
+    }
+
+    /// `(#0, #1) IN (pairs)`, as the `OR` of `AND`s that SQL lowering produces.
+    fn pairs_in(pairs: impl IntoIterator<Item = (i64, i64)>) -> MirScalarExpr {
+        MirScalarExpr::call_variadic(
+            Or,
+            pairs
+                .into_iter()
+                .map(|(a, b)| MirScalarExpr::call_variadic(And, vec![eq(0, a), eq(1, b)]))
+                .collect(),
+        )
+    }
+
+    /// Every key value a `KeyBounds` admits, for checking containment in tests.
+    fn admitted(bounds: &KeyBounds) -> BTreeSet<Row> {
+        bounds
+            .lookup_values()
+            .expect("bounded")
+            .into_iter()
+            .collect()
+    }
+
+    /// The lookup values of a conjunction must fall inside the bound of every conjunct that
+    /// reports itself `exact`, since those conjuncts are the ones the transform drops from
+    /// the filter.
+    #[test]
+    fn exact_conjunct_contains_lookup_values() {
+        let key = vec![MirScalarExpr::column(0), MirScalarExpr::column(1)];
+        // Wide enough that the product of the two box lists exceeds `MAX_BOXES`.
+        let width = 40;
+        let p1 = pairs_in((0..width).map(|i| (i, i)));
+        let p2 = pairs_in((0..width).map(|i| (i, i + 1)));
+
+        let b1 = KeyBounds::extract(&p1, &key);
+        let b2 = KeyBounds::extract(&p2, &key);
+        assert!(b1.exact(), "p1 is a pure key constraint");
+        assert!(b2.exact(), "p2 is a pure key constraint");
+
+        let joint = KeyBounds::conjunction([&p1, &p2], &key);
+        let lookups = admitted(&joint);
+        // `p1 AND p2` is a contradiction: no `(i, i)` is also an `(i, i + 1)`.
+        assert!(
+            lookups.is_empty(),
+            "lookup values not implied by the predicate: {:?}",
+            lookups
+        );
+    }
+}
