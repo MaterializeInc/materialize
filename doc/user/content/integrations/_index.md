@@ -37,6 +37,7 @@ available:
 
 - [SQL clients](/integrations/sql-clients/)
 - [Client Libraries](/integrations/client-libraries/)
+- [ADBC (Arrow Database Connectivity)](/integrations/adbc/)
 
 See also the following integration guides for BI tools:
 
