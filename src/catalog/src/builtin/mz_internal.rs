@@ -1322,7 +1322,7 @@ pub static MZ_SOURCE_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| 
         ),
         (
             "details",
-            "Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions.",
+            "Additional metadata provided by the source. In case of error, may contain a `hints` field with a list of helpful suggestions.",
         ),
         (
             "replica_id",
@@ -2173,7 +2173,7 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
         ),
         (
             "details",
-            "Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions.",
+            "Additional metadata provided by the source. In case of error, may contain a `hints` field with a list of helpful suggestions.",
         ),
     ]),
     sql: "
@@ -2372,7 +2372,7 @@ pub static MZ_SINK_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| Bu
         ),
         (
             "details",
-            "Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions.",
+            "Additional metadata provided by the sink. In case of error, may contain a `hints` field with a list of helpful suggestions.",
         ),
         (
             "replica_id",
@@ -2455,7 +2455,7 @@ pub static MZ_SINK_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVie
         ),
         (
             "details",
-            "Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions.",
+            "Additional metadata provided by the sink. In case of error, may contain a `hints` field with a list of helpful suggestions.",
         ),
     ]),
     sql: "

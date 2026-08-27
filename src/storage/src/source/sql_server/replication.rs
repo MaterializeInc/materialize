@@ -560,8 +560,8 @@ pub(crate) fn render<'scope>(
                         };
                         let error =
                             DefiniteError::IncompatibleSchemaChange(
-                                capture_instance.to_string(),
                                 table.to_string(),
+                                capture_instance.to_string(),
                             );
                         for partition_idx in partition_indexes {
                             let cols = included_columns
