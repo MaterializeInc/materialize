@@ -15,6 +15,7 @@
 
 from typing import Any
 
+from dbt_common.dataclass_schema import ValidationError
 from dbt_common.exceptions import CompilationError
 
 
@@ -33,13 +34,24 @@ class RefreshIntervalConfigNotDictError(CompilationError):
 
 
 class RefreshIntervalConfigError(CompilationError):
-    def __init__(self, exc: TypeError):
+    def __init__(self, exc: ValidationError):
         self.exc = exc
         super().__init__(msg=self.get_message())
 
     def get_message(self) -> str:
         validator_msg = self.validator_error_message(self.exc)
         msg = f"Could not parse refresh interval config: {validator_msg}"
+        return msg
+
+
+class IndexConfigError(CompilationError):
+    def __init__(self, exc: ValidationError):
+        self.exc = exc
+        super().__init__(msg=self.get_message())
+
+    def get_message(self) -> str:
+        validator_msg = self.validator_error_message(self.exc)
+        msg = f"Could not parse index config: {validator_msg}"
         return msg
 
 
