@@ -24,15 +24,17 @@ use aws_sigv4::sign::v4;
 // Aliased to avoid colliding with `mz_ccsr::tls::Identity`.
 use aws_smithy_runtime_api::client::identity::Identity as AwsIdentity;
 use base64::Engine;
-use http::{HeaderName, HeaderValue};
+use http::{HeaderMap, HeaderName, HeaderValue};
 use iceberg::Catalog;
 use iceberg::CatalogBuilder;
+use iceberg::TableIdent;
 use iceberg::io::{
     GCS_CREDENTIALS_JSON, GCS_DISABLE_CONFIG_LOAD, GCS_DISABLE_VM_METADATA, GCS_USER_PROJECT,
     S3_ACCESS_KEY_ID, S3_DISABLE_EC2_METADATA, S3_REGION, S3_SECRET_ACCESS_KEY,
 };
 use iceberg_catalog_rest::{
-    REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RequestAuthenticator, RestCatalogBuilder,
+    OAuth2TokenProvider, REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RequestAuthenticator,
+    RestCatalogBuilder, TokenProvider,
 };
 use iceberg_storage_opendal::{
     AwsCredential, CustomAwsCredentialLoader, OpenDalStorageFactory, ProvideCredential,
@@ -89,13 +91,17 @@ use crate::errors::{ContextCreationError, CsrConnectError};
 
 pub mod aws;
 pub mod gcp;
+mod iceberg_credentials;
 pub mod inline;
 pub mod string_or_secret;
 
-const REST_CATALOG_PROP_SCOPE: &str = "scope";
-const REST_CATALOG_PROP_CREDENTIAL: &str = "credential";
-/// Overrides the OAuth2 token endpoint. Spelled `uri` because that is the property name the
-/// Iceberg REST clients agree on, even though the SQL option says `URL`.
+/// The OAuth2 form field naming the scopes a token is requested for.
+///
+/// Materialize drives the OAuth2 exchange itself rather than through the `credential`,
+/// `oauth2-server-uri`, and `scope` catalog properties, so that one token object serves both
+/// catalog requests and storage-credential refreshes.
+const OAUTH2_PARAM_SCOPE: &str = "scope";
+
 const REST_CATALOG_PROP_OAUTH2_SERVER_URI: &str = "oauth2-server-uri";
 /// Requests catalog-vended storage credentials. `iceberg-rust` turns `header.*` catalog
 /// properties into headers on every REST request, the same way the Iceberg Java client
@@ -793,18 +799,27 @@ impl<C: ConnectionAccess> IcebergCatalogConnection<C> {
 }
 
 impl IcebergCatalogConnection<InlinedConnection> {
+    /// Connects to the catalog.
+    ///
+    /// `table` names the table this handle will be used against. It is needed only to keep
+    /// catalog-vended storage credentials refreshed, which the REST specification scopes to a
+    /// single table. Passing `None` leaves the connection on whatever credentials the catalog
+    /// supplies at `loadTable` time, which expire.
     pub async fn connect(
         &self,
         storage_configuration: &StorageConfiguration,
         in_task: InTask,
+        table: Option<&TableIdent>,
     ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
         match self.catalog {
             IcebergCatalogImpl::S3TablesRest(ref s3tables) => {
+                // S3 Tables signs every request with SigV4 off a refreshable AWS provider, so it
+                // has no vended credential to keep alive.
                 self.connect_s3tables(s3tables, storage_configuration, in_task)
                     .await
             }
             IcebergCatalogImpl::Rest(ref rest) => {
-                self.connect_rest(rest, storage_configuration, in_task)
+                self.connect_rest(rest, storage_configuration, in_task, table)
                     .await
             }
         }
@@ -972,6 +987,7 @@ impl IcebergCatalogConnection<InlinedConnection> {
         rest: &RestIcebergCatalog,
         storage_configuration: &StorageConfiguration,
         in_task: InTask,
+        table: Option<&TableIdent>,
     ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
         let mut props = BTreeMap::from([(
             REST_CATALOG_PROP_URI.to_string(),
@@ -981,6 +997,10 @@ impl IcebergCatalogConnection<InlinedConnection> {
         if let Some(warehouse) = &rest.warehouse {
             props.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), warehouse.clone());
         }
+
+        // One client for catalog requests, OAuth token requests, and credential refreshes, so all
+        // three share a connection pool. `iceberg-rust` would otherwise default to its own.
+        let client = reqwest::Client::new();
 
         // Catalog auth is configured through a combination of `props` and `.with_authenticator(...)`,
         // which happen at different stages of the [`RestCatalogBuilder`] -> [`RestCatalog`]
@@ -998,7 +1018,6 @@ impl IcebergCatalogConnection<InlinedConnection> {
                     )
                     .await
                     .map_err(|e| anyhow!("failed to read Iceberg catalog credential: {e}"))?;
-                props.insert(REST_CATALOG_PROP_CREDENTIAL.to_string(), credential);
 
                 if let Some(server_url) = server_url {
                     // The OAuth2 exchange POSTs the catalog credential to this URL, so a URL
@@ -1031,9 +1050,63 @@ impl IcebergCatalogConnection<InlinedConnection> {
                     );
                 }
 
-                if let Some(scope) = scope {
-                    props.insert(REST_CATALOG_PROP_SCOPE.to_string(), scope.clone());
-                }
+                // Materialize builds an OAuth2 provider shared across both catalog requests
+                // and the vended credentials refresh below.
+                let token_endpoint = match server_url {
+                    Some(server_url) => server_url.clone(),
+                    // Matches `iceberg-rust`'s default when no `oauth2-server-uri` is configured.
+                    None => format!(
+                        "{}/v1/oauth/tokens",
+                        self.uri.as_str().trim_end_matches('/')
+                    ),
+                };
+                let (client_id, client_secret) = match credential.split_once(':') {
+                    Some((client_id, client_secret)) => {
+                        (Some(client_id.to_string()), client_secret.to_string())
+                    }
+                    None => (None, credential),
+                };
+                let oauth_params = BTreeMap::from([(
+                    OAUTH2_PARAM_SCOPE.to_string(),
+                    // The default `iceberg-rust` applies when the connection names no scope.
+                    scope.clone().unwrap_or_else(|| "catalog".to_string()),
+                )]);
+                let token: Arc<dyn TokenProvider> = Arc::new(OAuth2TokenProvider::new(
+                    client.clone(),
+                    client_id,
+                    client_secret,
+                    token_endpoint,
+                    // The token request needs none of the catalog's headers, and
+                    // `OAuth2TokenProvider` sets the form content type itself.
+                    HeaderMap::new(),
+                    oauth_params.into_iter().collect(),
+                ));
+
+                // Installing a loader hands it sole responsibility for S3 credentials: OpenDAL
+                // replaces its whole provider chain, including the static keys parsed out of the
+                // catalog's vended `storage-credentials` props. So only install one when the
+                // connection asked for delegation and we know which table to refresh, and let the
+                // static props serve every other case.
+                let customized_credential_load = match (&rest.access_delegation, table) {
+                    (Some(IcebergAccessDelegation::VendedCredentials), Some(table)) => {
+                        let endpoint = iceberg_credentials::table_credentials_endpoint(
+                            &self.uri,
+                            &client,
+                            &token,
+                            rest.warehouse.as_deref(),
+                            table,
+                        )
+                        .await?;
+                        Some(CustomAwsCredentialLoader::new(
+                            iceberg_credentials::VendedCredentialLoader::new(
+                                client.clone(),
+                                endpoint,
+                                Arc::clone(&token),
+                            ),
+                        ))
+                    }
+                    _ => None,
+                };
 
                 (
                     OpenDalStorageFactory::S3 {
@@ -1043,9 +1116,12 @@ impl IcebergCatalogConnection<InlinedConnection> {
                         // vends instead, it returns per-table `storage-credentials` that
                         // `iceberg-rust` wires into the same FileIO.
                         // N.B. This is not confirmed to work with other catalog & storage implementations.
-                        customized_credential_load: None,
+                        customized_credential_load,
                     },
-                    None,
+                    // NOTE: We construct our own OAuth authenticator for the Catalog client instead of using the one built in.
+                    // This means we ignore auth overrides from `/v1/config` (e.g. `oauth2-server-uri`).
+                    // This is okay because users can set these configs from Mz SQL.
+                    Some(iceberg_catalog_rest::BearerTokenAuthenticator::new(token)),
                 )
             }
             IcebergCatalogAuth::Gcp(gcp_connection_reference) => {
@@ -1089,8 +1165,9 @@ impl IcebergCatalogConnection<InlinedConnection> {
             );
         }
 
-        let mut catalog =
-            RestCatalogBuilder::default().with_storage_factory(Arc::new(storage_factory));
+        let mut catalog = RestCatalogBuilder::default()
+            .with_storage_factory(Arc::new(storage_factory))
+            .with_client(client);
         if let Some(auth) = custom_authenticator {
             catalog = catalog.with_authenticator(Arc::new(auth));
         }
@@ -1106,8 +1183,9 @@ impl IcebergCatalogConnection<InlinedConnection> {
         _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), ConnectionValidationError> {
+        // Validation only lists namespaces, so it needs no table-scoped credentials.
         let catalog = self
-            .connect(storage_configuration, InTask::No)
+            .connect(storage_configuration, InTask::No, None)
             .await
             .map_err(|e| {
                 ConnectionValidationError::Other(anyhow!("failed to connect to catalog: {e}"))
