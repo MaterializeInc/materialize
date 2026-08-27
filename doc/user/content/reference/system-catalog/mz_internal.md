@@ -204,6 +204,13 @@ The `mz_cluster_replica_metrics` view gives the last known CPU and RAM utilizati
 for all processes of all extant cluster replicas.
 
 At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+They are sampled roughly once a minute, so a spike shorter than the sampling interval is not
+visible here at all. For a view of a single replica sampled every few seconds, including high-water
+marks that survive a spike the sampling missed, see [Replica resource
+usage](/manage/monitor/replica-resource-usage/).
+
+Where a replica's disk is provided as swap rather than as a filesystem, `disk_bytes` reports swap
+usage.
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_metrics -->
 | Field               | Type         | Meaning
@@ -223,6 +230,11 @@ The `mz_cluster_replica_metrics_history` table records resource utilization metr
 for all processes of all extant cluster replicas.
 
 At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+They are sampled roughly once a minute, so a spike shorter than the sampling interval leaves no
+trace. Unlike
+[`mz_introspection.mz_cluster_replica_resource_usage`](/reference/system-catalog/mz_introspection/#mz_cluster_replica_resource_usage),
+which is sampled every few seconds but is replica-local and resets when a replica restarts, this
+history is retained across restarts.
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_metrics_history -->
 | Field            | Type      | Meaning

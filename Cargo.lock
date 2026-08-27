@@ -7487,10 +7487,12 @@ dependencies = [
 name = "mz-metrics"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "lgalloc",
  "libc",
  "mz-dyncfg",
  "mz-ore",
+ "nix 0.31.3",
  "paste",
  "prometheus",
  "thiserror 2.0.18",

@@ -136,6 +136,7 @@ Arrange␠Differential(BatcherRecords)  ArrangementSize  alloc::vec::Vec<mz_row_
 Arrange␠Differential(BatcherSize)  ArrangementSize  alloc::vec::Vec<mz_row_spine::arc_batch::ArcBatch<differential_dataflow::trace::implementations::ord_neu::val_batch::OrdValBatch<mz_row_spine::spines::RowRowLayout<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
 Arrange␠Differential(Sharing)  ArrangementSize  alloc::vec::Vec<mz_row_spine::arc_batch::ArcBatch<differential_dataflow::trace::implementations::ord_neu::val_batch::OrdValBatch<mz_row_spine::spines::RowRowLayout<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
 Arrange␠PrometheusMetrics  ArrangementSize  alloc::vec::Vec<mz_row_spine::arc_batch::ArcBatch<differential_dataflow::trace::implementations::ord_neu::val_batch::OrdValBatch<mz_row_spine::spines::RowRowLayout<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
+Arrange␠ResourceUsage  ArrangementSize  alloc::vec::Vec<mz_row_spine::arc_batch::ArcBatch<differential_dataflow::trace::implementations::ord_neu::val_batch::OrdValBatch<mz_row_spine::spines::RowRowLayout<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
 Arrange␠Timely(Addresses)  ArrangementSize  alloc::vec::Vec<mz_row_spine::arc_batch::ArcBatch<differential_dataflow::trace::implementations::ord_neu::val_batch::OrdValBatch<mz_row_spine::spines::RowRowLayout<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
 Arrange␠Timely(BatchesReceived)  ArrangementSize  alloc::vec::Vec<mz_row_spine::arc_batch::ArcBatch<differential_dataflow::trace::implementations::ord_neu::val_batch::OrdValBatch<mz_row_spine::spines::RowRowLayout<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
 Arrange␠Timely(BatchesSent)  ArrangementSize  alloc::vec::Vec<mz_row_spine::arc_batch::ArcBatch<differential_dataflow::trace::implementations::ord_neu::val_batch::OrdValBatch<mz_row_spine::spines::RowRowLayout<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
@@ -192,6 +193,7 @@ Replay␠differential␠logs  Differential␠Logging␠Demux  alloc::vec::Vec<(c
 Replay␠reachability␠logs  FlatMapReachability  mz_timely_util::columnar::Column<(core::time::Duration,␠(usize,␠alloc::vec::Vec<(usize,␠usize,␠bool,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>))>
 Replay␠storage␠timely␠logs  Concatenate  alloc::vec::Vec<(core::time::Duration,␠timely::logging::TimelyEvent)>
 Replay␠timely␠logs  Concatenate  alloc::vec::Vec<(core::time::Duration,␠timely::logging::TimelyEvent)>
+ResourceUsage  Arrange␠ResourceUsage  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Timely␠Logging␠Demux  Consolidate␠Timely(Addresses)  alloc::vec::Vec<((usize,␠alloc::vec::Vec<usize>),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Timely␠Logging␠Demux  Consolidate␠Timely(BatchesReceived)  alloc::vec::Vec<((mz_compute::logging::timely::MessageDatum,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Timely␠Logging␠Demux  Consolidate␠Timely(BatchesSent)  alloc::vec::Vec<((mz_compute::logging::timely::MessageDatum,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
@@ -245,8 +247,8 @@ GROUP BY type;
 1  mz_timely_util::columnar::Column<(core::time::Duration,␠(usize,␠alloc::vec::Vec<(usize,␠usize,␠bool,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>))>
 1  mz_timely_util::columnar::Column<(core::time::Duration,␠mz_compute::logging::compute::ComputeEvent)>
 3  alloc::vec::Vec<(core::time::Duration,␠timely::logging::TimelyEvent)>
-32  alloc::vec::Vec<mz_row_spine::arc_batch::ArcBatch<differential_dataflow::trace::implementations::ord_neu::val_batch::OrdValBatch<mz_row_spine::spines::RowRowLayout<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
-32  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
+33  alloc::vec::Vec<mz_row_spine::arc_batch::ArcBatch<differential_dataflow::trace::implementations::ord_neu::val_batch::OrdValBatch<mz_row_spine::spines::RowRowLayout<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
+33  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 4  alloc::vec::Vec<((mz_compute::logging::timely::MessageDatum,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 4  alloc::vec::Vec<alloc::vec::Vec<mz_timely_util::columnation::ColumnationStack<((mz_compute::logging::timely::MessageDatum,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>
 8  alloc::vec::Vec<((usize,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>

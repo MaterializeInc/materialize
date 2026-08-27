@@ -10,15 +10,20 @@ publish = false
 workspace = true
 
 [dependencies]
+anyhow.workspace = true
 lgalloc.workspace = true
 libc.workspace = true
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", features = ["metrics"] }
+nix.workspace = true
 paste.workspace = true
 prometheus.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+mz-ore = { path = "../ore", features = ["metrics", "test"] }
 
 [features]
 default = []

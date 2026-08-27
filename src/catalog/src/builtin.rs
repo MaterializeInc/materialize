@@ -1108,6 +1108,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Log(&MZ_COMPUTE_EXPORTS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER),
         Builtin::Log(&MZ_CLUSTER_PROMETHEUS_METRICS),
+        Builtin::Log(&MZ_CLUSTER_REPLICA_RESOURCE_USAGE),
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_RAW),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW),

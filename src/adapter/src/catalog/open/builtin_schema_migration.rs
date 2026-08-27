@@ -424,6 +424,23 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_views",
         ),
+        // Required because we added the `mz_cluster_replica_resource_usage` builtin log.
+        // make_mz_indexes and make_mz_sources inline the builtin-log set as
+        // VALUES, so adding one changes both MVs' SQL fingerprints. See the NOTE
+        // above: this version must stay at the workspace's current dev version
+        // until the change ships.
+        MigrationStep::replacement(
+            "26.40.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
+        MigrationStep::replacement(
+            "26.40.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_sources",
+        ),
     ]
 });
 
