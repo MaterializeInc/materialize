@@ -2272,6 +2272,13 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_exclude_constraints_option,
+        desc: "Whether to allow the EXCLUDE CONSTRAINTS / EXCLUDE ALL CONSTRAINTS options \
+               in CREATE TABLE .. FROM SOURCE.",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_join_prioritize_arranged,
         desc: "Whether join planning should prioritize already-arranged keys over keys with more fields.",
         default: false,

@@ -5350,7 +5350,7 @@ impl<'a> Parser<'a> {
         let option = match self
             .expect_one_of_keywords(&[TEXT, EXCLUDE, IGNORE, DETAILS, PARTITION, RETAIN])?
         {
-            ref keyword @ (TEXT | EXCLUDE) => {
+            TEXT => {
                 self.expect_keyword(COLUMNS)?;
 
                 let _ = self.consume_token(&Token::Eq);
@@ -5364,14 +5364,58 @@ impl<'a> Parser<'a> {
                     });
 
                 TableFromSourceOption {
-                    name: match *keyword {
-                        TEXT => TableFromSourceOptionName::TextColumns,
-                        EXCLUDE => TableFromSourceOptionName::ExcludeColumns,
-                        _ => unreachable!(),
-                    },
+                    name: TableFromSourceOptionName::TextColumns,
                     value,
                 }
             }
+            EXCLUDE => match self.expect_one_of_keywords(&[COLUMNS, CONSTRAINTS, ALL])? {
+                COLUMNS => {
+                    let _ = self.consume_token(&Token::Eq);
+
+                    let value =
+                        self.parse_option_sequence(Parser::parse_identifier)?
+                            .map(|inner| {
+                                WithOptionValue::Sequence(
+                                    inner.into_iter().map(WithOptionValue::Ident).collect_vec(),
+                                )
+                            });
+
+                    TableFromSourceOption {
+                        name: TableFromSourceOptionName::ExcludeColumns,
+                        value,
+                    }
+                }
+                CONSTRAINTS => {
+                    let _ = self.consume_token(&Token::Eq);
+
+                    // Constraint names are raw upstream identifiers whose case
+                    // must be preserved exactly, so they are string literals
+                    // rather than SQL identifiers.
+                    let value = self
+                        .parse_option_sequence(Parser::parse_literal_string)?
+                        .map(|inner| {
+                            WithOptionValue::Sequence(
+                                inner
+                                    .into_iter()
+                                    .map(|s| WithOptionValue::Value(Value::String(s)))
+                                    .collect_vec(),
+                            )
+                        });
+
+                    TableFromSourceOption {
+                        name: TableFromSourceOptionName::ExcludeConstraints,
+                        value,
+                    }
+                }
+                ALL => {
+                    self.expect_keyword(CONSTRAINTS)?;
+                    TableFromSourceOption {
+                        name: TableFromSourceOptionName::ExcludeAllConstraints,
+                        value: None,
+                    }
+                }
+                _ => unreachable!(),
+            },
             DETAILS => TableFromSourceOption {
                 name: TableFromSourceOptionName::Details,
                 value: self.parse_optional_option_value()?,

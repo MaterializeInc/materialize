@@ -60,7 +60,8 @@ use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
 use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
 use mz_storage_types::sources::{
-    GenericSourceConnection, SourceDesc, SourceExportStatementDetails, SqlServerSourceExtras,
+    GenericSourceConnection, SourceConnection, SourceDesc, SourceExportStatementDetails,
+    SqlServerSourceExtras,
 };
 use prost::Message;
 use protobuf_native::MessageLite;
@@ -949,6 +950,8 @@ async fn purify_create_source(
                 external_references,
                 text_columns,
                 exclude_columns,
+                &BTreeSet::new(),
+                false,
                 source_name,
                 &reference_policy,
             )
@@ -1510,6 +1513,8 @@ async fn purify_alter_source_add_subsources(
                 &Some(ExternalReferences::SubsetTables(external_references)),
                 text_columns,
                 exclude_columns,
+                &BTreeSet::new(),
+                false,
                 &unresolved_source_name,
                 &SourceReferencePolicy::Required,
             )
@@ -1803,6 +1808,8 @@ async fn purify_create_table_from_source(
     let crate::plan::statement::ddl::TableFromSourceOptionExtracted {
         text_columns,
         exclude_columns,
+        exclude_constraints,
+        exclude_all_constraints,
         retain_history: _,
         details,
         partition_by: _,
@@ -1811,6 +1818,14 @@ async fn purify_create_table_from_source(
     if details.is_some() {
         sql_bail!("DETAILS option cannot be explicitly set");
     }
+
+    if !exclude_constraints.is_empty() || exclude_all_constraints {
+        scx.require_feature_flag(&crate::session::vars::ENABLE_EXCLUDE_CONSTRAINTS_OPTION)?;
+    }
+    if !exclude_constraints.is_empty() && exclude_all_constraints {
+        sql_bail!("EXCLUDE ALL CONSTRAINTS cannot be combined with EXCLUDE CONSTRAINTS");
+    }
+    let exclude_constraints: BTreeSet<String> = exclude_constraints.into_iter().collect();
 
     // Our text column values are unqualified (just column names), but the purification methods below
     // expect to match the fully-qualified names against the full set of tables in upstream, so we
@@ -1850,6 +1865,17 @@ async fn purify_create_table_from_source(
         }])
     });
 
+    // Excluding constraints is only meaningful for sources whose upstream
+    // tables have constraints Materialize records as keys.
+    if (!exclude_constraints.is_empty() || exclude_all_constraints)
+        && !matches!(desc.connection, GenericSourceConnection::Postgres(_))
+    {
+        sql_bail!(
+            "EXCLUDE CONSTRAINTS is not supported for {} sources",
+            desc.connection.name()
+        );
+    }
+
     // Run purification work specific to each source type: resolve the external reference to
     // a fully qualified name and obtain the appropriate details for the source-export statement
     let purified_export = match desc.connection {
@@ -1880,6 +1906,8 @@ async fn purify_create_table_from_source(
                 &requested_references,
                 qualified_text_columns,
                 qualified_exclude_columns,
+                &exclude_constraints,
+                exclude_all_constraints,
                 &unresolved_source_name,
                 &SourceReferencePolicy::Required,
             )

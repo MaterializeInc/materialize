@@ -337,6 +337,48 @@ CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (TEXT COLUMNS = (bam))
 CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("baz")])), with_options: [TableFromSourceOption { name: TextColumns, value: Some(Sequence([Ident(Ident("bam"))])) }], include_metadata: [], format: None, envelope: None })
 
 parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE CONSTRAINTS ('users_wallet_id_key', 'MixedCase'))
+----
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE CONSTRAINTS = ('users_wallet_id_key', 'MixedCase'))
+=>
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("baz")])), with_options: [TableFromSourceOption { name: ExcludeConstraints, value: Some(Sequence([Value(String("users_wallet_id_key")), Value(String("MixedCase"))])) }], include_metadata: [], format: None, envelope: None })
+
+parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE CONSTRAINTS = ())
+----
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE CONSTRAINTS = ())
+=>
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("baz")])), with_options: [TableFromSourceOption { name: ExcludeConstraints, value: Some(Sequence([])) }], include_metadata: [], format: None, envelope: None })
+
+parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE ALL CONSTRAINTS)
+----
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE ALL CONSTRAINTS)
+=>
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("baz")])), with_options: [TableFromSourceOption { name: ExcludeAllConstraints, value: None }], include_metadata: [], format: None, envelope: None })
+
+parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE COLUMNS (a), EXCLUDE CONSTRAINTS ('k'))
+----
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE COLUMNS = (a), EXCLUDE CONSTRAINTS = ('k'))
+=>
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("baz")])), with_options: [TableFromSourceOption { name: ExcludeColumns, value: Some(Sequence([Ident(Ident("a"))])) }, TableFromSourceOption { name: ExcludeConstraints, value: Some(Sequence([Value(String("k"))])) }], include_metadata: [], format: None, envelope: None })
+
+parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE ALL COLUMNS)
+----
+error: Expected CONSTRAINTS, found COLUMNS
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE ALL COLUMNS)
+                                                                   ^
+
+parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE CONSTRAINTS (foo))
+----
+error: Expected literal string, found identifier "foo"
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE CONSTRAINTS (foo))
+                                                                            ^
+
+parse-statement
 CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "seed"}' MESSAGE 'Batch' VALUE SCHEMA '123' MESSAGE 'M' ENVELOPE UPSERT
 ----
 CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn SEED KEY SCHEMA '{"some": "seed"}' MESSAGE 'Batch' VALUE SCHEMA '123' MESSAGE 'M' ENVELOPE UPSERT

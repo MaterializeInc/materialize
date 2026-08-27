@@ -1774,6 +1774,13 @@ pub enum TableFromSourceOptionName {
     TextColumns,
     /// Columns you want to exclude when ingesting data
     ExcludeColumns,
+    /// Upstream `PRIMARY KEY`/`UNIQUE` constraints, by name, that Materialize
+    /// should not record as keys, so that their later upstream drop is a
+    /// non-event.
+    ExcludeConstraints,
+    /// Record no upstream constraints at all: no keys, and every column
+    /// ingested as nullable.
+    ExcludeAllConstraints,
     /// Hex-encoded protobuf of a `ProtoSourceExportStatementDetails`
     /// message, which includes details necessary for planning this
     /// table as a Source Export
@@ -1789,6 +1796,8 @@ impl AstDisplay for TableFromSourceOptionName {
         f.write_str(match self {
             TableFromSourceOptionName::TextColumns => "TEXT COLUMNS",
             TableFromSourceOptionName::ExcludeColumns => "EXCLUDE COLUMNS",
+            TableFromSourceOptionName::ExcludeConstraints => "EXCLUDE CONSTRAINTS",
+            TableFromSourceOptionName::ExcludeAllConstraints => "EXCLUDE ALL CONSTRAINTS",
             TableFromSourceOptionName::Details => "DETAILS",
             TableFromSourceOptionName::PartitionBy => "PARTITION BY",
             TableFromSourceOptionName::RetainHistory => "RETAIN HISTORY",
@@ -1808,6 +1817,8 @@ impl WithOptionName for TableFromSourceOptionName {
             TableFromSourceOptionName::Details
             | TableFromSourceOptionName::TextColumns
             | TableFromSourceOptionName::ExcludeColumns
+            | TableFromSourceOptionName::ExcludeConstraints
+            | TableFromSourceOptionName::ExcludeAllConstraints
             | TableFromSourceOptionName::RetainHistory => false,
             // The value is an arbitrary user expression/literal that may embed
             // sensitive data, so redact it (mirrors `KafkaSinkConfigOptionName`).
