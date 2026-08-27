@@ -893,6 +893,7 @@ impl_display_t!(Format);
 // souffrir pour être belle.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ConnectionOptionName {
+    AccessDelegation,
     AccessKeyId,
     AssumeRoleArn,
     AssumeRoleSessionName,
@@ -950,7 +951,8 @@ impl ConnectionOptionName {
             | ConnectionOptionName::SslCertificateAuthority
             | ConnectionOptionName::SslKey
             | ConnectionOptionName::User => true,
-            ConnectionOptionName::AssumeRoleArn
+            ConnectionOptionName::AccessDelegation
+            | ConnectionOptionName::AssumeRoleArn
             | ConnectionOptionName::AssumeRoleSessionName
             | ConnectionOptionName::AvailabilityZones
             | ConnectionOptionName::AwsConnection
@@ -985,6 +987,7 @@ impl ConnectionOptionName {
 impl AstDisplay for ConnectionOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
+            ConnectionOptionName::AccessDelegation => "ACCESS DELEGATION",
             ConnectionOptionName::AccessKeyId => "ACCESS KEY ID",
             ConnectionOptionName::AvailabilityZones => "AVAILABILITY ZONES",
             ConnectionOptionName::AwsConnection => "AWS CONNECTION",
