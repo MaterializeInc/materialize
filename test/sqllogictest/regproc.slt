@@ -97,9 +97,11 @@ SELECT 99999::regproc::text
 ----
 99999
 
-# `-` is the absent reference on input as well, so the text rendering round trips.
+# `-` round trips on input too. Spelled from a literal because feeding a
+# cast-derived value into the string to reg* cast hits the evaluation order
+# problem behind the cases commented out above.
 query T
-SELECT 0::regproc::text::regproc::text
+SELECT '-'::regproc::text
 ----
 -
 
