@@ -15,9 +15,8 @@
 # limitations under the License.
 import subprocess
 import time
-from collections import namedtuple
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 import psycopg2
 from dbt_common.contracts.constraints import (
@@ -146,30 +145,6 @@ class MaterializeAdapter(PostgresAdapter, SQLAdapter):
         #
         # [0]: https://github.com/dbt-labs/dbt-core/blob/13b18654f03d92eab3f5a9113e526a2a844f145d/plugins/postgres/dbt/adapters/postgres/impl.py#L126-L133
         pass
-
-    def _link_cached_database_relations(self, schemas: Set[str]):
-        """
-        :param schemas: The set of schemas that should have links added.
-        """
-        database = self.config.credentials.database
-        _Relation = namedtuple("_Relation", "database schema identifier")
-        links = [
-            (
-                _Relation(database, dep_schema, dep_identifier),
-                _Relation(database, ref_schema, ref_identifier),
-            )
-            for dep_schema, dep_identifier, ref_schema, ref_identifier in self.execute_macro(
-                "materialize__get_relations"
-            )
-            # don't record in cache if this relation isn't in a relevant schema
-            if ref_schema in schemas
-        ]
-
-        for dependent, referenced in links:
-            self.cache.add_link(
-                referenced=self.Relation.create(**referenced._asdict()),
-                dependent=self.Relation.create(**dependent._asdict()),
-            )
 
     def verify_database(self, database):
         pass
