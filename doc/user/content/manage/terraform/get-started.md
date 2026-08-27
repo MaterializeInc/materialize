@@ -153,11 +153,15 @@ export MZ_HOST=<host>
 ```
 
 {{< warning >}}
-`MZ_HOST` does more than supply a value. The provider connects to self-managed
-Materialize whenever a host is set, including when it comes from `MZ_HOST`. If you
-leave `MZ_HOST` exported and then run Terraform against Materialize Cloud, the
-provider uses your self-managed settings instead, which usually fails with an
-`invalid password` error. Unset it before working with Materialize Cloud.
+`MZ_HOST` is intended for use with Self-Managed Materialize. If `MZ_HOST` is set,
+the provider connects directly to that host, using `MZ_USERNAME` and
+`MZ_PASSWORD`, instead of connecting through Materialize Cloud.
+
+If you leave `MZ_HOST` exported and then run Terraform against Materialize
+Cloud, the provider uses your self-managed settings instead, which usually
+results in an `invalid password` error.
+
+Unset `MZ_HOST` before working with Materialize Cloud.
 {{< /warning >}}
 
 ```hcl
