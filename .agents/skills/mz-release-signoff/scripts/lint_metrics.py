@@ -71,19 +71,26 @@ def resolves(name, exact, globs):
 def resolve_continuation(continuation, base, exact, globs, allowed):
     """Resolve `_baz` against the family of a preceding `mz_foo_bar`.
 
-    Which prefix of the base the continuation attaches to is ambiguous: the
-    roster writes both `mz_persist_gc_seconds`, `_started`, which drops one
-    component, and `mz_compute_controller_replica_count`, `_collection_count`,
-    which drops two. Accept the first prefix that resolves, and report the
-    continuation only when no prefix does, which is what a removed metric
-    looks like.
+    Return every prefix of the base that the continuation resolves against,
+    longest first. How many components the continuation drops is not stated by
+    the row, so every cut has to be tried: the roster writes both
+    `mz_persist_gc_seconds`, `_started`, which drops one, and
+    `mz_compute_controller_replica_count`, `_peek_count`, which drops two.
+
+    More than one hit means the row is not pinned to a single metric. That
+    matters on removal rather than today, because the longest cut is the
+    intended one and comes first: delete the intended metric and a shorter cut
+    still resolves, so the row stays green while pointing at nothing. The
+    caller rejects an ambiguous row for that reason, and the fix is to spell
+    the member out in full.
     """
     parts = base.split("_")
-    for cut in range(len(parts) - 1, 0, -1):
-        candidate = "_".join(parts[:cut]) + continuation
-        if candidate in allowed or resolves(candidate, exact, globs):
-            return candidate
-    return None
+    return [
+        candidate
+        for cut in range(len(parts) - 1, 0, -1)
+        for candidate in ["_".join(parts[:cut]) + continuation]
+        if candidate in allowed or resolves(candidate, exact, globs)
+    ]
 
 
 def allowlisted():
@@ -162,10 +169,15 @@ def main() -> int:
     allowed = allowlisted()
 
     unresolved = {}
+    ambiguous = {}
     for label, target, path in referenced():
         if isinstance(target, tuple):
             continuation, base = target
-            if resolve_continuation(continuation, base, exact, globs, allowed):
+            hits = resolve_continuation(continuation, base, exact, globs, allowed)
+            if len(hits) > 1:
+                ambiguous.setdefault(label, (hits, set()))[1].add(str(path))
+                continue
+            if hits:
                 continue
         else:
             if target in allowed or resolves(target, exact, globs):
@@ -177,6 +189,17 @@ def main() -> int:
         print("Allowlisted names that now resolve in the catalog; remove them:")
         for name in stale:
             print(f"  {name}")
+        print()
+
+    if ambiguous:
+        print("Abbreviated metric names that resolve more than one way:")
+        for label in sorted(ambiguous):
+            hits, paths = ambiguous[label]
+            print(f"  {label}  ({', '.join(sorted(paths))})")
+            print(f"    resolves to: {', '.join(hits)}")
+        print()
+        print("The row is not pinned to one metric, so removing the intended one")
+        print("leaves the lint green. Spell the member out in full.")
         print()
 
     if unresolved:
@@ -191,7 +214,7 @@ def main() -> int:
             f"catalog cannot see it, in which case add it to {ALLOWLIST} with a reason."
         )
 
-    return 1 if (unresolved or stale) else 0
+    return 1 if (unresolved or stale or ambiguous) else 0
 
 
 if __name__ == "__main__":

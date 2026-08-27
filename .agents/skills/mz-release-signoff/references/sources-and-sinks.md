@@ -59,7 +59,7 @@ Label naming is not consistent: the rate panels filter `parent_source_id` while 
 | `mz_storage_upsert_state_rocksdb_autospill_in_use` | removed | Deleted along with the autospill upsert backend, so the percentage panel that divides `sum` by `count` renders empty and reads as no worker spilling. The surviving members of the family are `_rehydration_latency`, `_rehydration_total`, and `_rehydration_updates`. |
 | `mz_storage_upsert_backpressure_emitted_bytes`, `_retired_bytes`, `_last_backpressured_bytes` | counter, gauge | Backpressure. |
 | `mz_storage_upsert_merge_snapshot_latency_bucket` | histogram | |
-| `mz_storage_upsert_merge_snapshot_updates_total`, `_inserts_total`, `_deletes_total` | counter | |
+| `mz_storage_upsert_merge_snapshot_updates_total`, `mz_storage_upsert_merge_snapshot_inserts_total`, `mz_storage_upsert_merge_snapshot_deletes_total` | counter | |
 | `mz_storage_rocksdb_multi_get_latency_bucket`, `_multi_put_latency_bucket` | histogram | Panels plot p95, p99, and p999. |
 | `mz_storage_rocksdb_multi_get_count_total`, `_size_total`, `_result_bytes_total`, `_result_count_total`, and the `multi_put` equivalents | counter | Batch sizes are the size over the count. |
 | `mz_persist_shard_update_count` | gauge, by `shard` and `name` | Filtered by `name="$source"`, so it joins a source to its persist shard. |
