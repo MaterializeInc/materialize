@@ -485,6 +485,11 @@ pub enum SqlServerSourcePurificationError {
         option_name: String,
         items: Vec<UnresolvedItemName>,
     },
+    #[error("EXCLUDE CONSTRAINTS refers to constraints that do not exist on table {table}")]
+    DanglingExcludeConstraints {
+        table: String,
+        constraints: Vec<String>,
+    },
     #[error("found multiple primary keys for a table. constraints {constraint_names:?}")]
     MultiplePrimaryKeys { constraint_names: Vec<Arc<str>> },
     #[error("column {schema_name}.{tbl_name}.{col_name} of type {col_type} is not supported")]
@@ -520,6 +525,13 @@ impl SqlServerSourcePurificationError {
                 "the following columns are referenced but not added: {}",
                 itertools::join(items, ", ")
             )),
+            Self::DanglingExcludeConstraints {
+                table: _,
+                constraints,
+            } => Some(format!(
+                "the following constraints were not found: {}",
+                constraints.join(", ")
+            )),
             Self::UnsupportedColumn { context, .. } => Some(context.clone()),
             _ => None,
         }
@@ -530,6 +542,11 @@ impl SqlServerSourcePurificationError {
             Self::RequiresExternalReferences => {
                 Some("provide a FOR TABLES (..), FOR SCHEMAS (..), or FOR ALL TABLES clause".into())
             }
+            Self::DanglingExcludeConstraints { .. } => Some(
+                "Constraint names are matched exactly, including case, against the upstream \
+                 PRIMARY KEY and UNIQUE constraint names."
+                    .into(),
+            ),
             Self::UnnecessaryOptionsWithoutReferences(option) => Some(format!(
                 "Remove the {} option, as no tables are being added.",
                 option
