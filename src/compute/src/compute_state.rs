@@ -154,47 +154,6 @@ fn peek_row_iteration_limit(config: &ConfigSet) -> Option<usize> {
         .then(|| PEEK_ROW_ITERATION_LIMIT.get(config))
 }
 
-#[cfg(test)]
-mod tests {
-    use mz_dyncfg::ConfigUpdates;
-
-    use super::*;
-
-    #[mz_ore::test]
-    fn row_iteration_limit_observes_updates_and_disabled_rows() {
-        let config = mz_dyncfgs::all_dyncfgs();
-        let row_iteration_config = PeekRowIterationConfig::new(&config);
-        let mut tracker = PeekRowIterationTracker::new(row_iteration_config.current_limit(), 0);
-
-        tracker.track_next().unwrap();
-        tracker.track_next().unwrap();
-
-        let mut updates = ConfigUpdates::default();
-        updates.add(&PEEK_ROW_ITERATION_LIMIT, 3);
-        updates.add(&ENABLE_PEEK_ROW_ITERATION_LIMIT, true);
-        updates.apply(&config);
-        tracker.set_limit(row_iteration_config.current_limit());
-        tracker.track_next().unwrap();
-
-        let mut updates = ConfigUpdates::default();
-        updates.add(&ENABLE_PEEK_ROW_ITERATION_LIMIT, false);
-        updates.apply(&config);
-        tracker.set_limit(row_iteration_config.current_limit());
-        tracker.track_next().unwrap();
-
-        let mut updates = ConfigUpdates::default();
-        updates.add(&PEEK_ROW_ITERATION_LIMIT, 5);
-        updates.add(&ENABLE_PEEK_ROW_ITERATION_LIMIT, true);
-        updates.apply(&config);
-        tracker.set_limit(row_iteration_config.current_limit());
-        tracker.track_next().unwrap();
-        assert_eq!(
-            tracker.track_next(),
-            Err(PeekError::RowIterationLimitExceeded { limit: 5 })
-        );
-    }
-}
-
 /// Worker-local state that is maintained across dataflows.
 ///
 /// This state is restricted to the COMPUTE state, the deterministic, idempotent work
@@ -2268,3 +2227,6 @@ impl CollectionState {
         let _ = self.read_only_tx.send(false);
     }
 }
+
+#[cfg(test)]
+mod tests;
