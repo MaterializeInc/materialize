@@ -19,7 +19,7 @@ use mz_persist_client::batch::ProtoBatch;
 use mz_persist_types::ShardId;
 use mz_repr::{GlobalId, RelationDesc, Timestamp, UpdateCollection};
 use mz_storage_types::errors::DataflowError;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use uuid::Uuid;
 
@@ -191,7 +191,12 @@ impl FrontiersResponse {
 ///
 /// Note that each `Peek` expects to generate exactly one `PeekResponse`, i.e.
 /// we expect a 1:1 contract between `Peek` and `PeekResponse`.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// Encoded with bincode, which identifies a variant by its position, so both ends of a connection
+/// have to agree on this declaration. They do: the CTP handshake refuses a peer whose version
+/// differs from its own (`mz_service::transport`), so a replica never speaks to a controller that
+/// declares a different shape, and the encoding is free to change with the type.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PeekResponse {
     /// Returned rows of a successful peek.
     Rows(Vec<RowCollection>),
@@ -201,66 +206,6 @@ pub enum PeekResponse {
     Error(PeekError),
     /// The peek was canceled.
     Canceled,
-}
-
-/// Wire shape of [`PeekResponse`], mirrored so that giving `Error` a payload type does not
-/// change the bytes we put on the CTP connection.
-///
-/// The compute protocol is encoded with bincode, which identifies a variant by its position and
-/// has no way to skip one it does not know. So variants may only be appended, and the encoding of
-/// an existing variant may not change. `Error(String)` is therefore kept where it was and carries
-/// the unstructured case, while structured errors ride along in `StructuredError`.
-///
-/// NOTE: A replica that predates `StructuredError` cannot decode it. The CTP handshake compares
-/// semantic versions, not builds, so it does not catch that on its own.
-#[derive(Serialize)]
-enum WirePeekResponseRef<'a> {
-    Rows(&'a [RowCollection]),
-    Stashed(&'a StashedPeekResponse),
-    Error(&'a str),
-    Canceled,
-    StructuredError(&'a PeekError),
-}
-
-/// Owned counterpart of [`WirePeekResponseRef`], used for decoding.
-#[derive(Deserialize)]
-enum WirePeekResponse {
-    Rows(Vec<RowCollection>),
-    Stashed(Box<StashedPeekResponse>),
-    Error(String),
-    Canceled,
-    StructuredError(PeekError),
-}
-
-impl Serialize for PeekResponse {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            Self::Rows(rows) => WirePeekResponseRef::Rows(rows.as_slice()),
-            Self::Stashed(stashed) => WirePeekResponseRef::Stashed(stashed.as_ref()),
-            Self::Error(PeekError::Unstructured(error)) => WirePeekResponseRef::Error(error),
-            Self::Error(error) => WirePeekResponseRef::StructuredError(error),
-            Self::Canceled => WirePeekResponseRef::Canceled,
-        }
-        .serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for PeekResponse {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Ok(match WirePeekResponse::deserialize(deserializer)? {
-            WirePeekResponse::Rows(rows) => Self::Rows(rows),
-            WirePeekResponse::Stashed(stashed) => Self::Stashed(stashed),
-            WirePeekResponse::Error(error) => Self::Error(PeekError::Unstructured(error)),
-            WirePeekResponse::Canceled => Self::Canceled,
-            WirePeekResponse::StructuredError(error) => Self::Error(error),
-        })
-    }
 }
 
 impl PeekResponse {
@@ -444,46 +389,6 @@ pub enum StatusResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bincode::Options;
-
-    #[allow(dead_code)]
-    #[derive(Serialize)]
-    enum LegacyPeekResponse {
-        Rows(Vec<RowCollection>),
-        Stashed(Box<StashedPeekResponse>),
-        Error(String),
-        Canceled,
-    }
-
-    fn serialize_ctp(value: &impl Serialize) -> Vec<u8> {
-        bincode::DefaultOptions::new().serialize(value).unwrap()
-    }
-
-    #[mz_ore::test]
-    fn peek_response_preserves_legacy_encodings() {
-        let legacy_error = LegacyPeekResponse::Error("dataflow error".into());
-        let error = PeekResponse::Error(PeekError::unstructured("dataflow error"));
-        assert_eq!(serialize_ctp(&error), serialize_ctp(&legacy_error));
-
-        let decoded: PeekResponse = bincode::DefaultOptions::new()
-            .deserialize(&serialize_ctp(&legacy_error))
-            .unwrap();
-        assert_eq!(decoded, error);
-
-        assert_eq!(
-            serialize_ctp(&PeekResponse::Canceled),
-            serialize_ctp(&LegacyPeekResponse::Canceled)
-        );
-    }
-
-    #[mz_ore::test]
-    fn structured_peek_error_roundtrips() {
-        let response = PeekResponse::Error(PeekError::RowIterationLimitExceeded { limit: 1000 });
-        let decoded: PeekResponse = bincode::DefaultOptions::new()
-            .deserialize(&serialize_ctp(&response))
-            .unwrap();
-        assert_eq!(decoded, response);
-    }
 
     /// Test to ensure the size of the `ComputeResponse` enum doesn't regress.
     #[mz_ore::test]

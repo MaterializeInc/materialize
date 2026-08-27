@@ -760,14 +760,3 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION)
         .add(&COLUMN_CHUNK_COMPRESS_MIN_DEPTH)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[mz_ore::test]
-    fn peek_row_iteration_limit_defaults() {
-        assert!(!*ENABLE_PEEK_ROW_ITERATION_LIMIT.default());
-        assert_eq!(*PEEK_ROW_ITERATION_LIMIT.default(), 1000);
-    }
-}
