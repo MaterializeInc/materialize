@@ -8,9 +8,9 @@
 # by the Apache License, Version 2.0.
 
 # EXCLUDE CONSTRAINTS / EXCLUDE ALL CONSTRAINTS on `CREATE TABLE .. FROM
-# SOURCE` is only supported for Postgres sources; other source types reject
-# the options during purification. The Postgres behavior itself is covered in
-# test/pg-cdc/exclude-constraints.td.
+# SOURCE` is only supported for Postgres, MySQL, and SQL Server sources; other
+# source types reject the options during purification. The per-source behavior
+# is covered in test/pg-cdc/, test/mysql-cdc/, and test/sql-server-cdc/.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_exclude_constraints_option = true
