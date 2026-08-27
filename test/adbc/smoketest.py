@@ -68,7 +68,7 @@ EXPECTED_SCALAR_TYPES = {
     "c_timestamptz": pa.timestamp("us", tz="UTC"),
     "c_interval": pa.month_day_nano_interval(),
     "c_uuid": pa.opaque(pa.binary(), "uuid", "PostgreSQL"),
-    "c_jsonb": pa.string(),
+    "c_jsonb": pa.json_(pa.string()),
 }
 
 

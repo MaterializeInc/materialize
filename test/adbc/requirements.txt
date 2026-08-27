@@ -1,4 +1,4 @@
-adbc-driver-manager==1.11.0
-adbc-driver-postgresql==1.11.0
+adbc-driver-manager==1.12.0
+adbc-driver-postgresql==1.12.0
 duckdb==1.5.5
-pyarrow==25.0.0
+pyarrow==25.0.1
