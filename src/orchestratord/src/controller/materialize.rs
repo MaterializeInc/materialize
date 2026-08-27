@@ -25,6 +25,7 @@ use kube::{
     Api, Client, Resource, ResourceExt,
     api::{ListParams, PostParams},
     runtime::controller::Action,
+    runtime::events::{Event, EventType},
 };
 use tracing::{debug, trace, warn};
 use uuid::Uuid;
@@ -137,11 +138,16 @@ pub struct Config {
 pub struct Context {
     config: Config,
     metrics: Arc<Metrics>,
+    publisher: Arc<reconcile::Publisher>,
     needs_update: Arc<Mutex<BTreeSet<String>>>,
 }
 
 impl Context {
-    pub fn new(config: Config, metrics: Arc<Metrics>) -> Self {
+    pub fn new(
+        config: Config,
+        metrics: Arc<Metrics>,
+        publisher: Arc<reconcile::Publisher>,
+    ) -> Self {
         if config.cloud_provider == CloudProvider::Aws {
             assert!(
                 config.aws_account_id.is_some(),
@@ -152,6 +158,7 @@ impl Context {
         Self {
             config,
             metrics,
+            publisher,
             needs_update: Default::default(),
         }
     }
@@ -191,6 +198,46 @@ impl Context {
             .set(u64::cast_from(needs_update_set.len()));
     }
 
+    /// Reports a lifecycle transition as a Kubernetes event on the resource.
+    ///
+    /// The condition's own `reason` and `message` become the event's, so the
+    /// vocabulary an operator sees in `kubectl describe` is the one the status
+    /// already reports: `Applying`, `ReadyToPromote`, `Promoting`, `Applied`,
+    /// `WaitingForApproval`, `RolloutTimeout`, `FailedDeploy`. Keep those
+    /// stable, since they are what a dashboard groups on.
+    ///
+    /// A `FailedDeploy` reports here and again from the generic reconciliation
+    /// wrapper, which files the error itself. The two carry different halves of
+    /// the picture, the phase and the cause, and the reasons tell them apart.
+    ///
+    /// These do not aggregate the way repeated failures do, so each transition
+    /// is its own event carrying its own message. Two things make that so: a
+    /// transition only reports when the status actually moved, and a pass that
+    /// ends cleanly forgets what the resource published. A transition reported
+    /// from a pass that then fails is the exception, and there aggregating is
+    /// right, since the retry is reporting the same phase again.
+    async fn publish_transition(&self, mz: &Materialize, condition: &Condition) {
+        self.publisher
+            .publish(
+                mz,
+                Event {
+                    // A condition that went false is the environment failing to
+                    // reach the state it was asked for, which is worth flagging.
+                    // `Unknown` is a rollout still under way, which is not.
+                    type_: if condition.status == "False" {
+                        EventType::Warning
+                    } else {
+                        EventType::Normal
+                    },
+                    reason: condition.reason.clone(),
+                    action: "Reconcile".into(),
+                    note: Some(condition.message.clone()),
+                    secondary: None,
+                },
+            )
+            .await;
+    }
+
     async fn update_status(
         &self,
         mz_api: &Api<Materialize>,
@@ -209,10 +256,26 @@ impl Context {
             return Ok(new_mz);
         }
 
+        // Reaching here is the definition of a transition: the guard above
+        // returns early unless the status moved, comparing everything but the
+        // timestamp. That is what keeps this to one event per transition in a
+        // reconciler that re-runs on every watch event.
+        //
+        // The exception is the pass that gives a new resource its first status,
+        // which carries no conditions yet and so reports no phase.
+        let condition = status.conditions.first().cloned();
         new_mz.status = Some(status);
-        mz_api
+        let new_mz = mz_api
             .replace_status(&mz.name_unchecked(), &PostParams::default(), &new_mz)
-            .await
+            .await?;
+
+        // Only once the status is durable, so that no event claims a transition
+        // that failed to persist.
+        if let Some(condition) = condition {
+            self.publish_transition(mz, &condition).await;
+        }
+
+        Ok(new_mz)
     }
 
     async fn promote(
