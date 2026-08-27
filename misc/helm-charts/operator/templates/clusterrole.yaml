@@ -37,6 +37,16 @@ rules:
   - get
   - list
   - watch
+# The controllers publish a warning event on the Materialize, Balancer, or
+# Console resource whose reconciliation failed, so that `kubectl describe`
+# explains a stuck object without needing the operator's logs. Patch is for
+# the aggregation of a repeated failure into one event with a count.
+- apiGroups: ["events.k8s.io"]
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
 - apiGroups: ["coordination.k8s.io"]
   resources:
   - leases
