@@ -33,13 +33,18 @@
 //!    twice-optimized plan, which can repair a first-pass miscompile that
 //!    production `into_plan`-on-raw callers still execute. `optimize` only
 //!    iterates while the expression size strictly decreases, so a fresh second
-//!    call is not guaranteed to be a no-op. The oracle is one-directional,
-//!    mirroring the contract optimize actually owes: optimize is allowed to
-//!    *drop* an error or a row that the raw MFP would reject, because it removes
-//!    unused map expressions and reorders predicates. But for every input row the
-//!    raw MFP passes through cleanly with output `out`, the optimized plan must
-//!    also pass it through with the byte-identical `out`. (When the raw MFP errors
-//!    or filters a row we assert nothing.)
+//!    call is not guaranteed to be a no-op. The oracle constrains both
+//!    directions of the filter, and neither direction of an error: optimize is
+//!    allowed to *drop* an error, because `remove_undemanded` deletes unused
+//!    (possibly fallible) map expressions, and it is allowed to *introduce* one,
+//!    because sorting predicates by position can surface an error the raw order
+//!    rejected the row before reaching. So when either side errors we assert
+//!    nothing. A row whose lazy evaluation absorbs an `AND`/`OR` operand error
+//!    is skipped outright, because `optimize` may legally surface that error or
+//!    fold on it (see `absorbs_and_or_operand_error`). Otherwise: a row the raw
+//!    MFP passes cleanly with output `out` the optimized plan must pass with
+//!    the byte-identical `out`, and a row the raw MFP cleanly filters the
+//!    optimized plan must not pass.
 //!
 //!  * **Temporal lowering.** Add predicates of the form `mz_now() <cmp> e` (and
 //!    conjunctions of them) over a bounded `mz_timestamp` expression `e`, then
@@ -51,18 +56,23 @@
 //!    at `T`" (`lower <= T < upper`, with the non-temporal predicates also
 //!    passing) agrees with a substitution reference: the same MFP with every
 //!    `mz_now()` replaced by the literal `mz_timestamp` `T`, evaluated
-//!    non-temporally. The compared timestamps are kept well below `u64::MAX` so
-//!    `StepMzTimestamp` (the `+1` the lowering inserts for `<=`/`>`/`=`) never
-//!    overflows, which keeps the substitution equivalence exact. As above the
-//!    oracle is one-directional: if the reference errors at `T` we assert
-//!    nothing.
+//!    non-temporally. The probed times are a random sample plus the interval's
+//!    own endpoints, because an off-by-one in the operator translation is
+//!    observable at an endpoint and nowhere else. The compared timestamps are
+//!    kept well below `u64::MAX` so `StepMzTimestamp` (the `+1` the lowering
+//!    inserts for `<=`/`>`/`=`) never overflows, which keeps the substitution
+//!    equivalence exact. As above the oracle is one-directional: if the reference
+//!    errors at `T` we assert nothing.
 
 #![no_main]
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
 use mz_expr::{
-    func, Eval, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan, UnmaterializableFunc,
+    Eval, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan, UnmaterializableFunc,
+    VariadicFunc, func,
 };
 use mz_repr::{Datum, Diff, ReprScalarType, Row, RowArena, Timestamp};
 
@@ -275,9 +285,13 @@ fn gen_ts_expr(u: &mut Unstructured, cols: &[Ty]) -> arbitrary::Result<MirScalar
     Ok(ts_literal(t))
 }
 
-/// Upper bound (exclusive) on generated timestamp magnitudes, far from
-/// `u64::MAX` so `StepMzTimestamp` never overflows.
-const TS_BOUND: u64 = 1_000_000;
+/// Upper bound on generated timestamp magnitudes. Two constraints pull in
+/// opposite directions and a small value satisfies both. It must stay far from
+/// `u64::MAX` so `StepMzTimestamp` never overflows, and it must be small enough
+/// that a probed logical time frequently lands *on* a generated bound, because
+/// that is the only point at which the `<` vs `<=` (`StepMzTimestamp`)
+/// distinction the lowering makes is observable at all.
+const TS_BOUND: u64 = 16;
 
 fn ts_bound_i64() -> MirScalarExpr {
     MirScalarExpr::literal_ok(
@@ -335,13 +349,14 @@ fn reference_present(plan: &mz_expr::SafeMfpPlan, row: &Row) -> Option<bool> {
     }
 }
 
+type Interval = Option<(Timestamp, Option<Timestamp>)>;
+
 /// Read the validity interval a temporal plan assigns to `row`, evaluating once
 /// with `time = 0`, `diff = +1`, and an always-valid frontier. Returns:
 ///  * `Err(())` if evaluation errored,
 ///  * `Ok(None)` if the (non-temporal part of the) plan rejected the row,
 ///  * `Ok(Some((lower, upper)))` for the half-open interval `[lower, upper)`
 ///    (`upper == None` means unbounded above).
-type Interval = Option<(Timestamp, Option<Timestamp>)>;
 fn temporal_interval(plan: &mz_expr::MfpPlan, row: &Row) -> Result<Interval, ()> {
     let arena = RowArena::new();
     let mut datums: Vec<Datum> = row.iter().collect();
@@ -419,6 +434,96 @@ fn eval_raw(mfp: &MapFilterProject, row: &Row) -> Option<Option<Row>> {
     Some(Some(out))
 }
 
+/// Does evaluating `expr` on this row absorb an `And`/`Or` operand error?
+///
+/// This is `mir_scalar_reduce`'s `absorbs_and_or_operand_error`, the per-row
+/// refinement of `MirScalarExpr::could_hit_nonstrict_error_fold`, minus the
+/// `ErrorIfNull` arm for a function this target's vocabulary lacks. Rows it
+/// reports are skipped: reduce's error propagation may fold the absorbed error
+/// into the plan (CLU-137), and memoization may hoist a fallible subexpression
+/// shared under the `And`/`Or` into a mapped column that is evaluated eagerly,
+/// surfacing the error. Both outcomes are legal for `optimize`, because
+/// `AND`/`OR` evaluation order is undefined (STG-54), so such a row constrains
+/// nothing. See `run` for the two mechanisms side by side.
+///
+/// NOTE: this deliberately evaluates *every* operand of an `And`/`Or`, even
+/// though `And::eval` short-circuits on the first `false` and so may never
+/// reach a later erroring operand. Error propagation and memoization are both
+/// position-insensitive, so a short-circuit-aware version would report "no
+/// absorption" for rows the optimized plan nonetheless errors on.
+fn absorbs_and_or_operand_error<'a>(
+    expr: &'a MirScalarExpr,
+    datums: &[Datum<'a>],
+    arena: &'a RowArena,
+) -> bool {
+    match expr {
+        MirScalarExpr::Column(..)
+        | MirScalarExpr::Literal(..)
+        | MirScalarExpr::CallUnmaterializable(_) => false,
+        MirScalarExpr::CallUnary { expr, .. } => absorbs_and_or_operand_error(expr, datums, arena),
+        MirScalarExpr::CallBinary { expr1, expr2, .. } => {
+            absorbs_and_or_operand_error(expr1, datums, arena)
+                || absorbs_and_or_operand_error(expr2, datums, arena)
+        }
+        MirScalarExpr::CallVariadic { func, exprs } => {
+            let nested = exprs
+                .iter()
+                .any(|expr| absorbs_and_or_operand_error(expr, datums, arena));
+
+            if !matches!(func, VariadicFunc::And(_) | VariadicFunc::Or(_)) {
+                return nested;
+            }
+
+            let is_and = matches!(func, VariadicFunc::And(_));
+            let mut has_absorbing_value = false;
+            let mut has_error = false;
+            for expr in exprs {
+                match expr.eval(datums, arena) {
+                    Ok(Datum::False) if is_and => has_absorbing_value = true,
+                    Ok(Datum::True) if !is_and => has_absorbing_value = true,
+                    Err(_) => has_error = true,
+                    _ => {}
+                }
+            }
+
+            nested || (has_absorbing_value && has_error)
+        }
+        MirScalarExpr::If { cond, then, els } => {
+            if absorbs_and_or_operand_error(cond, datums, arena) {
+                return true;
+            }
+            match cond.eval(datums, arena) {
+                Ok(Datum::True) => absorbs_and_or_operand_error(then, datums, arena),
+                Ok(Datum::False | Datum::Null) => absorbs_and_or_operand_error(els, datums, arena),
+                _ => false,
+            }
+        }
+    }
+}
+
+/// `absorbs_and_or_operand_error` over every map and predicate of `mfp`, in the
+/// column context `eval_raw` evaluates them in.
+///
+/// A map expression that fails to re-evaluate counts as absorbing. That arm is
+/// reachable only for a row `eval_raw` filtered before reaching the map, and
+/// "assert nothing" is the safe answer for a row this function cannot model.
+fn mfp_absorbs_and_or_operand_error(mfp: &MapFilterProject, row: &Row) -> bool {
+    let arena = RowArena::new();
+    let mut datums: Vec<Datum> = row.iter().collect();
+    for expr in &mfp.expressions {
+        if absorbs_and_or_operand_error(expr, &datums, &arena) {
+            return true;
+        }
+        match expr.eval(&datums, &arena) {
+            Ok(datum) => datums.push(datum),
+            Err(_) => return true,
+        }
+    }
+    mfp.predicates
+        .iter()
+        .any(|(_, predicate)| absorbs_and_or_operand_error(predicate, &datums, &arena))
+}
+
 /// Non-temporal preservation: raw unoptimized MFP semantics vs. the `optimize`d
 /// plan's output.
 fn run_nontemporal(
@@ -440,24 +545,52 @@ fn run_nontemporal(
     for _ in 0..ROWS_PER_MFP {
         let row = gen_input_row(u, types)?;
 
-        // Only a row the raw MFP passes through cleanly constrains the optimized
-        // plan. An error or a filtered row lets optimize legitimately differ.
-        let Some(Some(out_ref)) = eval_raw(&mfp, &row) else {
+        // A raw error constrains nothing: optimize may legitimately drop it.
+        let Some(raw) = eval_raw(&mfp, &row) else {
             continue;
         };
+
+        // Neither does a row that absorbs an `And`/`Or` operand error: optimize
+        // may legally turn its outcome into an error, a different value, or a
+        // different pass/fail. See `run`.
+        if mfp_absorbs_and_or_operand_error(&mfp, &row) {
+            continue;
+        }
 
         let arena = RowArena::new();
         let mut datums_p: Vec<Datum> = row.iter().collect();
         let mut buf_p = Row::default();
-        match safe_opt.evaluate_into(&mut datums_p, &arena, &mut buf_p) {
-            Ok(Some(out)) => assert_eq!(
+        // Every panic prints both MFPs: which rewrite `optimize` got wrong is not
+        // recoverable from the row alone, and the crash artifact only replays
+        // under a `cargo fuzz` build.
+        let opt_mfp: &MapFilterProject = &safe_opt;
+        let opt = safe_opt.evaluate_into(&mut datums_p, &arena, &mut buf_p);
+        match (raw, opt) {
+            (Some(out_ref), Ok(Some(out))) => assert_eq!(
                 &out_ref, out,
-                "optimize changed the projected output\n  row = {row:?}\n  out_ref = {out_ref:?}\n  out_opt = {out:?}"
+                "optimize changed the projected output\n  row = {row:?}\n  out_ref = {out_ref:?}\n  out_opt = {out:?}\n  mfp = {mfp:?}\n  optimized = {opt_mfp:?}"
             ),
-            Ok(None) => panic!("optimize filtered out a row the raw MFP passed\n  row = {row:?}"),
-            Err(e) => panic!(
-                "optimize errored on a row the raw MFP passed cleanly\n  row = {row:?}\n  err = {e:?}"
+            (Some(_), Ok(None)) => panic!(
+                "optimize filtered out a row the raw MFP passed\n  row = {row:?}\n  mfp = {mfp:?}\n  optimized = {opt_mfp:?}"
             ),
+            (Some(_), Err(e)) => panic!(
+                "optimize errored on a row the raw MFP passed cleanly\n  row = {row:?}\n  err = {e:?}\n  mfp = {mfp:?}\n  optimized = {opt_mfp:?}"
+            ),
+            // The raw MFP cleanly filtered the row, so the optimized plan must
+            // not pass it. `optimize` never drops a predicate beyond
+            // `predicates.dedup()` on exact copies, and no rewrite can turn a
+            // predicate's `false`/`null` into `true`. Reordering only changes
+            // which predicate is reached first. The one rewrite that does change
+            // a value, replacing a mapped expression `e` with `#c` when a
+            // predicate `#c = e` is present, is value-preserving on any row where
+            // that predicate holds, and on a row where it does not the predicate
+            // itself is still there to reject the row.
+            (None, Ok(Some(out))) => panic!(
+                "optimize passed a row the raw MFP cleanly filtered\n  row = {row:?}\n  out_opt = {out:?}\n  mfp = {mfp:?}\n  optimized = {opt_mfp:?}"
+            ),
+            // Filtered on both sides, or the optimized plan errored where the raw
+            // order rejected the row first. Both are allowed.
+            (None, Ok(None)) | (None, Err(_)) => {}
         }
     }
     Ok(())
@@ -476,31 +609,53 @@ fn run_temporal(
         return Ok(());
     };
 
-    // Sample the logical times to probe, and build each substitution reference
-    // plan once (it depends only on `t`, not on the row). A reference plan that
-    // fails to lower is dropped: we simply assert nothing at that time.
-    let mut times: Vec<(u64, mz_expr::SafeMfpPlan)> = Vec::with_capacity(TIMES_PER_MFP);
+    // Logical times probed against every row.
+    let mut sampled = Vec::with_capacity(TIMES_PER_MFP);
     for _ in 0..TIMES_PER_MFP {
-        let t = u.int_in_range(0u64..=TS_BOUND + 2)?;
-        if let Some(ref_plan) = reference_plan(&mfp, t) {
-            times.push((t, ref_plan));
-        }
+        sampled.push(u.int_in_range(0u64..=TS_BOUND + 2)?);
     }
+
+    // A substitution reference depends only on `t`, not on the row, so it is
+    // built once per time and shared across rows. `None` records that lowering
+    // rejected it, meaning we assert nothing at that time. The map is filled
+    // lazily because the interval endpoints probed below are row-dependent.
+    let mut refs: BTreeMap<u64, Option<mz_expr::SafeMfpPlan>> = BTreeMap::new();
 
     for _ in 0..ROWS_PER_MFP {
         let row = gen_input_row(u, types)?;
-        let interval = temporal_interval(&plan, &row);
         // A plan that errors on this row lets the lowered plan legitimately
         // differ from the substitution reference, so assert nothing.
-        let interval = match interval {
-            Err(()) => continue,
-            Ok(iv) => iv,
+        let Ok(interval) = temporal_interval(&plan, &row) else {
+            continue;
         };
 
-        for (t, ref_plan) in &times {
-            // One-directional: only constrain the plan when the reference is a
-            // clean pass/fail. A reference error lets the lowered plan differ.
-            let Some(present_ref) = reference_present(ref_plan, &row) else {
+        let mut times: BTreeSet<u64> = sampled.iter().copied().collect();
+        // Probe the interval's own endpoints, not just sampled times. An
+        // off-by-one in the lowering (a missing or spurious `StepMzTimestamp`,
+        // or a wrong width for `mz_now() = e`) moves an endpoint by one, so it
+        // is observable at that endpoint and at no other time. Sampled times
+        // reach an endpoint only incidentally, and mostly the endpoint 0, which
+        // is what every draw decodes to once a short input leaves `Unstructured`
+        // with no data. A nonzero endpoint needs the sample to hit it exactly.
+        if let Some((lower, upper)) = &interval {
+            for t in [Some(u64::from(*lower)), upper.map(u64::from)] {
+                let Some(t) = t else { continue };
+                times.insert(t);
+                if let Some(before) = t.checked_sub(1) {
+                    times.insert(before);
+                }
+            }
+        }
+
+        for t in times {
+            let ref_plan = refs.entry(t).or_insert_with(|| reference_plan(&mfp, t));
+            // One-directional: only constrain the plan when the reference lowers
+            // and is a clean pass/fail. A reference error lets the lowered plan
+            // differ.
+            let Some(present_ref) = ref_plan
+                .as_ref()
+                .and_then(|ref_plan| reference_present(ref_plan, &row))
+            else {
                 continue;
             };
             let present_plan = match &interval {
@@ -508,7 +663,7 @@ fn run_temporal(
                 // failed): it is absent at every `t`.
                 None => false,
                 Some((lower, upper)) => {
-                    let tt = Timestamp::new(*t);
+                    let tt = Timestamp::new(t);
                     *lower <= tt && upper.map(|up| tt < up).unwrap_or(true)
                 }
             };
@@ -562,6 +717,36 @@ fn run(u: &mut Unstructured) -> arbitrary::Result<()> {
         .map(maps)
         .filter(filters)
         .project(projection);
+
+    // Two mechanisms let `optimize` legally change what a row yields once lazy
+    // `And`/`Or` evaluation absorbs an operand error (`Or::eval` returns `true`
+    // the moment it sees one, dropping any error it collected, and `And::eval`
+    // does the same for `false`). Reduce's generic error propagation, run by
+    // `optimize` on every expression, replaces the whole call with any
+    // operand's literal error even though `eval` would have absorbed it (the
+    // open bug CLU-137), and the folded literal's non-nullable type can license
+    // a rewrite above it into a different projected value or a dropped row. And
+    // memoization hoists a fallible subexpression shared under an `And`/`Or`
+    // into a mapped column that `evaluate_inner` runs eagerly, surfacing the
+    // absorbed error. The latter is not a bug: `AND`/`OR` evaluation order is
+    // undefined, in Materialize as in Postgres (STG-54), so the surfaced error
+    // is a legal outcome of the same plan.
+    //
+    // Non-temporal mode handles both row-precisely, skipping exactly the rows
+    // that absorb an operand error (see `absorbs_and_or_operand_error`).
+    // Temporal mode skips the whole MFP on the coarse, expression-level
+    // predicate: its reference side substitutes a literal for `mz_now()` and
+    // re-runs `optimize` per probed time, so "absorbs on this row" has no
+    // single answer there.
+    if temporal
+        && mfp
+            .expressions
+            .iter()
+            .chain(mfp.predicates.iter().map(|(_, p)| p))
+            .any(|e| e.could_hit_nonstrict_error_fold())
+    {
+        return Ok(());
+    }
 
     if temporal {
         run_temporal(u, mfp, &types)

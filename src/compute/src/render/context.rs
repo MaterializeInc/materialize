@@ -21,8 +21,8 @@ use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
-    ENABLE_COLUMN_PAGED_BATCHER, ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION,
-    ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY,
+    ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION, ENABLE_COMPUTE_TEMPORAL_BUCKETING,
+    TEMPORAL_BUCKETING_SUMMARY,
 };
 use mz_compute_types::plan::scalar::{LirScalarExpr, mfp_mir_to_lir_plan, mfp_plan_lir_to_mir};
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
@@ -30,11 +30,13 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::{Eval, Id, MfpPlan};
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ExtendDatums;
-use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
+use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow, StableRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, Col2ValPagedBatcher, columnar_exchange};
+use mz_timely_util::columnar::{
+    Col2ValBatcher, Col2ValColBatcher, Col2ValPagedBatcher, columnar_exchange,
+};
 use mz_timely_util::columnation::ColumnationChunker;
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, PushInto};
@@ -47,7 +49,8 @@ use timely::progress::operate::FrontierInterest;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::compute_state::ComputeState;
-use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
+use crate::extensions::arrange::{ArrangementBatcher, KeyCollection, MzArrange, MzArrangeCore};
+use crate::extensions::reduce::MzReduce;
 use crate::render::columnar::CollectionEdge;
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
@@ -435,6 +438,41 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
         }
     }
 }
+/// Rewrites an arranged error collection to hold each of its errors once.
+///
+/// Sound because query semantics depend only on whether an error is present, and correct under
+/// retraction only because it reads the accumulated collection: no pointwise function of the input
+/// diffs (a saturating add, a sign) can collapse multiplicity and still cancel when the errors
+/// retract.
+///
+/// NOTE: One consumer does read the multiplicity. Error-count introspection reports it as the
+/// number of failing rows, so `log_dataflow_errors` must see the collection before this collapses
+/// it, or a dataflow reports one error however many rows failed. Collapse after the logging, never
+/// before.
+pub(crate) fn distinct_arranged_errs<'a, T: RenderTimestamp>(
+    errs: Arranged<'a, ErrAgent<T, Diff>>,
+    name: &str,
+) -> Arranged<'a, ErrAgent<T, Diff>> {
+    errs.mz_reduce_abelian::<_, ErrBuilder<_, _>, ErrSpine<_, _>, _>(
+        name,
+        |_err, _input, output| output.push(((), Diff::ONE)),
+    )
+}
+
+/// Rewrites an error collection to hold each of its errors once.
+///
+/// Costs an arrangement more than [`distinct_arranged_errs`], which reuses the arrangement its
+/// input already has.
+pub(crate) fn distinct_errs_collection<'a, T: RenderTimestamp>(
+    errs: VecCollection<'a, T, DataflowErrorSer, Diff>,
+) -> VecCollection<'a, T, DataflowErrorSer, Diff> {
+    let errs: KeyCollection<_, _, _> = errs.into();
+    let errs = errs
+        .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
+            "Arrange errors",
+        );
+    distinct_arranged_errs(errs, "Distinct errors").as_collection(|err, _| err.clone())
+}
 
 /// A bundle of the various ways a collection can be represented.
 ///
@@ -505,6 +543,50 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 .expect("Must contain a valid collection")
                 .scope()
         }
+    }
+
+    /// Collapses the multiplicity of every error this bundle carries to one.
+    ///
+    /// Belongs at the definition of a binding that more than one `Get` reads. Each reader
+    /// propagates the binding's errors independently, so a binding read `f` times contributes its
+    /// errors `f` times to the dataflow's error output, and those factors apply again at every
+    /// further level of sharing: a chain of diamonds multiplies rather than adds, and reaches
+    /// `Diff` overflow at a depth plans really do have. Collapsing at each definition holds the
+    /// dataflow's error multiplicity to the fan-out of a single level.
+    ///
+    /// Sound because error semantics depend only on whether an error is present, and correct under
+    /// retraction only because it reads the accumulated collection: no pointwise function of the
+    /// input diffs (a saturating add, a sign) can collapse multiplicity and still cancel when the
+    /// errors retract.
+    ///
+    /// Collapses every form the bundle offers, not just one. Each form carries its own error
+    /// stream, and those streams differ in content as well as identity: an arrangement's errors
+    /// include the key-formation errors that the raw collection's do not. Which form a consumer
+    /// reads is the consumer's choice, and a delta join reads both within one operator, so a
+    /// binding's definition cannot know which form to collapse.
+    ///
+    /// NOTE: Leaves imported arrangements (`ArrangementFlavor::Trace`) alone, whose error traces
+    /// this dataflow cannot rewrite in place. Their errors arrive bounded by the exporting
+    /// dataflow's last level of sharing rather than collapsed to one, since nothing collapses at an
+    /// export. A global read more than once within one dataflow is not collapsed either, because
+    /// only local bindings reach this.
+    pub fn distinct_errs(mut self) -> Self {
+        if let Some((oks, errs)) = self.collection.take() {
+            self.collection = Some((oks, distinct_errs_collection(errs)));
+        }
+        for (key, flavor) in std::mem::take(&mut self.arranged) {
+            let flavor = match flavor {
+                ArrangementFlavor::Local(oks, errs) => {
+                    // Names the key, not the binding: an operator name carrying a `LocalId` would
+                    // churn the introspection goldens every time the optimizer renumbers locals.
+                    let name = format!("Distinct errors[{key:?}]");
+                    ArrangementFlavor::Local(oks, distinct_arranged_errs(errs, &name))
+                }
+                flavor @ ArrangementFlavor::Trace(..) => flavor,
+            };
+            self.arranged.insert(key, flavor);
+        }
+        self
     }
 
     /// Brings the collection bundle into a region.
@@ -906,13 +988,16 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     pub fn as_collection_core(
         &self,
         mfp_plan: MfpPlan<LirScalarExpr>,
-        key_val: Option<(Vec<LirScalarExpr>, Option<Row>)>,
+        key_val: Option<(Vec<LirScalarExpr>, Option<StableRow>)>,
         until: Antichain<mz_repr::Timestamp>,
         config_set: &ConfigSet,
     ) -> (
         VecCollection<'scope, T, mz_repr::Row, Diff>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) {
+        // Unwrap the stable-serialization row wrapper, seeking works on
+        // plain rows.
+        let key_val = key_val.map(|(key, val)| (key, val.map(|val| val.0)));
         // If the MFP is trivial, we can just call `as_collection`.
         // In the case that we weren't going to apply the `key_val` optimization,
         // this path results in a slightly smaller and faster
@@ -1090,14 +1175,9 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 } else {
                     oks
                 };
-                let use_paged_path = ENABLE_COLUMN_PAGED_BATCHER.get(config_set);
-                let (oks, errs_keyed, passthrough) = Self::arrange_collection(
-                    &name,
-                    oks,
-                    key.clone(),
-                    thinning.clone(),
-                    use_paged_path,
-                );
+                let batcher = ArrangementBatcher::from_config(config_set);
+                let (oks, errs_keyed, passthrough) =
+                    Self::arrange_collection(&name, oks, key.clone(), thinning.clone(), batcher);
                 let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
                 self.collection = Some((CollectionEdge::Vec(passthrough), errs));
                 let errs =
@@ -1131,7 +1211,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         oks: VecCollection<'scope, T, Row, Diff>,
         key: Vec<LirScalarExpr>,
         thinning: Vec<usize>,
-        use_paged_path: bool,
+        batcher: ArrangementBatcher,
     ) -> (
         Arranged<'scope, RowRowAgent<T, Diff>>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
@@ -1187,22 +1267,28 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
 
         let exchange =
             ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
-        let oks = if use_paged_path {
-            ok_stream.mz_arrange_core::<
+        let oks = match batcher {
+            ArrangementBatcher::ColumnarPaged => ok_stream.mz_arrange_core::<
                 _,
                 batcher::ColumnChunker<_>,
                 Col2ValPagedBatcher<_, _, _, _>,
                 RowRowColPagedBuilder<_, _>,
                 RowRowSpine<_, _>,
-            >(exchange, name)
-        } else {
-            ok_stream.mz_arrange_core::<
+            >(exchange, name),
+            ArrangementBatcher::Columnar => ok_stream.mz_arrange_core::<
+                _,
+                batcher::ColumnChunker<_>,
+                Col2ValColBatcher<_, _, _, _>,
+                RowRowColPagedBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >(exchange, name),
+            ArrangementBatcher::Columnation => ok_stream.mz_arrange_core::<
                 _,
                 batcher::Chunker<_>,
                 Col2ValBatcher<_, _, _, _>,
                 RowRowBuilder<_, _>,
                 RowRowSpine<_, _>,
-            >(exchange, name)
+            >(exchange, name),
         };
         (
             oks,

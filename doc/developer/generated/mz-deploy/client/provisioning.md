@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/client/provisioning.rs
-revision: 3f3bdb0535
+revision: 2e6c03ac43
 ---
 
 # mz-deploy::client::provisioning
@@ -11,4 +11,4 @@ Methods on `ProvisioningClient` issue idempotent `CREATE … IF NOT EXISTS` and 
 
 Provisioning must follow referential order: databases must be created before schemas, and schemas before clusters. Callers (e.g. `DeploymentExecutor`) are responsible for invoking methods in the correct order.
 
-`create_cluster` builds a `CREATE CLUSTER` statement with the requested size and replication factor, appending an autoscaling strategy clause via `strategy_to_cluster_option` when one is configured. `create_cluster_with_config` dispatches between managed and unmanaged cluster creation based on the `ClusterConfig` variant, then applies any associated replica and grant statements.
+`create_cluster_with_config` dispatches between managed and unmanaged cluster creation based on the `ClusterConfig` variant. For managed clusters, it replays the production cluster's canonical `CREATE CLUSTER` statement under the new name. For unmanaged clusters, it issues `CREATE CLUSTER ... REPLICAS ()` followed by individual `CREATE CLUSTER REPLICA` statements. After the cluster is created, any associated grant statements are applied.

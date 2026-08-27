@@ -1,12 +1,12 @@
 ---
 source: src/sql/src/plan.rs
-revision: fca741734d
+revision: 39dcae2fba
 ---
 
 # mz-sql::plan
 
 Defines all `Plan` variants produced by the SQL planner and consumed by the adapter, plus the shared infrastructure for planning.
-Key types exported from `plan.rs`: `Plan` (the top-level enum covering every statement kind), `PlanContext`, `QueryContext`, `QueryLifetime`, `Params`, and dozens of plan-specific structs (`CreateSourcePlan`, `SelectPlan`, `SubscribePlan`, etc.).
+Key types exported from `plan.rs`: `Plan` (the top-level enum covering every statement kind), `PlanContext`, `QueryContext`, `QueryLifetime`, `Params`, and dozens of plan-specific structs (`CreateSourcePlan`, `SelectPlan`, `SubscribePlan`, `CreateMetricSinkPlan`, etc.).
 `SubscribeFrom::Query` carries an `HirRelationExpr` (not a `MirRelationExpr`); lowering to MIR happens downstream of planning.
 `TryFromValue` is re-exported from the `with_options` submodule for callers that need to convert `WithOptionValue` items outside the planner.
 The module is organized into: `query` (query planning), `hir` + `lowering` (HIR IR and HIR→MIR translation), `statement` (statement dispatch), `func` helpers (`typeconv`, `side_effecting_func`), `transform_ast`/`transform_hir` (rewrites), and supporting utilities (`error`, `notice`, `literal`, `plan_utils`, `scope`, `with_options`, `explain`, `virtual_syntax`).
@@ -17,3 +17,4 @@ The module is organized into: `query` (query planning), `hir` + `lowering` (HIR 
 `AlterSinkPlan` carries `set_options: Vec<CreateSinkOption<Aug>>` and `reset_options: Vec<CreateSinkOptionName>` fields recording the option edits requested by `ALTER SINK ... SET/RESET (...)`. Sequencing must re-apply them to the catalog's `create_sql` via `apply_sink_option_edits` because the `create_sql` may have changed since planning (e.g. due to a schema swap).
 `apply_sink_option_edits` applies a set of SET and RESET option edits to the with-options of a `CREATE SINK` statement: it removes any option whose name appears in `set_options` or `reset_options`, then appends the `set_options`.
 `AlterClusterPlanStrategy::UntilReady::on_timeout` is `Option<OnTimeoutAction>`. `None` indicates the `ALTER` omitted the `ON TIMEOUT` clause; the executing path supplies the implicit action.
+`CreateClusterPlan` carries `if_not_exists: bool`; when true, creating a cluster whose name already exists succeeds and emits a notice instead of failing. `CreateClusterReplicaPlan` carries the same `if_not_exists: bool` field with the same semantics.

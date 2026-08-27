@@ -25,14 +25,16 @@ from materialize import MZ_ROOT, buildkite, ci_util
 # - Negative values indicate that the line has only been covered in unit tests.
 Coverage = dict[str, OrderedDict[int, int | None]]
 # Normalizes an absolute lcov SF path to a repo-relative path so it can be
-# matched against the keys from find_modified_lines(). Only the buildkite
-# alternative yields an actual repo file (starting with `src/`). The external
+# matched against the keys from find_modified_lines(). Only the /workspace
+# (CI_BUILDER_FIXED_WORKDIR builds) and buildkite alternatives yield an actual
+# repo file (starting with `src/`). The external
 # and rustlib alternatives exist so the assert below does not fire on
 # dependency sources, they never match a modified repo file.
 SOURCE_RE = re.compile(
     r"""
     ( external/(.*$)
     | /usr/local/lib/rustlib/(.*$)
+    | /workspace/(src/.*$)
     | /var/lib/buildkite-agent/builds/buildkite-.*/materialize/[^/]*/(src/.*$)
     )""",
     re.VERBOSE,

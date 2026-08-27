@@ -133,6 +133,22 @@ metrics! {
     (ru_nivcsw, "involuntary context switches", "_total", Unitless)
 }
 
+/// Read this process's peak resident set size, in bytes.
+///
+/// The kernel maintains this high-water mark itself, so it cannot miss a short-lived spike the
+/// way a sampled maximum can.
+pub(crate) fn max_rss_bytes() -> Result<i64, std::io::Error> {
+    let rusage = unsafe {
+        let mut rusage = std::mem::zeroed();
+        let ret = libc::getrusage(libc::RUSAGE_SELF, &mut rusage);
+        if ret < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        rusage
+    };
+    Ok(<MaxrssToBytes as Unit>::from(rusage.ru_maxrss))
+}
+
 /// Register a task to read rusage stats.
 pub(crate) fn register_metrics_into(metrics_registry: &MetricsRegistry) -> RuMetrics {
     RuMetrics::new(metrics_registry)

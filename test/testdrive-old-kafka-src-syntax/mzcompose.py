@@ -86,7 +86,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--default-size",
         type=int,
-        default=Materialized.Size.DEFAULT_SIZE,
+        default=Materialized.Size.default(),
         help="Use SIZE 'scale=N,workers=N' for replicas and SIZE 'scale=N,workers=1' for sources",
     )
     parser.add_argument(

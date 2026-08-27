@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer.rs
-revision: d0e1746c64
+revision: a702b8be70
 ---
 
 # adapter::coord::sequencer

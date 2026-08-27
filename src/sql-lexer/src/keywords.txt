@@ -74,6 +74,7 @@ Broker
 Brokers
 By
 Bytes
+Cancellation
 Capture
 Cardinality
 Cascade
@@ -297,6 +298,7 @@ Membership
 Memory
 Message
 Metadata
+Metric
 Minute
 Minutes
 Mock

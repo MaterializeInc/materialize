@@ -1,6 +1,6 @@
 ---
 source: src/metrics/src/dyncfgs.rs
-revision: 359955093e
+revision: 5a4a36c4fd
 ---
 
 # mz-metrics::dyncfgs

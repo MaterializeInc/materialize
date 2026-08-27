@@ -27,6 +27,20 @@ use tracing::info;
 
 use super::*;
 
+#[mz_ore::test]
+fn hydration_history_forced_migration_policy() {
+    let hydration_history = Builtin::Table(&*MZ_OBJECT_HYDRATION_HISTORY);
+
+    assert!(participates_in_forced_migration(
+        &hydration_history,
+        Mechanism::Evolution
+    ));
+    assert!(!participates_in_forced_migration(
+        &hydration_history,
+        Mechanism::Replacement
+    ));
+}
+
 #[test] // allow(test-attribute)
 #[cfg_attr(miri, ignore)] // too slow
 fn test_builtin_schema_migration() {
@@ -400,5 +414,21 @@ fn init_persist(sim: &mut turmoil::Sim) -> PersistLocation {
     PersistLocation {
         blob_uri: "turmoil://blob:7000".parse().unwrap(),
         consensus_uri: "turmoil://consensus:7000".parse().unwrap(),
+    }
+}
+
+/// A step naming a builtin that no longer exists, or that changed
+/// `CatalogItemType`, panics `validate_migration_steps` at catalog open. That
+/// needs a catalog already on disk to reproduce, so the default CI suite never
+/// sees it and only the upgrade nightly does. Much cheaper to catch here.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_migration_steps_resolve_to_builtins() {
+    for step in MIGRATIONS.iter() {
+        assert!(
+            BUILTIN_LOOKUP.contains_key(&step.object),
+            "migration step for non-existent builtin: {:?}",
+            step.object
+        );
     }
 }

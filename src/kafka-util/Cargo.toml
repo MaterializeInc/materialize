@@ -20,14 +20,12 @@ chrono.workspace = true
 clap.workspace = true
 crossbeam.workspace = true
 fancy-regex.workspace = true
-futures.workspace = true
 itertools.workspace = true
 mz-avro = { path = "../avro" }
 mz-ccsr = { path = "../ccsr" }
 mz-ore = { path = "../ore", features = ["cli", "network", "async"] }
 mz-ssh-util = { path = "../ssh-util" }
 num_cpus.workspace = true
-prost.workspace = true
 rand.workspace = true
 rdkafka.workspace = true
 serde.workspace = true

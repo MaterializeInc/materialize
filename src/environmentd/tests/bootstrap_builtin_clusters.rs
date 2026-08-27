@@ -13,8 +13,17 @@
 //! single source of truth for its replica set. These tests pin that down from
 //! both directions: the factor a deployment bootstraps with is realized, and a
 //! factor an operator sets with `ALTER CLUSTER` survives a restart.
+//!
+//! Two writers realize that factor, at different times. At catalog open the
+//! builtin-replica migration converges the set synchronously, so a bootstrap or
+//! post-restart assertion can be exact. At runtime the cluster controller owns
+//! it and converges a tick after the `ALTER` commits, so an assertion right
+//! after an `ALTER` has to poll.
+
+use std::time::Duration;
 
 use mz_environmentd::test_util::{self, TestHarness, TestServerWithRuntime};
+use mz_ore::retry::Retry;
 
 /// A builtin cluster's declared replication factor and how many replicas it
 /// actually has.
@@ -33,6 +42,24 @@ fn declared_and_actual(server: &TestServerWithRuntime, cluster: &str) -> (i32, i
         )
         .unwrap();
     (row.get(0), row.get(1))
+}
+
+/// Polls [`declared_and_actual`] until it reads `expected`.
+///
+/// For assertions that follow a runtime `ALTER CLUSTER`, whose replica
+/// create/drop the cluster controller applies on a later tick.
+fn await_declared_and_actual(server: &TestServerWithRuntime, cluster: &str, expected: (i32, i32)) {
+    Retry::default()
+        .max_duration(Duration::from_secs(60))
+        .retry(|_| {
+            let actual = declared_and_actual(server, cluster);
+            if actual == expected {
+                Ok(())
+            } else {
+                Err(format!("{cluster}: got {actual:?}, want {expected:?}"))
+            }
+        })
+        .unwrap();
 }
 
 /// Runs `stmt` as `user` over the internal port, which is where the system roles
@@ -104,7 +131,7 @@ fn test_alter_to_zero_replicas_survives_restart() {
             "mz_system",
             "ALTER CLUSTER mz_system SET (REPLICATION FACTOR 0)",
         );
-        assert_eq!(declared_and_actual(&server, "mz_system"), (0, 0));
+        await_declared_and_actual(&server, "mz_system", (0, 0));
     }
 
     let server = harness.start_blocking();
@@ -124,7 +151,7 @@ fn test_alter_above_one_replica_survives_restart() {
             "mz_system",
             "ALTER CLUSTER mz_system SET (REPLICATION FACTOR 2)",
         );
-        assert_eq!(declared_and_actual(&server, "mz_system"), (2, 2));
+        await_declared_and_actual(&server, "mz_system", (2, 2));
     }
 
     let server = harness.start_blocking();
@@ -182,7 +209,7 @@ fn test_support_cluster_replica_survives_restart() {
             "mz_support",
             "ALTER CLUSTER mz_support SET (REPLICATION FACTOR 1)",
         );
-        assert_eq!(declared_and_actual(&server, "mz_support"), (1, 1));
+        await_declared_and_actual(&server, "mz_support", (1, 1));
     }
 
     let server = harness.start_blocking();

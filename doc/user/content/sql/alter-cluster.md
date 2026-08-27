@@ -165,7 +165,7 @@ immediately.
 During a graceful resize, Materialize:
 1. Provisions new replicas at the target size, alongside the current replicas.
 2. Waits for the new replicas to
-   [hydrate](/concepts/clusters/#consider-hydration-requirements).
+   [hydrate](/concepts/hydration/).
 3. Retires the old replicas.
 
 Throughout, the cluster keeps serving queries, first from the old replicas,
@@ -257,6 +257,18 @@ example below uses `CREATE CLUSTER`; see [Configure
 autoscaling](#configure-autoscaling) for the `ALTER CLUSTER` form.
 
 {{% include-headless "/headless/cluster-hydration-burst" %}}
+
+### Dictionary compression
+
+{{% include-headless "/headless/dictionary-compression/overview" %}}
+
+Turn compression on for an existing cluster with `ALTER CLUSTER ... SET
+(EXPERIMENTAL ARRANGEMENT COMPRESSION = true)`, and go back to the default with
+`ALTER CLUSTER ... RESET (EXPERIMENTAL ARRANGEMENT COMPRESSION)`.
+
+{{% include-headless "/headless/dictionary-compression/replica-replacement" %}}
+
+{{% include-headless "/headless/dictionary-compression/tradeoff-summary" %}}
 
 ### Replication factor
 
@@ -437,3 +449,4 @@ compute-specific settings. If needed, these can be set explicitly.
 - [`CREATE CLUSTER`](/sql/create-cluster/)
 - [`SHOW CLUSTERS`](/sql/show-clusters/)
 - [`DROP CLUSTER`](/sql/drop-cluster/)
+- [Dictionary compression](/transform-data/dictionary-compression/)

@@ -170,6 +170,27 @@ Summaries are flattened into separate quantile, sum, and count rows.
 | `value`       | [`double precision`]   | The numeric value of the metric.                                     |
 | `help`        | [`text`]               | The help string describing the metric.                               |
 
+## `mz_cluster_replica_resource_usage`
+
+The `mz_cluster_replica_resource_usage` source reports the resource usage of each process of a
+cluster replica, as one row per measurement source and metric. Each row is what that source
+reported, without interpretation: sources measure overlapping but distinct quantities, so combining
+them into a single figure for memory usage, or for how close a replica is to its limit, is left to
+queries over this relation.
+
+The replica samples its sources every few seconds, and reports a high-water mark alongside the
+instantaneous value where one is available. For the sources and metrics that appear here, how to
+interpret them, and an example query, see [Replica resource
+usage](/manage/monitor/replica-resource-usage/).
+
+<!-- RELATION_SPEC mz_introspection.mz_cluster_replica_resource_usage NO_COMMENTS -->
+| Field        | Type      | Meaning                                                              |
+|--------------|-----------|----------------------------------------------------------------------|
+| `process_id` | [`uint8`] | The ID of the process within the replica.                            |
+| `source`     | [`text`]  | The measurement source, for example `cgroup` or `rusage`.             |
+| `metric`     | [`text`]  | What the source measured, for example `memory_current`.               |
+| `value`      | [`uint8`] | The reported value, in bytes for a size and as a count otherwise.     |
+
 ## `mz_dataflows`
 
 The `mz_dataflows` view describes the [dataflows][dataflow] in the system.

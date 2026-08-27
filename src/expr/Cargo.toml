@@ -24,14 +24,12 @@ harness = false
 [dependencies]
 aho-corasick.workspace = true
 anyhow.workspace = true
-bytes.workspace = true
 bytesize.workspace = true
 chrono.workspace = true
 columnation.workspace = true
 chrono-tz.workspace = true
 crc32fast.workspace = true
 csv.workspace = true
-differential-dataflow.workspace = true
 dec.workspace = true
 derivative.workspace = true
 encoding.workspace = true
@@ -61,6 +59,7 @@ regex.workspace = true
 regex-syntax.workspace = true
 seahash.workspace = true
 serde.workspace = true
+serde_bytes.workspace = true
 serde_json.workspace = true
 aws-lc-rs.workspace = true
 tracing.workspace = true
@@ -72,6 +71,7 @@ proptest-derive = { workspace = true, optional = true }
 smallvec.workspace = true
 
 [dev-dependencies]
+bincode.workspace = true
 criterion.workspace = true
 datadriven.workspace = true
 insta.workspace = true

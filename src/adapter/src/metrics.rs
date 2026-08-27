@@ -21,6 +21,7 @@ pub struct Metrics {
     pub query_total: IntCounterVec,
     pub active_sessions: IntGaugeVec,
     pub active_subscribes: IntGaugeVec,
+    pub active_internal_subscribes: IntGaugeVec,
     pub active_copy_tos: IntGaugeVec,
     pub queue_busy_seconds: Histogram,
     pub determine_timestamp: IntCounterVec,
@@ -30,6 +31,10 @@ pub struct Metrics {
     pub storage_usage_collection_time_seconds: Histogram,
     pub arrangement_sizes_collection_time_seconds: Histogram,
     pub arrangement_sizes_rows_written: IntCounter,
+    pub hydration_history_mutations: IntCounterVec,
+    pub hydration_history_retention_batch_full: IntCounter,
+    pub hydration_history_rows_affected: IntCounterVec,
+    pub hydration_history_sweep_duration_seconds: Histogram,
     pub subscribe_outputs: IntCounterVec,
     pub canceled_peeks: IntCounter,
     pub linearize_message_seconds: HistogramVec,
@@ -43,8 +48,6 @@ pub struct Metrics {
     pub append_table_duration_seconds: Histogram,
     pub webhook_validation_reduce_failures: IntCounterVec,
     pub webhook_get_appender: IntCounter,
-    pub check_scheduling_policies_seconds: HistogramVec,
-    pub handle_scheduling_decisions_seconds: HistogramVec,
     pub row_set_finishing_seconds: Histogram,
     pub session_startup_table_writes_seconds: Histogram,
     pub parse_seconds: Histogram,
@@ -60,6 +63,7 @@ pub struct Metrics {
     pub catalog_transact_phase_seconds: HistogramVec,
     pub apply_catalog_implications_seconds: Histogram,
     pub group_commit_catalog_upper_seconds: Histogram,
+    pub occ_retry_count: Histogram,
 }
 
 impl Metrics {
@@ -85,6 +89,11 @@ impl Metrics {
                 var_labels: ["session_type"],
                 visibility: MetricVisibility::Public,
                 tags: [MetricTag::Environment],
+            )),
+            active_internal_subscribes: registry.register(metric!(
+                name: "mz_active_internal_subscribes",
+                help: "The number of active internal subscribes used by read-then-write operations and background maintenance.",
+                var_labels: ["session_type"],
             )),
             active_copy_tos: registry.register(metric!(
                 name: "mz_active_copy_tos",
@@ -133,6 +142,25 @@ impl Metrics {
             arrangement_sizes_rows_written: registry.register(metric!(
                 name: "mz_arrangement_sizes_rows_written_total",
                 help: "Total rows appended to mz_object_arrangement_size_history since process start.",
+            )),
+            hydration_history_mutations: registry.register(metric!(
+                name: "mz_hydration_history_mutations_total",
+                help: "Total hydration-history collection and retention mutations since process start.",
+                var_labels: ["operation", "outcome"],
+            )),
+            hydration_history_retention_batch_full: registry.register(metric!(
+                name: "mz_hydration_history_retention_batch_full_total",
+                help: "Total hydration-history sweeps whose retention batch was full. Repeated increments mean retention may not be keeping up with its schedule.",
+            )),
+            hydration_history_rows_affected: registry.register(metric!(
+                name: "mz_hydration_history_rows_affected_total",
+                help: "Total rows changed by hydration-history maintenance since process start.",
+                var_labels: ["action"],
+            )),
+            hydration_history_sweep_duration_seconds: registry.register(metric!(
+                name: "mz_hydration_history_sweep_duration_seconds",
+                help: "Wall time of a complete hydration-history collection and retention sweep.",
+                buckets: histogram_seconds_buckets(0.128, 1024.0),
             )),
             subscribe_outputs: registry.register(metric!(
                 name: "mz_subscribe_outputs",
@@ -197,18 +225,6 @@ impl Metrics {
             webhook_get_appender: registry.register(metric!(
                 name: "mz_webhook_get_appender_count",
                 help: "Count of getting a webhook appender from the Coordinator.",
-            )),
-            check_scheduling_policies_seconds: registry.register(metric!(
-                name: "mz_check_scheduling_policies_seconds",
-                help: "The time each policy in `check_scheduling_policies` takes.",
-                var_labels: ["policy", "thread"],
-                buckets: histogram_seconds_buckets(0.000_128, 8.0),
-            )),
-            handle_scheduling_decisions_seconds: registry.register(metric!(
-                name: "mz_handle_scheduling_decisions_seconds",
-                help: "The time `handle_scheduling_decisions` takes.",
-                var_labels: ["altered_a_cluster"],
-                buckets: histogram_seconds_buckets(0.000_128, 8.0),
             )),
             row_set_finishing_seconds: registry.register(metric!(
                 name: "mz_row_set_finishing_seconds",
@@ -295,6 +311,13 @@ impl Metrics {
                 name: "mz_group_commit_catalog_upper_seconds",
                 help: "The time it takes to advance the catalog shard upper for a txns-shard write (group commits and table register/forget).",
                 buckets: histogram_seconds_buckets(0.001, 32.0),
+            )),
+            occ_retry_count: registry.register(metric!(
+                name: "mz_occ_read_then_write_retry_count",
+                help: "Number of OCC retries per read-then-write operation.",
+                buckets: vec![
+                    0., 1., 2., 3., 5., 10., 25., 50., 100., 200., 300., 500., 750., 1000.,
+                ],
             )),
         }
     }

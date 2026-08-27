@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/pool.rs
-revision: 4d6c73f6fa
+revision: 24cd10bf65
 ---
 
 # mz-ore::pool
@@ -24,6 +24,7 @@ Memory descends a ladder of tiers, each with its own ceiling:
 - `ChunkHandle` — a handle to an inserted chunk; dropping it frees the chunk.
 - `ChunkHints` — advisory placement hints (generational depth) supplied at insert.
 - `ExtentCodec` — trait for the encode/decode transform between body bytes and stored (compressed) bytes.
+- `IdentityCodec` — an `ExtentCodec` whose stored form is the body verbatim (no compression); `IDENTITY_CODEC` is the static instance to pass to `Pool::insert_with`.
 - `PoolStats` — snapshot of pool counters.
 - `max_stored_len` — computes the maximum stored-form length for a given body length.
 

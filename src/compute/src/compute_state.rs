@@ -26,15 +26,16 @@ use mz_compute_client::protocol::command::{
 };
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
-    ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse, SubscribeResponse,
+    ComputeResponse, CopyToResponse, FrontiersResponse, PeekError, PeekResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
-    ENABLE_PEEK_RESPONSE_STASH, PEEK_RESPONSE_STASH_BATCH_MAX_RUNS,
-    PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_STASH_BATCH_SIZE, PEEK_STASH_NUM_BATCHES,
+    ENABLE_PEEK_RESPONSE_STASH, ENABLE_PEEK_ROW_ITERATION_LIMIT,
+    PEEK_RESPONSE_STASH_BATCH_MAX_RUNS, PEEK_RESPONSE_STASH_THRESHOLD_BYTES,
+    PEEK_ROW_ITERATION_LIMIT, PEEK_STASH_BATCH_SIZE, PEEK_STASH_NUM_BATCHES,
 };
 use mz_compute_types::plan::render_plan::RenderPlan;
-use mz_dyncfg::ConfigSet;
+use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_expr::row::RowCollection;
 use mz_expr::{RowComparator, SafeMfpPlan};
 use mz_ore::cast::{CastFrom, CastLossy};
@@ -78,6 +79,80 @@ use crate::server::{ComputeInstanceContext, ResponseSender};
 
 mod peek_result_iterator;
 mod peek_stash;
+
+/// Cheap handles on the dyncfgs that bound how many rows a peek may examine.
+///
+/// The limit is read through handles rather than captured once, because `UpdateConfiguration`
+/// applies to peeks that are already in flight.
+#[derive(Clone, Debug)]
+struct PeekRowIterationConfig {
+    enabled: ConfigValHandle<bool>,
+    limit: ConfigValHandle<usize>,
+}
+
+impl PeekRowIterationConfig {
+    fn new(config: &ConfigSet) -> Self {
+        Self {
+            enabled: ENABLE_PEEK_ROW_ITERATION_LIMIT.handle(config),
+            limit: PEEK_ROW_ITERATION_LIMIT.handle(config),
+        }
+    }
+
+    fn current_limit(&self) -> Option<usize> {
+        self.enabled.get().then(|| self.limit.get())
+    }
+}
+
+/// Counts the rows a peek has examined on this worker and fails it once that exceeds the limit.
+///
+/// A "row" here is a record the worker had to look at, not a record it returned. Records that a
+/// literal constraint or the MFP throws away, and records that consolidate to zero, cost scan
+/// time all the same, so they count too.
+///
+/// Exactly `limit` rows are allowed. The peek only fails when it asks for the row after that.
+#[derive(Debug)]
+pub(crate) struct PeekRowIterationTracker {
+    limit: Option<usize>,
+    rows_iterated: usize,
+}
+
+impl PeekRowIterationTracker {
+    fn new(limit: Option<usize>, rows_iterated: usize) -> Self {
+        Self {
+            limit,
+            rows_iterated,
+        }
+    }
+
+    /// Adopts a new limit without forgetting the rows already examined.
+    ///
+    /// Rows counted while the feature was off still count, so turning it on mid-scan accounts for
+    /// the work the peek has already caused.
+    fn set_limit(&mut self, limit: Option<usize>) {
+        self.limit = limit;
+    }
+
+    fn rows_iterated(&self) -> usize {
+        self.rows_iterated
+    }
+
+    fn track_next(&mut self) -> Result<(), PeekError> {
+        if let Some(limit) = self.limit
+            && self.rows_iterated >= limit
+        {
+            return Err(PeekError::RowIterationLimitExceeded { limit });
+        }
+
+        self.rows_iterated = self.rows_iterated.saturating_add(1);
+        Ok(())
+    }
+}
+
+fn peek_row_iteration_limit(config: &ConfigSet) -> Option<usize> {
+    ENABLE_PEEK_ROW_ITERATION_LIMIT
+        .get(config)
+        .then(|| PEEK_ROW_ITERATION_LIMIT.get(config))
+}
 
 /// Worker-local state that is maintained across dataflows.
 ///
@@ -428,6 +503,13 @@ impl ComputeState {
                     warn!("chunk spill: buffer pool unavailable; chunks stay resident");
                 }
             }
+
+            // The generational depth floor below which spilled bodies store
+            // uncompressed. Subsystem-independent, so applied here alongside
+            // the rest of the process-wide chunk configuration.
+            let compress_min_depth =
+                u8::try_from(COLUMN_CHUNK_COMPRESS_MIN_DEPTH.get(config)).unwrap_or(u8::MAX);
+            mz_timely_util::columnar::chunk::set_compress_min_depth(compress_min_depth);
         }
 
         // Remember the maintenance interval locally to avoid reading it from the config set on
@@ -668,6 +750,16 @@ impl<'a> ActiveComputeState<'a> {
             .chain(dataflow.copy_to_ids())
             .collect();
 
+        // `StartSignal` is attached only to imported sources and imported indexes, and
+        // `import_ids` is exactly those two sets, so a dataflow with no imports has nothing
+        // suspended and begins computing as soon as it is rendered. Such a dataflow can reach
+        // hydration before its `Schedule` arrives, and the controller sends one anyway to keep
+        // protocol communication predictable, so a `started_at` stamped only from
+        // `handle_schedule` would land after `hydrated_at`. Stamping it here also keeps the row
+        // truthful from the moment it appears, rather than reporting the object as queued while
+        // nothing is queueing it.
+        let starts_immediately = dataflow.import_ids().next().is_none();
+
         // Initialize compute and logging state for each object.
         for object_id in dataflow.export_ids() {
             let is_subscribe_or_copy = subscribe_copy_ids.contains(&object_id);
@@ -686,6 +778,9 @@ impl<'a> ActiveComputeState<'a> {
                     *dataflow_index,
                     dataflow.import_ids(),
                 );
+                if starts_immediately {
+                    logging.set_hydration_start();
+                }
                 collection.logging = Some(logging);
             }
 
@@ -727,6 +822,12 @@ impl<'a> ActiveComputeState<'a> {
         // scheduled.
         let suspension_token = self.compute_state.suspended_collections.remove(&id);
         drop(suspension_token);
+
+        if let Some(collection) = self.compute_state.collections.get(&id) {
+            if let Some(logging) = &collection.logging {
+                logging.set_hydration_start();
+            }
+        }
     }
 
     fn handle_allow_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
@@ -756,6 +857,7 @@ impl<'a> ActiveComputeState<'a> {
                     metadata,
                     usize::cast_from(self.compute_state.max_result_size),
                     self.timely_worker,
+                    PeekRowIterationConfig::new(&self.compute_state.worker_config),
                 )
             }
         };
@@ -871,6 +973,11 @@ impl<'a> ActiveComputeState<'a> {
 
             let logging =
                 CollectionLogging::new(id, logger.clone(), *dataflow_index, std::iter::empty());
+            // Log collections are never suspended and the controller marks them scheduled
+            // implicitly, so no `Schedule` command ever arrives for them. Record their hydration
+            // start here, or they would sit permanently in the illegal state of being hydrated
+            // without having started.
+            logging.set_hydration_start();
             collection.logging = Some(logging);
 
             let existing = self.compute_state.collections.insert(id, collection);
@@ -1006,6 +1113,9 @@ impl<'a> ActiveComputeState<'a> {
             PendingPeek::Index(peek) => {
                 let start = Instant::now();
 
+                let row_iteration_limit =
+                    peek_row_iteration_limit(&self.compute_state.worker_config);
+
                 let peek_stash_eligible = peek
                     .peek
                     .finishing
@@ -1042,7 +1152,9 @@ impl<'a> ActiveComputeState<'a> {
                         .compute_state
                         .metrics
                         .index_peek_row_iteration_seconds,
+                    row_iteration_rows: &self.compute_state.metrics.index_peek_row_iteration_rows,
                     result_sort_seconds: &self.compute_state.metrics.index_peek_result_sort_seconds,
+                    result_sort_rows: &self.compute_state.metrics.index_peek_result_sort_rows,
                     row_collection_seconds: &self
                         .compute_state
                         .metrics
@@ -1054,6 +1166,7 @@ impl<'a> ActiveComputeState<'a> {
                     self.compute_state.max_result_size,
                     peek_stash_enabled && peek_stash_eligible,
                     peek_stash_threshold_bytes,
+                    row_iteration_limit,
                     &metrics,
                 );
 
@@ -1069,6 +1182,9 @@ impl<'a> ActiveComputeState<'a> {
                         let _span =
                             span!(parent: &peek.span, Level::DEBUG, "process_stash_peek").entered();
 
+                        // NOTE: The row iteration limit does not follow a peek into the stash. The
+                        // stash restarts the scan and produces in bounded bursts, so a stashed
+                        // peek may examine any number of rows.
                         let peek_stash_batch_max_runs = PEEK_RESPONSE_STASH_BATCH_MAX_RUNS
                             .get(&self.compute_state.worker_config);
 
@@ -1327,6 +1443,7 @@ impl PendingPeek {
         metadata: CollectionMetadata,
         max_result_size: usize,
         timely_worker: &TimelyWorker,
+        row_iteration_config: PeekRowIterationConfig,
     ) -> Self {
         let active_worker = {
             // Choose the worker that does the actual peek arbitrarily but consistently.
@@ -1364,6 +1481,7 @@ impl PendingPeek {
                     mfp_plan,
                     max_result_size,
                     max_results_needed,
+                    row_iteration_config,
                 )
                 .await
             } else {
@@ -1371,7 +1489,7 @@ impl PendingPeek {
             };
             let result = match result {
                 Ok(rows) => PeekResponse::Rows(vec![RowCollection::new(rows, &order_by)]),
-                Err(e) => PeekResponse::Error(e.to_string()),
+                Err(error) => PeekResponse::Error(error),
             };
             match result_tx.send((result, start.elapsed())) {
                 Ok(()) => {}
@@ -1435,11 +1553,12 @@ impl PersistPeek {
         mfp_plan: SafeMfpPlan,
         max_result_size: usize,
         mut limit_remaining: usize,
-    ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
+        row_iteration_config: PeekRowIterationConfig,
+    ) -> Result<Vec<(Row, NonZeroUsize)>, PeekError> {
         let client = persist_clients
             .open(metadata.persist_location)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| PeekError::unstructured(e.to_string()))?;
 
         let mut reader: ReadHandle<SourceData, (), Timestamp, StorageDiff> = client
             .open_leased_reader(
@@ -1450,7 +1569,7 @@ impl PersistPeek {
                 USE_CRITICAL_SINCE_SNAPSHOT.get(client.dyncfgs()),
             )
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| PeekError::unstructured(e.to_string()))?;
 
         // If we are using txn-wal for this collection, then the upper might
         // be advanced lazily and we have to go through txn-wal for reads.
@@ -1476,7 +1595,9 @@ impl PersistPeek {
         )
         .await
         .map_err(|since| {
-            format!("attempted to peek at {as_of}, but the since has advanced to {since:?}")
+            PeekError::unstructured(format!(
+                "attempted to peek at {as_of}, but the since has advanced to {since:?}"
+            ))
         })?;
 
         // Re-used state for processing and building rows.
@@ -1485,6 +1606,7 @@ impl PersistPeek {
         let mut row_builder = Row::default();
         let arena = RowArena::new();
         let mut total_size = 0usize;
+        let mut row_iteration_tracker = PeekRowIterationTracker::new(None, 0);
 
         let literal_len = match &literal_constraint {
             None => 0,
@@ -1496,7 +1618,12 @@ impl PersistPeek {
                 break;
             };
             for (data, _, d) in batch {
-                let row = data.map_err(|e| e.to_string())?;
+                // Count before literal and MFP filtering because the Persist row
+                // has already been read and must still be examined.
+                row_iteration_tracker.set_limit(row_iteration_config.current_limit());
+                row_iteration_tracker.track_next()?;
+
+                let row = data.map_err(PeekError::from)?;
 
                 if let Some(literal) = &literal_constraint {
                     match row.iter().take(literal_len).cmp(literal.iter()) {
@@ -1511,11 +1638,11 @@ impl PersistPeek {
                         shard = %metadata.data_shard, diff = d, ?row,
                         "persist peek encountered negative multiplicities",
                     );
-                    format!(
+                    PeekError::unstructured(format!(
                         "Invalid data in source, \
                          saw retractions ({}) for row that does not exist: {:?}",
                         -d, row,
-                    )
+                    ))
                 })?;
                 let Some(count) = NonZeroUsize::new(count) else {
                     continue;
@@ -1524,16 +1651,16 @@ impl PersistPeek {
                 let eval_result = mfp_plan
                     .evaluate_into(&mut datum_local, &arena, &mut row_builder)
                     .map(|row| row.cloned())
-                    .map_err(|e| e.to_string())?;
+                    .map_err(PeekError::from)?;
                 if let Some(row) = eval_result {
                     total_size = total_size
                         .saturating_add(row.byte_len())
                         .saturating_add(std::mem::size_of::<NonZeroUsize>());
                     if total_size > max_result_size {
-                        return Err(format!(
+                        return Err(PeekError::unstructured(format!(
                             "result exceeds max size of {}",
                             ByteSize::b(u64::cast_from(max_result_size))
-                        ));
+                        )));
                     }
                     result.push((row, count));
                     limit_remaining = limit_remaining.saturating_sub(count.get());
@@ -1567,7 +1694,9 @@ pub(crate) struct IndexPeekMetrics<'a> {
     pub error_scan_seconds: &'a prometheus::Histogram,
     pub cursor_setup_seconds: &'a prometheus::Histogram,
     pub row_iteration_seconds: &'a prometheus::Histogram,
+    pub row_iteration_rows: &'a prometheus::Histogram,
     pub result_sort_seconds: &'a prometheus::Histogram,
+    pub result_sort_rows: &'a prometheus::Histogram,
     pub row_collection_seconds: &'a prometheus::Histogram,
 }
 
@@ -1590,6 +1719,7 @@ impl IndexPeek {
         max_result_size: u64,
         peek_stash_eligible: bool,
         peek_stash_threshold_bytes: usize,
+        row_iteration_limit: Option<usize>,
         metrics: &IndexPeekMetrics<'_>,
     ) -> PeekStatus {
         let method_start = Instant::now();
@@ -1610,7 +1740,7 @@ impl IndexPeek {
                 read_frontier.elements(),
                 self.peek.timestamp,
             );
-            return PeekStatus::Ready(PeekResponse::Error(error));
+            return PeekStatus::Ready(PeekResponse::Error(PeekError::unstructured(error)));
         }
 
         metrics
@@ -1621,6 +1751,7 @@ impl IndexPeek {
             max_result_size,
             peek_stash_eligible,
             peek_stash_threshold_bytes,
+            row_iteration_limit,
             metrics,
         );
 
@@ -1637,14 +1768,20 @@ impl IndexPeek {
         max_result_size: u64,
         peek_stash_eligible: bool,
         peek_stash_threshold_bytes: usize,
+        row_iteration_limit: Option<usize>,
         metrics: &IndexPeekMetrics<'_>,
     ) -> PeekStatus {
         let error_scan_start = Instant::now();
 
         // Check if there exist any errors and, if so, return whatever one we
         // find first.
+        let mut row_iteration_tracker = PeekRowIterationTracker::new(row_iteration_limit, 0);
         let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
         while cursor.key_valid(&storage) {
+            if let Err(error) = row_iteration_tracker.track_next() {
+                return PeekStatus::Ready(PeekResponse::Error(error));
+            }
+
             let mut copies = Diff::ZERO;
             cursor.map_times(&storage, |time, diff| {
                 if time.less_equal(&self.peek.timestamp) {
@@ -1657,14 +1794,15 @@ impl IndexPeek {
                     target = %self.peek.target.id(), diff = %copies, %error,
                     "index peek encountered negative multiplicities in error trace",
                 );
-                return PeekStatus::Ready(PeekResponse::Error(format!(
+                return PeekStatus::Ready(PeekResponse::Error(PeekError::unstructured(format!(
                     "Invalid data in source errors, \
                     saw retractions ({}) for row that does not exist: {}",
                     -copies, error,
-                )));
+                ))));
             }
             if copies.is_positive() {
-                return PeekStatus::Ready(PeekResponse::Error(cursor.key(&storage).to_string()));
+                let error = cursor.key(&storage).deserialize();
+                return PeekStatus::Ready(PeekResponse::Error(error.into()));
             }
             cursor.step_key(&storage);
         }
@@ -1679,6 +1817,8 @@ impl IndexPeek {
             max_result_size,
             peek_stash_eligible,
             peek_stash_threshold_bytes,
+            row_iteration_limit,
+            row_iteration_tracker.rows_iterated(),
             metrics,
         )
     }
@@ -1690,6 +1830,8 @@ impl IndexPeek {
         max_result_size: u64,
         peek_stash_eligible: bool,
         peek_stash_threshold_bytes: usize,
+        row_iteration_limit: Option<usize>,
+        rows_iterated: usize,
         metrics: &IndexPeekMetrics<'_>,
     ) -> PeekStatus
     where
@@ -1716,6 +1858,8 @@ impl IndexPeek {
             peek.timestamp,
             peek.literal_constraints.clone().as_deref_mut(),
             oks_handle,
+            row_iteration_limit,
+            rows_iterated,
         );
 
         metrics
@@ -1738,6 +1882,7 @@ impl IndexPeek {
         // Row iteration timing
         let row_iteration_start = Instant::now();
         let mut sort_time_accum = Duration::ZERO;
+        let mut rows_sorted = 0usize;
 
         while let Some(row) = peek_iterator.next() {
             let row: (Row, _) = match row {
@@ -1754,10 +1899,10 @@ impl IndexPeek {
                 return PeekStatus::UsePeekStash;
             }
             if total_size > max_result_size {
-                return PeekStatus::Ready(PeekResponse::Error(format!(
+                return PeekStatus::Ready(PeekResponse::Error(PeekError::unstructured(format!(
                     "result exceeds max size of {}",
                     ByteSize::b(u64::cast_from(max_result_size))
-                )));
+                ))));
             }
 
             results.push((row, copies));
@@ -1787,8 +1932,14 @@ impl IndexPeek {
                             .row_iteration_seconds
                             .observe(row_iteration_start.elapsed().as_secs_f64());
                         metrics
+                            .row_iteration_rows
+                            .observe(f64::cast_lossy(peek_iterator.rows_processed()));
+                        metrics
                             .result_sort_seconds
                             .observe(sort_time_accum.as_secs_f64());
+                        metrics
+                            .result_sort_rows
+                            .observe(f64::cast_lossy(rows_sorted));
                         let row_collection_start = Instant::now();
                         let collection = RowCollection::new(results, &peek.finishing.order_by);
                         metrics
@@ -1805,6 +1956,7 @@ impl IndexPeek {
                         // inner test (as we prefer not to maintain `Vec<Datum>`
                         // in the other case).
                         let sort_start = Instant::now();
+                        rows_sorted = rows_sorted.saturating_add(results.len());
                         results.sort_by(|left, right| {
                             comparator.compare_rows(&left.0, &right.0, || left.0.cmp(&right.0))
                         });
@@ -1828,8 +1980,14 @@ impl IndexPeek {
             .row_iteration_seconds
             .observe(row_iteration_start.elapsed().as_secs_f64());
         metrics
+            .row_iteration_rows
+            .observe(f64::cast_lossy(peek_iterator.rows_processed()));
+        metrics
             .result_sort_seconds
             .observe(sort_time_accum.as_secs_f64());
+        metrics
+            .result_sort_rows
+            .observe(f64::cast_lossy(rows_sorted));
 
         let row_collection_start = Instant::now();
         let collection = RowCollection::new(results, &peek.finishing.order_by);
@@ -2069,3 +2227,6 @@ impl CollectionState {
         let _ = self.read_only_tx.send(false);
     }
 }
+
+#[cfg(test)]
+mod tests;

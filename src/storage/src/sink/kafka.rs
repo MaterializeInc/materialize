@@ -310,7 +310,7 @@ impl TransactionalProducer {
         options.insert("queue.buffering.max.messages", "0".into());
         // Make the Kafka producer wait at least 10 ms before sending out MessageSets
         options.insert("queue.buffering.max.ms", format!("{}", 10));
-        // Time out transactions after 60 seconds
+        // Time out transactions after `transaction_timeout`.
         options.insert(
             "transaction.timeout.ms",
             format!("{}", timeout_config.transaction_timeout.as_millis()),

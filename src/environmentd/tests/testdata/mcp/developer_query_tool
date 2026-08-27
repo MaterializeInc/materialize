@@ -17,7 +17,7 @@ mcp-developer
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"materialize-mcp-developer","version":"<VERSION>"},"instructions":"You are connected to the Materialize developer MCP server for troubleshooting and observability.\n\nTools:\n- query_system_catalog: read-only SELECT/SHOW/EXPLAIN restricted to system catalog tables (mz_*, pg_catalog, information_schema). No cluster argument; prefer this for most catalog lookups.\n- query: read-only SELECT/SHOW/EXPLAIN that can also reach user objects on a named cluster. Use this for EXPLAIN ANALYZE and for inspecting user objects directly.\n\nIMPORTANT: Before writing queries, discover table schemas using the mz_ontology tables:\n- mz_internal.mz_ontology_entity_types: what catalog entities exist and which tables they map to\n- mz_internal.mz_ontology_link_types: relationships between entities (foreign keys, metrics, etc.)\n- mz_internal.mz_ontology_properties: column names, types, and descriptions for each entity\n- mz_internal.mz_ontology_semantic_types: typed ID domains (CatalogItemId, ReplicaId, etc.)\n\nUse these to find the correct tables, join paths, and column names instead of guessing.\n\nKey rules:\n- mz_source_statuses and mz_sink_statuses use `last_status_change_at` (NOT `updated_at`)\n- mz_cluster_replica_utilization only has `replica_id` — JOIN with mz_cluster_replicas and mz_clusters to get names\n- Do NOT query mz_introspection.mz_dataflow_arrangement_sizes — it is cluster-scoped and has uint8/text type mismatches\n- Use SHOW COLUMNS FROM <table> to verify column names if unsure"}}
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"materialize-mcp-developer","version":"<VERSION>"},"instructions":"You are connected to the Materialize developer MCP server for troubleshooting and observability.\n\nTools:\n- query_system_catalog: read-only SELECT/SHOW/EXPLAIN restricted to system catalog tables (mz_*, pg_catalog, information_schema). No cluster argument; prefer this for most catalog lookups.\n- query: read-only SELECT/SHOW/EXPLAIN that can also reach user objects on a named cluster. Use this for EXPLAIN ANALYZE and for inspecting user objects directly.\n\nIMPORTANT: Before writing queries, discover table schemas using the mz_ontology tables:\n- mz_internal.mz_ontology_entity_types: what catalog entities exist and which tables they map to\n- mz_internal.mz_ontology_link_types: relationships between entities (foreign keys, metrics, etc.)\n- mz_internal.mz_ontology_properties: column names, types, and descriptions for each entity\n- mz_internal.mz_ontology_semantic_types: typed ID domains (CatalogItemId, ReplicaId, etc.)\n\nUse these to find the correct tables, join paths, and column names instead of guessing.\n\nKey rules:\n- mz_source_statuses and mz_sink_statuses use `last_status_change_at` (NOT `updated_at`)\n- mz_cluster_replica_utilization only has `replica_id` — JOIN with mz_cluster_replicas and mz_clusters to get names\n- mz_introspection relations (for example mz_dataflow_arrangement_sizes) are cluster-scoped and query_system_catalog answers about the session's default cluster: read them only through the query tool with its cluster argument (and cluster_replica on a multi-replica cluster), never through query_system_catalog\n- mz_dataflow_arrangement_sizes.id and mz_dataflows.id are dataflow ids (uint8), not catalog ids: do not JOIN them to mz_catalog.mz_objects.id (text); join through mz_introspection.mz_compute_exports (dataflow_id to export_id) instead, or match the name column, which reads Dataflow: <database>.<schema>.<object>\n- Use SHOW COLUMNS FROM <table> to verify column names if unsure"}}
 
 # =============================================================================
 # Tools List - query tool enabled
@@ -39,7 +39,7 @@ mcp-developer
 {"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SELECT 1 AS val"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":10,"result":{"content":[{"type":"text","text":"[\n  [\n    \"1\"\n  ]\n]"}],"isError":false}}
+{"jsonrpc":"2.0","id":10,"result":{"content":[{"type":"text","text":"[\n  [\"1\"]\n]"}],"isError":false}}
 
 # SELECT against a system catalog table should work too: the developer query
 # tool is intentionally NOT restricted to mz_*.
@@ -47,14 +47,14 @@ mcp-developer
 {"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":11,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\"\n  ]\n]"}],"isError":false}}
+{"jsonrpc":"2.0","id":11,"result":{"content":[{"type":"text","text":"[\n  [\"materialize\"]\n]"}],"isError":false}}
 
 # SHOW statement should work.
 mcp-developer
 {"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SHOW DATABASES"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":12,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\",\n    \"\"\n  ]\n]"}],"isError":false}}
+{"jsonrpc":"2.0","id":12,"result":{"content":[{"type":"text","text":"[\n  [\"materialize\",\"\"]\n]"}],"isError":false}}
 
 # EXPLAIN should work — this is the motivating use case for the dev query tool
 # (EXPLAIN ANALYZE needs a cluster and so cannot use query_system_catalog).
@@ -62,7 +62,7 @@ mcp-developer
 {"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"EXPLAIN SELECT 1"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":13,"result":{"content":[{"type":"text","text":"[\n  [\n    \"Explained Query (fast path):\\n  →Constant (1 rows)\\n\\nTarget cluster: mz_catalog_server\\n\"\n  ]\n]"}],"isError":false}}
+{"jsonrpc":"2.0","id":13,"result":{"content":[{"type":"text","text":"[\n  [\"Explained Query (fast path):\\n  →Constant (1 rows)\\n\\nTarget cluster: mz_catalog_server\\n\"]\n]"}],"isError":false}}
 
 # =============================================================================
 # query - EXPLAIN ANALYZE
@@ -92,14 +92,14 @@ mcp-developer
 {"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"EXPLAIN ANALYZE MEMORY FOR INDEX t_idx AS SQL"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":14,"result":{"content":[{"type":"text","text":"[\n  [\n    \"WITH\\n    summary_memory AS\\n    (\\n        SELECT\\n            mlm.global_id AS global_id,\\n            mlm.lir_id AS lir_id,\\n            sum(mas.size) AS total_memory,\\n            sum(mas.records) AS total_records,\\n            CASE\\n                    WHEN count(DISTINCT mas.worker_id) <> 0\\n                            THEN sum(mas.size) / count(DISTINCT mas.worker_id)\\n                        ELSE NULL\\n                END\\n                AS avg_memory,\\n            CASE\\n                    WHEN count(DISTINCT mas.worker_id) <> 0\\n                            THEN\\n                                sum(mas.records) / count(DISTINCT mas.worker_id)\\n                        ELSE NULL\\n                END\\n                AS avg_records\\n        FROM\\n            mz_introspection.mz_lir_mapping AS mlm\\n                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id\\n                JOIN\\n                    mz_introspection.mz_arrangement_sizes_per_worker AS mas\\n                    ON (mas.operator_id = valid_id)\\n        GROUP BY mlm.global_id, mlm.lir_id\\n    )\\nSELECT\\n    repeat(' ', nesting * 2) || operator AS operator,\\n    pg_size_pretty(sm.total_memory) AS total_memory,\\n    sm.total_records AS total_records\\nFROM\\n    mz_introspection.mz_lir_mapping AS mlm\\n        LEFT JOIN summary_memory AS sm USING(global_id, lir_id)\\n        JOIN\\n            mz_introspection.mz_mappable_objects AS mo\\n            ON (mlm.global_id = mo.global_id)\\nWHERE mo.name = 'materialize.public.t_idx'\\nORDER BY mlm.lir_id DESC;\"\n  ]\n]"}],"isError":false}}
+{"jsonrpc":"2.0","id":14,"result":{"content":[{"type":"text","text":"[\n  [\"WITH\\n    summary_memory AS\\n    (\\n        SELECT\\n            mlm.global_id AS global_id,\\n            mlm.lir_id AS lir_id,\\n            sum(mas.size) AS total_memory,\\n            sum(mas.records) AS total_records,\\n            CASE\\n                    WHEN count(DISTINCT mas.worker_id) <> 0\\n                            THEN sum(mas.size) / count(DISTINCT mas.worker_id)\\n                        ELSE NULL\\n                END\\n                AS avg_memory,\\n            CASE\\n                    WHEN count(DISTINCT mas.worker_id) <> 0\\n                            THEN\\n                                sum(mas.records) / count(DISTINCT mas.worker_id)\\n                        ELSE NULL\\n                END\\n                AS avg_records\\n        FROM\\n            mz_introspection.mz_lir_mapping AS mlm\\n                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id\\n                JOIN\\n                    mz_introspection.mz_arrangement_sizes_per_worker AS mas\\n                    ON (mas.operator_id = valid_id)\\n        GROUP BY mlm.global_id, mlm.lir_id\\n    )\\nSELECT\\n    repeat(' ', nesting * 2) || operator AS operator,\\n    pg_size_pretty(sm.total_memory) AS total_memory,\\n    sm.total_records AS total_records\\nFROM\\n    mz_introspection.mz_lir_mapping AS mlm\\n        LEFT JOIN summary_memory AS sm USING(global_id, lir_id)\\n        JOIN\\n            mz_introspection.mz_mappable_objects AS mo\\n            ON (mlm.global_id = mo.global_id)\\nWHERE mo.name = 'materialize.public.t_idx'\\nORDER BY mlm.lir_id DESC;\"]\n]"}],"isError":false}}
 
 # EXPLAIN ANALYZE CLUSTER (Statement::ExplainAnalyzeCluster).
 mcp-developer
 {"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"EXPLAIN ANALYZE CLUSTER MEMORY AS SQL"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":15,"result":{"content":[{"type":"text","text":"[\n  [\n    \"WITH\\n    per_operator_memory_totals AS\\n    (\\n        SELECT\\n            mlm.global_id AS global_id,\\n            mlm.lir_id AS lir_id,\\n            sum(mas.size) AS total_memory,\\n            sum(mas.records) AS total_records\\n        FROM\\n            mz_introspection.mz_lir_mapping AS mlm\\n                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id\\n                JOIN\\n                    mz_introspection.mz_arrangement_sizes_per_worker AS mas\\n                    ON (mas.operator_id = valid_id)\\n        GROUP BY mlm.global_id, mlm.lir_id\\n    ),\\n    object_memory_totals AS\\n    (\\n        SELECT\\n            pomt.global_id AS global_id,\\n            sum(pomt.total_memory) AS total_memory,\\n            sum(pomt.total_records) AS total_records\\n        FROM per_operator_memory_totals AS pomt\\n        GROUP BY pomt.global_id\\n    )\\nSELECT\\n    mo.name AS object,\\n    mo.global_id AS global_id,\\n    pg_size_pretty(omt.total_memory) AS total_memory,\\n    omt.total_records AS total_records\\nFROM\\n    mz_introspection.mz_mappable_objects AS mo\\n        LEFT JOIN object_memory_totals AS omt USING(global_id)\\nORDER BY\\n    omt.total_memory DESC NULLS LAST,\\n    total_records DESC NULLS LAST,\\n    mo.name DESC;\"\n  ]\n]"}],"isError":false}}
+{"jsonrpc":"2.0","id":15,"result":{"content":[{"type":"text","text":"[\n  [\"WITH\\n    per_operator_memory_totals AS\\n    (\\n        SELECT\\n            mlm.global_id AS global_id,\\n            mlm.lir_id AS lir_id,\\n            sum(mas.size) AS total_memory,\\n            sum(mas.records) AS total_records\\n        FROM\\n            mz_introspection.mz_lir_mapping AS mlm\\n                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id\\n                JOIN\\n                    mz_introspection.mz_arrangement_sizes_per_worker AS mas\\n                    ON (mas.operator_id = valid_id)\\n        GROUP BY mlm.global_id, mlm.lir_id\\n    ),\\n    object_memory_totals AS\\n    (\\n        SELECT\\n            pomt.global_id AS global_id,\\n            sum(pomt.total_memory) AS total_memory,\\n            sum(pomt.total_records) AS total_records\\n        FROM per_operator_memory_totals AS pomt\\n        GROUP BY pomt.global_id\\n    )\\nSELECT\\n    mo.name AS object,\\n    mo.global_id AS global_id,\\n    pg_size_pretty(omt.total_memory) AS total_memory,\\n    omt.total_records AS total_records\\nFROM\\n    mz_introspection.mz_mappable_objects AS mo\\n        LEFT JOIN object_memory_totals AS omt USING(global_id)\\nORDER BY\\n    omt.total_memory DESC NULLS LAST,\\n    total_records DESC NULLS LAST,\\n    mo.name DESC;\"]\n]"}],"isError":false}}
 
 # =============================================================================
 # query - writes and DDL rejected
@@ -182,7 +182,7 @@ mcp-developer
 {"jsonrpc":"2.0","id":50,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":50,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\"\n  ]\n]"}],"isError":false}}
+{"jsonrpc":"2.0","id":50,"result":{"content":[{"type":"text","text":"[\n  [\"materialize\"]\n]"}],"isError":false}}
 
 # =============================================================================
 # query - cluster_replica validation

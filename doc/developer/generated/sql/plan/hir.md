@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/hir.rs
-revision: 0b5864836a
+revision: 449b2eead4
 ---
 
 # mz-sql::plan::hir
@@ -12,3 +12,4 @@ Key types include `ColumnRef` (a leveled column reference), `JoinKind` (inner/le
 `relation_node_count` counts the number of `HirRelationExpr` nodes in an expression tree (including those reachable through scalar subqueries) as a structural size metric for comparing two expressions against each other; scalar nodes themselves are not counted.
 `HirScalarExpr` implements `VisitChildren<HirRelationExpr>` to expose its immediate subquery bodies (`Exists`/`Select` arms) without descending further; this is the asymmetric counterpart of `VisitChildren<HirScalarExpr>` on `HirRelationExpr`, which traverses scalars into subqueries at any depth.
 HIR is converted to MIR via `HirRelationExpr::lower()`, which is defined in `plan::lowering` as an `impl HirRelationExpr` method.
+The deprecated `visit_mut_fallible` method is wrapped in `stack::maybe_grow` so that traversals over user-controlled-depth relation trees (long JOIN chains, deep CTE nesting) do not overflow the stack. The deprecated `visit_fallible` method is similarly guarded. `split_subquery_predicates` (in `transform_hir`) uses `visit_mut_fallible` internally, so the guard applies there too.

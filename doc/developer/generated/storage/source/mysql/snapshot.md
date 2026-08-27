@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/source/mysql/snapshot.rs
-revision: a694e29cb3
+revision: de8eac0d16
 ---
 
 # mz-storage::source::mysql::snapshot
@@ -14,7 +14,7 @@ Handles resumption correctly by skipping tables whose outputs have already been 
 The leader's setup is encapsulated in `lock_and_prepare_snapshot`, which:
 
 1. Verifies output schemas against planning-time descriptors via `verify_output_schemas`.
-2. Reads row counts and, for tables with a supported single-column primary key, computes PK-range split boundaries via `sample_pk_bounds` (runs concurrently over at most `worker_count` connections). The `mysql_source_snapshot_parallelism` dyncfg disables splitting, putting every table in single-worker fallback mode. For tables whose optimizer estimate exceeds `MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS` (default 1,000,000 rows), `collect_table_statistics` reads the optimizer's row estimate from `information_schema.tables` instead of running `COUNT(*)`; for smaller tables an exact count is used. The counts feed both the PK-range sampling stride and the snapshot size gauge.
+2. Reads row counts and, for tables with a supported single-column primary key, computes PK-range split boundaries via `sample_pk_bounds` (runs concurrently over at most `worker_count` connections). The `mysql_source_snapshot_parallelism` dyncfg disables splitting, putting every table in single-worker fallback mode. Splitting is only attempted for tables whose single-column primary key is a `CHAR` or `VARCHAR` column of at most 768 characters with `utf8mb4_bin` collation; tables with integer PKs or other collations fall back to single-worker-per-table mode. The `MYSQL_SOURCE_SNAPSHOT_PARTITION_MIN_ROWS` dyncfg sets the smallest estimated row count the partitioner attempts to subdivide, and `MYSQL_SOURCE_SNAPSHOT_PARTITION_PROBED_PREFIXES_PER_BILLION_ROWS` caps the number of prefix probes, scaled by the estimated row count, to limit time spent on high-cardinality tables. For tables whose optimizer estimate exceeds `MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS` (default 1,000,000 rows), `collect_table_statistics` reads the optimizer's row estimate from `information_schema.tables` instead of running `COUNT(*)`; for smaller tables an exact count is used. The counts feed both the PK-range sampling stride and the snapshot size gauge.
 3. Acquires `LOCK TABLES … READ` and reads `@@global.gtid_executed` as the snapshot upper via `lock_tables_and_read_gtid_set`. This helper optionally sets `@@session.lock_wait_timeout` before locking.
 4. Broadcasts the resulting `SnapshotInfo` (GTID set, per-table PK boundaries, and any schema-errored outputs) to all workers via a timely feedback loop.
 

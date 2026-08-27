@@ -444,7 +444,13 @@ impl Interval {
         if self.is_negative() {
             bail!("cannot convert negative interval to duration");
         }
-        let micros: u64 = u64::try_from(self.as_microseconds())?;
+        // Phrase the overflow ourselves rather than letting `TryFromIntError`
+        // through. Its `Display` is std's, and std has reworded it between
+        // toolchains, which would otherwise rewrite a user-facing error message
+        // out from under us.
+        let Ok(micros) = u64::try_from(self.as_microseconds()) else {
+            bail!("interval is too large to convert to duration");
+        };
         Ok(Duration::from_micros(micros))
     }
 
@@ -909,6 +915,9 @@ impl FixedSizeCodec<Interval> for PackedInterval {
 
 #[cfg(test)]
 mod test {
+    use mz_ore::assert_ok;
+    use mz_proto::protobuf_roundtrip;
+
     use super::*;
     use proptest::prelude::*;
 
@@ -1341,5 +1350,19 @@ mod test {
         proptest!(|(interval in any::<Vec<Interval>>())| {
             sort_intervals(interval);
         });
+    }
+
+    // `Interval` <-> `ProtoInterval` is a field-for-field copy today, so this only
+    // bites once the two structs drift: a field added to `Interval` but not carried
+    // through `ProtoInterval` silently decodes as that field's default. NOTE: the
+    // guard is blind unless `Interval::arbitrary` also generates the new field, so
+    // extend the strategy alongside the field.
+    proptest! {
+        #[mz_ore::test]
+        fn interval_protobuf_roundtrip(expect in any::<Interval>()) {
+            let actual = protobuf_roundtrip::<_, ProtoInterval>(&expect);
+            assert_ok!(actual);
+            assert_eq!(actual.unwrap(), expect);
+        }
     }
 }

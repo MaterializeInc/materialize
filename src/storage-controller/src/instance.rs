@@ -20,6 +20,7 @@ use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::ReplicaId;
 use mz_cluster_client::client::ClusterReplicaLocation;
+use mz_dyncfg::ConfigUpdates;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_ore::retry::{Retry, RetryState};
@@ -76,6 +77,11 @@ pub(crate) struct Instance {
     /// The command history, used to replay past commands when introducing new replicas or
     /// reconnecting to existing replicas.
     history: CommandHistory,
+    /// Per-replica dyncfg overrides, merged into `UpdateConfiguration` commands
+    /// when they are sent or replayed to the overridden replica. The history
+    /// records the base (un-specialized) commands, so overrides are re-applied
+    /// at replay time rather than baked into the shared history.
+    replica_dyncfg_overrides: BTreeMap<ReplicaId, ConfigUpdates>,
     /// Metrics tracked for this storage instance.
     metrics: InstanceMetrics,
     /// A function that returns the current time.
@@ -128,6 +134,7 @@ impl Instance {
             ingestion_exports: Default::default(),
             active_exports: BTreeMap::new(),
             history,
+            replica_dyncfg_overrides: Default::default(),
             metrics,
             now,
             response_tx: instance_response_tx,
@@ -199,8 +206,14 @@ impl Instance {
             .get_mut(&replica_id)
             .expect("replica must exist");
 
-        // Replay the commands at the new replica.
+        // Replay the commands at the new replica, re-applying its dyncfg
+        // override to configuration commands.
         for command in filtered_commands {
+            let command = Self::specialize_command_for_replica(
+                command,
+                replica_id,
+                &self.replica_dyncfg_overrides,
+            );
             replica.send(command);
         }
     }
@@ -208,6 +221,11 @@ impl Instance {
     /// Removes the identified replica from this storage instance.
     pub fn drop_replica(&mut self, id: ReplicaId) {
         let replica = self.replicas.remove(&id);
+
+        // The coordinator only re-pushes the override map when the scoped configuration itself
+        // changes, so a dropped replica's entry would otherwise be retained until the next such
+        // change.
+        self.replica_dyncfg_overrides.remove(&id);
 
         let mut needs_rescheduling = false;
         for (ingestion_id, ingestion) in self.active_ingestions.iter_mut() {
@@ -333,6 +351,34 @@ impl Instance {
         }
     }
 
+    /// Replaces the per-replica dyncfg overrides. Callers should follow this
+    /// with a configuration push (e.g. an `UpdateConfiguration` command) so
+    /// that existing replicas observe the new overrides.
+    pub fn update_replica_dyncfg_overrides(
+        &mut self,
+        overrides: BTreeMap<ReplicaId, ConfigUpdates>,
+    ) {
+        self.replica_dyncfg_overrides = overrides;
+    }
+
+    /// Specializes a command for a specific replica by merging that replica's
+    /// dyncfg override into its configuration. For `UpdateConfiguration` the
+    /// override is merged into the update. All other commands are returned
+    /// unchanged.
+    fn specialize_command_for_replica(
+        mut command: StorageCommand,
+        replica_id: ReplicaId,
+        overrides: &BTreeMap<ReplicaId, ConfigUpdates>,
+    ) -> StorageCommand {
+        if let StorageCommand::UpdateConfiguration(params) = &mut command
+            && let Some(over) = overrides.get(&replica_id)
+            && !over.updates.is_empty()
+        {
+            params.dyncfg_updates.extend(over.clone());
+        }
+        command
+    }
+
     /// Sends a command to this storage instance.
     pub fn send(&mut self, command: StorageCommand) {
         // Record the command so that new replicas can be brought up to speed.
@@ -372,8 +418,14 @@ impl Instance {
                 self.absorb_compaction(id, frontier);
             }
             command => {
-                for replica in self.replicas.values_mut() {
-                    replica.send(command.clone());
+                let overrides = &self.replica_dyncfg_overrides;
+                for (replica_id, replica) in self.replicas.iter_mut() {
+                    let command = Self::specialize_command_for_replica(
+                        command.clone(),
+                        *replica_id,
+                        overrides,
+                    );
+                    replica.send(command);
                 }
             }
         }
@@ -947,5 +999,61 @@ impl ReplicaTask {
         if let StorageCommand::Hello { nonce } = command {
             *nonce = Uuid::new_v4();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use mz_dyncfg::{ConfigUpdates, ConfigVal};
+    use mz_storage_types::dyncfgs::ENABLE_UPSERT_PAGED_SPILL;
+    use mz_storage_types::parameters::StorageParameters;
+
+    use super::{Instance, ReplicaId, StorageCommand};
+
+    fn update_configuration_command() -> StorageCommand {
+        StorageCommand::UpdateConfiguration(Box::new(StorageParameters::default()))
+    }
+
+    fn dyncfg_updates(command: &StorageCommand) -> &ConfigUpdates {
+        match command {
+            StorageCommand::UpdateConfiguration(params) => &params.dyncfg_updates,
+            other => panic!("expected UpdateConfiguration, got {other:?}"),
+        }
+    }
+
+    /// An overridden replica's `UpdateConfiguration` carries its override on
+    /// top of the environment-wide updates, while replicas without an
+    /// override receive the base command unchanged.
+    #[mz_ore::test]
+    fn update_configuration_applies_replica_override() {
+        let mut over = ConfigUpdates::default();
+        over.add(&ENABLE_UPSERT_PAGED_SPILL, true);
+        let overrides = BTreeMap::from([(ReplicaId::User(1), over)]);
+
+        let command = Instance::specialize_command_for_replica(
+            update_configuration_command(),
+            ReplicaId::User(1),
+            &overrides,
+        );
+        assert_eq!(
+            dyncfg_updates(&command)
+                .updates
+                .get(ENABLE_UPSERT_PAGED_SPILL.name()),
+            Some(&ConfigVal::Bool(true)),
+        );
+
+        let command = Instance::specialize_command_for_replica(
+            update_configuration_command(),
+            ReplicaId::User(2),
+            &overrides,
+        );
+        assert_eq!(
+            dyncfg_updates(&command)
+                .updates
+                .get(ENABLE_UPSERT_PAGED_SPILL.name()),
+            None,
+        );
     }
 }

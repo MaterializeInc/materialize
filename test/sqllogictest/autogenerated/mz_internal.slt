@@ -129,7 +129,7 @@ cluster_id  text  The␠ID␠of␠the␠cluster.␠Corresponds␠to␠`mz_cluste
 status  text  The␠lifecycle␠status␠of␠the␠reconfiguration:␠`in-progress`␠while␠the␠controller␠converges␠on␠the␠target,␠then␠a␠terminal␠`finalized`,␠`timed-out`,␠`cancelled`,␠or␠`resource-exhausted`.␠The␠record␠is␠retained␠after␠it␠settles,␠so␠the␠latest␠outcome␠stays␠inspectable␠until␠a␠later␠reconfiguration␠overwrites␠it.
 deadline  mz_timestamp  The␠deadline␠by␠which␠the␠reconfiguration␠must␠complete.␠After␠it␠passes,␠the␠`on_timeout`␠action␠applies.
 on_timeout  text  The␠action␠applied␠if␠`deadline`␠passes␠before␠the␠target␠hydrates:␠`commit`␠(cut␠over␠to␠the␠not-yet-hydrated␠target)␠or␠`rollback`␠(revert␠to␠the␠pre-reconfiguration␠shape).
-target  jsonb  The␠config␠shape␠the␠cluster␠is␠reconfiguring␠to,␠as␠JSON:␠`size`,␠`replication_factor`,␠`availability_zones`,␠and␠`logging`.␠The␠realized␠(current)␠shape␠is␠in␠`mz_clusters`.
+target  jsonb  The␠config␠shape␠the␠cluster␠is␠reconfiguring␠to,␠as␠JSON:␠`size`,␠`replication_factor`,␠`availability_zones`,␠`logging`,␠and␠`arrangement_compression`.␠The␠realized␠(current)␠shape␠is␠in␠`mz_clusters`.
 changes  jsonb  The␠dimensions␠in␠which␠`target`␠differs␠from␠the␠cluster's␠realized␠configuration,␠as␠a␠JSON␠object␠holding␠the␠target␠value␠per␠changed␠dimension.␠Empty␠(`{}`)␠once␠a␠record␠settles␠with␠its␠target␠applied.␠A␠rolled-back␠record␠keeps␠the␠abandoned␠diff.
 
 query TTT
@@ -353,6 +353,12 @@ object_id  text  The␠ID␠of␠the␠dependent␠object.␠Corresponds␠to␠
 referenced_object_id  text  The␠ID␠of␠the␠referenced␠object.␠Corresponds␠to␠`mz_objects.id`.
 
 query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_graph_edges' ORDER BY position
+----
+object_id  text  The␠ID␠of␠the␠dependent␠object.␠Corresponds␠to␠`mz_objects.id`.
+dependency_id  text  The␠ID␠of␠the␠object␠it␠depends␠on.␠Corresponds␠to␠`mz_objects.id`.
+
+query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_fully_qualified_names' ORDER BY position
 ----
 id  text  Materialize's␠unique␠ID␠for␠the␠object.
@@ -381,6 +387,17 @@ cluster_id  text  The␠object's␠cluster␠ID.␠`NULL`␠if␠the␠object␠
 object_type  text  The␠type␠of␠the␠object:␠one␠of␠`table`,␠`source`,␠`view`,␠`materialized-view`,␠`sink`,␠`index`,␠`connection`,␠`secret`,␠`type`,␠or␠`function`.
 created_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠of␠when␠the␠object␠was␠created.␠`NULL`␠for␠built␠in␠system␠objects.
 dropped_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠of␠when␠the␠object␠was␠dropped.␠`NULL`␠for␠built␠in␠system␠objects␠or␠if␠the␠object␠hasn't␠been␠dropped.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_hydration_history' ORDER BY position
+----
+object_id  text  The␠ID␠of␠the␠object's␠dataflow,␠as␠reported␠by␠the␠replica.␠Join␠`mz_internal.mz_object_global_ids`␠to␠reach␠the␠index␠or␠materialized␠view␠while␠that␠mapping␠exists.␠Dropping␠the␠dataflow␠retracts␠the␠mapping,␠so␠historical␠IDs␠may␠no␠longer␠resolve.
+cluster_id  text  The␠ID␠of␠the␠object's␠cluster.
+replica_id  text  The␠ID␠of␠the␠cluster␠replica.␠May␠name␠a␠replica␠that␠no␠longer␠exists.
+installed_at  timestamp␠with␠time␠zone  When␠the␠object's␠dataflow␠was␠installed␠on␠the␠replica.
+started_at  timestamp␠with␠time␠zone  When␠hydration␠work␠began,␠or␠`NULL`␠if␠the␠replica␠reported␠none.␠A␠replica␠that␠observed␠no␠start␠reports␠the␠installation␠time␠instead,␠so␠a␠zero␠interval␠between␠the␠two␠does␠not␠mean␠the␠dataflow␠started␠immediately.
+hydrated_at  timestamp␠with␠time␠zone  When␠hydration␠finished.
+status  text  The␠terminal␠status.␠Currently␠always␠`hydrated`.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_transitive_dependencies' ORDER BY position
@@ -780,6 +797,8 @@ mz_aws_privatelink_connection_status_history
 mz_aws_privatelink_connection_statuses
 mz_builtin_materialized_views
 mz_builtin_sources
+mz_builtin_tables
+mz_builtin_views
 mz_catalog_raw
 mz_cluster_auto_scaling_strategies
 mz_cluster_deployment_lineage
@@ -819,6 +838,7 @@ mz_materialized_view_refresh_strategies
 mz_materialized_view_refreshes
 mz_mcp_data_product_details
 mz_mcp_data_products
+mz_metric_sinks
 mz_mysql_source_tables
 mz_network_policies
 mz_network_policy_rules
@@ -829,7 +849,9 @@ mz_object_arrangement_sizes
 mz_object_dependencies
 mz_object_fully_qualified_names
 mz_object_global_ids
+mz_object_graph_edges
 mz_object_history
+mz_object_hydration_history
 mz_object_lifetimes
 mz_object_oid_alias
 mz_object_transitive_dependencies

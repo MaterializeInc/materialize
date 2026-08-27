@@ -18,7 +18,7 @@ use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures::FutureExt;
 use futures::future::{self, BoxFuture};
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 #[allow(unused_imports)] // False positive.
@@ -78,6 +78,7 @@ pub(crate) const CLAIM_UNCLAIMED_COMPACTIONS: Config<bool> = Config::new(
     false,
     "If an append doesn't result in a compaction request, but there is some uncompacted batch \
     in state, compact that instead.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const CLAIM_COMPACTION_PERCENT: Config<usize> = Config::new(
@@ -86,12 +87,14 @@ pub(crate) const CLAIM_COMPACTION_PERCENT: Config<usize> = Config::new(
     "Claim a compaction with the given percent chance, if claiming compactions is enabled. \
     (If over 100, we'll always claim at least one; for example, if set to 365, we'll claim at least \
     three and have a 65% chance of claiming a fourth.)",
+    ParameterScope::Environment,
 );
 
 pub(crate) const CLAIM_COMPACTION_MIN_VERSION: Config<String> = Config::new(
     "persist_claim_compaction_min_version",
     String::new(),
     "If set to a valid version string, compact away any earlier versions if possible.",
+    ParameterScope::Environment,
 );
 
 impl<K, V, T, D> Machine<K, V, T, D>
@@ -254,9 +257,10 @@ where
         // seqno hold). The real invariant we want to protect here is that the
         // hold is >= the seqno_since, so validate that instead of anything more
         // specific.
-        debug_assert!(
+        mz_ore::soft_assert_no_log!(
             reader_state.seqno >= seqno_since,
-            "{} vs {}",
+            "leased reader {} registered with seqno hold {} below the shard's seqno_since {}",
+            reader_id,
             reader_state.seqno,
             seqno_since,
         );
@@ -514,7 +518,7 @@ where
                     info!(
                         "compare_and_append received an indeterminate error, retrying in {:?}: {}",
                         retry.next_sleep(),
-                        err
+                        err.display_with_causes()
                     );
                     if indeterminate.is_none() {
                         indeterminate = Some(err);
@@ -1143,24 +1147,28 @@ pub(crate) const NEXT_LISTEN_BATCH_RETRYER_FIXED_SLEEP: Config<Duration> = Confi
     Duration::from_millis(1200), // pubsub is on by default!
     "\
     The fixed sleep when polling for new batches from a Listen or Subscribe. Skipped if zero.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF: Config<Duration> = Config::new(
     "persist_next_listen_batch_retryer_initial_backoff",
     Duration::from_millis(100), // pubsub is on by default!
     "The initial backoff when polling for new batches from a Listen or Subscribe.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER: Config<u32> = Config::new(
     "persist_next_listen_batch_retryer_multiplier",
     2,
     "The backoff multiplier when polling for new batches from a Listen or Subscribe.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const NEXT_LISTEN_BATCH_RETRYER_CLAMP: Config<Duration> = Config::new(
     "persist_next_listen_batch_retryer_clamp",
     Duration::from_secs(16), // pubsub is on by default!
     "The backoff clamp duration when polling for new batches from a Listen or Subscribe.",
+    ParameterScope::Environment,
 );
 
 pub(crate) fn next_listen_batch_retry_params(cfg: &ConfigSet) -> RetryParameters {
@@ -1834,8 +1842,13 @@ pub mod datadriven {
             .expect("unknown batch")
             .clone();
         let truncated_desc = Description::new(lower, upper, batch.batch.desc.since().clone());
-        let () = validate_truncate_batch(&batch.batch, &truncated_desc, false, true)?;
+        let bounds_truncated = validate_truncate_batch(&batch.batch, &truncated_desc, false, true)?;
         let mut new_hollow_batch = (*batch.batch).clone();
+        if bounds_truncated {
+            for run_meta in &mut new_hollow_batch.run_meta {
+                run_meta.set_bounds_truncated();
+            }
+        }
         new_hollow_batch.desc = truncated_desc;
         let new_batch = IdHollowBatch {
             batch: Arc::new(new_hollow_batch),
@@ -2363,37 +2376,42 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let input = args.expect_str("input");
+        let legacy = args.optional("legacy").unwrap_or(false);
         let batch = datadriven
             .batches
             .get(input)
             .expect("unknown batch")
             .clone();
-        let compact_req = datadriven
-            .compactions
-            .get(input)
-            .expect("unknown compact req")
-            .clone();
-        let input_batches = compact_req
-            .inputs
-            .iter()
-            .map(|x| x.id)
-            .collect::<BTreeSet<_>>();
-        let lower_spine_bound = input_batches
-            .first()
-            .map(|id| id.0)
-            .expect("at least one batch must be present");
-        let upper_spine_bound = input_batches
-            .last()
-            .map(|id| id.1)
-            .expect("at least one batch must be present");
-        let id = SpineId(lower_spine_bound, upper_spine_bound);
+        let compaction_input = if legacy {
+            CompactionInput::Legacy
+        } else {
+            let compact_req = datadriven
+                .compactions
+                .get(input)
+                .expect("unknown compact req")
+                .clone();
+            let input_batches = compact_req
+                .inputs
+                .iter()
+                .map(|x| x.id)
+                .collect::<BTreeSet<_>>();
+            let lower_spine_bound = input_batches
+                .first()
+                .map(|id| id.0)
+                .expect("at least one batch must be present");
+            let upper_spine_bound = input_batches
+                .last()
+                .map(|id| id.1)
+                .expect("at least one batch must be present");
+            CompactionInput::IdRange(SpineId(lower_spine_bound, upper_spine_bound))
+        };
         let hollow_batch = (*batch.batch).clone();
 
         let (merge_res, maintenance) = datadriven
             .machine
             .merge_res(&FueledMergeRes {
                 output: hollow_batch,
-                input: CompactionInput::IdRange(id),
+                input: compaction_input,
                 new_active_compaction: None,
             })
             .await;

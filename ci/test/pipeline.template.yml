@@ -203,8 +203,7 @@ steps:
 
       - id: lint-macos
         label: ":rust: macOS Clippy"
-        # Running on a manually installed macOS agent, so make sure we don't go out of disk
-        command: "cargo clippy --all-targets -- -D warnings; if [ $(du -sg target | cut -f1) -gt 50 ]; then rm -rf target; fi"
+        command: ci/test/lint-macos.sh
         env:
           CARGO_INCREMENTAL: "0"
           RUSTUP_TOOLCHAIN: $RUST_VERSION
@@ -265,7 +264,7 @@ steps:
 
 
   - id: cargo-test
-    topics: [kafka, postgres]
+    topics: [kafka, mysql, postgres]
     label: ":rust: Cargo test"
     timeout_in_minutes: 60
     inputs:
@@ -644,6 +643,7 @@ steps:
           composition: mz-debug
     agents:
       queue: hetzner-aarch64-4cpu-8gb
+    sanitizer: skip
 
   - id: copy
     topics: [copy-to-s3]
@@ -787,6 +787,9 @@ steps:
           queue: linux-x86_64
         env:
           CI: "true"
+          # The kind cluster setup hands repository paths to the host Docker
+          # daemon. See CI_BUILDER_FIXED_WORKDIR in bin/ci-builder.
+          CI_BUILDER_FIXED_WORKDIR: "0"
         coverage: skip
         sanitizer: skip
         ci_glue_exempt: true
@@ -836,6 +839,7 @@ steps:
         agents:
           # Playwright Docker image is x86_64 only
           queue: hetzner-x86-64-4cpu-8gb
+        sanitizer: skip
 
   - id: deploy-website
     label: Deploy website

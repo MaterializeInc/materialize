@@ -17,13 +17,12 @@ use std::ops::{AddAssign, Bound, RangeBounds, SubAssign};
 
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::logging::{BatchEvent, DropEvent};
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use mz_compute_types::dyncfgs::{
     CONSOLIDATING_VEC_GROWTH_DAMPENER, CORRECTION_V2_CHAIN_PROPORTIONALITY,
     CORRECTION_V2_CHUNK_SIZE, ENABLE_CORRECTION_V2,
 };
 use mz_dyncfg::ConfigSet;
-use mz_ore::iter::IteratorExt;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
 use timely::PartialOrder;
@@ -98,6 +97,33 @@ impl<D: Data> Correction<D> {
         match self {
             Self::V1(c) => Box::new(c.updates_before(upper)),
             Self::V2(c) => Box::new(c.updates_before(upper)),
+        }
+    }
+
+    /// Consolidate the updates before the given `upper`.
+    ///
+    /// This is the expensive half of [`Correction::updates_before`], split out so callers that
+    /// must not run unbounded CPU work inline can perform it elsewhere.
+    pub fn consolidate_before(&mut self, upper: &Antichain<Timestamp>) {
+        match self {
+            Self::V1(c) => c.consolidate_before(upper),
+            Self::V2(c) => c.consolidate_before(upper),
+        }
+    }
+
+    /// Return the updates before the given `upper`, as consolidated by a preceding
+    /// [`Correction::consolidate_before`] call.
+    ///
+    /// The caller must have invoked `consolidate_before` with the same `upper` and must not have
+    /// mutated the buffer since. Otherwise the returned updates are neither consolidated nor
+    /// necessarily complete.
+    pub fn consolidated_updates_before<'a>(
+        &'a self,
+        upper: &Antichain<Timestamp>,
+    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + Send + use<'a, D> {
+        match self {
+            Self::V1(c) => Either::Left(c.consolidated_updates_before(upper)),
+            Self::V2(c) => Either::Right(c.consolidated_updates_before(upper)),
         }
     }
 
@@ -222,7 +248,7 @@ impl<D: Data> CorrectionV1<D> {
         let mut new_size = self.total_size;
         let mut updates = updates.drain(..).peekable();
         while let Some(&(_, time, _)) = updates.peek() {
-            debug_assert!(
+            mz_ore::soft_assert_no_log!(
                 self.since.less_equal(&time),
                 "update not advanced by `since`"
             );
@@ -251,42 +277,42 @@ impl<D: Data> CorrectionV1<D> {
         self.update_metrics(new_size);
     }
 
-    /// Consolidate and return updates within the given bounds.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `lower` is not less than or equal to `upper`.
-    pub fn updates_within<'a>(
-        &'a mut self,
-        lower: &Antichain<Timestamp>,
-        upper: &Antichain<Timestamp>,
-    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + ExactSizeIterator + use<'a, D> {
-        assert!(PartialOrder::less_equal(lower, upper));
-
-        let start = match lower.as_option() {
-            Some(ts) => Bound::Included(*ts),
-            None => Bound::Excluded(Timestamp::MAX),
-        };
+    /// The range of stored times before the given `upper`.
+    fn range_before(upper: &Antichain<Timestamp>) -> (Bound<Timestamp>, Bound<Timestamp>) {
+        let start = Bound::Included(Timestamp::MIN);
         let end = match upper.as_option() {
             Some(ts) => Bound::Excluded(*ts),
             None => Bound::Unbounded,
         };
+        (start, end)
+    }
 
-        let update_count = self.consolidate((start, end));
+    /// Consolidate the updates before the given `upper`.
+    pub fn consolidate_before(&mut self, upper: &Antichain<Timestamp>) {
+        let _ = self.consolidate(Self::range_before(upper));
+    }
 
-        let range = self.updates.range((start, end));
-        range
+    /// Return the updates before the given `upper`, as consolidated by a preceding
+    /// [`CorrectionV1::consolidate_before`] call.
+    ///
+    /// The caller must have invoked `consolidate_before` with the same `upper` and must not have
+    /// mutated the buffer since. Otherwise the returned updates are not consolidated.
+    pub fn consolidated_updates_before<'a>(
+        &'a self,
+        upper: &Antichain<Timestamp>,
+    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + Send + use<'a, D> {
+        self.updates
+            .range(Self::range_before(upper))
             .flat_map(|(t, data)| data.iter().map(|(d, r)| (d.clone(), *t, *r)))
-            .exact_size(update_count)
     }
 
     /// Consolidate and return updates before the given `upper`.
     pub fn updates_before<'a>(
         &'a mut self,
         upper: &Antichain<Timestamp>,
-    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + ExactSizeIterator + Send + use<'a, D> {
-        let lower = Antichain::from_elem(Timestamp::MIN);
-        self.updates_within(&lower, upper)
+    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + Send + use<'a, D> {
+        self.consolidate_before(upper);
+        self.consolidated_updates_before(upper)
     }
 
     /// Consolidate the updates at the times in the given range.

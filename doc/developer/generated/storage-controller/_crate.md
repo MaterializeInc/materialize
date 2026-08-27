@@ -1,6 +1,6 @@
 ---
 source: src/storage-controller/src/lib.rs
-revision: a60edac7f1
+revision: ed7294b842
 ---
 
 # storage-controller
@@ -11,7 +11,7 @@ The controller manages the lifecycle of all sources, sinks, and tables: it maint
 ## Module structure
 
 * `lib.rs` — `Controller` struct and the full `StorageController` trait implementation; crate entry point.
-* `instance` — `Instance` and `Replica`: manages one storage cluster and its replica connections, including scheduling and command replay.
+* `instance` — `Instance` and `Replica`: manages one storage cluster and its replica connections, including scheduling, per-replica dyncfg override specialization, and command replay.
 * `history` — `CommandHistory`: reducible command log used to rehydrate replicas.
 * `collection_mgmt` — `CollectionManager`: background tasks that maintain append-only and differential introspection collections.
 * `persist_handles` — `PersistTableWriteWorker`: serializes table writes through txn-wal; includes read-only mode fallback.

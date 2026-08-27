@@ -12,18 +12,20 @@ use std::ops::Range;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, CursorList};
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
+use mz_compute_client::protocol::response::PeekError;
 
 /// The merged cursor a [`TraceReader::cursor`] hands out over all of a trace's batches: a
 /// [`CursorList`] over the per-batch cursors.
 type TraceCursor<Tr> = CursorList<BatchCursor<Tr>>;
 /// Backing storage for a [`TraceCursor`]: the batches the cursor borrows from.
 type TraceStorage<Tr> = Vec<<Tr as TraceReader>::Batch>;
-use mz_ore::result::ResultExt;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
 use timely::order::PartialOrder;
 
-pub struct PeekResultIterator<Tr>
+use super::PeekRowIterationTracker;
+
+pub(super) struct PeekResultIterator<Tr>
 where
     Tr: TraceReader<Batch: Navigable>,
 {
@@ -36,6 +38,9 @@ where
     row_builder: Row,
     datum_vec: DatumVec,
     literals: Option<Literals<Tr>>,
+    rows_processed: usize,
+    row_iteration_tracker: PeekRowIterationTracker,
+    exhausted: bool,
 }
 
 /// Helper to handle literals in peeks
@@ -120,12 +125,14 @@ where
             DiffGat<'a> = &'a Diff,
         >,
 {
-    pub fn new(
+    pub(super) fn new(
         target_id: GlobalId,
         map_filter_project: mz_expr::SafeMfpPlan,
         peek_timestamp: mz_repr::Timestamp,
         literal_constraints: Option<&mut [Row]>,
         trace_reader: &mut Tr,
+        row_iteration_limit: Option<usize>,
+        rows_iterated: usize,
     ) -> Self {
         let (mut cursor, storage) = trace_reader.cursor();
         let literals = literal_constraints
@@ -140,7 +147,15 @@ where
             row_builder: Row::default(),
             datum_vec: DatumVec::new(),
             literals,
+            rows_processed: 0,
+            row_iteration_tracker: PeekRowIterationTracker::new(row_iteration_limit, rows_iterated),
+            exhausted: false,
         }
+    }
+
+    /// Returns the number of rows evaluated by the iterator.
+    pub fn rows_processed(&self) -> usize {
+        self.rows_processed
     }
 
     /// Returns `true` if the iterator has no more literals to process, or if there are no literals at all.
@@ -173,39 +188,27 @@ where
             DiffGat<'a> = &'a Diff,
         >,
 {
-    type Item = Result<(Row, NonZeroI64), String>;
+    type Item = Result<(Row, NonZeroI64), PeekError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let result = loop {
-            if self.literals_exhausted() {
-                return None;
-            }
-
-            if !self.cursor.key_valid(&self.storage) {
-                return None;
-            }
-
-            if !self.cursor.val_valid(&self.storage) {
-                let exhausted = self.step_key();
-                if exhausted {
-                    return None;
-                }
-            }
-
-            match self.extract_current_row() {
-                Ok(Some(row)) => break Ok(row),
-                Ok(None) => {
-                    // Have to keep stepping and try with the next val.
-                    self.cursor.step_val(&self.storage);
-                }
-                Err(err) => break Err(err),
-            }
-        };
-
-        self.cursor.step_val(&self.storage);
-
-        Some(result)
+        let mut fuel = usize::MAX;
+        match self.step(&mut fuel) {
+            Step::Row(row) => Some(row),
+            Step::Done => None,
+            Step::OutOfFuel => unreachable!("stepped with unbounded fuel"),
+        }
     }
+}
+
+/// The outcome of a single fueled [`PeekResultIterator::step`].
+pub enum Step {
+    /// A result row, or the error that ended the scan.
+    Row(Result<(Row, NonZeroI64), PeekError>),
+    /// The cursor is exhausted. Further steps also return `Done`.
+    Done,
+    /// The fuel ran out before a row was found. The cursor sits at the next
+    /// position to attempt, so stepping again resumes exactly there.
+    OutOfFuel,
 }
 
 impl<Tr> PeekResultIterator<Tr>
@@ -219,10 +222,70 @@ where
             DiffGat<'a> = &'a Diff,
         >,
 {
+    /// Advances the cursor until it produces a row, the cursor is exhausted,
+    /// or `fuel` runs out, whichever comes first. Decrements `fuel` by the
+    /// number of cursor positions visited.
+    ///
+    /// Fuel is charged per cursor position, not per row returned, so a
+    /// selective `map_filter_project` cannot starve the caller of yield
+    /// points. Returning with fuel left over means the cursor is exhausted.
+    pub fn step(&mut self, fuel: &mut usize) -> Step {
+        if self.exhausted {
+            return Step::Done;
+        }
+
+        let result = loop {
+            if *fuel == 0 {
+                return Step::OutOfFuel;
+            }
+            *fuel -= 1;
+
+            if self.literals_exhausted() {
+                return Step::Done;
+            }
+
+            if !self.cursor.key_valid(&self.storage) {
+                return Step::Done;
+            }
+
+            if !self.cursor.val_valid(&self.storage) {
+                let exhausted = self.step_key();
+                if exhausted {
+                    return Step::Done;
+                }
+            }
+
+            // Filtered and zero-multiplicity rows still consume worker time, so
+            // they count against the budget before evaluation.
+            //
+            // Failing here leaves the cursor where it is, so latch the iterator
+            // shut. Otherwise a caller that polls again would get the same error
+            // forever rather than an end.
+            if let Err(error) = self.row_iteration_tracker.track_next() {
+                self.exhausted = true;
+                return Step::Row(Err(error));
+            }
+
+            self.rows_processed = self.rows_processed.saturating_add(1);
+            match self.extract_current_row() {
+                Ok(Some(row)) => break Ok(row),
+                Ok(None) => {
+                    // Have to keep stepping and try with the next val.
+                    self.cursor.step_val(&self.storage);
+                }
+                Err(err) => break Err(err),
+            }
+        };
+
+        self.cursor.step_val(&self.storage);
+
+        Step::Row(result)
+    }
+
     /// Extracts and returns the row currently pointed at by our cursor. Returns
     /// `Ok(None)` if our MapFilterProject evaluates to `None`. Also returns any
     /// errors that arise from evaluating the MapFilterProject.
-    fn extract_current_row(&mut self) -> Result<Option<(Row, NonZeroI64)>, String> {
+    fn extract_current_row(&mut self) -> Result<Option<(Row, NonZeroI64)>, PeekError> {
         // TODO: This arena could be maintained and reused for longer,
         // but it wasn't clear at what interval we should flush
         // it to ensure we don't accidentally spike our memory use.
@@ -252,7 +315,7 @@ where
             .map_filter_project
             .evaluate_into(&mut borrow, &arena, &mut self.row_builder)
             .map(|row| row.cloned())
-            .map_err_to_string_with_causes()?
+            .map_err(PeekError::from)?
         {
             let mut copies = Diff::ZERO;
             self.cursor.map_times(&self.storage, |time, diff| {
@@ -266,11 +329,11 @@ where
                     target = %self.target_id, diff = %copies, ?row,
                     "index peek encountered negative multiplicities in ok trace",
                 );
-                return Err(format!(
+                return Err(PeekError::unstructured(format!(
                     "Invalid data in source, \
                              saw retractions ({}) for row that does not exist: {:?}",
                     -copies, row,
-                ));
+                )));
             } else {
                 copies.into_inner()
             };

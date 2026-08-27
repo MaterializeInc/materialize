@@ -836,6 +836,24 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION: LazyLock<SystemObject
         object_type: CatalogItemType::Table,
         object_name: MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY.name.to_string(),
     });
+
+/// Identifies [`MZ_OBJECT_HYDRATION_HISTORY`] for the schema-migration guard.
+pub static MZ_OBJECT_HYDRATION_HISTORY_DESCRIPTION: LazyLock<SystemObjectDescription> =
+    LazyLock::new(|| SystemObjectDescription {
+        schema_name: MZ_OBJECT_HYDRATION_HISTORY.schema.to_string(),
+        object_type: CatalogItemType::Table,
+        object_name: MZ_OBJECT_HYDRATION_HISTORY.name.to_string(),
+    });
+
+/// Identifies [`MZ_CLUSTER_REPLICA_FRONTIERS`] for the schema-migration guard in
+/// `builtin_schema_migration.rs`, which forbids migrating this source because the 0dt
+/// caught-up gate reads the leader's shard for it to learn the live frontiers.
+pub static MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION: LazyLock<SystemObjectDescription> =
+    LazyLock::new(|| SystemObjectDescription {
+        schema_name: MZ_CLUSTER_REPLICA_FRONTIERS.schema.to_string(),
+        object_type: CatalogItemType::Source,
+        object_name: MZ_CLUSTER_REPLICA_FRONTIERS.name.to_string(),
+    });
 pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SYSTEM_ROLE_ID,
     name: SYSTEM_USER_NAME,
@@ -1090,6 +1108,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Log(&MZ_COMPUTE_EXPORTS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER),
         Builtin::Log(&MZ_CLUSTER_PROMETHEUS_METRICS),
+        Builtin::Log(&MZ_CLUSTER_REPLICA_RESOURCE_USAGE),
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_RAW),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW),
@@ -1107,17 +1126,17 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Log(&MZ_COMPUTE_ERROR_COUNTS_RAW),
         Builtin::Log(&MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER),
-        Builtin::Table(&MZ_KAFKA_SINKS),
+        Builtin::MaterializedView(&MZ_KAFKA_SINKS),
         Builtin::MaterializedView(&MZ_KAFKA_CONNECTIONS),
         Builtin::MaterializedView(&MZ_KAFKA_SOURCES),
         Builtin::Table(&MZ_OBJECT_DEPENDENCIES),
-        Builtin::Table(&MZ_ICEBERG_SINKS),
+        Builtin::MaterializedView(&MZ_ICEBERG_SINKS),
         Builtin::MaterializedView(&MZ_DATABASES),
         Builtin::MaterializedView(&MZ_SCHEMAS),
         Builtin::Table(&MZ_COLUMNS),
         // mz_indexes is generated dynamically below with inlined builtin VALUES.
         Builtin::Table(&MZ_INDEX_COLUMNS),
-        Builtin::Table(&MZ_TABLES),
+        Builtin::MaterializedView(&MZ_TABLES),
         // mz_sources is generated dynamically below with inlined builtin VALUES.
         Builtin::Table(&MZ_SOURCE_REFERENCES),
         Builtin::MaterializedView(&MZ_POSTGRES_SOURCES),
@@ -1125,8 +1144,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_MYSQL_SOURCE_TABLES),
         Builtin::MaterializedView(&MZ_SQL_SERVER_SOURCE_TABLES),
         Builtin::MaterializedView(&MZ_KAFKA_SOURCE_TABLES),
-        Builtin::Table(&MZ_SINKS),
-        Builtin::Table(&MZ_VIEWS),
+        Builtin::MaterializedView(&MZ_SINKS),
+        Builtin::MaterializedView(&MZ_VIEWS),
         Builtin::Table(&MZ_TYPES),
         Builtin::Table(&MZ_TYPE_PG_METADATA),
         Builtin::Table(&MZ_ARRAY_TYPES),
@@ -1172,6 +1191,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_SYSTEM_PRIVILEGES),
         Builtin::MaterializedView(&MZ_COMMENTS),
         Builtin::Table(&MZ_WEBHOOKS_SOURCES),
+        Builtin::MaterializedView(&MZ_METRIC_SINKS),
         Builtin::Table(&MZ_HISTORY_RETENTION_STRATEGIES),
         Builtin::MaterializedView(&MZ_MATERIALIZED_VIEWS),
         Builtin::Table(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
@@ -1372,6 +1392,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Source(&MZ_MATERIALIZED_VIEW_REFRESHES),
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::View(&MZ_MATERIALIZATION_DEPENDENCIES),
+        Builtin::View(&MZ_OBJECT_GRAPH_EDGES),
         Builtin::View(&MZ_MATERIALIZATION_LAG),
         Builtin::View(&MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW),
         Builtin::View(&MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_3H),
@@ -1418,6 +1439,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_ROLES_IND),
         Builtin::Index(&MZ_SOURCES_IND),
         Builtin::Index(&MZ_SINKS_IND),
+        Builtin::Index(&MZ_METRIC_SINKS_IND),
         Builtin::Index(&MZ_MATERIALIZED_VIEWS_IND),
         Builtin::Index(&MZ_SOURCE_STATUSES_IND),
         Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
@@ -1437,6 +1459,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_OBJECT_DEPENDENCIES_IND),
         Builtin::Index(&MZ_COMPUTE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND),
+        Builtin::Index(&MZ_OBJECT_GRAPH_EDGES_IND),
         Builtin::Index(&MZ_FRONTIERS_IND),
         Builtin::Index(&MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY_IND),
         Builtin::Index(&MZ_KAFKA_SOURCES_IND),
@@ -1463,6 +1486,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_INDEX_ADVICE),
         Builtin::View(&MZ_MCP_DATA_PRODUCTS),
         Builtin::View(&MZ_MCP_DATA_PRODUCT_DETAILS),
+        Builtin::Table(&MZ_OBJECT_HYDRATION_HISTORY),
     ];
 
     builtin_items.extend(notice::builtins());

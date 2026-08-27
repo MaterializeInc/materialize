@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import Intercom from "@intercom/messenger-js-sdk";
+import Intercom, { update } from "@intercom/messenger-js-sdk";
 import { useEffect } from "react";
 
 import { useIntercomJwt } from "~/api/auth";
@@ -31,6 +31,14 @@ export function useIntercom() {
       Intercom({ app_id: APP_ID, intercom_user_jwt: jwt });
     }
   }, [jwt]);
+}
+
+export function useHideIntercomLauncher(hidden: boolean) {
+  useEffect(() => {
+    if (!hidden || !window.Intercom) return;
+    update({ hide_default_launcher: true });
+    return () => update({ hide_default_launcher: false });
+  }, [hidden]);
 }
 
 export default useIntercom;

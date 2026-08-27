@@ -21,6 +21,10 @@ class BuiltinClusterReplicationFactor(Check):
     the break-glass path a support engineer scales up by hand. A catalog open that
     does not read the cluster's replication factor tears that replica down, leaving
     the cluster reporting a factor it is not honoring.
+
+    The replica arrives asynchronously: the cluster controller materializes it a
+    tick after the ALTER commits. Every assertion below is a retrying testdrive
+    query for that reason.
     """
 
     def _can_run(self, e: Executor) -> bool:

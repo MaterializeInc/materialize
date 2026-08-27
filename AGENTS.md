@@ -10,6 +10,12 @@ Use the `mz-test` skill before running ANY tests, even mid-task — the canonica
 commands aren't the obvious ones (e.g. `bin/sqllogictest --optimized`, not
 `cargo build --bin sqllogictest`).
 
+Use the `mz-run` skill before building, running, formatting, or linting. `bin/fmt` and `bin/lint` are the canonical entry points, NOT `cargo fmt`, `rustfmt`, or a bare `cargo clippy`. `bin/environmentd`, not `cargo build --bin environmentd`.
+
+Use the `mz-commit` skill before `git commit`, `git push`, or `gh pr create`.
+
+Use the `mz-debug-ci` skill before the first `bk` or `gh pr checks` command, or when handed a Buildkite URL.
+
 ## Code navigation
 
 For operation flow tracing, read first:
@@ -93,10 +99,10 @@ Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].all
   we need to record that knowledge. In general comments need to stand on their
   own and make sense from just looking at them and the code around it, not
   previous changes.
-* Avoid em-dashes and semicolons for structuring sentences, everywhere: code
-  comments, specs, design docs, all of it. Restructure with full stops and
-  commas instead. In most cases a sentence that wants an em-dash or semicolon
-  can just be split into two.
+* Avoid em-dashes for structuring sentences in any prose: code comments, specs,
+  design docs, all of it. Restructure with full stops and commas instead. The
+  same goes for semicolons, though one is fine where splitting would mangle the
+  sentence.
 * Our guidance applies both when writing new code or designs, or when we notice
   deviations in code or architecture that we are working on. At the same time,
   we want to keep our changes minimal so it's good to call out deviations and
@@ -150,5 +156,28 @@ only that one line. Don't narrate the body in rustdoc ("Phase 1 ... Phase
 works goes in an inline `//` at the decision point, or in a module-level `//!`
 when it is about how the pieces fit together. Document a struct field only when
 its meaning is subtle.
+
+Every fact gets exactly one owning comment: the decision point for reasoning,
+the mechanism for mechanism docs, the public setter or constant for config
+semantics. Everywhere else either points at the owner or says nothing. The
+tell is the same clause appearing near-verbatim in a module doc, a struct doc,
+and an inline comment; when that happens, pick the owner and cut the rest. In
+particular: don't restate a callee's documented contract at its call sites,
+don't narrate in one function's doc what a sibling's doc already owns, and
+don't duplicate an assert message in a comment on the same line.
+
+Budget doc-comment paragraphs by decisions: each paragraph should carry a
+distinct decision or invariant, not re-argue one documented elsewhere or
+enumerate the item's callers or fields. Skip speculative comments about what
+a future implementation could do (one `TODO` at the owning seam is enough),
+and skip comments explaining an absence when the surrounding docs already
+imply it. No ASCII section-divider banners (`// ----- helpers -----`); item
+placement carries the structure. Performance claims in comments should state
+a constraint or a measured number, not unverifiable color ("the compiler can
+autovectorize this").
+
+The same economy applies to tests: a test whose name and assert messages
+state the property needs no doc comment. Keep test docs for non-obvious
+setup, fixtures whose shape encodes the scenario, and multi-phase protocols.
 
 Mark counterintuitive gotchas with `NOTE:` and future work with `TODO:`.

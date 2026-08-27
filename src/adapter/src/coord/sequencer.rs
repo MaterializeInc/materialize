@@ -94,7 +94,6 @@ use crate::util::ClientTransmitter;
 //   big refactoring after the old peek sequencing is removed.
 
 mod inner;
-pub(crate) use inner::cancel_carried_reconfiguration;
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 34KB. This would
@@ -292,6 +291,10 @@ impl Coordinator {
                 }
                 Plan::CreateIndex(plan) => {
                     self.sequence_create_index(ctx, plan, resolved_ids).await;
+                }
+                Plan::CreateMetricSink(plan) => {
+                    self.sequence_create_metric_sink(ctx, plan, resolved_ids)
+                        .await;
                 }
                 Plan::CreateType(plan) => {
                     let result = self
@@ -911,6 +914,14 @@ impl Coordinator {
                 // Consolidate rows. This is useful e.g. for an UPDATE where the row
                 // doesn't change, and we need to reflect that in the number of
                 // affected rows.
+                //
+                // NOTE: This differs from PostgreSQL, where `UPDATE t SET x = x`
+                // reports the number of rows matching the WHERE clause even when
+                // no value changes. Because Materialize works in differential
+                // dataflow, the +1 and -1 diffs for an unchanged row cancel out
+                // during consolidation, so it reports 0 affected rows. This is
+                // longstanding behavior and both read-then-write paths agree on
+                // it.
                 differential_dataflow::consolidation::consolidate(&mut plan.updates);
 
                 affected_rows = Diff::ZERO;
@@ -1150,10 +1161,12 @@ pub(crate) async fn explain_pushdown_future_inner<
                 let bytes = u64::cast_from(*bytes);
                 total_bytes += bytes;
                 total_parts += 1u64;
-                let selected = match stats {
+                let selected = match stats.as_ref().and_then(|x| x.try_decode().ok()) {
+                    // Also the arm for stats that do not decode, which a
+                    // newer writer's stats kind can produce. Both report the
+                    // part as selected, matching what a read of it would do.
                     None => true,
                     Some(stats) => {
-                        let stats = stats.decode();
                         let stats = RelationPartStats::new(
                             name.as_str(),
                             &snapshot_stats.metrics.pushdown.part_stats,

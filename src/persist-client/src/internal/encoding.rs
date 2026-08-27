@@ -209,7 +209,6 @@ pub(crate) struct MetadataMap(BTreeMap<String, Bytes>);
 ///
 /// It is an error to reuse key names, or to change the type associated with a particular name.
 /// It is polite to choose short names, since they get serialized alongside every struct.
-#[allow(unused)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub(crate) struct MetadataKey<V, P = V> {
     name: &'static str,
@@ -217,7 +216,6 @@ pub(crate) struct MetadataKey<V, P = V> {
 }
 
 impl<V, P> MetadataKey<V, P> {
-    #[allow(unused)]
     pub(crate) const fn new(name: &'static str) -> Self {
         MetadataKey {
             name,
@@ -242,7 +240,6 @@ impl MetadataMap {
     }
 
     /// Serialize and insert a new key into the map, replacing any existing value for the key.
-    #[allow(unused)]
     pub fn set<V: RustType<P>, P: prost::Message>(&mut self, key: MetadataKey<V, P>, value: V) {
         self.0.insert(
             String::from(key.name),
@@ -251,7 +248,6 @@ impl MetadataMap {
     }
 
     /// Deserialize a key from the map, if it is present.
-    #[allow(unused)]
     pub fn get<V: RustType<P>, P: prost::Message + Default>(
         &self,
         key: MetadataKey<V, P>,
@@ -1756,17 +1752,11 @@ impl LazyPartStats {
     /// This does not cache the returned value, it decodes each time it's
     /// called.
     ///
-    /// Panics if the encoded bytes are malformed. Only call this where the value
-    /// is known to have come from `Self::encode` rather than straight off blob.
-    pub fn decode(&self) -> PartStats {
-        self.try_decode().expect("valid stats")
-    }
-
-    /// Like [Self::decode], but surfaces a malformed encoding as an error.
-    ///
-    /// The bytes are stored undecoded (see the [RustType] impl), so a corrupted
-    /// or crafted blob reaches here intact. Anything running on state that has
-    /// not been validated yet must use this.
+    /// The bytes are stored undecoded (see the [RustType] impl) and are never
+    /// validated on the way in, so a corrupted, crafted, or newer-version blob
+    /// reaches here intact. There is deliberately no infallible variant: every
+    /// caller reads stats straight off durable state, where a decode failure
+    /// must fail open (keep the part, report it selected) rather than panic.
     pub fn try_decode(&self) -> Result<PartStats, TryFromProtoError> {
         let key = self
             .key
@@ -1977,6 +1967,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Antichain> for Antichain<T> {
 #[cfg(test)]
 mod tests {
     use mz_ore::assert_none;
+    use mz_persist_types::stats::{ProtoDynStats, ProtoStructStats};
 
     use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
@@ -2665,5 +2656,26 @@ mod tests {
             .expect("stats bytes are stored undecoded");
         assert_err!(stats.try_decode());
         assert!(format!("{stats:?}").contains("undecodable"));
+    }
+
+    /// The exact shape version skew produces: valid protobuf whose stats
+    /// oneof uses a variant this version does not know (a newer writer's new
+    /// stats kind reaching an older reader).
+    fn version_skewed_part_stats() -> LazyPartStats {
+        let mut proto = ProtoStructStats::default();
+        proto.cols.insert("c".into(), ProtoDynStats::default());
+        let bytes = prost::Message::encode_to_vec(&proto);
+        LazyPartStats::from_proto(Bytes::from(bytes)).expect("stats bytes are stored undecoded")
+    }
+
+    /// Stats from a newer version are an error rather than a value this
+    /// version misreads, which is what lets every read path fail open on
+    /// them: the `shard_source` filter and the fast-path peek filter keep the
+    /// part, the `stats()` accessors in fetch report `None`, `EXPLAIN FILTER
+    /// PUSHDOWN` reports the part as selected, and inspect-state serializes
+    /// the stats as absent.
+    #[mz_ore::test]
+    fn part_stats_try_decode_fails_open_on_unknown_variant() {
+        assert_err!(version_skewed_part_stats().try_decode());
     }
 }

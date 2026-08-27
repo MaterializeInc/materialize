@@ -755,6 +755,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     runtime.block_on(mz_metrics::register_metrics_into(
         &metrics_registry,
         mz_dyncfgs::all_dyncfgs(),
+        // environmentd has no scratch directory, so it tracks no disk usage.
+        None,
     ));
 
     // Initialize fail crate for failpoint support

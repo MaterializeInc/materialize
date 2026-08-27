@@ -96,6 +96,12 @@ metrics:
   - session_type
   source: src/adapter/src/metrics.rs
   visibility: internal
+- name: mz_active_internal_subscribes
+  help: The number of active internal subscribes used by read-then-write operations and background maintenance.
+  labels:
+  - session_type
+  source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_active_sessions
   help: The number of active coordinator sessions.
   labels:
@@ -452,28 +458,6 @@ metrics:
 - name: mz_catalog_transactions_started
   help: Total number of started transactions.
   source: src/catalog/src/durable/metrics.rs
-  visibility: internal
-- name: mz_check_scheduling_policies_seconds_bucket
-  help: The time each policy in `check_scheduling_policies` takes.
-  labels:
-  - le
-  - policy
-  - thread
-  source: src/adapter/src/metrics.rs
-  visibility: internal
-- name: mz_check_scheduling_policies_seconds_count
-  help: The time each policy in `check_scheduling_policies` takes.
-  labels:
-  - policy
-  - thread
-  source: src/adapter/src/metrics.rs
-  visibility: internal
-- name: mz_check_scheduling_policies_seconds_sum
-  help: The time each policy in `check_scheduling_policies` takes.
-  labels:
-  - policy
-  - thread
-  source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_cluster_handle_command_duration_seconds_bucket
   help: Time spent in handling commands.
@@ -971,23 +955,35 @@ metrics:
   help: The time it takes to advance the catalog shard upper for a txns-shard write (group commits and table register/forget).
   source: src/adapter/src/metrics.rs
   visibility: internal
-- name: mz_handle_scheduling_decisions_seconds_bucket
-  help: The time `handle_scheduling_decisions` takes.
+- name: mz_hydration_history_mutations_total
+  help: Total hydration-history collection and retention mutations since process start.
   labels:
-  - altered_a_cluster
+  - operation
+  - outcome
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_hydration_history_retention_batch_full_total
+  help: Total hydration-history sweeps whose retention batch was full. Repeated increments mean retention may not be keeping up with its schedule.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_hydration_history_rows_affected_total
+  help: Total rows changed by hydration-history maintenance since process start.
+  labels:
+  - action
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_hydration_history_sweep_duration_seconds_bucket
+  help: Wall time of a complete hydration-history collection and retention sweep.
+  labels:
   - le
   source: src/adapter/src/metrics.rs
   visibility: internal
-- name: mz_handle_scheduling_decisions_seconds_count
-  help: The time `handle_scheduling_decisions` takes.
-  labels:
-  - altered_a_cluster
+- name: mz_hydration_history_sweep_duration_seconds_count
+  help: Wall time of a complete hydration-history collection and retention sweep.
   source: src/adapter/src/metrics.rs
   visibility: internal
-- name: mz_handle_scheduling_decisions_seconds_sum
-  help: The time `handle_scheduling_decisions` takes.
-  labels:
-  - altered_a_cluster
+- name: mz_hydration_history_sweep_duration_seconds_sum
+  help: Wall time of a complete hydration-history collection and retention sweep.
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_cursor_setup_seconds_bucket
@@ -1032,6 +1028,20 @@ metrics:
   help: Time checking trace frontiers.
   source: src/compute/src/metrics.rs
   visibility: internal
+- name: mz_index_peek_result_sort_rows_bucket
+  help: Number of intermediate result rows sorted during peek collection, summed across sort operations.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_result_sort_rows_count
+  help: Number of intermediate result rows sorted during peek collection, summed across sort operations.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_result_sort_rows_sum
+  help: Number of intermediate result rows sorted during peek collection, summed across sort operations.
+  source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_index_peek_result_sort_seconds_bucket
   help: Time sorting intermediate results during peek collection.
   labels:
@@ -1058,6 +1068,20 @@ metrics:
   visibility: internal
 - name: mz_index_peek_row_collection_seconds_sum
   help: Time constructing RowCollection from peek results.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_row_iteration_rows_bucket
+  help: Number of arrangement rows evaluated by the index peek result iterator.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_row_iteration_rows_count
+  help: Number of arrangement rows evaluated by the index peek result iterator.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_row_iteration_rows_sum
+  help: Number of arrangement rows evaluated by the index peek result iterator.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_seconds_bucket
@@ -1378,6 +1402,13 @@ metrics:
   help: user CPU time used
   source: src/metrics/src/rusage.rs
   visibility: internal
+- name: mz_metrics_resource_usage
+  help: Resource usage observations, by source and metric.
+  labels:
+  - metric
+  - source
+  source: src/metrics/src/usage.rs
+  visibility: internal
 - name: mz_metrics_update_duration_bucket
   help: The time it took to update lgalloc stats
   labels:
@@ -1466,6 +1497,20 @@ metrics:
   visibility: public
   tags:
   - environment
+- name: mz_occ_read_then_write_retry_count_bucket
+  help: Number of OCC retries per read-then-write operation.
+  labels:
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_occ_read_then_write_retry_count_count
+  help: Number of OCC retries per read-then-write operation.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_occ_read_then_write_retry_count_sum
+  help: Number of OCC retries per read-then-write operation.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_optimization_notices
   help: Number of optimization notices per notice type.
   labels:
@@ -1651,6 +1696,50 @@ metrics:
   labels:
   - honeycomb
   source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_hedge_armed
+  help: 1 if this process opened a hedge sibling and can hedge when enabled
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_hedge_errors
+  help: hedge requests (the hedge leg only, not the primary) that completed with an error
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_hedge_rtt_latency
+  help: roundtrip-time of the most recent successful warm-path liveness gets on the hedge sibling
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_hedge_warm_errors
+  help: warm-path liveness gets on the hedge sibling that failed or timed out
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_hedge_won_seconds_bucket
+  help: end-to-end latency of blob gets won by the hedge request
+  labels:
+  - le
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_hedge_won_seconds_count
+  help: end-to-end latency of blob gets won by the hedge request
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_hedge_won_seconds_sum
+  help: end-to-end latency of blob gets won by the hedge request
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_hedges_fired
+  help: blob gets that fired a hedge request
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_hedges_skipped
+  help: hedge requests not fired for a get that exceeded the hedge delay, by reason
+  labels:
+  - reason
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_hedges_won
+  help: blob gets where the hedge request won the race
+  source: src/persist/src/metrics.rs
   visibility: internal
 - name: mz_persist_cmd_cas_mismatch_count
   help: count of command retries from CaS mismatch

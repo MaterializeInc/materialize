@@ -251,7 +251,7 @@ impl<I: Clone + Ord, S: PartialEq + Debug> SchemaCacheMap<I, S> {
             // same, so just overwrite
             let prev = map.insert(id.clone(), Arc::clone(val));
             match prev {
-                Some(prev) => debug_assert_eq!(*val, prev),
+                Some(prev) => mz_ore::soft_assert_eq_no_log!(*val, prev),
                 None => self.metrics.added_count.inc(),
             }
         } else {

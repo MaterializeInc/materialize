@@ -289,7 +289,7 @@ public.bool
 > DROP DATABASE foo
 
 ! DROP OBJECT v1
-contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or NETWORK, found identifier
+contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or METRIC or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or NETWORK, found identifier
 
 > SHOW OBJECTS
 name        type        comment
@@ -516,18 +516,13 @@ mz_cluster_replica_sizes       ""
 mz_columns                     ""
 mz_egress_ips                  ""
 mz_functions                   ""
-mz_iceberg_sinks               ""
 mz_index_columns               ""
-mz_kafka_sinks                 ""
 mz_list_types                  ""
 mz_map_types                   ""
 mz_operators                   ""
 mz_pseudo_types                ""
 mz_role_auth                   ""
-mz_sinks                       ""
-mz_tables                      ""
 mz_types                       ""
-mz_views                       ""
 
 > SHOW VIEWS FROM mz_catalog
 name                       comment
@@ -549,18 +544,23 @@ mz_cluster_replicas   mz_catalog_server   ""
 mz_connections        mz_catalog_server   ""
 mz_databases          mz_catalog_server   ""
 mz_default_privileges mz_catalog_server   ""
+mz_iceberg_sinks      mz_catalog_server   ""
 mz_indexes            mz_catalog_server   ""
 mz_kafka_connections  mz_catalog_server   ""
+mz_kafka_sinks        mz_catalog_server   ""
 mz_kafka_sources      mz_catalog_server   ""
 mz_role_members       mz_catalog_server   ""
 mz_role_parameters    mz_catalog_server   ""
 mz_roles              mz_catalog_server   ""
 mz_schemas            mz_catalog_server   ""
 mz_secrets            mz_catalog_server   ""
+mz_sinks              mz_catalog_server   ""
 mz_sources            mz_catalog_server   ""
 mz_ssh_tunnel_connections mz_catalog_server ""
 mz_system_privileges  mz_catalog_server   ""
 mz_materialized_views mz_catalog_server   ""
+mz_tables             mz_catalog_server   ""
+mz_views              mz_catalog_server   ""
 
 # Check default sources, tables, and views in mz_catalog_unstable.
 
@@ -610,6 +610,7 @@ mz_materialized_view_refresh_strategies  ""
 mz_object_arrangement_size_history       ""
 mz_object_dependencies                   ""
 mz_object_global_ids                     ""
+mz_object_hydration_history              ""
 mz_optimizer_notices                     ""
 mz_replacements                          ""
 mz_sessions                              ""
@@ -625,6 +626,8 @@ name                                     comment
 mz_activity_log_thinned                  ""
 mz_builtin_materialized_views            ""
 mz_builtin_sources                       ""
+mz_builtin_tables                        ""
+mz_builtin_views                         ""
 mz_cluster_deployment_lineage            ""
 mz_cluster_replica_history               ""
 mz_cluster_replica_metrics               ""
@@ -646,6 +649,7 @@ mz_mcp_data_products                     ""
 mz_notices                               ""
 mz_notices_redacted                      ""
 mz_object_fully_qualified_names          ""
+mz_object_graph_edges                    ""
 mz_object_history                        ""
 mz_object_lifetimes                      ""
 mz_object_oid_alias                      ""
@@ -725,6 +729,7 @@ mz_cluster_workload_classes    mz_catalog_server   ""
 mz_comments                    mz_catalog_server   ""
 mz_internal_cluster_replicas   mz_catalog_server   ""
 mz_kafka_source_tables         mz_catalog_server   ""
+mz_metric_sinks                mz_catalog_server   ""
 mz_mysql_source_tables         mz_catalog_server   ""
 mz_network_policies            mz_catalog_server   ""
 mz_network_policy_rules        mz_catalog_server   ""
@@ -758,6 +763,7 @@ mz_compute_import_frontiers_per_worker       log   <null>    ""
 mz_compute_lir_mapping_per_worker            log   <null>    ""
 mz_compute_operator_durations_histogram_raw  log   <null>    ""
 mz_compute_operator_hydration_statuses_per_worker log <null> ""
+mz_cluster_replica_resource_usage             log   <null>    ""
 mz_cluster_prometheus_metrics     log   <null>    ""
 mz_dataflow_addresses_per_worker             log   <null>    ""
 mz_dataflow_channels_per_worker              log   <null>    ""
@@ -830,11 +836,11 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-34
+30
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-272
+280
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

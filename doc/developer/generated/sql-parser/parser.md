@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/parser.rs
-revision: fca741734d
+revision: 8be80d79b9
 ---
 
 # mz-sql-parser::parser
@@ -15,6 +15,7 @@ The right-hand side of `IS [NOT] DISTINCT FROM` is parsed at the precedence of t
 `parse_raw_ident_str` rejects empty identifiers so that resolved names like `[""]` (which display as `[]` and fail to reparse) are caught at parse time.
 A parenthesized `(SHOW …)` query at statement level is unwrapped to a bare `Statement::Show` when it carries no CTEs, ORDER BY, LIMIT, or OFFSET, keeping the AST independent of redundant outer parens.
 Iceberg sink mode parsing accepts `UPSERT` or `APPEND` as valid values.
+`parse_option_map` peeks ahead for `[` before committing to a map literal; a bare `map` identifier in an option-value position therefore falls through to `parse_item_name` rather than causing a parse error.
 `EXECUTE UNIT TEST <name> FOR <target> [AT TIME <expr>] [MOCK <view_def>, ...] EXPECTED <result_def>` is parsed by `parse_execute_unit_test`; individual mock clauses are parsed by `parse_mock_view_def`. Both methods are called from `parse_execute` after the leading `EXECUTE UNIT TEST` tokens are consumed.
 The private method `parse_list_value<T, F>` optionally consumes `=`, then parses a comma-separated list enclosed in parentheses or brackets using a provided closure, returning `Vec<T>`.
 `CREATE CONNECTION ... TO AWS` dispatches on the next keyword: `PRIVATELINK` yields `CreateConnectionType::AwsPrivatelink`, `GLUE` (followed by `SCHEMA REGISTRY`) yields `CreateConnectionType::GlueSchemaRegistry`, and no keyword yields `CreateConnectionType::Aws`. `CREATE CONNECTION ... TO GCP` yields `CreateConnectionType::Gcp`.
@@ -25,3 +26,6 @@ The `Precedence` enum is `pub(crate)` and serves as the single source of truth f
 `parse_rows_from` uses `parse_windowless_function` (a private method) for each function inside `ROWS FROM (...)`. `parse_windowless_function` parses a function name and argument list without consuming `DISTINCT`, `FILTER`, or `OVER`, ensuring that table functions in `ROWS FROM` never carry those clauses.
 `parse_cluster_option_name` recognizes `AUTO SCALING STRATEGY` as a cluster option, dispatching to `parse_cluster_option_auto_scaling_strategy`. That method parses a paren-enclosed list of strategy sub-policies; the only supported sub-policy in v1 is `ON HYDRATION (HYDRATION SIZE = '...' [, LINGER DURATION = '...'])`. An empty list `()` disables autoscaling. Each sub-policy may appear at most once; a duplicate `ON HYDRATION` entry is a parse error. The result is a `ClusterOption` with value `WithOptionValue::ClusterAutoScalingStrategyOptionValue`.
 `GRANT/REVOKE ON ALL` parsing recognizes `NETWORK POLICY` as an object type in addition to the other supported types.
+`CREATE METRIC SINK [IF NOT EXISTS] <name> [IN CLUSTER <cluster>] FROM <source> [WITH (PREFIX = ...)]` is parsed by `parse_create_metric_sink`, which is dispatched from `parse_create` when the next two tokens are `METRIC SINK`. The only supported `WITH` option is `PREFIX`, parsed by `parse_create_metric_sink_option`.
+
+`SHOW METRIC SINKS [IN CLUSTER <cluster>]` is handled in `parse_show_objects`: `parse_object_type` recognizes the two-token sequence `METRIC SINKS` and returns `ObjectType::MetricSink`, which is then dispatched to `ShowObjectType::MetricSink { in_cluster }`. `SHOW CREATE METRIC SINK <name>` is handled in `parse_show_create` by matching the three-token sequence `CREATE METRIC SINK` and producing `ShowStatement::ShowCreateMetricSink`.

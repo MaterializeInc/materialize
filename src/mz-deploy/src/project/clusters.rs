@@ -13,7 +13,6 @@
 //! defines a single cluster with a required `CREATE CLUSTER` statement and optional
 //! `GRANT` and `COMMENT` statements.
 
-use crate::client::auto_scaling::strategy_from_option_value;
 use crate::project::error::{
     LoadError, ProjectError, ValidationError, ValidationErrorKind, ValidationErrors,
 };
@@ -21,11 +20,10 @@ use crate::project::syntax::parser::{
     LocatedStatement, parse_statements_with_context, statement_type_name,
 };
 use crate::project::syntax::profile_files::collect_all_sql_files;
-use mz_sql::plan::AutoScalingStrategy;
 use mz_sql_parser::ast::{
-    ClusterOptionName, CommentObjectType, CommentStatement, CreateClusterStatement,
-    GrantPrivilegesStatement, GrantTargetSpecification, GrantTargetSpecificationInner, Ident,
-    ObjectType, Raw, RawClusterName, Statement, UnresolvedObjectName, WithOptionValue,
+    CommentObjectType, CommentStatement, CreateClusterStatement, GrantPrivilegesStatement,
+    GrantTargetSpecification, GrantTargetSpecificationInner, Ident, ObjectType, Raw,
+    RawClusterName, Statement, UnresolvedObjectName,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -320,58 +318,20 @@ fn suffixed_ident(ident: &Ident, suffix: &str) -> Ident {
     Ident::new(&format!("{}{}", ident, suffix)).expect("valid cluster identifier")
 }
 
-/// Extract the desired SIZE from a CreateClusterStatement's options.
-pub(crate) fn extract_size(create_stmt: &CreateClusterStatement<Raw>) -> Option<String> {
-    for opt in &create_stmt.options {
-        if opt.name == ClusterOptionName::Size {
-            if let Some(WithOptionValue::Value(ref v)) = opt.value {
-                return Some(v.to_string().trim_matches('\'').to_string());
-            }
-        }
-    }
-    None
-}
-
-/// Extract the desired REPLICATION FACTOR from a CreateClusterStatement's options.
-pub(crate) fn extract_replication_factor(create_stmt: &CreateClusterStatement<Raw>) -> Option<u32> {
-    for opt in &create_stmt.options {
-        if opt.name == ClusterOptionName::ReplicationFactor {
-            if let Some(WithOptionValue::Value(ref v)) = opt.value {
-                return v.to_string().parse::<u32>().ok();
-            }
-        }
-    }
-    None
-}
-
-/// Extract the desired autoscaling policy from a CreateClusterStatement's
-/// options. An absent option and an empty `AUTO SCALING STRATEGY = ()` block
-/// both map to `None` (no policy), matching the server planner's
-/// normalization.
-pub(crate) fn extract_auto_scaling_strategy(
-    create_stmt: &CreateClusterStatement<Raw>,
-) -> Result<Option<AutoScalingStrategy>, String> {
-    for opt in &create_stmt.options {
-        if opt.name == ClusterOptionName::AutoScalingStrategy {
-            return match &opt.value {
-                Some(WithOptionValue::ClusterAutoScalingStrategyOptionValue(value)) => {
-                    strategy_from_option_value(value)
-                }
-                _ => Err("invalid AUTO SCALING STRATEGY value".to_string()),
-            };
-        }
-    }
-    Ok(None)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mz_sql_parser::ast::display::AstDisplay;
     use std::fs;
     use tempfile::TempDir;
 
     fn create_test_dir() -> TempDir {
         TempDir::new().unwrap()
+    }
+
+    /// The loaded definition's `CREATE CLUSTER`, rendered back to SQL.
+    fn create_sql(def: &ClusterDefinition) -> String {
+        def.create_stmt.to_ast_string_simple()
     }
 
     #[mz_ore::test]
@@ -404,12 +364,10 @@ mod tests {
         assert_eq!(result[0].grants.len(), 1);
         assert_eq!(result[0].comments.len(), 1);
 
-        // Verify extracted options
         assert_eq!(
-            extract_size(&result[0].create_stmt),
-            Some("100cc".to_string())
+            create_sql(&result[0]),
+            "CREATE CLUSTER analytics (SIZE = '100cc', REPLICATION FACTOR = 1)"
         );
-        assert_eq!(extract_replication_factor(&result[0].create_stmt), Some(1));
     }
 
     #[mz_ore::test]
@@ -576,8 +534,8 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "analytics");
         assert_eq!(
-            extract_size(&result[0].create_stmt),
-            Some("25cc".to_string())
+            create_sql(&result[0]),
+            "CREATE CLUSTER analytics (SIZE = '25cc')"
         );
     }
 
@@ -603,15 +561,13 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "analytics");
         assert_eq!(
-            extract_size(&result[0].create_stmt),
-            Some("100cc".to_string())
+            create_sql(&result[0]),
+            "CREATE CLUSTER analytics (SIZE = '100cc')"
         );
     }
 
     #[mz_ore::test]
     fn test_load_clusters_auto_scaling_strategy() {
-        use std::time::Duration;
-
         let dir = create_test_dir();
         let clusters_dir = dir.path().join("clusters");
         fs::create_dir(&clusters_dir).unwrap();
@@ -625,41 +581,11 @@ mod tests {
 
         let result = load_clusters(dir.path(), "default", None, &BTreeMap::new()).unwrap();
         assert_eq!(result.len(), 1);
-        let strategy = extract_auto_scaling_strategy(&result[0].create_stmt)
-            .unwrap()
-            .unwrap();
-        let on_hydration = strategy.on_hydration.unwrap();
-        assert_eq!(on_hydration.hydration_size, "3200cc");
-        assert_eq!(on_hydration.linger_duration, Some(Duration::from_secs(600)));
-    }
-
-    #[mz_ore::test]
-    fn test_extract_auto_scaling_strategy_absent_and_empty() {
-        let dir = create_test_dir();
-        let clusters_dir = dir.path().join("clusters");
-        fs::create_dir(&clusters_dir).unwrap();
-
-        fs::write(
-            clusters_dir.join("plain.sql"),
-            "CREATE CLUSTER plain (SIZE = '100cc');",
-        )
-        .unwrap();
-        fs::write(
-            clusters_dir.join("disabled.sql"),
-            "CREATE CLUSTER disabled (SIZE = '100cc', AUTO SCALING STRATEGY = ());",
-        )
-        .unwrap();
-
-        let result = load_clusters(dir.path(), "default", None, &BTreeMap::new()).unwrap();
-        assert_eq!(result.len(), 2);
-        for def in &result {
-            assert_eq!(
-                extract_auto_scaling_strategy(&def.create_stmt).unwrap(),
-                None,
-                "cluster '{}' should have no policy",
-                def.name
-            );
-        }
+        assert_eq!(
+            create_sql(&result[0]),
+            "CREATE CLUSTER analytics (SIZE = '100cc', AUTO SCALING STRATEGY = \
+             (ON HYDRATION (HYDRATION SIZE = '3200cc', LINGER DURATION = '600s')))"
+        );
     }
 
     #[mz_ore::test]

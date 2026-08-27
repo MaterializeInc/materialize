@@ -709,7 +709,7 @@ async fn upgrade_check(
 
     let msg = format!(
         "catalog upgrade from {} to {} would succeed in about {} ms",
-        last_seen_version,
+        last_seen_version.map_or_else(|| "new".into(), |v| v.to_string()),
         BUILD_INFO.human_version(None),
         dur.as_millis(),
     );
@@ -726,6 +726,7 @@ async fn upgrade_check(
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
+            | CatalogItem::MetricSink(_)
             | CatalogItem::Index(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)

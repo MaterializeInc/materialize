@@ -1,6 +1,6 @@
 ---
 source: src/sql-pretty/src/doc.rs
-revision: 72277f8ac9
+revision: 447da2b53e
 ---
 
 # mz-sql-pretty::doc

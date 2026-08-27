@@ -45,7 +45,10 @@ import ClusterFilter from "./ClusterFilter";
 import ColumnFilter from "./ColumnFilter";
 import DateRangeInput from "./DateRangeInput";
 import FilterMenu from "./FilterMenu";
-import { useFetchQueryHistoryList } from "./queries";
+import {
+  useFetchQueryHistoryList,
+  useFetchStatementLoggingMaxSampleRate,
+} from "./queries";
 import QueryHistoryTable from "./QueryHistoryTable";
 import {
   formatSelectedDates,
@@ -96,6 +99,34 @@ const EmptyState = () => {
                 : userFilter}
               <br />
               Date range: {formattedDateFilterStr}
+            </>
+          }
+        />
+      </EmptyListHeader>
+    </EmptyListWrapper>
+  );
+};
+
+const SamplingDisabledState = () => {
+  const { colors } = useTheme<MaterializeTheme>();
+
+  return (
+    <EmptyListWrapper>
+      <EmptyListHeader>
+        <Circle p={2} bg={colors.background.secondary}>
+          <ActivityIcon color={colors.foreground.secondary} />
+        </Circle>
+        <EmptyListHeaderContents
+          title="Statement logging is turned off."
+          helpText={
+            <>
+              The statement logging sample rate is set to zero, so no queries
+              are recorded. Ask an administrator to raise it with{" "}
+              <Text as="span" textStyle="monospace">
+                ALTER SYSTEM SET statement_logging_max_sample_rate
+              </Text>
+              . In self-managed deployments it can also be set through the
+              Materialize operator&apos;s Helm chart values.
             </>
           }
         />
@@ -189,12 +220,23 @@ export const QueryHistoryList = ({
     },
   );
 
+  const isEmpty = queryHistoryListData?.rows.length === 0;
+
+  // Only needed to disambiguate an empty result set, so keep it off the path
+  // that renders rows.
+  const { data: maxSampleRate, isLoading: isMaxSampleRateLoading } =
+    useFetchStatementLoggingMaxSampleRate({ enabled: isEmpty });
+
   useSyncObjectToSearchParams(urlParamObject);
 
   const isError = isPrivilegesError || isQueryHistoryListError;
 
-  const isLoading = isPrivilegesLoading || isQueryHistoryListLoading;
-  const isEmpty = queryHistoryListData?.rows.length === 0;
+  const isLoading =
+    isPrivilegesLoading || isQueryHistoryListLoading || isMaxSampleRateLoading;
+  const isSamplingDisabled = isEmpty && maxSampleRate === 0;
+  // Sampling being off, not an over-narrow filter, is what the user has to fix,
+  // so don't draw attention to the filter controls.
+  const isFilterEmpty = isEmpty && !isSamplingDisabled;
 
   const isUnauthorized = isPrivilegesSuccess && !isAuthorized;
 
@@ -215,12 +257,14 @@ export const QueryHistoryList = ({
             <HStack>
               <UserFilter
                 submitForm={submitForm}
-                variant={isEmpty ? "focused" : "default"}
+                variant={isFilterEmpty ? "focused" : "default"}
               />
               <ClusterFilter submitForm={submitForm} />
               <DateRangeInput
                 onSubmit={onSubmit}
-                toggleButtonProps={isEmpty ? { variant: "focused" } : undefined}
+                toggleButtonProps={
+                  isFilterEmpty ? { variant: "focused" } : undefined
+                }
               />
               <FilterMenu onSubmit={onSubmit} />
             </HStack>
@@ -246,7 +290,9 @@ export const QueryHistoryList = ({
               >
                 <Spinner data-testid="loading-spinner" />
               </Stack>
-            ) : isEmpty ? (
+            ) : isSamplingDisabled ? (
+              <SamplingDisabledState />
+            ) : isFilterEmpty ? (
               <EmptyState />
             ) : (
               <QueryHistoryTable

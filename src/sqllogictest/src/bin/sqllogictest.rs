@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![recursion_limit = "256"]
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
@@ -18,7 +20,8 @@ use std::process::ExitCode;
 
 use chrono::Utc;
 use clap::ArgAction;
-use mz_adapter_types::dyncfgs::{ENABLE_BACKGROUND_ALTER_CLUSTER, ENABLE_CLUSTER_CONTROLLER};
+use mz_adapter_types::dyncfgs::ENABLE_BACKGROUND_ALTER_CLUSTER;
+use mz_compute_types::dyncfgs::{ENABLE_PEEK_ROW_ITERATION_LIMIT, PEEK_ROW_ITERATION_LIMIT};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::metrics::MetricsRegistry;
@@ -176,18 +179,22 @@ async fn main() -> ExitCode {
         }
     }
 
-    // The cluster controller and background ALTER CLUSTER land dark in
-    // production (the dyncfg defaults stay false); force them on for
-    // sqllogictest so the suite exercises the controller owning the
-    // managed-cluster replica set. These are dyncfgs (set by name), and a
-    // caller-provided value wins.
-    for name in [
-        ENABLE_CLUSTER_CONTROLLER.name(),
-        ENABLE_BACKGROUND_ALTER_CLUSTER.name(),
+    // Pin background ALTER CLUSTER on for the suite so a config-shape
+    // `ALTER CLUSTER` returns immediately rather than blocking on the
+    // wait-shim. This is a dyncfg (set by name), and a caller-provided value
+    // wins.
+    system_parameter_defaults
+        .entry(ENABLE_BACKGROUND_ALTER_CLUSTER.name().to_string())
+        .or_insert_with(|| "true".to_string());
+
+    // Keep the guard enabled in the suite without constraining normal test queries.
+    for (name, value) in [
+        (ENABLE_PEEK_ROW_ITERATION_LIMIT.name(), "true"),
+        (PEEK_ROW_ITERATION_LIMIT.name(), "1000000000"),
     ] {
         system_parameter_defaults
             .entry(name.to_string())
-            .or_insert_with(|| "true".to_string());
+            .or_insert_with(|| value.to_string());
     }
 
     let config = RunConfig {

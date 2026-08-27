@@ -21,21 +21,24 @@ import time
 from collections.abc import Callable
 from copy import copy
 from datetime import datetime, timedelta
-from statistics import quantiles
+from statistics import median, quantiles
 from textwrap import dedent
 from threading import Event, Thread
 
 import psycopg
 import requests
 import websocket
-from psycopg import Cursor
+from psycopg import Cursor, sql
 from psycopg.errors import (
     DatabaseError,
+    DivisionByZero,
     InternalError_,
+    OperationalError,
     QueryCanceled,
 )
 
 from materialize import buildkite, ui
+from materialize.mzcompose import sanitizer_enabled
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -111,6 +114,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         if (args.slow_only and name not in slow_tests) or (
             not args.slow_only and name in slow_tests
         ):
+            return
+
+        # The profiling endpoints this exercises are backed by jemalloc, which
+        # sanitizer builds drop, so there is nothing to fetch there.
+        if name == "test-profile-fetch" and sanitizer_enabled():
+            ui.warn(f"Skipping {name} under a sanitizer: build has no jemalloc")
             return
 
         with c.test_case(name):
@@ -3686,6 +3695,100 @@ def workflow_test_concurrent_connections(c: Composition) -> None:
         ), f"p99 is {p99:.2f}s, should be less than {p99_limit:.2f}s"
 
 
+def workflow_test_connection_limit_tracks_committed_vars(c: Composition) -> None:
+    """
+    Assert that the connection limit enforced when a connection is established
+    tracks the committed values of `max_connections` and
+    `superuser_reserved_connections`.
+
+    Both are mirrored into the connection counter by `SystemVars` callbacks that
+    the catalog fires once per committed transaction that changed a system var,
+    so this covers every catalog op that can change them (`ALTER SYSTEM SET`,
+    `RESET` and `RESET ALL`), plus a rejected `ALTER SYSTEM SET`, which must
+    leave both the committed value and the enforced limit alone.
+    """
+    c.up("materialized")
+
+    def alter_system(statement: str) -> None:
+        # Internal users are exempt from the connection limit, so this keeps
+        # working while the limit is exhausted.
+        c.sql(statement, port=6877, user="mz_system")
+
+    def assert_committed(name: str, expected: str) -> None:
+        actual = c.sql_query(f"SHOW {name}", port=6877, user="mz_system")[0][0]
+        assert actual == expected, f"{name} is {actual}, expected {expected}"
+
+    def assert_connection_allowed() -> None:
+        with c.sql_connection(reuse_connection=False) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                assert cur.fetchone() == (1,)
+
+    def assert_connection_refused() -> None:
+        try:
+            conn = c.sql_connection(reuse_connection=False)
+        except OperationalError as e:
+            assert "creating connection would violate max_connections limit" in str(
+                e
+            ), f"Unexpected error: {e}"
+        else:
+            conn.close()
+            raise AssertionError("connecting succeeded, expected it to be refused")
+
+    alter_system("ALTER SYSTEM SET superuser_reserved_connections = 0")
+    alter_system("ALTER SYSTEM SET max_connections = 100")
+
+    # Held open for the rest of the test so that a limit of 1 is exhausted.
+    held_connection = c.sql_connection(reuse_connection=False)
+
+    try:
+        # Op::UpdateSystemConfiguration.
+        alter_system("ALTER SYSTEM SET max_connections = 1")
+        assert_committed("max_connections", "1")
+        assert_connection_refused()
+
+        # A mirror stuck on the previous value would keep refusing here.
+        alter_system("ALTER SYSTEM SET max_connections = 100")
+        assert_connection_allowed()
+
+        # Op::ResetSystemConfiguration.
+        alter_system("ALTER SYSTEM SET max_connections = 1")
+        assert_connection_refused()
+        alter_system("ALTER SYSTEM RESET max_connections")
+        assert_connection_allowed()
+
+        # Op::ResetAllSystemConfiguration.
+        alter_system("ALTER SYSTEM SET max_connections = 1")
+        assert_connection_refused()
+        alter_system("ALTER SYSTEM RESET ALL")
+        assert_connection_allowed()
+
+        # The same callback mirrors `superuser_reserved_connections`, so
+        # reserving every connection leaves none for a non-superuser.
+        alter_system("ALTER SYSTEM SET max_connections = 100")
+        alter_system("ALTER SYSTEM SET superuser_reserved_connections = 100")
+        assert_connection_refused()
+        alter_system("ALTER SYSTEM SET superuser_reserved_connections = 0")
+        assert_connection_allowed()
+
+        # A rejected `ALTER SYSTEM SET` commits nothing, so neither the
+        # committed value nor the enforced limit may move.
+        alter_system("ALTER SYSTEM SET max_connections = 1")
+        assert_connection_refused()
+        try:
+            alter_system("ALTER SYSTEM SET max_connections = 'not-a-number'")
+        except DatabaseError as e:
+            assert 'parameter "max_connections" requires' in str(
+                e
+            ), f"Unexpected error: {e}"
+        else:
+            raise AssertionError("ALTER SYSTEM succeeded, expected it to be rejected")
+        assert_committed("max_connections", "1")
+        assert_connection_refused()
+    finally:
+        held_connection.close()
+
+
 def workflow_test_profile_fetch(c: Composition) -> None:
     """
     Test fetching memory and CPU profiles via the internal HTTP
@@ -4165,7 +4268,7 @@ def workflow_test_subscribe_hydration_status(
               FROM mz_internal.mz_subscriptions s,
               unnest(s.referenced_object_ids) as sroi(id)
               JOIN mz_introspection.mz_compute_hydration_times_per_worker h ON h.export_id = s.id
-              JOIN mz_tables t ON (t.id = sroi.id)
+              JOIN mz_materialized_views t ON (t.id = sroi.id)
               WHERE t.name = 'mz_tables'
             true
             """))
@@ -4180,9 +4283,97 @@ def workflow_test_subscribe_hydration_status(
               FROM mz_internal.mz_subscriptions s,
               unnest(s.referenced_object_ids) as sroi(id)
               JOIN mz_introspection.mz_compute_hydration_times_per_worker h ON h.export_id = s.id
-              JOIN mz_tables t ON (t.id = sroi.id)
+              JOIN mz_materialized_views t ON (t.id = sroi.id)
               WHERE t.name = 'mz_tables'
             """))
+
+
+def workflow_test_hydration_timestamps(c: Composition) -> None:
+    """
+    Test that compute hydration timestamps are stamped by the replica.
+
+    They must therefore survive an environmentd restart, which does not disturb
+    the replica, and reset on a replica restart, which rebuilds the dataflows
+    they describe.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized", "clusterd1")
+
+    c.sql(
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.sql("""
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
+            COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102'],
+            WORKERS 2
+        ));
+        SET cluster = cluster1;
+        CREATE TABLE t (a int);
+        CREATE INDEX idx ON t (a);
+        """)
+
+    def collect_timestamps() -> list[tuple]:
+        """Return one `(worker_id, installed_at, started_at, hydrated_at)` row per worker.
+
+        Retries until every worker reports a complete set of timestamps, since
+        dataflows take an unknown time to hydrate and the introspection
+        relations are updated asynchronously.
+        """
+        deadline = time.time() + 120
+        while True:
+            with c.sql_cursor() as cursor:
+                cursor.execute("SET cluster = cluster1")
+                cursor.execute("""
+                    SELECT h.worker_id, h.installed_at, h.started_at, h.hydrated_at
+                    FROM mz_introspection.mz_compute_hydration_times_per_worker h
+                    JOIN mz_indexes i ON (i.id = h.export_id)
+                    WHERE i.name = 'idx'
+                    ORDER BY h.worker_id
+                    """)
+                rows = [tuple(row) for row in cursor.fetchall()]
+            if len(rows) == 2 and all(all(v is not None for v in row) for row in rows):
+                return rows
+            assert time.time() < deadline, f"idx did not hydrate, last saw: {rows}"
+            time.sleep(1)
+
+    before = collect_timestamps()
+    for worker_id, installed_at, started_at, hydrated_at in before:
+        assert (
+            installed_at <= started_at <= hydrated_at
+        ), f"worker {worker_id} timestamps out of order: {installed_at}, {started_at}, {hydrated_at}"
+
+    # An environmentd restart triggers a reconciliation on clusterd, which
+    # retains the dataflow, so the timestamps describe the same episode and must
+    # not change.
+    c.kill("materialized")
+    c.up("materialized")
+
+    after_environmentd_restart = collect_timestamps()
+    assert before == after_environmentd_restart, (
+        "hydration timestamps changed across an environmentd restart: "
+        f"{before} vs {after_environmentd_restart}"
+    )
+
+    # A replica restart rebuilds the dataflow, which is a new hydration episode,
+    # so every timestamp must be fresh.
+    c.kill("clusterd1")
+    c.up("clusterd1")
+
+    after_replica_restart = collect_timestamps()
+    for (_, before_installed, _, _), (worker_id, after_installed, _, _) in zip(
+        before, after_replica_restart
+    ):
+        assert after_installed > before_installed, (
+            f"worker {worker_id} kept its installed_at across a replica restart: "
+            f"{before_installed} vs {after_installed}"
+        )
 
 
 def workflow_cluster_drop_concurrent(
@@ -4636,6 +4827,304 @@ def workflow_test_drop_index_during_subscribe_sequencing(c: Composition) -> None
         assert (
             "duplicate end_statement_execution" not in logs.stdout
         ), "statement execution was ended twice; end-of-execution ownership handoff regressed"
+
+
+def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
+    """A read-then-write that reports zero rows must not retire before the write
+    that emptied its selection is readable through the timestamp oracle.
+
+    The OCC path linearizes only its initial `as_of`, and its internal subscribe
+    follows Persist visibility, which runs ahead of the oracle: the group
+    committer appends before it applies the write timestamp. A DELETE or UPDATE
+    can therefore consolidate its selection to empty against state no
+    oracle-timestamped read can reach yet, report zero rows through
+    `NoRowsMatched`, and return. A strict-serializable read issued after that
+    response then still sees the row the response said was not there, and no
+    serial order explains that history.
+
+    The `group_commit_before_apply_write` failpoint holds the winning writer
+    inside that window, the same one a second `environmentd` process opens on
+    its own with no ordering against local Persist visibility.
+
+    The winner is a blind INSERT into a second table rather than a write to the
+    target, because a blind write takes its timestamp from the oracle before it
+    parks. Its `W` is therefore below the target the UPDATE picks, so the UPDATE
+    folds the winner's effect into an empty payload and reaches its zero-row answer
+    without submitting anything, while the oracle still cannot serve reads at `W`.
+
+    A winner that took a timestamped write, an OCC `DELETE` on the target for
+    instance, does not witness this. `commit_timestamped` only peeks the oracle, so
+    a parked one leaves the write timestamp untouched, the UPDATE picks `W` itself,
+    and its submission queues behind the parked winner on the group committer. The
+    refusal then cannot come back until the winner has applied `W`, so the answer
+    is only ever reached after the oracle already covers it and the assertion below
+    holds whether or not the zero-row path linearizes at all.
+
+    NOTE: The premise relies on the UPDATE's frontier reaching `W + 1` even though
+    the winner wrote a different table, which holds because a txns-shard append
+    advances the readable upper of every registered table. If that ever stops
+    holding, the UPDATE waits for its frontier rather than for the oracle, and an
+    attempt passes without witnessing anything.
+    """
+
+    # Every txns-shard write parks here while armed, including the keepalives
+    # that advance table uppers, so this has to be a bounded `sleep` and not a
+    # `pause`: a keepalive would take the `pause` first and the winning INSERT
+    # would never get to append. The window has to outlast a peek, one subscribe
+    # dataflow installation, and the UPDATE's own wait for the oracle.
+    failpoint = "group_commit_before_apply_write"
+    arm = f"SET failpoints = '{failpoint}=sleep(10000)'"
+    disarm = f"SET failpoints = '{failpoint}=off'"
+
+    def occ_writes() -> tuple[int, int]:
+        """Read-then-writes the OCC path sequenced, and how many of their write
+        attempts lost the race for their write timestamp."""
+        metric = "mz_occ_read_then_write_retry_count"
+        metrics = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        values = {
+            line.split()[0]: int(float(line.split()[1]))
+            for line in metrics.splitlines()
+            if line.startswith((f"{metric}_count ", f"{metric}_sum "))
+        }
+        return values[f"{metric}_count"], values[f"{metric}_sum"]
+
+    def guard_rows(cur: Cursor, key: int) -> int:
+        """Rows of `guard` for `key`, which is what the UPDATE's selection reads."""
+        cur.execute(f"SELECT count(*) FROM guard WHERE g = {key}".encode())
+        row = cur.fetchone()
+        assert row is not None
+        return int(row[0])
+
+    with c.override(
+        Materialized(
+            # Sampled once at startup, so this cannot be an `ALTER SYSTEM SET`.
+            additional_system_parameter_defaults={
+                "enable_adapter_frontend_occ_read_then_write": "true"
+            },
+        )
+    ):
+        c.up("materialized")
+        c.sql("CREATE TABLE t (k int, v int)")
+        # A row here empties the UPDATE's selection. Keyed per attempt, so an
+        # attempt never starts from a selection an earlier one already emptied.
+        c.sql("CREATE TABLE guard (g int)")
+
+        # Ask the process rather than the catalog which path it takes: the UPDATE
+        # only reaches the histogram if the frontend sequenced it.
+        sequenced = occ_writes()[0]
+        c.sql("UPDATE t SET v = v + 1 WHERE k = 0")
+        assert occ_writes()[0] > sequenced, (
+            "the UPDATE did not go through the OCC path, so this would exercise the "
+            "coordinator's lock-based path instead"
+        )
+
+        # Connections are opened before the failpoint is armed: starting a session
+        # appends to `mz_sessions`, which parks like any other write.
+        with (
+            c.sql_cursor() as control,
+            c.sql_cursor() as probe,
+            c.sql_cursor() as winner_cur,
+            c.sql_cursor() as session,
+        ):
+            # A serializable read may pick a timestamp past the oracle's read
+            # timestamp, so it sees the winner's append while a strict-serializable
+            # read cannot.
+            probe.execute("SET transaction_isolation = 'serializable'")
+
+            # An attempt only says something while the window is open. The
+            # failpoint's `sleep` can expire first, and then the guard row is
+            # readable through the oracle and the UPDATE reports zero rows for the
+            # ordinary reason. The witness below tells the two apart, and an
+            # attempt that lost the window is retried with a fresh key.
+            for attempt in range(1, 4):
+                key = attempt
+                c.sql(f"INSERT INTO t VALUES ({key}, 1)")
+                armed = Event()
+
+                def guard_winner(key: int = key) -> None:
+                    armed.wait()
+                    # Takes its timestamp from the oracle, lands its append, then
+                    # parks before applying that timestamp to the oracle.
+                    winner_cur.execute(f"INSERT INTO guard VALUES ({key})".encode())
+
+                winner = PropagatingThread(target=guard_winner, name="winner")
+                winner.start()
+                control.execute(arm)
+                armed.set()
+
+                # The winner's append is visible in Persist from here on ...
+                deadline = time.time() + 120
+                while guard_rows(probe, key) == 0:
+                    assert (
+                        time.time() < deadline
+                    ), "the winning INSERT never became visible in Persist"
+                    time.sleep(0.1)
+                # ... and the oracle cannot serve reads at it yet, which is what
+                # puts us inside the window. This witness says nothing about the
+                # UPDATE, so it stays valid once the zero-row path waits.
+                before = guard_rows(session, key)
+
+                conflicts = occ_writes()[1]
+                started = time.time()
+                session.execute(
+                    f"UPDATE t SET v = v + 1 WHERE k = {key} "
+                    f"AND NOT EXISTS (SELECT 1 FROM guard WHERE g = {key})".encode()
+                )
+                matched = session.rowcount
+                elapsed = time.time() - started
+                after = guard_rows(session, key)
+                conflicts = occ_writes()[1] - conflicts
+
+                control.execute(disarm)
+                # `off` does not interrupt a `sleep` under way, so this waits out
+                # the rest of the window.
+                winner.join(timeout=120)
+                assert not winner.is_alive(), "the winning INSERT never finished"
+
+                print(
+                    f"attempt {attempt}: UPDATE matched {matched} row(s) in "
+                    f"{elapsed:.1f}s with {conflicts} write conflict(s); "
+                    f"strict-serializable reads saw {before} guard row(s) before it "
+                    f"and {after} after"
+                )
+                assert matched == 0, (
+                    f"the UPDATE matched {matched} row(s) with the guard row already "
+                    "visible, so it never took the zero-row path"
+                )
+                if before > 0:
+                    # The guard row was already readable through the oracle, so
+                    # the zero-row answer needed no linearization and this attempt
+                    # witnesses nothing.
+                    continue
+
+                assert conflicts == 0, (
+                    f"the UPDATE lost {conflicts} write conflict(s), so it submitted "
+                    "a write and its answer came back only after the parked winner "
+                    "applied, which leaves the assertion below with nothing to witness"
+                )
+
+                # Without the linearization the UPDATE returns while the oracle is
+                # still below the guard row's timestamp, so this read lands below it
+                # too and reports 0: a statement that answered "no rows" from state
+                # the following read cannot see.
+                assert after == 1, (
+                    "the UPDATE reported zero rows matched from state the oracle had "
+                    "not applied yet, and a strict-serializable read after it saw "
+                    f"{after} guard row(s): the zero-row response was not linearized "
+                    "against the write that emptied the selection"
+                )
+                break
+            else:
+                raise AssertionError(
+                    "no attempt ran its UPDATE while the winning INSERT was "
+                    "visible in Persist but not yet through the oracle, so the "
+                    "window was never observed"
+                )
+
+
+def workflow_test_occ_sealed_input_write_stands_alone(c: Composition) -> None:
+    """A read-then-write whose selection reads persisted state must commit as
+    its own transaction, including when its subscribe ends on its own.
+
+    The OCC path stages a mutation's diffs only when the selection reads
+    nothing, because only then is the statement one that may belong to a
+    transaction. A selection that reads persisted state commits inside the OCC
+    loop and ends the implicit transaction it opened instead of spanning the
+    rest of an extended-protocol pipeline, so a later failure there cannot undo
+    it.
+
+    Which of the two happens is decided twice, and the answers differ. Before
+    the dataflow runs it is `depends_on()` on the selection. Once it runs it is
+    whether the subscribe closed on its own, which it also does for a sealed
+    persisted input: a `REFRESH AT` materialized view past its last refresh has
+    an empty write frontier, so the sink's output frontier reaches the empty
+    antichain. An `INSERT ... SELECT` over such a view reads persisted state and
+    still takes the closed-channel exit. Only the syntactic answer may decide
+    transaction membership, or whether a statement's rows survive would turn on
+    an input passing its last refresh rather than on the statement.
+    """
+
+    def rows_surviving(write: str) -> int:
+        """Rows left in `dst` once `write` has succeeded and the pipeline behind
+        it has failed. Leaves `dst` empty again.
+
+        `write` is sent as one extended-protocol pipeline with a failing
+        statement behind it and no `Sync` between them. A pipeline is an
+        implicit transaction, so rows going missing here is exactly `write`
+        having joined that transaction instead of committing on its own.
+        """
+        with c.sql_connection() as conn:
+            try:
+                # psycopg pipelines the extended protocol only, and syncs when
+                # the block ends. Autocommit keeps a `BEGIN` off the front,
+                # which the OCC path would refuse outright.
+                with conn.cursor() as cur, conn.pipeline():
+                    cur.execute(write.encode())
+                    cur.execute(b"SELECT 1 / 0")
+            except DivisionByZero:
+                pass
+            else:
+                raise AssertionError(f"the statement behind {write!r} succeeded")
+        rows = c.sql_query("SELECT count(*) FROM dst")[0][0]
+        c.sql("DELETE FROM dst")
+        return rows
+
+    with c.override(
+        Materialized(
+            # Sampled once at startup, so this cannot be an `ALTER SYSTEM SET`.
+            additional_system_parameter_defaults={
+                "enable_adapter_frontend_occ_read_then_write": "true"
+            },
+        )
+    ):
+        c.up("materialized")
+        c.sql(dedent("""
+                CREATE TABLE src (a int);
+                INSERT INTO src VALUES (1), (2), (3);
+                CREATE TABLE dst (a int);
+                CREATE MATERIALIZED VIEW sealed WITH (REFRESH AT CREATION) AS
+                    SELECT a FROM src;
+                """))
+
+        # An empty write frontier is what closes the subscribe, and it surfaces
+        # as a NULL `write_frontier`. Hydration alone is not enough, so wait for
+        # the seal rather than for the first successful read.
+        sealed = """SELECT f.write_frontier IS NULL
+                    FROM mz_internal.mz_frontiers f
+                    JOIN mz_materialized_views m ON (m.id = f.object_id)
+                    WHERE m.name = 'sealed'"""
+        deadline = time.time() + 120
+        while c.sql_query(sealed) != [(True,)]:
+            assert (
+                time.time() < deadline
+            ), "the REFRESH AT CREATION materialized view never sealed"
+            time.sleep(0.1)
+
+        # Control: the same pipeline over `src`, whose subscribe never ends on
+        # its own. It pins the harness, since rows lost here would mean the
+        # pipeline was never an open transaction to begin with.
+        write = "INSERT INTO dst SELECT a FROM src"
+        rows = rows_surviving(write)
+        assert rows == 3, f"{write} succeeded, then lost {3 - rows} of its 3 rows"
+
+        # Ask the process rather than the catalog which path that took: the
+        # write only reaches the histogram if the frontend sequenced it, and on
+        # the coordinator's lock path none of this is about read-then-write
+        # transaction handling at all.
+        metrics = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        assert any(
+            line.startswith("mz_occ_read_then_write_retry_count_count ")
+            and float(line.split()[1]) > 0
+            for line in metrics.splitlines()
+        ), "no read-then-write went through the OCC path"
+
+        write = "INSERT INTO dst SELECT a FROM sealed"
+        rows = rows_surviving(write)
+        assert rows == 3, f"{write} succeeded, then lost {3 - rows} of its 3 rows"
 
 
 def workflow_test_refresh_mv_warmup(
@@ -5554,9 +6043,9 @@ def workflow_test_adhoc_system_indexes(
         WHERE i.name = 'mz_test_idx1'
         """)
     assert output[0] == ("u1", "mz_tables", "mz_catalog_server"), output
-    output = c.sql_query("EXPLAIN SELECT * FROM mz_tables WHERE char_length(name) = 9")
+    output = c.sql_query("EXPLAIN SELECT * FROM mz_tables WHERE char_length(name) = 8")
     assert "mz_test_idx1" in output[0][0], output
-    output = c.sql_query("SELECT * FROM mz_tables WHERE char_length(name) = 9")
+    output = c.sql_query("SELECT * FROM mz_tables WHERE char_length(name) = 8")
     assert len(output) > 0
 
     # The system user should be able to create a new index on an unstable
@@ -7699,6 +8188,86 @@ def workflow_test_prometheus_metrics(c: Composition) -> None:
                 """))
 
 
+def workflow_test_resource_usage(c: Composition) -> None:
+    """Test that mz_cluster_replica_resource_usage reports observations per replica process."""
+
+    c.up("materialized")
+
+    # Sample fast, so the test does not have to wait out the default interval.
+    c.sql(
+        "ALTER SYSTEM SET mz_metrics_usage_refresh_interval = '1s';",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql("CREATE CLUSTER cluster1 SIZE 'scale=2,workers=2';")
+
+    def observations() -> dict[tuple[int, str, str], int]:
+        with c.sql_cursor() as cursor:
+            cursor.execute(b"SET cluster = cluster1")
+            # `process_id` and `value` are `uint8`, which psycopg has no adapter for and hands
+            # back as strings. Cast so the comparisons below are numeric, not lexicographic.
+            cursor.execute(b"""
+                SELECT process_id::int8, source, metric, value::int8
+                FROM mz_introspection.mz_cluster_replica_resource_usage
+                """)
+            return {(r[0], r[1], r[2]): r[3] for r in cursor.fetchall()}
+
+    # Both processes must report, and every process must report the same set of metrics: the two
+    # run the same binary in the same environment, so a metric readable on one and not the other
+    # means a reader failed rather than that the source is unavailable.
+    for _ in range(60):
+        before = observations()
+        processes = {process_id for process_id, _, _ in before}
+        per_process = {
+            process_id: {(s, m) for p, s, m in before if p == process_id}
+            for process_id in processes
+        }
+        if processes == {0, 1} and len(set(map(frozenset, per_process.values()))) == 1:
+            break
+        time.sleep(1)
+    else:
+        assert False, f"resource usage not reported for both processes: {before}"
+
+    # `rusage` and `proc_status` are available on any Linux replica, so their absence is a bug
+    # rather than an unsupported configuration. cgroup metrics are deliberately not asserted:
+    # `memory.peak` and `memory.swap.peak` depend on the kernel version.
+    metrics = {(source, metric) for _, source, metric in before}
+    for required in [("rusage", "max_rss"), ("proc_status", "vm_rss")]:
+        assert required in metrics, f"{required} missing from {sorted(metrics)}"
+
+    # Every reported value must be a plain number. Nothing is allowed to surface as a sentinel.
+    for key, value in before.items():
+        assert value >= 0, f"{key} reported {value}"
+
+    # Do some work to push usage up. Peaks must not go backwards, whether or not this particular
+    # workload moves them.
+    c.sql("""
+        SET cluster = cluster1;
+        CREATE TABLE t (a int);
+        INSERT INTO t SELECT generate_series(1, 500000);
+        CREATE MATERIALIZED VIEW mv AS SELECT count(*) FROM t;
+        """)
+    with c.sql_cursor() as cursor:
+        cursor.execute(b"SET cluster = cluster1")
+        cursor.execute(b"SELECT * FROM mv")
+        cursor.fetchall()
+
+    # Give the sampler a few intervals to observe the new usage.
+    time.sleep(5)
+
+    after = observations()
+
+    # Peaks are monotonic, whether the kernel maintains them or the sampler folds them. Current
+    # values are free to fall, so they are deliberately not checked here.
+    peaks = [key for key in before if key[2].endswith("peak") or key[2] == "max_rss"]
+    assert peaks, f"no peak metrics reported: {sorted(before)}"
+    for key in peaks:
+        assert key in after, f"{key} stopped being reported"
+        assert (
+            after[key] >= before[key]
+        ), f"{key} peak fell from {before[key]} to {after[key]}"
+
+
 def workflow_test_metrics_null_label(c: Composition) -> None:
     """SQL-198: `/metrics/mz_usage` must not abort environmentd when a
     Prometheus label column is SQL NULL. An unorchestrated cluster replica has
@@ -7733,3 +8302,184 @@ def workflow_test_metrics_null_label(c: Composition) -> None:
         assert c.sql_query("SELECT 1", reuse_connection=False)[0][0] == 1
     finally:
         c.sql("DROP CLUSTER sql198_unmgd CASCADE", port=6877, user="mz_system")
+
+
+def workflow_test_controller_oracle_stall(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Scheduled-cluster count must not determine unrelated reconciliation latency."""
+    parser.add_argument("--latency-ms", type=int, default=500)
+    parser.add_argument("--scheduled-clusters", type=int, default=8)
+    args = parser.parse_args()
+    if args.latency_ms < 100:
+        parser.error("--latency-ms must be at least 100")
+    if args.scheduled_clusters < 8:
+        parser.error("--scheduled-clusters must be at least 8")
+    oracle_port = 26258
+
+    def set_latency(toxi: str, latency_ms: int) -> None:
+        requests.delete(f"{toxi}/proxies/oracle/toxics/lat")
+        if latency_ms > 0:
+            response = requests.post(
+                f"{toxi}/proxies/oracle/toxics",
+                json={
+                    "name": "lat",
+                    "type": "latency",
+                    "attributes": {"latency": latency_ms, "jitter": 0},
+                },
+            )
+            assert response.status_code == 200, response.text
+
+    with c.override(
+        Materialized(
+            external_metadata_store=True,
+            options=[
+                f"--timestamp-oracle-url=postgres://root@toxiproxy:{oracle_port}"
+                "?options=--search_path=tsoracle",
+            ],
+        )
+    ):
+        c.up("toxiproxy")
+        toxi = f"http://localhost:{c.default_port('toxiproxy')}"
+        requests.delete(f"{toxi}/proxies/oracle")
+        response = requests.post(
+            f"{toxi}/proxies",
+            json={
+                "name": "oracle",
+                "listen": f"0.0.0.0:{oracle_port}",
+                "upstream": "postgres-metadata:26257",
+                "enabled": True,
+            },
+        )
+        assert response.status_code == 201, response.text
+        c.up("materialized")
+
+        c.sql(
+            "ALTER SYSTEM SET cluster_controller_tick_interval = '100ms'",
+            port=6877,
+            user="mz_system",
+        )
+        mz = c.sql_cursor()
+        mz.execute("SET transaction_isolation = 'serializable'")
+
+        def converge_ms(replication_factor: int) -> float:
+            start = time.monotonic()
+            mz.execute(
+                sql.SQL("ALTER CLUSTER cc_probe SET (REPLICATION FACTOR {})").format(
+                    sql.Literal(replication_factor)
+                )
+            )
+            while True:
+                mz.execute(
+                    "SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c "
+                    "ON r.cluster_id = c.id WHERE c.name = 'cc_probe'"
+                )
+                if mz.fetchall()[0][0] == replication_factor:
+                    return (time.monotonic() - start) * 1000
+                assert (
+                    time.monotonic() - start < 120
+                ), f"cc_probe never reached rf {replication_factor}"
+                time.sleep(0.05)
+
+        def convergence_samples() -> list[float]:
+            samples = []
+            replication_factor = 1
+            for _ in range(3):
+                samples.append(converge_ms(replication_factor))
+                replication_factor = 1 - replication_factor
+            return samples
+
+        def await_scheduled_replicas() -> None:
+            start = time.monotonic()
+            while True:
+                mz.execute(
+                    "SELECT count(DISTINCT c.id), count(*) "
+                    "FROM mz_clusters c JOIN mz_cluster_replicas r "
+                    "ON r.cluster_id = c.id "
+                    "WHERE c.name LIKE 'cc\\_sched%' ESCAPE '\\'"
+                )
+                cluster_count, replica_count = mz.fetchall()[0]
+                if (
+                    cluster_count == args.scheduled_clusters
+                    and replica_count == args.scheduled_clusters
+                ):
+                    return
+                if time.monotonic() - start >= 120:
+                    mz.execute(
+                        "SELECT c.name, count(r.id) "
+                        "FROM mz_clusters c LEFT JOIN mz_cluster_replicas r "
+                        "ON r.cluster_id = c.id "
+                        "WHERE c.name LIKE 'cc\\_sched%' ESCAPE '\\' "
+                        "GROUP BY c.name ORDER BY c.name"
+                    )
+                    replica_counts = mz.fetchall()
+                    raise AssertionError(
+                        "scheduled cluster replica counts after 120s: "
+                        f"{replica_counts}. Expected exactly "
+                        f"{args.scheduled_clusters} cc_sched clusters with "
+                        "exactly one replica each"
+                    )
+                time.sleep(0.05)
+
+        set_latency(toxi, 0)
+        mz.execute(
+            "CREATE CLUSTER cc_probe "
+            "(SIZE 'scale=1,workers=1', REPLICATION FACTOR 0)"
+        )
+
+        no_latency_samples = convergence_samples()
+        no_latency_ms = median(no_latency_samples)
+        converge_ms(0)
+
+        set_latency(toxi, args.latency_ms)
+        control_samples = convergence_samples()
+        control_ms = median(control_samples)
+        set_latency(toxi, 0)
+        latency_increase_ms = control_ms - no_latency_ms
+        minimum_increase_ms = args.latency_ms / 2
+        assert latency_increase_ms >= minimum_increase_ms, (
+            f"injecting {args.latency_ms}ms oracle latency increased the control "
+            f"measurement by only {latency_increase_ms:.0f}ms, expected at least "
+            f"{minimum_increase_ms:.0f}ms. The oracle may be bypassing toxiproxy"
+        )
+
+        converge_ms(0)
+        mz.execute("CREATE TABLE cc_sched_t (x int)")
+        for i in range(args.scheduled_clusters):
+            cluster_name = sql.Identifier(f"cc_sched{i}")
+            mz.execute(
+                sql.SQL(
+                    "CREATE CLUSTER {} (SIZE 'scale=1,workers=1', "
+                    "SCHEDULE = ON REFRESH "
+                    "(HYDRATION TIME ESTIMATE = '60 seconds'))"
+                ).format(cluster_name)
+            )
+            mz.execute(
+                sql.SQL(
+                    "CREATE MATERIALIZED VIEW {} IN CLUSTER {} "
+                    "WITH (REFRESH = EVERY '1 second') AS "
+                    "SELECT count(*) FROM cc_sched_t"
+                ).format(sql.Identifier(f"cc_sched{i}_mv"), cluster_name)
+            )
+
+        await_scheduled_replicas()
+        set_latency(toxi, args.latency_ms)
+        stalled_samples = convergence_samples()
+        stalled_ms = median(stalled_samples)
+        set_latency(toxi, 0)
+
+    excess_ms = stalled_ms - control_ms
+    ceiling_ms = 4 * args.latency_ms
+    print(f"cc_probe 0 -> 1 replica at {args.latency_ms}ms oracle latency:")
+    print(f"  no injected latency : {no_latency_ms:.0f}ms")
+    print(f"  0 scheduled clusters : {control_ms:.0f}ms")
+    print(f"  {args.scheduled_clusters} scheduled clusters : {stalled_ms:.0f}ms")
+    print(
+        f"  excess : {excess_ms:.0f}ms (ceiling {ceiling_ms}ms, "
+        "expected bounded oracle round-trips per controller phase)"
+    )
+    assert excess_ms < ceiling_ms, (
+        f"{args.scheduled_clusters} unrelated ON REFRESH clusters delayed the "
+        f"probe cluster's reconciliation by {excess_ms:.0f}ms "
+        f"(ceiling {ceiling_ms}ms)"
+    )

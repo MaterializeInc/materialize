@@ -27,11 +27,11 @@
 //! so that re-running provisioning on an already-provisioned environment is a
 //! no-op.
 
-use crate::client::auto_scaling::strategy_to_cluster_option;
 use crate::client::connection::ProvisioningClient;
 use crate::client::errors::ConnectionError;
-use crate::client::models::{ClusterConfig, ClusterOptions};
+use crate::client::models::ClusterConfig;
 use crate::client::quote_identifier;
+use mz_sql_parser::ast::Ident;
 use mz_sql_parser::ast::display::AstDisplay;
 
 impl ProvisioningClient<'_> {
@@ -71,41 +71,6 @@ impl ProvisioningClient<'_> {
         Ok(())
     }
 
-    /// Create a managed cluster with the requested size, replication factor,
-    /// and autoscaling policy.
-    pub async fn create_cluster(
-        &self,
-        name: &str,
-        options: &ClusterOptions,
-    ) -> Result<(), ConnectionError> {
-        let mut sql = format!(
-            "CREATE CLUSTER {} (SIZE = '{}', REPLICATION FACTOR = {}",
-            quote_identifier(name),
-            options.size,
-            options.replication_factor
-        );
-        if let Some(strategy) = &options.auto_scaling_strategy {
-            sql.push_str(", ");
-            sql.push_str(&strategy_to_cluster_option(strategy).to_ast_string_simple());
-        }
-        sql.push(')');
-
-        self.client.execute(&sql, &[]).await.map_err(|e| {
-            if e.to_string().contains("already exists") {
-                ConnectionError::ClusterAlreadyExists {
-                    name: name.to_string(),
-                }
-            } else {
-                ConnectionError::ClusterCreationFailed {
-                    name: name.to_string(),
-                    source: Box::new(e),
-                }
-            }
-        })?;
-
-        Ok(())
-    }
-
     /// Create a cluster from a captured cluster configuration.
     pub async fn create_cluster_with_config(
         &self,
@@ -113,8 +78,33 @@ impl ProvisioningClient<'_> {
         config: &ClusterConfig,
     ) -> Result<(), ConnectionError> {
         let grants = match config {
-            ClusterConfig::Managed { options, grants } => {
-                self.create_cluster(name, options).await?;
+            ClusterConfig::Managed {
+                create_stmt,
+                grants,
+            } => {
+                let mut create_stmt = create_stmt.clone();
+                create_stmt.name =
+                    Ident::new(name).map_err(|e| ConnectionError::ClusterCreationFailed {
+                        name: name.to_string(),
+                        source: Box::new(e),
+                    })?;
+
+                self.client
+                    .execute(&create_stmt.to_ast_string_simple(), &[])
+                    .await
+                    .map_err(|e| {
+                        if e.to_string().contains("already exists") {
+                            ConnectionError::ClusterAlreadyExists {
+                                name: name.to_string(),
+                            }
+                        } else {
+                            ConnectionError::ClusterCreationFailed {
+                                name: name.to_string(),
+                                source: Box::new(e),
+                            }
+                        }
+                    })?;
+
                 grants
             }
             ClusterConfig::Unmanaged { replicas, grants } => {

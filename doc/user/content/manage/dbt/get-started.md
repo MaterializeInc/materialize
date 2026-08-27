@@ -421,7 +421,7 @@ CREATE INDEX database.schema.view_a_idx IN CLUSTER cluster_a ON view_a (col_a);
 
 As new data arrives, indexes keep view results **incrementally updated** in
 memory within a [cluster](/concepts/clusters/). Indexes help optimize query
-performance and make queries against views fast and computationally free.
+performance and make queries against views fast since the results are already calculated.
 
 #### Materialized views
 
@@ -545,12 +545,14 @@ For guidance and best practices on how to use `PARTITION BY` in Materialize,
 see [Partitioning and filter pushdown](/transform-data/patterns/partition-by/).
 {{</ tip >}}
 
-To control the internal storage order that Materialize uses for a
-materialized view, use the `partition_by` configuration. This declares the
-columns that Materialize should sort by when writing the underlying data into
-storage, so that rows with similar values are stored together. The main
-user-visible benefit is enabling [filter pushdown](/transform-data/patterns/partition-by/#filter-pushdown)
-for queries with selective filters on the partition columns.
+To declare the expected internal storage order for a materialized view, use the
+`partition_by` configuration.
+
+The `PARTITION BY` option that this compiles to is validated when the
+materialized view is created, but it does not change how the data is stored.
+Setting it therefore does not by itself change whether [filter
+pushdown](/transform-data/patterns/partition-by/#filter-pushdown) is effective
+for queries with selective filters on those columns.
 
 **Filename:** models/materialized_view_partitioned.sql
 ```mzsql

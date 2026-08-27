@@ -482,15 +482,11 @@ where
 
     let (sentry_layer, sentry_reloader): (_, DirectiveReloader) =
         if let Some(sentry_config) = config.sentry {
-            let guard = sentry::init((
-                sentry_config.dsn,
-                sentry::ClientOptions {
-                    attach_stacktrace: true,
-                    release: Some(format!("materialize@{0}", config.build_version).into()),
-                    environment: sentry_config.environment.map(Into::into),
-                    ..Default::default()
-                },
-            ));
+            let mut options = sentry::ClientOptions::default();
+            options.attach_stacktrace = true;
+            options.release = Some(format!("materialize@{0}", config.build_version).into());
+            options.environment = sentry_config.environment.map(Into::into);
+            let guard = sentry::init((sentry_config.dsn, options));
 
             // Forgetting the guard ensures that the Sentry transport won't shut down for the
             // lifetime of the process.

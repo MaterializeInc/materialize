@@ -877,6 +877,26 @@ impl Optimizer {
             Box::new(CanonicalizeMfp),
             // Identifies common relation subexpressions.
             Box::new(cse::relation_cse::RelationCSE::new(false)),
+            // `UnionBranchCancellation` only cancels two branches that are direct siblings of the
+            // same `Union` and literally structurally equal (see `compare_branches`); a
+            // `Get x` under a `Map` sibling to a `Union` nested one level down does not qualify,
+            // even if that nested union contains a matching `Negate (Get x)`.
+            //
+            // In `fixpoint_physical_01` above, `LiteralLifting` can hoist a `Map` literal that was
+            // wrapping *both* branches of such a union out of the union entirely, turning
+            // `union(map(k, x), map(k, union(negate(x), y)))` into `map(k, union(x, union(negate(x), y)))`.
+            // Flattening that union-of-union is what makes `x` and `negate(x)` direct siblings, so
+            // run `UnionFusion` first to establish the flat shape `UnionBranchCancellation` needs.
+            // `LiteralLifting` also runs in the logical optimizer's `fixpoint_logical_02`, but
+            // `logical_cleanup_pass` (which runs after cross-view normalization, closer to where this
+            // shape tends to arise) never repeats it, so no earlier `UnionBranchCancellation` call
+            // gets a chance to see the flattened form. Run it again here, after the last
+            // `RelationCSE`, so the trailing `fold_constants_fixpoint` can fuse the resulting empty
+            // constants and drop the now-unused binding.
+            Box::new(fusion::union::Union);
+                if ctx.features.enable_union_cancellation_after_relation_cse,
+            Box::new(UnionBranchCancellation);
+                if ctx.features.enable_union_cancellation_after_relation_cse,
             // `RelationCSE` can create new points of interest for `ProjectionPushdown`: If an MFP
             // is cut in half by `RelationCSE`, then we'd like to push projections behind the new
             // Get as much as possible. This is because a fork in the plan involves copying the

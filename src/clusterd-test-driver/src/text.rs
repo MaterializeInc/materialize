@@ -27,6 +27,11 @@
 //! A `#` at column 0 is a comment; an indented `#0` is a column reference in MIR.
 //! Comments and blank lines are preserved across a rewrite.
 //!
+//! Output that itself contains blank lines (notably an `explain` plan render) uses
+//! the `datadriven` doubled-separator form: the directive, then `----`, then `----`,
+//! then the expected output, closed by a `----`/`----` pair. `REWRITE` emits this
+//! form automatically when the output contains a blank line.
+//!
 //! Command bodies are indentation-structured: `define-schema`/`write-rows`/`peek`
 //! carry rows or columns, and `define` carries `import`/`build`/`export`
 //! sub-commands, with a `build`'s MIR as its own deeper-indented sub-body.
@@ -34,8 +39,11 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, anyhow, bail, ensure};
+use mz_repr::GlobalId;
 
-use crate::script::{BuildSpec, ColumnSpec, Command, ConfigSetting, ExportSpec, ImportSpec};
+use crate::script::{
+    BuildSpec, ColumnSpec, Command, ConfigSetting, ExplainTarget, ExportSpec, ImportSpec,
+};
 
 /// One element of a parsed script file, retained so a `REWRITE` reproduces the
 /// file faithfully.
@@ -82,12 +90,36 @@ pub fn parse_file(content: &str) -> anyhow::Result<Vec<Item>> {
         );
         let input = lines[start..i].join("\n");
         i += 1; // consume `----`
-        // The expected output runs to the next blank line (or end of file).
-        let exp_start = i;
-        while i < lines.len() && !lines[i].trim().is_empty() {
+        // A second `----` opens "blank-line mode" (the `datadriven` convention): the
+        // expected output may contain blank lines and runs until a closing `----`
+        // `----` pair, instead of ending at the first blank line. Used for the
+        // multi-object `explain` plan render.
+        let blank_mode = i < lines.len() && lines[i] == "----";
+        if blank_mode {
             i += 1;
         }
-        let expected = lines[exp_start..i].join("\n");
+        let exp_start = i;
+        let expected = if blank_mode {
+            while i < lines.len()
+                && !(lines[i] == "----" && i + 1 < lines.len() && lines[i + 1] == "----")
+            {
+                i += 1;
+            }
+            ensure!(
+                i < lines.len(),
+                "stanza starting at line {} has an unclosed `----`/`----` block",
+                start + 1
+            );
+            let expected = lines[exp_start..i].join("\n");
+            i += 2; // consume the closing `----` `----`
+            expected
+        } else {
+            // The expected output runs to the next blank line (or end of file).
+            while i < lines.len() && !lines[i].trim().is_empty() {
+                i += 1;
+            }
+            lines[exp_start..i].join("\n")
+        };
         let command = parse_command(&input)
             .with_context(|| format!("parsing stanza at line {}", start + 1))?;
         items.push(Item::Stanza(Stanza {
@@ -115,10 +147,18 @@ pub fn rewrite(items: &[Item], actuals: &[String]) -> String {
                 let actual = &actuals[next];
                 next += 1;
                 out.push_str(&stanza.input);
-                out.push_str("\n----\n");
-                out.push_str(actual);
-                if !actual.is_empty() {
-                    out.push('\n');
+                if actual.contains("\n\n") {
+                    // Blank lines in the output need the doubled-`----` form, else the
+                    // first blank line would truncate the block on the next parse.
+                    out.push_str("\n----\n----\n");
+                    out.push_str(actual);
+                    out.push_str("\n----\n----\n");
+                } else {
+                    out.push_str("\n----\n");
+                    out.push_str(actual);
+                    if !actual.is_empty() {
+                        out.push('\n');
+                    }
                 }
             }
         }
@@ -274,6 +314,22 @@ fn opt_usize(args: &BTreeMap<String, String>, key: &str) -> anyhow::Result<Optio
         .transpose()
 }
 
+/// Parse a global id argument: a bare `u64` (e.g. `1001`) is the user namespace,
+/// matching [`mz_repr::GlobalId`]'s `Display`/`FromStr` prefixes (`s`/`si`/`u`/`t`)
+/// for the other namespaces, e.g. `t7` is `GlobalId::Transient(7)`.
+fn parse_id(s: &str) -> anyhow::Result<GlobalId> {
+    if s.bytes().all(|b| b.is_ascii_digit()) {
+        let id: u64 = s.parse().with_context(|| format!("bad id `{s}`"))?;
+        Ok(GlobalId::User(id))
+    } else {
+        s.parse().with_context(|| format!("bad id `{s}`"))
+    }
+}
+
+fn req_id(args: &BTreeMap<String, String>, key: &str) -> anyhow::Result<GlobalId> {
+    parse_id(req(args, key)?)
+}
+
 fn opt_string(args: &BTreeMap<String, String>, key: &str) -> Option<String> {
     args.get(key).cloned()
 }
@@ -300,22 +356,22 @@ fn parse_usize_list(s: &str) -> anyhow::Result<Vec<usize>> {
 /// Parse an `export` sub-command into an [`ExportSpec`]. The `kind=` argument
 /// selects the variant (defaulting to `index`); each kind takes its own arguments.
 fn parse_export(args: &BTreeMap<String, String>) -> anyhow::Result<ExportSpec> {
-    let on_id = req_u64(args, "on")?;
+    let on_id = req_id(args, "on")?;
     Ok(
         match args.get("kind").map(String::as_str).unwrap_or("index") {
             "index" => ExportSpec::Index {
-                index_id: req_u64(args, "index")?,
+                index_id: req_id(args, "index")?,
                 on_id,
                 key: parse_usize_list(req(args, "key")?)?,
             },
             "materialized-view" => ExportSpec::MaterializedView {
-                sink_id: req_u64(args, "sink")?,
+                sink_id: req_id(args, "sink")?,
                 on_id,
                 shard: req(args, "shard")?.to_string(),
                 schema: opt_string(args, "schema"),
             },
             "subscribe" => ExportSpec::Subscribe {
-                sink_id: req_u64(args, "sink")?,
+                sink_id: req_id(args, "sink")?,
                 on_id,
                 schema: opt_string(args, "schema"),
                 up_to: opt_u64(args, "up-to")?,
@@ -370,13 +426,24 @@ fn columns_from_body(body: &[Line]) -> anyhow::Result<Vec<ColumnSpec>> {
         .collect()
 }
 
-/// Parse a `create-dataflow` body of `import`/`build`/`export` sub-commands. The
-/// directive's bare flags carry the dataflow-level options (`optimize`).
-fn parse_create_dataflow(
+/// The parsed parts of a `create-dataflow` / `explain` body, shared by both verbs.
+struct DataflowBody {
+    name: Option<String>,
+    imports: Vec<ImportSpec>,
+    builds: Vec<BuildSpec>,
+    exports: Vec<ExportSpec>,
+    as_of: u64,
+    optimize: bool,
+}
+
+/// Parse a dataflow body of `import`/`build`/`export` sub-commands, shared by
+/// `create-dataflow` and `explain`. The directive's bare flags carry the
+/// dataflow-level options (`optimize`).
+fn parse_dataflow_body(
     args: &BTreeMap<String, String>,
     flags: &[String],
     body: &[Line],
-) -> anyhow::Result<Command> {
+) -> anyhow::Result<DataflowBody> {
     let name = opt_string(args, "name");
     let as_of = req_u64(args, "as-of")?;
     let optimize = flags.iter().any(|f| f == "optimize");
@@ -389,13 +456,12 @@ fn parse_create_dataflow(
             "import" => {
                 if let Some(index_id) = args.get("index") {
                     imports.push(ImportSpec::Index {
-                        index_id: index_id
-                            .parse()
+                        index_id: parse_id(index_id)
                             .with_context(|| format!("bad index id `{index_id}`"))?,
                     });
                 } else {
                     imports.push(ImportSpec::Source {
-                        id: req_u64(&args, "source")?,
+                        id: req_id(&args, "source")?,
                         shard: req(&args, "shard")?.to_string(),
                         schema: opt_string(&args, "schema"),
                         upper: req_u64(&args, "upper")?,
@@ -405,15 +471,15 @@ fn parse_create_dataflow(
             "build" => {
                 ensure!(!sub_body.is_empty(), "`build` needs a MIR body");
                 builds.push(BuildSpec {
-                    id: req_u64(&args, "id")?,
+                    id: req_id(&args, "id")?,
                     expr: body_text(sub_body),
                 });
             }
             "export" => exports.push(parse_export(&args)?),
-            other => bail!("unknown `create-dataflow` sub-command `{other}`"),
+            other => bail!("unknown dataflow sub-command `{other}`"),
         }
     }
-    Ok(Command::CreateDataflow {
+    Ok(DataflowBody {
         name,
         imports,
         builds,
@@ -457,8 +523,8 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
             rows: rows_from_body(body)?,
         },
         "define-index" => Command::DefineIndex {
-            source_id: req_u64(&args, "source")?,
-            index_id: req_u64(&args, "index")?,
+            source_id: req_id(&args, "source")?,
+            index_id: req_id(&args, "index")?,
             shard: req(&args, "shard")?.to_string(),
             schema: opt_string(&args, "schema"),
             key: parse_usize_list(req(&args, "key")?)?,
@@ -466,36 +532,82 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
             upper: req_u64(&args, "upper")?,
         },
         "schedule" => Command::Schedule {
-            id: req_u64(&args, "id")?,
+            id: req_id(&args, "id")?,
         },
         "allow-compaction" => Command::AllowCompaction {
-            id: req_u64(&args, "id")?,
+            id: req_id(&args, "id")?,
             frontier: req_u64(&args, "frontier")?,
         },
         "allow-writes" => Command::AllowWrites {
-            id: req_u64(&args, "id")?,
+            id: req_id(&args, "id")?,
         },
         "await-frontier" => Command::AwaitFrontier {
-            id: req_u64(&args, "id")?,
+            id: req_id(&args, "id")?,
             ts: req_u64(&args, "ts")?,
             timeout_secs: opt_u64(&args, "timeout-secs")?,
             allow_timeout: flags.iter().any(|f| f == "allow-timeout"),
         },
         "count" => Command::Count {
-            id: req_u64(&args, "id")?,
+            id: req_id(&args, "id")?,
             ts: req_u64(&args, "ts")?,
         },
         "peek" => Command::Peek {
-            id: req_u64(&args, "id")?,
+            id: req_id(&args, "id")?,
             schema: opt_string(&args, "schema"),
             ts: req_u64(&args, "ts")?,
         },
         "await-subscribe" => Command::AwaitSubscribe {
-            id: req_u64(&args, "id")?,
+            id: req_id(&args, "id")?,
             up_to: req_u64(&args, "up-to")?,
             timeout_secs: opt_u64(&args, "timeout-secs")?,
         },
-        "create-dataflow" => parse_create_dataflow(&args, &flags, body)?,
+        "create-dataflow" => {
+            let DataflowBody {
+                name,
+                imports,
+                builds,
+                exports,
+                as_of,
+                optimize,
+            } = parse_dataflow_body(&args, &flags, body)?;
+            Command::CreateDataflow {
+                name,
+                imports,
+                builds,
+                exports,
+                as_of,
+                optimize,
+            }
+        }
+        "explain" => {
+            // `explain ref=<name>` renders a previously declared dataflow; otherwise
+            // the dataflow is given inline with the `create-dataflow` body.
+            let target = if let Some(reference) = opt_string(&args, "ref") {
+                ensure!(
+                    body.is_empty(),
+                    "`explain ref=...` takes no body; it renders the declared dataflow"
+                );
+                ExplainTarget::Reference { name: reference }
+            } else {
+                let DataflowBody {
+                    name,
+                    imports,
+                    builds,
+                    exports,
+                    as_of,
+                    optimize,
+                } = parse_dataflow_body(&args, &flags, body)?;
+                ExplainTarget::Inline {
+                    name,
+                    imports,
+                    builds,
+                    exports,
+                    as_of,
+                    optimize,
+                }
+            };
+            Command::Explain { target }
+        }
         "create-instance" => Command::CreateInstance {
             expiration_offset: opt_string(&args, "expiration-offset"),
             arrangement_dictionary_compression: args
@@ -546,7 +658,7 @@ mod tests {
         assert_eq!(
             cmd,
             Command::AwaitFrontier {
-                id: 1001,
+                id: GlobalId::User(1001),
                 ts: 1,
                 timeout_secs: Some(3),
                 allow_timeout: true,
@@ -558,8 +670,8 @@ mod tests {
         assert_eq!(
             cmd,
             Command::DefineIndex {
-                source_id: 1000,
-                index_id: 1001,
+                source_id: GlobalId::User(1000),
+                index_id: GlobalId::User(1001),
                 shard: "d".to_string(),
                 schema: None,
                 key: vec![0],
@@ -567,6 +679,37 @@ mod tests {
                 upper: 1,
             }
         );
+    }
+
+    /// An id argument accepts a bare number (user namespace) or an explicit
+    /// `s`/`si`/`u`/`t` prefix selecting the namespace directly.
+    #[mz_ore::test]
+    fn parses_prefixed_ids() {
+        assert_eq!(
+            parse_command("schedule id=1001").unwrap(),
+            Command::Schedule {
+                id: GlobalId::User(1001)
+            }
+        );
+        assert_eq!(
+            parse_command("schedule id=u1001").unwrap(),
+            Command::Schedule {
+                id: GlobalId::User(1001)
+            }
+        );
+        assert_eq!(
+            parse_command("schedule id=t7").unwrap(),
+            Command::Schedule {
+                id: GlobalId::Transient(7)
+            }
+        );
+        assert_eq!(
+            parse_command("schedule id=s42").unwrap(),
+            Command::Schedule {
+                id: GlobalId::System(42)
+            }
+        );
+        assert!(parse_command("schedule id=bogus").is_err());
     }
 
     /// `define-schema` and `write-rows` parse their indented bodies, typing values.
@@ -629,14 +772,16 @@ mod tests {
             cmd,
             Command::CreateDataflow {
                 name: Some("count".to_string()),
-                imports: vec![ImportSpec::Index { index_id: 1001 }],
+                imports: vec![ImportSpec::Index {
+                    index_id: GlobalId::User(1001)
+                }],
                 builds: vec![BuildSpec {
-                    id: 2000,
+                    id: GlobalId::User(2000),
                     expr: "Reduce aggregates=[count(*)]\n  Get u1000".to_string(),
                 }],
                 exports: vec![ExportSpec::Index {
-                    index_id: 2001,
-                    on_id: 2000,
+                    index_id: GlobalId::User(2001),
+                    on_id: GlobalId::User(2000),
                     key: vec![0]
                 }],
                 as_of: 0,
@@ -655,6 +800,63 @@ mod tests {
         ));
     }
 
+    /// Inline `explain` shares the `create-dataflow` body grammar but parses into
+    /// `Command::Explain` with an `Inline` target carrying the same body.
+    #[mz_ore::test]
+    fn parses_explain_inline() {
+        let input = "explain name=j as-of=0 optimize\n  import source=1000 shard=l upper=1\n  import source=1001 shard=r upper=1\n  build id=2000\n    Join on=(#0 = #2)\n      Get u1000\n      Get u1001\n  export index=2001 on=2000 key=[0]";
+        let cmd = parse_command(input).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Explain {
+                target: ExplainTarget::Inline {
+                    name: Some("j".to_string()),
+                    imports: vec![
+                        ImportSpec::Source {
+                            id: GlobalId::User(1000),
+                            shard: "l".to_string(),
+                            schema: None,
+                            upper: 1,
+                        },
+                        ImportSpec::Source {
+                            id: GlobalId::User(1001),
+                            shard: "r".to_string(),
+                            schema: None,
+                            upper: 1,
+                        },
+                    ],
+                    builds: vec![BuildSpec {
+                        id: GlobalId::User(2000),
+                        expr: "Join on=(#0 = #2)\n  Get u1000\n  Get u1001".to_string(),
+                    }],
+                    exports: vec![ExportSpec::Index {
+                        index_id: GlobalId::User(2001),
+                        on_id: GlobalId::User(2000),
+                        key: vec![0],
+                    }],
+                    as_of: 0,
+                    optimize: true,
+                }
+            }
+        );
+    }
+
+    /// `explain ref=<name>` parses into a `Reference` target and takes no body.
+    #[mz_ore::test]
+    fn parses_explain_ref() {
+        let cmd = parse_command("explain ref=join").unwrap();
+        assert_eq!(
+            cmd,
+            Command::Explain {
+                target: ExplainTarget::Reference {
+                    name: "join".to_string(),
+                },
+            }
+        );
+        // A body is rejected: the declared dataflow supplies it.
+        assert!(parse_command("explain ref=join\n  import source=1 shard=s upper=1").is_err());
+    }
+
     /// `create-dataflow` parses the sink export kinds: a materialized-view sink with
     /// a target shard, and a subscribe sink. The `copy-to` kind is rejected.
     #[mz_ore::test]
@@ -666,8 +868,8 @@ mod tests {
         assert_eq!(
             exports,
             vec![ExportSpec::MaterializedView {
-                sink_id: 2001,
-                on_id: 2000,
+                sink_id: GlobalId::User(2001),
+                on_id: GlobalId::User(2000),
                 shard: "out".to_string(),
                 schema: Some("kv".to_string()),
             }]
@@ -680,8 +882,8 @@ mod tests {
         assert_eq!(
             exports,
             vec![ExportSpec::Subscribe {
-                sink_id: 2001,
-                on_id: 2000,
+                sink_id: GlobalId::User(2001),
+                on_id: GlobalId::User(2000),
                 schema: None,
                 up_to: Some(2),
             }]
@@ -760,7 +962,7 @@ mod tests {
         assert_eq!(
             cmd,
             Command::AwaitSubscribe {
-                id: 2001,
+                id: GlobalId::User(2001),
                 up_to: 2,
                 timeout_secs: Some(5),
             }
@@ -782,12 +984,39 @@ mod tests {
             })
             .collect();
         assert_eq!(stanzas.len(), 2);
-        assert_eq!(stanzas[0].command, Command::Schedule { id: 1001 });
+        assert_eq!(
+            stanzas[0].command,
+            Command::Schedule {
+                id: GlobalId::User(1001)
+            }
+        );
         assert_eq!(stanzas[0].expected, "ok");
         assert_eq!(stanzas[1].expected, "10000");
 
         // Rewriting with the same outputs reproduces the file.
         let actuals = vec!["ok".to_string(), "10000".to_string()];
         assert_eq!(rewrite(&items, &actuals), content);
+    }
+
+    /// Output with blank lines uses the doubled-`----` form: it parses with the
+    /// blanks intact, and rewriting an actual that contains a blank line emits that
+    /// form (so it round-trips).
+    #[mz_ore::test]
+    fn blank_mode_round_trips() {
+        let content = "explain name=j as-of=0\n----\n----\nu2001:\n  →Arrange (#0)\n\nu2000:\n  →Stream u1000\n----\n----\n";
+        let items = parse_file(content).unwrap();
+        let Item::Stanza(stanza) = &items[0] else {
+            panic!("expected a stanza");
+        };
+        // The blank line between the two objects is preserved in the expected block.
+        assert_eq!(
+            stanza.expected,
+            "u2001:\n  →Arrange (#0)\n\nu2000:\n  →Stream u1000"
+        );
+        // Rewriting with the same (blank-containing) output reproduces the file.
+        assert_eq!(
+            rewrite(&items, std::slice::from_ref(&stanza.expected)),
+            content
+        );
     }
 }

@@ -54,11 +54,12 @@ import { hasTenantApiTokenPermissions } from "~/api/auth";
 import { ApiToken } from "~/api/frontegg/types";
 import Alert from "~/components/Alert";
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
-import ConnectModal from "~/components/ConnectModal";
 import { SecretCopyableBox } from "~/components/copyableComponents";
 import TaggedMultiSelect from "~/components/Dropdown/TaggedComboBox";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import { Modal } from "~/components/Modal";
+import SimpleSelect from "~/components/SimpleSelect";
+import StatusPill from "~/components/StatusPill";
 import { User } from "~/external-library-wrappers/frontegg";
 import {
   MainContentContainer,
@@ -70,14 +71,24 @@ import {
   useListApiTokens,
   useTeamRoles,
 } from "~/queries/frontegg";
-import ConnectionIcon from "~/svg/ConnectionIcon";
 import { MaterializeTheme } from "~/theme";
-import {
-  formatDate,
-  FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
-} from "~/utils/dateFormat";
+import { DATE_FORMAT, formatDate } from "~/utils/dateFormat";
 import { toBase64 } from "~/utils/format";
 import { obfuscateSecret } from "~/utils/format";
+
+const EXPIRES_IN_OPTIONS = {
+  "30d": { label: "30 days", minutes: 30 * 24 * 60 },
+  "60d": { label: "60 days", minutes: 60 * 24 * 60 },
+  "90d": { label: "90 days", minutes: 90 * 24 * 60 },
+  "365d": { label: "365 days", minutes: 365 * 24 * 60 },
+  never: { label: "No expiration", minutes: undefined },
+} as const;
+
+type ExpiresInOption = keyof typeof EXPIRES_IN_OPTIONS;
+
+const DEFAULT_EXPIRES_IN: ExpiresInOption = "90d";
+
+const EXPIRING_SOON_MS = 7 * 24 * 60 * 60 * 1000;
 
 const AppPasswordsPage = ({ user }: { user: User }) => {
   const { isOpen, onOpen, onClose } = useDisclosure();
@@ -139,6 +150,7 @@ const AppPasswordsInner = (props: {
     user: string;
     name: string;
     roles: { name: string; id: string }[];
+    expiresIn: ExpiresInOption;
   }>({
     mode: "onChange",
     defaultValues: {
@@ -146,6 +158,7 @@ const AppPasswordsInner = (props: {
       name: "",
       user: "",
       roles: [],
+      expiresIn: DEFAULT_EXPIRES_IN,
     },
   });
 
@@ -190,6 +203,7 @@ const AppPasswordsInner = (props: {
                 description: data.name,
                 user: data.user,
                 roleIds: data.roles.map((r) => r.id),
+                expiresInMinutes: EXPIRES_IN_OPTIONS[data.expiresIn].minutes,
               });
               reset();
               props.closeNewModal();
@@ -253,6 +267,28 @@ const AppPasswordsInner = (props: {
                   <FormHelperText>
                     Describe what you&apos;ll use the app password for, in case
                     you need to revoke it in the future.
+                  </FormHelperText>
+                </FormControl>
+                <FormControl>
+                  <FormLabel htmlFor="expiresIn" fontSize="sm">
+                    Expiration
+                  </FormLabel>
+                  <SimpleSelect
+                    {...register("expiresIn")}
+                    id="expiresIn"
+                    width="100%"
+                  >
+                    {Object.entries(EXPIRES_IN_OPTIONS).map(
+                      ([value, { label }]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ),
+                    )}
+                  </SimpleSelect>
+                  <FormHelperText>
+                    The app password stops working once it expires. Expiration
+                    cannot be changed after creation.
                   </FormHelperText>
                 </FormControl>
                 {watchType == "service" && (
@@ -357,6 +393,28 @@ const AppPasswordsInner = (props: {
   );
 };
 
+const ExpiresCell = ({ expires }: { expires?: string }) => {
+  const { colors } = useTheme<MaterializeTheme>();
+
+  if (!expires) {
+    return <Text color={colors.foreground.secondary}>Never</Text>;
+  }
+
+  const msUntilExpiry = new Date(expires).getTime() - Date.now();
+
+  return (
+    <HStack flexWrap="wrap">
+      <Text whiteSpace="nowrap">
+        {formatDate(new Date(expires), DATE_FORMAT)}
+      </Text>
+      {msUntilExpiry <= 0 && <StatusPill status="expired" colorScheme="red" />}
+      {msUntilExpiry > 0 && msUntilExpiry <= EXPIRING_SOON_MS && (
+        <StatusPill status="expiring soon" colorScheme="yellow" />
+      )}
+    </HStack>
+  );
+};
+
 type ApiTokensTableProps = BoxProps & {
   tokens: ApiToken[];
   user: User;
@@ -382,6 +440,7 @@ const ApiTokensTableProps = ({
           <Th>User</Th>
           <Th>Roles</Th>
           <Th>Created at</Th>
+          <Th>Expires</Th>
           <Th />
         </Tr>
       </Thead>
@@ -419,7 +478,7 @@ const ApiTokensTableProps = ({
                 borderBottomColor={colors.border.primary}
               >
                 {token.type === "personal" ? (
-                  <Text color={colors.gray["500"]}>{userStr}</Text>
+                  <Text color={colors.foreground.secondary}>{userStr}</Text>
                 ) : (
                   userStr
                 )}
@@ -429,7 +488,7 @@ const ApiTokensTableProps = ({
                 borderBottomColor={colors.border.primary}
               >
                 {token.type === "personal" ? (
-                  <Text color={colors.gray["500"]}>
+                  <Text color={colors.foreground.secondary}>
                     {tokenRoles.join(", ")}
                   </Text>
                 ) : (
@@ -439,28 +498,28 @@ const ApiTokensTableProps = ({
               <Td
                 borderBottomWidth="1px"
                 borderBottomColor={colors.border.primary}
+                whiteSpace="nowrap"
               >
-                {" "}
-                {formatDate(
-                  new Date(token.createdAt),
-                  FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
-                )}
+                {formatDate(new Date(token.createdAt), DATE_FORMAT)}
               </Td>
               <Td
                 borderBottomWidth="1px"
                 borderBottomColor={colors.border.primary}
               >
-                <HStack>
-                  <ConnectAppPasswordModal user={user} userStr={userStr} />
-                  <DeleteAppPasswordModal token={token} />
-                </HStack>
+                <ExpiresCell expires={token.expires} />
+              </Td>
+              <Td
+                borderBottomWidth="1px"
+                borderBottomColor={colors.border.primary}
+              >
+                <DeleteAppPasswordModal token={token} />
               </Td>
             </Tr>
           );
         })}
         {tokens.length === 0 && (
           <Tr>
-            <Td colSpan={6}>No app passwords yet.</Td>
+            <Td colSpan={7}>No app passwords yet.</Td>
           </Tr>
         )}
       </Tbody>
@@ -542,37 +601,6 @@ const SecretBox = ({
         onClick={onClose}
       />
     </ChakraAlert>
-  );
-};
-
-const ConnectAppPasswordModal = ({
-  user,
-  userStr,
-}: {
-  user: User;
-  userStr: string;
-}) => {
-  const { isOpen, onOpen, onClose } = useDisclosure();
-
-  return (
-    <>
-      <Button
-        onClick={onOpen}
-        title="Connect to Materialize"
-        size="sm"
-        colorScheme="primary"
-        variant="outline"
-        leftIcon={<ConnectionIcon />}
-      >
-        Connect
-      </Button>
-      <ConnectModal
-        onClose={onClose}
-        isOpen={isOpen}
-        user={user}
-        forAppPassword={{ user: userStr }}
-      />
-    </>
   );
 };
 

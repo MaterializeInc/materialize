@@ -210,3 +210,91 @@ Used Indexes:
 Target cluster: quickstart
 
 EOF
+
+
+# An import whose last reference the global pipeline folds away is pruned from the dataflow
+# description. It must not show up as a source: the description drives the persist sources the
+# replicas build, the read holds the controller takes, and whether the dataflow is taken to depend
+# on wall clock.
+
+statement ok
+CREATE TABLE flags (c0 bool);
+
+statement ok
+CREATE MATERIALIZED VIEW mv_folded AS
+  WITH x AS (SELECT c0 FROM flags WHERE TRUE = c0)
+  (SELECT true AS c0 FROM x) EXCEPT ALL (SELECT c0 FROM x);
+
+# Pin the premise. The two branches are the same collection under the filter, which the global
+# pipeline sees and local optimization does not, so the table is still an import when the fold
+# removes its last reference. Were it to fold locally, the description would never import the table
+# and the golden below would hold for the wrong reason.
+query T multiline
+EXPLAIN LOCALLY OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+MATERIALIZED VIEW mv_folded;
+----
+With
+  cte l0 =
+    Filter (#0{c0} = true)
+      Get materialize.public.flags
+Return
+  Threshold
+    Union
+      Project (#1)
+        Map (true)
+          Get l0
+      Negate
+        Get l0
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+MATERIALIZED VIEW mv_folded;
+----
+materialize.public.mv_folded:
+  Constant <empty>
+
+Target cluster: quickstart
+
+EOF
+
+
+# The same state through a different transform. The predicate in `unsatisfiable` cannot hold, so
+# that view folds on its own, and inlining it into the join is what drops the last reference to
+# `flags`. Unlike the fold above this one does not depend on recognizing a mapped literal as a
+# column, so the two goldens do not stand or fall together. `flags` carries no index, so it is a
+# source import rather than an index one.
+statement ok
+CREATE VIEW unsatisfiable AS SELECT c0 FROM flags WHERE c0 IS NULL AND c0 = true;
+
+statement ok
+CREATE MATERIALIZED VIEW mv_empty_join AS
+  SELECT f.c0 FROM flags f, unsatisfiable u WHERE f.c0 = u.c0;
+
+query T multiline
+EXPLAIN LOCALLY OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+MATERIALIZED VIEW mv_empty_join;
+----
+Project (#0{c0})
+  Join on=(#0{c0} = #1{c0})
+    Filter (#0{c0}) IS NOT NULL
+      Get materialize.public.flags
+    Get materialize.public.unsatisfiable
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+MATERIALIZED VIEW mv_empty_join;
+----
+materialize.public.mv_empty_join:
+  Constant <empty>
+
+Target cluster: quickstart
+
+EOF

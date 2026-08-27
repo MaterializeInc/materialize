@@ -54,8 +54,12 @@ your clusters](/sql/alter-cluster/#resizing).
 {{</ note >}}
 
 Clusters are always "on", and you can adjust the [replication factor](/sql/create-cluster/#replication-factor)
-for fault tolerance. See [Compute cost factors](#compute-cost-factors) for more
-information on the cost of increasing a cluster's replication factor.
+for fault tolerance.
+
+{{% include-from-yaml data="cluster_details" name="replica-definition" %}}
+
+See [Compute cost factors](#compute-cost-factors) for more information on the
+cost of increasing a cluster's replication factor.
 
 ### Compute cost factors
 
@@ -67,7 +71,7 @@ that contribute to compute usage include:
 | [Replication factor for a cluster](/sql/create-cluster/#replication-factor). | Cost is calculated (at one second granularity) as cluster [`SIZE`](/sql/create-cluster/#available-sizes) * [`REPLICATION FACTOR`](/sql/create-cluster/#replication-factor). |
 | [Indexes](/concepts/indexes/) and [materialized views](/concepts/views) | As data changes (insert/update/delete), [indexes](/concepts/indexes/) and [materialized views](/concepts/views) perform incremental updates to provide up-to-date results. |
 | [Sources](/concepts/sources/) |• Sources that use upsert logic (i.e., [`ENVELOPE UPSERT`](/sql/create-sink/kafka/#upsert) or [`ENVELOPE DEBEZIUM` Kafka sources](/sql/create-sink/kafka/#debezium)) can lead to high memory and disk utilization.<br>• Other sources consume a negligible amount of resources in steady state. |
-| [`SELECT`s](/sql/select/) and [`SUBSCRIBE`s](/sql/subscribe/)  |• [`SELECT`s](/sql/select/) and [`SUBSCRIBE`s](/sql/subscribe/) that do not use indexes and materialized views perform work. <br>• [`SELECT`s](/sql/select/) and [`SUBSCRIBE`s](/sql/subscribe/) that use indexes and materialized views are **free**.|
+| [`SELECT`s](/sql/select/) and [`SUBSCRIBE`s](/sql/subscribe/)  |• [`SELECT`s](/sql/select/) and [`SUBSCRIBE`s](/sql/subscribe/) that do not use indexes and materialized views perform work. <br>• [`SELECT`s](/sql/select/) and [`SUBSCRIBE`s](/sql/subscribe/) that use indexes and materialized views access already-computed results.|
 | [Sinks](/concepts/sinks/) | Only small CPU/memory costs.|
 
 ## Storage
