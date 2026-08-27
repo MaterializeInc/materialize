@@ -143,7 +143,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE remove_column DROP COLUMN f2;
 
 ! SELECT * from remove_column;
-contains:altered
+contains:column "f2" of source table public.remove_column was dropped or renamed upstream
 
 
 #
@@ -156,7 +156,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_column ALTER COLUMN f2 TYPE CHAR(2);
 
 ! SELECT * from alter_column;
-contains:altered
+contains:the type of column "f2" of source table public.alter_column changed upstream
 
 
 #
@@ -169,7 +169,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_drop_nullability ALTER COLUMN f1 DROP NOT NULL;
 
 ! SELECT * FROM alter_drop_nullability WHERE f1 IS NOT NULL;
-contains:altered
+contains:the NOT NULL constraint on column "f1" of source table public.alter_drop_nullability was dropped upstream
 
 # We have guaranteed that this column is not null so the optimizer eagerly
 # returns the empty set.
@@ -201,7 +201,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_drop_pk DROP CONSTRAINT alter_drop_pk_pkey;
 
 ! SELECT f1 FROM alter_drop_pk;
-contains:altered
+contains:PRIMARY KEY constraint "alter_drop_pk_pkey" (f1) on source table public.alter_drop_pk was dropped or altered upstream
 
 
 #
@@ -230,7 +230,7 @@ ALTER TABLE alter_cycle_pk DROP CONSTRAINT alter_cycle_pk_pkey;
 ALTER TABLE alter_cycle_pk ADD PRIMARY KEY(f1);
 
 ! SELECT * FROM alter_cycle_pk;
-contains:altered
+contains:PRIMARY KEY constraint "alter_cycle_pk_pkey" (f1) on source table public.alter_cycle_pk was dropped or altered upstream
 
 
 #
@@ -260,7 +260,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_drop_unique DROP CONSTRAINT alter_drop_unique_f1_key;
 
 ! SELECT f1 FROM alter_drop_unique;
-contains:altered
+contains:UNIQUE constraint "alter_drop_unique_f1_key" (f1) on source table public.alter_drop_unique was dropped or altered upstream
 
 
 #
@@ -288,7 +288,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_extend_column ALTER COLUMN f1 TYPE VARCHAR(20);
 
 ! SELECT * FROM alter_extend_column;
-contains:altered
+contains:the type of column "f1" of source table public.alter_extend_column changed upstream
 
 
 #
@@ -300,7 +300,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_decimal ALTER COLUMN f1 TYPE DECIMAL(6,1);
 
 ! SELECT * FROM alter_decimal;
-contains:altered
+contains:the type of column "f1" of source table public.alter_decimal changed upstream
 
 
 #
@@ -313,7 +313,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_table_rename RENAME TO alter_table_renamed;
 
 ! SELECT * FROM alter_table_rename;
-contains:altered
+contains:source table public.alter_table_rename with oid
 
 #
 # Alter table rename column
@@ -327,7 +327,7 @@ ALTER TABLE alter_table_rename_column RENAME COLUMN f2 TO f1;
 ALTER TABLE alter_table_rename_column RENAME COLUMN f3 TO f2;
 
 ! SELECT * FROM alter_table_rename_column;
-contains:altered
+contains:changed position upstream
 
 
 #
@@ -342,7 +342,7 @@ ALTER TABLE alter_table_change_attnum DROP COLUMN f2;
 ALTER TABLE alter_table_change_attnum ADD COLUMN f2 VARCHAR(10);
 
 ! SELECT * FROM alter_table_change_attnum;
-contains:altered
+contains:column "f2" of source table public.alter_table_change_attnum changed position upstream
 
 > SELECT * from alter_table_supported;
 1 1
@@ -368,7 +368,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_table_supported DROP COLUMN f2;
 
 ! SELECT * from alter_table_supported;
-contains:altered
+contains:column "f2" of source table public.alter_table_supported was dropped or renamed upstream
 
 
 #
