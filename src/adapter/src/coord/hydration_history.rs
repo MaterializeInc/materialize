@@ -23,7 +23,7 @@
 //! interval improves freshness at the cost of more replica dataflow installs.
 //!
 //! Collection is sampling, not an event log. Replica history records only the
-//! latest completed component visible in a sweep. Intermediate episodes and
+//! latest completed episode visible in a sweep. Intermediate episodes and
 //! intervals retracted before collection leave no evidence and are not recorded.
 //! See the design doc for the resulting semantics.
 
@@ -406,30 +406,11 @@ fn object_collection_sql(cluster_id: ClusterId, replica_id: ReplicaId, cutoff: &
     )
 }
 
-/// The latest completed transition of this replica from hydrated to hydrating
-/// and back, together with the process resource peaks visible when collected.
+/// Returns SQL for the latest completed compute hydration episode and its
+/// process resource peaks.
 ///
-/// Each object's interval starts at installation and ends at hydration. The
-/// union of overlapping intervals is one replica episode. The running maximum
-/// of prior finishes identifies gaps between those unions, and the latest gap
-/// identifies the most recent episode. Collection waits until every currently
-/// visible object and every configured replica process has reported.
-///
-/// Process-local wall clocks stamp both ends. Clock skew can therefore merge
-/// components that did not overlap in real time. Replica processes are fate
-/// shared and restart together, so the query never combines process generations.
-///
-/// Retracted intervals leave no evidence. `hydrated` therefore describes the
-/// surviving component at collection time, not objects that disappeared before
-/// the sweep. Once an episode is recorded, the history guard prevents a later
-/// snapshot from inserting a component that precedes or overlaps it.
-///
-/// Resource high-water marks reset when a process restarts, not at an episode
-/// boundary. They cover the process lifetime through collection, so even the
-/// initial episode can include work after hydration. For a later episode they
-/// can also include an earlier peak. The filesystem peak remains a sampled lower
-/// bound. The maximum across processes is the relevant figure because managed
-/// replica resource limits apply to each process independently.
+/// Collection waits until every visible non-transient export has hydrated and
+/// every configured replica process has reported resource usage.
 fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
     let ReplicaTarget {
         cluster_id,
@@ -440,22 +421,15 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
     // catalog-internal and the cutoff is an RFC 3339 timestamp we formatted.
     format!(
         "WITH
-        worker_hydration AS (
-            SELECT t.export_id, t.installed_at, t.hydrated_at
-            FROM mz_introspection.mz_compute_hydration_times_per_worker AS t
-            JOIN mz_internal.mz_object_global_ids AS ids ON ids.global_id = t.export_id
-            JOIN mz_catalog.mz_objects AS o ON o.id = ids.id
-            WHERE t.export_id LIKE 'u%'
-              AND o.type IN ('index', 'materialized-view')
-        ),
         objects AS (
             SELECT
-                export_id AS object_id,
-                min(installed_at) AS installed_at,
-                max(hydrated_at) AS hydrated_at,
-                count(*) = count(hydrated_at) AS hydrated
-            FROM worker_hydration
-            GROUP BY export_id
+                t.export_id AS object_id,
+                min(t.installed_at) AS installed_at,
+                max(t.hydrated_at) AS hydrated_at,
+                count(*) = count(t.hydrated_at) AS hydrated
+            FROM mz_introspection.mz_compute_hydration_times_per_worker AS t
+            WHERE t.export_id NOT LIKE 't%'
+            GROUP BY t.export_id
         ),
         running AS (
             SELECT
@@ -948,6 +922,10 @@ mod tests {
             "{sql}"
         );
         assert!(sql.contains("r.process_count = 3::uint8"), "{sql}");
+        assert!(sql.contains("WHERE t.export_id NOT LIKE 't%'"), "{sql}");
+        assert!(!sql.contains("WHERE t.export_id LIKE 'u%'"), "{sql}");
+        assert!(!sql.contains("mz_object_global_ids"), "{sql}");
+        assert!(!sql.contains("mz_catalog.mz_objects"), "{sql}");
         let normalized_sql = sql.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(
             normalized_sql
