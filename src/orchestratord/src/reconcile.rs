@@ -22,7 +22,8 @@
 //! "the desired state was reached", since the reconciler interface reports both
 //! as success.
 
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use k8s_controller::TraceMetadata;
@@ -271,7 +272,7 @@ pub struct Observed<Ctx> {
     inner: Ctx,
     controller: &'static str,
     metrics: Arc<Metrics>,
-    recorder: Recorder,
+    publisher: Arc<Publisher>,
 }
 
 impl<Ctx> Observed<Ctx> {
@@ -284,13 +285,13 @@ impl<Ctx> Observed<Ctx> {
         inner: Ctx,
         controller: &'static str,
         metrics: Arc<Metrics>,
-        recorder: Recorder,
+        publisher: Arc<Publisher>,
     ) -> Self {
         Self {
             inner,
             controller,
             metrics,
-            recorder,
+            publisher,
         }
     }
 }
@@ -301,38 +302,27 @@ where
     <Ctx::Resource as Resource>::DynamicType: Default,
 {
     /// Publishes a warning event describing `error` on `resource`.
-    ///
-    /// Failing to publish is only logged: the caller is already returning the
-    /// reconciliation's own error, and replacing it with this one would hide
-    /// the problem the event was meant to report. A missing `events.k8s.io`
-    /// permission therefore costs visibility, not reconciliation.
     async fn publish_failure(
         &self,
         entry_point: EntryPoint,
         resource: &Ctx::Resource,
         error: &Ctx::Error,
     ) {
-        let event = Event {
-            type_: EventType::Warning,
-            reason: RECONCILIATION_FAILED.into(),
-            action: entry_point.action().into(),
-            // The cause chain, not just the outermost message: an error like
-            // "invalid environment id in license key" is only actionable
-            // alongside what it was that failed to parse.
-            note: Some(truncate_note(&error.to_string_with_causes())),
-            secondary: None,
-        };
-        if let Err(e) = self
-            .recorder
-            .publish(&event, &resource.object_ref(&Default::default()))
-            .await
-        {
-            warn!(
-                error = %e,
-                controller = self.controller,
-                "failed to publish reconciliation failure event",
-            );
-        }
+        self.publisher
+            .publish(
+                resource,
+                Event {
+                    type_: EventType::Warning,
+                    reason: RECONCILIATION_FAILED.into(),
+                    action: entry_point.action().into(),
+                    // The cause chain, not just the outermost message: an error
+                    // like "invalid environment id in license key" is only
+                    // actionable alongside what it was that failed to parse.
+                    note: Some(error.to_string_with_causes()),
+                    secondary: None,
+                },
+            )
+            .await;
     }
 
     /// Records what one reconciliation pass did, and reports a failure on the
@@ -350,8 +340,12 @@ where
             Outcome::of_result(result),
             start.elapsed().as_secs_f64(),
         );
-        if let Err(error) = result {
-            self.publish_failure(entry_point, resource, error).await;
+        // A pass that succeeded ends whatever the last one reported, so the
+        // next failure files a new event rather than aggregating into one that
+        // has stopped describing the resource.
+        match result {
+            Ok(_) => self.publisher.forget(resource),
+            Err(error) => self.publish_failure(entry_point, resource, error).await,
         }
     }
 }
@@ -405,22 +399,128 @@ where
     // not, gets the crate's default backoff.
 }
 
-/// Builds the event recorder shared by every controller in this process.
+/// Publishes Kubernetes events on the resources a controller reconciles.
 ///
-/// One recorder is shared so that its deduplication cache is too: a
-/// reconciliation that keeps failing collapses into a single event with a
-/// count, rather than one event per attempt.
+/// Kubernetes expects repeats of an event to aggregate into one object carrying
+/// a count, rather than one object per occurrence. That is what keeps a
+/// reconciliation retrying on a backoff from burying its resource in identical
+/// events, and [`Recorder`] implements it with a cache keyed on everything
+/// about an event except its note, re-sending the cached note on a hit.
 ///
-/// `instance` disambiguates which replica published an event, and should be the
-/// pod name.
-pub fn event_recorder(client: Client, instance: String) -> Recorder {
-    Recorder::new(
-        client,
-        Reporter {
-            controller: EVENT_REPORTER.to_owned(),
-            instance: Some(instance),
-        },
-    )
+/// Aggregating on that key alone would pin a failing resource's event to
+/// whichever error came first, for as long as the failure lasted. The cache
+/// entry expires six minutes after its last use, but each republish refreshes
+/// it, and the controller's backoff tops out at retrying every 128 to 256
+/// seconds, so the entry of a resource that keeps failing never ages out. An
+/// error that changes along the way, a missing secret first and the real cause
+/// once it appears, would go on reporting the first cause under a count and a
+/// timestamp that both make it look current.
+///
+/// So this aggregates only while the note is unchanged, and files a fresh event
+/// when it changes: one event per distinct message, each counting its own
+/// repeats.
+pub struct Publisher {
+    client: Client,
+    reporter: Reporter,
+    /// The note last published for a resource and reason, with the recorder
+    /// that published it. Sending that same note again through that recorder
+    /// aggregates into the event it already filed; a different note gets a new
+    /// recorder, whose empty cache files a new event instead.
+    ///
+    /// [`Publisher::forget`] bounds this to the resources whose most recent
+    /// reconciliation reported something.
+    published: Mutex<BTreeMap<(String, String), (String, Recorder)>>,
+}
+
+impl Publisher {
+    /// Builds the publisher shared by every controller in this process.
+    ///
+    /// `instance` disambiguates which replica published an event, and should be
+    /// the pod name.
+    pub fn new(client: Client, instance: String) -> Self {
+        Self {
+            client,
+            reporter: Reporter {
+                controller: EVENT_REPORTER.to_owned(),
+                instance: Some(instance),
+            },
+            published: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// Publishes `event` on `resource`, trimming its note to what the API
+    /// server accepts.
+    ///
+    /// Failing to publish is only logged. An event reports something that
+    /// already happened, so failing to file it must not change what the caller
+    /// goes on to do; a missing `events.k8s.io` permission costs visibility,
+    /// not reconciliation.
+    pub async fn publish<K>(&self, resource: &K, mut event: Event)
+    where
+        K: Resource,
+        K::DynamicType: Default,
+    {
+        event.note = event.note.take().map(|note| truncate_note(&note));
+
+        let recorder = self.recorder_for(
+            resource,
+            &event.reason,
+            event.note.clone().unwrap_or_default(),
+        );
+        if let Err(e) = recorder
+            .publish(&event, &resource.object_ref(&Default::default()))
+            .await
+        {
+            warn!(
+                error = %e,
+                reason = %event.reason,
+                kind = %K::kind(&Default::default()),
+                "failed to publish event",
+            );
+        }
+    }
+
+    /// Returns the recorder to publish `note` through: the one that filed the
+    /// resource's last event under `reason` if the note is unchanged, and a
+    /// fresh one otherwise.
+    fn recorder_for<K>(&self, resource: &K, reason: &str, note: String) -> Recorder
+    where
+        K: Resource,
+    {
+        // A resource with no uid has not been persisted, so there is nothing
+        // stable to aggregate against.
+        let Some(uid) = resource.meta().uid.clone() else {
+            return Recorder::new(self.client.clone(), self.reporter.clone());
+        };
+        let key = (uid, reason.to_owned());
+        let mut published = self.published.lock().expect("lock poisoned");
+        if let Some((last_note, recorder)) = published.get(&key)
+            && *last_note == note
+        {
+            return recorder.clone();
+        }
+        let recorder = Recorder::new(self.client.clone(), self.reporter.clone());
+        published.insert(key, (note, recorder.clone()));
+        recorder
+    }
+
+    /// Drops what `resource` published, so that its next event starts afresh
+    /// rather than aggregating into one that has stopped describing it.
+    ///
+    /// Reported when a resource reconciles cleanly, which is what keeps this
+    /// state to the resources currently reporting something.
+    pub fn forget<K>(&self, resource: &K)
+    where
+        K: Resource,
+    {
+        let Some(uid) = resource.meta().uid.as_ref() else {
+            return;
+        };
+        self.published
+            .lock()
+            .expect("lock poisoned")
+            .retain(|(published_uid, _), _| published_uid != uid);
+    }
 }
 
 /// Shortens `note` to fit an event's note, on a character boundary.
