@@ -456,6 +456,12 @@ impl ComputeState {
 
             let compute_spill = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
             let storage_spill = mz_storage_types::dyncfgs::ENABLE_UPSERT_PAGED_SPILL.get(config);
+            // Set compute's leg of the process-wide chunk spill gate. The
+            // gate ORs this leg with storage's, so chunks spill while either
+            // subsystem's flag is set. Storage's config application writes
+            // only its own leg, keeping the two flags from clobbering each
+            // other.
+            mz_timely_util::columnar::chunk::set_compute_spill_enabled(compute_spill);
             if !(compute_spill || storage_spill) {
                 debug!("chunk spill: gates off, leaving the buffer pool uninstalled");
             } else {
