@@ -152,9 +152,17 @@ export MZ_PASSWORD=<password>
 export MZ_HOST=<host>
 ```
 
+{{< warning >}}
+`MZ_HOST` does more than supply a value. The provider connects to self-managed
+Materialize whenever a host is set, including when it comes from `MZ_HOST`. If you
+leave `MZ_HOST` exported and then run Terraform against Materialize Cloud, the
+provider uses your self-managed settings instead, which usually fails with an
+`invalid password` error. Unset it before working with Materialize Cloud.
+{{< /warning >}}
+
 ```hcl
 provider "materialize" {
-  # Configuration will be read from MZ_HOST, MZ_PORT, MZ_USER,
+  # Configuration will be read from MZ_HOST, MZ_PORT, MZ_USERNAME,
   # MZ_DATABASE, MZ_PASSWORD, MZ_SSLMODE environment variables
 }
 ```
@@ -189,7 +197,7 @@ provider "materialize" {
 |-----------|-------------|---------------------|---------|
 | `host` | Materialize host address | `MZ_HOST` | - |
 | `port` | Materialize port | `MZ_PORT` | `6875` |
-| `username` | Database username | `MZ_USER` | `materialize` |
+| `username` | Database username | `MZ_USERNAME` | `materialize` |
 | `database` | Database name | `MZ_DATABASE` | `materialize` |
 | `password` | Database password | `MZ_PASSWORD` | - |
 | `sslmode` | SSL mode (`disable`, `require`, `verify-ca`, `verify-full`) | `MZ_SSLMODE` | `require` |
