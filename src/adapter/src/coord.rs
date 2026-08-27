@@ -4339,6 +4339,14 @@ impl Coordinator {
                     }
                 }
             }
+
+            // The sweep can own timestamp-oracle senders through its background
+            // client. Release them before the coordinator runtime starts shutting
+            // down the oracle workers.
+            if let Some(sweep) = self.hydration_history_sweep.take() {
+                sweep.abort_and_wait().await;
+            }
+
             // Try and cleanup as a best effort. There may be some async tasks out there holding a
             // reference that prevents us from cleaning up.
             if let Some(catalog) = Arc::into_inner(self.catalog) {

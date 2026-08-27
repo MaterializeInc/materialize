@@ -31,8 +31,12 @@ ALTER SYSTEM SET hydration_history_collection_interval = '1s';
 # Pin retention too: CI randomizes it, and a short period would prune the
 # episodes asserted below before the assertions run.
 ALTER SYSTEM SET hydration_history_retention_period = '30d';
+# Keep both publications of the process resource observations fresh enough to
+# compare within the test's retry budget.
+ALTER SYSTEM SET mz_metrics_usage_refresh_interval = '1s';
+ALTER SYSTEM SET compute_prometheus_introspection_scrape_interval = '1s';
 
-> CREATE CLUSTER test REPLICAS (hydrated_test_1 (SIZE 'scale=1,workers=1'))
+> CREATE CLUSTER test REPLICAS (hydrated_test_1 (SIZE 'scale=2,workers=2'))
 > SET cluster = test
 
 # Test that on an empty cluster only the introspection indexes show up.
@@ -87,11 +91,11 @@ mv_const hydrated_test_1 true false
 # turn cannot be recorded, rather than a special case. `idx` and `mv` keep their
 # dataflows installed, so they are stable.
 #
-# The recorded interval must be ordered. The stamps are aggregated over a replica's
-# workers, so on a multi-process replica the ends can come from different process
-# clocks and the interval carries their skew. These replicas are single-process, so
-# the ordering is exact here. The coalesce covers a NULL start, which the replica no
-# longer produces but the column still permits.
+# The recorded interval must be ordered. The stamps are aggregated over a
+# replica's workers, so the ends can come from different process clocks and the
+# duration carries their skew. Taking the earliest installation and latest
+# hydration preserves ordering. The coalesce covers a NULL start, which the
+# replica no longer produces but the column still permits.
 > SELECT o.name, r.name, h.status,
          h.installed_at <= h.hydrated_at,
          coalesce(h.installed_at <= h.started_at AND h.started_at <= h.hydrated_at, true)
@@ -117,8 +121,44 @@ mv  hydrated_test_1 hydrated true true
 true true true
 
 # Installing an object after the replica is fully hydrated starts a new replica
-# episode. On this single-worker replica its boundaries match the object's.
+# episode. Its boundaries match the same per-object aggregates used by object
+# history.
+> SET cluster_replica = hydrated_test_1
+
+> SELECT count(*) > 0
+  FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metrics_resource_usage';
+true
+
+$ set-from-sql var=memory-peak-before
+SELECT coalesce(max(value)::text, '-1')
+FROM mz_introspection.mz_cluster_replica_resource_usage
+WHERE source = 'cgroup'
+  AND metric = 'memory_peak'
+
+$ set-from-sql var=disk-peak-before
+SELECT coalesce(coalesce(
+    max(value) FILTER (
+        WHERE source = 'statvfs'
+          AND metric = 'fs_used_peak'
+    ),
+    max(value) FILTER (
+        WHERE source = 'cgroup'
+          AND metric = 'swap_peak'
+    )
+)::text, '-1')
+FROM mz_introspection.mz_cluster_replica_resource_usage
+
+> RESET cluster_replica
+
 > CREATE INDEX replica_episode_idx ON t (a + 1)
+
+# This timeout bounds the complete production path: installing the targeted
+# subscribe, evaluating the connected-component query, and committing through
+# OCC. It is intentionally generous for debug builds but far below the
+# collector's five-minute mutation timeout. Test configurations with a larger
+# default can raise this bound for sanitizer overhead.
+$ set-sql-timeout duration=20s
 
 > SELECT rh.status, rh.object_count,
          rh.started_at = oh.installed_at,
@@ -131,6 +171,67 @@ true true true
   JOIN mz_catalog.mz_objects AS o ON o.id = g.id
   WHERE o.name = 'replica_episode_idx';
 hydrated 1 true true
+
+# The Prometheus registry and resource-usage log publish the same process
+# sampler independently. A Prometheus scrape after collection can observe a
+# higher process-lifetime peak, so the value is bracketed by the maximum across
+# process resource logs before collection and the maximum across Prometheus
+# series after it rather than required to equal the later scrape. Metric
+# availability must agree.
+> SET cluster_replica = hydrated_test_1
+
+> WITH recorded AS (
+      SELECT rh.peak_memory_bytes, rh.peak_disk_bytes
+      FROM mz_internal.mz_replica_hydration_history AS rh
+      JOIN mz_internal.mz_object_hydration_history AS oh
+        ON oh.replica_id = rh.replica_id
+       AND oh.installed_at = rh.started_at
+      JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = oh.object_id
+      JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+      WHERE o.name = 'replica_episode_idx'
+  ), prometheus AS (
+      SELECT
+          count(DISTINCT process_id) AS process_count,
+          max(value) FILTER (
+              WHERE labels -> 'source' = 'cgroup'
+                AND labels -> 'metric' = 'memory_peak'
+          ) AS peak_memory_bytes,
+          coalesce(
+              max(value) FILTER (
+                  WHERE labels -> 'source' = 'statvfs'
+                    AND labels -> 'metric' = 'fs_used_peak'
+              ),
+              max(value) FILTER (
+                  WHERE labels -> 'source' = 'cgroup'
+                    AND labels -> 'metric' = 'swap_peak'
+              )
+          ) AS peak_disk_bytes
+      FROM mz_introspection.mz_cluster_prometheus_metrics
+      WHERE metric_name = 'mz_metrics_resource_usage'
+  )
+  SELECT
+      p.process_count = 2,
+      CASE WHEN p.peak_memory_bytes IS NULL THEN
+          r.peak_memory_bytes IS NULL AND ${memory-peak-before}::double precision = -1
+      ELSE
+          r.peak_memory_bytes IS NOT NULL
+          AND ${memory-peak-before}::double precision <= r.peak_memory_bytes::double precision
+          AND r.peak_memory_bytes::double precision <= p.peak_memory_bytes
+      END,
+      CASE WHEN p.peak_disk_bytes IS NULL THEN
+          r.peak_disk_bytes IS NULL AND ${disk-peak-before}::double precision = -1
+      ELSE
+          r.peak_disk_bytes IS NOT NULL
+          AND ${disk-peak-before}::double precision <= r.peak_disk_bytes::double precision
+          AND r.peak_disk_bytes::double precision <= p.peak_disk_bytes
+      END
+  FROM recorded AS r
+  CROSS JOIN prometheus AS p;
+true true true
+
+> RESET cluster_replica
+
+$ set-sql-timeout duration=default
 
 > DROP INDEX replica_episode_idx
 

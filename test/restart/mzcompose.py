@@ -1458,12 +1458,16 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
 
     def replica_episodes() -> list[list]:
         return c.sql_query("""
-            SELECT h.started_at::text, h.finished_at::text, h.object_count::text,
-                   h.peak_memory_bytes::text, h.peak_disk_bytes::text, h.status
+            SELECT h.replica_id, h.started_at::text, h.finished_at::text,
+                   h.object_count::text, h.peak_memory_bytes::text,
+                   h.peak_disk_bytes::text, h.status
             FROM mz_internal.mz_replica_hydration_history AS h
             JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
             WHERE r.name = 'r1'
             ORDER BY h.started_at""")
+
+    def replica_episode_identities(episodes: list[list]) -> list[tuple[str, str]]:
+        return [(episode[0], episode[1]) for episode in episodes]
 
     c.down(destroy_volumes=True)
     with c.override(
@@ -1509,6 +1513,11 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
                 break
             time.sleep(0.5)
         assert replica_before, "replica hydration history timed out before restart"
+        replica_before_ids = replica_episode_identities(replica_before)
+        replica_before_started_at = {identity[1] for identity in replica_before_ids}
+        assert len(replica_before_ids) == len(
+            set(replica_before_ids)
+        ), f"duplicate replica hydration identities before restart: {replica_before}"
 
         # Discover which MV's persist-sink worker is off worker 0 instead of
         # predicting it from user-ID allocation and hashing. Enough input data
@@ -1599,24 +1608,31 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
 
         deadline = time.time() + 120
         replica_after = []
-        replica_fresh = []
+        replica_after_ids = []
+        replica_fresh_ids = set()
         while time.time() < deadline:
             replica_after = replica_episodes()
-            replica_fresh = [
-                episode for episode in replica_after if episode not in replica_before
-            ]
-            if (
-                all(episode in replica_after for episode in replica_before)
-                and replica_fresh
-            ):
+            replica_after_ids = replica_episode_identities(replica_after)
+            replica_fresh_ids = set(replica_after_ids) - set(replica_before_ids)
+            if set(replica_before_ids) <= set(replica_after_ids) and replica_fresh_ids:
                 break
             time.sleep(0.5)
         assert all(
             episode in replica_after for episode in replica_before
+        ), f"restart changed replica episodes: had {replica_before}, now {replica_after}"
+        assert set(replica_before_ids) <= set(
+            replica_after_ids
         ), f"restart lost replica episodes: had {replica_before}, now {replica_after}"
         assert (
-            replica_fresh
-        ), f"restart produced no fresh replica episode: {replica_after}"
+            len(replica_fresh_ids) == 1
+        ), f"restart did not produce exactly one fresh replica identity: {replica_after}"
+        assert all(
+            identity[1] not in replica_before_started_at
+            for identity in replica_fresh_ids
+        ), f"restart reused a replica hydration start: {replica_after}"
+        assert len(replica_after_ids) == len(
+            set(replica_after_ids)
+        ), f"restart produced duplicate replica hydration identities: {replica_after}"
 
         # Let several sweeps run. The pre-restart episode must not be duplicated,
         # and the post-restart episode must settle at one row too.
@@ -1631,12 +1647,23 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
         assert len(settled) == 2, f"expected two settled episodes, got {settled}"
 
         replica_settled = replica_episodes()
-        assert len(replica_settled) == len(
-            set(tuple(row) for row in replica_settled)
-        ), f"sweeps duplicated a replica hydration episode: {replica_settled}"
+        replica_settled_ids = replica_episode_identities(replica_settled)
+        assert len(replica_settled_ids) == len(
+            set(replica_settled_ids)
+        ), f"sweeps duplicated a replica hydration identity: {replica_settled}"
+        assert set(replica_before_ids) <= set(
+            replica_settled_ids
+        ), f"pre-restart replica episodes disappeared: {replica_settled}"
         assert all(
             episode in replica_settled for episode in replica_before
-        ), f"pre-restart replica episodes disappeared: {replica_settled}"
+        ), f"pre-restart replica episodes changed: {replica_settled}"
+        assert replica_fresh_ids <= set(
+            replica_settled_ids
+        ), f"post-restart replica episodes disappeared: {replica_settled}"
+        assert len(replica_settled_ids) == len(replica_before_ids) + 1, (
+            f"expected exactly one settled replica episode after restart: "
+            f"{replica_settled}"
+        )
 
 
 def workflow_default(c: Composition) -> None:

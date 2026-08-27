@@ -3,7 +3,7 @@
 ## Context
 
 Materialize durably records successful hydration of individual index and
-materialized-view dataflows. Users also need the replica-wide episode that says
+materialized-view dataflows. Users also need a replica-wide summary that says
 how many objects hydrated together, how long the replica was hydrating, and how
 close any process came to its resource limit.
 
@@ -15,15 +15,15 @@ Compute now exposes two replica-local inputs:
   replica process, including kernel-maintained memory and swap high-water marks
   and a sampled scratch-filesystem high-water mark.
 
-This design extends the existing hydration-history sweep to persist successful
-replica episodes from those inputs.
+This design extends the existing hydration-history sweep to sample successful
+replica hydration components from those inputs.
 
 ## Goals
 
-- Record one row whenever a replica transitions from fully hydrated to
-  hydrating and back.
-- Include every index or materialized-view dataflow installed while that
-  transition is in progress.
+- Record the latest completed replica hydration component visible in each
+  replica's sweep.
+- Include every index or materialized-view dataflow still visible from the
+  latest component when it is sampled.
 - Record the process peak relevant to a per-process replica resource limit.
 - Survive environmentd and replica restarts.
 - Stay idempotent across concurrent environmentd processes.
@@ -37,6 +37,8 @@ replica episodes from those inputs.
 - Storage objects. Storage does not publish equivalent lifecycle timestamps.
 - A resettable resource peak for an incremental episode. The available kernel
   peaks reset when the process restarts, not when a new object is installed.
+- A complete event log. Intermediate transitions and intervals that retract
+  before collection leave no current-state evidence.
 - A public stable catalog contract. The table starts in `mz_internal` while its
   semantics settle.
 
@@ -54,15 +56,19 @@ mz_internal.mz_replica_hydration_history
   status             text         not null
 ```
 
-An episode is identified operationally by `(replica_id, started_at)`. The table
+A component is identified operationally by `(replica_id, started_at)`. The table
 does not declare this as a relation key. The anti-join enforces uniqueness, and
 an accidental duplicate must remain visible rather than be optimized away.
 
-Only successful episodes are recorded, so `finished_at` is populated and
-`status` is `hydrated`. The nullable finish and explicit status reserve a
-compatible shape for terminal failures once they become observable. Resource
-columns are nullable because cgroup peak files depend on the host kernel and a
-replica without disk reports no filesystem observation.
+Only components whose surviving intervals have all hydrated are recorded, so
+`finished_at` is populated and `status` is `hydrated`. An interval that retracts
+before collection is unknown to the sampler. This means a canceled transition
+can leave a successful component of the surviving intervals. The nullable finish
+and explicit status leave room for lifecycle-accurate terminal failures. A future
+writer must also define monotonic-guard and retention behavior for a `NULL` finish
+before it can record them. Resource columns are nullable because cgroup peak files
+depend on the host kernel and a replica without disk reports no filesystem
+observation.
 
 There is no index. Collection runs on the selected user replica, so it cannot
 use an index arranged on the catalog server. Such an index would pin the whole
@@ -84,9 +90,11 @@ new episode.
 
 The query sorts intervals by installation time and computes the running maximum
 finish among preceding intervals. An installation after that maximum starts a
-new component. The latest such start identifies the episode whose resources are
-currently observable. Its finish is the maximum object finish and its object
-count is the number of intervals in the component.
+new component. The latest such start identifies the component whose resources
+are currently observable. Its finish is the maximum object finish and its
+object count is the number of intervals in the component. Earlier components
+that completed between sweeps are intentionally not recorded because the
+current resource observations cannot be attributed between them.
 
 This definition handles both important cases without coordinator-local state:
 
@@ -96,9 +104,18 @@ This definition handles both important cases without coordinator-local state:
   preceding component's finish. It becomes a new episode. Objects installed
   while it hydrates join that episode if their intervals overlap.
 
-Sampling still limits completeness. An object that disappears before the sweep
-can be absent from the episode, and a process clock ahead of the read timestamp
-can hide a worker. These are the same accepted limits as durable object history.
+Sampling limits completeness and boundary accuracy. An object that disappears
+before the sweep is absent from the component. Process-local wall clocks stamp
+the intervals, so skew can hide a worker at the sampled logical timestamp or
+merge components that did not overlap in real time. Replica processes are fate
+shared and always restart together, so a snapshot cannot combine process
+generations.
+
+After recording a component, collection only accepts a candidate that starts
+after every retained row for that replica has finished. This monotonic guard
+prevents later retractions from splitting an already-recorded component into an
+additional overlapping row. It cannot recover intervals that disappeared
+before the first row was recorded.
 
 ## Resource interpretation
 
@@ -129,18 +146,20 @@ represented by `NULL` rather than a zero sentinel.
 
 Collection is disabled by default. Setting
 `hydration_history_collection_interval` to a nonzero duration enables both the
-object and replica history sweeps.
+object and replica history sweeps. Both histories depend on compute introspection.
+A replica configured with `INTROSPECTION INTERVAL = 0` is skipped even when the
+history collection interval is nonzero.
 
 The existing single-flight sweep visits one user replica per interval. It first
-collects object rows, then collects the latest replica episode, then runs
+collects object rows, then collects the latest replica component, then runs
 retention for both tables on the catalog server. A failure in one step does not
 prevent the later steps from running.
 
 The replica query anti-joins against the table it writes. Concurrent
 environmentd processes can compute the same candidate, but exact-timestamp OCC
 allows one write to commit. A losing subscribe observes that row and retracts
-its own candidate before retrying. The identity uses replica-stamped
-`started_at`, so an environmentd restart does not create a duplicate.
+its own candidate before retrying. The guard uses replica-stamped timestamps,
+so an environmentd restart does not create a duplicate.
 
 The same background isolation rules apply as for object history. Collection is
 replica-targeted, writes only a system table, depends only on system objects,
@@ -150,8 +169,11 @@ does not take the user-DML OCC permit, and has a bounded attempt timeout.
 
 Replica history uses `hydration_history_retention_period`, which defaults to 30
 days. Each sweep retracts one bounded batch of rows whose `finished_at` is older
-than the cutoff. Collection applies the same cutoff, so a live introspection row
-cannot resurrect an episode that retention removed.
+than the cutoff. Collection applies the same cutoff, so one sweep cannot
+resurrect a component its own retention step removed. Concurrent environmentd
+processes can use slightly different cutoffs. An older sweep can temporarily
+reinsert a boundary-aged row deleted by a newer sweep. Retention is therefore
+eventual once every collector's cutoff has passed the row.
 
 The table is exempt from bootstrap system-table reset and forced shard
 replacement. Schema evolution keeps the shard and its rows. A migration guard
@@ -165,6 +187,7 @@ of its evidence has disappeared.
 ## Future work
 
 - Publish episode-scoped resettable peaks from the replica.
+- Publish causal episode identities and terminal membership from the replica.
 - Retain lifecycle and resource events until environmentd acknowledges them.
 - Finalize open episodes from replica lifecycle events as canceled, failed, or
   OOM-killed.

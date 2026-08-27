@@ -745,19 +745,26 @@ logical timestamp, so the recorded finish can precede the latest process's finis
 
 ## `mz_replica_hydration_history`
 
-The `mz_replica_hydration_history` table records successful replica hydration
-episodes for indexes and materialized views. An episode begins when the first
+The `mz_replica_hydration_history` table samples successful replica hydration
+components for indexes and materialized views. A component begins when the first
 object dataflow is installed on a fully hydrated replica. Any object installed
-before every preceding object has hydrated belongs to the same episode. The
-episode finishes when all of those objects have hydrated.
+before every preceding object has hydrated belongs to the same component. The
+component finishes when all surviving object intervals have hydrated.
 
 Collection is disabled by default. Setting
 `hydration_history_collection_interval` to a nonzero duration enables it. Rows
-are retained for 30 days by default while collection is enabled. Disabling
-collection also suspends retention. Recording is best effort, so an episode can
-be missed if its objects or replica disappear before the collector observes
-completion. Failed, canceled, and OOM-killed episodes are not recorded.
-`cluster_id` and `replica_id` may name objects that no longer exist.
+Compute introspection must also be enabled on the replica. Replicas configured
+with `INTROSPECTION INTERVAL = 0` are skipped. Rows are retained for 30 days by
+default while collection is enabled. Disabling collection also suspends
+retention. Recording is best effort, so an episode can be missed if its objects
+or replica disappear before the collector observes completion. Only the latest
+completed component visible in a sweep is recorded, so intermediate transitions
+between sweeps can be missed. An object retracted before collection leaves no
+evidence. The surviving component can therefore be recorded as `hydrated` even
+if another object was canceled. Failed, canceled, and OOM-killed episodes are
+not recorded directly. Process-local clock skew can merge components that did
+not overlap in real time. `cluster_id` and `replica_id` may name objects that no
+longer exist.
 
 Resource peaks have process-lifetime scope because the operating system resets
 them when a replica process restarts, not when a hydration episode starts. They
@@ -770,17 +777,22 @@ filesystem peak remains a sampled lower bound. Replica resource limits apply
 independently to each process, so the table records the largest process peak
 rather than a sum of peaks that may not have occurred at the same time.
 
+Retention is eventual across concurrent `environmentd` processes. Collectors
+with slightly different cutoffs can briefly delete and reinsert a row near the
+retention boundary. The row remains deleted once every collector's cutoff has
+passed it.
+
 <!-- RELATION_SPEC mz_internal.mz_replica_hydration_history -->
 | Field               | Type                         | Meaning                                                                                                                  |
 | ------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `replica_id`        | [`text`]                     | The ID of the cluster replica. May name a replica that no longer exists.                                                 |
 | `cluster_id`        | [`text`]                     | The ID of the replica's cluster.                                                                                          |
-| `started_at`        | [`timestamp with time zone`] | When the first object in this hydration episode was installed on the replica.                                             |
-| `finished_at`       | [`timestamp with time zone`] | When every object installed during the episode had hydrated.                                                              |
-| `object_count`      | [`uint8`]                    | The number of object dataflows that hydrated during the episode.                                                         |
-| `peak_memory_bytes` | [`uint8`]                    | The largest process-lifetime cgroup memory high-water mark reported by any process when the collector recorded the episode. `NULL` if the platform reports no cgroup memory peak. |
-| `peak_disk_bytes`   | [`uint8`]                    | The largest process-lifetime scratch-filesystem or swap high-water mark reported by any process when the collector recorded the episode. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available. |
-| `status`            | [`text`]                     | The terminal status. Currently always `hydrated`.                                                                        |
+| `started_at`        | [`timestamp with time zone`] | The earliest object installation in the completed component visible when this row was collected.                        |
+| `finished_at`       | [`timestamp with time zone`] | The latest object hydration in the completed component visible when this row was collected.                              |
+| `object_count`      | [`uint8`]                    | The number of object dataflows in the completed component visible when this row was collected.                           |
+| `peak_memory_bytes` | [`uint8`]                    | The largest process-lifetime cgroup memory high-water mark reported by any process when the collector recorded the component. `NULL` if the platform reports no cgroup memory peak. |
+| `peak_disk_bytes`   | [`uint8`]                    | The largest process-lifetime scratch-filesystem or swap high-water mark reported by any process when the collector recorded the component. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available. |
+| `status`            | [`text`]                     | The status of the component's surviving object intervals. Currently always `hydrated`.                                  |
 
 ## `mz_object_transitive_dependencies`
 

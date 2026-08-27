@@ -5242,7 +5242,7 @@ pub static MZ_OBJECT_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(|
     }),
 });
 
-/// Completed hydration episodes, one row per replica transition to fully hydrated.
+/// Sampled successful hydration components for cluster replicas.
 ///
 /// Exempt from the bootstrap reset and from forced shard replacement, since the
 /// contents cannot be rebuilt from anything else. Schema evolution keeps them and
@@ -5276,27 +5276,27 @@ pub static MZ_REPLICA_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(
         ("cluster_id", "The ID of the replica's cluster."),
         (
             "started_at",
-            "When the first object in this hydration episode was installed on the replica.",
+            "The earliest object installation in the completed component visible when this row was collected.",
         ),
         (
             "finished_at",
-            "When every object installed during the episode had hydrated.",
+            "The latest object hydration in the completed component visible when this row was collected.",
         ),
         (
             "object_count",
-            "The number of object dataflows that hydrated during the episode.",
+            "The number of object dataflows in the completed component visible when this row was collected.",
         ),
         (
             "peak_memory_bytes",
-            "The largest process-lifetime cgroup memory high-water mark reported by any process when the collector recorded the episode. `NULL` if the platform reports no cgroup memory peak.",
+            "The largest process-lifetime cgroup memory high-water mark reported by any process when the collector recorded the component. `NULL` if the platform reports no cgroup memory peak.",
         ),
         (
             "peak_disk_bytes",
-            "The largest process-lifetime scratch-filesystem or swap high-water mark reported by any process when the collector recorded the episode. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available.",
+            "The largest process-lifetime scratch-filesystem or swap high-water mark reported by any process when the collector recorded the component. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available.",
         ),
         (
             "status",
-            "The terminal status. Currently always `hydrated`.",
+            "The status of the component's surviving object intervals. Currently always `hydrated`.",
         ),
     ]),
     // Not a retained-metrics object: that would pin a 30 day compaction window,
@@ -5305,27 +5305,41 @@ pub static MZ_REPLICA_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
-        entity_name: "replica_hydration_event",
-        description: "Completed hydration of a set of objects on a cluster replica",
-        // NOTE: These references outlive what they point at. A row deliberately
-        // survives the replica it describes, so resolving one against the
-        // catalog can come up empty.
+        entity_name: "replica_hydration_sample",
+        description: "Sampled successful hydration of a set of objects on a cluster replica",
         links: &const {
             [
                 OntologyLink {
                     name: "hydrated_on_cluster",
                     target: "cluster",
-                    properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
+                    properties: LinkProperties::ForeignKey {
+                        source_column: "cluster_id",
+                        target_column: "id",
+                        cardinality: Cardinality::ManyToOne,
+                        source_id_type: None,
+                        requires_mapping: None,
+                        nullable: false,
+                        note: Some(
+                            "Hydration samples can outlive their cluster, so this reference may not resolve.",
+                        ),
+                        extra_key_columns: None,
+                    },
                 },
                 OntologyLink {
                     name: "hydrated_on_replica",
                     target: "replica",
-                    properties: LinkProperties::fk_typed(
-                        "replica_id",
-                        "id",
-                        Cardinality::ManyToOne,
-                        mz_repr::SemanticType::ReplicaId,
-                    ),
+                    properties: LinkProperties::ForeignKey {
+                        source_column: "replica_id",
+                        target_column: "id",
+                        cardinality: Cardinality::ManyToOne,
+                        source_id_type: Some(mz_repr::SemanticType::ReplicaId),
+                        requires_mapping: None,
+                        nullable: false,
+                        note: Some(
+                            "Hydration samples can outlive their replica, so this reference may not resolve.",
+                        ),
+                        extra_key_columns: None,
+                    },
                 },
             ]
         },

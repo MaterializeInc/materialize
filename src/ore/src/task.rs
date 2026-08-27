@@ -54,9 +54,15 @@ use tokio::task::{self, JoinHandle as TokioJoinHandle};
 pub struct AbortOnDropHandle<T>(JoinHandle<T>);
 
 impl<T> AbortOnDropHandle<T> {
-    /// Checks if the task associated with this [`AbortOnDropHandle`] has finished.a
+    /// Checks if the task associated with this [`AbortOnDropHandle`] has finished.
     pub fn is_finished(&self) -> bool {
         self.0.inner.is_finished()
+    }
+
+    /// Aborts the task, then waits for it to release its owned resources.
+    pub async fn abort_and_wait(mut self) {
+        self.0.inner.abort();
+        let _ = (&mut self.0.inner).await;
     }
 
     // Note: adding an `abort(&self)` method here is incorrect; see the comment in JoinHandle::poll.
@@ -440,5 +446,40 @@ impl<T> JoinSetExt<T> for tokio::task::JoinSet<T> {
         {
             self.spawn(future)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use tokio::sync::oneshot;
+
+    struct SetOnDrop(Arc<AtomicBool>);
+
+    impl Drop for SetOnDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn abort_on_drop_handle_waits_for_task_drop() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let guard = SetOnDrop(Arc::clone(&dropped));
+        let (started_tx, started_rx) = oneshot::channel();
+        let handle = super::spawn(|| "abort_on_drop_handle_waits_for_task_drop", async move {
+            let _guard = guard;
+            started_tx.send(()).expect("receiver remains live");
+            future::pending::<()>().await;
+        })
+        .abort_on_drop();
+
+        started_rx.await.expect("task starts");
+        handle.abort_and_wait().await;
+
+        assert!(dropped.load(Ordering::SeqCst));
     }
 }

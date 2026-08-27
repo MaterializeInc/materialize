@@ -22,10 +22,10 @@
 //! replicas revisits each one approximately every `N * interval`. Lowering the
 //! interval improves freshness at the cost of more replica dataflow installs.
 //!
-//! Collection is sampling, not an event log. An episode whose live row is
-//! retracted before its replica's turn in the sweep (a dropped object, or a
-//! replica that restarts first) is not recorded, and cannot be, because
-//! the only evidence is gone. See the design doc for why that is accepted here.
+//! Collection is sampling, not an event log. Replica history records only the
+//! latest completed component visible in a sweep. Intermediate episodes and
+//! intervals retracted before collection leave no evidence and are not recorded.
+//! See the design doc for the resulting semantics.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -415,6 +415,15 @@ fn object_collection_sql(cluster_id: ClusterId, replica_id: ReplicaId, cutoff: &
 /// identifies the most recent episode. Collection waits until every currently
 /// visible object and every configured replica process has reported.
 ///
+/// Process-local wall clocks stamp both ends. Clock skew can therefore merge
+/// components that did not overlap in real time. Replica processes are fate
+/// shared and restart together, so the query never combines process generations.
+///
+/// Retracted intervals leave no evidence. `hydrated` therefore describes the
+/// surviving component at collection time, not objects that disappeared before
+/// the sweep. Once an episode is recorded, the history guard prevents a later
+/// snapshot from inserting a component that precedes or overlaps it.
+///
 /// Resource high-water marks reset when a process restarts, not at an episode
 /// boundary. They cover the process lifetime through collection, so even the
 /// initial episode can include work after hydration. For a later episode they
@@ -524,7 +533,7 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
             SELECT 1
             FROM mz_internal.mz_replica_hydration_history AS h
             WHERE h.replica_id = c.replica_id
-              AND h.started_at = c.started_at
+              AND h.finished_at >= c.started_at
         )"
     )
 }
@@ -574,8 +583,9 @@ struct Sweep {
     replica_history_id: CatalogItemId,
     metrics: Metrics,
     wall_time: chrono::DateTime<chrono::Utc>,
-    /// Rows finishing before this have aged out. Both steps apply it, so a live
-    /// log row cannot resurrect an episode retention just retracted.
+    /// Rows finishing before this have aged out. Both steps apply it, so this
+    /// sweep cannot resurrect an episode its own retention step retracts.
+    /// Concurrent sweeps can have different cutoffs, making retention eventual.
     cutoff: String,
 }
 
@@ -938,12 +948,28 @@ mod tests {
             "{sql}"
         );
         assert!(sql.contains("r.process_count = 3::uint8"), "{sql}");
-        assert!(sql.contains("metric = 'memory_peak'"), "{sql}");
-        assert!(sql.contains("metric = 'fs_used_peak'"), "{sql}");
-        assert!(sql.contains("metric = 'swap_peak'"), "{sql}");
+        let normalized_sql = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            normalized_sql
+                .contains("max(value) FILTER ( WHERE source = 'cgroup' AND metric = 'memory_peak'"),
+            "{sql}"
+        );
+        assert!(
+            normalized_sql.contains(
+                "max(value) FILTER ( WHERE source = 'statvfs' AND metric = 'fs_used_peak'"
+            ),
+            "{sql}"
+        );
+        assert!(
+            normalized_sql
+                .contains("max(value) FILTER ( WHERE source = 'cgroup' AND metric = 'swap_peak'"),
+            "{sql}"
+        );
+        assert!(!normalized_sql.contains("sum(value)"), "{sql}");
         assert!(
             sql.contains("FROM mz_internal.mz_replica_hydration_history"),
             "{sql}"
         );
+        assert!(sql.contains("h.finished_at >= c.started_at"), "{sql}");
     }
 }
