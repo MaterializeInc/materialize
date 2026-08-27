@@ -37,7 +37,6 @@ use mz_ore::metrics::{
     MetricsRegistry,
     raw::{HistogramVec, IntCounterVec},
 };
-use mz_ore::stats::histogram_seconds_buckets;
 
 /// The `reportingController` that events published by this process carry.
 const EVENT_REPORTER: &str = "orchestratord.materialize.cloud";
@@ -48,6 +47,19 @@ const RECONCILIATION_FAILED: &str = "ReconciliationFailed";
 /// The Kubernetes API server rejects an event whose note exceeds 1kB, so a
 /// long error is truncated to fit rather than costing us the event entirely.
 const MAX_NOTE_BYTES: usize = 1024;
+
+/// Buckets shared by both duration histograms, so that a step's latency reads
+/// against the whole pass it belongs to.
+///
+/// Reconciliation is a handful of Kubernetes API calls: measured on a settled
+/// operator, steps run 6ms to 90ms, the two that touch a generation's resources
+/// run 230ms to 420ms, and a whole pass runs 58ms to 350ms. Order-of-magnitude
+/// resolution is all that band needs, so these are deliberately coarser than
+/// `mz_ore::stats::histogram_seconds_buckets`, whose power-of-two spacing costs
+/// three times the series for detail no operator question asks for. Anything
+/// past the top bucket is pathological rather than slow, and `+Inf`, `_sum` and
+/// `_count` still account for it.
+const DURATION_BUCKETS: [f64; 6] = [0.01, 0.05, 0.25, 1.0, 5.0, 30.0];
 
 /// What a reconciliation pass, or one step of one, did.
 ///
@@ -150,7 +162,7 @@ impl Metrics {
                 name: "orchestratord_reconciliation_duration_seconds",
                 help: "Time spent in one reconciliation pass. This covers only the reconciler itself, not the finalizer bookkeeping around it, and a pass that waits on a rollout returns promptly rather than blocking, so this measures work done and not the wall-clock length of a rollout.",
                 var_labels: ["controller", "event_type"],
-                buckets: histogram_seconds_buckets(0.001, 512.0),
+                buckets: DURATION_BUCKETS.to_vec(),
             }),
             steps: registry.register(metric! {
                 name: "orchestratord_reconciliation_steps_total",
@@ -161,7 +173,7 @@ impl Metrics {
                 name: "orchestratord_reconciliation_step_duration_seconds",
                 help: "Time spent in one reconciliation step.",
                 var_labels: ["controller", "step"],
-                buckets: histogram_seconds_buckets(0.001, 512.0),
+                buckets: DURATION_BUCKETS.to_vec(),
             }),
         }
     }
