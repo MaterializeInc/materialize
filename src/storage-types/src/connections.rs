@@ -35,7 +35,7 @@ use iceberg_catalog_rest::{
     REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RequestAuthenticator, RestCatalogBuilder,
 };
 use iceberg_storage_opendal::{
-    AwsCredential, AwsCredentialLoad, CustomAwsCredentialLoader, OpenDalStorageFactory,
+    AwsCredential, CustomAwsCredentialLoader, OpenDalStorageFactory, ProvideCredential,
 };
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
@@ -63,6 +63,7 @@ use rdkafka::ClientContext;
 use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use regex::Regex;
+use reqsign_core::time::Timestamp;
 use reqwest::Request;
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::net;
@@ -101,6 +102,7 @@ const REST_CATALOG_PROP_CREDENTIAL: &str = "credential";
 /// We use this instead of OpenDAL's built-in assume role support because Materialize
 /// has a runtime-defined credential chain (ambient → jump role → user role with external ID)
 /// that can't be expressed via OpenDAL's static configuration properties.
+#[derive(Debug)]
 struct AwsSdkCredentialLoader {
     /// The underlying AWS SDK credentials provider. For assume role auth, this provider
     /// already handles the full chain: ambient creds -> jump role -> user role.
@@ -113,35 +115,57 @@ impl AwsSdkCredentialLoader {
     }
 }
 
-#[async_trait]
-impl AwsCredentialLoad for AwsSdkCredentialLoader {
-    async fn load_credential(
+impl ProvideCredential for AwsSdkCredentialLoader {
+    type Credential = AwsCredential;
+
+    async fn provide_credential(
         &self,
-        _client: reqwest::Client,
-    ) -> anyhow::Result<Option<AwsCredential>> {
-        let creds = self
-            .provider
-            .provide_credentials()
-            .await
-            .map_err(|e| {
-                warn!(
-                    error = %e.display_with_causes(),
-                    "failed to load AWS credentials for Iceberg FileIO from SDK provider"
-                );
-                e
-            })
-            .context(
+        _ctx: &reqsign_core::Context,
+    ) -> reqsign_core::Result<Option<Self::Credential>> {
+        let creds = self.provider.provide_credentials().await.map_err(|e| {
+            warn!(
+                error = %e.display_with_causes(),
+                "failed to load AWS credentials for Iceberg FileIO from SDK provider"
+            );
+            reqsign_core::Error::credential_invalid(
                 "failed to load AWS credentials from SDK provider for Iceberg FileIO \
                  (credential source may be temporarily unavailable)",
-            )?;
+            )
+            .with_source(e)
+        })?;
+
+        // Propagate the SDK's expiry whenever it reports one. reqsign treats a `None` expiry as
+        // "valid forever", so dropping it would leave OpenDAL signing with stale assume-role
+        // credentials rather than asking us for fresh ones.
+        let expires_in = creds.expiry().map(aws_expiry_to_timestamp).transpose()?;
 
         Ok(Some(AwsCredential {
             access_key_id: creds.access_key_id().to_string(),
             secret_access_key: creds.secret_access_key().to_string(),
             session_token: creds.session_token().map(|s| s.to_string()),
-            expires_in: creds.expiry().map(|t| t.into()),
+            expires_in,
         }))
     }
+}
+
+/// Converts an AWS SDK credential expiry into reqsign's [`Timestamp`].
+///
+/// Both failure modes require a nonsensical expiry (before the Unix epoch, or beyond year
+/// 292278994), so they are reported as errors rather than silently dropped, which would make the
+/// credential look non-expiring.
+fn aws_expiry_to_timestamp(expiry: SystemTime) -> reqsign_core::Result<Timestamp> {
+    let millis = expiry
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_err(|e| {
+            reqsign_core::Error::unexpected("AWS credential expiry precedes the Unix epoch")
+                .with_source(e)
+        })?
+        .as_millis();
+    let millis = i64::try_from(millis).map_err(|e| {
+        reqsign_core::Error::unexpected("AWS credential expiry overflows a millisecond timestamp")
+            .with_source(e)
+    })?;
+    Timestamp::from_millisecond(millis)
 }
 
 /// Signs each outgoing REST-catalog request with AWS SigV4.
@@ -871,15 +895,14 @@ impl IcebergCatalogConnection<InlinedConnection> {
         // N.B. We're using the AWS credentials from the catalog connection for the storage layer
         //   even though the sink comes with its own (unused) AWS credentials for storage.
         let customized_credential_load = if matches!(aws_auth, AwsAuth::AssumeRole(_)) {
-            Some(CustomAwsCredentialLoader::new(Arc::new(
-                AwsSdkCredentialLoader::new(credentials_provider),
+            Some(CustomAwsCredentialLoader::new(AwsSdkCredentialLoader::new(
+                credentials_provider,
             )))
         } else {
             None
         };
 
         let storage_factory = Arc::new(OpenDalStorageFactory::S3 {
-            configured_scheme: "s3".to_string(),
             customized_credential_load,
         });
 
@@ -933,7 +956,6 @@ impl IcebergCatalogConnection<InlinedConnection> {
                 }
                 (
                     OpenDalStorageFactory::S3 {
-                        configured_scheme: "s3".to_string(),
                         // When used with MinIO, Polaris returns a config with:
                         //   s3.access-key-id, s3.secret-access-key, s3.endpoint, ...
                         // `iceberg-rust` forwards these props to `opendal`.
