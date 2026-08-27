@@ -104,6 +104,36 @@ mv_const hydrated_test_1 true false
 idx hydrated_test_1 hydrated true true
 mv  hydrated_test_1 hydrated true true
 
+# Replica history rolls overlapping object intervals into one episode and waits
+# for every configured process to publish resource observations. The exact
+# number of initial episodes depends on whether these sequential DDL statements
+# overlapped, so assert the stable properties here.
+> SELECT count(*) > 0,
+         bool_and(h.status = 'hydrated' AND h.started_at <= h.finished_at),
+         bool_and(h.object_count > 0)
+  FROM mz_internal.mz_replica_hydration_history AS h
+  JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
+  WHERE r.name = 'hydrated_test_1';
+true true true
+
+# Installing an object after the replica is fully hydrated starts a new replica
+# episode. On this single-worker replica its boundaries match the object's.
+> CREATE INDEX replica_episode_idx ON t (a + 1)
+
+> SELECT rh.status, rh.object_count,
+         rh.started_at = oh.installed_at,
+         rh.finished_at = oh.hydrated_at
+  FROM mz_internal.mz_replica_hydration_history AS rh
+  JOIN mz_internal.mz_object_hydration_history AS oh
+    ON oh.replica_id = rh.replica_id
+   AND oh.installed_at = rh.started_at
+  JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = oh.object_id
+  JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+  WHERE o.name = 'replica_episode_idx';
+hydrated 1 true true
+
+> DROP INDEX replica_episode_idx
+
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
@@ -407,6 +437,9 @@ $ postgres-execute connection=mz_system
 ALTER SYSTEM SET hydration_history_retention_period = '0s';
 
 > SELECT count(*) FROM mz_internal.mz_object_hydration_history;
+0
+
+> SELECT count(*) FROM mz_internal.mz_replica_hydration_history;
 0
 
 > SELECT o.name, r.name, h.hydrated

@@ -1437,7 +1437,7 @@ def workflow_temporary_item_cleanup(c: Composition) -> None:
 
 
 def workflow_hydration_history_survives_restart(c: Composition) -> None:
-    """`mz_object_hydration_history` rows outlive the process that wrote them.
+    """Durable object and replica hydration rows outlive their writer.
 
     Killing the service also restarts clusterd, so the replica hydrates again
     and legitimately records a *second* episode with a fresh `installed_at`.
@@ -1455,6 +1455,15 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
             JOIN mz_catalog.mz_objects AS o ON o.id = g.id
             WHERE o.name = '{name}'
             ORDER BY h.installed_at""")
+
+    def replica_episodes() -> list[list]:
+        return c.sql_query("""
+            SELECT h.started_at::text, h.finished_at::text, h.object_count::text,
+                   h.peak_memory_bytes::text, h.peak_disk_bytes::text, h.status
+            FROM mz_internal.mz_replica_hydration_history AS h
+            JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
+            WHERE r.name = 'r1'
+            ORDER BY h.started_at""")
 
     c.down(destroy_volumes=True)
     with c.override(
@@ -1491,6 +1500,15 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
         assert (
             len(before) == 1
         ), f"expected exactly one episode, got {before} (empty means it timed out)"
+
+        deadline = time.time() + 120
+        replica_before = []
+        while time.time() < deadline:
+            replica_before = replica_episodes()
+            if replica_before:
+                break
+            time.sleep(0.5)
+        assert replica_before, "replica hydration history timed out before restart"
 
         # Discover which MV's persist-sink worker is off worker 0 instead of
         # predicting it from user-ID allocation and hashing. Enough input data
@@ -1579,6 +1597,27 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
             len(after) == 2 and len(fresh) == 1
         ), f"expected one preserved and one fresh episode, got {after}"
 
+        deadline = time.time() + 120
+        replica_after = []
+        replica_fresh = []
+        while time.time() < deadline:
+            replica_after = replica_episodes()
+            replica_fresh = [
+                episode for episode in replica_after if episode not in replica_before
+            ]
+            if (
+                all(episode in replica_after for episode in replica_before)
+                and replica_fresh
+            ):
+                break
+            time.sleep(0.5)
+        assert all(
+            episode in replica_after for episode in replica_before
+        ), f"restart lost replica episodes: had {replica_before}, now {replica_after}"
+        assert (
+            replica_fresh
+        ), f"restart produced no fresh replica episode: {replica_after}"
+
         # Let several sweeps run. The pre-restart episode must not be duplicated,
         # and the post-restart episode must settle at one row too.
         time.sleep(10)
@@ -1590,6 +1629,14 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
             set(tuple(row) for row in settled)
         ), f"sweeps duplicated a hydration episode: {settled}"
         assert len(settled) == 2, f"expected two settled episodes, got {settled}"
+
+        replica_settled = replica_episodes()
+        assert len(replica_settled) == len(
+            set(tuple(row) for row in replica_settled)
+        ), f"sweeps duplicated a replica hydration episode: {replica_settled}"
+        assert all(
+            episode in replica_settled for episode in replica_before
+        ), f"pre-restart replica episodes disappeared: {replica_settled}"
 
 
 def workflow_default(c: Composition) -> None:

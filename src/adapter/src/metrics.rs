@@ -150,7 +150,7 @@ impl Metrics {
             )),
             hydration_history_retention_batch_full: registry.register(metric!(
                 name: "mz_hydration_history_retention_batch_full_total",
-                help: "Total hydration-history sweeps whose retention batch was full. Repeated increments mean retention may not be keeping up with its schedule.",
+                help: "Total hydration-history retention batches that were full. Repeated increments mean retention may not be keeping up with its schedule.",
             )),
             hydration_history_rows_affected: registry.register(metric!(
                 name: "mz_hydration_history_rows_affected_total",

@@ -421,19 +421,19 @@ pub const ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD: Config<Duration> = Config::
     ParameterScope::Environment,
 );
 
-/// How often to sweep replicas for completed object hydration episodes.
+/// How often to sweep replicas for completed object and replica hydration episodes.
 pub const HYDRATION_HISTORY_COLLECTION_INTERVAL: Config<Duration> = Config::new(
     "hydration_history_collection_interval",
     Duration::ZERO,
-    "How often to record completed object hydration episodes. A zero duration disables collection.",
+    "How often to record completed object and replica hydration episodes. A zero duration disables collection.",
     ParameterScope::Environment,
 );
 
-/// How long to retain completed object hydration episodes.
+/// How long to retain completed object and replica hydration episodes.
 pub const HYDRATION_HISTORY_RETENTION_PERIOD: Config<Duration> = Config::new(
     "hydration_history_retention_period",
     Duration::from_hours(30 * 24),
-    "How long to retain rows in mz_internal.mz_object_hydration_history.",
+    "How long to retain rows in mz_internal.mz_object_hydration_history and mz_internal.mz_replica_hydration_history.",
     ParameterScope::Environment,
 );
 
