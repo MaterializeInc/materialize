@@ -5242,7 +5242,7 @@ pub static MZ_OBJECT_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(|
     }),
 });
 
-/// Sampled successful hydration components for cluster replicas.
+/// Successful hydration episodes for cluster replicas.
 ///
 /// Exempt from the bootstrap reset and from forced shard replacement, since the
 /// contents cannot be rebuilt from anything else. Schema evolution keeps them and
@@ -5276,27 +5276,27 @@ pub static MZ_REPLICA_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(
         ("cluster_id", "The ID of the replica's cluster."),
         (
             "started_at",
-            "The earliest object installation in the completed component visible when this row was collected.",
+            "The earliest maintained compute dataflow installation in the hydration episode.",
         ),
         (
             "finished_at",
-            "The latest object hydration in the completed component visible when this row was collected.",
+            "The latest maintained compute dataflow hydration in the hydration episode.",
         ),
         (
             "object_count",
-            "The number of object dataflows in the completed component visible when this row was collected.",
+            "The number of maintained compute dataflows in the hydration episode.",
         ),
         (
             "peak_memory_bytes",
-            "The largest process-lifetime cgroup memory high-water mark reported by any process when the collector recorded the component. `NULL` if the platform reports no cgroup memory peak.",
+            "The largest process-lifetime cgroup memory high-water mark reported by any process when the collector recorded the episode. `NULL` if the platform reports no cgroup memory peak.",
         ),
         (
             "peak_disk_bytes",
-            "The largest process-lifetime scratch-filesystem or swap high-water mark reported by any process when the collector recorded the component. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available.",
+            "The largest process-lifetime scratch-filesystem or swap high-water mark reported by any process when the collector recorded the episode. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available.",
         ),
         (
             "status",
-            "The status of the component's surviving object intervals. Currently always `hydrated`.",
+            "The hydration episode's status. Currently always `hydrated`.",
         ),
     ]),
     // Not a retained-metrics object: that would pin a 30 day compaction window,
@@ -5305,8 +5305,8 @@ pub static MZ_REPLICA_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
-        entity_name: "replica_hydration_sample",
-        description: "Sampled successful hydration of a set of objects on a cluster replica",
+        entity_name: "replica_hydration_episode",
+        description: "Successful hydration episode on a cluster replica",
         links: &const {
             [
                 OntologyLink {
