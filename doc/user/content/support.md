@@ -26,7 +26,7 @@ answer questions, suggest documentation, and assist with troubleshooting. You
 can also submit a request to **Talk to a human**. Just look for the messenger
 widget on the bottom right.
 
-**Don’t see the messenger?** Make sure cookies are enabled for materialize.com, then refresh the page.
+<img src="/images/messenger-widget.png" alt="Materialize messenger widget icon" width="20" height="20" style="vertical-align: text-bottom;" /> **Don’t see the messenger?** Make sure cookies are enabled for materialize.com, then refresh the page.
 
 {{< tip >}}
 If you are an SLA Supported Customer who is experiencing an [**urgent** issue](#urgent-issues-for-sla-supported-customers-only),
@@ -47,7 +47,7 @@ Connect with other users, share ideas, and get informal help from the [Materiali
 
 If you are an SLA Supported Customer who is experiencing an **urgent** issue,
 
-- Use the [messenger's](#messenger-app) **Report Production Outage** option for
+- Use the [messenger's](#messenger) **Report Production Outage** option for
   fastest response.
 
 - Alternatively, you can email `support@materialize.com`. To ensure priority
