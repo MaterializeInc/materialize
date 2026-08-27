@@ -211,18 +211,20 @@ Target cluster: quickstart
 
 EOF
 
-# `a = NULL` should NOT find the NULL in the table.
+# `a = NULL` should NOT find the NULL in the table. Note that `a = NULL` reduces to a `null`
+# literal, and a filter drops a `null` row just as it drops a `false` one, so the predicate
+# is equivalent to just `a = 2` and the lookup is exact.
 
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1
 WHERE a = NULL OR a = 2
 ----
 Explained Query (fast path):
-  Filter (null OR (#0{a} = 2))
-    ReadIndex on=materialize.public.t1 idx_t1_a_b=[*** full scan ***]
+  Project (#0{a}, #1{b})
+    ReadIndex on=materialize.public.t1 idx_t1_a=[lookup value=(2)]
 
 Used Indexes:
-  - materialize.public.idx_t1_a_b (*** full scan ***)
+  - materialize.public.idx_t1_a (lookup)
 
 Target cluster: quickstart
 
@@ -1490,6 +1492,7 @@ SELECT u FROM t_uint_cast WHERE u::int2 = 5::int2
 
 query error "3000000000" uint2 out of range
 SELECT u FROM t_uint_cast WHERE u::uint2 = 5::uint2
+
 # An IN list large enough that a disjunctive-normal-form expansion would be impractical
 # still uses the index, and the constraints still come out of the filter. The predicate is
 # read once per candidate index, so the conjuncts that say nothing about the index key
