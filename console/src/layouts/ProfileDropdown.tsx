@@ -32,6 +32,7 @@ import { apiClient } from "~/api/apiClient";
 import { getCurrentTenant, useCurrentOrganization } from "~/api/auth";
 import { logout, logoutAndRedirectOrThrow } from "~/api/materialize/auth";
 import ThemeSwitcher from "~/components/ThemeSwitcher";
+import UiPreviewSwitcher from "~/components/UiPreviewSwitcher";
 import { AppConfigSwitch } from "~/config/AppConfigSwitch";
 import {
   AdminPortal,
@@ -361,6 +362,7 @@ const ProfileDropdown = ({
       <MenuList pb={2}>
         <UserInfoMenuItem />
         <ThemeSwitcher />
+        <UiPreviewSwitcher />
         <AppConfigSwitch
           cloudConfigElement={({ runtimeConfig }) => {
             if (runtimeConfig.isImpersonating) return null;
