@@ -23,6 +23,7 @@ maplit.workspace = true
 md-5.workspace = true
 mz-adapter-types = { path = "../adapter-types" }
 mz-catalog = { path = "../catalog" }
+mz-compute-types = { path = "../compute-types" }
 mz-controller = { path = "../controller" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-environmentd = { path = "../environmentd", default-features = false }
