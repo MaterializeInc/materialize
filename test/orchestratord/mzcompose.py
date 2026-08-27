@@ -3561,7 +3561,57 @@ def workflow_manually_promote(
     wait_for_rollout_complete()
     print("Test 2 PASSED: Promotion via v1 requestedRolloutHash succeeded")
 
+    # Two manual promotions have now driven the full lifecycle, so every phase
+    # of one should have been reported as an event.
+    check_lifecycle_events(definition)
     print("workflow_manually_promote PASSED")
+
+
+def check_lifecycle_events(definition: dict[str, Any]) -> None:
+    """Assert that the operator reported each rollout phase as an event.
+
+    The status conditions record only the phase the resource is in now, so the
+    events are the only account of the phases it passed through. Their reasons
+    are what a dashboard groups on, which is why this pins the exact vocabulary
+    rather than checking that any event at all was published.
+    """
+    name = definition["materialize"]["metadata"]["name"]
+    events = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                # The events.k8s.io API explicitly, rather than the core v1 view
+                # `kubectl get events` serves, which renames these fields.
+                "events.events.k8s.io",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "json",
+            ],
+        )
+    )["items"]
+    by_reason = {
+        event["reason"]: event
+        for event in events
+        if event.get("regarding", {}).get("kind") == "Materialize"
+        and event.get("regarding", {}).get("name") == name
+    }
+    # ManuallyPromote holds at ReadyToPromote until forcePromote is set, so a
+    # promotion under this strategy passes through all three.
+    for reason in ("Applying", "ReadyToPromote", "Promoting", "Applied"):
+        assert reason in by_reason, (
+            f"Expected a {reason} event on Materialize/{name}, "
+            f"found {sorted(by_reason)}"
+        )
+        event = by_reason[reason]
+        assert event["type"] == "Normal", event
+        assert event["reportingController"] == "orchestratord.materialize.cloud", event
+        assert event.get("note"), event
+    # The promotion events should name the generation they promoted, which is
+    # what makes them readable against a rollout after the fact.
+    applied = by_reason["Applied"]["note"]
+    assert "generation" in applied, applied
 
 
 def apply_materialize(definition: dict[str, Any]) -> None:
