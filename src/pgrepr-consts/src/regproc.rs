@@ -21,9 +21,12 @@
 //! through `mz_catalog::builtin::BUILTINS::funcs()`, which is the authoritative
 //! definition of every function OID. `mz_catalog::builtin`'s
 //! `test_regproc_names_match_builtin_functions` recomputes the whole table from
-//! that registry and fails with the corrected contents when the two have
-//! drifted, so do not hand-edit entries here. Add the function to the registry
-//! and paste in the table the test prints.
+//! that registry and fails when the two have drifted, so do not hand-edit
+//! entries here. Add the function to the registry, then regenerate the table:
+//!
+//! ```shell
+//! REWRITE=1 cargo test -p mz-catalog test_regproc_names_match_builtin_functions
+//! ```
 //!
 //! The OIDs are not invented by Materialize wherever PostgreSQL already assigns
 //! one. `mz_sql::func`'s `PG_CATALOG_BUILTINS` records that its literal OIDs
@@ -50,6 +53,7 @@
 /// from `regproc` to `text`, and the unquoted form still resolves because
 /// `regprocin` accepts a reserved word either way.
 pub const NAMES: &[(u32, &str)] = &[
+    // BEGIN GENERATED
     (34, "namein"),
     (38, "int2in"),
     (40, "int2vectorin"),
@@ -681,6 +685,7 @@ pub const NAMES: &[(u32, &str)] = &[
     (17113, "mz_aws_account_id"),
     (17114, "mz_aws_external_id_prefix"),
     (17115, "mz_aws_connection_role_arn"),
+    // END GENERATED
 ];
 
 /// Returns the text that `regproc` OID `oid` renders as, or `None` when no
