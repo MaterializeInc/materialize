@@ -906,6 +906,7 @@ pub enum ConnectionOptionName {
     Endpoint,
     GcpConnection,
     Host,
+    Oauth2ServerUrl,
     Password,
     Port,
     ProgressTopic,
@@ -960,6 +961,7 @@ impl ConnectionOptionName {
             | ConnectionOptionName::Endpoint
             | ConnectionOptionName::GcpConnection
             | ConnectionOptionName::Host
+            | ConnectionOptionName::Oauth2ServerUrl
             | ConnectionOptionName::Port
             | ConnectionOptionName::ProgressTopic
             | ConnectionOptionName::ProgressTopicReplicationFactor
@@ -994,6 +996,7 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::Endpoint => "ENDPOINT",
             ConnectionOptionName::GcpConnection => "GCP CONNECTION",
             ConnectionOptionName::Host => "HOST",
+            ConnectionOptionName::Oauth2ServerUrl => "OAUTH2 SERVER URL",
             ConnectionOptionName::Password => "PASSWORD",
             ConnectionOptionName::Port => "PORT",
             ConnectionOptionName::ProgressTopic => "PROGRESS TOPIC",

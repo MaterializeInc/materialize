@@ -62,6 +62,7 @@ generate_extracted_config!(
     (Endpoint, String),
     (GcpConnection, with_options::Object),
     (Host, String),
+    (Oauth2ServerUrl, String),
     (Password, with_options::Secret),
     (Port, u16),
     (ProgressTopic, String),
@@ -194,6 +195,7 @@ pub(super) fn validate_options_per_connection_type(
             CatalogType,
             Credential,
             GcpConnection,
+            Oauth2ServerUrl,
             Scope,
             Url,
             Warehouse,
@@ -697,6 +699,11 @@ impl ConnectionOptionExtracted {
                                 "invalid CONNECTION: ICEBERG s3tablesrest connections do not support GCP CONNECTION"
                             );
                         }
+                        if self.oauth2_server_url.is_some() {
+                            sql_bail!(
+                                "invalid CONNECTION: ICEBERG s3tablesrest connections do not support OAUTH2 SERVER URL"
+                            );
+                        }
                         let Some(warehouse) = warehouse else {
                             sql_bail!(
                                 "invalid CONNECTION: ICEBERG s3tablesrest connections must specify WAREHOUSE"
@@ -726,8 +733,14 @@ impl ConnectionOptionExtracted {
                             (Some(credential), None) => IcebergCatalogAuth::OAuth {
                                 credential,
                                 scope: self.scope.clone(),
+                                server_url: self.oauth2_server_url.clone(),
                             },
                             (None, Some(gcp_connection)) => {
+                                if self.oauth2_server_url.is_some() {
+                                    sql_bail!(
+                                        "invalid CONNECTION: OAUTH2 SERVER URL applies to CREDENTIAL auth, not GCP CONNECTION"
+                                    );
+                                }
                                 /// All BigLake Iceberg REST Catalogs use the same catalog URI.
                                 const BIGLAKE_CATALOG_URI: &str =
                                     "https://biglake.googleapis.com/iceberg/v1/restcatalog";
