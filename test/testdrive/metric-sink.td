@@ -95,12 +95,17 @@ true
 2
 
 # Read the sink's id off the companion gauge it stamps with a `sink` label.
-# `LIMIT 1` guards the single-row contract of `set-from-sql`: today `s` is the
-# only metric sink, but a second one (user or builtin) sharing this scrape
-# window would otherwise make the capture fail.
+# The curated metric sinks (installed on every replica) stamp this gauge with
+# their names too, so exclude those to isolate `s`, the only user sink here.
+# `LIMIT 1` guards the single-row contract of `set-from-sql`.
+#
+# NOTE: `CURATED` in src/adapter/src/coord/metric_sink.rs is the source of truth
+# for these names. The same exclusion list is repeated later in this file and in
+# checks/all_checks/metric_sink.py, so a new curated sink means updating them all.
 $ set-from-sql var=sink-id
 SELECT labels -> 'sink' FROM mz_introspection.mz_cluster_prometheus_metrics
 WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+  AND labels -> 'sink' NOT IN ('mz_metric_arrangement_sizes', 'mz_metric_dataflow_errors')
 LIMIT 1
 
 # The companion gauges exist, are labeled with this sink's id, and read healthy
@@ -216,10 +221,11 @@ contains:still depended upon by metric sink "s"
 > CREATE METRIC SINK s_skip IN CLUSTER quickstart FROM lv WITH (PREFIX = 'mz_metric_sink_skip_')
 
 # Both rows are skipped and stay distinct (a null value is not the same identity as an empty one),
-# so the gauge reads 2, not 1. This retrying read also waits for the scrape to observe the sink;
-# `s_skip` is the only metric sink here, so no `sink`-label filter is needed.
+# so the gauge reads 2, not 1. This retrying read also waits for the scrape to observe the sink.
+# `s_skip` is the only user sink here, but the curated sinks stamp this gauge too, so exclude them.
 > SELECT value FROM mz_introspection.mz_cluster_prometheus_metrics
   WHERE metric_name = 'mz_compute_metric_sink_skipped'
+    AND labels -> 'sink' NOT IN ('mz_metric_arrangement_sizes', 'mz_metric_dataflow_errors')
 2
 
 # Neither row publishes a series under the sink's metric name.
@@ -229,12 +235,125 @@ contains:still depended upon by metric sink "s"
 
 > DROP TABLE lt CASCADE
 
+#
+# Curated metric sinks. The coordinator installs these on every replica (not via
+# CREATE METRIC SINK), so with `enable_metric_sink` on they run on quickstart's r1
+# from boot. Reads target r1 (cluster_replica, set at the top of the file).
+#
+
+# An index gives the sizes sink a dataflow arrangement to measure.
+> CREATE TABLE arr_t (k text NOT NULL, v int)
+
+> INSERT INTO arr_t VALUES ('a', 1), ('b', 2)
+
+> CREATE INDEX arr_idx ON arr_t (k)
+
+# Each size family publishes one gauge series per dataflow, tagged with a
+# representative exported object's global id, or `unattributable` for a dataflow
+# that exports nothing. Values churn, so assert shape rather than magnitude.
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_arrangement_size_bytes'
+    AND metric_type = 'gauge' AND labels -> 'id' IS NOT NULL
+true
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_arrangement_records'
+    AND metric_type = 'gauge' AND labels -> 'id' IS NOT NULL
+true
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_arrangement_batches'
+    AND metric_type = 'gauge' AND labels -> 'id' IS NOT NULL
+true
+
+# The attributable path: the index above is keyed by its object's global id.
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_arrangement_size_bytes'
+    AND labels -> 'id' LIKE 'u%'
+true
+
+# The sentinel path: the replica's own introspection-subscribe dataflows export no
+# catalog object, so their arrangements bucket under `unattributable` instead of
+# dropping. These run on every replica, so the bucket is always present.
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_arrangement_size_bytes'
+    AND labels -> 'id' = 'unattributable'
+true
+
+# Series count equals the sink's own operator -> dataflow -> id mapping over the raw
+# heap-size log, the global id when the dataflow exports one and the sentinel when it
+# does not. Also confirms the per-worker rows collapsed.
+> SELECT
+    (SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+       WHERE metric_name = 'mz_metric_sink_arrangement_size_bytes')
+    =
+    (SELECT count(DISTINCT COALESCE(gid.global_id, 'unattributable'))
+       FROM mz_introspection.mz_arrangement_heap_size_raw r
+       JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
+       LEFT JOIN (SELECT id, min(global_id) AS global_id
+               FROM mz_introspection.mz_dataflow_global_ids GROUP BY id) gid
+         ON gid.id = dod.dataflow_id)
+true
+
+# Both curated sinks report healthy companion gauges: frontier advancing, no errors.
+> SELECT value > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+    AND labels -> 'sink' = 'mz_metric_arrangement_sizes'
+true
+
+> SELECT value > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+    AND labels -> 'sink' = 'mz_metric_dataflow_errors'
+true
+
+> SELECT value = 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_errors'
+    AND labels -> 'sink' = 'mz_metric_arrangement_sizes'
+true
+
+> SELECT value = 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_errors'
+    AND labels -> 'sink' = 'mz_metric_dataflow_errors'
+true
+
+# The errors sink's HAVING drops zero-error exports, so a healthy cluster
+# publishes no error series.
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_dataflow_error_count'
+0
+
+# A divide-by-zero materialized view errors in its dataflow, so the raw error
+# log gains a row and the errors sink publishes a series for it.
+> CREATE TABLE err_t (x int)
+
+> INSERT INTO err_t VALUES (0)
+
+> CREATE MATERIALIZED VIEW err_mv IN CLUSTER quickstart AS SELECT 1 / x AS v FROM err_t
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_dataflow_error_count'
+    AND metric_type = 'gauge' AND labels -> 'id' IS NOT NULL
+true
+
+# Once the erroring dataflow is gone the error series is retracted.
+> DROP MATERIALIZED VIEW err_mv
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_dataflow_error_count'
+0
+
+> DROP INDEX arr_idx
+
+> DROP TABLE arr_t
+
+> DROP TABLE err_t
+
 # Replica churn drives the coordinator's curated metric-sink install and
-# teardown (`install_metric_sinks` / `drop_metric_sinks`). The curated list is
-# empty, so there is no curated series to assert on: what is under test is that
-# both hooks run over an empty list without erroring, and that a replica added
-# and removed under a live sink leaves that sink publishing on the replica that
-# remains.
+# teardown (`install_metric_sinks` / `drop_metric_sinks`): the curated sinks
+# install on churn_c's added replica and are torn down when it is dropped. The
+# curated series themselves are asserted on quickstart above; here the focus is
+# that a user sink added and removed under replica churn keeps publishing on the
+# replica that remains, while the curated install/teardown runs on each change.
 #
 # On its own cluster, so the churn does not disturb the replica serving the rest
 # of this file. `quickstart` is a managed cluster anyway, which rejects
@@ -286,3 +405,129 @@ contains:still depended upon by metric sink "s"
 > DROP CLUSTER churn_c CASCADE
 
 > DROP TABLE churn_t CASCADE
+
+#
+# Curated sinks across a multi-cluster, multi-replica topology. The coordinator
+# installs the curated set on every replica of every cluster, so a regression that
+# skipped a replica, or only worked on quickstart, leaves one of the four replicas
+# below with no curated series. Each read targets one replica by name, so a missing
+# install shows as a mismatch rather than being masked by another replica's series.
+#
+> CREATE CLUSTER ma_c (SIZE '${arg.default-replica-size}', REPLICATION FACTOR 2)
+
+> CREATE CLUSTER mb_c (SIZE '${arg.default-replica-size}', REPLICATION FACTOR 2)
+
+> CREATE TABLE mrep_t (x int)
+
+> INSERT INTO mrep_t VALUES (0), (1), (2)
+
+# An arrangement (index) and an erroring dataflow (divide by zero) on each cluster.
+> CREATE INDEX mrep_ix_a IN CLUSTER ma_c ON mrep_t (x)
+
+> CREATE MATERIALIZED VIEW mrep_mv_a IN CLUSTER ma_c AS SELECT 1 / x AS v FROM mrep_t
+
+> CREATE INDEX mrep_ix_b IN CLUSTER mb_c ON mrep_t (x)
+
+> CREATE MATERIALIZED VIEW mrep_mv_b IN CLUSTER mb_c AS SELECT 1 / x AS v FROM mrep_t
+
+# Every replica of both clusters publishes the size family, the error family (the
+# erroring MV), and both curated sinks' health frontier gauges.
+> SET cluster = ma_c
+
+> SET cluster_replica = r1
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_arrangement_size_bytes' AND labels -> 'id' IS NOT NULL
+true
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_dataflow_error_count' AND labels -> 'id' IS NOT NULL
+true
+
+> SELECT value > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms' AND labels -> 'sink' = 'mz_metric_arrangement_sizes'
+true
+
+> SELECT value > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms' AND labels -> 'sink' = 'mz_metric_dataflow_errors'
+true
+
+# One series per dataflow, not per worker: holds for any worker count, and under
+# a multi-worker config it is the assertion that the per-worker raw log collapsed.
+> SELECT
+    (SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+       WHERE metric_name = 'mz_metric_sink_arrangement_size_bytes')
+    =
+    (SELECT count(DISTINCT COALESCE(gid.global_id, 'unattributable'))
+       FROM mz_introspection.mz_arrangement_heap_size_raw r
+       JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
+       LEFT JOIN (SELECT id, min(global_id) AS global_id
+               FROM mz_introspection.mz_dataflow_global_ids GROUP BY id) gid
+         ON gid.id = dod.dataflow_id)
+true
+
+> SET cluster_replica = r2
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_arrangement_size_bytes' AND labels -> 'id' IS NOT NULL
+true
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_dataflow_error_count' AND labels -> 'id' IS NOT NULL
+true
+
+> SELECT value > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms' AND labels -> 'sink' = 'mz_metric_arrangement_sizes'
+true
+
+> SELECT value > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms' AND labels -> 'sink' = 'mz_metric_dataflow_errors'
+true
+
+> SET cluster = mb_c
+
+> SET cluster_replica = r1
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_arrangement_size_bytes' AND labels -> 'id' IS NOT NULL
+true
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_dataflow_error_count' AND labels -> 'id' IS NOT NULL
+true
+
+> SELECT value > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms' AND labels -> 'sink' = 'mz_metric_arrangement_sizes'
+true
+
+> SELECT value > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms' AND labels -> 'sink' = 'mz_metric_dataflow_errors'
+true
+
+> SET cluster_replica = r2
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_arrangement_size_bytes' AND labels -> 'id' IS NOT NULL
+true
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_dataflow_error_count' AND labels -> 'id' IS NOT NULL
+true
+
+> SELECT value > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms' AND labels -> 'sink' = 'mz_metric_arrangement_sizes'
+true
+
+> SELECT value > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms' AND labels -> 'sink' = 'mz_metric_dataflow_errors'
+true
+
+> RESET cluster_replica
+
+> RESET cluster
+
+> DROP CLUSTER ma_c CASCADE
+
+> DROP CLUSTER mb_c CASCADE
+
+> DROP TABLE mrep_t CASCADE

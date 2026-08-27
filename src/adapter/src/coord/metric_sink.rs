@@ -84,7 +84,71 @@ pub(super) struct CuratedMetricSink {
 }
 
 /// The curated metric sinks, installed on every replica.
-const CURATED: &[CuratedMetricSink] = &[];
+///
+/// Sources read the raw `..._raw` logging relations, never the derived builtin views like
+/// `mz_dataflow_arrangement_sizes`, which re-aggregate expensively and churn even on static data (a
+/// per-dataflow size metric off the derived view measured ~30x the raw form).
+///
+/// Every family sums across workers, so a series carries no `worker_id`, and a multi-process replica
+/// reports one number per grouping key rather than one per process. The size families emit one series
+/// per dataflow, the errors family one per export.
+const CURATED: &[CuratedMetricSink] = &[
+    CuratedMetricSink {
+        name: "mz_metric_arrangement_sizes",
+        prefix: "mz_metric_sink_",
+        // Key on the exported object's `GlobalId`, not the timely dataflow id, which is re-minted on
+        // every re-render and joins to nothing. The size logs are per operator, so map operator ->
+        // dataflow -> global id. A dataflow can export several objects, so collapse them to one
+        // representative id (`min(global_id)`) to keep one series per dataflow instead of fanning out.
+        // A dataflow with no export (a transient peek) has no global id, so bucket its arrangements
+        // under an `unattributable` sentinel rather than dropping their bytes from the total.
+        source_sql: "
+SELECT 'arrangement_size_bytes'::text AS metric_name, 'gauge'::text AS metric_type,
+       map_build(LIST[ROW('id', COALESCE(gid.global_id, 'unattributable'))])::map[text=>text] AS labels,
+       count(*)::double precision AS value, 'arrangement heap size in bytes'::text AS help
+FROM mz_introspection.mz_arrangement_heap_size_raw r
+JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
+LEFT JOIN (SELECT id, min(global_id) AS global_id FROM mz_introspection.mz_dataflow_global_ids GROUP BY id) gid
+  ON gid.id = dod.dataflow_id
+GROUP BY COALESCE(gid.global_id, 'unattributable')
+UNION ALL
+SELECT 'arrangement_records'::text AS metric_name, 'gauge'::text AS metric_type,
+       map_build(LIST[ROW('id', COALESCE(gid.global_id, 'unattributable'))])::map[text=>text] AS labels,
+       count(*)::double precision AS value, 'number of records in arrangement heaps'::text AS help
+FROM mz_introspection.mz_arrangement_records_raw r
+JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
+LEFT JOIN (SELECT id, min(global_id) AS global_id FROM mz_introspection.mz_dataflow_global_ids GROUP BY id) gid
+  ON gid.id = dod.dataflow_id
+GROUP BY COALESCE(gid.global_id, 'unattributable')
+UNION ALL
+SELECT 'arrangement_batches'::text AS metric_name, 'gauge'::text AS metric_type,
+       map_build(LIST[ROW('id', COALESCE(gid.global_id, 'unattributable'))])::map[text=>text] AS labels,
+       count(*)::double precision AS value, 'number of batches in arrangements'::text AS help
+FROM mz_introspection.mz_arrangement_batches_raw r
+JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
+LEFT JOIN (SELECT id, min(global_id) AS global_id FROM mz_introspection.mz_dataflow_global_ids GROUP BY id) gid
+  ON gid.id = dod.dataflow_id
+GROUP BY COALESCE(gid.global_id, 'unattributable')",
+    },
+    CuratedMetricSink {
+        name: "mz_metric_dataflow_errors",
+        prefix: "mz_metric_sink_",
+        // Raw log, not the `mz_compute_error_counts` view: the view joins the storage-managed
+        // `mz_internal.mz_compute_dependencies`, which `ensure_reads_only_logs` rejects. `count` is
+        // per-worker, so sum per export. `HAVING` drops the healthy ones.
+        //
+        // NOTE: direct errors only. The raw log attributes an error to the export that raised it. The
+        // view also forwards counts onto index-reuse exports, so a broken reuse-index reads 0 here and
+        // its errors show under the underlying export, undercounting against the view.
+        source_sql: "
+SELECT 'dataflow_error_count'::text AS metric_name, 'gauge'::text AS metric_type,
+       map_build(LIST[ROW('id', export_id::text)])::map[text=>text] AS labels,
+       sum(count)::double precision AS value, 'count of errors in the dataflow'::text AS help
+FROM mz_introspection.mz_compute_error_counts_raw
+GROUP BY export_id
+HAVING sum(count) > 0",
+    },
+];
 
 /// A [`CuratedMetricSink`] installed on one replica.
 #[derive(Debug)]
@@ -211,8 +275,9 @@ impl Coordinator {
         //
         // NOTE: This checks only the prefix format, not collisions. A curated prefix is not checked
         // against user sinks (`ensure_metric_sink_prefix_is_free` cannot see a non-catalog item) nor
-        // against other curated definitions, yet both share the `mz_metric_sink_` lane and could
-        // overlap. Deferred until `CURATED` is populated.
+        // against other curated definitions, which all share the `mz_metric_sink_` lane. Today's
+        // definitions stay disjoint by publishing distinct `metric_name`s within that lane, so no
+        // series collide; a definition reusing another's family would need a real check here.
         if let Err(err) = validate_metric_sink_prefix(definition.prefix) {
             soft_panic_or_log!(
                 "invalid curated metric sink prefix (name={}): {err}",
@@ -379,11 +444,11 @@ impl Coordinator {
         let read_holds = self.acquire_read_holds(&id_bundle);
         df_desc.set_as_of(read_holds.least_valid_read());
 
-        // Record the install now that the dataflow is about to ship, so a definition that fails to
-        // plan or optimize leaves no entry behind. `drop_metric_sinks` uses this entry to release the
-        // sink's instance-global collection state when the replica is dropped. Recording after the
-        // ship (an introspection subscribe records before sequencing) is safe: validity was rechecked
-        // at this stage and nothing awaits before the ship, so no replica drop can interleave.
+        // Record the install just before shipping. A failed plan or optimize returns earlier, so it
+        // leaves no entry behind. `drop_metric_sinks` reads this entry to release the sink's
+        // instance-global collection state on replica drop. Recording before the ship is safe because
+        // the coordinator runs one message at a time with no await between the two, so no replica drop
+        // sees an entry whose dataflow has not shipped.
         let install = InstalledMetricSink {
             cluster_id,
             sink_id,
@@ -425,7 +490,7 @@ impl Coordinator {
             info!(%sink_id, %replica_id, name, "dropping metric sink");
             self.metric_sinks.remove(&(replica_id, name));
 
-            // The collection exists (the entry is recorded only after the dataflow ships), so this
+            // The entry exists only for a shipped dataflow, so its collection is present and this
             // drop succeeds. Result ignored: a failure during replica teardown is not worth a panic.
             let _ = self
                 .controller
@@ -450,9 +515,7 @@ fn metric_sinks_on_replica(
 }
 
 /// Enforces the introspection-only contract from [`CuratedMetricSink::source_sql`]: every relation
-/// the definition reads, walking views transitively, must be a log collection. A storage-backed
-/// read would put envd's write frontier on the sink's emission path, the coupling these sinks exist
-/// to avoid.
+/// the definition reads, walking views transitively, must be a log collection.
 ///
 /// Checked here against what the definition reads rather than by import kind after optimization: the
 /// import split (storage vs index) depends on which indexes the target cluster happens to have, so
@@ -650,23 +713,31 @@ mod tests {
         }
     }
 
-    /// Every curated definition must plan against the system catalog. A definition that does not
-    /// would soft-panic at boot, so catch it here as a failing test instead. `CURATED` is empty
-    /// today, so this iterates nothing until the first definition lands.
+    /// Runs the two checks `plan_metric_sink` does at boot, where a failure soft-panics (a hard panic
+    /// under debug assertions, so a CI boot crash-loop). The gate is the load-bearing one: a source
+    /// can plan cleanly yet still read a storage-backed relation transitively (a builtin view joining
+    /// in an introspection source), which only `ensure_reads_only_logs` catches.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
     async fn curated_definitions_plan() {
         Catalog::with_debug(|catalog| async move {
             let session_catalog = catalog.for_system_session();
             for definition in CURATED {
-                definition
-                    .plan_source(&session_catalog)
-                    .unwrap_or_else(|err| {
-                        panic!(
-                            "curated metric sink {:?} does not plan: {err}",
-                            definition.name
-                        )
-                    });
+                let (_, _, dependencies) =
+                    definition
+                        .plan_source(&session_catalog)
+                        .unwrap_or_else(|err| {
+                            panic!(
+                                "curated metric sink {:?} does not plan: {err}",
+                                definition.name
+                            )
+                        });
+                ensure_reads_only_logs(&catalog, &dependencies).unwrap_or_else(|err| {
+                    panic!(
+                        "curated metric sink {:?} reads a non-introspection relation: {err}",
+                        definition.name
+                    )
+                });
             }
         })
         .await

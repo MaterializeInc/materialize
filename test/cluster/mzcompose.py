@@ -326,6 +326,15 @@ def workflow_test_github_4443(c: Composition) -> None:
             user="mz_system",
         )
 
+        # Curated metric sinks install a dataflow on every replica, which would
+        # inflate the dataflow counts asserted below. Disable them before the
+        # cluster is created so its replica carries only this test's dataflows.
+        c.sql(
+            "ALTER SYSTEM SET enable_metric_sink = false;",
+            port=6877,
+            user="mz_system",
+        )
+
         # Set up a cluster with an indexed table and an unindexed one.
         c.sql("""
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
