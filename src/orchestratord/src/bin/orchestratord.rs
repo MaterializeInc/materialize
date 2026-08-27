@@ -45,7 +45,7 @@ use mz_orchestratord::{
     controller, gcp_node_upgrade,
     k8s::{ConversionWebhookConfig, register_crds},
     metrics::{self, Metrics},
-    reconcile::{Observed, event_recorder},
+    reconcile::{Observed, Publisher},
     tls::DefaultCertificateSpecs,
     webhook,
 };
@@ -632,10 +632,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         &leader_election_identity,
     );
 
-    // Shared by all of the controllers, so that a reconciliation that keeps
-    // failing collapses into one event with a count rather than one event per
-    // attempt.
-    let recorder = event_recorder(client.clone(), leader_election_identity.clone());
+    // Shared by all of the controllers, so that the aggregation of repeated
+    // events is too.
+    let publisher = Arc::new(Publisher::new(
+        client.clone(),
+        leader_election_identity.clone(),
+    ));
 
     // Each of these is rebuilt every time this replica wins the election, since
     // running a controller consumes it and we rejoin the election after losing
@@ -714,7 +716,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             tracing: args.tracing,
             orchestratord_namespace: namespace,
         };
-        let recorder = recorder.clone();
+        let publisher = Arc::clone(&publisher);
         move || {
             k8s_controller::Controller::namespaced_all(
                 client.clone(),
@@ -722,7 +724,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     controller::materialize::Context::new(config.clone(), Arc::clone(&metrics)),
                     controller::materialize::CONTROLLER_NAME,
                     Arc::clone(&metrics.reconcile),
-                    recorder.clone(),
+                    Arc::clone(&publisher),
                 ),
                 watcher::Config::default().timeout(29),
             )
@@ -784,7 +786,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             balancerd_internal_http_port: args.balancerd_internal_http_port,
         };
         let reconcile_metrics = Arc::clone(&metrics.reconcile);
-        let recorder = recorder.clone();
+        let publisher = Arc::clone(&publisher);
         move || {
             k8s_controller::Controller::namespaced_all(
                 client.clone(),
@@ -795,7 +797,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     ),
                     controller::balancer::CONTROLLER_NAME,
                     Arc::clone(&reconcile_metrics),
-                    recorder.clone(),
+                    Arc::clone(&publisher),
                 ),
                 watcher::Config::default().timeout(29),
             )
@@ -844,7 +846,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             balancerd_http_port: args.balancerd_http_port,
         };
         let reconcile_metrics = Arc::clone(&metrics.reconcile);
-        let recorder = recorder.clone();
+        let publisher = Arc::clone(&publisher);
         move || {
             k8s_controller::Controller::namespaced_all(
                 client.clone(),
@@ -855,7 +857,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     ),
                     controller::console::CONTROLLER_NAME,
                     Arc::clone(&reconcile_metrics),
-                    recorder.clone(),
+                    Arc::clone(&publisher),
                 ),
                 watcher::Config::default().timeout(29),
             )
