@@ -1490,3 +1490,179 @@ SELECT u FROM t_uint_cast WHERE u::int2 = 5::int2
 
 query error "3000000000" uint2 out of range
 SELECT u FROM t_uint_cast WHERE u::uint2 = 5::uint2
+# An IN list large enough that a disjunctive-normal-form expansion would be impractical
+# still uses the index, and the constraints still come out of the filter. The predicate is
+# read once per candidate index, so the conjuncts that say nothing about the index key
+# neither cost anything nor stand in the way.
+# See https://github.com/MaterializeInc/database-issues/issues/1924
+
+statement ok
+CREATE TABLE wide (shop_id text, sku_code text, created_at int, rule text, flag bool)
+
+statement ok
+CREATE INDEX wide_idx ON wide(shop_id, sku_code)
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, join implementations) AS VERBOSE TEXT FOR
+SELECT shop_id FROM wide
+WHERE shop_id = 's1' AND sku_code IN ('sku0','sku1','sku2','sku3','sku4','sku5','sku6','sku7','sku8','sku9','sku10','sku11','sku12','sku13','sku14','sku15','sku16','sku17','sku18','sku19','sku20','sku21','sku22','sku23','sku24','sku25','sku26','sku27','sku28','sku29','sku30','sku31','sku32','sku33','sku34','sku35','sku36','sku37','sku38','sku39','sku40','sku41','sku42','sku43','sku44','sku45','sku46','sku47','sku48','sku49','sku50','sku51','sku52','sku53','sku54','sku55','sku56','sku57','sku58','sku59','sku60','sku61','sku62','sku63','sku64','sku65','sku66','sku67','sku68','sku69','sku70','sku71','sku72','sku73','sku74','sku75','sku76','sku77','sku78','sku79','sku80','sku81','sku82','sku83','sku84','sku85','sku86','sku87','sku88','sku89','sku90','sku91','sku92','sku93','sku94','sku95','sku96','sku97','sku98','sku99','sku100','sku101','sku102','sku103','sku104','sku105','sku106','sku107','sku108','sku109','sku110','sku111','sku112','sku113','sku114','sku115','sku116','sku117','sku118','sku119','sku120','sku121','sku122','sku123','sku124','sku125','sku126','sku127','sku128','sku129','sku130','sku131','sku132','sku133','sku134','sku135','sku136','sku137','sku138','sku139','sku140','sku141','sku142','sku143','sku144','sku145','sku146','sku147','sku148','sku149','sku150','sku151','sku152','sku153','sku154','sku155','sku156','sku157','sku158','sku159','sku160','sku161','sku162','sku163','sku164','sku165','sku166','sku167','sku168','sku169','sku170','sku171','sku172','sku173','sku174','sku175','sku176','sku177','sku178','sku179','sku180','sku181','sku182','sku183','sku184','sku185','sku186','sku187','sku188','sku189','sku190','sku191','sku192','sku193','sku194','sku195','sku196','sku197','sku198','sku199','sku200','sku201','sku202','sku203','sku204','sku205','sku206','sku207','sku208','sku209','sku210','sku211','sku212','sku213','sku214','sku215','sku216','sku217','sku218','sku219','sku220','sku221','sku222','sku223','sku224','sku225','sku226','sku227','sku228','sku229','sku230','sku231','sku232','sku233','sku234','sku235','sku236','sku237','sku238','sku239','sku240','sku241','sku242','sku243','sku244','sku245','sku246','sku247','sku248','sku249','sku250','sku251','sku252','sku253','sku254','sku255','sku256','sku257','sku258','sku259','sku260','sku261','sku262','sku263','sku264','sku265','sku266','sku267','sku268','sku269','sku270','sku271','sku272','sku273','sku274','sku275','sku276','sku277','sku278','sku279','sku280','sku281','sku282','sku283','sku284','sku285','sku286','sku287','sku288','sku289','sku290','sku291','sku292','sku293','sku294','sku295','sku296','sku297','sku298','sku299','sku300','sku301','sku302','sku303','sku304','sku305','sku306','sku307','sku308','sku309','sku310','sku311','sku312','sku313','sku314','sku315','sku316','sku317','sku318','sku319','sku320','sku321','sku322','sku323','sku324','sku325','sku326','sku327','sku328','sku329','sku330','sku331','sku332','sku333','sku334','sku335','sku336','sku337','sku338','sku339','sku340','sku341','sku342','sku343','sku344','sku345','sku346','sku347','sku348','sku349','sku350','sku351','sku352','sku353','sku354','sku355','sku356','sku357','sku358','sku359','sku360','sku361','sku362','sku363','sku364','sku365','sku366','sku367','sku368','sku369','sku370','sku371','sku372','sku373','sku374','sku375','sku376','sku377','sku378','sku379','sku380','sku381','sku382','sku383','sku384','sku385','sku386','sku387','sku388','sku389','sku390','sku391','sku392','sku393','sku394','sku395','sku396','sku397','sku398','sku399')
+  AND created_at < 100 AND (rule = 'median' OR rule = 'same_price') AND flag = false
+----
+Explained Query (fast path):
+  Project (#0{shop_id})
+    Filter (#2{created_at} < 100) AND ((#3{rule} = "median") OR (#3{rule} = "same_price")) AND (#4{flag} = false)
+      ReadIndex on=materialize.public.wide wide_idx=[lookup values=[("s1", "sku0"); ("s1", "sku1"); ("s1", "sku2"); ("s1", "sku3"); ("s1", "sku4"); ("s1", "sku5"); ("s1", "sku6"); ("s1", "sku7"); ("s1", "sku8"); ("s1", "sku9"); ("s1", "sku10"); ("s1", "sku11"); ("s1", "sku12"); ("s1", "sku13"); ("s1", "sku14"); ("s1", "sku15"); ("s1", "sku16"); ("s1", "sku17"); ("s1", "sku18"); ("s1", "sku19"); ("s1", "sku20"); ("s1", "sku21"); ("s1", "sku22"); ("s1", "sku23"); ("s1", "sku24"); ("s1", "sku25"); ("s1", "sku26"); ("s1", "sku27"); ("s1", "sku28"); ("s1", "sku29"); ("s1", "sku30"); ("s1", "sku31"); ("s1", "sku32"); ("s1", "sku33"); ("s1", "sku34"); ("s1", "sku35"); ("s1", "sku36"); ("s1", "sku37"); ("s1", "sku38"); ("s1", "sku39"); ("s1", "sku40"); ("s1", "sku41"); ("s1", "sku42"); ("s1", "sku43"); ("s1", "sku44"); ("s1", "sku45"); ("s1", "sku46"); ("s1", "sku47"); ("s1", "sku48"); ("s1", "sku49"); ("s1", "sku50"); ("s1", "sku51"); ("s1", "sku52"); ("s1", "sku53"); ("s1", "sku54"); ("s1", "sku55"); ("s1", "sku56"); ("s1", "sku57"); ("s1", "sku58"); ("s1", "sku59"); ("s1", "sku60"); ("s1", "sku61"); ("s1", "sku62"); ("s1", "sku63"); ("s1", "sku64"); ("s1", "sku65"); ("s1", "sku66"); ("s1", "sku67"); ("s1", "sku68"); ("s1", "sku69"); ("s1", "sku70"); ("s1", "sku71"); ("s1", "sku72"); ("s1", "sku73"); ("s1", "sku74"); ("s1", "sku75"); ("s1", "sku76"); ("s1", "sku77"); ("s1", "sku78"); ("s1", "sku79"); ("s1", "sku80"); ("s1", "sku81"); ("s1", "sku82"); ("s1", "sku83"); ("s1", "sku84"); ("s1", "sku85"); ("s1", "sku86"); ("s1", "sku87"); ("s1", "sku88"); ("s1", "sku89"); ("s1", "sku90"); ("s1", "sku91"); ("s1", "sku92"); ("s1", "sku93"); ("s1", "sku94"); ("s1", "sku95"); ("s1", "sku96"); ("s1", "sku97"); ("s1", "sku98"); ("s1", "sku99"); ("s1", "sku100"); ("s1", "sku101"); ("s1", "sku102"); ("s1", "sku103"); ("s1", "sku104"); ("s1", "sku105"); ("s1", "sku106"); ("s1", "sku107"); ("s1", "sku108"); ("s1", "sku109"); ("s1", "sku110"); ("s1", "sku111"); ("s1", "sku112"); ("s1", "sku113"); ("s1", "sku114"); ("s1", "sku115"); ("s1", "sku116"); ("s1", "sku117"); ("s1", "sku118"); ("s1", "sku119"); ("s1", "sku120"); ("s1", "sku121"); ("s1", "sku122"); ("s1", "sku123"); ("s1", "sku124"); ("s1", "sku125"); ("s1", "sku126"); ("s1", "sku127"); ("s1", "sku128"); ("s1", "sku129"); ("s1", "sku130"); ("s1", "sku131"); ("s1", "sku132"); ("s1", "sku133"); ("s1", "sku134"); ("s1", "sku135"); ("s1", "sku136"); ("s1", "sku137"); ("s1", "sku138"); ("s1", "sku139"); ("s1", "sku140"); ("s1", "sku141"); ("s1", "sku142"); ("s1", "sku143"); ("s1", "sku144"); ("s1", "sku145"); ("s1", "sku146"); ("s1", "sku147"); ("s1", "sku148"); ("s1", "sku149"); ("s1", "sku150"); ("s1", "sku151"); ("s1", "sku152"); ("s1", "sku153"); ("s1", "sku154"); ("s1", "sku155"); ("s1", "sku156"); ("s1", "sku157"); ("s1", "sku158"); ("s1", "sku159"); ("s1", "sku160"); ("s1", "sku161"); ("s1", "sku162"); ("s1", "sku163"); ("s1", "sku164"); ("s1", "sku165"); ("s1", "sku166"); ("s1", "sku167"); ("s1", "sku168"); ("s1", "sku169"); ("s1", "sku170"); ("s1", "sku171"); ("s1", "sku172"); ("s1", "sku173"); ("s1", "sku174"); ("s1", "sku175"); ("s1", "sku176"); ("s1", "sku177"); ("s1", "sku178"); ("s1", "sku179"); ("s1", "sku180"); ("s1", "sku181"); ("s1", "sku182"); ("s1", "sku183"); ("s1", "sku184"); ("s1", "sku185"); ("s1", "sku186"); ("s1", "sku187"); ("s1", "sku188"); ("s1", "sku189"); ("s1", "sku190"); ("s1", "sku191"); ("s1", "sku192"); ("s1", "sku193"); ("s1", "sku194"); ("s1", "sku195"); ("s1", "sku196"); ("s1", "sku197"); ("s1", "sku198"); ("s1", "sku199"); ("s1", "sku200"); ("s1", "sku201"); ("s1", "sku202"); ("s1", "sku203"); ("s1", "sku204"); ("s1", "sku205"); ("s1", "sku206"); ("s1", "sku207"); ("s1", "sku208"); ("s1", "sku209"); ("s1", "sku210"); ("s1", "sku211"); ("s1", "sku212"); ("s1", "sku213"); ("s1", "sku214"); ("s1", "sku215"); ("s1", "sku216"); ("s1", "sku217"); ("s1", "sku218"); ("s1", "sku219"); ("s1", "sku220"); ("s1", "sku221"); ("s1", "sku222"); ("s1", "sku223"); ("s1", "sku224"); ("s1", "sku225"); ("s1", "sku226"); ("s1", "sku227"); ("s1", "sku228"); ("s1", "sku229"); ("s1", "sku230"); ("s1", "sku231"); ("s1", "sku232"); ("s1", "sku233"); ("s1", "sku234"); ("s1", "sku235"); ("s1", "sku236"); ("s1", "sku237"); ("s1", "sku238"); ("s1", "sku239"); ("s1", "sku240"); ("s1", "sku241"); ("s1", "sku242"); ("s1", "sku243"); ("s1", "sku244"); ("s1", "sku245"); ("s1", "sku246"); ("s1", "sku247"); ("s1", "sku248"); ("s1", "sku249"); ("s1", "sku250"); ("s1", "sku251"); ("s1", "sku252"); ("s1", "sku253"); ("s1", "sku254"); ("s1", "sku255"); ("s1", "sku256"); ("s1", "sku257"); ("s1", "sku258"); ("s1", "sku259"); ("s1", "sku260"); ("s1", "sku261"); ("s1", "sku262"); ("s1", "sku263"); ("s1", "sku264"); ("s1", "sku265"); ("s1", "sku266"); ("s1", "sku267"); ("s1", "sku268"); ("s1", "sku269"); ("s1", "sku270"); ("s1", "sku271"); ("s1", "sku272"); ("s1", "sku273"); ("s1", "sku274"); ("s1", "sku275"); ("s1", "sku276"); ("s1", "sku277"); ("s1", "sku278"); ("s1", "sku279"); ("s1", "sku280"); ("s1", "sku281"); ("s1", "sku282"); ("s1", "sku283"); ("s1", "sku284"); ("s1", "sku285"); ("s1", "sku286"); ("s1", "sku287"); ("s1", "sku288"); ("s1", "sku289"); ("s1", "sku290"); ("s1", "sku291"); ("s1", "sku292"); ("s1", "sku293"); ("s1", "sku294"); ("s1", "sku295"); ("s1", "sku296"); ("s1", "sku297"); ("s1", "sku298"); ("s1", "sku299"); ("s1", "sku300"); ("s1", "sku301"); ("s1", "sku302"); ("s1", "sku303"); ("s1", "sku304"); ("s1", "sku305"); ("s1", "sku306"); ("s1", "sku307"); ("s1", "sku308"); ("s1", "sku309"); ("s1", "sku310"); ("s1", "sku311"); ("s1", "sku312"); ("s1", "sku313"); ("s1", "sku314"); ("s1", "sku315"); ("s1", "sku316"); ("s1", "sku317"); ("s1", "sku318"); ("s1", "sku319"); ("s1", "sku320"); ("s1", "sku321"); ("s1", "sku322"); ("s1", "sku323"); ("s1", "sku324"); ("s1", "sku325"); ("s1", "sku326"); ("s1", "sku327"); ("s1", "sku328"); ("s1", "sku329"); ("s1", "sku330"); ("s1", "sku331"); ("s1", "sku332"); ("s1", "sku333"); ("s1", "sku334"); ("s1", "sku335"); ("s1", "sku336"); ("s1", "sku337"); ("s1", "sku338"); ("s1", "sku339"); ("s1", "sku340"); ("s1", "sku341"); ("s1", "sku342"); ("s1", "sku343"); ("s1", "sku344"); ("s1", "sku345"); ("s1", "sku346"); ("s1", "sku347"); ("s1", "sku348"); ("s1", "sku349"); ("s1", "sku350"); ("s1", "sku351"); ("s1", "sku352"); ("s1", "sku353"); ("s1", "sku354"); ("s1", "sku355"); ("s1", "sku356"); ("s1", "sku357"); ("s1", "sku358"); ("s1", "sku359"); ("s1", "sku360"); ("s1", "sku361"); ("s1", "sku362"); ("s1", "sku363"); ("s1", "sku364"); ("s1", "sku365"); ("s1", "sku366"); ("s1", "sku367"); ("s1", "sku368"); ("s1", "sku369"); ("s1", "sku370"); ("s1", "sku371"); ("s1", "sku372"); ("s1", "sku373"); ("s1", "sku374"); ("s1", "sku375"); ("s1", "sku376"); ("s1", "sku377"); ("s1", "sku378"); ("s1", "sku379"); ("s1", "sku380"); ("s1", "sku381"); ("s1", "sku382"); ("s1", "sku383"); ("s1", "sku384"); ("s1", "sku385"); ("s1", "sku386"); ("s1", "sku387"); ("s1", "sku388"); ("s1", "sku389"); ("s1", "sku390"); ("s1", "sku391"); ("s1", "sku392"); ("s1", "sku393"); ("s1", "sku394"); ("s1", "sku395"); ("s1", "sku396"); ("s1", "sku397"); ("s1", "sku398"); ("s1", "sku399")]]
+
+Used Indexes:
+  - materialize.public.wide_idx (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+# Unrelated disjunctions multiply a disjunctive normal form but say nothing about the key,
+# so they are simply carried through to the residual filter.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, join implementations) AS VERBOSE TEXT FOR
+SELECT shop_id FROM wide
+WHERE shop_id = 's1' AND sku_code IN ('sku3','sku4')
+  AND (created_at > 0 OR rule = 'r0') AND (created_at > 1 OR rule = 'r1')
+  AND (created_at > 2 OR rule = 'r2') AND (created_at > 3 OR rule = 'r3')
+  AND (created_at > 4 OR rule = 'r4') AND (created_at > 5 OR rule = 'r5')
+  AND (created_at > 6 OR rule = 'r6') AND (created_at > 7 OR rule = 'r7')
+  AND (created_at > 8 OR rule = 'r8') AND (created_at > 9 OR rule = 'r9')
+----
+Explained Query (fast path):
+  Project (#0{shop_id})
+    Filter ((#3{rule} = "r0") OR (#2{created_at} > 0)) AND ((#3{rule} = "r1") OR (#2{created_at} > 1)) AND ((#3{rule} = "r2") OR (#2{created_at} > 2)) AND ((#3{rule} = "r3") OR (#2{created_at} > 3)) AND ((#3{rule} = "r4") OR (#2{created_at} > 4)) AND ((#3{rule} = "r5") OR (#2{created_at} > 5)) AND ((#3{rule} = "r6") OR (#2{created_at} > 6)) AND ((#3{rule} = "r7") OR (#2{created_at} > 7)) AND ((#3{rule} = "r8") OR (#2{created_at} > 8)) AND ((#3{rule} = "r9") OR (#2{created_at} > 9))
+      ReadIndex on=materialize.public.wide wide_idx=[lookup values=[("s1", "sku3"); ("s1", "sku4")]]
+
+Used Indexes:
+  - materialize.public.wide_idx (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+# An expression pinned to two different values makes the relation empty, whether or not the
+# expression is part of an index key.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, join implementations) AS VERBOSE TEXT FOR
+SELECT shop_id FROM wide
+WHERE shop_id = 's1' AND sku_code = 'sku3'
+  AND (created_at = 1 OR created_at = 2) AND (created_at = 3 OR created_at = 4)
+----
+Explained Query (fast path):
+  Constant <empty>
+
+Target cluster: quickstart
+
+EOF
+
+# An IN list on a column the index does not cover must not obstruct the index. Converting to
+# disjunctive normal form would multiply the two lists together, so these are the cases that
+# used to fall off a cliff. The lookup values come only from the covered column, and the
+# uncovered list is carried through to the residual filter.
+
+statement ok
+CREATE TABLE cover (foo int, bar int, qux int)
+
+statement ok
+CREATE INDEX cover_foo ON cover(foo)
+
+statement ok
+INSERT INTO cover VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3)
+
+# Two IN lists, one covered. A DNF would have 144 disjuncts for 12 lookup values.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, join implementations) AS VERBOSE TEXT FOR
+SELECT foo FROM cover WHERE foo IN (0,1,2,3,4,5,6,7,8,9,10,11) AND bar IN (0,1,2,3,4,5,6,7,8,9,10,11)
+----
+Explained Query (fast path):
+  Project (#0{foo})
+    Filter ((#1{bar} = 0) OR (#1{bar} = 1) OR (#1{bar} = 2) OR (#1{bar} = 3) OR (#1{bar} = 4) OR (#1{bar} = 5) OR (#1{bar} = 6) OR (#1{bar} = 7) OR (#1{bar} = 8) OR (#1{bar} = 9) OR (#1{bar} = 10) OR (#1{bar} = 11))
+      ReadIndex on=materialize.public.cover cover_foo=[lookup values=[(0); (1); (2); (3); (4); (5); (6); (7); (8); (9); (10); (11)]]
+
+Used Indexes:
+  - materialize.public.cover_foo (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+# Three IN lists, one covered. A DNF would have 12^3 = 1728 disjuncts for the same 12 values.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, join implementations) AS VERBOSE TEXT FOR
+SELECT foo FROM cover WHERE foo IN (0,1,2,3,4,5,6,7,8,9,10,11) AND bar IN (0,1,2,3,4,5,6,7,8,9,10,11) AND qux IN (0,1,2,3,4,5,6,7,8,9,10,11)
+----
+Explained Query (fast path):
+  Project (#0{foo})
+    Filter ((#1{bar} = 0) OR (#1{bar} = 1) OR (#1{bar} = 2) OR (#1{bar} = 3) OR (#1{bar} = 4) OR (#1{bar} = 5) OR (#1{bar} = 6) OR (#1{bar} = 7) OR (#1{bar} = 8) OR (#1{bar} = 9) OR (#1{bar} = 10) OR (#1{bar} = 11)) AND ((#2{qux} = 0) OR (#2{qux} = 1) OR (#2{qux} = 2) OR (#2{qux} = 3) OR (#2{qux} = 4) OR (#2{qux} = 5) OR (#2{qux} = 6) OR (#2{qux} = 7) OR (#2{qux} = 8) OR (#2{qux} = 9) OR (#2{qux} = 10) OR (#2{qux} = 11))
+      ReadIndex on=materialize.public.cover cover_foo=[lookup values=[(0); (1); (2); (3); (4); (5); (6); (7); (8); (9); (10); (11)]]
+
+Used Indexes:
+  - materialize.public.cover_foo (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+# A covered list long enough that the whole predicate is past any workable size guard on a
+# DNF, with an uncovered list alongside it. The long list is on the covered column here so
+# that the plan prints one line of lookup values rather than a wall of residual predicates.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, join implementations) AS VERBOSE TEXT FOR
+SELECT foo FROM cover WHERE foo IN (0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145,146,147,148,149,150,151,152,153,154,155,156,157,158,159,160,161,162,163,164,165,166,167,168,169,170,171,172,173,174,175,176,177,178,179,180,181,182,183,184,185,186,187,188,189,190,191,192,193,194,195,196,197,198,199,200,201,202,203,204,205,206,207,208,209,210,211,212,213,214,215,216,217,218,219,220,221,222,223,224,225,226,227,228,229,230,231,232,233,234,235,236,237,238,239,240,241,242,243,244,245,246,247,248,249,250,251,252,253,254,255,256,257,258,259,260,261,262,263,264,265,266,267,268,269,270,271,272,273,274,275,276,277,278,279,280,281,282,283,284,285,286,287,288,289,290,291,292,293,294,295,296,297,298,299,300,301,302,303,304,305,306,307,308,309,310,311,312,313,314,315,316,317,318,319,320,321,322,323,324,325,326,327,328,329,330,331,332,333,334,335,336,337,338,339) AND bar IN (1,2)
+----
+Explained Query (fast path):
+  Project (#0{foo})
+    Filter ((#1{bar} = 1) OR (#1{bar} = 2))
+      ReadIndex on=materialize.public.cover cover_foo=[lookup values=[(0); (1); (2); (3); (4); (5); (6); (7); (8); (9); (10); (11); (12); (13); (14); (15); (16); (17); (18); (19); (20); (21); (22); (23); (24); (25); (26); (27); (28); (29); (30); (31); (32); (33); (34); (35); (36); (37); (38); (39); (40); (41); (42); (43); (44); (45); (46); (47); (48); (49); (50); (51); (52); (53); (54); (55); (56); (57); (58); (59); (60); (61); (62); (63); (64); (65); (66); (67); (68); (69); (70); (71); (72); (73); (74); (75); (76); (77); (78); (79); (80); (81); (82); (83); (84); (85); (86); (87); (88); (89); (90); (91); (92); (93); (94); (95); (96); (97); (98); (99); (100); (101); (102); (103); (104); (105); (106); (107); (108); (109); (110); (111); (112); (113); (114); (115); (116); (117); (118); (119); (120); (121); (122); (123); (124); (125); (126); (127); (128); (129); (130); (131); (132); (133); (134); (135); (136); (137); (138); (139); (140); (141); (142); (143); (144); (145); (146); (147); (148); (149); (150); (151); (152); (153); (154); (155); (156); (157); (158); (159); (160); (161); (162); (163); (164); (165); (166); (167); (168); (169); (170); (171); (172); (173); (174); (175); (176); (177); (178); (179); (180); (181); (182); (183); (184); (185); (186); (187); (188); (189); (190); (191); (192); (193); (194); (195); (196); (197); (198); (199); (200); (201); (202); (203); (204); (205); (206); (207); (208); (209); (210); (211); (212); (213); (214); (215); (216); (217); (218); (219); (220); (221); (222); (223); (224); (225); (226); (227); (228); (229); (230); (231); (232); (233); (234); (235); (236); (237); (238); (239); (240); (241); (242); (243); (244); (245); (246); (247); (248); (249); (250); (251); (252); (253); (254); (255); (256); (257); (258); (259); (260); (261); (262); (263); (264); (265); (266); (267); (268); (269); (270); (271); (272); (273); (274); (275); (276); (277); (278); (279); (280); (281); (282); (283); (284); (285); (286); (287); (288); (289); (290); (291); (292); (293); (294); (295); (296); (297); (298); (299); (300); (301); (302); (303); (304); (305); (306); (307); (308); (309); (310); (311); (312); (313); (314); (315); (316); (317); (318); (319); (320); (321); (322); (323); (324); (325); (326); (327); (328); (329); (330); (331); (332); (333); (334); (335); (336); (337); (338); (339)]]
+
+Used Indexes:
+  - materialize.public.cover_foo (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+query III rowsort
+SELECT * FROM cover WHERE foo IN (0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145,146,147,148,149,150,151,152,153,154,155,156,157,158,159,160,161,162,163,164,165,166,167,168,169,170,171,172,173,174,175,176,177,178,179,180,181,182,183,184,185,186,187,188,189,190,191,192,193,194,195,196,197,198,199,200,201,202,203,204,205,206,207,208,209,210,211,212,213,214,215,216,217,218,219,220,221,222,223,224,225,226,227,228,229,230,231,232,233,234,235,236,237,238,239,240,241,242,243,244,245,246,247,248,249,250,251,252,253,254,255,256,257,258,259,260,261,262,263,264,265,266,267,268,269,270,271,272,273,274,275,276,277,278,279,280,281,282,283,284,285,286,287,288,289,290,291,292,293,294,295,296,297,298,299,300,301,302,303,304,305,306,307,308,309,310,311,312,313,314,315,316,317,318,319,320,321,322,323,324,325,326,327,328,329,330,331,332,333,334,335,336,337,338,339) AND bar IN (1,2)
+----
+1  1  1
+2  2  2
+
+# With both `foo` and `qux` covered, the cross product of their two lists is the real answer,
+# so the nine lookup values here are inherent rather than incidental. `bar` still contributes
+# nothing but a residual predicate.
+
+statement ok
+CREATE INDEX cover_foo_qux ON cover(foo, qux)
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, join implementations) AS VERBOSE TEXT FOR
+SELECT foo FROM cover WHERE foo IN (1,2,3) AND bar IN (0,1,2,3,4,5,6,7,8,9,10,11) AND qux IN (1,2,3)
+----
+Explained Query (fast path):
+  Project (#0{foo})
+    Filter ((#2{bar} = 0) OR (#2{bar} = 1) OR (#2{bar} = 2) OR (#2{bar} = 3) OR (#2{bar} = 4) OR (#2{bar} = 5) OR (#2{bar} = 6) OR (#2{bar} = 7) OR (#2{bar} = 8) OR (#2{bar} = 9) OR (#2{bar} = 10) OR (#2{bar} = 11))
+      ReadIndex on=materialize.public.cover cover_foo_qux=[lookup values=[(1, 1); (1, 2); (1, 3); (2, 1); (2, 2); (2, 3); (3, 1); (3, 2); (3, 3)]]
+
+Used Indexes:
+  - materialize.public.cover_foo_qux (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+query III rowsort
+SELECT * FROM cover WHERE foo IN (1,2,3) AND bar IN (0,1,2,3,4,5,6,7,8,9,10,11) AND qux IN (1,2,3)
+----
+1  1  1
+2  2  2
+3  3  3
