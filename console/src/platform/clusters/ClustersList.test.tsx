@@ -1328,6 +1328,21 @@ describe("ClustersList CPU filter", () => {
     expect(percent).toHaveValue("40");
   });
 
+  it("clears a typed threshold that was never applied", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await openCpuFilter(user);
+    await user.selectOptions(screen.getByLabelText("CPU comparison"), "<");
+    await user.type(screen.getByLabelText("CPU threshold percentage"), "50");
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+
+    // No filter was ever applied, so Clear has no applied value to change.
+    // It still has to empty the panel it is sitting in.
+    expect(screen.getByLabelText("CPU threshold percentage")).toHaveValue("");
+    expect(screen.getByLabelText("CPU comparison")).toHaveValue(">");
+  });
+
   it("cannot be applied with an empty threshold", async () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());

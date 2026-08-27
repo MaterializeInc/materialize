@@ -78,6 +78,12 @@ export const UtilizationFilterPanel = <TData,>({
   };
 
   const clearFilter = () => {
+    // Reset the draft as well as the filter. With nothing applied, clearing
+    // leaves the applied value as it was, `undefined`, so the sync effect has
+    // no change to react to and a threshold typed but never applied would stay
+    // on screen.
+    setComparison(DEFAULT_COMPARISON);
+    setPercent("");
     column.setFilterValue(undefined);
   };
 
