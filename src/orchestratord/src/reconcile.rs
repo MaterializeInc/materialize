@@ -65,8 +65,19 @@ pub enum Outcome {
     /// Had nothing to act on: what it manages is disabled by configuration, or
     /// absent from the resource's spec.
     Skipped,
-    /// Failed.
+    /// Returned an error, observed as one.
     Failed,
+    /// Did not reach a conclusion. Either an error propagated out of it, or the
+    /// reconciliation running it was cancelled: this process aborts in-flight
+    /// reconciliations when it loses the leadership lease, and again on
+    /// shutdown.
+    ///
+    /// A [`Step`] dropped without being finished records this, because a `Drop`
+    /// cannot tell those two apart. It is therefore not a failure signal:
+    /// `orchestratord_reconciliations_total` is, since it is recorded from the
+    /// reconciler's actual `Result` and a cancelled pass never reaches it. What
+    /// this answers is which step a pass was in when it stopped.
+    Abandoned,
 }
 
 impl Outcome {
@@ -76,6 +87,7 @@ impl Outcome {
             Outcome::Waiting => "waiting",
             Outcome::Skipped => "skipped",
             Outcome::Failed => "failed",
+            Outcome::Abandoned => "abandoned",
         }
     }
 
@@ -142,7 +154,7 @@ impl Metrics {
             }),
             steps: registry.register(metric! {
                 name: "orchestratord_reconciliation_steps_total",
-                help: "Count of reconciliation steps, by controller, by step, and by what the step concluded. Steps are the named phases a reconciliation pass moves through, so this is where a pass that fails or stalls identifies which phase it was in.",
+                help: "Count of reconciliation steps, by controller, by step, and by what the step concluded. Steps are the named phases a reconciliation pass moves through, so this is where a pass that fails or stalls identifies which phase it was in. An `outcome` of `abandoned` means the step did not conclude, which covers both an error propagating out of it and the pass being cancelled by a leadership handoff, so alert on orchestratord_reconciliations_total instead and read this to locate the step.",
                 var_labels: ["controller", "step", "outcome"],
             }),
             step_duration_seconds: registry.register(metric! {
@@ -186,12 +198,12 @@ impl Metrics {
 /// Times one named step of a reconciliation, recording its duration and
 /// outcome once dropped.
 ///
-/// A step dropped without [`Step::finish`] records [`Outcome::Failed`], so the
-/// `?` that abandons a step reports it as the failure it is, with no
+/// A step dropped without [`Step::finish`] records [`Outcome::Abandoned`], so
+/// the `?` that leaves a step reports where the pass stopped with no
 /// bookkeeping at the point of the early return. The contract that buys is
-/// that every path out of a step's scope which is *not* a failure must finish
-/// the step explicitly.
-#[must_use = "a step that is never finished records a failure"]
+/// that every path out of a step's scope which reaches a conclusion must
+/// finish the step explicitly.
+#[must_use = "a step that is never finished records itself as abandoned"]
 pub struct Step<'a> {
     metrics: &'a Metrics,
     controller: &'static str,
@@ -207,8 +219,12 @@ impl Step<'_> {
     }
 
     /// Records the step as having concluded with what a reconciler returned:
-    /// [`Outcome::Waiting`] if it asked to be run again, and
-    /// [`Outcome::Applied`] if it is done.
+    /// [`Outcome::Waiting`] if it asked to be run again, [`Outcome::Applied`]
+    /// if it is done, and [`Outcome::Failed`] if it errored.
+    ///
+    /// A step whose caller holds the `Result` should prefer this over letting
+    /// the error propagate past the guard, since observing the error is what
+    /// separates a failure from an [`Outcome::Abandoned`] pass.
     pub fn finish_with<E>(self, result: &Result<Option<Action>, E>) {
         self.finish(Outcome::of_result(result));
     }
@@ -216,7 +232,7 @@ impl Step<'_> {
 
 impl Drop for Step<'_> {
     fn drop(&mut self) {
-        let outcome = self.outcome.unwrap_or(Outcome::Failed);
+        let outcome = self.outcome.unwrap_or(Outcome::Abandoned);
         self.metrics
             .steps
             .with_label_values(&[self.controller, self.step, outcome.as_str()])

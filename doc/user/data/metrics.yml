@@ -4417,7 +4417,7 @@ metrics:
   source: src/orchestratord/src/reconcile.rs
   visibility: internal
 - name: orchestratord_reconciliation_steps_total
-  help: Count of reconciliation steps, by controller, by step, and by what the step concluded. Steps are the named phases a reconciliation pass moves through, so this is where a pass that fails or stalls identifies which phase it was in.
+  help: Count of reconciliation steps, by controller, by step, and by what the step concluded. Steps are the named phases a reconciliation pass moves through, so this is where a pass that fails or stalls identifies which phase it was in. An `outcome` of `abandoned` means the step did not conclude, which covers both an error propagating out of it and the pass being cancelled by a leadership handoff, so alert on orchestratord_reconciliations_total instead and read this to locate the step.
   labels:
   - controller
   - outcome
