@@ -131,6 +131,17 @@ SELECT 99999::regtype::text
 ----
 99999
 
+# `-` is the absent reference on input as well, so the text rendering round trips.
+query T
+SELECT 0::regtype::text::regtype::text
+----
+-
+
+query T
+SELECT '-'::regtype::oid
+----
+0
+
 # ensure that all existing types can be cast to their respective names
 statement OK
 select oid, oid::regtype::text from (select oid from mz_catalog.mz_types)

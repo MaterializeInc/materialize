@@ -123,6 +123,8 @@ impl<const N: usize> From<[UnaryFunc; N]> for CastTemplate {
 /// A reg* type represents a specific type of object by oid.
 ///
 /// Casting from a string to a reg*:
+/// - Accepts `-`, the absent reference, as OID 0 in all cases, matching
+///   PostgreSQL's `parseDashOrOid`.
 /// - Accepts a string that looks like an OID and converts the value to the
 ///   specified reg* type. This is available in all cases except explicitly
 ///   casting text values to regclass (e.g. `SELECT '2'::text::regclass`)
@@ -138,6 +140,9 @@ const STRING_REG_CAST_TEMPLATE: &str = "
 (SELECT
 CASE
     WHEN $1 IS NULL THEN NULL
+-- Handle the absent reference, which the reg* text output spells `-`. PostgreSQL's
+-- `parseDashOrOid` accepts it for every reg* type, including text to regclass.
+    WHEN $1 = '-' THEN 0::pg_catalog.oid::pg_catalog.{0}
 -- Handle OID-like input, if available via {2}
     WHEN {2} AND pg_catalog.substring($1, 1, 1) BETWEEN '0' AND '9' THEN
         $1::pg_catalog.oid::pg_catalog.{0}

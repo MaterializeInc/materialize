@@ -97,6 +97,17 @@ SELECT 99999::regproc::text
 ----
 99999
 
+# `-` is the absent reference on input as well, so the text rendering round trips.
+query T
+SELECT 0::regproc::text::regproc::text
+----
+-
+
+query T
+SELECT '-'::regproc::oid
+----
+0
+
 query error more than one function named "max"
 SELECT 'max'::regproc
 

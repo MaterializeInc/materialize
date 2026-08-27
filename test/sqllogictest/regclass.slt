@@ -286,6 +286,18 @@ SELECT 99999::regclass::text
 ----
 99999
 
+# `-` is the absent reference on input as well, so the text rendering round trips.
+# Unlike a numeric string, `-` is accepted even casting from text to regclass.
+query T
+SELECT 0::regclass::text::regclass::text
+----
+-
+
+query T
+SELECT '-'::regclass::oid
+----
+0
+
 # ensure that all existing types can be cast to their respective names
 statement OK
 select oid, oid::regclass::text from (select oid from pg_catalog.pg_class)
