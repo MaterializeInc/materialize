@@ -972,6 +972,30 @@ impl IcebergCatalogConnection<InlinedConnection> {
                 props.insert(REST_CATALOG_PROP_CREDENTIAL.to_string(), credential);
 
                 if let Some(server_url) = server_url {
+                    // The OAuth2 exchange POSTs the catalog credential to this URL, so a URL
+                    // aimed inside our own network turns the connection into a request forger
+                    // against, say, a cloud metadata endpoint. Resolve it and reject private
+                    // addresses, the same check every other host we dial directly gets.
+                    //
+                    // NOTE: the resolved addresses are only checked, not pinned. The catalog
+                    // client offers no hook to dial a pre-resolved address, so a name that
+                    // resolves differently between this check and the request slips through.
+                    // Kafka and Confluent Schema Registry connections do pin theirs.
+                    let url = Url::parse(server_url).with_context(|| {
+                        format!("invalid OAUTH2 SERVER URL for Iceberg catalog: {server_url}")
+                    })?;
+                    let host = url.host_str().ok_or_else(|| {
+                        anyhow!("OAUTH2 SERVER URL for Iceberg catalog has no host: {server_url}")
+                    })?;
+                    resolve_address(
+                        host,
+                        ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
+                    )
+                    .await
+                    .with_context(|| {
+                        format!("OAUTH2 SERVER URL for Iceberg catalog is not resolvable to an external address: {server_url}")
+                    })?;
+
                     props.insert(
                         REST_CATALOG_PROP_OAUTH2_SERVER_URI.to_string(),
                         server_url.clone(),
