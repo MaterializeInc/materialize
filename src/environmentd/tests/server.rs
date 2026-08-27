@@ -2256,10 +2256,21 @@ fn test_internal_console_proxy_preview_build() {
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(res.text().unwrap(), "default-build");
 
-    // Selecting a preview build sets a cookie and redirects back to the same
-    // path, preserving unrelated query parameters.
+    // A GET with a preview build label only renders the confirmation page.
     let res = client
         .get(Url::parse(&format!("{base}?preview_build=console-git-foo&x=1")).unwrap())
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers().get(SET_COOKIE), None);
+    let body = res.text().unwrap();
+    assert_contains!(body.as_str(), "console-git-foo.127.0.0.1");
+    assert_contains!(body.as_str(), "<form method=\"post\"");
+
+    // POSTing the selection sets the cookie and redirects back to the same
+    // path, preserving unrelated query parameters.
+    let res = client
+        .post(Url::parse(&format!("{base}?preview_build=console-git-foo&x=1")).unwrap())
         .send()
         .unwrap();
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
@@ -2271,33 +2282,48 @@ fn test_internal_console_proxy_preview_build() {
     assert_contains!(cookie, "mz_console_preview_build=console-git-foo");
     assert_contains!(cookie, "Path=/internal-console");
 
-    // An invalid label is rejected outright.
-    let res = client
-        .get(Url::parse(&format!("{base}?preview_build=Bad_Label")).unwrap())
-        .send()
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    // An invalid label and a label without the console-git- prefix are
+    // rejected outright.
+    for label in ["Bad_Label", "other-subdomain"] {
+        let res = client
+            .get(Url::parse(&format!("{base}?preview_build={label}")).unwrap())
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // A POST without a selection is not proxied.
+    let res = client.post(Url::parse(&base).unwrap()).send().unwrap();
+    assert_eq!(res.status(), StatusCode::METHOD_NOT_ALLOWED);
 
     // A selection cookie routes the request to the preview host instead of
     // the default upstream. `https://console-git-foo.127.0.0.1` is
-    // unreachable, so the proxy errors rather than falling back.
+    // unreachable, so the proxy serves the recovery page rather than falling
+    // back.
     let hits_before = upstream_hits.load(Ordering::SeqCst);
     let res = client
         .get(Url::parse(&base).unwrap())
         .header(COOKIE, "mz_console_preview_build=console-git-foo")
         .send()
         .unwrap();
-    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    assert_contains!(res.text().unwrap(), "?preview_build=");
     assert_eq!(upstream_hits.load(Ordering::SeqCst), hits_before);
 
-    // An invalid cookie value is ignored, serving the default build.
-    let res = client
-        .get(Url::parse(&base).unwrap())
-        .header(COOKIE, "mz_console_preview_build=NOT!VALID")
-        .send()
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(res.text().unwrap(), "default-build");
+    // Invalid or non-prefixed cookie values are ignored, serving the default
+    // build.
+    for cookie in [
+        "mz_console_preview_build=NOT!VALID",
+        "mz_console_preview_build=other-subdomain",
+    ] {
+        let res = client
+            .get(Url::parse(&base).unwrap())
+            .header(COOKIE, cookie)
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.text().unwrap(), "default-build");
+    }
 
     // An empty selection clears the cookie.
     let res = client

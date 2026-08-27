@@ -17,8 +17,8 @@ use axum::Json;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::response::{IntoResponse, Response};
-use http::header::{COOKIE, HOST, LOCATION, SET_COOKIE};
-use http::{HeaderMap, HeaderValue};
+use http::header::{CONTENT_TYPE, COOKIE, HOST, LOCATION, SET_COOKIE};
+use http::{HeaderMap, HeaderValue, Method};
 use hyper::Uri;
 use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::Client;
@@ -87,14 +87,20 @@ impl ConsoleProxyConfig {
     }
 }
 
-/// A valid preview build label is a DNS label: 1-63 characters of lowercase
-/// ASCII alphanumerics and hyphens, not starting or ending with a hyphen.
+/// Prefix required of preview build labels. CI only creates preview aliases
+/// under this prefix, so requiring it keeps the reachable hosts to builds of
+/// console pull requests.
+const PREVIEW_BUILD_LABEL_PREFIX: &str = "console-git-";
+
+/// A valid preview build label is a DNS label (1-63 characters of lowercase
+/// ASCII alphanumerics and hyphens, not ending with a hyphen) starting with
+/// [`PREVIEW_BUILD_LABEL_PREFIX`].
 fn is_valid_preview_build_label(label: &str) -> bool {
-    (1..=63).contains(&label.len())
+    label.len() <= 63
+        && label.starts_with(PREVIEW_BUILD_LABEL_PREFIX)
         && label
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        && !label.starts_with('-')
         && !label.ends_with('-')
 }
 
@@ -142,7 +148,9 @@ pub async fn handle_console_config(
 /// HTML, JS, and CSS static files.
 ///
 /// `?preview_build=<label>` selects a per-browser preview build served from a
-/// subdomain of the upstream host; an empty value returns to the default.
+/// subdomain of the upstream host; an empty value returns to the default. A
+/// GET only renders a confirmation page. The selection itself requires a POST,
+/// so that a cross-site link cannot change which build a browser is served.
 pub(crate) async fn handle_internal_console(
     console_config: Extension<Arc<ConsoleProxyConfig>>,
     mut req: Request<Body>,
@@ -151,9 +159,11 @@ pub(crate) async fn handle_internal_console(
         return Ok(response);
     }
 
-    let upstream_url = preview_build_from_cookie(req.headers())
-        .and_then(|label| console_config.preview_url(&label))
-        .unwrap_or_else(|| console_config.url.clone());
+    let preview_build = preview_build_from_cookie(req.headers())
+        .and_then(|label| console_config.preview_url(&label).map(|url| (label, url)));
+    let upstream_url = preview_build
+        .as_ref()
+        .map_or_else(|| console_config.url.clone(), |(_, url)| url.clone());
 
     let path = req.uri().path();
     let mut path_query = req
@@ -175,21 +185,28 @@ pub(crate) async fn handle_internal_console(
         .insert(HOST, HeaderValue::from_str(&host).unwrap());
 
     // Call this request against the upstream, return response directly.
-    Ok(console_config
-        .client
-        .request(req)
-        .await
-        .map_err(|err| {
+    match console_config.client.request(req).await {
+        Ok(response) => Ok(response.into_response()),
+        Err(err) => {
             tracing::warn!("Error retrieving console url: {}", err);
-            StatusCode::BAD_REQUEST
-        })?
-        .into_response())
+            // A broken preview selection would otherwise present as an opaque
+            // error until the cookie expires, so offer the way back.
+            match preview_build {
+                Some((label, _)) => Ok(preview_build_unavailable_response(&label)),
+                None => Err(StatusCode::BAD_REQUEST),
+            }
+        }
+    }
 }
 
-/// Handles the `?preview_build=<label>` selection parameter: stores the
-/// selection in a cookie and redirects back to the same path without the
-/// parameter, so subsequent asset requests carry the choice. Returns `None`
-/// when the parameter is absent.
+/// Handles the `?preview_build=<label>` selection parameter. A GET with a
+/// label renders a confirmation page whose form POSTs the selection back; the
+/// POST stores it in a cookie and redirects to the same path without the
+/// parameter. Requiring the POST means a cross-site navigation cannot change
+/// the served build, since `SameSite=Lax` session cookies accompany top-level
+/// GETs but not cross-site POSTs. Clearing (an empty label) is allowed on GET:
+/// it only ever restores the default build and is the recovery path for a
+/// broken selection. Returns `None` when the parameter is absent.
 fn preview_build_selection_response(
     console_config: &ConsoleProxyConfig,
     req: &Request<Body>,
@@ -206,7 +223,13 @@ fn preview_build_selection_response(
             any_remaining = true;
         }
     }
+    let is_post = *req.method() == Method::POST;
     let Some(label) = selection else {
+        // The proxied upstream serves only static assets, so only selection
+        // POSTs are accepted.
+        if is_post {
+            return Err(StatusCode::METHOD_NOT_ALLOWED);
+        }
         return Ok(None);
     };
 
@@ -215,11 +238,17 @@ fn preview_build_selection_response(
         console_config.route_prefix
     );
     let cookie = if label.is_empty() {
-        // An empty label clears the selection.
         format!("{PREVIEW_BUILD_COOKIE}=; Max-Age=0; {cookie_attributes}")
     } else {
-        if console_config.preview_url(&label).is_none() {
+        let Some(preview_url) = console_config.preview_url(&label) else {
             return Err(StatusCode::BAD_REQUEST);
+        };
+        if !is_post {
+            return Ok(Some(preview_build_confirmation_response(
+                console_config,
+                &label,
+                &preview_url,
+            )));
         }
         format!(
             "{PREVIEW_BUILD_COOKIE}={label}; \
@@ -239,6 +268,49 @@ fn preview_build_selection_response(
         .body(Body::empty())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Some(response))
+}
+
+/// Confirmation page for a preview build selection. All interpolated values
+/// are validated or config-controlled, never raw request input.
+fn preview_build_confirmation_response(
+    console_config: &ConsoleProxyConfig,
+    label: &str,
+    preview_url: &str,
+) -> Response {
+    let route_prefix = &console_config.route_prefix;
+    let body = format!(
+        "<!DOCTYPE html>\n\
+         <html><head><title>Console preview build</title></head><body>\n\
+         <p>Serve console assets in this browser from <code>{preview_url}</code> \
+         for the next 24 hours?</p>\n\
+         <form method=\"post\"><button type=\"submit\">Use preview build {label}</button></form>\n\
+         <p><a href=\"{route_prefix}/\">Cancel</a></p>\n\
+         </body></html>\n"
+    );
+    (
+        StatusCode::OK,
+        [(CONTENT_TYPE, "text/html; charset=utf-8")],
+        body,
+    )
+        .into_response()
+}
+
+/// Error page served when the selected preview build cannot be fetched,
+/// linking back to the default build.
+fn preview_build_unavailable_response(label: &str) -> Response {
+    let body = format!(
+        "<!DOCTYPE html>\n\
+         <html><head><title>Console preview build unavailable</title></head><body>\n\
+         <p>Failed to load console preview build <code>{label}</code>.</p>\n\
+         <p><a href=\"?{PREVIEW_BUILD_PARAM}=\">Return to the default console build</a></p>\n\
+         </body></html>\n"
+    );
+    (
+        StatusCode::BAD_GATEWAY,
+        [(CONTENT_TYPE, "text/html; charset=utf-8")],
+        body,
+    )
+        .into_response()
 }
 
 /// Returns the preview build label from the request's cookies, if one is set
