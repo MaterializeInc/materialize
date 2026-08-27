@@ -99,9 +99,11 @@ impl PeekWalkMetrics {
 
     /// Counts a walk that a promoted task drove to an outcome, whatever that outcome is.
     ///
-    /// A walk cancelled while queued for a permit or while running counts on neither substrate,
-    /// which is what makes the two substrates sum to the walks that ended. How many walks were
-    /// admitted is a different question, and one the permit queue's own metrics answer.
+    /// A walk cancelled while queued for a permit or while running counts on neither substrate, as
+    /// does one whose task died without an outcome, which the worker answers with an error of its
+    /// own. The two substrates therefore sum to the walks that reached an outcome rather than to
+    /// the peeks that were answered. How many walks were admitted is a different question, and one
+    /// the permit queue's own metrics answer.
     pub(super) fn walked_offloaded(&self) {
         self.walks_offloaded.inc();
     }

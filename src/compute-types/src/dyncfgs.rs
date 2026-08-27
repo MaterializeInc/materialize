@@ -716,6 +716,11 @@ pub const INDEX_PEEK_ACTIVATION_BUDGET: Config<usize> = Config::new(
 /// Counted in the same unit as [`INDEX_PEEK_INLINE_BUDGET`], for the same reasons, and likewise
 /// read through a handle.
 ///
+/// An upper bound rather than a period. A walk whose rows are bound for the peek stash suspends
+/// once its accumulation crosses `peek_response_stash_threshold_bytes`, which at that threshold's
+/// default is by far the smaller trigger, so such a walk yields per batch and the fuel it did not
+/// spend is not carried into the next slice.
+///
 /// Replica-scoped, unlike the switch and the two budgets. It selects no execution path and changes
 /// no result. It only sets how often a walk that is already promoted yields and rechecks
 /// cancellation, which is the timing of the replica process's own execution. Divergence is safe

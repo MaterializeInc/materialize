@@ -313,6 +313,9 @@ impl OffloadedPeek {
                     // progress until it is taken.
                     if let Some(batch) = scan.take_batch() {
                         let Some(stash) = &stash else {
+                            // The ok walk stopped short of the trace, so it reports nothing, and
+                            // only the phases that precede it are complete enough to.
+                            metrics.observe_error_phase(&scan.phases());
                             return Some(PeekResponse::Error(PeekError::unstructured(
                                 NO_STASH_LOCATION,
                             )));
@@ -323,6 +326,7 @@ impl OffloadedPeek {
                                 Ok(opened) => upload = Some(opened),
                                 Err(error) => {
                                     warn!(%peek_uuid, %error, "peek stash failed to open a shard");
+                                    metrics.observe_error_phase(&scan.phases());
                                     return Some(PeekResponse::Error(PeekError::unstructured(
                                         error,
                                     )));
@@ -351,6 +355,7 @@ impl OffloadedPeek {
                                 // defect in the upload rather than a blip, and the query's error
                                 // is the only other place it shows.
                                 warn!(%peek_uuid, %error, "peek stash rejected a batch");
+                                metrics.observe_error_phase(&scan.phases());
                                 upload.take().expect("opened above").discard();
                                 return Some(PeekResponse::Error(PeekError::unstructured(error)));
                             }
