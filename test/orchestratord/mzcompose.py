@@ -5062,6 +5062,56 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
         )
         raise ValueError("Never completed")
 
+    if expect_fail:
+        wait_for_reconciliation_failed_event(definition)
+
+
+def wait_for_reconciliation_failed_event(definition: dict[str, Any]) -> None:
+    """Assert that the operator reported the failed reconciliation as an event
+    on the Materialize resource.
+
+    The event is the only place a user without access to the operator's logs
+    sees why their environment is not progressing, so a failure that reaches
+    the logs but not the resource is a regression.
+    """
+    name = definition["materialize"]["metadata"]["name"]
+
+    def check() -> None:
+        events = json.loads(
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    # The events.k8s.io API explicitly, rather than the core v1
+                    # view `kubectl get events` serves, which renames the
+                    # fields asserted on below.
+                    "events.events.k8s.io",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "json",
+                ],
+            )
+        )["items"]
+        matching = [
+            event
+            for event in events
+            if event.get("reason") == "ReconciliationFailed"
+            and event.get("regarding", {}).get("kind") == "Materialize"
+            and event.get("regarding", {}).get("name") == name
+        ]
+        assert matching, (
+            f"Expected a ReconciliationFailed event on Materialize/{name}, found "
+            f"{[(e.get('reason'), e.get('regarding', {}).get('name')) for e in events]}"
+        )
+        event = matching[0]
+        assert event["type"] == "Warning", event
+        assert event["reportingController"] == "orchestratord.materialize.cloud", event
+        # The note carries the error, and is what makes the event actionable.
+        assert event.get("note"), event
+
+    retry(check, 120)
+
 
 def run_balancer(definition: dict[str, Any], expect_fail: bool) -> None:
     defs = [

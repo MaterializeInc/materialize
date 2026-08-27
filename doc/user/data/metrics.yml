@@ -4372,6 +4372,66 @@ metrics:
   help: Whether this operator replica holds the controller leadership lease, and is therefore the replica reconciling. Summed across the replicas this should be 1. A sustained 0 means no replica can take the lease, for instance because the service account lacks permission on leases, and the operator is reconciling nothing.
   source: src/orchestratord/src/metrics.rs
   visibility: internal
+- name: orchestratord_reconciliation_duration_seconds_bucket
+  help: Time spent in one reconciliation pass. This covers only the reconciler itself, not the finalizer bookkeeping around it, and a pass that waits on a rollout returns promptly rather than blocking, so this measures work done and not the wall-clock length of a rollout.
+  labels:
+  - controller
+  - event_type
+  - le
+  source: src/orchestratord/src/reconcile.rs
+  visibility: internal
+- name: orchestratord_reconciliation_duration_seconds_count
+  help: Time spent in one reconciliation pass. This covers only the reconciler itself, not the finalizer bookkeeping around it, and a pass that waits on a rollout returns promptly rather than blocking, so this measures work done and not the wall-clock length of a rollout.
+  labels:
+  - controller
+  - event_type
+  source: src/orchestratord/src/reconcile.rs
+  visibility: internal
+- name: orchestratord_reconciliation_duration_seconds_sum
+  help: Time spent in one reconciliation pass. This covers only the reconciler itself, not the finalizer bookkeeping around it, and a pass that waits on a rollout returns promptly rather than blocking, so this measures work done and not the wall-clock length of a rollout.
+  labels:
+  - controller
+  - event_type
+  source: src/orchestratord/src/reconcile.rs
+  visibility: internal
+- name: orchestratord_reconciliation_step_duration_seconds_bucket
+  help: Time spent in one reconciliation step.
+  labels:
+  - controller
+  - le
+  - step
+  source: src/orchestratord/src/reconcile.rs
+  visibility: internal
+- name: orchestratord_reconciliation_step_duration_seconds_count
+  help: Time spent in one reconciliation step.
+  labels:
+  - controller
+  - step
+  source: src/orchestratord/src/reconcile.rs
+  visibility: internal
+- name: orchestratord_reconciliation_step_duration_seconds_sum
+  help: Time spent in one reconciliation step.
+  labels:
+  - controller
+  - step
+  source: src/orchestratord/src/reconcile.rs
+  visibility: internal
+- name: orchestratord_reconciliation_steps_total
+  help: Count of reconciliation steps, by controller, by step, and by what the step concluded. Steps are the named phases a reconciliation pass moves through, so this is where a pass that fails or stalls identifies which phase it was in.
+  labels:
+  - controller
+  - outcome
+  - step
+  source: src/orchestratord/src/reconcile.rs
+  visibility: internal
+- name: orchestratord_reconciliations_total
+  help: Count of reconciliation passes, by controller, by which of the controller's entry points ran, and by what the pass concluded. An `outcome` of `waiting` means the pass asked to be retried, which is normal during a rollout; `failed` means it returned an error, and is also reported as a Kubernetes event on the resource.
+  labels:
+  - controller
+  - event_type
+  - outcome
+  source: src/orchestratord/src/reconcile.rs
+  visibility: internal
 - name: outer_join_lowering_cases
   help: How many times the different outer join lowering cases happened.
   labels:

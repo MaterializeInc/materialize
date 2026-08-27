@@ -13,6 +13,7 @@ pub mod controller;
 pub mod gcp_node_upgrade;
 pub mod k8s;
 pub mod metrics;
+pub mod reconcile;
 pub mod tls;
 pub mod webhook;
 
