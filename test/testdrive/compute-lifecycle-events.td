@@ -93,29 +93,24 @@ written 1
   GROUP BY l.event
 snapshot_complete 2
 
-# `written` never precedes `snapshot_complete`, which is what makes the interval
-# between them the time taken to make the computed snapshot durable.
-#
-# The comparison has to be per worker. `written` is reported only by the worker
-# that maintains the sink frontier, and it is ordered after that worker's own
-# `snapshot_complete`. Another worker may finish later still, so comparing `written`
-# against the maximum `snapshot_complete` across all workers proves nothing.
+# The write stages are not ordered against the per-worker stages, so nothing here
+# compares them. `written` reports that the output shard's upper passed the as-of,
+# which for a shard that already holds data is true from installation, and
+# `apply_refresh` advances the upper of a `REFRESH` materialized view before its
+# dataflow has computed anything. What does hold is that `written` carries a
+# wallclock instant like every other event.
 
-> SELECT DISTINCT
-      max(l.occurred_at) FILTER (WHERE l.event = 'written')
-          >= max(l.occurred_at) FILTER (WHERE l.event = 'snapshot_complete')
+> SELECT DISTINCT max(l.occurred_at) BETWEEN now() - '1 hour'::interval AND now()
   FROM mz_introspection.mz_compute_lifecycle_events_per_worker l
   JOIN mz_materialized_views mv ON (mv.id = l.export_id)
-  WHERE mv.name = 'mv'
-  GROUP BY l.worker_id
-  HAVING count(*) FILTER (WHERE l.event = 'written') > 0
+  WHERE mv.name = 'mv' AND l.event = 'written'
 true
 
-# `write_blocked` is only reported for an object whose snapshot is complete and is still
-# not permitted to write, which is a replica in read-only mode awaiting a
-# cutover. Testdrive cannot reach that state, so there is nothing to assert
-# positively here. The invariant block at the end of this file requires the
-# blocked/unblocked pair to be absent or complete, never that it is present.
+# `write_blocked` is reported when the sink has a batch to mint and read-only mode
+# forbids writing it, which is a replica awaiting a cutover. Testdrive cannot reach
+# that state, so there is nothing to assert positively here. The invariant block at
+# the end of this file requires the blocked/unblocked pair to be absent or complete,
+# never that it is present.
 
 # Dropping an object retracts its rows, so the log does not accumulate lifecycles
 # of objects that no longer exist. This converges rather than holding at every
@@ -153,7 +148,9 @@ $ set-max-tries max-tries=1
      OR (reason IS NOT NULL AND event <> 'write_blocked')
 0
 
-# No worker reports a stage without its predecessors.
+# No worker reports a stage without its predecessors, within each side of the
+# lifecycle. The compute stages are ordered among themselves and the write stages
+# among themselves, but the two are not ordered against each other.
 
 > SELECT count(*)
   FROM (
@@ -167,7 +164,6 @@ $ set-max-tries max-tries=1
   WHERE NOT ('installed' = ANY(events))
      OR ('snapshot_complete' = ANY(events) AND NOT 'started' = ANY(events))
      OR ('write_unblocked' = ANY(events) AND NOT 'write_blocked' = ANY(events))
-     OR ('written' = ANY(events) AND NOT 'snapshot_complete' = ANY(events))
 0
 
 # A stage is reported at most once per export and worker, which is what lets a

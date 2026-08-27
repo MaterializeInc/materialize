@@ -240,30 +240,33 @@ than of computation. A collection with no compute probe produces its output *by*
 it, an index into its own trace, so there the write frontier is the progress and
 `snapshot_complete` coincides with durability.
 
-`written` reads the sink's write frontier passing the as-of, once `snapshot_complete` has
-been reported and writes are permitted. It says the output is durable through the as-of
-and that this replica was permitted to write. It does not say that this replica performed
-the write: the frontier is the output shard's upper, which every replica's `mint` reads
-back from persist, so it advances on all of them when any one wins the append.
+`written` reads the output shard's upper passing the as-of. It says the output is durable
+through the as-of, not that this replica wrote it: every replica's `mint` reads the same
+upper back from persist, so it advances on all of them when any one wins the append.
 
-For a materialized view `written` is the stage that matters, and it can coincide with an
-earlier one. The as-of is bounded to one step below the upper for a shard that already
-holds data, so on a restarted or scaled-out replica `written` lands together with
-`snapshot_complete`, and at a cutover together with `write_unblocked`.
+**The write stages are reported by the sink, and are not ordered against the compute
+stages.** `mint` is the only place that tracks the shard's upper, and it runs on one
+elected worker, which is what makes these three events one report per object rather than
+one per worker. Reporting them there rather than from the collection also means nothing
+outside the sink needs to know which worker was elected.
 
-**`write_blocked` is logged on entry, not on exit.** The state an operator debugs is the
-one that has not ended, and that state carries no `write_unblocked` row, so the cause has
-to be recorded on entry. Entry means after `snapshot_complete`: before it the sink has
-produced nothing, and every collection starts read-only, so logging from installation
-would put the pair on essentially every materialized view, both events ahead of its
-snapshot.
+The price is that the two sides of the lifecycle are ordered only among themselves. For a
+shard that already holds data the as-of is bounded to one step below the upper, so
+`written` is true from installation, and `apply_refresh` advances the upper of a `REFRESH`
+materialized view before its dataflow computes anything. A consumer must not assume
+`written` follows `snapshot_complete`.
 
-**`write_unblocked` is when writing became permitted,** not when the first write happened.
-`mint` produces a batch description as soon as the desired frontier passes the persist
-frontier, which starts at the as-of, so for a plain materialized view the first write is
-minted at `snapshot_complete` and a separate stamp for it would carry no information. In
-the common case the event is absent rather than zero, since the controller allows writes
-in the same turn it ships the dataflow.
+**`write_blocked` is logged on entry, not on exit,** because the state an operator debugs
+is the one that has not ended, and that state carries no `write_unblocked` row. Entry
+means the sink has a batch to mint and read-only mode forbids writing it, which is
+exactly the condition `maybe_mint_batch_description` already evaluates. Reporting every
+read-only observation instead would put the pair on essentially every materialized view,
+since collections start read-only and the controller releases them.
+
+**`write_unblocked` is when writing became permitted,** not when the first write happened,
+and it is reported only for a sink that was seen to wait. `mint` produces a batch
+description as soon as the desired frontier passes the persist frontier, so a separate
+stamp for the first write would carry no information.
 
 **`reason` and `details`.** `reason` is a typed cause for the event, and is NULL unless the
 event has one. Its only value is `read_only`, on `write_blocked`. `details` is a nullable
@@ -294,9 +297,10 @@ a materialized view whose first refresh is far in the future reports
 `mz_hydration_statuses.hydrated = true`, and that flag is `time_ns IS NOT NULL`,
 which requires the write frontier to have passed the as-of.
 
-Two consequences. There is no `refresh` cause for `write_blocked` to report,
-because there is no such state. And the shard's upper can pass the as-of while the
-dataflow is still hydrating, which is why `written` is clamped to `snapshot_complete`.
+Two consequences. There is no `refresh` cause for `write_blocked` to report, because there
+is no such state. And the shard's upper can pass the as-of while the dataflow is still
+hydrating, which is one of the reasons `written` is not ordered against
+`snapshot_complete`.
 
 ### A new hydration start event
 
@@ -561,8 +565,10 @@ coordinating with consumers rather than a detail:
   denominator" above.
 - `occurred_at` is a wallclock instant, carrying its worker's epoch anchor.
 - `snapshot_complete` is always the dataflow-progress reading and `written` is always
-  "durable through the as-of, and this replica was permitted to write". Neither varies
-  by object type.
+  "the output is durable through the as-of". Neither varies by object type.
+- The compute stages are ordered among themselves and the write stages among themselves.
+  The two sides are *not* ordered against each other, so `written - snapshot_complete` can
+  be negative and a consumer must not read the stages as one sequence.
 - `mz_compute_hydration_times_per_worker.hydrated_at` and `time_ns` remain the
   durability reading, computed in the demux. That relation will not become a view over
   the lifecycle log. `mz_compute_hydration_statuses.hydrated` is `time_ns IS NOT NULL`

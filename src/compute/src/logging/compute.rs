@@ -196,11 +196,11 @@ pub enum LifecycleStage {
     /// The dataflow's own progress frontier passed its as-of, so its snapshot at the as-of is
     /// computed. Logged from [`Lifecycle`], as are the stages below.
     SnapshotComplete,
-    /// The export's sink may not write, because the dataflow is in read-only mode.
+    /// The export's sink has a batch to mint and read-only mode forbids writing it.
     WriteBlockedReadOnly,
-    /// The export's sink may write.
+    /// The export's sink may write, having been reported blocked.
     WriteUnblocked,
-    /// The export's sink advanced the output shard's upper past the as-of.
+    /// The output shard's upper passed the as-of, so the output is durable through it.
     Written,
 }
 

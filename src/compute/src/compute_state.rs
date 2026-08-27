@@ -979,11 +979,6 @@ impl<'a> ActiveComputeState<'a> {
         let mut new_frontier = Antichain::new();
         // Same, for the frontier that measures dataflow progress.
         let mut snapshot_frontier = Antichain::new();
-        // Same, for the write frontier. The output frontier fold below reuses `new_frontier` and
-        // so destroys the write frontier that `observe_writes` needs, and the observers cannot run
-        // before the fold because `reported` borrows the collection until after it.
-        let mut write_frontier = Antichain::new();
-
         for (&id, collection) in self.compute_state.collections.iter_mut() {
             // The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
             // collections (database-issues#4701).
@@ -1028,8 +1023,6 @@ impl<'a> ActiveComputeState<'a> {
                 }
                 None => snapshot_frontier.clone_from(&new_frontier),
             }
-
-            write_frontier.clone_from(&new_frontier);
 
             // Collect the output frontier and check for progress.
             //
@@ -1077,9 +1070,7 @@ impl<'a> ActiveComputeState<'a> {
                     .set_reported_output_frontier(ReportedFrontier::Reported(frontier.clone()));
             }
 
-            // Hydration must be observed first, since the write stages are gated on it.
             collection.observe_snapshot(&snapshot_frontier);
-            collection.observe_writes(&write_frontier);
 
             let response = FrontiersResponse {
                 write_frontier: new_write_frontier,
@@ -2092,13 +2083,6 @@ pub struct CollectionState {
     logging: Option<CollectionLogging>,
     /// Metrics tracked for this collection.
     metrics: CollectionMetrics,
-    /// Whether this worker's copy of [`Self::sink_write_frontier`] carries the sink's write
-    /// progress. A persist sink maintains it on one worker and clears it on the others, so the
-    /// write lifecycle stages are logged by that worker alone, once per export. False for a
-    /// collection whose output frontier is not a persist upper, such as an index or a metric sink.
-    ///
-    /// Set through [`Self::set_sink_write_frontier`] together with the frontier it describes.
-    owns_sink_frontier: bool,
     /// Which lifecycle stages have been logged for this collection.
     ///
     /// Stages are only ever added, never removed. Reconciliation resets the reported frontiers of
@@ -2143,7 +2127,6 @@ impl CollectionState {
             compute_probe: None,
             logging: None,
             metrics,
-            owns_sink_frontier: false,
             logged_stages: BTreeSet::new(),
             read_only_tx,
             read_only_rx,
@@ -2240,81 +2223,9 @@ impl CollectionState {
         }
     }
 
-    /// Observe this collection's sink write frontier and log the write lifecycle stages it has
-    /// reached.
-    ///
-    /// Only the worker that maintains the sink frontier reports these stages, which is what makes
-    /// them one observation per export rather than one per worker.
-    ///
-    /// Nothing is reported before the snapshot is complete. Until then the sink has produced no
-    /// output, so read-only mode is not holding anything back, and reporting a block there would
-    /// make `write_unblocked - snapshot_complete` negative rather than zero. Gating here
-    /// also keeps the stages ordered against `written`, which can otherwise arrive first:
-    /// `apply_refresh` rounds a `REFRESH` materialized view's frontier up to the next refresh time
-    /// before the dataflow has computed anything, so its sink writes an empty batch for the
-    /// pre-refresh window and advances the shard's upper while the dataflow is still hydrating.
-    ///
-    /// NOTE: `written` promises that the output is durable through the as-of and that this replica
-    /// was permitted to write, not that this replica performed the write. `write_frontier` is the
-    /// output shard's upper, which every replica's `mint` reads back from persist, so it advances
-    /// here when any replica wins the append. The as-of is bounded to one step below the upper for
-    /// a non-empty storage export (`as_of_selection::apply_downstream_storage_constraints`), so for
-    /// a shard that already holds data the stage is reached as soon as it is gated on, together
-    /// with `snapshot_complete` on a restarted or scaled-out replica and with `write_unblocked` at
-    /// a cutover.
-    ///
-    /// TODO: attributing the write to this replica needs a signal from its own append path.
-    /// `next_append_worker` rotates independently of `sink::frontier_owner`, so that signal has to
-    /// cross workers to reach the worker that reports the stage.
-    fn observe_writes(&mut self, write_frontier: &Antichain<Timestamp>) {
-        if !self.owns_sink_frontier {
-            return;
-        }
-
-        if *self.read_only_rx.borrow() {
-            // Report the block only once the snapshot is complete. Before that the sink has
-            // produced nothing, so read-only mode is holding nothing back.
-            if self
-                .logged_stages
-                .contains(&LifecycleStage::SnapshotComplete)
-            {
-                self.log_stage(LifecycleStage::WriteBlockedReadOnly);
-            }
-            return;
-        }
-
-        if !self
-            .logged_stages
-            .contains(&LifecycleStage::SnapshotComplete)
-        {
-            return;
-        }
-
-        if self
-            .logged_stages
-            .contains(&LifecycleStage::WriteBlockedReadOnly)
-        {
-            // Only report having been unblocked if we reported being blocked. A collection whose
-            // writes were allowed before we first observed it was never seen to wait.
-            self.log_stage(LifecycleStage::WriteUnblocked);
-        }
-
-        if PartialOrder::less_than(&self.as_of, write_frontier) {
-            self.log_stage(LifecycleStage::Written);
-        }
-    }
-
     /// Record the shared frontier a sink publishes its write progress through.
-    ///
-    /// `owned` must be true exactly when *this* worker's copy of the frontier carries that
-    /// progress, which for a persist sink means this worker is [`crate::sink::frontier_owner`].
-    pub(crate) fn set_sink_write_frontier(
-        &mut self,
-        frontier: Rc<RefCell<Antichain<Timestamp>>>,
-        owned: bool,
-    ) {
+    pub(crate) fn set_sink_write_frontier(&mut self, frontier: Rc<RefCell<Antichain<Timestamp>>>) {
         self.sink_write_frontier = Some(frontier);
-        self.owns_sink_frontier = owned;
     }
 
     /// Allow writes for this collection.

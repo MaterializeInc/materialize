@@ -187,7 +187,7 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
         // has folded through, not a persist upper, and every worker writes it. Hence not owned:
         // no single copy carries progress, and a metric sink reports no write lifecycle stages.
         let collection = compute_state.expect_collection_mut(sink_id);
-        collection.set_sink_write_frontier(sink_frontier, false);
+        collection.set_sink_write_frontier(sink_frontier);
 
         Some(Rc::new(drop_handle))
     }

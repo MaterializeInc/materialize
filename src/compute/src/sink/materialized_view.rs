@@ -259,7 +259,6 @@ where
     }
 
     let scope = ok_collection.scope();
-    let owns_sink_frontier = scope.index() == crate::sink::frontier_owner(sink_id, scope.peers());
     let desired = OkErr::new(ok_collection.inner, err_collection.inner);
 
     // Read back the persist shard.
@@ -296,7 +295,7 @@ where
 
     // Report sink frontier updates to the `ComputeState`.
     let collection = compute_state.expect_collection_mut(sink_id);
-    collection.set_sink_write_frontier(sink_frontier, owns_sink_frontier);
+    collection.set_sink_write_frontier(sink_frontier);
 
     Rc::new((persist_token, mint_token, write_token, append_token))
 }
@@ -508,6 +507,12 @@ mod mint {
         // Determine the active worker for the mint operator.
         let active_worker_id = crate::sink::frontier_owner(sink_id, scope.peers());
 
+        let write_stages = crate::sink::WriteStageLogger::new(
+            sink_id,
+            as_of.clone(),
+            scope.worker().logger_for("materialize/compute"),
+        );
+
         let sink_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::MIN)));
         let shared_frontier = Rc::clone(&sink_frontier);
 
@@ -558,7 +563,7 @@ mod mint {
             let mut cap_set = CapabilitySet::from_elem(desc_cap);
 
             let read_only = *read_only_rx.borrow_and_update();
-            let mut state = State::new(sink_id, worker_count, as_of, read_only);
+            let mut state = State::new(sink_id, worker_count, write_stages, as_of, read_only);
 
             // Create a stream that reports advancements of the target shard's frontier and updates
             // the shared sink frontier.
@@ -671,12 +676,15 @@ mod mint {
         ///
         /// In read-only mode, minting of batch descriptions is disabled.
         read_only: bool,
+        /// Reports the write lifecycle stages of this sink.
+        write_stages: crate::sink::WriteStageLogger,
     }
 
     impl State {
         fn new(
             sink_id: GlobalId,
             worker_count: usize,
+            write_stages: crate::sink::WriteStageLogger,
             as_of: Antichain<Timestamp>,
             read_only: bool,
         ) -> Self {
@@ -693,6 +701,7 @@ mod mint {
                 next_append_worker: 0,
                 last_lower: None,
                 read_only,
+                write_stages,
             }
         }
 
@@ -723,11 +732,18 @@ mod mint {
             if advance(&mut self.persist_frontier, frontier.borrow()) {
                 self.trace("advanced `persist` frontier");
             }
+            let Self {
+                write_stages,
+                persist_frontier,
+                ..
+            } = self;
+            write_stages.observe_persist_frontier(persist_frontier);
         }
 
         fn allow_writes(&mut self) {
             if self.read_only {
                 self.read_only = false;
+                self.write_stages.unblocked();
                 self.trace("disabled read-only mode");
             }
         }
@@ -744,6 +760,11 @@ mod mint {
             let persist_advanced = self.last_lower.as_ref().map_or(true, |lower| {
                 PartialOrder::less_than(lower, persist_frontier)
             });
+
+            // A block only matters once there is a batch to mint.
+            if self.read_only && desired_ahead && persist_advanced {
+                self.write_stages.blocked();
+            }
 
             if self.read_only || !desired_ahead || !persist_advanced {
                 return None;
