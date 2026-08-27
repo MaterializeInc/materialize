@@ -93,11 +93,11 @@ written 1
   GROUP BY l.event
 snapshot_complete 2
 
-# The write stages are not ordered against the per-worker stages, so nothing here
-# compares them. `written` reports that the output shard's upper passed the as-of,
-# which for a shard that already holds data is true from installation, and
-# `apply_refresh` advances the upper of a `REFRESH` materialized view before its
-# dataflow has computed anything. What does hold is that `written` carries a
+# The write stages are ordered against nothing, not the compute stages and not each
+# other, so nothing here compares them. `written` reports that the output shard's
+# upper passed the as-of, which for a shard that already holds data is true from
+# installation, and `apply_refresh` advances the upper of a `REFRESH` materialized
+# view before its dataflow has computed anything. What does hold is that `written` carries a
 # wallclock instant like every other event.
 
 > SELECT DISTINCT max(l.occurred_at) BETWEEN now() - '1 hour'::interval AND now()
@@ -148,9 +148,11 @@ $ set-max-tries max-tries=1
      OR (reason IS NOT NULL AND event <> 'write_blocked')
 0
 
-# No worker reports a stage without its predecessors, within each side of the
-# lifecycle. The compute stages are ordered among themselves and the write stages
-# among themselves, but the two are not ordered against each other.
+# No worker reports a stage without its predecessors, where one exists. Only the
+# compute stages are ordered. `write_unblocked` still implies `write_blocked`,
+# because the sink reports being unblocked only for a sink it reported blocked, but
+# that is a causal dependency rather than an ordering of the write stages: `written`
+# is unordered against both.
 
 > SELECT count(*)
   FROM (

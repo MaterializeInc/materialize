@@ -244,17 +244,20 @@ it, an index into its own trace, so there the write frontier is the progress and
 through the as-of, not that this replica wrote it: every replica's `mint` reads the same
 upper back from persist, so it advances on all of them when any one wins the append.
 
-**The write stages are reported by the sink, and are not ordered against the compute
-stages.** `mint` is the only place that tracks the shard's upper, and it runs on one
-elected worker, which is what makes these three events one report per object rather than
-one per worker. Reporting them there rather than from the collection also means nothing
-outside the sink needs to know which worker was elected.
+**The write stages are reported by the sink, and are ordered against nothing.** `mint` is
+the only place that tracks the shard's upper, and it runs on one elected worker, which is
+what makes these three events one report per object rather than one per worker. Reporting
+them there rather than from the collection also means nothing outside the sink needs to
+know which worker was elected.
 
-The price is that the two sides of the lifecycle are ordered only among themselves. For a
-shard that already holds data the as-of is bounded to one step below the upper, so
-`written` is true from installation, and `apply_refresh` advances the upper of a `REFRESH`
-materialized view before its dataflow computes anything. A consumer must not assume
-`written` follows `snapshot_complete`.
+The price is that only the compute stages remain ordered. `written` reads the shard's
+upper, and for a shard that already holds data the as-of is bounded one step below it, so
+`written` is true from installation. `apply_refresh` advances the upper of a `REFRESH`
+materialized view before its dataflow computes anything, for the same effect. And
+`write_blocked` needs the dataflow's desired frontier to pass that upper, which is strictly
+later than observing it, so a replica awaiting a cutover reports `written` *before*
+`write_blocked`. A consumer must not assume any order among the six beyond the compute
+stages.
 
 **`write_blocked` is logged on entry, not on exit,** because the state an operator debugs
 is the one that has not ended, and that state carries no `write_unblocked` row. Entry
@@ -566,9 +569,13 @@ coordinating with consumers rather than a detail:
 - `occurred_at` is a wallclock instant, carrying its worker's epoch anchor.
 - `snapshot_complete` is always the dataflow-progress reading and `written` is always
   "the output is durable through the as-of". Neither varies by object type.
-- The compute stages are ordered among themselves and the write stages among themselves.
-  The two sides are *not* ordered against each other, so `written - snapshot_complete` can
-  be negative and a consumer must not read the stages as one sequence.
+- The compute stages are ordered among themselves. Nothing else is ordered: not the two
+  sides against each other, and not the three write stages against each other. `written`
+  reads the output shard's upper, which moves whether or not this replica may write, so in
+  the one case that produces `write_blocked` at all, a replacement awaiting a cutover, the
+  shard already holds data and `written` is reported first. A consumer must not read the
+  six as one sequence, and must not treat a difference between two of them as an elapsed
+  interval unless it is between two compute stages.
 - `mz_compute_hydration_times_per_worker.hydrated_at` and `time_ns` remain the
   durability reading, computed in the demux. That relation will not become a view over
   the lifecycle log. `mz_compute_hydration_statuses.hydrated` is `time_ns IS NOT NULL`
