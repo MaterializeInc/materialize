@@ -34,7 +34,32 @@ Install the Materialize agent skills with a single command:
 npx skills add MaterializeInc/agent-skills
 ```
 
-Once installed, you can update installed skills by running `npx skills update`.
+## Upgrade skills
+
+We publish upgrades to the Materialize agent skills weekly, so check back
+regularly to pick up the latest documentation and reference material. To upgrade
+the skills you already have installed:
+
+```bash
+npx skills update MaterializeInc/agent-skills
+```
+
+To upgrade every skill installed on your machine, regardless of source, omit the
+repository:
+
+```bash
+npx skills update
+```
+
+## Claude Code plugins
+
+The same repository also serves as a [Claude Code plugin
+marketplace](https://code.claude.com/docs/en/plugin-marketplaces) named
+`materialize`. Its `mz-sql-lsp` plugin registers the
+[`mz-deploy`](/manage/mz-deploy/) language server for `.sql` files, so Claude
+Code navigates your project instead of grepping it. See [AI agent
+setup](/manage/mz-deploy/agent-setup/#configuring-for-claude-code) for
+installation and configuration.
 
 ## Reduce permission prompts (Claude Code)
 
@@ -64,4 +89,5 @@ all tools rather than just this directory.
 ## Related Pages
 
 - [MCP Server](/integrations/mcp-server/)
+- [mz-deploy AI agent setup](/manage/mz-deploy/agent-setup/)
 - [GitHub: Materialize Agent Skills](https://github.com/MaterializeInc/agent-skills)

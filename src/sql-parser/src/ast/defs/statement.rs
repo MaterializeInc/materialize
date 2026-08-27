@@ -53,6 +53,7 @@ pub enum Statement<T: AstInfo> {
     CreateSource(CreateSourceStatement<T>),
     CreateSubsource(CreateSubsourceStatement<T>),
     CreateSink(CreateSinkStatement<T>),
+    CreateMetricSink(CreateMetricSinkStatement<T>),
     CreateView(CreateViewStatement<T>),
     CreateMaterializedView(CreateMaterializedViewStatement<T>),
     CreateTable(CreateTableStatement<T>),
@@ -132,6 +133,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateSource(stmt) => f.write_node(stmt),
             Statement::CreateSubsource(stmt) => f.write_node(stmt),
             Statement::CreateSink(stmt) => f.write_node(stmt),
+            Statement::CreateMetricSink(stmt) => f.write_node(stmt),
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateMaterializedView(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
@@ -239,6 +241,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateSource => "create_source",
         StatementKind::CreateSubsource => "create_subsource",
         StatementKind::CreateSink => "create_sink",
+        StatementKind::CreateMetricSink => "create_metric_sink",
         StatementKind::CreateView => "create_view",
         StatementKind::CreateMaterializedView => "create_materialized_view",
         StatementKind::CreateTable => "create_table",
@@ -1432,6 +1435,79 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
 }
 impl_display_t!(CreateSinkStatement);
 
+/// An option in a `CREATE METRIC SINK` statement.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CreateMetricSinkOptionName {
+    Prefix,
+}
+
+impl AstDisplay for CreateMetricSinkOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            CreateMetricSinkOptionName::Prefix => {
+                f.write_str("PREFIX");
+            }
+        }
+    }
+}
+
+impl WithOptionName for CreateMetricSinkOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            CreateMetricSinkOptionName::Prefix => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CreateMetricSinkOption<T: AstInfo> {
+    pub name: CreateMetricSinkOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+impl_display_for_with_option!(CreateMetricSinkOption);
+
+/// `CREATE METRIC SINK`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateMetricSinkStatement<T: AstInfo> {
+    pub name: UnresolvedItemName,
+    pub in_cluster: Option<T::ClusterName>,
+    pub if_not_exists: bool,
+    pub from: T::ItemName,
+    pub with_options: Vec<CreateMetricSinkOption<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateMetricSinkStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE METRIC SINK ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" ");
+        if let Some(cluster) = &self.in_cluster {
+            f.write_str("IN CLUSTER ");
+            f.write_node(cluster);
+            f.write_str(" ");
+        }
+        f.write_str("FROM ");
+        f.write_node(&self.from);
+
+        // NOTE: `create_sql` is persisted through this impl and re-parsed on boot, so dropping
+        // the clause here would silently lose the prefix across a restart.
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
+        }
+    }
+}
+impl_display_t!(CreateMetricSinkStatement);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ViewDefinition<T: AstInfo> {
     /// View name
@@ -2430,6 +2506,7 @@ pub enum ClusterFeatureName {
     EnableLetrecFixpointAnalysis,
     EnableJoinPrioritizeArranged,
     EnableProjectionPushdownAfterRelationCse,
+    EnableUnionCancellationAfterRelationCse,
 }
 
 impl WithOptionName for ClusterFeatureName {
@@ -2446,7 +2523,8 @@ impl WithOptionName for ClusterFeatureName {
             | Self::EnableVariadicLeftJoinLowering
             | Self::EnableLetrecFixpointAnalysis
             | Self::EnableJoinPrioritizeArranged
-            | Self::EnableProjectionPushdownAfterRelationCse => false,
+            | Self::EnableProjectionPushdownAfterRelationCse
+            | Self::EnableUnionCancellationAfterRelationCse => false,
         }
     }
 }
@@ -3513,6 +3591,9 @@ pub enum ShowObjectType<T: AstInfo> {
     Sink {
         in_cluster: Option<T::ClusterName>,
     },
+    MetricSink {
+        in_cluster: Option<T::ClusterName>,
+    },
     Type,
     Role,
     Cluster,
@@ -3565,6 +3646,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::View => "VIEWS",
             ShowObjectType::Source { .. } => "SOURCES",
             ShowObjectType::Sink { .. } => "SINKS",
+            ShowObjectType::MetricSink { .. } => "METRIC SINKS",
             ShowObjectType::Type => "TYPES",
             ShowObjectType::Role => "ROLES",
             ShowObjectType::Cluster => "CLUSTERS",
@@ -3605,6 +3687,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::MaterializedView { in_cluster }
             | ShowObjectType::Index { in_cluster, .. }
             | ShowObjectType::Sink { in_cluster }
+            | ShowObjectType::MetricSink { in_cluster }
             | ShowObjectType::Source { in_cluster } => {
                 if let Some(cluster) = in_cluster {
                     f.write_str(" IN CLUSTER ");
@@ -3786,6 +3869,25 @@ impl<T: AstInfo> AstDisplay for ShowCreateSinkStatement<T> {
     }
 }
 impl_display_t!(ShowCreateSinkStatement);
+
+/// `SHOW [REDACTED] CREATE METRIC SINK <sink>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ShowCreateMetricSinkStatement<T: AstInfo> {
+    pub metric_sink_name: T::ItemName,
+    pub redacted: bool,
+}
+
+impl<T: AstInfo> AstDisplay for ShowCreateMetricSinkStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW ");
+        if self.redacted {
+            f.write_str("REDACTED ");
+        }
+        f.write_str("CREATE METRIC SINK ");
+        f.write_node(&self.metric_sink_name);
+    }
+}
+impl_display_t!(ShowCreateMetricSinkStatement);
 
 /// `SHOW [REDACTED] CREATE INDEX <index>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -4115,6 +4217,7 @@ pub enum ExplainPlanOptionName {
     EnableJoinPrioritizeArranged,
     EnableProjectionPushdownAfterRelationCse,
     EnableFixedCorrelatedCteLowering,
+    EnableUnionCancellationAfterRelationCse,
 }
 
 impl WithOptionName for ExplainPlanOptionName {
@@ -4152,7 +4255,8 @@ impl WithOptionName for ExplainPlanOptionName {
             | Self::EnableLetrecFixpointAnalysis
             | Self::EnableJoinPrioritizeArranged
             | Self::EnableProjectionPushdownAfterRelationCse
-            | Self::EnableFixedCorrelatedCteLowering => false,
+            | Self::EnableFixedCorrelatedCteLowering
+            | Self::EnableUnionCancellationAfterRelationCse => false,
         }
     }
 }
@@ -4349,6 +4453,7 @@ pub enum ObjectType {
     MaterializedView,
     Source,
     Sink,
+    MetricSink,
     Index,
     Type,
     Role,
@@ -4371,6 +4476,7 @@ impl ObjectType {
             | ObjectType::MaterializedView
             | ObjectType::Source
             | ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
@@ -4395,6 +4501,7 @@ impl AstDisplay for ObjectType {
             ObjectType::MaterializedView => "MATERIALIZED VIEW",
             ObjectType::Source => "SOURCE",
             ObjectType::Sink => "SINK",
+            ObjectType::MetricSink => "METRIC SINK",
             ObjectType::Index => "INDEX",
             ObjectType::Type => "TYPE",
             ObjectType::Role => "ROLE",
@@ -5438,6 +5545,7 @@ pub enum ShowStatement<T: AstInfo> {
     ShowCreateSource(ShowCreateSourceStatement<T>),
     ShowCreateTable(ShowCreateTableStatement<T>),
     ShowCreateSink(ShowCreateSinkStatement<T>),
+    ShowCreateMetricSink(ShowCreateMetricSinkStatement<T>),
     ShowCreateIndex(ShowCreateIndexStatement<T>),
     ShowCreateConnection(ShowCreateConnectionStatement<T>),
     ShowCreateCluster(ShowCreateClusterStatement<T>),
@@ -5456,6 +5564,7 @@ impl<T: AstInfo> AstDisplay for ShowStatement<T> {
             ShowStatement::ShowCreateSource(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateTable(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateSink(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateMetricSink(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateIndex(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateConnection(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateCluster(stmt) => f.write_node(stmt),
@@ -5727,8 +5836,8 @@ impl<T: AstInfo> AstDisplay for AbbreviatedGrantStatement<T> {
         f.write_str("GRANT ");
         f.write_node(&self.privileges);
         f.write_str(" ON ");
-        f.write_node(&self.object_type);
-        f.write_str("S TO ");
+        write_grant_object_type_plural(f, &self.object_type);
+        f.write_str(" TO ");
         f.write_node(&display::comma_separated(&self.grantees));
     }
 }
@@ -5751,8 +5860,8 @@ impl<T: AstInfo> AstDisplay for AbbreviatedRevokeStatement<T> {
         f.write_str("REVOKE ");
         f.write_node(&self.privileges);
         f.write_str(" ON ");
-        f.write_node(&self.object_type);
-        f.write_str("S FROM ");
+        write_grant_object_type_plural(f, &self.object_type);
+        f.write_str(" FROM ");
         f.write_node(&display::comma_separated(&self.revokees));
     }
 }

@@ -880,7 +880,7 @@ pub static MZ_CLUSTER_RECONFIGURATIONS: LazyLock<BuiltinMaterializedView> = Lazy
             ),
             (
                 "target",
-                "The config shape the cluster is reconfiguring to, as JSON: `size`, `replication_factor`, `availability_zones`, and `logging`. The realized (current) shape is in `mz_clusters`.",
+                "The config shape the cluster is reconfiguring to, as JSON: `size`, `replication_factor`, `availability_zones`, `logging`, and `arrangement_compression`. The realized (current) shape is in `mz_clusters`.",
             ),
             (
                 "changes",
@@ -957,7 +957,9 @@ SELECT
     CASE WHEN r.target->'availability_zones' != r.config->'availability_zones'
         THEN jsonb_build_object('availability_zones', r.target->'availability_zones') ELSE '{}'::jsonb END ||
     CASE WHEN r.target->'logging' != r.config->'logging'
-        THEN jsonb_build_object('logging', r.target->'logging') ELSE '{}'::jsonb END
+        THEN jsonb_build_object('logging', r.target->'logging') ELSE '{}'::jsonb END ||
+    CASE WHEN r.target->'arrangement_compression' != r.config->'arrangement_compression'
+        THEN jsonb_build_object('arrangement_compression', r.target->'arrangement_compression') ELSE '{}'::jsonb END
     AS changes
 FROM records r",
         is_retained_metrics_object: false,
@@ -3691,6 +3693,122 @@ pub static MZ_WEBHOOKS_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
     }),
 });
 
+pub static MZ_METRIC_SINKS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_metric_sinks",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_METRIC_SINKS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("from_id", SqlScalarType::String.nullable(false))
+            .with_column("cluster_id", SqlScalarType::String.nullable(false))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .with_key(vec![1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for the metric sink."),
+            ("oid", "A PostgreSQL-compatible OID for the metric sink."),
+            (
+                "schema_id",
+                "The ID of the schema to which the metric sink belongs. Corresponds to `mz_schemas.id`.",
+            ),
+            ("name", "The name of the metric sink."),
+            (
+                "from_id",
+                "The ID of the relation the metric sink reads. Corresponds to `mz_objects.id`.",
+            ),
+            (
+                "cluster_id",
+                "The ID of the cluster maintaining the metric sink. Corresponds to `mz_clusters.id`.",
+            ),
+            (
+                "owner_id",
+                "The role ID of the owner of the metric sink. Corresponds to `mz_roles.id`.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL from_id,
+    ASSERT NOT NULL cluster_id,
+    ASSERT NOT NULL owner_id
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    (data->'value'->>'oid')::oid AS oid,
+    mz_internal.parse_catalog_id(data->'value'->'schema_id') AS schema_id,
+    data->'value'->>'name' AS name,
+    parsed->>'from_id' AS from_id,
+    parsed->>'cluster_id' AS cluster_id,
+    mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id
+FROM
+    mz_internal.mz_catalog_raw
+    CROSS JOIN LATERAL (
+        SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS l(parsed)
+WHERE
+    data->>'kind' = 'Item' AND
+    parsed->>'type' = 'metric-sink'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "metric-sink",
+            description: "A sink that exports metrics about a relation",
+            links: &const {
+                [
+                    OntologyLink {
+                        name: "in_schema",
+                        target: "schema",
+                        properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
+                    },
+                    OntologyLink {
+                        name: "reads_relation",
+                        target: "relation",
+                        properties: LinkProperties::fk("from_id", "id", Cardinality::ManyToOne),
+                    },
+                    OntologyLink {
+                        name: "runs_on_cluster",
+                        target: "cluster",
+                        properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
+                    },
+                    OntologyLink {
+                        name: "owned_by",
+                        target: "role",
+                        properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
+                    },
+                ]
+            },
+            column_semantic_types: &const {
+                [
+                    ("id", SemanticType::CatalogItemId),
+                    ("oid", SemanticType::OID),
+                    ("schema_id", SemanticType::SchemaId),
+                    ("from_id", SemanticType::CatalogItemId),
+                    ("cluster_id", SemanticType::ClusterId),
+                    ("owner_id", SemanticType::RoleId),
+                ]
+            },
+        }),
+    }
+});
+
+pub const MZ_METRIC_SINKS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_metric_sinks_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_METRIC_SINKS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_metric_sinks (id)",
+    is_retained_metrics_object: false,
+};
+
 pub static MZ_HISTORY_RETENTION_STRATEGIES: LazyLock<BuiltinTable> = LazyLock::new(|| {
     BuiltinTable {
         name: "mz_history_retention_strategies",
@@ -3889,6 +4007,7 @@ pub static MZ_OBJECTS_ID_NAMESPACE_TYPES: LazyLock<BuiltinView> = LazyLock::new(
             ('materialized-view'),
             ('source'),
             ('sink'),
+            ('metric-sink'),
             ('index'),
             ('connection'),
             ('type'),
@@ -3897,6 +4016,66 @@ pub static MZ_OBJECTS_ID_NAMESPACE_TYPES: LazyLock<BuiltinView> = LazyLock::new(
     )
     AS _ (object_type)"#,
     access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
+
+/// Object dependency edges. Each row `(object_id, dependency_id)` means
+/// `object_id` depends on `dependency_id`.
+///
+/// Unions the dataflow dependencies between maintained objects (index,
+/// materialized view, sink, source, table) with the source-to-subsource and
+/// source-to-table edges that connect a source to the children carrying its
+/// data. Indexed on `mz_catalog_server` so the console surfaces that walk the
+/// dependency graph read one maintained arrangement instead of recomputing the
+/// union per request: the object workflow graph, critical-path freshness
+/// analysis, and impact/dependents views.
+pub static MZ_OBJECT_GRAPH_EDGES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_object_graph_edges",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_OBJECT_GRAPH_EDGES_OID,
+    desc: RelationDesc::builder()
+        .with_column("object_id", SqlScalarType::String.nullable(false))
+        .with_column("dependency_id", SqlScalarType::String.nullable(false))
+        .with_key(vec![0, 1])
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "object_id",
+            "The ID of the dependent object. Corresponds to `mz_objects.id`.",
+        ),
+        (
+            "dependency_id",
+            "The ID of the object it depends on. Corresponds to `mz_objects.id`.",
+        ),
+    ]),
+    sql: "
+SELECT md.object_id, md.dependency_id
+FROM mz_internal.mz_materialization_dependencies md
+JOIN mz_catalog.mz_objects po ON po.id = md.dependency_id
+    AND po.type IN ('index', 'materialized-view', 'sink', 'source', 'table')
+JOIN mz_catalog.mz_objects co ON co.id = md.object_id
+    AND co.type IN ('index', 'materialized-view', 'sink', 'source', 'table')
+UNION
+-- Subsource -> parent-source edges: a subsource depends on the (user) source it
+-- belongs to, an edge mz_materialization_dependencies doesn't carry.
+SELECT od.object_id, od.referenced_object_id
+FROM mz_internal.mz_object_dependencies od
+JOIN mz_catalog.mz_sources ps ON ps.id = od.referenced_object_id
+JOIN mz_catalog.mz_sources cs ON cs.id = od.object_id
+-- Progress collections are deliberately left out: their dependency edge points
+-- source -> progress, and they only exist for old-syntax sources, which the
+-- source-table migration is removing.
+WHERE ps.id LIKE 'u%' AND cs.type = 'subsource'
+UNION
+-- Select the (non-null) source id from the join rather than the nullable
+-- mz_tables.source_id, so dependency_id is non-null across all branches.
+SELECT t.id, ps.id
+FROM mz_catalog.mz_tables t
+JOIN mz_catalog.mz_sources ps ON ps.id = t.source_id",
+    access: vec![PUBLIC_SELECT],
+    // No ontology entity: these edges are already in the ontology via the
+    // DependsOn links of mz_object_dependencies and
+    // mz_materialization_dependencies. An entity here would duplicate them.
     ontology: None,
 });
 
@@ -4969,6 +5148,106 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_TS_IND: LazyLock<BuiltinIndex> =
         is_retained_metrics_object: true,
     });
 
+/// Completed hydration episodes, one row per object, replica, and installation.
+///
+/// Exempt from the bootstrap reset and from forced shard replacement, since the
+/// contents cannot be rebuilt from anything else. Schema evolution keeps them and
+/// applies normally. Clearing them for a schema change is still allowed, see the
+/// tripwire in `validate_migration_steps`.
+pub static MZ_OBJECT_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_object_hydration_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_OBJECT_HYDRATION_HISTORY_OID,
+    desc: RelationDesc::builder()
+        .with_column("object_id", SqlScalarType::String.nullable(false))
+        .with_column("cluster_id", SqlScalarType::String.nullable(false))
+        .with_column("replica_id", SqlScalarType::String.nullable(false))
+        .with_column(
+            "installed_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column(
+            "started_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column(
+            "hydrated_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column("status", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "object_id",
+            "The ID of the object's dataflow, as reported by the replica. Join `mz_internal.mz_object_global_ids` to reach the index or materialized view while that mapping exists. Dropping the dataflow retracts the mapping, so historical IDs may no longer resolve.",
+        ),
+        ("cluster_id", "The ID of the object's cluster."),
+        (
+            "replica_id",
+            "The ID of the cluster replica. May name a replica that no longer exists.",
+        ),
+        (
+            "installed_at",
+            "When the object's dataflow was installed on the replica.",
+        ),
+        (
+            "started_at",
+            "When hydration work began, or `NULL` if the replica reported none. A replica that observed no start reports the installation time instead, so a zero interval between the two does not mean the dataflow started immediately.",
+        ),
+        ("hydrated_at", "When hydration finished."),
+        (
+            "status",
+            "The terminal status. Currently always `hydrated`.",
+        ),
+    ]),
+    // Not a retained-metrics object: that would pin a 30 day compaction window,
+    // and our history lives in the rows, which the retention sweep retracts on
+    // its own schedule. Nothing reads this table at an old timestamp.
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "object_hydration_event",
+        description: "Completed hydration of an index or materialized view on a replica",
+        // NOTE: These references outlive what they point at. A row deliberately
+        // survives the object and the replica it describes, so resolving one
+        // against the catalog can come up empty.
+        links: &const {
+            [
+                OntologyLink {
+                    name: "hydration_of_dataflow",
+                    target: "object_global_id",
+                    properties: LinkProperties::fk_typed(
+                        "object_id",
+                        "global_id",
+                        Cardinality::ManyToOne,
+                        mz_repr::SemanticType::GlobalId,
+                    ),
+                },
+                OntologyLink {
+                    name: "hydrated_on_cluster",
+                    target: "cluster",
+                    properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
+                },
+                OntologyLink {
+                    name: "hydrated_on_replica",
+                    target: "replica",
+                    properties: LinkProperties::fk_typed(
+                        "replica_id",
+                        "id",
+                        Cardinality::ManyToOne,
+                        mz_repr::SemanticType::ReplicaId,
+                    ),
+                },
+            ]
+        },
+        column_semantic_types: &[
+            ("object_id", SemanticType::GlobalId),
+            ("cluster_id", SemanticType::ClusterId),
+            ("replica_id", SemanticType::ReplicaId),
+        ],
+    }),
+});
+
 pub static MZ_COMPUTE_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_compute_hydration_statuses",
     schema: MZ_INTERNAL_SCHEMA,
@@ -5657,7 +5936,8 @@ pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
                 'size to ' || (changes->>'size'),
                 'replication factor to ' || (changes->>'replication_factor'),
                 CASE WHEN changes->'availability_zones' IS NOT NULL THEN 'availability zones' END,
-                CASE WHEN changes->'logging' IS NOT NULL THEN 'introspection settings' END
+                CASE WHEN changes->'logging' IS NOT NULL THEN 'introspection settings' END,
+                CASE WHEN changes->'arrangement_compression' IS NOT NULL THEN 'arrangement compression' END
             ], ', '), '') AS summary
         FROM mz_internal.mz_cluster_reconfigurations
         WHERE status = 'in-progress'
@@ -8760,6 +9040,15 @@ pub const MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND: BuiltinIndex = BuiltinIndex {
     oid: oid::INDEX_MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_object_transitive_dependencies (object_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_OBJECT_GRAPH_EDGES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_object_graph_edges_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_OBJECT_GRAPH_EDGES_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_object_graph_edges (object_id)",
     is_retained_metrics_object: false,
 };
 

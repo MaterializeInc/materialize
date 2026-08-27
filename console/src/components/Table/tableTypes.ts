@@ -39,10 +39,38 @@ export interface UniversalTableProps<TData> {
   /** Chakra `sx` merged onto every body `<Tr>`. */
   rowSx?: HTMLChakraProps<"tr">["sx"];
   /**
+   * Returns a class name for each body `<Tr>`, for styling that depends on the
+   * row's data. Declare the styles as selectors in `rowSx` and switch on them
+   * here:
+   *
+   * ```tsx
+   * rowSx={{ td: { height: "8" }, "&.cluster-row td": { height: "16" } }}
+   * getRowClassName={(row) =>
+   *   row.original.rowType === "cluster" ? "cluster-row" : undefined
+   * }
+   * ```
+   *
+   * Preferred over returning a style object per row: the whole table serializes
+   * one class instead of one per row, and CSS specificity resolves overlapping
+   * declarations instead of an object spread silently replacing them.
+   *
+   * NOTE: a typo in either the name or the selector fails silently, so share a
+   * constant between the two.
+   */
+  getRowClassName?: (row: Row<TData>) => string | undefined;
+  /**
    * Returns a `data-testid` for each body `<Tr>`. Group rows are
    * distinguishable via `row.getCanExpand()`.
    */
   rowTestId?: (row: Row<TData>) => string | undefined;
+  /**
+   * Accessible name for a group row's expand caret, called only for rows that
+   * can expand. Without it every caret in the table shares one generic name,
+   * leaving screen reader users unable to tell them apart, so name the row's
+   * subject: "Show replicas of quickstart". Returning `undefined` falls back to
+   * that generic name.
+   */
+  expandLabel?: (row: Row<TData>) => string | undefined;
   /** Chakra `sx` merged onto the footer `<Tr>`. */
   footerSx?: HTMLChakraProps<"tr">["sx"];
   /** `data-testid` for the footer `<Tr>`. */

@@ -1,6 +1,6 @@
 ---
 source: src/balancerd/src/dyncfgs.rs
-revision: 11b00e354f
+revision: 5a4a36c4fd
 ---
 
 # balancerd::dyncfgs

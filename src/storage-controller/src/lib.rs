@@ -35,6 +35,7 @@ use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_controller_types::dyncfgs::{
     ENABLE_0DT_DEPLOYMENT_SOURCES, WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
+use mz_dyncfg::ConfigUpdates;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -331,6 +332,16 @@ impl StorageController for Controller {
                 .parameters
                 .user_storage_managed_collections_batch_duration,
         );
+    }
+
+    fn update_replica_dyncfg_overrides(
+        &mut self,
+        mut overrides: BTreeMap<StorageInstanceId, BTreeMap<ReplicaId, ConfigUpdates>>,
+    ) {
+        for (id, instance) in self.instances.iter_mut() {
+            let instance_overrides = overrides.remove(id).unwrap_or_default();
+            instance.update_replica_dyncfg_overrides(instance_overrides);
+        }
     }
 
     /// Get the current configuration
@@ -989,7 +1000,14 @@ impl StorageController for Controller {
                 // environmentd/controller deletes a collection. We exit
                 // gracefully, which means we'll get restarted and get to try
                 // again.
-                if dependency_since.is_empty() {
+                //
+                // We only do this when our own upper is not empty. An empty
+                // upper means the collection is sealed and no-one can write to
+                // it anymore, so an empty dependency since cannot hurt us. And
+                // a sealed collection is durable state rather than a race, so
+                // halting on it would wedge bootstrap forever instead of
+                // resolving on the next attempt.
+                if dependency_since.is_empty() && !write_frontier.is_empty() {
                     halt!(
                         "dependency since frontier is empty while dependent upper \
                         is not empty (dependent id={id}, write_frontier={:?}, dependency_read_holds={:?}), \
@@ -3163,6 +3181,10 @@ where
         // In read-only mode we create a new shard for all migrated storage collections. So we
         // "trick" the write task into thinking that it's not in read-only mode so something is
         // advancing this new shard.
+        //
+        // This is the storage-side of forcing writes to a self-owned replacement shard while
+        // read-only. Migrated builtin MVs need the same treatment on their own write path; see
+        // `ComputeController::allow_writes_in_read_only`.
         let force_writable = self.read_only && self.migrated_storage_collections.contains(&id);
         if force_writable {
             assert!(id.is_system(), "unexpected non-system global id: {id:?}");

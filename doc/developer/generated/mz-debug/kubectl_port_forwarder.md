@@ -1,6 +1,6 @@
 ---
 source: src/mz-debug/src/kubectl_port_forwarder.rs
-revision: 8b438b66ce
+revision: 253293ef87
 ---
 
 # mz-debug::kubectl_port_forwarder

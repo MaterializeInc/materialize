@@ -722,7 +722,7 @@ where
                 // We decode the datums once, into a common buffer for efficiency.
                 // Each row should contain `arity` columns; we should check that.
                 let temp_storage = mz_repr::RowArena::new();
-                let mut buffer = datum_vec.borrow();
+                let mut buffer = Vec::with_capacity(arity * source.len());
                 for (index, (datums, _)) in source.iter().enumerate() {
                     datums.extend_datums(&temp_storage, &mut buffer, None);
                     assert_eq!(buffer.len(), arity * (index + 1));
@@ -997,7 +997,7 @@ pub mod monoids {
 
     impl Ord for Top1Monoid {
         fn cmp(&self, other: &Self) -> Ordering {
-            debug_assert_eq!(self.order_key, other.order_key);
+            mz_ore::soft_assert_eq_no_log!(self.order_key, other.order_key);
 
             // It might be nice to cache this row decoding like the non-monotonic codepath, but we'd
             // have to store the decoded Datums in the same struct as the Row, which gets tricky.
@@ -1120,7 +1120,7 @@ pub mod monoids {
 
     impl Ord for Top1MonoidLocal {
         fn cmp(&self, other: &Self) -> Ordering {
-            debug_assert!(Rc::ptr_eq(&self.shared, &other.shared));
+            mz_ore::soft_assert_no_log!(Rc::ptr_eq(&self.shared, &other.shared));
             let Top1MonoidShared {
                 left,
                 right,

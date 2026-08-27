@@ -342,15 +342,15 @@ fn cast_string_to_uuid<'a>(a: &'a str) -> Result<Uuid, EvalError> {
     Deserialize,
     Hash
 )]
-pub struct CastStringToArray {
+pub struct CastStringToArray<E = MirScalarExpr> {
     // Target array's type.
     pub return_ty: SqlScalarType,
     // The expression to cast the discovered array elements to the array's
     // element type.
-    pub cast_expr: Box<MirScalarExpr>,
+    pub cast_expr: Box<E>,
 }
 
-impl LazyUnaryFunc for CastStringToArray {
+impl<E: Eval> LazyUnaryFunc for CastStringToArray<E> {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
@@ -412,7 +412,29 @@ impl LazyUnaryFunc for CastStringToArray {
     }
 }
 
-impl fmt::Display for CastStringToArray {
+impl<E> CastStringToArray<E> {
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn try_map_expr<'a, E2: TryFrom<&'a E>>(
+        &'a self,
+    ) -> Result<CastStringToArray<E2>, E2::Error> {
+        Ok(CastStringToArray {
+            return_ty: self.return_ty.clone(),
+            cast_expr: Box::new(E2::try_from(&*self.cast_expr)?),
+        })
+    }
+
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn map_expr<'a, E2: From<&'a E>>(&'a self) -> CastStringToArray<E2> {
+        CastStringToArray {
+            return_ty: self.return_ty.clone(),
+            cast_expr: Box::new(E2::from(&*self.cast_expr)),
+        }
+    }
+}
+
+impl<E> fmt::Display for CastStringToArray<E> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("strtoarray")
     }
@@ -429,15 +451,15 @@ impl fmt::Display for CastStringToArray {
     Deserialize,
     Hash
 )]
-pub struct CastStringToList {
+pub struct CastStringToList<E = MirScalarExpr> {
     // Target list's type
     pub return_ty: SqlScalarType,
     // The expression to cast the discovered list elements to the list's
     // element type.
-    pub cast_expr: Box<MirScalarExpr>,
+    pub cast_expr: Box<E>,
 }
 
-impl LazyUnaryFunc for CastStringToList {
+impl<E: Eval> LazyUnaryFunc for CastStringToList<E> {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
@@ -505,7 +527,29 @@ impl LazyUnaryFunc for CastStringToList {
     }
 }
 
-impl fmt::Display for CastStringToList {
+impl<E> CastStringToList<E> {
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn try_map_expr<'a, E2: TryFrom<&'a E>>(
+        &'a self,
+    ) -> Result<CastStringToList<E2>, E2::Error> {
+        Ok(CastStringToList {
+            return_ty: self.return_ty.clone(),
+            cast_expr: Box::new(E2::try_from(&*self.cast_expr)?),
+        })
+    }
+
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn map_expr<'a, E2: From<&'a E>>(&'a self) -> CastStringToList<E2> {
+        CastStringToList {
+            return_ty: self.return_ty.clone(),
+            cast_expr: Box::new(E2::from(&*self.cast_expr)),
+        }
+    }
+}
+
+impl<E> fmt::Display for CastStringToList<E> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("strtolist")
     }
@@ -522,15 +566,15 @@ impl fmt::Display for CastStringToList {
     Deserialize,
     Hash
 )]
-pub struct CastStringToMap {
+pub struct CastStringToMap<E = MirScalarExpr> {
     // Target map's value type
     pub return_ty: SqlScalarType,
     // The expression used to cast the discovered values to the map's value
     // type.
-    pub cast_expr: Box<MirScalarExpr>,
+    pub cast_expr: Box<E>,
 }
 
-impl LazyUnaryFunc for CastStringToMap {
+impl<E: Eval> LazyUnaryFunc for CastStringToMap<E> {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
@@ -604,7 +648,29 @@ impl LazyUnaryFunc for CastStringToMap {
     }
 }
 
-impl fmt::Display for CastStringToMap {
+impl<E> CastStringToMap<E> {
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn try_map_expr<'a, E2: TryFrom<&'a E>>(
+        &'a self,
+    ) -> Result<CastStringToMap<E2>, E2::Error> {
+        Ok(CastStringToMap {
+            return_ty: self.return_ty.clone(),
+            cast_expr: Box::new(E2::try_from(&*self.cast_expr)?),
+        })
+    }
+
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn map_expr<'a, E2: From<&'a E>>(&'a self) -> CastStringToMap<E2> {
+        CastStringToMap {
+            return_ty: self.return_ty.clone(),
+            cast_expr: Box::new(E2::from(&*self.cast_expr)),
+        }
+    }
+}
+
+impl<E> fmt::Display for CastStringToMap<E> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("strtomap")
     }
@@ -690,15 +756,15 @@ impl fmt::Display for CastStringToChar {
     Deserialize,
     Hash
 )]
-pub struct CastStringToRange {
+pub struct CastStringToRange<E = MirScalarExpr> {
     // Target range's type
     pub return_ty: SqlScalarType,
     // The expression to cast the discovered range elements to the range's
     // element type.
-    pub cast_expr: Box<MirScalarExpr>,
+    pub cast_expr: Box<E>,
 }
 
-impl LazyUnaryFunc for CastStringToRange {
+impl<E: Eval> LazyUnaryFunc for CastStringToRange<E> {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
@@ -764,7 +830,29 @@ impl LazyUnaryFunc for CastStringToRange {
     }
 }
 
-impl fmt::Display for CastStringToRange {
+impl<E> CastStringToRange<E> {
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn try_map_expr<'a, E2: TryFrom<&'a E>>(
+        &'a self,
+    ) -> Result<CastStringToRange<E2>, E2::Error> {
+        Ok(CastStringToRange {
+            return_ty: self.return_ty.clone(),
+            cast_expr: Box::new(E2::try_from(&*self.cast_expr)?),
+        })
+    }
+
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn map_expr<'a, E2: From<&'a E>>(&'a self) -> CastStringToRange<E2> {
+        CastStringToRange {
+            return_ty: self.return_ty.clone(),
+            cast_expr: Box::new(E2::from(&*self.cast_expr)),
+        }
+    }
+}
+
+impl<E> fmt::Display for CastStringToRange<E> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("strtorange")
     }
@@ -1100,6 +1188,11 @@ impl fmt::Display for IsRegexpMatch {
     Deserialize,
     Hash
 )]
+// The serde name distinguishes this precompiled-pattern function from the
+// generated struct of the dynamic-pattern variadic `regexp_match`, which is
+// also named `RegexpMatch`. The stable LIR schema registry requires container
+// names to be unique. Same for `RegexpSplitToArray` and `RegexpReplace` below.
+#[serde(rename = "RegexpMatchStatic")]
 pub struct RegexpMatch(pub Regex);
 
 impl LazyUnaryFunc for RegexpMatch {
@@ -1172,6 +1265,8 @@ impl fmt::Display for RegexpMatch {
     Deserialize,
     Hash
 )]
+// See `RegexpMatch` above for explanation.
+#[serde(rename = "RegexpSplitToArrayStatic")]
 pub struct RegexpSplitToArray(pub Regex);
 
 impl LazyUnaryFunc for RegexpSplitToArray {
@@ -1258,6 +1353,8 @@ fn quote_ident<'a>(a: &'a str) -> Result<String, EvalError> {
     Deserialize,
     Hash
 )]
+// See `RegexpMatch` above for explanation.
+#[serde(rename = "RegexpReplaceStatic")]
 pub struct RegexpReplace {
     pub regex: Regex,
     pub limit: usize,

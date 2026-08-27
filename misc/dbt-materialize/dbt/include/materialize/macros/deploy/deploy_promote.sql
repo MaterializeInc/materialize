@@ -49,13 +49,7 @@
 #}
 
 {% set current_target_name = target.name %}
-{% set deployment = var('deployment') %}
-{% set target_config = deployment[current_target_name] %}
-
--- Check if the target-specific configuration exists
-{% if not target_config %}
-    {{ exceptions.raise_compiler_error("No deployment configuration found for target " ~ current_target_name) }}
-{% endif %}
+{% set target_config = internal_get_deployment_config() %}
 
 {{ log("Creating deployment environment for target " ~ current_target_name, info=True) }}
 
@@ -242,8 +236,8 @@
 
     {% set result = run_query("SELECT current_user, now();") %}
     {% if result is not none and result.rows|length > 0 %}
-        {% set db_user = result.columns[0][0] %}
-        {% set deploy_time = result.columns[0][1] %}
+        {% set db_user = result.rows[0][0] %}
+        {% set deploy_time = result.rows[0][1] %}
     {% else %}
         {% set db_user = "unknown" %}
         {% set deploy_time = "unknown" %}

@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+* Fix the deployment timestamp in the schema comment `deploy_promote` leaves
+  behind. It read the second row of the first column instead of the second
+  column of the only row, so every tag said `Deployment by <user> on ` with
+  nothing after it.
+
+* Fix `deploy_init` when the `CI_TAG` environment variable is set. The
+  deployment schema was tagged without passing the schema name, so the
+  operation failed with `COMMENT ON SCHEMA ""`. The deployment schema is
+  now also created with a quoted name, matching how it is dropped and how its
+  grants and default privileges are copied.
+
+* Report errors instead of failing in odd ways on a few paths:
+
+  * A malformed `indexes` config now raises a clear parse error. It used to
+    hit a `dbt_common` helper that no longer exists and crash with an
+    unhandled `AttributeError`.
+  * Incremental models and the `listagg` macro now show the explanation they
+    were written to show. Both called an exception class that dbt does not
+    expose to Jinja, so users saw a message about a `dict object` instead.
+  * `rename_relation` looked at an undefined variable to pick between a view
+    and a materialized view, which made every rename fail.
+  * `drop_relation` now errors for relation types it does not handle, rather
+    than sending an empty statement to the server.
+  * Option values in the `options` profile field are no longer mangled when
+    they contain a backslash, and non-string values no longer raise an
+    `AttributeError`.
+  * Connections that reach the adapter's version check without an
+    `mz_version` (for example, through a proxy that strips it) now get a
+    clear error instead of a crash on the missing version string.
+
 ## 1.9.11 - 2026-07-26
 
 * Add support for the [`AUTO SCALING STRATEGY`](https://materialize.com/docs/sql/create-cluster/#autoscaling)

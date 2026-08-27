@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/rbac.rs
-revision: 2ba315025c
+revision: 39dcae2fba
 ---
 
 # mz-sql::rbac
@@ -14,3 +14,4 @@ System users (`mz_system`, `mz_support`) bypass most checks, and individual chec
 `generate_read_privileges_inner` uses an iterative worklist traversal rather than recursion; view dependency chains are user-controlled and can be arbitrarily deep, so recursion risks a stack overflow.
 `ALTER ROLE ... SET restrict_to_user_objects` requires superuser: the `PlannedAlterRoleOption::Variable` match arm in `generate_rbac_requirements` enforces this with a case-insensitive name comparison.
 `Plan::CreateMaterializedView` in `generate_rbac_requirements` requires ownership of both `replace` (the `CREATE OR REPLACE` target, if set) and `materialized_view.replacement_target` (the `FOR <target>` replacement target, if set). Both are independent and optional; ownership of whichever are present is required, mirroring the ownership check for `ALTER ... APPLY REPLACEMENT` and `CREATE INDEX`.
+`Plan::CreateMetricSink` in `generate_rbac_requirements` requires `CREATE` on the target schema, `CREATE` on the cluster, and read privileges on the `FROM` relation (via `generate_read_privileges`). Metric sinks are treated as an egress path for the source relation's contents, so read access on that relation is the guard, not ownership of it.

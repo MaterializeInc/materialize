@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/project/compiler/typecheck/executor.rs
-revision: 673fdb9d44
+revision: f0cdedca04
 ---
 
 # mz-deploy::project::compiler::typecheck::executor

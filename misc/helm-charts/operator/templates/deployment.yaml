@@ -76,9 +76,12 @@ spec:
         - "--cloud-provider={{ .Values.operator.cloudProvider.type }}"
         - "--region={{ .Values.operator.cloudProvider.region }}"
         - "--secrets-controller={{ .Values.operator.secretsController }}"
-        # (SangJunBak) For self-managed, we disable statement logging due to performance issues
-        # https://github.com/MaterializeInc/cloud/issues/10755
-        - "--disable-statement-logging"
+        {{- if not (kindIs "invalid" .Values.operator.args.statementLoggingMaxSampleRate) }}
+        - "--statement-logging-max-sample-rate={{ .Values.operator.args.statementLoggingMaxSampleRate }}"
+        {{- end }}
+        {{- if not (kindIs "invalid" .Values.operator.args.statementLoggingTargetDataRate) }}
+        - "--statement-logging-target-data-rate={{ int64 .Values.operator.args.statementLoggingTargetDataRate }}"
+        {{- end }}
         {{- range $key, $value := include "materialize-operator.selectorLabels" . | fromYaml }}
         - "--orchestratord-pod-selector-labels={{ $key }}={{ $value }}"
         {{- end }}

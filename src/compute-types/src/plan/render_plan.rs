@@ -19,7 +19,7 @@ use mz_expr::{
 };
 use mz_ore::soft_assert_or_log;
 use mz_repr::explain::{CompactScalars, ExprHumanizer};
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, StableRow, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
@@ -131,7 +131,7 @@ pub enum Expr {
     /// A collection containing a pre-determined collection.
     Constant {
         /// Explicit update triples for the collection.
-        rows: Result<Vec<(Row, Timestamp, Diff)>, EvalError>,
+        rows: Result<Vec<(StableRow, Timestamp, Diff)>, EvalError>,
     },
     /// A reference to a bound collection.
     ///
@@ -160,7 +160,7 @@ pub enum Expr {
         mfp: MfpPlan<LirScalarExpr>,
         /// Whether the input is from an arrangement, and if so, whether we can seek to a specific
         /// value therein.
-        input_key_val: Option<(Vec<LirScalarExpr>, Option<Row>)>,
+        input_key_val: Option<(Vec<LirScalarExpr>, Option<StableRow>)>,
     },
     /// A variable number of output records for each input record.
     ///

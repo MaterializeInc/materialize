@@ -31,9 +31,13 @@
 //! `Let`/local `Get` bindings (e.g. from CSE) are collapsed by `collapse`, which
 //! iterates `FoldConstants` + `NormalizeLets` until the plan reduces to a
 //! `Constant`. The comparison is conservative (only asserted when both sides
-//! fold, a `Typecheck`/optimizer error is a skip), so a surviving divergence or
-//! an optimizer panic is a genuine finding. It covers the symbolic-input
-//! planning that the constant-rooted target cannot reach.
+//! fold, and a plan matching the open bug CLU-137 is skipped via
+//! `hits_non_strict_error_fold`), so a surviving divergence or an optimizer panic
+//! is a genuine finding. An optimizer *error* is not a skip: a rejected plan
+//! shape panics inside `Typecheck` long before it could become one, so every
+//! `TransformError` that gets here is an invariant violation. See
+//! `mz_transform_fuzz::optimize`. It covers the
+//! symbolic-input planning that the constant-rooted target cannot reach.
 
 #![no_main]
 
@@ -42,11 +46,10 @@ use std::collections::BTreeMap;
 use libfuzzer_sys::arbitrary::{self, Unstructured};
 use libfuzzer_sys::fuzz_target;
 use mz_expr::{Id, MirRelationExpr};
-use mz_repr::optimize::OptimizerFeatures;
-use mz_repr::{Diff, GlobalId, Row};
-use mz_transform::fold_constants::FoldConstants;
-use mz_transform::normalize_lets::NormalizeLets;
-use mz_transform_fuzz::{Ty, apply_recursively, gen_constant, gen_rel, optimize};
+use mz_repr::GlobalId;
+use mz_transform_fuzz::{
+    Collapse, Ty, collapse, gen_constant, gen_rel, hits_non_strict_error_fold, optimize,
+};
 
 /// A symbolic `Get` leaf bound (in `data`) to a fresh constant collection.
 fn gen_get(
@@ -89,69 +92,6 @@ fn substitute(mut rel: MirRelationExpr, data: &BTreeMap<u64, MirRelationExpr>) -
     rel
 }
 
-/// Outcome of trying to fold a (`Get`-free) plan all the way to a `Constant`.
-enum Collapse {
-    /// Reduced to a `Constant` of `Ok` rows. The consolidated `(row, diff)`
-    /// multiset is the actual result.
-    Const(BTreeMap<Row, Diff>),
-    /// Reached a fixpoint of `FoldConstants` + `NormalizeLets` (applying them no
-    /// longer changes the plan) that is *not* a constant, e.g. the plan errors,
-    /// or folding genuinely cannot evaluate it. This is a legitimate
-    /// fold-limitation skip, not a coverage gap.
-    StuckFixpoint,
-    /// Hit the iteration budget without reaching either a constant or a
-    /// fixpoint. The plan was still simplifying when we ran out of passes. Kept
-    /// distinct from `StuckFixpoint` only to name the two skip reasons.
-    /// `FoldConstants` does not promise a constant input collapses to a
-    /// `Constant` within any limit, so this is a conservative skip too.
-    BudgetExhausted,
-}
-
-/// Fold a (now `Get`-free) plan to a `Constant` by iterating `FoldConstants` +
-/// `NormalizeLets` (to collapse any `Let`s the optimizer's CSE introduced) until
-/// it either becomes a `Constant`, reaches a fixpoint, or exhausts the budget.
-///
-/// This loops to a genuine fixpoint (stops only when a pass leaves the plan
-/// unchanged), so a plan that just needs a few more passes converges rather than
-/// being dropped. The budget is a generous guard against a non-terminating
-/// rewrite.
-fn collapse(mut rel: MirRelationExpr) -> Collapse {
-    let features = OptimizerFeatures::default();
-    const BUDGET: usize = 64;
-    for _ in 0..BUDGET {
-        let before = rel.clone();
-        if apply_recursively(FoldConstants { limit: None }, &mut rel).is_err() {
-            return Collapse::StuckFixpoint;
-        }
-        if rel.as_const().is_some() {
-            break;
-        }
-        if NormalizeLets::new(true)
-            .action(&mut rel, &features)
-            .is_err()
-        {
-            return Collapse::StuckFixpoint;
-        }
-        // A full pass that changed nothing means we will never reach a constant.
-        if rel == before {
-            return Collapse::StuckFixpoint;
-        }
-    }
-    let Some(constant) = rel.as_const() else {
-        // Still simplifying when the budget ran out.
-        return Collapse::BudgetExhausted;
-    };
-    let (Ok(rows), _) = constant else {
-        return Collapse::StuckFixpoint;
-    };
-    let mut multiset: BTreeMap<Row, Diff> = BTreeMap::new();
-    for (row, diff) in rows {
-        *multiset.entry(row.clone()).or_insert(Diff::ZERO) += *diff;
-    }
-    multiset.retain(|_, d| *d != Diff::ZERO);
-    Collapse::Const(multiset)
-}
-
 fn run(u: &mut Unstructured) -> arbitrary::Result<()> {
     let mut next_id = 0u64;
     let mut data = BTreeMap::new();
@@ -160,17 +100,34 @@ fn run(u: &mut Unstructured) -> arbitrary::Result<()> {
         gen_rel(u, 3, &mut leaf)?
     };
 
+    // Skip the shape of the open bug CLU-137, which the optimizer gets wrong for
+    // reasons unrelated to whatever else the plan exercises. The bound data is
+    // checked too: a `Get`'s constant collection carries no scalars today, but
+    // `substitute` inlines it into the plan the optimizer sees.
+    if hits_non_strict_error_fold(&plan) || data.values().any(hits_non_strict_error_fold) {
+        return Ok(());
+    }
+
     // Ground truth: inline the data into the input plan and fold. Only proceed
     // when the *input* (which has no optimizer-introduced `Let`s) folds to a
     // constant, that is what gives us a result to compare against.
+    // Optimize with the Gets still symbolic, then inline the same data and fold.
+    //
+    // Optimize *before* deciding whether the baseline is comparable. A plan whose
+    // result is an evaluation error folds to an `Err` constant, which `collapse`
+    // reports as a skip, and returning at that point would mean never calling the
+    // optimizer on it at all. That is a large and deliberately generated class:
+    // `gen_scalar` spends one of its three literal-leaf choices on
+    // `EvalError::DivisionByZero`, and any such literal under a `Map`/`Filter`
+    // over a non-empty collection poisons the whole fold, as does a `Reduce` over
+    // a net-negative collection. Optimizing first keeps the "a panic in the
+    // optimizer is a finding" coverage over those inputs, which is the coverage
+    // they were generated for.
+    let optimized = optimize(plan.clone());
+
     let baseline = match collapse(substitute(plan.clone(), &data)) {
         Collapse::Const(b) => b,
         Collapse::StuckFixpoint | Collapse::BudgetExhausted => return Ok(()),
-    };
-
-    // Optimize with the Gets still symbolic, then inline the same data and fold.
-    let Some(optimized) = optimize(plan.clone()) else {
-        return Ok(());
     };
     match collapse(substitute(optimized, &data)) {
         Collapse::Const(after) => assert_eq!(

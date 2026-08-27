@@ -35,13 +35,15 @@ use prometheus::Histogram;
 use qcell::QCell;
 use thiserror::Error;
 use timely::progress::Antichain;
-use tokio::sync::oneshot;
+use tokio::sync::{Semaphore, oneshot};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::command::{CatalogSnapshot, Command, ExecuteResponse};
+use crate::coord::appends::GroupCommitNotifier;
 use crate::coord::peek::FastPathPlan;
-use crate::coord::{Coordinator, ExecuteContextExtra, ExecuteContextGuard};
+use crate::coord::{Coordinator, ExecuteContextExtra, ExecuteContextGuard, Message};
+use crate::metrics::Metrics;
 use crate::session::{LifecycleTimestamps, Session};
 use crate::statement_logging::{
     FrontendStatementLoggingEvent, PreparedStatementEvent, PreparedStatementLoggingInfo,
@@ -56,7 +58,7 @@ pub type StorageCollectionsHandle =
 /// Clients needed for peek sequencing in the Adapter Frontend.
 #[derive(Debug)]
 pub struct PeekClient {
-    coordinator_client: Client,
+    coordinator_client: CoordinatorClient,
     /// Cache of the latest catalog snapshot. Serves
     /// [`PeekClient::catalog_snapshot`] without a Coordinator round-trip
     /// while the catalog's transient revision is unchanged.
@@ -79,6 +81,66 @@ pub struct PeekClient {
     persist_client: PersistClient,
     /// Statement logging state for frontend peek sequencing.
     pub statement_logging_frontend: StatementLoggingFrontend,
+    /// Semaphore for limiting concurrent OCC (optimistic concurrency control) write operations.
+    pub occ_write_semaphore: Arc<Semaphore>,
+    /// Whether frontend OCC read-then-write is enabled (determined once at process startup).
+    pub frontend_read_then_write_enabled: bool,
+    /// Requests a group commit. Used to advance the write timeline when we
+    /// need the oracle to move but have nothing to write ourselves.
+    pub(crate) group_commit_notifier: GroupCommitNotifier,
+    /// Whether the coordinator is in read-only mode. Mutations must be rejected.
+    pub read_only: bool,
+}
+
+/// A command sender that does not make background work keep the coordinator alive.
+#[derive(Debug, Clone)]
+pub(crate) enum CoordinatorClient {
+    Session(Client),
+    Background {
+        tx: tokio::sync::mpsc::UnboundedSender<Message>,
+        metrics: Metrics,
+    },
+}
+
+impl CoordinatorClient {
+    /// Sends a command, dropping it if the coordinator is gone.
+    ///
+    /// A session cannot outrun the coordinator: it holds a `Client`, and the
+    /// coordinator's loop only exits once every client is dropped, so a failed
+    /// send there is a real bug. Background work holds no client on purpose, so
+    /// losing the race with shutdown is normal and must not crash the process.
+    /// Dropping the command closes its response channel, which the caller handles
+    /// as an error.
+    pub(crate) fn send(&self, command: Command) {
+        if self.try_send(command) {
+            return;
+        }
+        match self {
+            CoordinatorClient::Session(_) => panic!("coordinator unexpectedly gone"),
+            CoordinatorClient::Background { .. } => {
+                tracing::debug!("dropping background command, coordinator is gone")
+            }
+        }
+    }
+
+    pub(crate) fn try_send(&self, command: Command) -> bool {
+        match self {
+            CoordinatorClient::Session(client) => client.try_send(command),
+            CoordinatorClient::Background { tx, .. } => tx
+                .send(Message::Command(
+                    mz_ore::tracing::OpenTelemetryContext::obtain(),
+                    command,
+                ))
+                .is_ok(),
+        }
+    }
+
+    pub(crate) fn metrics(&self) -> &Metrics {
+        match self {
+            CoordinatorClient::Session(client) => client.metrics(),
+            CoordinatorClient::Background { metrics, .. } => metrics,
+        }
+    }
 }
 
 impl PeekClient {
@@ -86,14 +148,19 @@ impl PeekClient {
     ///
     /// `catalog` seeds the catalog snapshot cache, so that the session's
     /// first statements don't need a `Command::CatalogSnapshot` round-trip.
-    pub fn new(
-        coordinator_client: Client,
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        coordinator_client: CoordinatorClient,
         catalog: &Arc<Catalog>,
         storage_collections: StorageCollectionsHandle,
         transient_id_gen: Arc<TransientIdGen>,
         optimizer_metrics: OptimizerMetrics,
         persist_client: PersistClient,
         statement_logging_frontend: StatementLoggingFrontend,
+        occ_write_semaphore: Arc<Semaphore>,
+        frontend_read_then_write_enabled: bool,
+        group_commit_notifier: GroupCommitNotifier,
+        read_only: bool,
     ) -> Self {
         Self {
             coordinator_client,
@@ -105,20 +172,25 @@ impl PeekClient {
             statement_logging_frontend,
             oracles: Default::default(), // lazily populated
             persist_client,
+            occ_write_semaphore,
+            frontend_read_then_write_enabled,
+            group_commit_notifier,
+            read_only,
         }
     }
 
     pub async fn ensure_compute_instance_client(
         &mut self,
         compute_instance: ComputeInstanceId,
-    ) -> Result<InstanceClient, InstanceMissing> {
+    ) -> Result<InstanceClient, CollectionLookupError> {
         if !self.compute_instances.contains_key(&compute_instance) {
             let client = self
                 .call_coordinator(|tx| Command::GetComputeInstanceClient {
                     instance_id: compute_instance,
                     tx,
                 })
-                .await?;
+                .await
+                .map_err(|_| CollectionLookupError::InstanceShutDown)??;
             self.compute_instances.insert(compute_instance, client);
         }
         Ok(self
@@ -138,7 +210,7 @@ impl PeekClient {
                     timeline: timeline.clone(),
                     tx,
                 })
-                .await?;
+                .await??;
             self.oracles.insert(timeline.clone(), oracle);
         }
         Ok(self.oracles.get_mut(&timeline).expect("ensured above"))
@@ -178,9 +250,13 @@ impl PeekClient {
         // The cache is empty, stale, or its allocation is gone: do the
         // round-trip.
         let start = std::time::Instant::now();
+        // Session clients keep the coordinator loop alive. A dropped response
+        // here therefore indicates an internal lifecycle bug, unlike a
+        // background compute lookup racing coordinator shutdown.
         let CatalogSnapshot { catalog } = self
             .call_coordinator(|tx| Command::CatalogSnapshot { tx })
-            .await;
+            .await
+            .expect("coordinator unexpectedly dropped catalog snapshot response");
         let metrics = self.coordinator_client.metrics();
         metrics
             .catalog_snapshot_seconds
@@ -194,14 +270,19 @@ impl PeekClient {
         catalog
     }
 
-    pub(crate) async fn call_coordinator<T, F>(&self, f: F) -> T
+    /// Calls the coordinator and returns an error if it drops the response.
+    pub(crate) async fn call_coordinator<T, F>(&self, f: F) -> Result<T, AdapterError>
     where
         F: FnOnce(oneshot::Sender<T>) -> Command,
     {
         let (tx, rx) = oneshot::channel();
         self.coordinator_client.send(f(tx));
-        rx.await
-            .expect("if the coordinator is still alive, it shouldn't have dropped our call")
+        Ok(rx.await?)
+    }
+
+    /// The client for sending commands to the coordinator.
+    pub(crate) fn coordinator_client(&self) -> &CoordinatorClient {
+        &self.coordinator_client
     }
 
     /// Acquire read holds on the given compute/storage collections, and
@@ -412,7 +493,12 @@ impl PeekClient {
         let client = self
             .ensure_compute_instance_client(compute_instance)
             .await
-            .map_err(AdapterError::concurrent_dependency_drop_from_instance_missing)?;
+            .map_err(|error| {
+                AdapterError::concurrent_dependency_drop_from_collection_lookup_error(
+                    error,
+                    compute_instance,
+                )
+            })?;
 
         // Register coordinator tracking of this peek. This has to complete before issuing the peek.
         //
@@ -427,7 +513,7 @@ impl PeekClient {
             watch_set,
             tx,
         })
-        .await?;
+        .await??;
 
         // The peek is registered: the coordinator's `pending_peeks` entry now
         // owns end-of-execution logging. It logs the end on peek completion,
@@ -468,14 +554,15 @@ impl PeekClient {
             // ask it to unregister the peek and retire it with this error. If
             // a concurrent teardown already retired the peek, the end is
             // already logged and the unregistration is a no-op.
-            self.call_coordinator(|tx| Command::UnregisterFrontendPeek {
-                uuid,
-                reason: statement_logging::StatementEndedExecutionReason::Errored {
-                    error: err.to_string(),
-                },
-                tx,
-            })
-            .await;
+            let _ = self
+                .call_coordinator(|tx| Command::UnregisterFrontendPeek {
+                    uuid,
+                    reason: statement_logging::StatementEndedExecutionReason::Errored {
+                        error: err.to_string(),
+                    },
+                    tx,
+                })
+                .await;
             return Err(err);
         }
 
@@ -622,7 +709,7 @@ impl PeekClient {
 struct StatementLoggingGuard {
     /// `None` if the statement was not sampled for logging.
     id: Option<StatementLoggingId>,
-    coordinator_client: Client,
+    coordinator_client: CoordinatorClient,
     now: mz_ore::now::NowFn,
 }
 

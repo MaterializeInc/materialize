@@ -1,6 +1,6 @@
 ---
 source: src/cloud-resources/src/crd.rs
-revision: b088d23e1d
+revision: 253293ef87
 ---
 
 # cloud-resources::crd

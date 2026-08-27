@@ -1232,6 +1232,7 @@ impl From<CommentObjectId> for ObjectId {
             | CommentObjectId::MaterializedView(item_id)
             | CommentObjectId::Source(item_id)
             | CommentObjectId::Sink(item_id)
+            | CommentObjectId::MetricSink(item_id)
             | CommentObjectId::Index(item_id)
             | CommentObjectId::Func(item_id)
             | CommentObjectId::Connection(item_id)
@@ -1292,6 +1293,7 @@ pub enum CommentObjectId {
     MaterializedView(CatalogItemId),
     Source(CatalogItemId),
     Sink(CatalogItemId),
+    MetricSink(CatalogItemId),
     Index(CatalogItemId),
     Func(CatalogItemId),
     Connection(CatalogItemId),
@@ -2104,7 +2106,11 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         &mut self,
         name: <Raw as AstInfo>::NetworkPolicyName,
     ) -> <Aug as AstInfo>::NetworkPolicyName {
-        match self.catalog.resolve_network_policy(&name.to_string()) {
+        let name_str = match &name {
+            RawNetworkPolicyName::Unresolved(ident) => ident.as_str(),
+            RawNetworkPolicyName::Resolved(s) => s.as_str(),
+        };
+        match self.catalog.resolve_network_policy(name_str) {
             Ok(policy) => ResolvedNetworkPolicyName {
                 id: policy.id(),
                 name: policy.name().to_string(),

@@ -52,6 +52,8 @@ use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
+use mz_ore::soft_assert_or_log;
+use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::PersistLocation;
 use mz_repr::{GlobalId, RelationDesc, Row, Timestamp};
@@ -170,7 +172,7 @@ impl PeekNotification {
                     result_size: u64::cast_from(result_size),
                 }
             }
-            PeekResponse::Error(err) => Self::Error(err.clone()),
+            PeekResponse::Error(err) => Self::Error(err.to_string()),
             PeekResponse::Canceled => Self::Canceled,
         }
     }
@@ -211,6 +213,12 @@ pub struct ComputeController {
     /// Updated through `ComputeController::update_configuration` calls and shared with all
     /// subcomponents of the compute controller.
     dyncfg: Arc<ConfigSet>,
+    /// The replica-local scoped overrides of [`Self::dyncfg`], by replica.
+    ///
+    /// Sparse, and kept here in addition to on the `Instance`s because replica
+    /// configuration that the controller resolves once, at replica creation,
+    /// must be read through the new replica's overrides.
+    replica_dyncfg_overrides: BTreeMap<ReplicaId, ConfigUpdates>,
 
     /// Receiver for responses produced by `Instance`s.
     response_rx: mpsc::UnboundedReceiver<ComputeControllerResponse>,
@@ -306,6 +314,7 @@ impl ComputeController {
             now,
             wallclock_lag,
             dyncfg: Arc::new(mz_dyncfgs::all_dyncfgs()),
+            replica_dyncfg_overrides: BTreeMap::new(),
             response_rx,
             response_tx,
             introspection_rx: Some(introspection_rx),
@@ -470,6 +479,7 @@ impl ComputeController {
             now: _,
             wallclock_lag: _,
             dyncfg: _,
+            replica_dyncfg_overrides: _,
             response_rx: _,
             response_tx: _,
             introspection_rx: _,
@@ -640,16 +650,22 @@ impl ComputeController {
 
     /// Replaces the per-replica dyncfg overrides for the given instances.
     ///
-    /// This only stores the overrides; callers should follow with a
-    /// configuration push (e.g. [`Self::update_configuration`]) so existing
-    /// replicas observe the new values. Instances absent from `overrides` have
-    /// their overrides cleared, so a replica that no longer has an override
-    /// reverts to the environment-wide configuration. Used by the scoped
-    /// feature flags (replica-local) layer.
+    /// This only stores the overrides, here and on the instances; callers
+    /// should follow with a configuration push (e.g.
+    /// [`Self::update_configuration`]) so existing replicas observe the new
+    /// values. Instances absent from `overrides` have their overrides cleared,
+    /// so a replica that no longer has an override reverts to the
+    /// environment-wide configuration. Used by the scoped feature flags
+    /// (replica-local) layer.
     pub fn update_replica_dyncfg_overrides(
         &mut self,
         mut overrides: BTreeMap<ComputeInstanceId, BTreeMap<ReplicaId, ConfigUpdates>>,
     ) {
+        self.replica_dyncfg_overrides = overrides
+            .values()
+            .flat_map(|replicas| replicas.iter())
+            .map(|(replica_id, updates)| (*replica_id, updates.clone()))
+            .collect();
         for (id, instance) in self.instances.iter_mut() {
             let instance_overrides = overrides.remove(id).unwrap_or_default();
             instance.call(move |i| i.update_replica_dyncfg_overrides(instance_overrides));
@@ -718,7 +734,17 @@ impl ComputeController {
             None => (false, Duration::from_secs(1)),
         };
 
-        let expiration_offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&self.dyncfg);
+        // Both configs below are `ParameterScope::Replica` and are resolved
+        // here, once, for the replica being created. Reading them through the
+        // new replica's scoped overrides is what makes those declarations
+        // effective: the values are frozen into `ReplicaConfig` and never
+        // re-read from the environment-wide set. The overrides for a replica
+        // created by DDL are committed in the same transaction that creates it,
+        // so they are already installed by the time we get here.
+        let overrides = self.replica_dyncfg_overrides.get(&replica_id);
+
+        let expiration_offset =
+            COMPUTE_REPLICA_EXPIRATION_OFFSET.get_with_overrides(&self.dyncfg, overrides);
 
         // Capture dictionary compression once, at replica creation, and hold it fixed for the
         // replica's lifetime (see `InstanceConfig::arrangement_dictionary_compression`). This is
@@ -727,7 +753,7 @@ impl ComputeController {
         // while the flag is enabled, so turning the flag off disables compression on new or
         // restarted replicas regardless of their configuration.
         let arrangement_dictionary_compression = ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA
-            .get(&self.dyncfg)
+            .get_with_overrides(&self.dyncfg, overrides)
             && config.arrangement_compression;
 
         let replica_config = ReplicaConfig {
@@ -771,6 +797,12 @@ impl ComputeController {
 
         instance.replicas.remove(&replica_id);
 
+        // The coordinator only re-pushes the override map when the scoped
+        // configuration itself changes, so a dropped replica's entry would
+        // otherwise be retained until the next such change.
+        self.replica_dyncfg_overrides.remove(&replica_id);
+
+        let instance = self.instance_mut(instance_id).expect("validated");
         instance.call(move |i| i.remove_replica(replica_id).expect("validated"));
 
         Ok(())
@@ -778,7 +810,10 @@ impl ComputeController {
 
     /// Creates the described dataflow and initializes state for its output.
     ///
-    /// Only materialized views and subscribes are allowed to have a `target_replica`.
+    /// Only sink exports are allowed to have a `target_replica`: materialized views and subscribes.
+    /// Metric sinks are sink exports too, and nothing here forbids targeting one, but by caller
+    /// convention they always pass `target_replica: None` so each replica renders the sink into its
+    /// own registry for per-replica introspection.
     ///
     /// Panics if called with a dataflow description that has index exports
     /// when `target_replica` is set.
@@ -812,6 +847,45 @@ impl ComputeController {
             return Err(EmptyAsOfForCopyTo);
         }
 
+        // Validation: the dataflow exports something
+        //
+        // An export-less description has nothing to render and no answer to "what do the exports
+        // read", which the checks below are phrased in terms of. `optimize_dataflow` leaves such a
+        // description's imports alone for that reason, so one arriving here would fail the import
+        // check for the wrong reason.
+        soft_assert_or_log!(
+            !dataflow.index_exports.is_empty() || !dataflow.sink_exports.is_empty(),
+            "dataflow {} has no exports",
+            dataflow.debug_name,
+        );
+
+        // The imports the exports actually read. `optimize_dataflow` prunes the import list to
+        // exactly this set, so the two agree unless a producer stopped pruning.
+        //
+        // Computed once and used twice: the check below reports a loose list, and
+        // `determine_time_dependence` counts through it rather than over the raw list. That
+        // consumer is the one whose wrong answer hangs an environment: an import no export reads
+        // would report wall-clock dependence for a dataflow whose exports are constant, earning it
+        // a dataflow expiration that pins the output frontier days short of the empty antichain,
+        // and nothing downstream would learn the collection is final. Deriving it from this set
+        // makes that correct by construction, leaving the prune to reclaim the read hold and the
+        // persist source.
+        let used_imports = dataflow.used_import_ids();
+
+        // Validation: every import is read
+        //
+        // The read holds and the persist sources the replicas build are still derived from the raw
+        // list below, so a loose one describes a dataflow other than the one that will run. A
+        // logging variant rather than `soft_assert_no_log!`: the walk is paid for above either way,
+        // so reporting it in production costs only the comparison.
+        soft_assert_or_log!(
+            dataflow.import_ids().all(|id| used_imports.contains(&id)),
+            "dataflow {} imports collections no export reads: imports {:?}, read {:?}",
+            dataflow.debug_name,
+            dataflow.import_ids().collect::<Vec<_>>(),
+            used_imports,
+        );
+
         // Validation: input collections
         let storage_ids = dataflow.imported_source_ids().collect();
         let mut import_read_holds = self.storage_collections.acquire_read_holds(storage_ids)?;
@@ -832,7 +906,7 @@ impl ComputeController {
             }
         }
         let time_dependence = self
-            .determine_time_dependence(instance_id, &dataflow)
+            .determine_time_dependence(instance_id, &dataflow, &used_imports)
             .expect("must exist");
 
         let instance = self.instance_mut(instance_id).expect("validated");
@@ -1014,24 +1088,43 @@ impl ComputeController {
     }
 
     /// Determine the time dependence for a dataflow.
+    ///
+    /// `used_imports` are the imports the exports read, as
+    /// [`DataflowDescription::used_import_ids`] reports them. Only those count: an import no export
+    /// reads would report wall-clock dependence for a dataflow whose exports are constant, and that
+    /// earns it a dataflow expiration, which pins its output frontier at the expiration time. A
+    /// constant export's frontier is the empty antichain, so the pin would hold it days short of
+    /// the truth and whoever reads that frontier would never learn the collection can no longer
+    /// change.
+    ///
+    /// `optimize_dataflow` prunes the import list to this set, so the two agree and the filtering
+    /// is a no-op. It is here because this is the consumer whose wrong answer hangs an environment,
+    /// and deriving the answer from the read set makes it independent of the list staying tight.
     fn determine_time_dependence(
         &self,
         instance_id: ComputeInstanceId,
         dataflow: &DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
+        used_imports: &BTreeSet<GlobalId>,
     ) -> Result<Option<TimeDependence>, TimeDependenceError> {
         let instance = self
             .instance(instance_id)
             .map_err(|err| TimeDependenceError::InstanceMissing(err.0))?;
         let mut time_dependencies = Vec::new();
 
-        for id in dataflow.imported_index_ids() {
+        for id in dataflow
+            .imported_index_ids()
+            .filter(|id| used_imports.contains(id))
+        {
             let dependence = instance
                 .get_time_dependence(id)
                 .map_err(|err| TimeDependenceError::CollectionMissing(err.0))?;
             time_dependencies.push(dependence);
         }
 
-        'source: for id in dataflow.imported_source_ids() {
+        'source: for id in dataflow
+            .imported_source_ids()
+            .filter(|id| used_imports.contains(id))
+        {
             // We first check whether the id is backed by a compute object, in which case we use
             // the time dependence we know. This is true for storage sinks.
             for instance in self.instances.values() {
@@ -1085,6 +1178,61 @@ impl ComputeController {
             return Ok(());
         }
 
+        self.allow_writes_inner(instance_id, collection_id)
+    }
+
+    /// Like [`Self::allow_writes`], but takes effect even in read-only mode.
+    ///
+    /// The caller must guarantee that no leader environment writes the collection's output shard.
+    /// In a 0dt deployment that means a shard this environment created for itself, the replacement
+    /// shard of a `Replacement`-migrated builtin collection, never one the leader is still serving
+    /// from. `Evolution` migrates in place and reuses the leader's shard, so it must not reach this
+    /// path. Violating the guarantee races two writers on one shard.
+    ///
+    /// NOTE: ownership is exclusive per (build version, deploy generation), not per process: the
+    /// migration shard entry naming the shard is keyed by that pair and a read-only catalog open is
+    /// a savepoint, so two read-only processes of one generation both write it. Same shape as a
+    /// multi-replica materialized view, which the self-correcting persist sink tolerates (see the
+    /// `mz_compute::sink::materialized_view` module docs).
+    ///
+    /// This is the compute-side counterpart to the storage controller's `force_writable` handling
+    /// of migrated storage collections. Migrated builtin tables are storage collections that
+    /// storage force-writes read-only; migrated builtin MVs are compute collections that only this
+    /// path can force-write. Both rest on the same guarantee (this environment exclusively owns the
+    /// replacement shard) but run on separate write paths, so each needs its own bypass.
+    ///
+    /// NOTE: the replica-side handler enables persist compaction process-wide on the clusterd
+    /// (`ComputeState::handle_allow_writes`), which this path is the first to trigger inside a
+    /// read-only deployment.
+    pub fn allow_writes_in_read_only(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        collection_id: GlobalId,
+    ) -> Result<(), CollectionUpdateError> {
+        // Every builtin eligible for this bypass has a system id, so a non-system id means the
+        // caller's `Replacement`-only invariant broke. No-op rather than risk writing a shard the
+        // leader still serves. The collection then sits in the caught-up gate on an unwritten
+        // shard and blocks promotion, which is the loud, safe direction to fail.
+        //
+        // Storage asserts the same invariant hard, in
+        // `StorageController::register_introspection_collection`. The asymmetry is deliberate: a
+        // soft panic keeps a caller bug visible in CI and Sentry without downing production.
+        if self.read_only && !collection_id.is_system() {
+            soft_panic_or_log!(
+                "allow_writes_in_read_only called for non-system collection {collection_id}; \
+                 falling back to read-only no-op"
+            );
+            return Ok(());
+        }
+
+        self.allow_writes_inner(instance_id, collection_id)
+    }
+
+    fn allow_writes_inner(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        collection_id: GlobalId,
+    ) -> Result<(), CollectionUpdateError> {
         let instance = self.instance_mut(instance_id)?;
 
         // Validation

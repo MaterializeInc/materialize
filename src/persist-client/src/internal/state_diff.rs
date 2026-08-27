@@ -708,7 +708,9 @@ where
                         val: Delete(fv.clone()),
                     });
                     let f_next = from.next();
-                    debug_assert!(f_next.as_ref().map_or(true, |(fk_next, _)| fk_next > &fk));
+                    mz_ore::soft_assert_no_log!(
+                        f_next.as_ref().map_or(true, |(fk_next, _)| fk_next > &fk)
+                    );
                     f = f_next;
                 }
                 Ordering::Greater => {
@@ -717,7 +719,9 @@ where
                         val: Insert(tv.clone()),
                     });
                     let t_next = to.next();
-                    debug_assert!(t_next.as_ref().map_or(true, |(tk_next, _)| tk_next > &tk));
+                    mz_ore::soft_assert_no_log!(
+                        t_next.as_ref().map_or(true, |(tk_next, _)| tk_next > &tk)
+                    );
                     t = t_next;
                 }
                 Ordering::Equal => {
@@ -730,10 +734,14 @@ where
                         });
                     }
                     let f_next = from.next();
-                    debug_assert!(f_next.as_ref().map_or(true, |(fk_next, _)| fk_next > &fk));
+                    mz_ore::soft_assert_no_log!(
+                        f_next.as_ref().map_or(true, |(fk_next, _)| fk_next > &fk)
+                    );
                     f = f_next;
                     let t_next = to.next();
-                    debug_assert!(t_next.as_ref().map_or(true, |(tk_next, _)| tk_next > &tk));
+                    mz_ore::soft_assert_no_log!(
+                        t_next.as_ref().map_or(true, |(tk_next, _)| tk_next > &tk)
+                    );
                     t = t_next;
                 }
             },
@@ -743,7 +751,9 @@ where
                     val: Insert(tv.clone()),
                 });
                 let t_next = to.next();
-                debug_assert!(t_next.as_ref().map_or(true, |(tk_next, _)| tk_next > &tk));
+                mz_ore::soft_assert_no_log!(
+                    t_next.as_ref().map_or(true, |(tk_next, _)| tk_next > &tk)
+                );
                 t = t_next;
             }
             (Some((fk, fv)), None) => {
@@ -752,7 +762,9 @@ where
                     val: Delete(fv.clone()),
                 });
                 let f_next = from.next();
-                debug_assert!(f_next.as_ref().map_or(true, |(fk_next, _)| fk_next > &fk));
+                mz_ore::soft_assert_no_log!(
+                    f_next.as_ref().map_or(true, |(fk_next, _)| fk_next > &fk)
+                );
                 f = f_next;
             }
         }

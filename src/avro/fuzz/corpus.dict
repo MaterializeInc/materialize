@@ -1,10 +1,16 @@
-# libFuzzer dictionary for the Avro reader_decode target.
+# libFuzzer dictionary for the Avro fuzz targets, resolved crate-wide by
+# `dict_for` in test/cargo-fuzz/mzcompose.py.
 #
 # An Avro object-container file starts with the 4-byte magic "Obj\x01" followed
 # by a map of metadata (notably "avro.schema" and "avro.codec") and a 16-byte
-# sync marker. Without the magic the decoder bails immediately, so the most
-# valuable token by far is the magic itself; the rest let the mutator build
-# plausible headers and schemas.
+# sync marker. Without the magic the decoder bails immediately, so the magic and
+# the schema JSON tokens let the mutator build plausible headers and schemas.
+#
+# These tokens pay off for the targets that consume their input as *bytes*:
+# `avro_schema_parse`, and `reader_decode`'s raw-bytes branch. `reader_decode`'s
+# container-building branch and `schema_resolve` instead read their input as an
+# `arbitrary::Unstructured` recipe of generator choices, where a token is just
+# more choice bytes and carries no structural signal.
 
 # Object-container magic.
 "Obj\x01"

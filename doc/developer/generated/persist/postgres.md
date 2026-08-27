@@ -1,6 +1,6 @@
 ---
 source: src/persist/src/postgres.rs
-revision: 83c55157ed
+revision: 5a4a36c4fd
 ---
 
 # persist::postgres

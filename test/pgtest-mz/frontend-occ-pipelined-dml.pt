@@ -1,0 +1,230 @@
+# How the frontend OCC read-then-write path behaves inside an extended-protocol
+# pipeline.
+#
+# A pipeline is an implicit transaction: the transaction stays `Started` until
+# `Sync`, so statements that follow can still fail and roll the whole thing
+# back. Two kinds of read-then-write meet that differently.
+#
+# A write that reads no persisted state stages its rows, so it commits or rolls
+# back with everything else in the pipeline.
+#
+# A write that reads persisted state cannot be part of a transaction at all, we
+# refuse it in an explicit one. So it commits as its own transaction and does
+# not span the pipeline, the way PostgreSQL treats statements that cannot run in
+# a transaction block. It is durable once it reports success, and a later
+# failure in the pipeline does not undo it.
+
+send
+Query {"query": "DROP TABLE IF EXISTS t"}
+Query {"query": "CREATE TABLE t (a int)"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+# A read-dependent write pipelined behind a staged write is refused. It cannot
+# see those staged rows, so running it would compute its diffs from a snapshot
+# that lacks them.
+send
+Parse {"query": "INSERT INTO t VALUES (1)"}
+Bind
+Execute
+Parse {"query": "DELETE FROM t WHERE a = 1"}
+Bind
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"25001"},{"typ":"M","value":"DELETE FROM t WHERE a = 1 cannot be run inside a transaction block"}]}
+ReadyForQuery {"status":"I"}
+
+# The pipeline failed, so the staged INSERT rolled back too.
+send
+Query {"query": "SELECT count(*) FROM t"}
+----
+
+until
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"count"}]}
+DataRow {"fields":["0"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# A blind write pipelined behind a staged write. 20000 rows is above the
+# constant-folding limit, so the values stay a dataflow and take the
+# read-then-write path rather than being folded and staged by the constant
+# insert path. It reads nothing, so it is admitted, and it must stage its rows
+# rather than write them: writing would order them ahead of the earlier
+# `VALUES (1)` op and leave them behind when the pipeline rolls that op back.
+send
+Parse {"query": "INSERT INTO t VALUES (1)"}
+Bind
+Execute
+Parse {"query": "INSERT INTO t SELECT generate_series(1, 20000)"}
+Bind
+Execute
+Parse {"query": "SELECT 1/0"}
+Bind
+Execute
+Sync
+----
+
+until err_field_typs=SC
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 20000"}
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"22012"}]}
+ReadyForQuery {"status":"I"}
+
+# Neither INSERT survives: the blind write joined the transaction that the
+# division by zero rolled back.
+send
+Query {"query": "SELECT count(*) FROM t"}
+----
+
+until
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"count"}]}
+DataRow {"fields":["0"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# A blind write that opens the pipeline. Nothing is staged in front of it, so
+# neither transaction predicate reports a transaction, but the pipeline is still
+# one and can still fail after it. It stages its rows all the same.
+send
+Parse {"query": "INSERT INTO t SELECT generate_series(1, 20000)"}
+Bind
+Execute
+Parse {"query": "SELECT 1/0"}
+Bind
+Execute
+Sync
+----
+
+until err_field_typs=SC
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 20000"}
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"22012"}]}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "SELECT count(*) FROM t"}
+----
+
+until
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"count"}]}
+DataRow {"fields":["0"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "INSERT INTO t VALUES (1), (2), (3)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"INSERT 0 3"}
+ReadyForQuery {"status":"I"}
+
+# A read-dependent write that opens the pipeline commits as its own
+# transaction. The later division by zero fails on its own and does not undo it,
+# because the DELETE was never part of that transaction.
+send
+Parse {"query": "DELETE FROM t WHERE a = 1"}
+Bind
+Execute
+Parse {"query": "SELECT 1/0"}
+Bind
+Execute
+Sync
+----
+
+until err_field_typs=SC
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"DELETE 1"}
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"22012"}]}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "SELECT count(*) FROM t"}
+----
+
+until
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"count"}]}
+DataRow {"fields":["2"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# Because each read-dependent write ends its own transaction, a second one in
+# the same pipeline is not refused for running alongside staged ops. Both apply.
+send
+Parse {"query": "DELETE FROM t WHERE a = 2"}
+Bind
+Execute
+Parse {"query": "DELETE FROM t WHERE a = 3"}
+Bind
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"DELETE 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"DELETE 1"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "SELECT count(*) FROM t"}
+----
+
+until
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"count"}]}
+DataRow {"fields":["0"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}

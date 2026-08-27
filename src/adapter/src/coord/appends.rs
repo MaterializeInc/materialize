@@ -64,9 +64,10 @@ use tokio::sync::{Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore, mpsc
 use tracing::{Instrument, Span, info, warn};
 
 use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogUpperHandle};
+use crate::coord::timeline::write_ts_upper_bound;
 use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
 use crate::metrics::Metrics;
-use crate::session::{GroupCommitWriteLocks, Session, WriteLocks};
+use crate::session::{EndTransactionAction, GroupCommitWriteLocks, Session, WriteLocks};
 use crate::statement_logging::StatementLoggingId;
 use crate::util::{CompletedClientTransmitter, ResultExt};
 use crate::{AdapterError, ExecuteContext};
@@ -165,9 +166,6 @@ pub(crate) enum BuiltinTableUpdateSource {
 }
 
 /// Result of a write submitted by frontend sequencing.
-// The read-then-write path that submits these writes lands later in this
-// stack, this attribute goes away with it.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum WriteResult {
     /// The write committed at this timestamp.
@@ -176,6 +174,12 @@ pub enum WriteResult {
     TimestampPassed {
         target_timestamp: Timestamp,
         next_eligible_timestamp: Timestamp,
+    },
+    /// The requested timestamp ran further ahead of the wall clock than the write
+    /// timeline may be advanced, so the write was refused before it was attempted.
+    TimestampTooFarAhead {
+        target_timestamp: Timestamp,
+        limit: Timestamp,
     },
     /// The write was canceled before it entered the committer.
     Canceled,
@@ -190,19 +194,15 @@ pub enum WriteResult {
 /// Delivers an internal write result, including on task shutdown.
 ///
 /// The `Drop` impl is load-bearing. The session task waiting on the other end
-/// `expect`s a reply, so a `oneshot::Sender` that is dropped silently would
-/// panic that session on coordinator shutdown or on a dead group-committer
-/// task. Reporting [`WriteResult::Indeterminate`] instead lets the session
-/// report an error.
+/// needs a definitive response so that it can release its OCC permit and
+/// subscribe. Reporting [`WriteResult::Indeterminate`] lets it unwind when the
+/// coordinator or group committer shuts down.
 #[derive(Debug)]
 pub struct InternalWriteResponder {
     tx: Option<oneshot::Sender<WriteResult>>,
 }
 
 impl InternalWriteResponder {
-    // The read-then-write path that uses this lands later in this stack, this
-    // attribute goes away with it.
-    #[allow(dead_code)]
     pub(crate) fn new(tx: oneshot::Sender<WriteResult>) -> Self {
         Self { tx: Some(tx) }
     }
@@ -229,9 +229,6 @@ pub(crate) enum UserWriteResponder {
     /// `ExecuteContext` once the write commits.
     Session(PendingTxn),
     /// Frontend-sequenced blind write.
-    // The read-then-write path that uses this lands later in this stack, this
-    // attribute goes away with it.
-    #[allow(dead_code)]
     Internal {
         conn_id: ConnectionId,
         /// The table the diffs were computed against, item id and the generation
@@ -295,9 +292,6 @@ impl PendingWriteTxn {
 
 pub(crate) enum TableWriteCmd {
     GroupCommit(GroupCommitRequest),
-    // The read-then-write path that uses this lands later in this stack, this
-    // attribute goes away with it.
-    #[allow(dead_code)]
     TimestampedWrite(TimestampedWriteRequest),
     Register {
         tables: Vec<TableRegistration>,
@@ -450,8 +444,11 @@ impl GroupCommitter {
     ///
     /// What [`Self::commit`] does that this skips, and why that is safe:
     ///
-    /// * The wall-clock throttle. `target_timestamp` is the caller's to choose,
-    ///   and it must not run the write timeline ahead of the clock.
+    /// * The wall-clock throttle. `target_timestamp` is the caller's to choose, and a
+    ///   target above [`write_ts_upper_bound`] is refused rather than slept off.
+    ///   Committing there would advance the oracle with it, and a caller that took its
+    ///   target from the oracle cannot exceed the bound unless the timeline has already
+    ///   run away, which sleeping would not resolve.
     /// * A [`GroupCommitPermit`]. The caller bounds how many of these are in
     ///   flight, and that is the backpressure for this path.
     /// * Merging queued commits. There is nothing to merge into: these diffs
@@ -474,6 +471,18 @@ impl GroupCommitter {
             result.send(WriteResult::TimestampPassed {
                 target_timestamp,
                 next_eligible_timestamp: oracle_write_ts.step_forward(),
+            });
+            return ControlFlow::Continue(());
+        }
+
+        // Committing here would apply the target to the oracle below, which is what makes
+        // it stick. See `write_ts_upper_bound`.
+        let now: Timestamp = (self.now)().into();
+        let limit = write_ts_upper_bound(&now);
+        if target_timestamp > limit {
+            result.send(WriteResult::TimestampTooFarAhead {
+                target_timestamp,
+                limit,
             });
             return ControlFlow::Continue(());
         }
@@ -604,6 +613,16 @@ impl GroupCommitter {
 
         let now: Timestamp = (self.now)().into();
         crate::coord::timeline::check_runaway_write_ts(&now, write_ts.timestamp);
+
+        // The append above is already readable in Persist and has advanced the
+        // table's upper, while no oracle-timestamped read can reach it until
+        // the line below. Anything concluding from a read that follows Persist
+        // rather than the oracle has to cope with this window, so a test can
+        // hold it open here. Every txns-shard write parks here while armed,
+        // including the keepalives that advance table uppers, so arm it with a
+        // bounded `sleep` rather than a `pause`. Used by
+        // workflow_test_occ_zero_row_write_linearization.
+        fail::fail_point!("group_commit_before_apply_write");
 
         self.oracle.apply_write(write_ts.timestamp).await;
 
@@ -1054,6 +1073,27 @@ impl Coordinator {
                         }),
                 } => {
                     assert_none!(write_locks, "should have merged together all locks above");
+
+                    // Group commit resolves each write to the table's latest GlobalId and encodes
+                    // the staged rows against that collection's RelationDesc. But the rows were
+                    // packed against whatever descriptor was latest when the statement ran. A
+                    // concurrent ALTER TABLE can move the latest descriptor out from under them, so
+                    // the staged rows no longer match what we are about to encode against. Reject
+                    // the transaction and let the client retry against the current schema.
+                    if let Some(id) = Self::stale_write_target(self.catalog(), &writes) {
+                        let err = AdapterError::ConcurrentDependencyMutation {
+                            dependency_id: id.to_string(),
+                        };
+                        let (ctx, result) = CompletedClientTransmitter::new(
+                            ctx,
+                            Err(err),
+                            EndTransactionAction::Rollback,
+                        )
+                        .finalize();
+                        ctx.retire(result);
+                        continue;
+                    }
+
                     for (id, table_data) in writes {
                         // If the table that some write was targeting has been deleted while the
                         // write was waiting, then the write will be ignored and we respond to the
@@ -1162,6 +1202,36 @@ impl Coordinator {
             // Dropping the request retires its clients and notifies its waiters.
             warn!("group committer task gone, dropping staged group commit");
         }
+    }
+
+    /// Returns a table whose staged rows no longer match its latest `RelationDesc`, if any.
+    ///
+    /// Only `TableData::Rows` can go stale, because it gets encoded during the commit itself.
+    /// `TableData::Batches` is already encoded and records its own schema with Persist, which
+    /// migrates older parts on read.
+    ///
+    /// NOTE: We only look at the first row of each `TableData::Rows`. All of its rows come from
+    /// one statement and so share an arity, and checking every row would mean decoding every row
+    /// on the coordinator thread, since a `Row` doesn't carry its arity.
+    fn stale_write_target(
+        catalog: &Catalog,
+        writes: &BTreeMap<CatalogItemId, SmallVec<[TableData; 1]>>,
+    ) -> Option<CatalogItemId> {
+        writes.iter().find_map(|(id, table_data)| {
+            // A write to a dropped table isn't stale, it's dropped. The caller deals with it.
+            let entry = catalog.try_get_entry(id)?;
+            let arity = entry
+                .relation_desc_latest()
+                .expect("write target is a table")
+                .arity();
+            let stale = table_data.iter().any(|data| match data {
+                TableData::Rows(rows) => rows
+                    .first()
+                    .is_some_and(|(row, _)| row.iter().count() != arity),
+                TableData::Batches(_) => false,
+            });
+            stale.then_some(*id)
+        })
     }
 
     /// Registers `tables` in FIFO order and returns the applied timestamp.
@@ -1539,6 +1609,7 @@ pub(crate) fn waiting_on_startup_appends(
         | Plan::CreateView(_)
         | Plan::CreateMaterializedView(_)
         | Plan::CreateIndex(_)
+        | Plan::CreateMetricSink(_)
         | Plan::CreateType(_)
         | Plan::Comment(_)
         | Plan::DiscardTemp
@@ -1646,6 +1717,13 @@ mod tests {
 
     use super::*;
     use crate::catalog::Catalog;
+
+    #[mz_ore::test(tokio::test)]
+    async fn internal_write_responder_reports_indeterminate_on_drop() {
+        let (tx, rx) = oneshot::channel();
+        drop(InternalWriteResponder::new(tx));
+        assert!(matches!(rx.await, Ok(WriteResult::Indeterminate)));
+    }
 
     #[derive(Debug, Default)]
     struct MemTimestampOracle {

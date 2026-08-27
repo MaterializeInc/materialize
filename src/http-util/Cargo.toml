@@ -15,26 +15,25 @@ askama.workspace = true
 axum.workspace = true
 axum-extra.workspace = true
 headers.workspace = true
-http.workspace = true
-hyper.workspace = true
 include_dir.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "tracing"] }
 mime.workspace = true
 prometheus.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
-tower.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+http.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
+tokio.workspace = true
+tower.workspace = true
 
 [features]
 default = []
 
-[package.metadata.cargo-udeps.ignore]
+[package.metadata.unused-deps]
 # Only used in macro generated code
-normal = ["include_dir"]
+ignore = ["include_dir"]

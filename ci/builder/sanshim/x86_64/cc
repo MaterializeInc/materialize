@@ -12,7 +12,4 @@
 exec /usr/bin/clang -fsanitize="$CI_SANITIZER" \
   -fuse-ld=lld \
   --target=x86_64-unknown-linux-gnu \
-  --gcc-toolchain=/opt/x-tools/x86_64-unknown-linux-gnu/ \
-  --sysroot=/opt/x-tools/x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu/sysroot \
-  -L/opt/x-tools/x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu/sysroot/lib \
   "$@"

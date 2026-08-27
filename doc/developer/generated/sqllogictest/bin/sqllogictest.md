@@ -1,6 +1,6 @@
 ---
 source: src/sqllogictest/src/bin/sqllogictest.rs
-revision: 6eeaca032b
+revision: 84f88ca968
 ---
 
 # sqllogictest binary
@@ -9,5 +9,5 @@ revision: 6eeaca032b
 The `sqllogictest` binary entry point; parses CLI arguments (verbosity, quiet mode, rewrite mode, JUnit report path, Postgres URL, prefix, file/directory paths, system parameter defaults, log filter, replica size and count, shard/shard-count for parallel sharding, and flags for auto-indexing tables/selects, auto-transactions, table keys, and fail-fast behavior) and drives `Runner` over the specified test files or directories.
 Supports walking directory trees, collecting per-file `Outcomes`, generating JUnit XML reports, and exiting with a non-zero status on failures.
 Validates and injects required system parameter defaults (e.g., `enable_logical_compaction_window`) before constructing a `RunConfig`.
-Force-enables the `enable_cluster_controller` and `enable_background_alter_cluster` dyncfgs for the test suite so that the cluster controller owns the managed-cluster replica set during testing; a caller-supplied value for either name takes precedence.
+Force-enables the `enable_background_alter_cluster` dyncfg for the test suite so that a config-shape `ALTER CLUSTER` returns immediately rather than blocking on the wait-shim; a caller-supplied value takes precedence.
 An `OutputStream` wrapper optionally prefixes each output line with a UTC timestamp.

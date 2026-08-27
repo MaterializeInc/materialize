@@ -195,7 +195,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     aws_prefetch_sts_connect_timeout
     catalog_info_metrics_reconcile_interval
     cluster_alter_check_ready_interval
-    cluster_check_scheduling_policies_interval
     cluster_controller_tick_interval
     cluster_enable_topology_spread
     cluster_multi_process_replica_az_affinity_weight
@@ -211,6 +210,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     compute_flat_map_fuel
     compute_logical_backpressure_max_retained_capabilities
     compute_mv_sink_advance_persist_frontiers
+    compute_peek_row_iteration_limit
     compute_peek_response_stash_batch_max_runs
     compute_peek_response_stash_read_batch_size_bytes
     compute_peek_response_stash_read_memory_budget_bytes
@@ -234,16 +234,17 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_0dt_caught_up_replica_status_check
     enable_0dt_caught_up_stability_check
     enable_0dt_deployment_panic_after_timeout
+    enable_adapter_frontend_occ_read_then_write
     enable_alter_table_add_column
+    enable_any_all_null_array_semantics
     enable_auto_scaling_strategy
     enable_background_alter_cluster
     enable_statement_arrival_logging
     enable_binary_date_bin
-    enable_bounded_staleness_isolation
-    enable_cluster_controller
     enable_coalesce_case_transform
-    enable_cluster_controller
+    enable_columnar_merge_batcher
     enable_compute_half_join2
+    enable_compute_peek_row_iteration_limit
     enable_compute_render_fueled_as_specific_collection
     enable_date_bin_hopping
     enable_default_connection_validation
@@ -263,6 +264,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_load_generator_counter
     enable_load_generator_datums
     enable_managed_cluster_availability_zones
+    enable_metric_sink
     enable_notices_for_equals_null
     enable_notices_for_index_already_exists
     enable_notices_for_index_empty_key
@@ -285,10 +287,13 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_simplify_from_less_existence
     enable_simplify_quantified_comparisons
     enable_time_at_time_zone
+    enable_union_cancellation_after_relation_cse
     enable_unlimited_retain_history
     enable_will_distinct_propagation
     enable_with_ordinality_legacy_fallback
     grpc_client_connect_timeout
+    hydration_history_collection_interval
+    hydration_history_retention_period
     kafka_buffered_event_resize_threshold_elements
     kafka_default_aws_privatelink_endpoint_identification_algorithm
     kafka_poll_max_wait
@@ -302,8 +307,10 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     keep_n_sink_status_history_entries
     keep_n_source_status_history_entries
     log_filter_defaults
+    max_concurrent_occ_writes
     max_copy_from_row_size
     max_network_policies
+    max_occ_retries
     max_rules_per_network_policy
     max_sql_server_connections
     max_timestamp_interval
@@ -326,6 +333,11 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     persist_blob_cache_scale_factor_bytes
     persist_blob_cache_scale_with_threads
     persist_blob_connect_timeout
+    persist_blob_hedged_get_budget_ratio
+    persist_blob_hedged_get_delay
+    persist_blob_hedged_get_enabled
+    persist_blob_hedged_get_max_concurrent
+    persist_blob_hedged_get_warm_interval
     persist_blob_operation_attempt_timeout
     persist_blob_operation_timeout
     persist_blob_read_timeout
@@ -502,7 +514,6 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "column_paged_batcher_lz4",
     "compute_logical_backpressure_inflight_slack",
     "enable_lgalloc",
-    "enable_scoped_system_parameters",
     "enable_timely_zero_copy_lgalloc",
     "enable_upsert_paged_spill",
     "enable_zero_downtime_cluster_reconfiguration",
@@ -526,6 +537,7 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "compute_subscribe_snapshot_optimization",
     "enable_cast_elimination",
     "enable_compute_correction_v2",
+    "enable_compute_error_distinct",
     "enable_compute_temporal_bucketing",
     "enable_new_outer_join_lowering",
     "enable_upsert_v2",
@@ -560,6 +572,7 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     enable_new_outer_join_lowering
     enable_notices_for_index_too_wide_for_literal_constraints
     enable_refresh_every_mvs
+    enable_upsert_chunked_stash
     enable_upsert_paged_spill
     enable_variadic_left_join_lowering
     grpc_client_http2_keep_alive_timeout

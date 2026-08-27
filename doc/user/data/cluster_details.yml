@@ -1,0 +1,33 @@
+# Reusable cluster content, single-sourced for inclusion across pages with the
+# `include-from-yaml` shortcode.
+#
+# Usage:
+#   {{% include-from-yaml data="cluster_details" name="cross-cluster-accessibility" %}}
+#
+# The entries below are written to stand alone but also compose in order with
+# the `index-cluster-local` entry in index_details.yml
+# (accessibility -> index exception -> materialized-view reassurance).
+# index_details.yml is the manifest for everything the indexes page includes.
+
+- name: cross-cluster-accessibility
+  content: |
+    Tables, [views](/concepts/views/#views), and [materialized
+    views](/concepts/views/#materialized-views) are accessible across clusters.
+    That is, you can query or reference them from any cluster.
+
+# Shared by the clusters concept page (Fault tolerance),
+# administration/usage.md (where it renders inside a markdown table cell:
+# keep it a single paragraph, since multi-paragraph output breaks table
+# rows), and administration/billing.md (prose above the cost-factors table).
+- name: replica-definition
+  content: >-
+    Each replica of a cluster provisions a new pool of compute resources to
+    perform exactly the same work on exactly the same data. That is, replicas
+    are redundant copies of the cluster's workload, not shards: each replica
+    processes the full workload.
+
+- name: materialized-view-cross-cluster-queries
+  content: |
+    Querying a materialized view from a cluster other than the one that
+    maintains it is still fast since the results are already computed: the
+    query reads the up-to-date results from durable storage.

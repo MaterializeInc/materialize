@@ -19,12 +19,13 @@ use std::time::{Duration, Instant};
 
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
-use mz_dyncfg::Config;
+use mz_dyncfg::{Config, ParameterScope};
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle};
 use mz_ore::url::SensitiveUrl;
-use mz_persist::cfg::{BlobConfig, ConsensusConfig};
+use mz_persist::cfg::{BlobConfig, ConsensusConfig, open_hedge_sibling};
+use mz_persist::hedge::HedgedBlob;
 use mz_persist::location::{
     BLOB_GET_LIVENESS_KEY, Blob, CONSENSUS_HEAD_LIVENESS_KEY, Consensus, ExternalError, Tasked,
     VersionedData,
@@ -249,6 +250,29 @@ impl PersistClientCache {
                     blob.clone().open()
                 })
                 .await;
+                // Hedged gets need a second handle on an isolated connection
+                // pool. Built unconditionally (best-effort): the wrapper
+                // reads its enable flag dynamically per call.
+                //
+                // NOTE: HedgedBlob must stay below Tasked in this stack. Its
+                // race relies on dropping the losing future to cancel the
+                // request in flight, and on hedged gets running to
+                // completion once started (Tasked detaches). A task boundary
+                // between HedgedBlob and the backend would break the former,
+                // and an aborting layer above would slowly leak budget
+                // tokens via the latter.
+                let sibling = open_hedge_sibling(
+                    x.key(),
+                    Box::new(self.cfg.clone()),
+                    self.metrics.s3_blob.clone(),
+                )
+                .await;
+                let blob = Arc::new(HedgedBlob::new(
+                    blob,
+                    sibling,
+                    Arc::clone(&self.cfg.configs),
+                    self.metrics.blob_hedge.clone(),
+                ));
                 let blob = Arc::new(MetricsBlob::new(blob, Arc::clone(&self.metrics)));
                 let blob = Arc::new(Tasked(blob));
                 let task = blob_rtt_latency_task(
@@ -673,6 +697,7 @@ pub(crate) const STATE_UPDATE_LEASE_TIMEOUT: Config<Duration> = Config::new(
     "The amount of time for a command to wait for a previous command to finish before executing. \
         (If zero, commands will not wait for others to complete.) Higher values reduce database contention \
         at the cost of higher worst-case latencies for individual requests.",
+    ParameterScope::Environment,
 );
 
 impl<K, V, T, D> LockingTypedState<K, V, T, D> {
@@ -729,7 +754,7 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
         let seqno_before = state.seqno;
         let ret = f(&mut state);
         let seqno_after = state.seqno;
-        debug_assert!(seqno_after >= seqno_before);
+        mz_ore::soft_assert_no_log!(seqno_after >= seqno_before);
         if seqno_after > seqno_before {
             // The notifier only advances the upper waiters' signal on a strict
             // upper advance. The seqno bumps for many non-data reasons (GC,

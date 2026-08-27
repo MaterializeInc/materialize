@@ -270,7 +270,7 @@ impl SwapExtent {
             let mut buf = cell.borrow_mut();
             codec.encode(bytes, &mut buf);
             let comp_len = buf.len();
-            debug_assert!(
+            crate::soft_assert_no_log!(
                 comp_len <= max_stored_len(bytes.len()),
                 "codec output exceeds the extent-store bound",
             );
@@ -359,15 +359,12 @@ impl SwapExtent {
     /// incomplete pass leaves the extent fully resident for accounting and
     /// spends one unit of the retry budget: a single pinned page keeps the
     /// whole extent counted, which is the safe direction, and the retry
-    /// budget exists exactly for such transient pins. Cheap: the
-    /// compression is already paid, the madvise and page-table read are
-    /// microseconds, and the device write happens on the kernel's
-    /// asynchronous writeback path.
+    /// budget exists exactly for such transient pins.
     ///
     /// Callers must not invoke this on a [`SwapExtent::pageout_capped`]
     /// extent.
     pub(crate) fn pageout(&mut self) -> bool {
-        debug_assert!(!self.pageout_capped());
+        crate::soft_assert_no_log!(!self.pageout_capped());
         region::pageout(self.ptr, self.alloc_size);
         if region::nonresident(self.ptr, self.alloc_size) {
             self.resident = false;
@@ -588,9 +585,6 @@ mod tests {
         );
     }
 
-    /// The ladder is page-granular, strictly ascending, covers lz4's worst
-    /// case over the largest chunk class, and steps by at most 1.5x above
-    /// the smallest class.
     #[mz_ore::test]
     fn ladder_shape() {
         for page in [4096usize, 16384, 65536] {
@@ -679,8 +673,6 @@ mod tests {
         extent.read_into(&TEST_CODEC, bytemuck::cast_slice_mut(&mut out));
     }
 
-    /// Residency follows the observation, not the advice: a declined pass
-    /// leaves the extent resident, an accepted one marks it gone.
     #[mz_ore::test]
     fn pageout_is_observed_not_trusted() {
         let arena = arena();
@@ -695,8 +687,6 @@ mod tests {
         assert!(!extent.is_resident());
     }
 
-    /// Consecutive declined passes exhaust the retry budget. A read faults
-    /// the pages back in and restores it.
     #[mz_ore::test]
     fn pageout_retry_cap_and_read_reset() {
         let arena = arena();

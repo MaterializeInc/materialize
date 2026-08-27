@@ -16,11 +16,11 @@
 //! [timely dataflow]: ../timely/index.html
 
 use ::http::HeaderValue;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use std::{env, io};
 
@@ -281,7 +281,7 @@ impl Listener<SqlListenerConfig> {
         metrics: MetricsConfig,
         helm_chart_version: Option<String>,
     ) -> ListenerHandle {
-        let label: &'static str = Box::leak(name.into_boxed_str());
+        let label = leak_listener_name(&name);
         let tls = tls_reloading_context.map(|context| mz_server_core::ReloadingTlsConfig {
             context,
             mode: if self.config.enable_tls {
@@ -332,6 +332,29 @@ impl Listener<HttpListenerConfig> {
         });
         self.handle
     }
+}
+
+/// The `&'static str` listener names handed to the metrics layers, kept so that
+/// a process which serves repeatedly reuses one allocation per name.
+static LISTENER_NAMES: LazyLock<Mutex<BTreeSet<&'static str>>> =
+    LazyLock::new(|| Mutex::new(BTreeSet::new()));
+
+/// Returns a `&'static str` for `name`, leaking it on first use.
+///
+/// The metrics layer a listener is wired into wants a `'static` label. Leaking
+/// is how it gets one, but an unconditional leak both grows with every restart
+/// in a process that serves more than once, such as `sqllogictest`, and reads
+/// to LeakSanitizer as a genuine leak that fails the process at exit. Holding
+/// the leaked strs in a static solves both: one allocation per distinct name,
+/// still reachable at exit.
+fn leak_listener_name(name: &str) -> &'static str {
+    let mut names = LISTENER_NAMES.lock().expect("lock poisoned");
+    if let Some(name) = names.get(name) {
+        return name;
+    }
+    let name: &'static str = Box::leak(name.to_owned().into_boxed_str());
+    names.insert(name);
+    name
 }
 
 pub struct Listeners {
@@ -399,7 +422,7 @@ impl Listeners {
         let mut http_listener_handles = BTreeMap::new();
         for (name, listener) in self.http {
             let authenticator_kind = listener.config.authenticator_kind();
-            let source: &'static str = Box::leak(name.clone().into_boxed_str());
+            let source = leak_listener_name(&name);
             let tls = if listener.config.enable_tls() {
                 tls_reloading_context.clone()
             } else {
@@ -844,6 +867,7 @@ impl Listeners {
                 adapter_client: adapter_client.clone(),
                 environment_id: config.environment_id,
                 license_key: license_key.clone(),
+                helm_chart_version: config.helm_chart_version.clone(),
                 report_interval: Duration::from_secs(3600),
             });
         } else if config.test_only_dummy_segment_client {
@@ -859,6 +883,7 @@ impl Listeners {
                 adapter_client: adapter_client.clone(),
                 environment_id: config.environment_id,
                 license_key: license_key.clone(),
+                helm_chart_version: config.helm_chart_version.clone(),
                 report_interval: Duration::from_secs(180),
             });
         }

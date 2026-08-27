@@ -1023,8 +1023,7 @@ fn compat_translate_name(name: &str) -> &str {
 }
 
 /// Enforces feature-flag gating for `transaction_isolation` levels that sit
-/// behind a flag (`bounded staleness <duration>` and
-/// `strong session serializable`).
+/// behind a flag (`strong session serializable`).
 ///
 /// Returns `Ok(())` for any other variable, and for an unparseable value
 /// (parse errors surface on the actual set). This is shared by every path that
@@ -1045,9 +1044,6 @@ pub fn check_transaction_isolation_feature_flag(
     };
     match level {
         IsolationLevel::StrongSessionSerializable => ENABLE_SESSION_TIMELINES.require(system_vars),
-        IsolationLevel::BoundedStaleness(_) => {
-            ENABLE_BOUNDED_STALENESS_ISOLATION.require(system_vars)
-        }
         _ => Ok(()),
     }
 }
@@ -1225,6 +1221,8 @@ impl SystemVars {
             &MAX_RESULT_SIZE,
             &MAX_COPY_FROM_ROW_SIZE,
             &ALLOWED_CLUSTER_REPLICA_SIZES,
+            &MAX_CONCURRENT_OCC_WRITES,
+            &MAX_OCC_RETRIES,
             &upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE,
             &upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
             &upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
@@ -1309,7 +1307,6 @@ impl SystemVars {
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY,
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT,
             &cluster_scheduling::CLUSTER_ALTER_CHECK_READY_INTERVAL,
-            &cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL,
             &cluster_scheduling::CLUSTER_SECURITY_CONTEXT_ENABLED,
             &cluster_scheduling::CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE,
             &grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT,
@@ -1432,14 +1429,6 @@ impl SystemVars {
             .expect("provided var type should matched stored var")
     }
 
-    /// Reset all the values to their defaults (preserving
-    /// defaults from `VarMut::set_default).
-    pub fn reset_all(&mut self) {
-        for (_, var) in &mut self.vars {
-            var.reset();
-        }
-    }
-
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
@@ -1546,7 +1535,6 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set(input))?;
-        self.notify_callbacks(name);
         Ok(result)
     }
 
@@ -1589,7 +1577,6 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set_default(input))?;
-        self.notify_callbacks(name);
         Ok(())
     }
 
@@ -1616,7 +1603,6 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .map(|v| v.reset())?;
-        self.notify_callbacks(name);
         Ok(result)
     }
 
@@ -1634,10 +1620,24 @@ impl SystemVars {
             .collect()
     }
 
-    /// Registers a closure that will get called when the value for the
-    /// specified [`VarDefinition`] changes.
+    /// Registers a closure that mirrors the value of the given
+    /// [`VarDefinition`] into out-of-band state.
     ///
-    /// The callback is guaranteed to be called at least once.
+    /// The callback has to be an idempotent read of the passed [`SystemVars`],
+    /// because we don't promise to only call it when its var actually changed.
+    /// It runs once right now against the current values, and then again at
+    /// every catalog commit boundary whose transaction touched a system var
+    /// (see `Coordinator::apply_catalog_implications` and
+    /// [`SystemVars::notify_all_callbacks`]). Speculative mutations never
+    /// trigger it, so an aborted or dry-run transaction leaves the mirror
+    /// untouched.
+    ///
+    /// NOTE: a callback on a `feature_flags!` var won't observe the transient
+    /// flip that `CatalogState::with_enable_for_item_parsing` performs during
+    /// item parsing. That flip mutates the value and then restores the prior
+    /// `Arc` wholesale without re-notifying, so the mirror keeps tracking
+    /// committed state throughout, which is the contract here. Committed changes
+    /// to a feature flag (via `ALTER SYSTEM`) still notify like any other var.
     pub fn register_callback(
         &mut self,
         var: &VarDefinition,
@@ -1648,6 +1648,19 @@ impl SystemVars {
             .or_default()
             .push(callback);
         self.notify_callbacks(var.name());
+    }
+
+    /// Re-runs every registered callback against the current values.
+    ///
+    /// This fires all of them, even ones whose var didn't change, which is why
+    /// callbacks have to be idempotent reads of the passed [`SystemVars`]. See
+    /// [`SystemVars::register_callback`].
+    pub fn notify_all_callbacks(&self) {
+        for callbacks in self.callbacks.values() {
+            for callback in callbacks {
+                (callback)(self);
+            }
+        }
     }
 
     /// Notify any external components interested in this variable.
@@ -1778,6 +1791,16 @@ impl SystemVars {
             .into_iter()
             .map(|s| s.as_str().into())
             .collect()
+    }
+
+    /// Returns the value of the `max_concurrent_occ_writes` configuration parameter.
+    pub fn max_concurrent_occ_writes(&self) -> u32 {
+        *self.expect_value(&MAX_CONCURRENT_OCC_WRITES)
+    }
+
+    /// Returns the value of the `max_occ_retries` configuration parameter.
+    pub fn max_occ_retries(&self) -> u32 {
+        *self.expect_value(&MAX_OCC_RETRIES)
     }
 
     /// Returns the value of the `default_cluster_replication_factor` configuration parameter.
@@ -2258,10 +2281,6 @@ impl SystemVars {
         *self.expect_value(&cluster_scheduling::CLUSTER_ALTER_CHECK_READY_INTERVAL)
     }
 
-    pub fn cluster_check_scheduling_policies_interval(&self) -> Duration {
-        *self.expect_value(&cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL)
-    }
-
     pub fn cluster_security_context_enabled(&self) -> bool {
         *self.expect_value(&cluster_scheduling::CLUSTER_SECURITY_CONTEXT_ENABLED)
     }
@@ -2590,46 +2609,49 @@ mod isolation_feature_flag_tests {
     use super::*;
 
     #[mz_ore::test]
-    fn gates_bounded_staleness_value() {
+    fn gates_strong_session_serializable_value() {
         let mut system_vars = SystemVars::new();
 
-        // Default-on: the value passes the gate.
-        check_transaction_isolation_feature_flag(
-            TRANSACTION_ISOLATION_VAR_NAME,
-            VarInput::Flat("bounded staleness 5s"),
-            &system_vars,
-        )
-        .expect("flag on by default");
-
-        // Turn the flag off: the value is rejected regardless of the letter case
-        // of the variable name. This covers `SET`, `SET "TRANSACTION_ISOLATION"`,
-        // `ALTER ROLE ... SET`, and connection options, which all route through
-        // `SessionVars::set` and this shared check.
-        system_vars
-            .set("enable_bounded_staleness_isolation", VarInput::Flat("off"))
-            .expect("set flag");
+        // The flag defaults off: the value is rejected regardless of the letter
+        // case of the variable name. This covers `SET`,
+        // `SET "TRANSACTION_ISOLATION"`, `ALTER ROLE ... SET`, and connection
+        // options, which all route through `SessionVars::set` and this shared
+        // check.
         for name in ["transaction_isolation", "TRANSACTION_ISOLATION"] {
             let err = check_transaction_isolation_feature_flag(
                 name,
-                VarInput::Flat("bounded staleness 5s"),
+                VarInput::Flat("strong session serializable"),
                 &system_vars,
             )
-            .expect_err("flag off rejects bounded staleness");
+            .expect_err("flag off rejects strong session serializable");
             assert!(matches!(err, VarError::RequiresFeatureFlag { .. }));
         }
 
-        // Non-gated levels are unaffected.
+        // Ungated levels pass regardless of the flag.
+        for level in ["serializable", "bounded staleness 5s"] {
+            check_transaction_isolation_feature_flag(
+                TRANSACTION_ISOLATION_VAR_NAME,
+                VarInput::Flat(level),
+                &system_vars,
+            )
+            .expect("ungated level always allowed");
+        }
+
+        // With the flag on, the gated value passes too.
+        system_vars
+            .set("enable_session_timelines", VarInput::Flat("on"))
+            .expect("set flag");
         check_transaction_isolation_feature_flag(
             TRANSACTION_ISOLATION_VAR_NAME,
-            VarInput::Flat("serializable"),
+            VarInput::Flat("strong session serializable"),
             &system_vars,
         )
-        .expect("serializable always allowed");
+        .expect("flag on");
 
         // Unrelated variables are ignored, even with a gated-looking value.
         check_transaction_isolation_feature_flag(
             CLUSTER.name(),
-            VarInput::Flat("bounded staleness 5s"),
+            VarInput::Flat("strong session serializable"),
             &system_vars,
         )
         .expect("unrelated var ignored");

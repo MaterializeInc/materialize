@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/builtin/mz_introspection.rs
-revision: 36df04b4d9
+revision: 439f5a6518
 ---
 
 # catalog::builtin::mz_introspection

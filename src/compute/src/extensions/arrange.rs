@@ -8,7 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
+use std::sync::{Arc, Weak};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -17,6 +18,9 @@ use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollection};
+use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_COLUMNAR_MERGE_BATCHER};
+use mz_dyncfg::ConfigSet;
+use mz_row_spine::ArcBatch;
 use timely::Container;
 use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::Stream;
@@ -31,6 +35,43 @@ use crate::logging::compute::{
 use crate::typedefs::{
     KeyAgent, KeyValAgent, MzArrangeData, MzData, MzTimestamp, RowAgent, RowRowAgent, RowValAgent,
 };
+
+/// Which merge batcher an arrange site should instantiate.
+///
+/// The three parameters `mz_arrange_core` takes are one unit, not three
+/// knobs: the chunker's container and the builder's input are both pinned to
+/// `Batcher::Output`, so the chunker and builder follow from the batcher and
+/// a call site has to spell out a whole arm per variant.
+pub enum ArrangementBatcher {
+    /// `Chunker<ColumnationStack<_>>` + `Col2ValBatcher` + `RowRowBuilder`.
+    /// Chains are columnation stacks.
+    Columnation,
+    /// `ColumnChunker` + `Col2ValColBatcher` + `RowRowColPagedBuilder`.
+    /// Chains are resident `Column`s.
+    Columnar,
+    /// `ColumnChunker` + `Col2ValPagedBatcher` + `RowRowColPagedBuilder`.
+    /// Chains are `Column`s routed through the pager, which may spill them.
+    ColumnarPaged,
+}
+
+impl ArrangementBatcher {
+    /// Resolve the batcher from the replica's config set.
+    ///
+    /// `ENABLE_COLUMN_PAGED_BATCHER` wins over
+    /// `ENABLE_COLUMNAR_MERGE_BATCHER`, because it asks for the same columnar
+    /// chains plus paging. Call this once per arrange site at operator
+    /// construction time, so a dataflow keeps one batcher for its whole life
+    /// even if the flags flip underneath it.
+    pub fn from_config(config: &ConfigSet) -> Self {
+        if ENABLE_COLUMN_PAGED_BATCHER.get(config) {
+            Self::ColumnarPaged
+        } else if ENABLE_COLUMNAR_MERGE_BATCHER.get(config) {
+            Self::Columnar
+        } else {
+            Self::Columnation
+        }
+    }
+}
 
 /// Extension trait to arrange data.
 pub trait MzArrange<'scope>: MzArrangeCore<'scope> {
@@ -240,10 +281,14 @@ pub trait ArrangementSize {
 /// * `arranged`: The arrangement to inspect.
 /// * `logic`: Closure that calculates the heap size/capacity/allocations for a batch. The return
 ///    value are size and capacity in bytes, and number of allocations, all in absolute values.
+///
+/// Batch-size logging identifies each batch by the address of its backing allocation and holds a
+/// weak reference to it, so it needs the `Arc` underlying the spine's [`ArcBatch<B>`] batches;
+/// `batch.0` reaches straight through the newtype to it.
 fn log_arrangement_size_inner<'scope, B, L>(
-    arranged: Arranged<'scope, TraceAgent<Spine<Rc<B>>>>,
+    arranged: Arranged<'scope, TraceAgent<Spine<ArcBatch<B>>>>,
     mut logic: L,
-) -> Arranged<'scope, TraceAgent<Spine<Rc<B>>>>
+) -> Arranged<'scope, TraceAgent<Spine<ArcBatch<B>>>>
 where
     B: Batch + 'static,
     L: FnMut(&B) -> (usize, usize, usize) + 'static,
@@ -282,19 +327,26 @@ where
                 input.for_each(|time, data| {
                     for batch in data.iter() {
                         batches
-                            .entry(Rc::as_ptr(batch))
-                            .or_insert_with(|| (Rc::downgrade(batch), logic(batch)));
+                            .entry(Arc::as_ptr(&batch.0))
+                            .or_insert_with(|| (Arc::downgrade(&batch.0), logic(&batch.0)));
                     }
                     output.session(&time).give_container(data);
                 });
                 let Some(trace) = trace.upgrade() else {
+                    // Invariant: `batches` holds no entries once the trace is gone. Each entry's
+                    // `Weak` keeps its batch's `ArcInner` allocation reserved, and the `retain` below
+                    // that would drop it is unreachable on this path, so the entries have to go
+                    // here. The upgrade cannot start succeeding again, hence clearing on every
+                    // activation that takes this path also covers batches that arrive on the
+                    // input afterwards.
+                    batches.clear();
                     return;
                 };
 
                 trace.borrow().trace().map_batches(|batch| {
                     batches
-                        .entry(Rc::as_ptr(batch))
-                        .or_insert_with(|| (Rc::downgrade(batch), logic(batch)));
+                        .entry(Arc::as_ptr(&batch.0))
+                        .or_insert_with(|| (Arc::downgrade(&batch.0), logic(&batch.0)));
                 });
 
                 let (mut size, mut capacity, mut allocations) = (0, 0, 0);

@@ -194,7 +194,7 @@ mod columnar_upsert_key {
         const SLICE_COUNT: usize = 1;
         #[inline(always)]
         fn get_byte_slice(&self, index: usize) -> (u64, &'a [u8]) {
-            debug_assert!(index < Self::SLICE_COUNT);
+            mz_ore::soft_assert_no_log!(index < Self::SLICE_COUNT);
             (
                 u64::cast_from(align_of::<UpsertKey>()),
                 bytemuck::cast_slice(self.0),
@@ -296,7 +296,27 @@ macro_rules! upsert_source_time_unit {
 }
 upsert_source_time_unit!(GtidPartition, Lsn);
 
-/// Pager for the upsert-v2 source stash.
+/// Storage's leg of the process-wide chunk spill gate, used by the chunked
+/// upsert-v2 stash flavor.
+///
+/// In that flavor the source stash and feedback arrangement spill through the
+/// process buffer pool ([`mz_timely_util::columnar::chunk`]): committed chunk
+/// bodies land in the pool once compute's config handler has installed and
+/// budgeted it (storage and compute run in the same `clusterd` process).
+///
+/// The gate is process-wide with one leg per subsystem, and chunks spill
+/// while either leg is set. Storage sets its leg from
+/// `enable_upsert_paged_spill`, so that flag alone cannot veto spilling
+/// enabled by compute's leg. The gate is consulted at every chunk commit, so
+/// flips apply to running dataflows.
+pub mod upsert_stash_spill {
+    /// Enable or disable spilling of upsert chunk bodies to the buffer pool.
+    pub fn set_enabled(enabled: bool) {
+        mz_timely_util::columnar::chunk::set_storage_spill_enabled(enabled);
+    }
+}
+
+/// Pager for the paged upsert-v2 stash flavor.
 ///
 /// This draws from the same process-wide [`TieredPolicy`] budget pool as the
 /// compute column-paged batcher — there is one budget and one underlying
@@ -305,6 +325,9 @@ upsert_source_time_unit!(GtidPartition, Lsn);
 /// `enable_column_paged_batcher_spill`. The shared pool's budget / backend /
 /// codec are configured by compute's `apply_tiered_config` (storage and compute
 /// run in the same `clusterd` process).
+///
+/// Flipping the flag takes effect on dataflows created after the change: the
+/// paged flavor captures the pager once at operator construction.
 ///
 /// [`TieredPolicy`]: mz_timely_util::column_pager::policy::TieredPolicy
 pub mod upsert_stash_pager {
@@ -619,6 +642,7 @@ pub(crate) fn upsert_v2<'scope, T, FromTime>(
     previous_token: Option<Vec<PressOnDropButton>>,
     source_config: crate::source::SourceExportCreationConfig,
     backpressure_metrics: Option<BackpressureMetrics>,
+    stash_flavor: upsert_continual_feedback_v2::UpsertStashFlavor,
 ) -> (
     VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
     StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
@@ -645,10 +669,12 @@ where
     tracing::info!(
         worker_id = %source_config.worker_id,
         source_id = %source_config.id,
+        ?stash_flavor,
         "rendering upsert source (btreemap backend)"
     );
 
     upsert_continual_feedback_v2::upsert_inner(
+        stash_flavor,
         thin_input,
         upsert_envelope.key_indices,
         resume_upper,

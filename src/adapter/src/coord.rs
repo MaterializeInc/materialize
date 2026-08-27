@@ -91,14 +91,16 @@ use itertools::Itertools;
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
+use mz_adapter_types::dyncfgs::FRONTEND_READ_THEN_WRITE;
 use mz_adapter_types::dyncfgs::{
-    ENABLE_SCOPED_SYSTEM_PARAMETERS, USER_ID_POOL_BATCH_SIZE,
+    ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS, USER_ID_POOL_BATCH_SIZE,
     WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
 };
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{
-    BUILTINS, BUILTINS_STATIC, MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY, MZ_STORAGE_USAGE_BY_SHARD,
+    BUILTINS, BUILTINS_STATIC, MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY, MZ_OBJECT_HYDRATION_HISTORY,
+    MZ_STORAGE_USAGE_BY_SHARD,
 };
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
 use mz_catalog::durable::OpenableDurableCatalogState;
@@ -129,7 +131,7 @@ use mz_ore::channel::trigger::Trigger;
 use mz_ore::future::TimeoutError;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_ore::task::{JoinHandle, spawn};
+use mz_ore::task::{AbortOnDropHandle, JoinHandle, spawn};
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::url::SensitiveUrl;
@@ -149,7 +151,7 @@ use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{CatalogCluster, EnvironmentId};
-use mz_sql::names::{QualifiedItemName, ResolvedIds, SchemaSpecifier};
+use mz_sql::names::{QualifiedItemName, ResolvedIds};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{
     self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, HirRelationExpr,
@@ -171,12 +173,13 @@ use mz_storage_types::sources::{IngestionDescription, SourceExport, Timeline};
 use mz_timestamp_oracle::{TimestampOracleConfig, WriteTimestamp};
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
+use semver::Version;
 use serde::Serialize;
 use thiserror::Error;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
-use tokio::sync::{Notify, OwnedMutexGuard, mpsc, oneshot, watch};
+use tokio::sync::{Notify, OwnedMutexGuard, Semaphore, mpsc, oneshot, watch};
 use tokio::time::{Interval, MissedTickBehavior};
 use tracing::{Instrument, Level, Span, debug, info, info_span, span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -195,7 +198,6 @@ use crate::coord::appends::{
     PendingWriteTxn,
 };
 use crate::coord::caught_up::CaughtUpCheckContext;
-use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
 use crate::coord::peek::PendingPeek;
@@ -220,7 +222,6 @@ use crate::{AdapterNotice, ReadHolds, flags};
 pub(crate) mod appends;
 pub(crate) mod catalog_serving;
 pub(crate) mod cluster_controller;
-pub(crate) mod cluster_scheduling;
 pub(crate) mod consistency;
 pub(crate) mod id_bundle;
 pub(crate) mod in_memory_oracle;
@@ -237,6 +238,7 @@ mod caught_up;
 mod command_handler;
 mod ddl;
 pub(crate) mod group_sync;
+mod hydration_history;
 mod indexes;
 mod info_metrics;
 mod introspection;
@@ -244,6 +246,17 @@ mod message_handler;
 mod privatelink_status;
 mod sql;
 mod validity;
+
+/// The oldest leader version against which a replacement-migrated builtin materialized view may
+/// write its new persist shard while this environment is still read-only.
+///
+/// Every builtin materialized view reads `mz_internal.mz_catalog_raw`, so its dataflow only makes
+/// progress up to the catalog shard's frontier. Holding that frontier at the current time is the
+/// leader's job, and leaders only started doing it in v26.17 (PR #35402). Write-enable such an MV
+/// against an older leader and it sits at a stale frontier and never reports caught up, which
+/// blocks promotion outright instead of merely leaving the collection cold at cut-over. We still
+/// support upgrading from before v26.17, so that leader is a real case, not a hypothetical.
+const MIN_LEADER_VERSION_FOR_MIGRATED_MV_WRITES: Version = Version::new(26, 17, 0);
 
 /// A pool of pre-allocated user IDs to avoid per-DDL persist writes.
 ///
@@ -387,6 +400,8 @@ pub enum Message {
     ArrangementSizesSnapshot,
     ArrangementSizesWrite(Vec<ArrangementSizeRecord>),
     ArrangementSizesPrune(Vec<BuiltinTableUpdate>),
+    HydrationHistorySchedule,
+    HydrationHistoryRun,
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
@@ -409,6 +424,11 @@ pub enum Message {
         ctx: ExecuteContext,
         span: Span,
         stage: CreateIndexStage,
+    },
+    CreateMetricSinkStageReady {
+        ctx: ExecuteContext,
+        span: Span,
+        stage: CreateMetricSinkStage,
     },
     CreateViewStageReady {
         ctx: ExecuteContext,
@@ -446,13 +466,6 @@ pub enum Message {
     },
     DrainStatementLog,
     PrivateLinkVpcEndpointEvents(Vec<VpcEndpointEvent>),
-    CheckSchedulingPolicies,
-
-    /// Scheduling policy decisions about turning clusters On/Off.
-    /// `Vec<(policy name, Vec of decisions by the policy)>`
-    /// A cluster will be On if and only if there is at least one On decision for it.
-    /// Scheduling decisions for clusters that have `SCHEDULE = MANUAL` are ignored.
-    SchedulingDecisions(Vec<(&'static str, Vec<(ClusterId, SchedulingDecision)>)>),
 
     /// One pull/apply call from the cluster controller task, answered on the main
     /// coordinator message loop from the catalog and live controller signals.
@@ -509,6 +522,10 @@ impl Message {
                 Command::FrontendStatementLogging(..) => "frontend-statement-logging",
                 Command::StartCopyFromStdin { .. } => "start-copy-from-stdin",
                 Command::InjectAuditEvents { .. } => "inject-audit-events",
+                Command::RegisterConnectionCancelWatch { .. } => "register-connection-cancel-watch",
+                Command::CreateInternalSubscribe { .. } => "create-internal-subscribe",
+                Command::AttemptWrite { .. } => "attempt-write",
+                Command::DropInternalSubscribe { .. } => "drop-internal-subscribe",
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,
@@ -540,6 +557,8 @@ impl Message {
             Message::ArrangementSizesSnapshot => "arrangement_sizes_snapshot",
             Message::ArrangementSizesWrite(_) => "arrangement_sizes_write",
             Message::ArrangementSizesPrune(_) => "arrangement_sizes_prune",
+            Message::HydrationHistorySchedule => "hydration_history_schedule",
+            Message::HydrationHistoryRun => "hydration_history_run",
             Message::RetireExecute { .. } => "retire_execute",
             Message::ExecuteSingleStatementTransaction { .. } => {
                 "execute_single_statement_transaction"
@@ -547,6 +566,7 @@ impl Message {
             Message::PeekStageReady { .. } => "peek_stage_ready",
             Message::ExplainTimestampStageReady { .. } => "explain_timestamp_stage_ready",
             Message::CreateIndexStageReady { .. } => "create_index_stage_ready",
+            Message::CreateMetricSinkStageReady { .. } => "create_metric_sink_stage_ready",
             Message::CreateViewStageReady { .. } => "create_view_stage_ready",
             Message::CreateMaterializedViewStageReady { .. } => {
                 "create_materialized_view_stage_ready"
@@ -560,8 +580,6 @@ impl Message {
             Message::DrainStatementLog => "drain_statement_log",
             Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
-            Message::CheckSchedulingPolicies => "check_scheduling_policies",
-            Message::SchedulingDecisions { .. } => "scheduling_decision",
             Message::ClusterControllerRequest(_) => "cluster_controller_request",
             Message::DeferredStatementReady => "deferred_statement_ready",
         }
@@ -791,6 +809,31 @@ pub struct CreateIndexExplain {
     plan: plan::CreateIndexPlan,
     df_meta: DataflowMetainfo,
     explain_ctx: ExplainPlanContext,
+}
+
+#[derive(Debug)]
+pub enum CreateMetricSinkStage {
+    Optimize(CreateMetricSinkOptimize),
+    Finish(CreateMetricSinkFinish),
+}
+
+#[derive(Debug)]
+pub struct CreateMetricSinkOptimize {
+    validity: PlanValidity,
+    plan: plan::CreateMetricSinkPlan,
+    resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
+pub struct CreateMetricSinkFinish {
+    validity: PlanValidity,
+    item_id: CatalogItemId,
+    global_id: GlobalId,
+    plan: plan::CreateMetricSinkPlan,
+    resolved_ids: ResolvedIds,
+    global_mir_plan: optimize::metric_sink::GlobalMirPlan,
+    global_lir_plan: optimize::metric_sink::GlobalLirPlan,
+    optimizer_features: OptimizerFeatures,
 }
 
 #[derive(Debug)]
@@ -2062,11 +2105,18 @@ pub struct Coordinator {
     /// Each entry is a watch channel whose value is `false` until cancellation
     /// is requested for that connection, at which point it is set to `true`.
     ///
-    /// Consumers install/remove these watches while they have cancellable work
-    /// in flight.
+    /// Consumers install these watches while they have cancellable work in
+    /// flight, always as a fresh channel, so nobody can observe a cancellation
+    /// aimed at an earlier statement. An entry is removed when a statement
+    /// starts, when a stage runs uncancelable, and when the connection's state
+    /// is cleared.
     connection_cancel_watches: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
     /// Active introspection subscribes.
     introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
+    /// The last replica visited by the sequential hydration-history sweep.
+    hydration_history_replica_cursor: Option<ReplicaId>,
+    /// Hydration-history sweep owned by the coordinator while one is in flight.
+    hydration_history_sweep: Option<AbortOnDropHandle<()>>,
 
     /// Locks that grant access to a specific object, populated lazily as objects are written to.
     write_locks: BTreeMap<CatalogItemId, Arc<tokio::sync::Mutex<()>>>,
@@ -2075,6 +2125,24 @@ pub struct Coordinator {
 
     /// Pending writes waiting for a group commit.
     pending_writes: Vec<PendingWriteTxn>,
+
+    /// Semaphore to limit concurrent OCC (optimistic concurrency control)
+    /// read-then-write operations.
+    ///
+    /// Each operation maintains a subscribe that continually receives and
+    /// consolidates updates. With N concurrent loops, every successful write
+    /// forces the other N-1 to redo work, so total work scales as `O(n^2)`.
+    /// The semaphore caps concurrency to keep that bounded.
+    ///
+    /// NOTE: The number of permits is read from `max_concurrent_occ_writes` at
+    /// coordinator startup. Runtime changes require an `environmentd` restart.
+    occ_write_semaphore: Arc<Semaphore>,
+
+    /// Whether frontend OCC read-then-write is enabled. Read once at startup
+    /// from the `FRONTEND_READ_THEN_WRITE` dyncfg and fixed for the lifetime of
+    /// this process. See the module-level docs on `frontend_read_then_write`
+    /// for why mixed-mode operation is not allowed.
+    frontend_read_then_write_enabled: bool,
 
     /// For the realtime timeline, an explicit SELECT or INSERT on a table will bump the
     /// table's timestamps, but there are cases where timestamps are not bumped but
@@ -2133,14 +2201,6 @@ pub struct Coordinator {
     /// Optional config for the timestamp oracle. This is _required_ when
     /// a timestamp oracle backend is configured.
     timestamp_oracle_config: Option<TimestampOracleConfig>,
-
-    /// Periodically asks cluster scheduling policies to make their decisions.
-    check_cluster_scheduling_policies_interval: Interval,
-
-    /// This keeps the last On/Off decision for each cluster and each scheduling policy.
-    /// (Clusters that have been dropped or are otherwise out of scope for automatic scheduling are
-    /// periodically cleaned up from this Map.)
-    cluster_scheduling_decisions: BTreeMap<ClusterId, BTreeMap<&'static str, SchedulingDecision>>,
 
     /// When doing 0dt upgrades/in read-only mode, periodically ask all known
     /// clusters/collections whether they are caught up.
@@ -2215,7 +2275,7 @@ impl Coordinator {
     pub(crate) async fn reconcile_scoped_system_parameters(
         &mut self,
         scoped: ScopedParameters,
-        prune_scope: Option<ScopedParametersScope>,
+        prune_scope: ScopedParametersScope,
     ) {
         // Nothing changed: skip the durable write. This is the common case on
         // most sync ticks.
@@ -2257,10 +2317,10 @@ impl Coordinator {
     /// arrangement-build time) make a later push too late, which is why this
     /// happens in the create transaction rather than the next sync tick.
     ///
-    /// Returns `None` when the feature is gated off, the shared frontend is not
-    /// yet installed (e.g. before LaunchDarkly connects), or no override
-    /// applies. The new objects then resolve to the environment-wide value, and
-    /// the periodic sync loop remains the authoritative full-state reconciler.
+    /// Returns `None` when the shared frontend is not yet installed (e.g. before
+    /// LaunchDarkly connects), or when no override applies. The new objects then
+    /// resolve to the environment-wide value, and the periodic sync loop remains
+    /// the authoritative full-state reconciler.
     ///
     /// [`Op::UpdateScopedSystemParameters`]: crate::catalog::Op::UpdateScopedSystemParameters
     fn scoped_overrides_create_op(
@@ -2271,9 +2331,6 @@ impl Coordinator {
         let frontend = self.scoped_frontend.clone()?;
         let catalog = self.catalog();
         let system_config = catalog.system_config();
-        if !ENABLE_SCOPED_SYSTEM_PARAMETERS.get(system_config.dyncfgs()) {
-            return None;
-        }
 
         // Partition the synced parameters by scope class, as the sync loop does,
         // so we evaluate exactly the flags in use at each scope.
@@ -2311,24 +2368,19 @@ impl Coordinator {
         };
         Some(crate::catalog::Op::UpdateScopedSystemParameters {
             scoped: evaluated,
-            prune_scope: Some(prune_scope),
+            prune_scope,
         })
     }
 
-    /// Resolves the replica-local scoped overrides from the catalog working copy
-    /// into the compute controller's per-replica dyncfg layer, then re-pushes
-    /// the environment-wide compute configuration so replicas observe the new
-    /// values. Driven by the catalog implication for replica-scoped
-    /// configuration changes, and called once on bootstrap.
-    pub(crate) fn push_replica_dyncfg_overrides(&mut self) {
-        // Clone the (sparse) replica overrides so we don't hold a catalog borrow
-        // across the mutable controller calls below.
-        let replica_overrides = self
-            .catalog()
-            .state()
-            .scoped_system_parameters()
-            .replica
-            .clone();
+    /// Renders the replica-local scoped overrides in the catalog working copy as
+    /// per-replica [`ConfigUpdates`], grouped by cluster.
+    ///
+    /// Sparse: only replicas with an override are present. Parameters that are
+    /// not dyncfgs are skipped, as are values that fail to parse.
+    pub(crate) fn replica_dyncfg_overrides(
+        &self,
+    ) -> BTreeMap<ComputeInstanceId, BTreeMap<ReplicaId, ConfigUpdates>> {
+        let replica_overrides = &self.catalog().state().scoped_system_parameters().replica;
 
         let dyncfgs = self.catalog().system_config().dyncfgs();
         let mut instance_overrides: BTreeMap<
@@ -2363,26 +2415,42 @@ impl Coordinator {
             }
         }
 
-        // Only the compute controller's per-replica dyncfg layer is pushed, but on
-        // `clusterd` that also reaches storage. Compute and storage share one
-        // process, and the compute worker's `handle_update_configuration` applies
-        // the pushed dyncfg updates both to compute's own worker `ConfigSet` and to
-        // the shared persist client `ConfigSet` (`persist_clients.cfg()`) that the
-        // co-located storage server reads from the same `Arc`. So persist-backed and
-        // process-global replica-local configs such as the persist pager, LZ4,
-        // persist client tuning, and `lgalloc` take effect on storage too. The only
-        // gap would be a future `Replica`-scoped config realized solely in the
-        // storage worker's own `ConfigSet`, of which none exists today.
+        instance_overrides
+    }
+
+    /// Resolves the replica-local scoped overrides from the catalog working copy
+    /// into the controllers' per-replica dyncfg layers, then re-pushes the
+    /// environment-wide configuration so replicas observe the new values.
+    /// Driven by the catalog implication for replica-scoped configuration
+    /// changes, and called once on bootstrap.
+    pub(crate) fn push_replica_dyncfg_overrides(&mut self) {
+        let instance_overrides = self.replica_dyncfg_overrides();
+
+        // Both controllers carry a per-replica dyncfg layer, because the two
+        // protocols realize configs in different worker `ConfigSet`s on
+        // `clusterd`. The compute worker's `handle_update_configuration`
+        // applies the pushed dyncfg updates to compute's own worker
+        // `ConfigSet`, to the shared persist client `ConfigSet`
+        // (`persist_clients.cfg()`) that the co-located storage server reads
+        // from the same `Arc`, and to `mz_metrics`, which covers
+        // persist-backed and process-global configs such as persist client
+        // tuning and `lgalloc`. Configs realized from the storage worker's own
+        // `ConfigSet` (read in its `UpdateConfiguration` handler) are reached
+        // only by the storage controller's layer. A third class is not pushed
+        // to a running replica at all but baked into its process configuration
+        // when the controller provisions it, which is why the overrides also go
+        // to the outer controller.
         self.controller
-            .compute
             .update_replica_dyncfg_overrides(instance_overrides);
-        // Re-push the env-wide compute config so existing replicas pick up their
-        // (possibly changed) overrides. This also reverts a removed override: the
-        // per-replica layer no longer carries the key, so the replica falls back
-        // to the env-wide value, which `compute_config` always includes because it
-        // renders the full dyncfg set.
+        // Re-push the env-wide configs so existing replicas pick up their
+        // (possibly changed) overrides. This also reverts a removed override:
+        // the per-replica layer no longer carries the key, so the replica
+        // falls back to the env-wide value, which both configs always include
+        // because they render the full dyncfg set.
         let compute_config = crate::flags::compute_config(self.catalog().system_config());
         self.controller.compute.update_configuration(compute_config);
+        let storage_config = crate::flags::storage_config(self.catalog().system_config());
+        self.controller.storage.update_parameters(storage_config);
     }
 
     /// Returns the cluster-coherent scoped optimizer-feature overrides for
@@ -2405,6 +2473,7 @@ impl Coordinator {
         &mut self,
         boot_ts: Timestamp,
         migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
+        hydrate_migrated_mvs: bool,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
         cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
         uncached_local_exprs: BTreeMap<GlobalId, LocalExpressions>,
@@ -2461,6 +2530,16 @@ impl Coordinator {
             .update_orchestrator_scheduling_config(scheduling_config);
         self.controller.update_configuration(dyncfg_updates);
 
+        // Install the replica-local scoped overrides before creating any
+        // replica below. Parts of a replica's configuration (its `TimelyConfig`,
+        // its expiration offset) are resolved once, when the controller
+        // provisions the replica, and must see its overrides at that point. The
+        // push after the creation loop cannot serve this purpose, because those
+        // values are frozen by then.
+        let replica_dyncfg_overrides = self.replica_dyncfg_overrides();
+        self.controller
+            .update_replica_dyncfg_overrides(replica_dyncfg_overrides);
+
         // Skip the credit consumption check at bootstrap under DisableClusterCreation behavior:
         // this codepath validates existing replicas at startup, not cluster creation, so it
         // must not block startup. New cluster creation is still gated by the DDL-time check.
@@ -2516,7 +2595,7 @@ impl Coordinator {
         }
 
         // Now that the compute instances and their replicas exist, push the
-        // replica-local scoped overrides into the compute controller so existing
+        // replica-local scoped overrides into the controllers so existing
         // replicas observe them at startup. The scoped (per-cluster and
         // per-replica) working copy was restored from the durable cache into
         // `CatalogState` while opening the catalog, so the last-known values are
@@ -2730,11 +2809,57 @@ impl Coordinator {
                     self.ship_dataflow(df_desc, mview.cluster_id, mview.target_replica)
                         .await;
 
-                    // If this is a replacement MV, it must remain read-only until the replacement
-                    // gets applied.
+                    // A pending `REPLACEMENT FOR` MV must stay read-only until
+                    // `ALTER ... APPLY REPLACEMENT` swaps it in. Unrelated to the
+                    // builtin-migration `Replacement` mechanism below.
                     if mview.replacement_target.is_none() {
-                        self.allow_writes(mview.cluster_id, mview.global_id_writes());
+                        let gid = mview.global_id_writes();
+                        if hydrate_migrated_mvs
+                            && migrated_storage_collections_0dt.contains(&entry.id())
+                        {
+                            // `migrated_storage_collections_0dt` is `Replacement`-migrated items
+                            // only, so this is a fresh shard we own: nothing else writes it, and
+                            // writing it while read-only hydrates the MV and its dependents before
+                            // cut-over. An `Evolution`-migrated MV reuses the leader's live shard
+                            // and must never reach here.
+                            //
+                            // A *new* builtin MV gets no such treatment: its shard allocation
+                            // lives only in this read-only savepoint, so the promoted leader
+                            // allocates a different shard and discards whatever we wrote.
+                            self.controller
+                                .compute
+                                .allow_writes_in_read_only(mview.cluster_id, gid)
+                                .unwrap_or_terminate("allow_writes cannot fail");
+                        } else {
+                            self.allow_writes(mview.cluster_id, gid);
+                        }
                     }
+                }
+                CatalogItem::MetricSink(metric_sink) => {
+                    let df_desc = self
+                        .catalog()
+                        .try_get_physical_plan(&metric_sink.global_id)
+                        .expect("added in `bootstrap_dataflow_plans`")
+                        .clone();
+
+                    let df_meta = self
+                        .catalog()
+                        .try_get_dataflow_metainfo(&metric_sink.global_id)
+                        .expect("added in `bootstrap_dataflow_plans`");
+
+                    if self.catalog().state().system_config().enable_mz_notices() {
+                        // Collect optimization hint updates.
+                        self.catalog().state().pack_optimizer_notices(
+                            &mut builtin_table_updates,
+                            df_meta.optimizer_notices.iter(),
+                            Diff::ONE,
+                        );
+                    }
+
+                    // No read policy to set: the export is a sink, not a readable collection, so
+                    // `ship_dataflow` has no index export to initialize a policy for.
+                    self.ship_dataflow(df_desc, metric_sink.cluster_id, None)
+                        .await;
                 }
                 CatalogItem::Sink(sink) => {
                     policies_to_set
@@ -3054,29 +3179,19 @@ impl Coordinator {
         debug!("coordinator init: resetting system tables");
         let read_ts = self.get_local_read_ts().await;
 
-        // Filter out tables whose contents must survive restarts:
-        // 'mz_storage_usage_by_shard' for billing, and
-        // 'mz_object_arrangement_size_history', which accumulates history that
-        // is pruned by its own retention period instead.
-        let mz_storage_usage_by_shard_schema: SchemaSpecifier = self
-            .catalog()
-            .resolve_system_schema(MZ_STORAGE_USAGE_BY_SHARD.schema)
-            .into();
-        let arrangement_size_history_schema: SchemaSpecifier = self
-            .catalog()
-            .resolve_system_schema(MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY.schema)
-            .into();
-        let is_retained_across_restarts = |meta: &TableMetadata| -> bool {
-            (meta.name.item == MZ_STORAGE_USAGE_BY_SHARD.name
-                && meta.name.qualifiers.schema_spec == mz_storage_usage_by_shard_schema)
-                || (meta.name.item == MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY.name
-                    && meta.name.qualifiers.schema_spec == arrangement_size_history_schema)
-        };
+        let retained_across_restarts = BTreeSet::from([
+            self.catalog()
+                .resolve_builtin_table(&MZ_STORAGE_USAGE_BY_SHARD),
+            self.catalog()
+                .resolve_builtin_table(&MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY),
+            self.catalog()
+                .resolve_builtin_table(&MZ_OBJECT_HYDRATION_HISTORY),
+        ]);
 
         let mut retraction_tasks = Vec::new();
         let system_tables: Vec<_> = table_metas
             .iter()
-            .filter(|meta| meta.id.is_system() && !is_retained_across_restarts(meta))
+            .filter(|meta| meta.id.is_system() && !retained_across_restarts.contains(&meta.id))
             .collect();
 
         for system_table in system_tables {
@@ -3343,7 +3458,10 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
-                | CatalogItem::Connection(_) => (),
+                | CatalogItem::Connection(_)
+                // Nothing to bootstrap: a metric sink has no storage collection, it publishes
+                // into the replica's metrics registry.
+                | CatalogItem::MetricSink(_) => (),
             }
         }
 
@@ -3745,6 +3863,99 @@ impl Coordinator {
 
                     compute_instance.insert_collection(mv.global_id_writes());
                 }
+                CatalogItem::MetricSink(metric_sink) => {
+                    // Collect optimizer parameters.
+                    let compute_instance = instance_snapshots
+                        .entry(metric_sink.cluster_id)
+                        .or_insert_with(|| {
+                            self.instance_snapshot(metric_sink.cluster_id)
+                                .expect("compute instance exists")
+                        });
+                    let global_id = metric_sink.global_id;
+                    let optimizer_config = optimizer_config(&self.catalog, metric_sink.cluster_id);
+
+                    let (optimized_plan, physical_plan, metainfo) = match cached_global_exprs
+                        .remove(&global_id)
+                    {
+                        Some(global_expressions)
+                            if global_expressions.optimizer_features
+                                == optimizer_config.features =>
+                        {
+                            debug!("global expression cache hit for {global_id:?}");
+                            (
+                                global_expressions.global_mir,
+                                global_expressions.physical_plan,
+                                global_expressions.dataflow_metainfos,
+                            )
+                        }
+                        Some(_) | None => {
+                            // A transient id for the view the optimizer builds over `from` to
+                            // shape its rows (see `optimize::metric_sink::shape_metric_sink_source`).
+                            // The id only needs to be unique within this dataflow, so a cached plan
+                            // reusing a transient id from a previous boot is safe: build ids are
+                            // dataflow-local on the worker and never registered in the controller's
+                            // instance-global collections (only export ids are).
+                            let (_, view_id) = self.allocate_transient_id();
+
+                            let (optimized_plan, global_lir_plan) = {
+                                let mut optimizer = optimize::metric_sink::Optimizer::new(
+                                    self.owned_catalog(),
+                                    compute_instance.clone(),
+                                    view_id,
+                                    global_id,
+                                    optimizer_config.clone(),
+                                    self.optimizer_metrics(),
+                                );
+
+                                // MIR ⇒ MIR optimization (global)
+                                let metric_sink_plan = optimize::metric_sink::MetricSink::new(
+                                    entry.name().clone(),
+                                    metric_sink.from,
+                                    metric_sink.prefix.clone(),
+                                );
+                                let global_mir_plan = optimizer.optimize(metric_sink_plan)?;
+                                let optimized_plan = global_mir_plan.df_desc().clone();
+
+                                // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                                let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+
+                                (optimized_plan, global_lir_plan)
+                            };
+
+                            let (physical_plan, metainfo) = global_lir_plan.unapply();
+                            let metainfo = {
+                                // Pre-allocate a vector of transient GlobalIds for each notice.
+                                let notice_ids =
+                                    std::iter::repeat_with(|| self.allocate_transient_id())
+                                        .map(|(_item_id, gid)| gid)
+                                        .take(metainfo.optimizer_notices.len())
+                                        .collect::<Vec<_>>();
+                                // Return a metainfo with rendered notices.
+                                self.catalog()
+                                    .render_notices(metainfo, notice_ids, Some(global_id))
+                            };
+                            uncached_expressions.insert(
+                                global_id,
+                                GlobalExpressions {
+                                    global_mir: optimized_plan.clone(),
+                                    physical_plan: physical_plan.clone(),
+                                    dataflow_metainfos: metainfo.clone(),
+                                    optimizer_features: optimizer_config.features.clone(),
+                                },
+                            );
+                            (optimized_plan, physical_plan, metainfo)
+                        }
+                    };
+
+                    let catalog = self.catalog_mut();
+                    catalog.set_optimized_plan(global_id, optimized_plan);
+                    catalog.set_physical_plan(global_id, physical_plan);
+                    catalog.set_dataflow_metainfo(global_id, metainfo);
+
+                    // NOTE: No `insert_collection` for the export. A metric sink writes to the
+                    // metrics registry rather than to a readable collection, so no later dataflow
+                    // can import it.
+                }
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)
                 | CatalogItem::Log(_)
@@ -3777,6 +3988,7 @@ impl Coordinator {
             let gid = match entry.item() {
                 CatalogItem::Index(idx) => idx.global_id(),
                 CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
+                CatalogItem::MetricSink(metric_sink) => metric_sink.global_id,
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)
                 | CatalogItem::Log(_)
@@ -3893,6 +4105,7 @@ impl Coordinator {
 
             self.schedule_storage_usage_collection().await;
             self.schedule_arrangement_sizes_collection().await;
+            self.schedule_hydration_history_collection();
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
             self.spawn_catalog_info_metrics_task();
@@ -3968,8 +4181,8 @@ impl Coordinator {
                         // and make it follow from all the Spans in the pending
                         // writes.
                         let user_write_spans = self.pending_writes.iter().flat_map(|x| match x {
-                            PendingWriteTxn::User{span, ..} => Some(span),
-                            PendingWriteTxn::System{..} => None,
+                            PendingWriteTxn::User { span, .. } => Some(span),
+                            PendingWriteTxn::System { .. } => None,
                         });
                         let span = match user_write_spans.exactly_one() {
                             Ok(span) => span.clone(),
@@ -4041,13 +4254,6 @@ impl Coordinator {
                         linearize_reads_notified.set(linearize_reads_notify.notified());
                         messages.push(Message::LinearizeReads);
                     }
-                    // `tick()` on `Interval` is cancel-safe:
-                    // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
-                    // Receive a single command.
-                    _ = self.check_cluster_scheduling_policies_interval.tick() => {
-                        messages.push(Message::CheckSchedulingPolicies);
-                    },
-
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     // Receive a single command.
@@ -4820,6 +5026,20 @@ pub fn serve(
             .expect("inserted above")
             .oracle;
 
+        // The catalog shard's upper is durable, so a write that once landed far ahead of the
+        // clock is re-applied to the oracle here on every boot and cannot be waited out. We
+        // report it rather than refusing to start: the timeline is stalled either way, and a
+        // process that will not boot turns that into a total outage plus a crash loop.
+        let boot_now: mz_repr::Timestamp = (now)().into();
+        if catalog_upper > timeline::write_ts_upper_bound(&boot_now) {
+            tracing::error!(
+                %catalog_upper, %boot_now,
+                "catalog upper is far ahead of the wall clock, so writes and \
+                strict-serializable reads on the EpochMilliseconds timeline will block \
+                until the clock catches up",
+            );
+        }
+
         let mut boot_ts = if read_only_controllers {
             let read_ts = epoch_millis_oracle.read_ts().await;
             std::cmp::max(read_ts, catalog_upper)
@@ -4851,6 +5071,7 @@ pub fn serve(
         ;
         let OpenCatalogResult {
             mut catalog,
+            last_seen_version,
             migrated_storage_collections_0dt,
             new_builtin_collections,
             builtin_table_updates,
@@ -4906,6 +5127,22 @@ pub fn serve(
             catalog_open_start.elapsed()
         );
 
+        // Whether replacement-migrated builtin MVs may write their new shards before cut-over.
+        // Both `bootstrap` and the readiness gate below read this, and they have to agree.
+        // `MIN_LEADER_VERSION_FOR_MIGRATED_MV_WRITES` explains why the leader's version settles it.
+        //
+        // While we are read-only, `last_seen_version` is that leader's version: our catalog
+        // transaction is a savepoint, so our own bump of the setting never lands. `None` means a
+        // freshly initialized catalog, with nothing migrated and no leader to be compatible with.
+        //
+        // `ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS` is the break-glass revert: off falls back to
+        // excluding migrated MVs from the caught-up gate, no redeploy needed.
+        let hydrate_migrated_mvs = ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS
+            .get(catalog.system_config().dyncfgs())
+            && last_seen_version
+                .as_ref()
+                .is_none_or(|version| *version >= MIN_LEADER_VERSION_FOR_MIGRATED_MV_WRITES);
+
         let coord_thread_start = Instant::now();
         info!("startup: coordinator init: coordinator thread start beginning");
 
@@ -4928,12 +5165,6 @@ pub fn serve(
         let coord_now = now.clone();
         let advance_timelines_interval =
             tokio::time::interval(catalog.system_config().default_timestamp_interval());
-        let mut check_scheduling_policies_interval = tokio::time::interval(
-            catalog
-                .system_config()
-                .cluster_check_scheduling_policies_interval(),
-        );
-        check_scheduling_policies_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         let clusters_caught_up_check_interval = if read_only_controllers {
             let dyncfgs = catalog.system_config().dyncfgs();
@@ -4962,34 +5193,31 @@ pub fn serve(
 
                 // A collection that can't advance its write frontier in read-only mode
                 // stalls its transitive dependents too, so exclude those from the caught-up
-                // check as well. That's migrated MVs (their dataflows don't write in
-                // read-only mode) and new builtin MVs (their fresh shard has no writer until
-                // this deployment promotes). An excluded dependent may still be hydrating
-                // right after promotion, a brief blip we accept because these MVs are small
-                // and get a writer at cut-over.
+                // check as well. That's every *new* builtin collection, whose fresh shard has no
+                // writer until this deployment promotes, plus migrated MVs whenever the leader is
+                // too old for them to write. An excluded dependent may still be hydrating right
+                // after promotion, a brief blip we accept because these collections are small and
+                // get a writer at cut-over.
                 //
-                // TODO: Consider sending `allow_writes` for the dataflows of migrated MVs, which
-                //       would allow them to make progress even in read-only mode. This doesn't
-                //       work for MVs based on `mz_catalog_raw`, if the leader's version is less
-                //       than v26.17, since before that version the catalog shard's frontier wasn't
-                //       kept up-to-date with the current time. So this workaround has to remain in
-                //       place upgrades from a version less than v26.17 are no longer supported.
-                let new_builtin_mvs = new_builtin_collections
-                    .iter()
-                    .map(|global_id| {
-                        catalog
-                            .state()
-                            .try_get_entry_by_global_id(global_id)
-                            .expect("new builtin collections have catalog entries")
-                    })
-                    .filter(|entry| entry.is_materialized_view())
-                    .map(|entry| entry.id());
-                let mut todo: Vec<_> = migrated_storage_collections_0dt
+                // Seeded from all of `new_builtin_collections`, not just the MVs: a new builtin
+                // table or source has no read-only writer either (`register_table_collections`
+                // retains only *migrated* tables), so an MV reading one never advances past its
+                // empty frontier. A *migrated* table is the opposite case, even though a builtin
+                // MV can read one (`mz_clusters` joins `mz_cluster_replica_size_internal`):
+                // `read_only_mode_table_worker` keeps advancing migrated tables' uppers.
+                let new_builtin_items = new_builtin_collections.iter().map(|global_id| {
+                    catalog
+                        .state()
+                        .try_get_entry_by_global_id(global_id)
+                        .expect("new builtin collections have catalog entries")
+                        .id()
+                });
+                let frozen_migrated_mvs = migrated_storage_collections_0dt
                     .iter()
                     .copied()
-                    .filter(|id| catalog.state().get_entry(id).is_materialized_view())
-                    .chain(new_builtin_mvs)
-                    .collect();
+                    .filter(|_| !hydrate_migrated_mvs)
+                    .filter(|id| catalog.state().get_entry(id).is_materialized_view());
+                let mut todo: Vec<_> = new_builtin_items.chain(frozen_migrated_mvs).collect();
                 while let Some(item_id) = todo.pop() {
                     let entry = catalog.state().get_entry(&item_id);
                     exclude_collections.extend(entry.global_ids());
@@ -5079,6 +5307,13 @@ pub fn serve(
                 }
 
                 let catalog = Arc::new(catalog);
+                // Both are read once at startup, see the field docs on
+                // `occ_write_semaphore` and `frontend_read_then_write_enabled`.
+                let max_concurrent_occ_writes =
+                    usize::cast_from(catalog.system_config().max_concurrent_occ_writes());
+                let frontend_read_then_write_enabled = {
+                                FRONTEND_READ_THEN_WRITE.get(catalog.system_config().dyncfgs())
+                };
 
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
                 let (group_committer_tx, group_committer_rx) = mpsc::unbounded_channel();
@@ -5104,9 +5339,13 @@ pub fn serve(
                     active_copies: BTreeMap::new(),
                     connection_cancel_watches: BTreeMap::new(),
                     introspection_subscribes: BTreeMap::new(),
+                    hydration_history_replica_cursor: None,
+                    hydration_history_sweep: None,
                     write_locks: BTreeMap::new(),
                     deferred_write_ops: BTreeMap::new(),
                     pending_writes: Vec::new(),
+                    occ_write_semaphore: Arc::new(Semaphore::new(max_concurrent_occ_writes)),
+                    frontend_read_then_write_enabled,
                     advance_timelines_interval,
                     secrets_controller,
                     caching_secrets_reader,
@@ -5122,8 +5361,6 @@ pub fn serve(
                     statement_logging: StatementLogging::new(coord_now.clone()),
                     webhook_concurrency_limit,
                     timestamp_oracle_config,
-                    check_cluster_scheduling_policies_interval: check_scheduling_policies_interval,
-                    cluster_scheduling_decisions: BTreeMap::new(),
                     caught_up_check_interval: clusters_caught_up_check_interval,
                     caught_up_check: clusters_caught_up_check,
                     installed_watch_sets: BTreeMap::new(),
@@ -5155,6 +5392,7 @@ pub fn serve(
                         .bootstrap(
                             boot_ts,
                             migrated_storage_collections_0dt,
+                            hydrate_migrated_mvs,
                             builtin_table_updates,
                             cached_global_exprs,
                             uncached_local_exprs,

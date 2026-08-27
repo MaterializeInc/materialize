@@ -36,7 +36,7 @@ steps:
 
       - id: build-x86_64-asan
         label: ":rust: Build x86_64 (ASan)"
-        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        command: bin/ci-builder run nightly bin/pyactivate -m ci.test.build
         inputs:
           - "*"
         depends_on: []
@@ -45,14 +45,12 @@ steps:
           queue: builder-linux-x86_64
         env:
           CI_SANITIZER: address
-
         sanitizer: skip
         branches: "main"
-        skip: "currently broken"
 
       - id: build-aarch64-asan
         label: ":rust: Build aarch64 (ASan)"
-        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        command: bin/ci-builder run nightly bin/pyactivate -m ci.test.build
         inputs:
           - "*"
         depends_on: []
@@ -63,7 +61,6 @@ steps:
           CI_SANITIZER: address
         sanitizer: skip
         branches: "main"
-        skip: "currently broken"
 
       - id: build-rust-latest-beta
         label: "Build with Latest Rust Beta"
@@ -107,7 +104,7 @@ steps:
 
       - id: unused-deps
         label: Unused dependencies
-        command: bin/ci-builder run nightly bin/unused-deps
+        command: bin/ci-builder run stable bin/unused-deps
         inputs:
           - Cargo.lock
           - Cargo.toml
@@ -161,9 +158,9 @@ steps:
         artifact_paths: [sbom.json, inspector-results.json]
 
   - id: miri-test
-    topics: [kafka, postgres]
+    topics: [kafka, mysql, postgres]
     label: ":rust: Miri test (full)"
-    depends_on: build-aarch64
+    depends_on: []
     timeout_in_minutes: 60
     plugins:
       - ./ci/plugins/mzcompose:
@@ -171,6 +168,7 @@ steps:
           args: [--miri-full]
     agents:
       queue: hetzner-aarch64-16cpu-32gb
+    skip: "Has been creating more toil than use"
     sanitizer: skip
 
   - group: Benchmarks
@@ -179,6 +177,7 @@ steps:
       - id: feature-benchmark
         topics: [cockroach, copy-to-s3, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Feature benchmark against merge base or 'latest'"
+        sanitizer: skip
         depends_on: build-x86_64
         timeout_in_minutes: 120
         parallelism: 12
@@ -194,6 +193,7 @@ steps:
       - id: scalability-benchmark-dml-dql
         topics: [postgres]
         label: "Scalability benchmark (read & write) against merge base or 'latest'"
+        sanitizer: skip
         depends_on: build-x86_64
         timeout_in_minutes: 120
         env:
@@ -220,6 +220,7 @@ steps:
       - id: scalability-benchmark-ddl
         topics: [postgres]
         label: "Scalability benchmark (DDL) against merge base or 'latest'"
+        sanitizer: skip
         depends_on: build-x86_64
         timeout_in_minutes: 120
         env:
@@ -249,6 +250,7 @@ steps:
       - id: scalability-benchmark-connection
         topics: [postgres]
         label: "Scalability benchmark (connection) against merge base or 'latest'"
+        sanitizer: skip
         depends_on: build-x86_64
         timeout_in_minutes: 120
         parallelism: 2
@@ -277,6 +279,7 @@ steps:
       - id: parallel-benchmark
         topics: [cockroach, kafka, mysql, postgres]
         label: "Parallel Benchmark"
+        sanitizer: skip
         depends_on: build-x86_64
         timeout_in_minutes: 120
         parallelism: 5
@@ -296,6 +299,7 @@ steps:
       - id: workload-replay
         topics: [iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
         label: "Workload Replay (1% initial data)"
+        sanitizer: skip
         depends_on: build-x86_64
         timeout_in_minutes: 120
         parallelism: 5
@@ -310,6 +314,26 @@ steps:
                 - common-ancestor
         agents:
           queue: hetzner-x86-64-dedi-8cpu-32gb
+
+      - id: console-scalability
+        topics: [iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
+        label: "Console scalability (workload replay)"
+        sanitizer: skip
+        depends_on: build-x86_64
+        timeout_in_minutes: 120
+        parallelism: 3
+        artifact_paths:
+          - console/test-results/**/*
+          - console/e2e-tests/k6/queries-*.json
+          - console/e2e-tests/k6/summary-*.json
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: workload-replay
+              run: console-scalability
+              args: [--skip-large]
+        agents:
+          # Larger instance is more stable in performance
+          queue: hetzner-x86-64-dedi-16cpu-64gb
 
   - group: Kafka
     key: kafka
@@ -370,6 +394,7 @@ steps:
       - id: testdrive-replicas-4
         topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
         label: ":racing_car: testdrive 4 replicas"
+        sanitizer: skip
         depends_on: build-aarch64
         timeout_in_minutes: 60
         parallelism: 2
@@ -396,6 +421,7 @@ steps:
       - id: testdrive-size-8
         topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
         label: ":racing_car: testdrive with SIZE 8"
+        sanitizer: skip
         depends_on: build-aarch64
         timeout_in_minutes: 60
         parallelism: 2
@@ -437,6 +463,7 @@ steps:
       - id: azurite-testdrive-size-8
         topics: [azurite, copy-to-s3, kafka, kafka-sink, mysql, postgres]
         label: ":racing_car: testdrive with SIZE 8 and :azure: blob store"
+        sanitizer: skip
         depends_on: build-aarch64
         timeout_in_minutes: 60
         parallelism: 2
@@ -510,6 +537,7 @@ steps:
       - id: bounded-memory
         topics: [copy-to-s3, iceberg, kafka, mysql, postgres]
         label: "Bounded Memory"
+        sanitizer: skip
         depends_on: build-aarch64
         timeout_in_minutes: 60
         parallelism: 2
@@ -521,6 +549,7 @@ steps:
       - id: bounded-memory-search
         topics: [copy-to-s3, iceberg, kafka, mysql, postgres]
         label: "Bounded Memory Search (materialized only)"
+        sanitizer: skip
         depends_on: build-aarch64
         timeout_in_minutes: 60
         parallelism: 8
@@ -568,7 +597,7 @@ steps:
   - id: ssh-connection-extended
     topics: [kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
     label: Extended SSH connection
-    depends_on: build-aarch64
+    depends_on: build-x86_64
     timeout_in_minutes: 45
     plugins:
       - ./ci/plugins/mzcompose:
@@ -2386,6 +2415,17 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: txn-wal-fencing
           args: [--azurite]
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  - id: occ-mixed-mode-read-then-write
+    label: "Read-then-write sequencing split across two environmentd processes"
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: txn-wal-fencing
+          run: mixed-mode-read-then-write
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 

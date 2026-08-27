@@ -23,6 +23,15 @@ tests:
             apiGroups: [""]
             resources: ["configmaps", "persistentvolumeclaims", "pods", "namespaces", "secrets", "serviceaccounts", "services"]
             verbs: ["create", "update", "patch", "delete", "get", "list", "watch"]
+      # The operator only ever creates namespaced RBAC. Granting it
+      # clusterrolebindings would let it hand its own permissions to any
+      # subject in the cluster.
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["rbac.authorization.k8s.io"]
+            resources: ["roles", "rolebindings"]
+            verbs: ["create", "update", "patch", "delete", "get", "list", "watch"]
 
   - it: should not create a clusterrole when RBAC is disabled
     set:

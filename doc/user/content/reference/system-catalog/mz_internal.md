@@ -181,7 +181,7 @@ shape is in [`mz_clusters`](../mz_catalog/#mz_clusters).
 | `status`       | [`text`]         | The lifecycle status of the reconfiguration: `in-progress` while the controller converges on the target, then a terminal `finalized`, `timed-out`, `cancelled`, or `resource-exhausted`. The record is retained after it settles, so the latest outcome stays inspectable until a later reconfiguration overwrites it. |
 | `deadline`     | [`mz_timestamp`] | The deadline by which the reconfiguration must complete. After it passes, the `on_timeout` action applies. |
 | `on_timeout`   | [`text`]         | The action applied if `deadline` passes before the target hydrates: `commit` (cut over to the not-yet-hydrated target) or `rollback` (revert to the pre-reconfiguration shape). |
-| `target`       | [`jsonb`]        | The config shape the cluster is reconfiguring to, as JSON: `size`, `replication_factor`, `availability_zones`, and `logging`. The realized (current) shape is in `mz_clusters`. |
+| `target`       | [`jsonb`]        | The config shape the cluster is reconfiguring to, as JSON: `size`, `replication_factor`, `availability_zones`, `logging`, and `arrangement_compression`. The realized (current) shape is in `mz_clusters`. |
 | `changes`      | [`jsonb`]        | The dimensions in which `target` differs from the cluster's realized configuration, as a JSON object holding the target value per changed dimension. Empty (`{}`) once a record settles with its target applied. A rolled-back record keeps the abandoned diff. |
 
 ## `mz_cluster_auto_scaling_strategies`
@@ -204,6 +204,13 @@ The `mz_cluster_replica_metrics` view gives the last known CPU and RAM utilizati
 for all processes of all extant cluster replicas.
 
 At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+They are sampled roughly once a minute, so a spike shorter than the sampling interval is not
+visible here at all. For a view of a single replica sampled every few seconds, including high-water
+marks that survive a spike the sampling missed, see [Replica resource
+usage](/manage/monitor/replica-resource-usage/).
+
+Where a replica's disk is provided as swap rather than as a filesystem, `disk_bytes` reports swap
+usage.
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_metrics -->
 | Field               | Type         | Meaning
@@ -223,6 +230,11 @@ The `mz_cluster_replica_metrics_history` table records resource utilization metr
 for all processes of all extant cluster replicas.
 
 At this time, we do not make any guarantees about the exactness or freshness of these numbers.
+They are sampled roughly once a minute, so a spike shorter than the sampling interval leaves no
+trace. Unlike
+[`mz_introspection.mz_cluster_replica_resource_usage`](/reference/system-catalog/mz_introspection/#mz_cluster_replica_resource_usage),
+which is sampled every few seconds but is replica-local and resets when a replica restarts, this
+history is retained across restarts.
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_metrics_history -->
 | Field            | Type      | Meaning
@@ -646,6 +658,22 @@ all database objects in the system.
 | `object_id`             | [`text`]     | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).  |
 | `referenced_object_id`  | [`text`]     | The ID of the referenced object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
 
+## `mz_object_graph_edges`
+
+The `mz_object_graph_edges` view describes the dependency edges between maintained
+objects, as rendered by object dependency graphs.
+
+It unions the dataflow-layer dependencies from
+[`mz_materialization_dependencies`](#mz_materialization_dependencies), restricted to
+indexes, materialized views, sinks, sources, and tables, with the source-to-subsource
+and source-to-table edges that stand in for sources whose subsources carry the data.
+
+<!-- RELATION_SPEC mz_internal.mz_object_graph_edges -->
+| Field           | Type     | Meaning                                                                                |
+| --------------- | -------- | -------------------------------------------------------------------------------------- |
+| `object_id`     | [`text`] | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).     |
+| `dependency_id` | [`text`] | The ID of the object it depends on. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
+
 ## `mz_object_fully_qualified_names`
 
 The `mz_object_fully_qualified_names` view enriches the [`mz_catalog.mz_objects`](/reference/system-catalog/mz_catalog/#mz_objects) view with namespace information.
@@ -688,6 +716,33 @@ The `mz_object_history` view enriches the [`mz_catalog.mz_objects`](/reference/s
 | `created_at`    | [`timestamp with time zone`]                       | Wall-clock timestamp of when the object was created. `NULL` for built in system objects.                                                                                                |
 | `dropped_at`   | [`timestamp with time zone`]   | Wall-clock timestamp of when the object was dropped. `NULL` for built in system objects or if the object hasn't been dropped.                                              |
 
+## `mz_object_hydration_history`
+
+The `mz_object_hydration_history` table records completed hydration of indexes and
+materialized views, with one row for each time a dataflow hydrated on a replica.
+By default, rows are retained for 30 days while collection is enabled. Disabling
+collection also suspends retention, so existing rows remain until collection is
+enabled again. `object_id`, `cluster_id`, and `replica_id` may name objects that no
+longer exist.
+
+Recording is best effort. Only successful hydration is recorded, an episode can be
+missed if the object or its replica goes away before the episode is recorded, and a
+schema change to this table in a future release may clear its contents. On a
+multi-process replica, timestamps come from process-local logging clocks and include
+their clock skew. A process whose clock is ahead can be absent at the sampled
+logical timestamp, so the recorded finish can precede the latest process's finish.
+
+<!-- RELATION_SPEC mz_internal.mz_object_hydration_history -->
+| Field          | Type                         | Meaning                                                                                                                  |
+| -------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `object_id`    | [`text`]                     | The ID of the object's dataflow, as reported by the replica. Join `mz_internal.mz_object_global_ids` to reach the index or materialized view while that mapping exists. Dropping the dataflow retracts the mapping, so historical IDs may no longer resolve. |
+| `cluster_id`   | [`text`]                     | The ID of the object's cluster.                                                                                          |
+| `replica_id`   | [`text`]                     | The ID of the cluster replica. May name a replica that no longer exists.                                                 |
+| `installed_at` | [`timestamp with time zone`] | When the object's dataflow was installed on the replica.                                                                 |
+| `started_at`   | [`timestamp with time zone`] | When hydration work began, or `NULL` if the replica reported none. A replica that observed no start reports the installation time instead, so a zero interval between the two does not mean the dataflow started immediately. |
+| `hydrated_at`  | [`timestamp with time zone`] | When hydration finished.                                                                                                 |
+| `status`       | [`text`]                     | The terminal status. Currently always `hydrated`.                                                                        |
+
 ## `mz_object_transitive_dependencies`
 
 The `mz_object_transitive_dependencies` view describes the transitive dependency structure between
@@ -699,6 +754,12 @@ The view is defined as the transitive closure of [`mz_object_dependencies`](#mz_
 | ----------------------- | ------------ | --------                                                                                                              |
 | `object_id`             | [`text`]     | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).                          |
 | `referenced_object_id`  | [`text`]     | The ID of the (possibly transitively) referenced object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_metric_sinks -->
+<!-- TODO(metric-sink): promote to a documented RELATION_SPEC once
+     `enable_metric_sink` defaults on. The relation already ships full
+     per-column comments, so this "undocumented" marker is only correct while
+     the feature is gated off. -->
 
 ## `mz_notices`
 
@@ -1500,6 +1561,8 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_thinned -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_materialized_views -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_sources -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_tables -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_views -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_catalog_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_replica_size_internal -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_workload_classes -->

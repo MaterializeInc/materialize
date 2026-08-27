@@ -24,11 +24,9 @@ import * as React from "react";
 import { Link as RouterLink } from "react-router-dom";
 import useResizeObserver from "use-resize-observer";
 
-import ConnectModal from "~/components/ConnectModal";
+import ConnectDrawer from "~/components/connect/ConnectDrawer";
 import FreeTrialNotice from "~/components/FreeTrialNotice";
 import { MaterializeLogo } from "~/components/MaterializeLogo";
-import OidcConnectModal from "~/components/OidcConnectModal";
-import PasswordConnectModal from "~/components/PasswordConnectModal";
 import { AppConfigSwitch } from "~/config/AppConfigSwitch";
 import EnvironmentSelectField from "~/layouts/EnvironmentSelect";
 import ProfileDropdown from "~/layouts/ProfileDropdown";
@@ -153,9 +151,9 @@ export interface NavBarProps {
 
 export const NavBar = ({ isCollapsed }: NavBarProps) => {
   const {
-    isOpen: isConnectModalOpen,
-    onClose: onCloseConnectModal,
-    onOpen: onOpenConnectModal,
+    isOpen: isConnectDrawerOpen,
+    onClose: onCloseConnectDrawer,
+    onOpen: onOpenConnectDrawer,
   } = useDisclosure();
   const {
     isOpen: isMobileNavOpen,
@@ -268,13 +266,13 @@ export const NavBar = ({ isCollapsed }: NavBarProps) => {
                   <ConnectMenuItem
                     isCollapsed={isCollapsed}
                     width="100%"
-                    onClick={onOpenConnectModal}
+                    onClick={onOpenConnectDrawer}
                   />
 
-                  <ConnectModal
+                  <ConnectDrawer
                     user={runtimeConfig.user}
-                    onClose={onCloseConnectModal}
-                    isOpen={isConnectModalOpen}
+                    onClose={onCloseConnectDrawer}
+                    isOpen={isConnectDrawerOpen}
                   />
                 </HideIfEnvironmentDisabled>
               )
@@ -285,20 +283,18 @@ export const NavBar = ({ isCollapsed }: NavBarProps) => {
                   <ConnectMenuItem
                     isCollapsed={isCollapsed}
                     width="100%"
-                    onClick={onOpenConnectModal}
+                    onClick={onOpenConnectDrawer}
                   />
-                  {runtimeConfig.isOidcAvailable ? (
-                    <OidcConnectModal
-                      onClose={onCloseConnectModal}
-                      isOpen={isConnectModalOpen}
-                      auth={runtimeConfig.auth}
-                    />
-                  ) : (
-                    <PasswordConnectModal
-                      onClose={onCloseConnectModal}
-                      isOpen={isConnectModalOpen}
-                    />
-                  )}
+                  <ConnectDrawer
+                    onClose={onCloseConnectDrawer}
+                    isOpen={isConnectDrawerOpen}
+                    oidcEnabled={runtimeConfig.isOidcAvailable}
+                    auth={
+                      runtimeConfig.isOidcAvailable
+                        ? runtimeConfig.auth
+                        : undefined
+                    }
+                  />
                 </HideIfEnvironmentDisabled>
               )
             }

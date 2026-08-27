@@ -971,6 +971,8 @@ pub enum CatalogItemType {
     Secret,
     /// A connection.
     Connection,
+    /// A metric sink.
+    MetricSink,
 }
 
 impl CatalogItemType {
@@ -1004,6 +1006,7 @@ impl CatalogItemType {
             CatalogItemType::Func => false,
             CatalogItemType::Secret => false,
             CatalogItemType::Connection => false,
+            CatalogItemType::MetricSink => false,
         }
     }
 }
@@ -1021,6 +1024,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Func => f.write_str("func"),
             CatalogItemType::Secret => f.write_str("secret"),
             CatalogItemType::Connection => f.write_str("connection"),
+            CatalogItemType::MetricSink => f.write_str("metric sink"),
         }
     }
 }
@@ -1038,6 +1042,7 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Func => ObjectType::Func,
             CatalogItemType::Secret => ObjectType::Secret,
             CatalogItemType::Connection => ObjectType::Connection,
+            CatalogItemType::MetricSink => ObjectType::MetricSink,
         }
     }
 }
@@ -1055,6 +1060,7 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
             CatalogItemType::Func => mz_audit_log::ObjectType::Func,
             CatalogItemType::Secret => mz_audit_log::ObjectType::Secret,
             CatalogItemType::Connection => mz_audit_log::ObjectType::Connection,
+            CatalogItemType::MetricSink => mz_audit_log::ObjectType::MetricSink,
         }
     }
 }
@@ -1574,6 +1580,7 @@ pub enum ObjectType {
     MaterializedView,
     Source,
     Sink,
+    MetricSink,
     Index,
     Type,
     Role,
@@ -1596,6 +1603,7 @@ impl ObjectType {
             | ObjectType::MaterializedView
             | ObjectType::Source => true,
             ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
@@ -1620,6 +1628,7 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Source => ObjectType::Source,
             mz_sql_parser::ast::ObjectType::Subsource => ObjectType::Source,
             mz_sql_parser::ast::ObjectType::Sink => ObjectType::Sink,
+            mz_sql_parser::ast::ObjectType::MetricSink => ObjectType::MetricSink,
             mz_sql_parser::ast::ObjectType::Index => ObjectType::Index,
             mz_sql_parser::ast::ObjectType::Type => ObjectType::Type,
             mz_sql_parser::ast::ObjectType::Role => ObjectType::Role,
@@ -1643,6 +1652,7 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::MaterializedView(_) => ObjectType::MaterializedView,
             CommentObjectId::Source(_) => ObjectType::Source,
             CommentObjectId::Sink(_) => ObjectType::Sink,
+            CommentObjectId::MetricSink(_) => ObjectType::MetricSink,
             CommentObjectId::Index(_) => ObjectType::Index,
             CommentObjectId::Func(_) => ObjectType::Func,
             CommentObjectId::Connection(_) => ObjectType::Connection,
@@ -1666,6 +1676,7 @@ impl Display for ObjectType {
             ObjectType::MaterializedView => "MATERIALIZED VIEW",
             ObjectType::Source => "SOURCE",
             ObjectType::Sink => "SINK",
+            ObjectType::MetricSink => "METRIC SINK",
             ObjectType::Index => "INDEX",
             ObjectType::Type => "TYPE",
             ObjectType::Role => "ROLE",

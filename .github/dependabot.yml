@@ -1,9 +1,16 @@
 version: 2
 updates:
+# `/test/cargo-fuzz` is deliberately absent. The fuzz crates reach the root
+# workspace through `path` dependencies, so dependabot resolves that directory to
+# the root `Cargo.toml` and proposes edits to it while owning neither the root
+# `Cargo.lock` nor the fuzz manifests. Every such PR fails `--locked` and
+# duplicates the `/` PR for the same crate. Keeping the fuzz pins equal to the
+# root is enforced by `check_fuzz_versions_mirror_root` in `bin/lint-cargo`
+# instead, so a semver-incompatible root bump has to update the affected
+# `src/*/fuzz/Cargo.toml` by hand in the same PR.
 - package-ecosystem: cargo
   directories:
     - /
-    - /test/cargo-fuzz
   schedule:
     interval: weekly
     day: sunday
@@ -82,82 +89,18 @@ updates:
         - minor
         - patch
 - package-ecosystem: docker
-  directory: /misc/images/debian-base
-  schedule:
-    interval: weekly
-    day: sunday
-    time: "22:00"
-  # TODO: Add cooldown when https://github.com/dependabot/dependabot-core/issues/14044 is fixed
-  open-pull-requests-limit: 50
-  labels: [A-dependencies]
-  groups:
-    simple:
-      applies-to: version-updates
-      update-types:
-        - minor
-        - patch
-- package-ecosystem: docker
-  directory: /misc/images/openssh-static
-  schedule:
-    interval: weekly
-    day: sunday
-    time: "22:00"
-  # TODO: Add cooldown when https://github.com/dependabot/dependabot-core/issues/14044 is fixed
-  open-pull-requests-limit: 50
-  labels: [A-dependencies]
-  groups:
-    simple:
-      applies-to: version-updates
-      update-types:
-        - minor
-        - patch
-- package-ecosystem: docker
-  directory: /misc/images/tini-static
-  schedule:
-    interval: weekly
-    day: sunday
-    time: "22:00"
-  # TODO: Add cooldown when https://github.com/dependabot/dependabot-core/issues/14044 is fixed
-  open-pull-requests-limit: 50
-  labels: [A-dependencies]
-  groups:
-    simple:
-      applies-to: version-updates
-      update-types:
-        - minor
-        - patch
-- package-ecosystem: docker
-  directory: /misc/images/distroless-prod-base
-  schedule:
-    interval: weekly
-    day: sunday
-    time: "22:00"
-  # TODO: Add cooldown when https://github.com/dependabot/dependabot-core/issues/14044 is fixed
-  open-pull-requests-limit: 50
-  labels: [A-dependencies]
-  groups:
-    simple:
-      applies-to: version-updates
-      update-types:
-        - minor
-        - patch
-- package-ecosystem: docker
-  directory: /ci/builder
-  schedule:
-    interval: weekly
-    day: sunday
-    time: "22:00"
-  # TODO: Add cooldown when https://github.com/dependabot/dependabot-core/issues/14044 is fixed
-  open-pull-requests-limit: 50
-  labels: [A-dependencies]
-  groups:
-    simple:
-      applies-to: version-updates
-      update-types:
-        - minor
-        - patch
-- package-ecosystem: docker
-  directory: /test
+  directories:
+    - /console
+    - /console/misc/docker
+    - /misc/images/materialized-base
+    - /misc/images/debian-base
+    - /misc/images/openssh-static
+    - /misc/images/tini-static
+    - /misc/images/distroless-prod-base
+    - /misc/mcp-materialize
+    - /misc/mcp-materialize-agents
+    - /ci/builder
+    - /test
   schedule:
     interval: weekly
     day: sunday

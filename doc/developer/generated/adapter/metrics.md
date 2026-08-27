@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/metrics.rs
-revision: b644395dd7
+revision: 4f0805a4d8
 ---
 
 # adapter::metrics
@@ -13,3 +13,6 @@ The `mz_time_to_first_row_seconds` histogram carries an `application_name` label
 `Metrics` includes `catalog_transact_seconds` (a `HistogramVec` labeled by `method`) for timing catalog transact methods, `catalog_transact_phase_seconds` (a `HistogramVec` labeled by `phase`) for fine-grained per-phase timing within a catalog transaction (phases overlap and do not sum to `catalog_transact_seconds`), `apply_catalog_implications_seconds` for timing catalog implication application, and `group_commit_catalog_upper_seconds` for timing catalog shard upper advances during group commits and table register/forget operations.
 Several public metrics carry `MetricTag` annotations for categorization: `mz_query_total`, `mz_active_sessions`, `mz_active_subscribes`, and `mz_adapter_commands` carry `MetricTag::Environment`.
 Helper functions `session_type_label_value`, `statement_type_label_value`, and `subscribe_output_label_value` produce the label strings used for partitioning these metrics.
+`Metrics` includes a `subscribe_outputs` `IntCounterVec` (labeled via `subscribe_output_label_value`) counting subscribe output rows; `SessionMetrics` vends per-call counters from it via `Metrics::subscribe_outputs`.
+`Metrics` includes `active_internal_subscribes: IntGaugeVec` (labeled by `session_type`) tracking the number of active internal subscribes, which serve frontend-sequenced read-then-write operations. Internal subscribes are not reflected in `active_subscribes` or in the `mz_subscriptions` builtin table.
+`Metrics` includes `occ_retry_count: Histogram` recording the number of OCC retry attempts made per frontend read-then-write execution before it either succeeds or exhausts its retry budget.

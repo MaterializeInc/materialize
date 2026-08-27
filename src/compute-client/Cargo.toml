@@ -16,7 +16,6 @@ bytesize.workspace = true
 chrono.workspace = true
 derivative.workspace = true
 differential-dataflow.workspace = true
-futures.workspace = true
 mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-types = { path = "../compute-types" }
@@ -40,6 +39,10 @@ timely.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
+
+[dev-dependencies]
+bincode.workspace = true
+futures.workspace = true
 
 [features]
 default = []

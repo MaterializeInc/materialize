@@ -27,6 +27,7 @@ import psycopg
 
 from materialize import spawn, ui
 from materialize.mz_version import MzVersion
+from materialize.rustc_flags import Sanitizer
 from materialize.ui import UIError
 
 T = TypeVar("T")
@@ -48,7 +49,26 @@ DEFAULT_MZ_VOLUMES = [
 # a new feature causes benchmarks to become flaky, consider that this can also
 # impact customers' experience and try to find a solution other than disabling
 # the feature here!
-ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {}
+ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
+    # Benchmarks measure the intended production configuration. For hedged
+    # blob gets that is the planned enablement state (on, at production
+    # tuning), not the CI-wide coverage tuning below, whose short delay
+    # would add duplicate fetches to any measured get slower than it.
+    "persist_blob_hedged_get_enabled": "true",
+    "persist_blob_hedged_get_delay": "2s",
+    "persist_blob_hedged_get_budget_ratio": "0.01",
+}
+
+
+def sanitizer_enabled() -> bool:
+    """Whether the binaries under test were built with a sanitizer.
+
+    Sanitizer builds run several times slower and use several times as much
+    memory as ordinary ones, so tests that assert on timing, or that need
+    jemalloc (which sanitizer builds drop, as it clashes with the sanitizer
+    runtimes), have to account for them.
+    """
+    return Sanitizer[os.getenv("CI_SANITIZER", "none")] != Sanitizer.none
 
 
 def get_minimal_system_parameters(
@@ -75,7 +95,6 @@ def get_minimal_system_parameters(
         "enable_case_literal_transform": "true",
         "enable_cast_elimination": "true",
         "enable_coalesce_case_transform": "true",
-        "enable_columnar_lgalloc": "false",
         "enable_columnation_lgalloc": "false",
         "enable_compute_correction_v2": "true",
         "enable_compute_logical_backpressure": "true",
@@ -86,32 +105,28 @@ def get_minimal_system_parameters(
         "enable_expressions_in_limit_syntax": "true",
         "enable_fixed_correlated_cte_lowering": "true",
         "enable_introspection_subscribes": "true",
-        "enable_kafka_sink_partition_by": "true",
         "enable_lgalloc": "false",
         "enable_load_generator_counter": "true",
         "enable_logical_compaction_window": "true",
+        "enable_metric_sink": "true",
         "enable_multi_worker_storage_persist_sink": "true",
-        "enable_multi_replica_sources": "true",
         "enable_rbac_checks": "true",
         "enable_reduce_mfp_fusion": "true",
         "enable_refresh_every_mvs": "true",
         "enable_replacement_materialized_views": "true",
         "enable_cluster_schedule_refresh": "true",
-        # The cluster controller and background ALTER CLUSTER dyncfgs default on
-        # in current versions. Pin them explicitly so runs against older versions
-        # (which predate the flags or defaulted them off) exercise the legacy
-        # paths while current versions exercise the controller owning the
-        # managed-cluster replica set.
-        "enable_cluster_controller": (
-            "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
-        ),
+        # Pinned explicitly so runs against older versions (which predate the
+        # flag or defaulted it off) behave like current ones, where it defaults
+        # on.
         "enable_background_alter_cluster": (
             "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
         ),
         "enable_s3_tables_region_check": "false",
         "enable_statement_lifecycle_logging": "true",
         "enable_storage_introspection_logs": "true",
+        "enable_compute_error_distinct": "true",
         "enable_compute_temporal_bucketing": "true",
+        "enable_union_cancellation_after_relation_cse": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
         "grpc_client_http2_keep_alive_timeout": "5s",
@@ -124,8 +139,33 @@ def get_minimal_system_parameters(
         # End of list (ordered by name)
     }
 
+    if version >= MzVersion.parse_mz("v26.40.0-dev"):
+        # Exercise the row-limit check without constraining normal test queries.
+        config["compute_peek_row_iteration_limit"] = "1000000000"
+        config["enable_compute_peek_row_iteration_limit"] = "true"
+
     if version < MzVersion.parse_mz("v0.163.0-dev"):
         config["enable_compute_active_dataflow_cancelation"] = "true"
+
+    if version < MzVersion.parse_mz("v26.24.0-dev"):
+        config["enable_columnar_lgalloc"] = "false"
+    if version < MzVersion.parse_mz("v26.25.0-dev"):
+        config["enable_multi_replica_sources"] = "true"
+
+    if version >= MzVersion.parse_mz("v26.40.0-dev"):
+        config["hydration_history_collection_interval"] = "60s"
+
+    if sanitizer_enabled():
+        config["with_0dt_deployment_max_wait"] = "18000s"
+
+    # The cluster controller's break-glass gate. Removed in v26.38, where the
+    # controller runs unconditionally. Older binaries still read it, and
+    # defaulted it off before v26.29, so pin it on for them to keep mixed-version
+    # runs exercising the same path as current versions.
+    if version < MzVersion.parse_mz("v26.38.0-dev"):
+        config["enable_cluster_controller"] = (
+            "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
+        )
 
     return config
 
@@ -160,7 +200,7 @@ def get_variable_system_parameters(
         ["true", "false"] if read_committed_safe else ["false"],
     )
 
-    return [
+    params = [
         # -----
         # To reduce CRDB load as we are struggling with it in CI (values based on load test environment):
         VariableSystemParameter(
@@ -181,13 +221,21 @@ def get_variable_system_parameters(
         # -----
         # Persist internals changes, advance coverage
         VariableSystemParameter(
-            "persist_enable_arrow_lgalloc_noncc_sizes", "true", ["true", "false"]
-        ),
-        VariableSystemParameter(
-            "persist_enable_s3_lgalloc_noncc_sizes", "true", ["true", "false"]
-        ),
-        VariableSystemParameter(
             "persist_source_fetch_concurrency", "1", ["1", "2", "8", "16"]
+        ),
+        VariableSystemParameter(
+            "persist_blob_hedged_get_enabled", "true", ["true", "false"]
+        ),
+        # 10ms (vs the 2s production default) makes hedges actually fire in
+        # every CI run; 0s makes every blob get hedge under randomized seeds.
+        VariableSystemParameter(
+            "persist_blob_hedged_get_delay", "10ms", ["0s", "10ms", "2s"]
+        ),
+        # The production ratio: with the 10ms delay above, a full refill
+        # would hedge nearly every get and double CI blob traffic. The 1.0
+        # variant lets randomized runs pair a full budget with delay=0s.
+        VariableSystemParameter(
+            "persist_blob_hedged_get_budget_ratio", "0.01", ["1.0", "0.01"]
         ),
         # -----
         # Others (ordered by name),
@@ -218,6 +266,11 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "compute_apply_column_demands", "true", ["true", "false"]
         ),
+        # On by default so CI exercises the columnar merge batcher, which is
+        # off in production while it earns trust.
+        VariableSystemParameter(
+            "enable_columnar_merge_batcher", "true", ["true", "false"]
+        ),
         VariableSystemParameter(
             "compute_peek_response_stash_threshold_bytes",
             # 1 MiB, an in-between value
@@ -238,6 +291,11 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "enable_coalesce_case_transform",
             "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_adapter_frontend_occ_read_then_write",
+            "true" if version >= MzVersion.parse_mz("v26.36.0-dev") else "false",
             ["true", "false"],
         ),
         VariableSystemParameter(
@@ -271,12 +329,25 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
-            "enable_scoped_system_parameters",
-            "false",
+            "enable_simplify_from_less_existence",
+            "true",
             ["true", "false"],
         ),
         VariableSystemParameter(
-            "enable_simplify_from_less_existence",
+            "enable_union_cancellation_after_relation_cse",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_upsert_paged_spill",
+            "true",
+            ["true", "false"],
+        ),
+        # On by default so CI exercises the chunked stash flavor, which is
+        # off in production while it earns trust. Only meaningful when
+        # enable_upsert_v2 is true.
+        VariableSystemParameter(
+            "enable_upsert_chunked_stash",
             "true",
             ["true", "false"],
         ),
@@ -298,19 +369,12 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "mysql_source_snapshot_parallelism", "true", ["true", "false"]
         ),
+        # Low default so small tables exercise partitioning.
         VariableSystemParameter(
-            "persist_batch_columnar_format",
-            "structured" if version > MzVersion.parse_mz("v0.135.0-dev") else "both_v2",
-            ["row", "both_v2", "both", "structured"],
+            "mysql_source_snapshot_partition_min_rows", "2", ["2", "50000"]
         ),
         VariableSystemParameter(
             "persist_batch_delete_enabled", "true", ["true", "false"]
-        ),
-        VariableSystemParameter(
-            "persist_batch_structured_order", "true", ["true", "false"]
-        ),
-        VariableSystemParameter(
-            "persist_batch_builder_structured", "true", ["true", "false"]
         ),
         VariableSystemParameter(
             "persist_batch_structured_key_lower_len",
@@ -387,18 +451,6 @@ def get_variable_system_parameters(
             "persist_pubsub_push_diff_enabled", "true", ["true", "false"]
         ),
         VariableSystemParameter(
-            "persist_record_compactions", "true", ["true", "false"]
-        ),
-        VariableSystemParameter(
-            "persist_record_schema_id",
-            ("true" if version > MzVersion.parse_mz("v0.127.0-dev") else "false"),
-            (
-                ["true", "false"]
-                if version > MzVersion.parse_mz("v0.127.0-dev")
-                else ["false"]
-            ),
-        ),
-        VariableSystemParameter(
             "persist_rollup_use_active_rollup",
             ("true" if version > MzVersion.parse_mz("v0.143.0-dev") else "false"),
             (
@@ -464,6 +516,17 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "arrangement_size_history_retention_period", "7d", ["1min", "1h", "7d"]
         ),
+        *(
+            [
+                VariableSystemParameter(
+                    "hydration_history_retention_period",
+                    "30d",
+                    ["1min", "1h", "30d"],
+                )
+            ]
+            if version >= MzVersion.parse_mz("v26.40.0-dev")
+            else []
+        ),
         VariableSystemParameter(
             "persist_validate_part_bounds_on_read", "false", ["true", "false"]
         ),
@@ -490,7 +553,6 @@ def get_variable_system_parameters(
             "",
             ["", "0", "1", "1000", "2071", "1000000"],
         ),
-        VariableSystemParameter("storage_reclock_to_latest", "true", ["true", "false"]),
         VariableSystemParameter(
             "storage_source_decode_fuel",
             "100000",
@@ -509,6 +571,26 @@ def get_variable_system_parameters(
         ),
         # End of list (ordered by name)
     ]
+
+    if version < MzVersion.parse_mz("v26.14.0-dev"):
+        params.append(
+            VariableSystemParameter(
+                "storage_reclock_to_latest", "true", ["true", "false"]
+            )
+        )
+    if version < MzVersion.parse_mz("v26.23.0-dev"):
+        params.append(
+            VariableSystemParameter(
+                "persist_enable_arrow_lgalloc_noncc_sizes", "true", ["true", "false"]
+            )
+        )
+        params.append(
+            VariableSystemParameter(
+                "persist_enable_s3_lgalloc_noncc_sizes", "true", ["true", "false"]
+            )
+        )
+
+    return params
 
 
 def get_default_system_parameters(
@@ -572,13 +654,13 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "linear_join_yielding",
     "enable_column_paged_batcher",
     "enable_column_paged_batcher_spill",
+    "column_chunk_compress_min_depth",
     "column_paged_batcher_budget_fraction",
     "column_paged_batcher_lz4",
     "column_paged_batcher_swap_pageout",
     "column_paged_batcher_spill_worker_count",
     "column_paged_batcher_eager_backing",
     "column_paged_batcher_pool_rss_target_fraction",
-    "enable_upsert_paged_spill",
     "enable_lgalloc_eager_reclamation",
     "lgalloc_background_interval",
     "lgalloc_file_growth_dampener",
@@ -643,6 +725,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "persist_blob_operation_attempt_timeout",
     "persist_blob_connect_timeout",
     "persist_blob_read_timeout",
+    "persist_blob_hedged_get_max_concurrent",
+    "persist_blob_hedged_get_warm_interval",
     "persist_stats_collection_enabled",
     "persist_stats_filter_enabled",
     "persist_stats_budget_bytes",
@@ -701,6 +785,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     # The estimated path is covered explicitly in mysql-cdc/statistics.td and
     # by parallel-workload.
     "mysql_source_snapshot_exact_count_max_rows",
+    "mysql_source_snapshot_partition_probed_prefixes_per_billion_rows",
     "postgres_fetch_slot_resume_lsn_interval",
     "pg_schema_validation_interval",
     "pg_source_validate_timeline",
@@ -726,11 +811,13 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "with_0dt_caught_up_check_cutoff",
     "enable_0dt_caught_up_replica_status_check",
     "enable_0dt_caught_up_stability_check",
+    "enable_0dt_hydrate_migrated_builtin_mvs",
     "plan_insights_notice_fast_path_clusters_optimize_duration",
     "enable_expression_cache",
     "mz_metrics_lgalloc_map_refresh_interval",
     "mz_metrics_lgalloc_refresh_interval",
     "mz_metrics_rusage_refresh_interval",
+    "mz_metrics_usage_refresh_interval",
     "compute_peek_response_stash_batch_max_runs",
     "compute_peek_response_stash_read_batch_size_bytes",
     "compute_peek_response_stash_read_memory_budget_bytes",
@@ -763,6 +850,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "mcp_request_timeout",
     "user_id_pool_batch_size",
     "webhook_max_request_size_bytes",
+    "webhook_validation_memory_budget_bytes",
+    "subscribe_max_buffered_bytes",
     "cluster_controller_tick_interval",
     "default_cluster_reconfiguration_timeout",
     "read_then_write_max_dependencies",

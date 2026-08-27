@@ -13,6 +13,11 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+# mzcompose (and the compositions it runs) hands repository paths to the host
+# Docker daemon as bind mount sources, which requires container paths to equal
+# host paths. See CI_BUILDER_FIXED_WORKDIR in bin/ci-builder.
+export CI_BUILDER_FIXED_WORKDIR=0
+
 builder=${BUILDKITE_PLUGIN_MZCOMPOSE_CI_BUILDER:-min}
 
 if is_truthy "${CI_HEAP_PROFILES:-}"; then
@@ -404,6 +409,7 @@ cleanup() {
     && [ "$BUILDKITE_LABEL" != "QA Canary Environment Base Load" ] \
     && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Canary Environment" ] \
     && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Benchmarking Staging Environment" ] \
+    && [ "$BUILDKITE_LABEL" != ":rust: Miri test (full)" ] \
     && [[ ! "$BUILDKITE_LABEL" =~ Terraform\ .* ]] \
     && [[ ! "$BUILDKITE_LABEL" =~ Orchestratord\ .* ]] \
     && [[ ! "$BUILDKITE_LABEL" =~ Cluster\ spec\ sheet.* ]]; then

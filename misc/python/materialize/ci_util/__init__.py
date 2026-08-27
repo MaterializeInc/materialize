@@ -17,7 +17,8 @@ from typing import Any
 import requests
 from semver.version import VersionInfo
 
-from materialize import MZ_ROOT, buildkite, cargo, ui
+from materialize import MZ_ROOT, buildkite, cargo, git, ui
+from materialize.rustc_flags import Sanitizer
 
 
 def junit_report_filename(suite: str) -> Path:
@@ -92,3 +93,17 @@ def get_mz_version(workspace: cargo.Workspace | None = None) -> VersionInfo:
     if not workspace:
         workspace = cargo.Workspace(MZ_ROOT)
     return VersionInfo.parse(workspace.crates["mz-environmentd"].version_string)
+
+
+def dev_docker_tag() -> str:
+    """The Docker tag under which this commit's images are published.
+
+    Both the publishing side (`ci/test/dev_tag.py`) and anything that pulls
+    those images have to derive the tag the same way, or the pull looks for an
+    image that was never pushed.
+    """
+    # Ideally we'd use SemVer metadata (e.g., `v1.0.0+metadata`), but `+` is not
+    # a valid character in Docker tags, so we use `--` instead.
+    sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
+    suffix = "pr" if sanitizer == Sanitizer.none else f"pr-{sanitizer}"
+    return f"v{get_mz_version()}--{suffix}.g{git.rev_parse('HEAD')}"

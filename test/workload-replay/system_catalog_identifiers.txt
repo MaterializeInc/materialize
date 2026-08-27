@@ -368,6 +368,7 @@ floor
 format
 format_type
 form_of_use
+from_id
 from_index
 from_operator_address
 from_operator_id
@@ -664,6 +665,13 @@ mz_builtin_sources
 mz_catalog_raw
 mz_cluster_deployment_lineage
 mz_cluster_deployment_lineage_ind
+mz_cluster_replica_resource_usage
+mz_cluster_replica_resource_usage_s1_primary_idx
+mz_cluster_replica_resource_usage_s2_primary_idx
+mz_cluster_replica_resource_usage_s3_primary_idx
+mz_cluster_replica_resource_usage_s4_primary_idx
+mz_cluster_replica_resource_usage_s5_primary_idx
+mz_cluster_replica_resource_usage_u1_primary_idx
 mz_cluster_prometheus_metrics
 mz_cluster_prometheus_metrics_s1_primary_idx
 mz_cluster_prometheus_metrics_s2_primary_idx
@@ -900,6 +908,7 @@ mz_message_counts_sent_raw_s3_primary_idx
 mz_message_counts_sent_raw_s4_primary_idx
 mz_message_counts_sent_raw_s5_primary_idx
 mz_message_counts_sent_raw_u1_primary_idx
+mz_metric_sinks
 mz_minimal_name_qualification
 mz_mysql_source_tables
 mz_name_rank
@@ -922,6 +931,7 @@ mz_object_fully_qualified_names
 mz_object_global_ids
 mz_object_history
 mz_object_history_ind
+mz_object_hydration_history
 mz_object_lifetimes
 mz_object_lifetimes_ind
 mz_object_oid_alias

@@ -59,7 +59,7 @@ export async function fetchUserApiTokens(requestOptions?: RequestInit) {
 }
 
 export async function createUserApiToken(
-  params: { description: string },
+  params: { description: string; expiresInMinutes?: number },
   requestOptions?: RequestInit,
 ) {
   const response = handleFronteggResponse(
@@ -109,7 +109,15 @@ export async function fetchTenantApiTokens(requestOptions?: RequestInit) {
 }
 
 export async function createTenantApiToken(
-  { user, ...params }: { description: string; user: string; roleIds: string[] },
+  {
+    user,
+    ...params
+  }: {
+    description: string;
+    user: string;
+    roleIds: string[];
+    expiresInMinutes?: number;
+  },
   requestOptions?: RequestInit,
 ) {
   const response = handleFronteggResponse(

@@ -21,7 +21,7 @@
 
 use std::fmt;
 
-use mz_repr::{Datum, Row, RowArena, SqlColumnType};
+use mz_repr::{Datum, Row, RowArena, SqlColumnType, StableRow};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::variadic::LazyVariadicFunc;
@@ -42,7 +42,10 @@ use crate::{Eval, EvalError};
 )]
 pub struct CaseLiteralEntry {
     /// The literal value (as a single-datum `Row`).
-    pub literal: Row,
+    ///
+    /// A [`StableRow`] because `CaseLiteral` is part of the stable LIR
+    /// serialization surface, where raw `Row` bytes must not appear.
+    pub literal: StableRow,
     /// Index into the `exprs` vector of the corresponding result expression.
     pub expr_index: usize,
 }
@@ -87,7 +90,7 @@ impl LazyVariadicFunc for CaseLiteral {
         let key = Row::pack_slice(&[input]);
         if let Ok(pos) = self
             .lookup
-            .binary_search_by(|entry| entry.literal.cmp(&key))
+            .binary_search_by(|entry| entry.literal.0.cmp(&key))
         {
             exprs[self.lookup[pos].expr_index].eval(datums, temp_storage)
         } else {
@@ -130,7 +133,7 @@ impl CaseLiteral {
     /// Look up a key in the sorted lookup vec. Returns the expr index if found.
     pub fn get(&self, key: &Row) -> Option<usize> {
         self.lookup
-            .binary_search_by(|entry| entry.literal.cmp(key))
+            .binary_search_by(|entry| entry.literal.0.cmp(key))
             .ok()
             .map(|pos| self.lookup[pos].expr_index)
     }
@@ -140,7 +143,7 @@ impl CaseLiteral {
     pub fn insert(&mut self, literal: Row, expr_index: usize) -> Option<usize> {
         match self
             .lookup
-            .binary_search_by(|entry| entry.literal.cmp(&literal))
+            .binary_search_by(|entry| entry.literal.0.cmp(&literal))
         {
             Ok(pos) => {
                 let old = self.lookup[pos].expr_index;
@@ -151,7 +154,7 @@ impl CaseLiteral {
                 self.lookup.insert(
                     pos,
                     CaseLiteralEntry {
-                        literal,
+                        literal: StableRow(literal),
                         expr_index,
                     },
                 );

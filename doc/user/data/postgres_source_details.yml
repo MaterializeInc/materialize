@@ -158,6 +158,25 @@
     SOURCE` and create a new view (materialized or non-) that unions the new
     table.
 
+- name: postgres-partitioned-tables
+  content: |
+    When you add a [declaratively partitioned
+    table](https://www.postgresql.org/docs/current/ddl-partitioning.html) to a
+    publication, PostgreSQL expands it to the table's leaf partitions; the parent
+    table is not itself replicated. Materialize ingests one table per partition,
+    which you can reassemble into the parent table using `UNION ALL`.
+
+    Materialize does **not** support ingesting from a publication created with
+    [`publish_via_partition_root =
+    true`](https://www.postgresql.org/docs/current/sql-createpublication.html),
+    and doing so can produce incorrect results.
+
+- name: postgres-partitioned-tables-action
+  content: |
+    See [Ingest from partitioned
+    tables](/ingest-data/postgres/partitioned-tables/) for the supported
+    approaches, including how to add and remove partitions over time.
+
 - name: postgres-compatible-schema-changes
   content: |
     The use of [`CREATE SOURCE`](/sql/create-source/postgres-v2/) with `CREATE
@@ -218,6 +237,14 @@
 
       {{% include-from-yaml data="postgres_source_details"
     name="postgres-inherited-tables-action" %}}
+
+    ### Partitioned tables
+
+    {{% include-from-yaml data="postgres_source_details"
+    name="postgres-partitioned-tables" %}}
+
+    {{% include-from-yaml data="postgres_source_details"
+    name="postgres-partitioned-tables-action" %}}
 
     ### Replication slots
 

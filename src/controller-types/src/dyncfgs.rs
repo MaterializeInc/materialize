@@ -11,61 +11,76 @@
 
 use std::time::Duration;
 
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 
 /// The interval at which to retry cleaning replicas from past generatinos.
 pub const CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL: Config<Duration> = Config::new(
     "controller_past_generation_replica_cleanup_retry_interval",
     Duration::from_secs(300),
     "The interval at which to attempt to retry cleaning up replicas from past generations.",
+    ParameterScope::Environment,
 );
 
 pub const ENABLE_0DT_DEPLOYMENT_SOURCES: Config<bool> = Config::new(
     "enable_0dt_deployment_sources",
     true,
     "Whether to enable zero-downtime deployments for sources that support it (experimental).",
+    ParameterScope::Environment,
 );
 
 pub const WALLCLOCK_LAG_RECORDING_INTERVAL: Config<Duration> = Config::new(
     "wallclock_lag_recording_interval",
     Duration::from_secs(60),
     "The interval at which to record `WallclockLagHistory` introspection.",
+    ParameterScope::Environment,
 );
 
 pub const WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL: Config<Duration> = Config::new(
     "wallclock_lag_histogram_period_interval",
     Duration::from_secs(24 * 60 * 60),
     "The period interval of histograms in `WallclockLagHistogram` introspection.",
+    ParameterScope::Environment,
 );
+
+// The four configs below make up the `TimelyConfig` of a replica's `clusterd`
+// processes. They are replica-scoped: `Controller::provision_replica` resolves
+// them against the replica's scoped overrides and bakes the result into the
+// process configuration, so a change reaches a replica only when it is next
+// provisioned.
 
 pub const ENABLE_TIMELY_ZERO_COPY: Config<bool> = Config::new(
     "enable_timely_zero_copy",
     false,
     "Enable the zero copy allocator (timely dataflow).",
+    ParameterScope::Replica,
 );
 
 pub const ENABLE_TIMELY_ZERO_COPY_LGALLOC: Config<bool> = Config::new(
     "enable_timely_zero_copy_lgalloc",
     false,
     "Enable backing the zero copy allocator with lgalloc (timely dataflow).",
+    ParameterScope::Replica,
 );
 
 pub const TIMELY_ZERO_COPY_LIMIT: Config<Option<usize>> = Config::new(
     "timely_zero_copy_limit",
     None,
     "Optional limit of the zero copy allocator in allocations (timely dataflow).",
+    ParameterScope::Replica,
 );
 
 pub const ARRANGEMENT_EXERT_PROPORTIONALITY: Config<u32> = Config::new(
     "arrangement_exert_proportionality",
     16,
     "Value that controls how much merge effort to exert on arrangements.",
+    ParameterScope::Replica,
 );
 
 pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
     "enable_paused_cluster_readhold_downgrade",
     true,
     "Aggressively downgrade input read holds for indexes on zero-replica clusters.",
+    ParameterScope::Environment,
 );
 
 /// Adds the full set of all controller `Config`s.

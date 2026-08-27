@@ -25,6 +25,7 @@ use crate::azure::{AzureBlob, AzureBlobConfig};
 use crate::file::{FileBlob, FileBlobConfig};
 #[cfg(feature = "foundationdb")]
 use crate::foundationdb::{FdbConsensus, FdbConsensusConfig};
+use crate::hedge::HedgeSibling;
 use crate::location::{Blob, Consensus, Determinate, ExternalError};
 use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
 use crate::metrics::S3BlobMetrics;
@@ -33,7 +34,68 @@ use crate::s3::{S3Blob, S3BlobConfig};
 
 /// Adds the full set of all mz_persist `Config`s.
 pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
-    configs.add(&crate::postgres::PG_CONSENSUS_READ_COMMITTED)
+    configs
+        .add(&crate::postgres::PG_CONSENSUS_READ_COMMITTED)
+        .add(&crate::hedge::BLOB_HEDGED_GET_ENABLED)
+        .add(&crate::hedge::BLOB_HEDGED_GET_DELAY)
+        .add(&crate::hedge::BLOB_HEDGED_GET_MAX_CONCURRENT)
+        .add(&crate::hedge::BLOB_HEDGED_GET_BUDGET_RATIO)
+        .add(&crate::hedge::BLOB_HEDGED_GET_WARM_INTERVAL)
+}
+
+/// Opens the sibling handle that [crate::hedge::HedgedBlob] runs hedge
+/// requests on for `url`.
+///
+/// Contract:
+/// - An [HedgeSibling::Isolated] handle observes exactly the same durable
+///   store as a handle opened from the same `url`, but is built from a
+///   scratch client: it shares no HTTP connection pool, DNS state, or
+///   credential chain, so a hedge request on it can never be assigned a
+///   connection the primary's pool has already half-killed.
+/// - Backends where a second open would observe an independent store (mem,
+///   turmoil's simulated store), or that have no connection state to isolate
+///   (file), return [HedgeSibling::SharedWithPrimary] instead.
+/// - Callers must use the handle only for idempotent reads.
+///
+/// Errors opening the sibling degrade to [HedgeSibling::Unavailable] with a
+/// warning rather than failing: persist must come up even if hedging cannot.
+/// A process that hits this keeps hedging unavailable until restart, visible
+/// as `mz_persist_blob_hedges_skipped{reason="unavailable"}` and
+/// `mz_persist_blob_hedge_armed` staying 0.
+pub async fn open_hedge_sibling(
+    url: &SensitiveUrl,
+    knobs: Box<dyn BlobKnobs>,
+    metrics: S3BlobMetrics,
+) -> HedgeSibling {
+    let config = match BlobConfig::try_from(url, knobs, metrics).await {
+        Ok(config) => config,
+        Err(err) => {
+            warn!(
+                "hedged blob gets unavailable, sibling config failed: {}",
+                err
+            );
+            return HedgeSibling::Unavailable;
+        }
+    };
+    match config {
+        // A second S3/Azure config builds its own SDK client and therefore
+        // its own connection pool, with DNS resolved per connect.
+        config @ (BlobConfig::S3(_) | BlobConfig::Azure(_)) => match config.open().await {
+            Ok(blob) => HedgeSibling::Isolated(blob),
+            Err(err) => {
+                warn!("hedged blob gets unavailable, sibling open failed: {}", err);
+                HedgeSibling::Unavailable
+            }
+        },
+        // File has no connection pool to isolate, so a second instance would
+        // buy nothing. A second open of Mem (or of turmoil's simulated
+        // store) would be actively wrong: it creates an INDEPENDENT store,
+        // and a hedged get against a different store can return `Ok(None)`
+        // for data that exists.
+        BlobConfig::File(_) | BlobConfig::Mem(_) => HedgeSibling::SharedWithPrimary,
+        #[cfg(feature = "turmoil")]
+        BlobConfig::Turmoil(_) => HedgeSibling::SharedWithPrimary,
+    }
 }
 
 /// Config for an implementation of [Blob].

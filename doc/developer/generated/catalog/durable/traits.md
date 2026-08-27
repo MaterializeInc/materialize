@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/durable/traits.rs
-revision: 929ea2b3c5
+revision: 89575e831d
 ---
 
 # catalog::durable::traits

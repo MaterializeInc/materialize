@@ -392,7 +392,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                     buf.extend(iv.months.to_le_bytes());
                     buf.extend(iv.days.to_le_bytes());
                     buf.extend(iv.micros.to_le_bytes());
-                    debug_assert_eq!(buf.len(), 16);
+                    mz_ore::soft_assert_eq_no_log!(buf.len(), 16);
                     buf
                 }),
                 SqlScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),

@@ -278,12 +278,9 @@ steps:
           composition: cargo-fuzz
           ci_builder: nightly
           args:
-            - --profile=fruitful
+            - --profile=all
             - --max-seconds=86400
             - --wall-budget=84600
-            # Step hard-times out at 1440min (86400s). --wall-budget ends fuzzing
-            # at 84600s, leaving 1800s; cap minimize at 1200s so the corpus
-            # upload has ~600s of headroom before the kill.
             - --minimize-timeout=1200
             - --corpus-sync
     artifact_paths:
@@ -892,7 +889,7 @@ steps:
       - id: upsert-large-scale
         topics: [kafka]
         label: Upsert large scale ingestion
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 3600
         plugins:
           - ./ci/plugins/mzcompose:

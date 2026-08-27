@@ -19,9 +19,10 @@ use mz_repr::{ArrayRustType, Datum, Row, RowPacker, SqlColumnType, SqlScalarType
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     AstInfo, AvroSchema, ConnectionOption, ConnectionOptionName, CreateConnectionType,
-    CreateSubsourceOptionName, Format, FormatSpecifier, KafkaSourceConfigOptionName,
-    PgConfigOptionName, ProtobufSchema, RawClusterName, RawItemName, SourceEnvelope,
-    SourceErrorPolicy, UnresolvedItemName, Value, WithOptionValue,
+    CreateSinkConnection, CreateSubsourceOptionName, Format, FormatSpecifier,
+    IcebergSinkConfigOptionName, IcebergSinkMode, KafkaSinkConfigOptionName,
+    KafkaSourceConfigOptionName, PgConfigOptionName, ProtobufSchema, RawClusterName, RawItemName,
+    SinkEnvelope, SourceEnvelope, SourceErrorPolicy, UnresolvedItemName, Value, WithOptionValue,
 };
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
@@ -234,6 +235,7 @@ fn jsonb_strip_nulls<'a>(a: JsonbRef<'a>) -> Jsonb {
     Jsonb::from_row(row)
 }
 
+// NOTE: no budget pre-check, see the exception on `crate::func::check_build_fits_budget`.
 #[sqlfunc]
 fn jsonb_pretty<'a>(a: JsonbRef<'a>) -> String {
     let mut buf = String::new();
@@ -456,7 +458,15 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
 
                 "connection"
             }
-            CreateView(_) => "view",
+            CreateView(stmt) => {
+                let mut definition = stmt.definition.query.to_ast_string_stable();
+                // PostgreSQL appends a semicolon in `pg_views.definition`, we
+                // do the same for compatibility's sake.
+                definition.push(';');
+                info.insert("definition", json!(definition));
+
+                "view"
+            }
             CreateMaterializedView(stmt) => {
                 let Some(in_cluster) = stmt.in_cluster else {
                     return Err("missing IN CLUSTER".into());
@@ -473,7 +483,13 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
 
                 "materialized-view"
             }
-            CreateTable(_) | CreateTableFromSource(_) => "table",
+            CreateTable(_) => "table",
+            CreateTableFromSource(stmt) => {
+                let source_id = get_item_id(stmt.source)?;
+                info.insert("source_id", json!(source_id));
+
+                "table"
+            }
             CreateSource(stmt) => {
                 let Some(in_cluster) = stmt.in_cluster else {
                     return Err("missing IN CLUSTER".into());
@@ -576,7 +592,139 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
 
                 "subsource"
             }
-            CreateSink(_) => "sink",
+            // Everything the mz_sinks, mz_kafka_sinks and mz_iceberg_sinks
+            // views read. The Rust side of each value lives in `Sink` and
+            // `StorageSinkConnection`, so those and this have to move together.
+            //
+            // NOTE: we bail below if a sink has no resolved `IN CLUSTER`, no
+            // `TOPIC` on kafka, or no `NAMESPACE`/`TABLE` on iceberg. Planning
+            // guarantees all four. But if one ever slipped through it would
+            // take down every view built on this function, not just the sink
+            // ones.
+            CreateSink(stmt) => {
+                let Some(in_cluster) = stmt.in_cluster else {
+                    return Err("missing IN CLUSTER".into());
+                };
+                info.insert("cluster_id", json!(get_cluster_id(in_cluster)?));
+
+                match stmt.connection {
+                    CreateSinkConnection::Kafka {
+                        connection,
+                        options,
+                        key: sink_key,
+                        ..
+                    } => {
+                        info.insert("sink_type", json!("kafka"));
+                        info.insert("connection_id", json!(get_item_id(connection)?));
+
+                        let topic = options
+                            .into_iter()
+                            .find(|o| o.name == KafkaSinkConfigOptionName::Topic)
+                            .and_then(|o| o.value.as_ref().and_then(option_string))
+                            .ok_or("kafka sink missing TOPIC")?;
+                        info.insert("topic", json!(topic));
+
+                        if let Some(envelope) = stmt.envelope {
+                            let envelope_type = match envelope {
+                                SinkEnvelope::Upsert => "upsert",
+                                SinkEnvelope::Debezium => "debezium",
+                            };
+                            info.insert("envelope_type", json!(envelope_type));
+                        }
+
+                        if let Some(format_spec) = stmt.format {
+                            // A key format only survives if the sink has a
+                            // `KEY`. Without one `kafka_sink_builder` throws
+                            // away the key half of a key/value spec, and does
+                            // not copy a bare spec over to the key either.
+                            let (key_format, value_format) =
+                                match (&format_spec, sink_key.is_some()) {
+                                    (FormatSpecifier::Bare(fmt), false) => (None, format_name(fmt)),
+                                    (FormatSpecifier::Bare(fmt), true) => {
+                                        (Some(format_name(fmt)), format_name(fmt))
+                                    }
+                                    (FormatSpecifier::KeyValue { value, .. }, false) => {
+                                        (None, format_name(value))
+                                    }
+                                    (FormatSpecifier::KeyValue { key, value }, true) => {
+                                        (Some(format_name(key)), format_name(value))
+                                    }
+                                };
+                            if let Some(key_format) = key_format {
+                                info.insert("key_format", json!(key_format));
+                            }
+                            info.insert("value_format", json!(value_format));
+
+                            // The deprecated combined `format`. Only avro/avro
+                            // and json/json collapse to a single name.
+                            // Everything else, text/text and bytes/bytes
+                            // included, gets the composite form.
+                            let combined = match key_format {
+                                None => value_format.to_string(),
+                                Some(key_format)
+                                    if key_format == value_format
+                                        && matches!(value_format, "avro" | "json") =>
+                                {
+                                    value_format.to_string()
+                                }
+                                Some(key_format) => {
+                                    format!("key-{key_format}-value-{value_format}")
+                                }
+                            };
+                            info.insert("format", json!(combined));
+                        }
+                    }
+                    CreateSinkConnection::Iceberg {
+                        catalog_connection,
+                        options,
+                        ..
+                    } => {
+                        info.insert("sink_type", json!("iceberg"));
+                        // The catalog connection, not the optional AWS one.
+                        info.insert("connection_id", json!(get_item_id(catalog_connection)?));
+
+                        let mut namespace = None;
+                        let mut table = None;
+                        for option in options {
+                            match option.name {
+                                IcebergSinkConfigOptionName::Namespace => {
+                                    namespace = option.value.as_ref().and_then(option_string)
+                                }
+                                IcebergSinkConfigOptionName::Table => {
+                                    table = option.value.as_ref().and_then(option_string)
+                                }
+                            }
+                        }
+                        info.insert(
+                            "namespace",
+                            json!(namespace.ok_or("iceberg sink missing NAMESPACE")?),
+                        );
+                        info.insert("table", json!(table.ok_or("iceberg sink missing TABLE")?));
+
+                        // Iceberg spells the envelope `MODE`, and has no format
+                        // columns at all.
+                        if let Some(mode) = stmt.mode {
+                            let envelope_type = match mode {
+                                IcebergSinkMode::Upsert => "upsert",
+                                IcebergSinkMode::Append => "append",
+                            };
+                            info.insert("envelope_type", json!(envelope_type));
+                        }
+                    }
+                }
+
+                "sink"
+            }
+            CreateMetricSink(stmt) => {
+                let Some(in_cluster) = stmt.in_cluster else {
+                    return Err("missing IN CLUSTER".into());
+                };
+                let cluster_id = get_cluster_id(in_cluster)?;
+                info.insert("cluster_id", json!(cluster_id));
+                let from_id = get_item_id(stmt.from)?;
+                info.insert("from_id", json!(from_id));
+                "metric-sink"
+            }
             CreateIndex(stmt) => {
                 let Some(in_cluster) = stmt.in_cluster else {
                     return Err("missing IN CLUSTER".into());
@@ -588,7 +736,73 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                 "index"
             }
             CreateType(_) => "type",
-            _ => return Err("not a CREATE item statement".into()),
+            // NOTE: every statement that creates a catalog item needs an arm above. These
+            // catalog views run this over every item row before their type filter drops the
+            // unwanted rows, so one unclassified `create_sql` takes out `mz_objects`,
+            // `mz_indexes`, and every sibling view at once. The match is exhaustive to make
+            // that a compile error here, not a runtime failure.
+            Select(_)
+            | Insert(_)
+            | Copy(_)
+            | Update(_)
+            | Delete(_)
+            | CreateDatabase(_)
+            | CreateSchema(_)
+            | CreateRole(_)
+            | CreateCluster(_)
+            | CreateClusterReplica(_)
+            | CreateNetworkPolicy(_)
+            | AlterCluster(_)
+            | AlterOwner(_)
+            | AlterObjectRename(_)
+            | AlterObjectSwap(_)
+            | AlterRetainHistory(_)
+            | AlterIndex(_)
+            | AlterSecret(_)
+            | AlterSetCluster(_)
+            | AlterSink(_)
+            | AlterSource(_)
+            | AlterSystemSet(_)
+            | AlterSystemReset(_)
+            | AlterSystemResetAll(_)
+            | AlterConnection(_)
+            | AlterNetworkPolicy(_)
+            | AlterRole(_)
+            | AlterTableAddColumn(_)
+            | AlterMaterializedViewApplyReplacement(_)
+            | Discard(_)
+            | DropObjects(_)
+            | DropOwned(_)
+            | SetVariable(_)
+            | ResetVariable(_)
+            | Show(_)
+            | StartTransaction(_)
+            | SetTransaction(_)
+            | Commit(_)
+            | Rollback(_)
+            | Subscribe(_)
+            | ExplainPlan(_)
+            | ExplainPushdown(_)
+            | ExplainTimestamp(_)
+            | ExplainSinkSchema(_)
+            | ExplainAnalyzeObject(_)
+            | ExplainAnalyzeCluster(_)
+            | Declare(_)
+            | Fetch(_)
+            | Close(_)
+            | Prepare(_)
+            | Execute(_)
+            | ExecuteUnitTest(_)
+            | Deallocate(_)
+            | Raise(_)
+            | GrantRole(_)
+            | RevokeRole(_)
+            | GrantPrivileges(_)
+            | RevokePrivileges(_)
+            | AlterDefaultPrivileges(_)
+            | ReassignOwned(_)
+            | ValidateConnection(_)
+            | Comment(_) => return Err("not a CREATE item statement".into()),
         };
         info.insert("type", json!(item_type));
 
@@ -1696,5 +1910,421 @@ mod tests {
              IN CLUSTER [u42] FROM LOAD GENERATOR COUNTER";
         let out = super::parse_catalog_create_sql(sql).expect("ok");
         assert_eq!(as_serde(out).get("envelope_type"), None);
+    }
+
+    // --- parse_catalog_create_sql, CreateSink arm ----------------------------
+
+    const AVRO_FORMAT: &str = "FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \
+         [u12 AS \"materialize\".\"public\".\"csr_conn\"]";
+
+    /// A persisted kafka-sink `create_sql`: resolved names, and a `TOPIC` that
+    /// planning guarantees.
+    fn kafka_sink_sql(key: Option<&str>, format: &str, envelope: &str) -> String {
+        let key_clause = key.map(|k| format!(" KEY ({k})")).unwrap_or_default();
+        format!(
+            "CREATE SINK \"materialize\".\"public\".\"snk\" \
+             IN CLUSTER [u42] \
+             FROM [u1 AS \"materialize\".\"public\".\"t\"] \
+             INTO KAFKA CONNECTION [u10 AS \"materialize\".\"public\".\"k_conn\"] \
+             (TOPIC 'sink-topic'){key_clause} {format} ENVELOPE {envelope}"
+        )
+    }
+
+    fn iceberg_sink_sql(mode: &str) -> String {
+        format!(
+            "CREATE SINK \"materialize\".\"public\".\"ice\" \
+             IN CLUSTER [u42] \
+             FROM [u1 AS \"materialize\".\"public\".\"t\"] \
+             INTO ICEBERG CATALOG CONNECTION [u20 AS \"materialize\".\"public\".\"cat_conn\"] \
+             (NAMESPACE 'ns', TABLE 'tbl') \
+             USING AWS CONNECTION [u21 AS \"materialize\".\"public\".\"aws_conn\"] \
+             MODE {mode}"
+        )
+    }
+
+    #[mz_ore::test]
+    fn sink_kafka_bare_format_without_key() {
+        let sql = kafka_sink_sql(None, "FORMAT JSON", "DEBEZIUM");
+        let out = super::parse_catalog_create_sql(&sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "type": "sink",
+                "sink_type": "kafka",
+                "cluster_id": "u42",
+                "connection_id": "u10",
+                "topic": "sink-topic",
+                "envelope_type": "debezium",
+                "format": "json",
+                "value_format": "json",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn sink_kafka_bare_format_with_key_derives_key_format() {
+        // A bare format applies to the key too once the sink has a KEY, which
+        // is what makes the deprecated `format` column collapse to `avro`.
+        let sql = kafka_sink_sql(Some("a"), AVRO_FORMAT, "UPSERT");
+        let out = super::parse_catalog_create_sql(&sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "type": "sink",
+                "sink_type": "kafka",
+                "cluster_id": "u42",
+                "connection_id": "u10",
+                "topic": "sink-topic",
+                "envelope_type": "upsert",
+                "format": "avro",
+                "key_format": "avro",
+                "value_format": "avro",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn sink_kafka_bare_text_format_with_key_does_not_collapse() {
+        // Only avro/avro and json/json collapse, so a keyed text sink reports
+        // the composite form even though both halves are `text`.
+        let sql = kafka_sink_sql(Some("a"), "FORMAT TEXT", "UPSERT");
+        let out = super::parse_catalog_create_sql(&sql).expect("ok");
+        let out = as_serde(out);
+        assert_eq!(out["format"], json!("key-text-value-text"));
+        assert_eq!(out["key_format"], json!("text"));
+        assert_eq!(out["value_format"], json!("text"));
+    }
+
+    #[mz_ore::test]
+    fn sink_kafka_key_value_json_collapses() {
+        let sql = kafka_sink_sql(Some("a"), "KEY FORMAT JSON VALUE FORMAT JSON", "UPSERT");
+        let out = as_serde(super::parse_catalog_create_sql(&sql).expect("ok"));
+        assert_eq!(out["format"], json!("json"));
+        assert_eq!(out["key_format"], json!("json"));
+        assert_eq!(out["value_format"], json!("json"));
+    }
+
+    #[mz_ore::test]
+    fn sink_kafka_key_value_mixed_is_composite() {
+        let sql = kafka_sink_sql(Some("a"), "KEY FORMAT TEXT VALUE FORMAT BYTES", "UPSERT");
+        let out = as_serde(super::parse_catalog_create_sql(&sql).expect("ok"));
+        assert_eq!(out["format"], json!("key-text-value-bytes"));
+        assert_eq!(out["key_format"], json!("text"));
+        assert_eq!(out["value_format"], json!("bytes"));
+    }
+
+    #[mz_ore::test]
+    fn sink_kafka_key_format_without_key_is_dropped() {
+        // `kafka_sink_builder` ignores the key half of the format spec when the
+        // sink has no KEY, so neither `key_format` nor the composite `format`
+        // may reflect it.
+        let sql = kafka_sink_sql(None, "KEY FORMAT JSON VALUE FORMAT TEXT", "DEBEZIUM");
+        let out = as_serde(super::parse_catalog_create_sql(&sql).expect("ok"));
+        assert_eq!(out["format"], json!("text"));
+        assert_eq!(out["key_format"], serde_json::Value::Null);
+        assert_eq!(out["value_format"], json!("text"));
+    }
+
+    #[mz_ore::test]
+    fn sink_kafka_missing_topic_errors() {
+        let sql = "CREATE SINK \"materialize\".\"public\".\"snk\" \
+             IN CLUSTER [u42] \
+             FROM [u1 AS \"materialize\".\"public\".\"t\"] \
+             INTO KAFKA CONNECTION [u10 AS \"materialize\".\"public\".\"k_conn\"] \
+             FORMAT JSON ENVELOPE DEBEZIUM";
+        let err = super::parse_catalog_create_sql(sql).unwrap_err();
+        assert!(
+            matches!(err, EvalError::InvalidCatalogJson(msg) if msg.contains("missing TOPIC")),
+            "wrong error variant/message"
+        );
+    }
+
+    #[mz_ore::test]
+    fn sink_iceberg_upsert_mode() {
+        let sql = iceberg_sink_sql("UPSERT");
+        let out = super::parse_catalog_create_sql(&sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "type": "sink",
+                "sink_type": "iceberg",
+                "cluster_id": "u42",
+                // The catalog connection, never the AWS connection (u21).
+                "connection_id": "u20",
+                "namespace": "ns",
+                "table": "tbl",
+                "envelope_type": "upsert",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn sink_iceberg_append_mode() {
+        let sql = iceberg_sink_sql("APPEND");
+        let out = as_serde(super::parse_catalog_create_sql(&sql).expect("ok"));
+        // `append` is reachable only through an iceberg sink's MODE.
+        assert_eq!(out["envelope_type"], json!("append"));
+    }
+
+    #[mz_ore::test]
+    fn sink_iceberg_missing_table_errors() {
+        let sql = "CREATE SINK \"materialize\".\"public\".\"ice\" \
+             IN CLUSTER [u42] \
+             FROM [u1 AS \"materialize\".\"public\".\"t\"] \
+             INTO ICEBERG CATALOG CONNECTION [u20 AS \"materialize\".\"public\".\"cat_conn\"] \
+             (NAMESPACE 'ns') MODE UPSERT";
+        let err = super::parse_catalog_create_sql(sql).unwrap_err();
+        assert!(
+            matches!(err, EvalError::InvalidCatalogJson(msg) if msg.contains("missing TABLE")),
+            "wrong error variant/message"
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn sink_arm_leaves_other_item_types_alone() {
+        let sql = "CREATE VIEW \"materialize\".\"public\".\"v\" AS SELECT 1";
+        let out = super::parse_catalog_create_sql(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({ "type": "view", "definition": "SELECT 1;" })
+        );
+    }
+
+    // --- parse_catalog_create_sql --------------------------------------------
+
+    /// `type` for a `create_sql`, or the error message if parsing failed.
+    fn item_type(sql: &str) -> Result<String, String> {
+        match super::parse_catalog_create_sql(sql) {
+            Ok(out) => match as_serde(out) {
+                serde_json::Value::Object(mut m) => match m.remove("type") {
+                    Some(serde_json::Value::String(s)) => Ok(s),
+                    other => panic!("no string `type` key: {other:?}"),
+                },
+                other => panic!("not a JSON object: {other:?}"),
+            },
+            Err(EvalError::InvalidCatalogJson(msg)) => Err(msg.to_string()),
+            Err(e) => panic!("unexpected error variant: {e:?}"),
+        }
+    }
+
+    fn view_sql(query: &str) -> String {
+        format!("CREATE VIEW \"materialize\".\"public\".\"v\" AS {query}")
+    }
+
+    /// `definition` for a `CREATE VIEW` whose query is `query`.
+    fn view_definition(query: &str) -> String {
+        match as_serde(super::parse_catalog_create_sql(&view_sql(query)).expect("ok")) {
+            serde_json::Value::Object(mut m) => match m.remove("definition") {
+                Some(serde_json::Value::String(s)) => s,
+                other => panic!("no string `definition` key: {other:?}"),
+            },
+            other => panic!("not a JSON object: {other:?}"),
+        }
+    }
+
+    /// `mz_tables` and `mz_views` select rows by
+    /// `parse_catalog_create_sql(...)->>'type'`, and the function runs over
+    /// every `Item` row in the catalog, so a statement kind that changes its
+    /// reported type silently gains or loses rows in those relations. Pin the
+    /// type of every kind the catalog can hold.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn catalog_item_type_per_statement_kind() {
+        let cases = [
+            (
+                "CREATE TABLE \"materialize\".\"public\".\"t\" (a int4)",
+                "table",
+            ),
+            // A table created from a source, and a webhook table, are both
+            // `table`, so both land in mz_tables.
+            (
+                "CREATE TABLE \"materialize\".\"public\".\"tbl\" \
+                 FROM SOURCE [u1 AS \"materialize\".\"public\".\"src\"] \
+                 (REFERENCE = \"topic\") FORMAT TEXT",
+                "table",
+            ),
+            (
+                "CREATE TABLE \"materialize\".\"public\".\"wht\" FROM WEBHOOK BODY FORMAT JSON",
+                "table",
+            ),
+            (
+                "CREATE VIEW \"materialize\".\"public\".\"v\" AS SELECT 1",
+                "view",
+            ),
+            (
+                "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" \
+                 IN CLUSTER [u1] AS SELECT 1",
+                "materialized-view",
+            ),
+            (
+                "CREATE SOURCE \"materialize\".\"public\".\"lg\" \
+                 IN CLUSTER [u1] FROM LOAD GENERATOR COUNTER",
+                "source",
+            ),
+            (
+                "CREATE SOURCE \"materialize\".\"public\".\"wh\" \
+                 IN CLUSTER [u1] FROM WEBHOOK BODY FORMAT JSON",
+                "source",
+            ),
+            (
+                "CREATE SUBSOURCE \"materialize\".\"public\".\"sub\" (id int4) \
+                 OF SOURCE [u1 AS \"materialize\".\"public\".\"src\"]",
+                "subsource",
+            ),
+            (
+                "CREATE SUBSOURCE \"materialize\".\"public\".\"progress\" (id int4) \
+                 WITH (PROGRESS)",
+                "subsource",
+            ),
+            (
+                "CREATE SINK \"materialize\".\"public\".\"snk\" IN CLUSTER [u1] \
+                 FROM [u1 AS \"materialize\".\"public\".\"t\"] \
+                 INTO KAFKA CONNECTION [u2 AS \"materialize\".\"public\".\"c\"] \
+                 (TOPIC 'tp') FORMAT JSON ENVELOPE DEBEZIUM",
+                "sink",
+            ),
+            (
+                "CREATE INDEX \"i\" IN CLUSTER [u1] \
+                 ON [u1 AS \"materialize\".\"public\".\"t\"] (\"a\")",
+                "index",
+            ),
+            (
+                "CREATE TYPE \"materialize\".\"public\".\"ty\" AS LIST (ELEMENT TYPE = int4)",
+                "type",
+            ),
+            (
+                "CREATE SECRET \"materialize\".\"public\".\"s\" AS 'x'",
+                "secret",
+            ),
+            (
+                "CREATE CONNECTION \"materialize\".\"public\".\"c\" \
+                 TO KAFKA (BROKER 'b', SECURITY PROTOCOL PLAINTEXT)",
+                "connection",
+            ),
+        ];
+        for (sql, expected) in cases {
+            assert_eq!(item_type(sql).as_deref(), Ok(expected), "for {sql}");
+        }
+    }
+
+    /// `mz_views.definition` is produced here. It used to be produced by
+    /// `pack_view_update` in the adapter, so the exact rendering is a
+    /// compatibility surface: `pg_views.definition` reads it.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn catalog_view_definition() {
+        // Identifiers and function names come back fully quoted, literals
+        // untouched, and PostgreSQL's trailing semicolon is appended.
+        assert_eq!(view_definition("SELECT 1"), "SELECT 1;");
+        assert_eq!(
+            view_definition("WITH c AS (SELECT 1 AS a) SELECT a FROM c"),
+            "WITH \"c\" AS (SELECT 1 AS \"a\") SELECT \"a\" FROM \"c\";"
+        );
+        assert_eq!(
+            view_definition("SELECT 1 UNION ALL SELECT 2"),
+            "SELECT 1 UNION ALL SELECT 2;"
+        );
+        assert_eq!(
+            view_definition("SELECT (SELECT max(a) FROM [u1 AS \"materialize\".\"public\".\"t\"])"),
+            "SELECT (SELECT \"max\"(\"a\") FROM [u1 AS \"materialize\".\"public\".\"t\"]);"
+        );
+        // Identifiers needing quotes, an embedded double quote, non-ASCII, an
+        // embedded single quote in a literal, and ORDER BY all survive.
+        assert_eq!(
+            view_definition(
+                "SELECT \"a b\", \"héllo\", \"q\"\"x\" \
+                 FROM [u1 AS \"materialize\".\"public\".\"t\"] \
+                 WHERE s = 'lit''eral' AND n = 42 ORDER BY 1"
+            ),
+            "SELECT \"a b\", \"héllo\", \"q\"\"x\" \
+             FROM [u1 AS \"materialize\".\"public\".\"t\"] \
+             WHERE \"s\" = 'lit''eral' AND \"n\" = 42 ORDER BY 1;"
+        );
+    }
+
+    /// The rendering must be a fixed point: `pg_views` consumers re-issue
+    /// `definition` as the body of a new view, so a second pass through the
+    /// parser has to produce the identical string. The trailing `;` is part of
+    /// what gets re-parsed.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn catalog_view_definition_is_idempotent() {
+        for query in [
+            "SELECT 1",
+            "WITH c AS (SELECT 1 AS a) SELECT a FROM c",
+            "SELECT 1 UNION ALL SELECT 2",
+            "SELECT \"a b\", \"q\"\"x\" FROM [u1 AS \"materialize\".\"public\".\"t\"] \
+             WHERE s = 'lit''eral' ORDER BY 1",
+        ] {
+            let once = view_definition(query);
+            assert_eq!(
+                view_definition(&once),
+                once,
+                "not a fixed point for {query}"
+            );
+        }
+    }
+
+    /// `mz_tables.source_id` comes from this key. A table with no source must
+    /// omit it entirely, so the MV's `->>'source_id'` yields SQL NULL.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn catalog_table_source_id() {
+        let from_source = as_serde(
+            super::parse_catalog_create_sql(
+                "CREATE TABLE \"materialize\".\"public\".\"tbl\" \
+                 FROM SOURCE [u1 AS \"materialize\".\"public\".\"src\"] \
+                 (REFERENCE = \"topic\") FORMAT TEXT",
+            )
+            .expect("ok"),
+        );
+        assert_eq!(from_source, json!({ "type": "table", "source_id": "u1" }));
+
+        for sql in [
+            "CREATE TABLE \"materialize\".\"public\".\"t\" (a int4)",
+            "CREATE TABLE \"materialize\".\"public\".\"wht\" FROM WEBHOOK BODY FORMAT JSON",
+        ] {
+            assert_eq!(
+                as_serde(super::parse_catalog_create_sql(sql).expect("ok")),
+                json!({ "type": "table" }),
+                "for {sql}"
+            );
+        }
+    }
+
+    /// Every error here is fatal to the whole of `mz_tables`/`mz_views`, not to
+    /// one row: the MVs call this function inside their `WHERE` clause, so an
+    /// item the parser rejects makes the relation unreadable for everyone.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn catalog_create_sql_errors() {
+        assert_eq!(
+            item_type("this is not sql"),
+            Err(
+                "failed to parse create_sql: Expected a keyword at the beginning of a statement, \
+                 found identifier \"this\""
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            item_type("CREATE TABLE t (a int4); CREATE TABLE u (b int4)"),
+            Err("expected a single statement, found 2".to_string())
+        );
+        // A statement that is not a CREATE of a catalog item, e.g. if a future
+        // change persists something else in an Item record.
+        assert_eq!(
+            item_type("SELECT 1"),
+            Err("not a CREATE item statement".to_string())
+        );
+        // Catalog `create_sql` always names items by id. An unresolved name
+        // means the record was written wrong.
+        assert_eq!(
+            item_type(
+                "CREATE TABLE \"materialize\".\"public\".\"tbl\" \
+                 FROM SOURCE src (REFERENCE = \"topic\")"
+            ),
+            Err("unresolved item name".to_string())
+        );
     }
 }

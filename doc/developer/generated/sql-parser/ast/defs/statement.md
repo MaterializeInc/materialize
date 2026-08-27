@@ -1,12 +1,14 @@
 ---
 source: src/sql-parser/src/ast/defs/statement.rs
-revision: fca741734d
+revision: 96c4e5a965
 ---
 
 # mz-sql-parser::ast::defs::statement
 
-Defines `Statement<T>`, the top-level enum of all SQL statement types supported by Materialize, including DML (SELECT, INSERT, UPDATE, DELETE, COPY), DDL (CREATE/ALTER/DROP for connections, databases, schemas, sources, sinks, tables, views, materialized views, indexes, secrets, clusters, roles, types, functions), and control statements (SUBSCRIBE, EXPLAIN, SHOW, SET, RESET, BEGIN, COMMIT, ROLLBACK, PREPARE, EXECUTE, EXECUTE UNIT TEST, DECLARE, FETCH, CLOSE, INSPECT, RAISE).
+Defines `Statement<T>`, the top-level enum of all SQL statement types supported by Materialize, including DML (SELECT, INSERT, UPDATE, DELETE, COPY), DDL (CREATE/ALTER/DROP for connections, databases, schemas, sources, sinks, metric sinks, tables, views, materialized views, indexes, secrets, clusters, roles, types, functions, network policies; ALTER MATERIALIZED VIEW APPLY REPLACEMENT; DISCARD), and control statements (SUBSCRIBE, EXPLAIN PLAN, EXPLAIN PUSHDOWN, EXPLAIN TIMESTAMP, EXPLAIN SINK SCHEMA, EXPLAIN ANALYZE OBJECT, EXPLAIN ANALYZE CLUSTER, SHOW, SET, RESET, BEGIN, COMMIT, ROLLBACK, PREPARE, EXECUTE, EXECUTE UNIT TEST, DEALLOCATE, DECLARE, FETCH, CLOSE, RAISE, GRANT/REVOKE ROLE, GRANT/REVOKE PRIVILEGES, ALTER DEFAULT PRIVILEGES, REASSIGN OWNED, VALIDATE CONNECTION, COMMENT).
 Each statement variant has a corresponding struct with its specific fields.
+
+`CreateMetricSinkStatement<T>` represents a `CREATE METRIC SINK [IF NOT EXISTS] <name> [IN CLUSTER <cluster>] FROM <source> [WITH (PREFIX = '...')]` statement. Fields: `name: UnresolvedItemName`, `in_cluster: Option<T::ClusterName>`, `if_not_exists: bool`, `from: T::ItemName`, `with_options: Vec<CreateMetricSinkOption<T>>`. `CreateMetricSinkOptionName` has a single variant `Prefix`; its `redact_value()` returns `false`. The `AstDisplay` impl persists the `WITH (PREFIX = ...)` clause in `create_sql` so the prefix survives a restart.
 
 `ExecuteUnitTestStatement<T>` represents an `EXECUTE UNIT TEST <name> FOR <target> [AT TIME <expr>] [MOCK <view_def>, ...] EXPECTED <result_def>` statement. Fields: `name: Ident`, `target: T::ItemName`, `at_time: Option<Expr<T>>`, `mocks: Vec<MockViewDef<T>>`, `expected: ExpectedResultDef<T>`.
 
@@ -50,3 +52,11 @@ In redacted `AstDisplay` output, `WithOptionValue::Secret` is not redacted: a se
 `FetchStatement<T>`'s `AstDisplay` impl force-quotes a cursor name equal to `forward` (case-insensitive) when no count is present, preventing the optional leading `FORWARD` keyword from consuming the cursor name on reparse.
 
 `GrantTargetSpecification<T>`'s `AstDisplay` impl uses the private `write_grant_object_type_plural` helper to pluralize the object type keyword. `ObjectType::NetworkPolicy` pluralizes to `POLICIES`; all other types append `S` to their keyword. The preceding space before `IN DATABASE` and `IN SCHEMA` is emitted by the helper as part of the separator string.
+
+`AbbreviatedGrantStatement<T>` and `AbbreviatedRevokeStatement<T>`'s `AstDisplay` impls use the same `write_grant_object_type_plural` helper to emit the pluralized object type in `GRANT ... ON <type>S TO ...` and `REVOKE ... ON <type>S FROM ...` output.
+
+`ShowObjectType` includes a `MetricSink { in_cluster: Option<T::ClusterName> }` variant. Its `AstDisplay` impl prints `METRIC SINKS` and, when `in_cluster` is set, appends `IN CLUSTER <name>`.
+
+`ShowCreateMetricSinkStatement<T>` represents a `SHOW [REDACTED] CREATE METRIC SINK <metric_sink_name>` statement. Fields: `metric_sink_name: T::ItemName`, `redacted: bool`. `ShowStatement` includes a `ShowCreateMetricSink(ShowCreateMetricSinkStatement<T>)` variant.
+
+`ClusterFeatureName` includes an `EnableUnionCancellationAfterRelationCse` variant whose `redact_value()` returns `false`. `ExplainPlanOptionName` likewise includes an `EnableUnionCancellationAfterRelationCse` variant with `redact_value()` returning `false`.

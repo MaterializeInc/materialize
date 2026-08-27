@@ -914,6 +914,14 @@ pub struct RelationDesc {
 }
 
 impl RustType<ProtoRelationDesc> for RelationDesc {
+    // NOTE: `ProtoRelationDesc` has no field for the `ColumnIndex` keys, only the values in
+    // `ColumnIndex` order, so a desc whose indexes are sparse (what
+    // `VersionedRelationDesc::at_version` returns once a column has been dropped, and what
+    // `RelationDesc::apply_demand` returns) comes back from `from_proto` renumbered to `0..n`.
+    // `ColumnIndex::to_stable_name` is the arrow field name that `RowColumnarEncoder` and
+    // `RowColumnarDecoder` agree on, so encoding a sparse desc as the schema of data written
+    // under the original indexes builds a decoder that looks up the wrong fields. Only dense
+    // descs may be handed to `Codec::encode_schema`.
     fn into_proto(&self) -> ProtoRelationDesc {
         let (names, metadata): (Vec<_>, Vec<_>) = self
             .metadata
@@ -949,6 +957,31 @@ impl RustType<ProtoRelationDesc> for RelationDesc {
     }
 
     fn from_proto(proto: ProtoRelationDesc) -> Result<Self, TryFromProtoError> {
+        let typ: SqlRelationType = proto.typ.into_rust_if_some("ProtoRelationDesc::typ")?;
+
+        // Reject shapes that `VersionedRelationDesc::validate` calls corruption. Nothing
+        // downstream catches them: they decode and re-encode cleanly, and only panic at first
+        // use, e.g. `iter()` indexing `typ.columns()[typ_idx]` out of bounds, or `into_iter()`
+        // tripping `zip_eq`. Both are reachable from untrusted proto bytes.
+        if proto.names.len() != typ.column_types.len() {
+            return Err(TryFromProtoError::InvalidFieldError(format!(
+                "ProtoRelationDesc: names ({}) and column_types ({}) length mismatch",
+                proto.names.len(),
+                typ.column_types.len()
+            )));
+        }
+        if let Some(key) = typ
+            .keys
+            .iter()
+            .flatten()
+            .find(|key| **key >= typ.column_types.len())
+        {
+            return Err(TryFromProtoError::InvalidFieldError(format!(
+                "ProtoRelationDesc: key index {key} out of bounds for {} columns",
+                typ.column_types.len()
+            )));
+        }
+
         // `metadata` Migration Logic: We wrote some `ProtoRelationDesc`s into Persist before the
         // metadata field was added. If the field doesn't exist we fill it in with default values,
         // and when converting into_proto we omit these fields so the serialized bytes roundtrip.
@@ -990,10 +1023,7 @@ impl RustType<ProtoRelationDesc> for RelationDesc {
             })
             .collect::<Result<_, _>>()?;
 
-        Ok(RelationDesc {
-            typ: proto.typ.into_rust_if_some("ProtoRelationDesc::typ")?,
-            metadata,
-        })
+        Ok(RelationDesc { typ, metadata })
     }
 }
 
@@ -1369,6 +1399,19 @@ impl RelationDesc {
 
     /// Creates a new [`RelationDesc`] retaining only the columns specified in `demands`.
     pub fn apply_demand(&self, demands: &BTreeSet<usize>) -> RelationDesc {
+        // This filters `metadata` by raw ColumnIndex but `typ` by position,
+        // which only agree when the desc is dense. Every desc constructible
+        // today is (schema history is add-only), but a dropped column would
+        // desync the two and silently attach types, statistics, and filter
+        // specs to the wrong columns downstream.
+        debug_assert!(
+            self.metadata
+                .iter()
+                .enumerate()
+                .all(|(pos, (idx, meta))| idx.0 == pos && meta.typ_idx == pos),
+            "apply_demand requires a dense RelationDesc (ColumnIndex == typ_idx): {:?}",
+            self.metadata,
+        );
         let mut new_desc = self.clone();
 
         // Update ColumnMetadata.
@@ -1824,10 +1867,18 @@ impl VersionedRelationDesc {
                 }
             }
 
+            // Every version past the root is stamped exactly once, by the add or the
+            // drop that created it, so a column that was added and later dropped
+            // accounts for two of them and both have to be counted. Collapsing to
+            // `dropped.unwrap_or(added)` would lose the add's version, and with it any
+            // desc where a non-root column was later dropped.
             let versions = desc
                 .metadata
                 .values()
-                .map(|meta| meta.dropped.unwrap_or(meta.added));
+                .flat_map(|meta| [Some(meta.added), meta.dropped])
+                .flatten()
+                // The root version is the one version many columns can share.
+                .filter(|version| *version != RelationVersion::root());
             let mut max = 0;
             let mut sum = 0;
             for version in versions {
@@ -2027,6 +2078,23 @@ pub fn arb_relation_desc_diff(
 mod tests {
     use super::*;
     use prost::Message;
+
+    /// `apply_demand`, and the stats and filter-spec plumbing downstream of
+    /// it, require dense descs. A desc with a dropped column must trip the
+    /// assertion rather than silently misattach columns.
+    #[mz_ore::test]
+    #[should_panic(expected = "dense RelationDesc")]
+    fn apply_demand_rejects_non_dense_desc() {
+        let desc = RelationDesc::builder()
+            .with_column("a", SqlScalarType::Int32.nullable(false))
+            .with_column("b", SqlScalarType::Int32.nullable(false))
+            .with_column("c", SqlScalarType::Int32.nullable(false))
+            .finish();
+        let mut versioned = VersionedRelationDesc::new(desc);
+        let version = versioned.drop_column("b");
+        let desc = versioned.at_version(RelationVersionSelector::Specific(version));
+        let _ = desc.apply_demand(&BTreeSet::from([0]));
+    }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
@@ -2324,6 +2392,65 @@ mod tests {
           }
         }
         "###);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
+    fn test_drop_column_added_after_root() {
+        let desc = RelationDesc::builder()
+            .with_column("a", SqlScalarType::Bool.nullable(true))
+            .finish();
+        let mut versioned = VersionedRelationDesc::new(desc);
+
+        let v1 = versioned.add_column("b", SqlScalarType::String.nullable(false));
+        let v2 = versioned.drop_column("b");
+        assert_eq!(v1, RelationVersion(1));
+        assert_eq!(v2, RelationVersion(2));
+
+        assert_eq!(
+            versioned
+                .at_version(RelationVersionSelector::Specific(v1))
+                .arity(),
+            2
+        );
+        assert_eq!(
+            versioned
+                .at_version(RelationVersionSelector::Specific(v2))
+                .arity(),
+            1
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
+    fn relation_desc_proto_rejects_corrupt_shapes() {
+        fn proto(num_types: usize, num_names: usize, keys: Vec<Vec<usize>>) -> ProtoRelationDesc {
+            let mut typ = SqlRelationType::new(vec![SqlScalarType::Bool.nullable(true); num_types]);
+            typ.keys = keys;
+            ProtoRelationDesc {
+                typ: Some(typ.into_proto()),
+                names: (0..num_names)
+                    .map(|i| ColumnName::from(format!("c{i}")).into_proto())
+                    .collect(),
+                metadata: vec![],
+            }
+        }
+
+        // A desc with more names than types panics in `iter()`, one with more types than names
+        // panics in `into_iter()`, and an out of bounds key is what `validate` calls corruption.
+        // All three re-encode identically, so a proto round-trip oracle cannot see them.
+        for (num_types, num_names) in [(0, 1), (2, 0), (3, 1)] {
+            let err = RelationDesc::from_proto(proto(num_types, num_names, vec![]))
+                .expect_err("length mismatch must be rejected");
+            assert!(err.to_string().contains("length mismatch"), "{err}");
+        }
+        let err = RelationDesc::from_proto(proto(1, 1, vec![vec![7]]))
+            .expect_err("out of bounds key must be rejected");
+        assert!(err.to_string().contains("out of bounds"), "{err}");
+
+        // The well formed shape still decodes, and stays usable.
+        let desc = RelationDesc::from_proto(proto(2, 2, vec![vec![1]])).expect("valid");
+        assert_eq!(desc.iter().count(), 2);
     }
 
     #[mz_ore::test]

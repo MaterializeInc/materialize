@@ -2491,6 +2491,176 @@ def workflow_autoscaling(c: Composition, parser: WorkflowArgumentParser) -> None
         assert live_strategy("scaled") is None, "expected the policy to be reset"
 
 
+def workflow_cluster_options(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Generic cluster option reconciliation over the ``cluster-options/*``
+    projects.
+
+    Reconciliation compares the definition against the `SHOW CREATE CLUSTER`
+    statement the server renders, which spells out every option including the
+    ones the definition left to their defaults. These cases pin the two halves
+    of that comparison: a default the definition omits is not drift, and a value
+    the definition declares is."""
+    setup_base(c)
+
+    def create_sql(cluster: str) -> str:
+        """The canonical CREATE CLUSTER statement the server renders."""
+        rows = c.sql_query(f'SELECT create_sql FROM (SHOW CREATE CLUSTER "{cluster}")')
+        assert len(rows) == 1, f"expected one row for cluster {cluster}, got {rows}"
+        return rows[0][0]
+
+    def await_create_sql(cluster: str, *fragments: str) -> str:
+        """Wait for a cluster's canonical statement to contain every fragment.
+
+        An `ALTER CLUSTER` that changes the replica shape, such as SIZE or
+        INTROSPECTION INTERVAL, reconfigures gracefully: the controller runs the
+        realized and target replica sets side by side, and the catalog keeps
+        reporting the realized shape until cut-over. Reading it the instant
+        `apply` returns can still show the old value."""
+        deadline = time.time() + 60
+        sql = create_sql(cluster)
+        while not all(f in sql for f in fragments) and time.time() < deadline:
+            time.sleep(1)
+            sql = create_sql(cluster)
+        for fragment in fragments:
+            assert fragment in sql, f"expected {fragment!r} in {sql}"
+        return sql
+
+    def clusters_phase(project: str) -> dict:
+        """The clusters phase of a dry-run apply."""
+        result = run_mz_deploy(c, project, "apply", "--dry-run", "--output", "json")
+        dry_run = parse_dry_run_json(result)
+        phase = find_phase(dry_run["phases"], "clusters")
+        assert phase is not None, f"no clusters phase in {dry_run}"
+        return phase
+
+    with c.test_case("cluster-options-create"):
+        result = run_mz_deploy(c, "cluster-options/v1", "apply")
+        assert result.returncode == 0, f"apply v1 failed: {result.stderr}"
+        await_create_sql(
+            "sized", "SIZE = 'scale=1,workers=1'", "REPLICATION FACTOR = 1"
+        )
+
+    with c.test_case("cluster-options-defaults-are-not-drift"):
+        # The definition names only SIZE, so every other option the server
+        # renders holds its default. This case fails the day Materialize renders
+        # a new always-present option whose default reconciliation lacks.
+        phase = clusters_phase("cluster-options/v1")
+        assert (
+            len(phase_actions(phase, "altered")) == 0
+        ), f"expected no altered clusters on re-apply, got {phase}"
+        assert (
+            len(phase_actions(phase, "up_to_date")) == 1
+        ), f"expected the cluster to be up-to-date, got {phase}"
+
+    with c.test_case("cluster-options-replication-factor"):
+        # Declaring REPLICATION FACTOR where the live value is the default is
+        # drift.
+        phase = clusters_phase("cluster-options/v2")
+        altered = phase_actions(phase, "altered")
+        assert len(altered) == 1, f"expected 1 altered cluster, got {phase}"
+        statements = " ".join(altered[0].get("statements", []))
+        assert (
+            "SET (REPLICATION FACTOR = 2)" in statements
+        ), f"expected a REPLICATION FACTOR alter, got {statements}"
+
+        result = run_mz_deploy(c, "cluster-options/v2", "apply")
+        assert result.returncode == 0, f"apply v2 failed: {result.stderr}"
+        await_create_sql(
+            "sized", "SIZE = 'scale=1,workers=1'", "REPLICATION FACTOR = 2"
+        )
+
+        # A declared value that matches the live one is not drift either.
+        phase = clusters_phase("cluster-options/v2")
+        assert (
+            len(phase_actions(phase, "up_to_date")) == 1
+        ), f"expected the cluster to be up-to-date, got {phase}"
+
+    with c.test_case("cluster-options-reset-and-resize"):
+        # Dropping REPLICATION FACTOR reverts it to the server default.
+        phase = clusters_phase("cluster-options/v3")
+        altered = phase_actions(phase, "altered")
+        assert len(altered) == 1, f"expected 1 altered cluster, got {phase}"
+        statements = altered[0].get("statements", [])
+        assert any(
+            "RESET (REPLICATION FACTOR)" in s for s in statements
+        ), f"expected a REPLICATION FACTOR reset, got {statements}"
+        assert any(
+            "SET (SIZE = 'scale=1,workers=2')" in s for s in statements
+        ), f"expected a SIZE alter, got {statements}"
+
+        result = run_mz_deploy(c, "cluster-options/v3", "apply")
+        assert result.returncode == 0, f"apply v3 failed: {result.stderr}"
+        await_create_sql(
+            "sized", "SIZE = 'scale=1,workers=2'", "REPLICATION FACTOR = 1"
+        )
+
+    with c.test_case("cluster-options-unnamed-options"):
+        # Neither option appears anywhere in the reconciler.
+        phase = clusters_phase("cluster-options/v4")
+        altered = phase_actions(phase, "altered")
+        assert len(altered) == 1, f"expected 1 altered cluster, got {phase}"
+        statements = " ".join(altered[0].get("statements", []))
+        assert (
+            "EXPERIMENTAL ARRANGEMENT COMPRESSION = true" in statements
+        ), f"expected an arrangement compression alter, got {statements}"
+
+        result = run_mz_deploy(c, "cluster-options/v4", "apply")
+        assert result.returncode == 0, f"apply v4 failed: {result.stderr}"
+
+        await_create_sql(
+            "sized",
+            "EXPERIMENTAL ARRANGEMENT COMPRESSION = true",
+            "INTROSPECTION INTERVAL = INTERVAL '00:00:05'",
+        )
+
+        # The definition writes '5s' where the server renders INTERVAL '00:00:05'.
+        phase = clusters_phase("cluster-options/v4")
+        assert (
+            len(phase_actions(phase, "up_to_date")) == 1
+        ), f"expected the cluster to be up-to-date, got {phase}"
+
+    with c.test_case("cluster-option-spellings-are-idempotent"):
+        # The planner gives bare booleans their implied true value, maps a zero
+        # introspection interval to NULL, and accepts DISK as a legacy no-op.
+        result = run_mz_deploy(c, "cluster-options/spellings", "apply")
+        assert result.returncode == 0, f"apply spellings failed: {result.stderr}"
+
+        zero_and_noops = await_create_sql(
+            "zero_and_noops",
+            "EXPERIMENTAL ARRANGEMENT COMPRESSION = true",
+            "INTROSPECTION INTERVAL = NULL",
+            "MANAGED = true",
+        )
+        assert (
+            "DISK" not in zero_and_noops
+        ), f"expected SHOW CREATE to omit DISK, got {zero_and_noops}"
+        await_create_sql("implied_debugging", "INTROSPECTION DEBUGGING = true")
+
+        phase = clusters_phase("cluster-options/spellings")
+        assert (
+            len(phase_actions(phase, "altered")) == 0
+        ), f"equivalent option spellings must not drift, got {phase}"
+        assert (
+            len(phase_actions(phase, "up_to_date")) == 2
+        ), f"expected both clusters to be up-to-date, got {phase}"
+
+    with c.test_case("cluster-options-stage-clones-every-option"):
+        # The clone is identical option for option.
+        result = run_mz_deploy(
+            c, "cluster-options/v4", "stage", "--deploy-id", "co1", "--allow-dirty"
+        )
+        assert result.returncode == 0, f"stage co1 failed: {result.stderr}"
+
+        production = create_sql("sized")
+        staged = create_sql("sized_co1")
+        assert staged == production.replace(
+            '"sized"', '"sized_co1"', 1
+        ), f"staging cluster diverged from production:\n  {production}\n  {staged}"
+
+        result = run_mz_deploy(c, "cluster-options/v4", "abort", "co1")
+        assert result.returncode == 0, f"abort co1 failed: {result.stderr}"
+
+
 def workflow_apply_all_role_ordering(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:

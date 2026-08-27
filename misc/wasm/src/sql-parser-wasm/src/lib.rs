@@ -100,6 +100,7 @@ fn refine_show_kind(stmt: &ShowStatement<Raw>) -> &'static str {
         ShowStatement::ShowCreateSource(_) => "show_create_source",
         ShowStatement::ShowCreateTable(_) => "show_create_table",
         ShowStatement::ShowCreateSink(_) => "show_create_sink",
+        ShowStatement::ShowCreateMetricSink(_) => "show_create_metric_sink",
         ShowStatement::ShowCreateIndex(_) => "show_create_index",
         ShowStatement::ShowCreateConnection(_) => "show_create_connection",
         ShowStatement::ShowCreateCluster(_) => "show_create_cluster",

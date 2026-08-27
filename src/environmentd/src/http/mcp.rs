@@ -751,6 +751,14 @@ fn endpoint_instructions(
             } else {
                 ""
             };
+            // Same reasoning for the introspection rule: only route to the
+            // `query` tool when it is exposed, otherwise say that
+            // cluster-targeted introspection is unavailable here.
+            let introspection_rule = if query_tool_enabled {
+                "- mz_introspection relations (for example mz_dataflow_arrangement_sizes) are cluster-scoped and query_system_catalog answers about the session's default cluster: read them only through the query tool with its cluster argument (and cluster_replica on a multi-replica cluster), never through query_system_catalog"
+            } else {
+                "- mz_introspection relations (for example mz_dataflow_arrangement_sizes) are cluster-scoped and query_system_catalog answers about the session's default cluster only; cluster-targeted introspection is unavailable on this server (the query tool is disabled), so say so rather than reporting another cluster's numbers"
+            };
             Some(format!(
                 "You are connected to the Materialize developer MCP server for troubleshooting and observability.\n\n\
                  Tools:\n\
@@ -765,7 +773,8 @@ fn endpoint_instructions(
                  Key rules:\n\
                  - mz_source_statuses and mz_sink_statuses use `last_status_change_at` (NOT `updated_at`)\n\
                  - mz_cluster_replica_utilization only has `replica_id` — JOIN with mz_cluster_replicas and mz_clusters to get names\n\
-                 - Do NOT query mz_introspection.mz_dataflow_arrangement_sizes — it is cluster-scoped and has uint8/text type mismatches\n\
+                 {introspection_rule}\n\
+                 - mz_dataflow_arrangement_sizes.id and mz_dataflows.id are dataflow ids (uint8), not catalog ids: do not JOIN them to mz_catalog.mz_objects.id (text); join through mz_introspection.mz_compute_exports (dataflow_id to export_id) instead, or match the name column, which reads Dataflow: <database>.<schema>.<object>\n\
                  - Use SHOW COLUMNS FROM <table> to verify column names if unsure",
             ))
         }
@@ -1031,7 +1040,7 @@ fn call_status<T>(result: &Result<T, McpRequestError>) -> McpCallStatus {
 async fn execute_sql(
     client: &mut AuthedClient,
     query: &str,
-) -> Result<Vec<Vec<serde_json::Value>>, McpRequestError> {
+) -> Result<Vec<Box<serde_json::value::RawValue>>, McpRequestError> {
     let mut response = SqlResponse::new();
 
     execute_request(
@@ -1054,7 +1063,7 @@ async fn execute_sql(
 /// row-returning statement is an error rather than a dropped result.
 fn select_single_rows(
     results: Vec<SqlResult>,
-) -> Result<Vec<Vec<serde_json::Value>>, McpRequestError> {
+) -> Result<Vec<Box<serde_json::value::RawValue>>, McpRequestError> {
     let mut rows = None;
     for result in results {
         match result {
@@ -1085,9 +1094,11 @@ fn select_single_rows(
 /// endpoint handles `max_result_size` in sql.rs — fail cleanly rather
 /// than silently truncating.
 fn format_rows_response(
-    rows: Vec<Vec<serde_json::Value>>,
+    rows: Vec<Box<serde_json::value::RawValue>>,
     max_size: usize,
 ) -> Result<McpResult, McpRequestError> {
+    // Each row is already-serialized compact JSON. `RawValue` re-serializes
+    // verbatim, so the outer array is pretty-printed while rows stay compact.
     let text =
         serde_json::to_string_pretty(&rows).map_err(|e| McpRequestError::Internal(anyhow!(e)))?;
 
@@ -1215,17 +1226,20 @@ async fn read_data_product(
     if lookup_rows.is_empty() {
         return Err(McpRequestError::DataProductNotFound(name.to_string()));
     }
-    let catalog_cluster: Option<&str> = lookup_rows
+    // Rows are stored as pre-serialized JSON arrays, so parse the single-cell
+    // lookup row to read `dp.cluster`.
+    let catalog_cluster: Option<String> = lookup_rows
         .first()
-        .and_then(|row| row.first())
-        .and_then(|v| v.as_str());
+        .and_then(|row| serde_json::from_str::<Vec<serde_json::Value>>(row.get()).ok())
+        .and_then(|row| row.into_iter().next())
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
 
     // An override wins. Otherwise route to the catalog cluster when the role
     // can use it (non-null); when it is null the role lacks USAGE on the
     // object's cluster, so leave the cluster unset and read on the session's
     // default (serving) cluster. That still works: materialized views serve
     // from persist and views recompute, just without index benefit.
-    let target_cluster: Option<&str> = cluster_override.or(catalog_cluster);
+    let target_cluster: Option<&str> = cluster_override.or(catalog_cluster.as_deref());
 
     // No row cap is applied here: the response is bounded by the size cap
     // enforced in format_rows_response (MCP_MAX_RESPONSE_SIZE), and by
@@ -1529,10 +1543,18 @@ mod tests {
     use super::*;
     use crate::http::sql::{Description, SqlError};
 
+    /// Serializes each row to a compact JSON array, matching how the HTTP SQL
+    /// layer stores rows.
+    fn raw_rows(rows: Vec<Vec<serde_json::Value>>) -> Vec<Box<serde_json::value::RawValue>> {
+        rows.iter()
+            .map(|r| serde_json::value::to_raw_value(r).unwrap())
+            .collect()
+    }
+
     fn rows_result(rows: Vec<Vec<serde_json::Value>>) -> SqlResult {
         SqlResult::Rows {
             tag: String::new(),
-            rows,
+            rows: raw_rows(rows),
             desc: Description { columns: vec![] },
             notices: vec![],
         }
@@ -1570,7 +1592,9 @@ mod tests {
             rows_result(rows.clone()),
             ok_result(),
         ];
-        assert_eq!(select_single_rows(results).unwrap(), rows);
+        let got = select_single_rows(results).unwrap();
+        let got: Vec<&str> = got.iter().map(|r| r.get()).collect();
+        assert_eq!(got, vec!["[1]"]);
     }
 
     /// A response with no row-returning statement is an error.
@@ -2241,6 +2265,24 @@ mod tests {
             tool_names.contains(&"query"),
             "query tool should be present on developer when enabled"
         );
+
+        let instructions = endpoint_instructions(McpEndpointType::Developer, true, true)
+            .expect("developer instructions must be present");
+        assert!(
+            instructions.contains("through the query tool with its cluster argument"),
+            "instructions must route mz_introspection through query: {instructions}",
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_developer_instructions_query_tool_disabled() {
+        let instructions = endpoint_instructions(McpEndpointType::Developer, false, true)
+            .expect("developer instructions must be present");
+        assert!(
+            instructions.contains("cluster-targeted introspection is unavailable")
+                && !instructions.contains("through the query tool"),
+            "instructions must not route to the hidden query tool: {instructions}",
+        );
     }
 
     // ── Response size cap tests ────────────────────────────────────────
@@ -2248,7 +2290,7 @@ mod tests {
     #[mz_ore::test]
     fn test_format_rows_response_within_limit() {
         let rows = vec![vec![json!("a"), json!(1)], vec![json!("b"), json!(2)]];
-        let result = format_rows_response(rows, 1_000_000).unwrap();
+        let result = format_rows_response(raw_rows(rows), 1_000_000).unwrap();
         let McpResult::ToolContent(content) = result else {
             panic!("Expected ToolContent");
         };
@@ -2262,7 +2304,7 @@ mod tests {
         let rows: Vec<Vec<serde_json::Value>> = (0..100)
             .map(|i| vec![json!(format!("row_{}", i)), json!(i)])
             .collect();
-        let err = format_rows_response(rows, 500).unwrap_err();
+        let err = format_rows_response(raw_rows(rows), 500).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("exceeds the 500 byte limit"),
@@ -2277,7 +2319,7 @@ mod tests {
     #[mz_ore::test]
     fn test_format_rows_response_empty_rows() {
         let rows: Vec<Vec<serde_json::Value>> = vec![];
-        let result = format_rows_response(rows, 1000).unwrap();
+        let result = format_rows_response(raw_rows(rows), 1000).unwrap();
         let McpResult::ToolContent(content) = result else {
             panic!("Expected ToolContent");
         };

@@ -81,7 +81,8 @@ pub struct Config {
     pub scheduler_name: Option<String>,
     pub enable_security_context: bool,
     pub enable_internal_statement_logging: bool,
-    pub disable_statement_logging: bool,
+    pub statement_logging_max_sample_rate: Option<f64>,
+    pub statement_logging_target_data_rate: Option<usize>,
 
     pub orchestratord_pod_selector_labels: Vec<KeyValueArg<String, String>>,
     pub environmentd_node_selector: Vec<KeyValueArg<String, String>>,

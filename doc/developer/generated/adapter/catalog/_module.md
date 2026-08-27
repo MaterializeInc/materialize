@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog.rs
-revision: a60edac7f1
+revision: ed7294b842
 ---
 
 # adapter::catalog
@@ -13,3 +13,5 @@ Re-exports include `InjectedAuditEvent` from `transact`. Builtin materialized vi
 `is_reserved_role_name` returns true for names that match `is_reserved_name`, `is_public_role`, or the `RESERVED_ROLE_SPECIFICATION_NAMES` list. `RESERVED_ROLE_SPECIFICATION_NAMES` contains the five lowercase PostgreSQL role-specification keywords (`current_user`, `current_role`, `session_user`, `user`, `none`) that would be ambiguous in statements like `GRANT ... TO CURRENT_USER`; only the lowercase spellings are reserved, matching what unquoted identifiers normalize to.
 `Catalog::allocate_storage_usage_id(commit_ts)` is a thin wrapper around `DurableCatalogState::allocate_id` that bumps the `STORAGE_USAGE_ID_ALLOC_KEY` allocator by one and returns the allocated id, committed at `commit_ts`. It bypasses the high-level catalog transaction machinery; one id covers all rows produced in a single collection cycle.
 `Catalog::allocate_user_replica_ids`, `allocate_system_replica_ids`, and `allocate_replica_ids` delegate to the durable store to pre-allocate replica IDs out-of-band before a catalog transaction. `allocate_replica_ids` dispatches to user or system allocation based on the owning cluster's ID type.
+`Catalog::register_temporary_namespace` registers a connection's temporary namespace (the UUID-to-connection mapping used to stamp durable temporary items) before the first temporary-item transaction for that session. `Catalog::drop_temporary_namespace` removes the namespace when the session terminates. The `mz_temp` schema itself is created lazily when the first temporary item is applied.
+`CommentObjectId::MetricSink` maps to `ObjectType::MetricSink`; `COMMENT ON METRIC SINK` is rejected at parse, so no metric-sink comment id is built in practice. The arm exists only for exhaustiveness.

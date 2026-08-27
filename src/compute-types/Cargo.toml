@@ -11,7 +11,6 @@ workspace = true
 
 [dependencies]
 columnar.workspace = true
-columnation.workspace = true
 differential-dataflow.workspace = true
 itertools.workspace = true
 mz-dyncfg = { path = "../dyncfg" }
@@ -22,6 +21,13 @@ mz-storage-types = { path = "../storage-types" }
 serde.workspace = true
 timely.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+chrono-tz.workspace = true
+mz-pgtz = { path = "../pgtz" }
+serde-reflection.workspace = true
+serde_json.workspace = true
 
 [features]
 default = []
