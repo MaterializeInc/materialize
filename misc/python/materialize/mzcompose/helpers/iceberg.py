@@ -226,37 +226,6 @@ def grant_catalog_role_privilege(
     )
 
 
-def load_polaris_vended_credentials(
-    c: "Composition",
-    table: str,
-    namespace: str = "default_namespace",
-    catalog_name: str = "default_catalog",
-) -> dict[str, str]:
-    """Load a table through the REST catalog requesting credential vending, and
-    return the vended storage config (the `config` map, which contains the
-    temporary `s3.access-key-id`, `s3.secret-access-key`, and `s3.session-token`).
-
-    Requires the catalog to have been set up with `vended=True` so the principal
-    is authorized for `LOAD_TABLE_WITH_READ_DELEGATION`.
-    """
-    access_token = get_polaris_access_token(c)
-    resp = c.exec(
-        "polaris",
-        "curl",
-        "-sS",
-        "--fail-with-body",
-        "-X",
-        "GET",
-        "-H",
-        f"Authorization: Bearer {access_token}",
-        "-H",
-        "X-Iceberg-Access-Delegation: vended-credentials",
-        f"http://localhost:8181/api/catalog/v1/{catalog_name}/namespaces/{namespace}/tables/{table}",
-        capture=True,
-    )
-    return json.loads(resp.stdout)["config"]
-
-
 def setup_polaris_for_iceberg(
     c: "Composition",
     bucket_name: str = "test-bucket",

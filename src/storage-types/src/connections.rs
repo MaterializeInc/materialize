@@ -660,9 +660,10 @@ pub struct RestIcebergCatalog<C: ConnectionAccess = InlinedConnection> {
     pub warehouse: Option<String>,
     /// Which form of storage-access delegation to request from the catalog, if any.
     ///
-    /// `None` means never ask. Requesting delegation is not free of consequence: a
-    /// catalog that gates it behind privileges the principal lacks rejects the whole
-    /// request rather than falling back, so this stays opt-in per connection.
+    /// `None` means "do not request storage-access delegation".
+    /// If we do not have permission to request delegated access but request it anyway,
+    /// a catalog can reject our whole request,
+    /// even if we have our own storage credentials to fall back on.
     pub access_delegation: Option<IcebergAccessDelegation>,
 }
 
@@ -1079,9 +1080,7 @@ impl IcebergCatalogConnection<InlinedConnection> {
         };
 
         // `iceberg-rust` turns `header.*` props into headers on every REST request, so
-        // this rides along on `loadTable` and `createTable` alike. Only send it when the
-        // connection asked for delegation: catalogs that gate delegation behind
-        // privileges reject the entire request when the principal lacks them, rather
+        // connection asked for delegation.
         // than falling back to their configured storage credentials.
         if let Some(delegation) = &rest.access_delegation {
             props.insert(

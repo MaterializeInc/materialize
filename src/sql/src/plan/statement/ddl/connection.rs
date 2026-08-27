@@ -748,6 +748,11 @@ impl ConnectionOptionExtracted {
                                         "invalid CONNECTION: OAUTH2 SERVER URL applies to CREDENTIAL auth, not GCP CONNECTION"
                                     );
                                 }
+                                if self.access_delegation.is_some() {
+                                    sql_bail!(
+                                        "invalid CONNECTION: ICEBERG GCP CONNECTION does not support ACCESS DELEGATION"
+                                    );
+                                }
                                 /// All BigLake Iceberg REST Catalogs use the same catalog URI.
                                 const BIGLAKE_CATALOG_URI: &str =
                                     "https://biglake.googleapis.com/iceberg/v1/restcatalog";
