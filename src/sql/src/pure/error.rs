@@ -48,6 +48,11 @@ pub enum PgSourcePurificationError {
     DanglingTextColumns { items: Vec<PartialItemName> },
     #[error("EXCLUDE COLUMNS refers to table not currently being added")]
     DanglingExcludeColumns { items: Vec<PartialItemName> },
+    #[error("EXCLUDE CONSTRAINTS refers to constraints that do not exist on table {table}")]
+    DanglingExcludeConstraints {
+        table: PartialItemName,
+        constraints: Vec<String>,
+    },
     #[error("duplicated column name references: {0:?}")]
     DuplicatedColumnNames(Vec<String>),
     #[error("referenced tables use unsupported types")]
@@ -66,6 +71,13 @@ impl PgSourcePurificationError {
             Self::DanglingTextColumns { items } => Some(format!(
                 "the following tables are referenced but not added: {}",
                 itertools::join(items, ", ")
+            )),
+            Self::DanglingExcludeConstraints {
+                table: _,
+                constraints,
+            } => Some(format!(
+                "the following constraints were not found: {}",
+                constraints.join(", ")
             )),
             Self::DatabaseMissingFilteredSchemas {
                 database: _,
@@ -122,6 +134,11 @@ impl PgSourcePurificationError {
                 "Remove the {} option, as no tables are being added.",
                 option
             )),
+            Self::DanglingExcludeConstraints { .. } => Some(
+                "Constraint names are matched exactly, including case, against the upstream \
+                 PRIMARY KEY and UNIQUE constraint names."
+                    .into(),
+            ),
             Self::BypassRLSRequired { .. } => Some("Add the BYPASSRLS attribute to the Materialize user".into()),
             Self::InvalidConnection(e) => e.hint(),
             _ => None,

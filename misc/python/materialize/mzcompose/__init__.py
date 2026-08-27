@@ -102,6 +102,7 @@ def get_minimal_system_parameters(
         "enable_create_table_from_source": "true",
         "enable_eager_delta_joins": "true",
         "enable_envelope_debezium_in_subscribe": "true",
+        "enable_exclude_constraints_option": "true",
         "enable_expressions_in_limit_syntax": "true",
         "enable_fixed_correlated_cte_lowering": "true",
         "enable_introspection_subscribes": "true",

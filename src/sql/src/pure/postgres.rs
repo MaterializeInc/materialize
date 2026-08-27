@@ -371,6 +371,12 @@ pub(super) async fn purify_source_exports(
     requested_references: &Option<ExternalReferences>,
     mut text_columns: Vec<UnresolvedItemName>,
     mut exclude_columns: Vec<UnresolvedItemName>,
+    // NOTE: `exclude_constraints` and `exclude_all_constraints` are only ever
+    // non-empty/true for `CREATE TABLE .. FROM SOURCE`, which purifies exactly
+    // one export, so constraint names are validated against that single
+    // table's constraints.
+    exclude_constraints: &BTreeSet<String>,
+    exclude_all_constraints: bool,
     unresolved_source_name: &UnresolvedItemName,
     reference_policy: &SourceReferencePolicy,
 ) -> Result<PurifiedSourceExports, PlanError> {
@@ -457,6 +463,25 @@ pub(super) async fn purify_source_exports(
             let text_columns = text_column_map.remove(&desc.oid);
             let exclude_columns = exclude_column_map.remove(&desc.oid);
 
+            // Validate requested constraint names against the table's full,
+            // pre-pruning constraint set, so that a constraint whose columns
+            // are also excluded via EXCLUDE COLUMNS is still accepted.
+            let dangling_constraints: Vec<_> = exclude_constraints
+                .iter()
+                .filter(|n| !desc.keys.iter().any(|k| &&k.name == n))
+                .cloned()
+                .collect();
+            if !dangling_constraints.is_empty() {
+                return Err(PgSourcePurificationError::DanglingExcludeConstraints {
+                    table: PartialItemName {
+                        database: None,
+                        schema: Some(desc.namespace.clone()),
+                        item: desc.name.clone(),
+                    },
+                    constraints: dangling_constraints,
+                });
+            }
+
             if let Some(exclude_cols) = &exclude_columns {
                 let excluded_col_nums: BTreeSet<u16> = desc
                     .columns
@@ -472,6 +497,24 @@ pub(super) async fn purify_source_exports(
                 // incompatible schema change once the excluded column disappears.
                 desc.keys
                     .retain(|k| k.cols.iter().all(|c| !excluded_col_nums.contains(c)));
+            }
+
+            // An excluded constraint is never recorded as a key, so it neither
+            // becomes a Materialize relation key nor participates in the
+            // runtime schema compatibility check. Its later upstream drop is
+            // then a non-event.
+            desc.keys.retain(|k| !exclude_constraints.contains(&k.name));
+
+            if exclude_all_constraints {
+                // No keys, and every column ingested as nullable, so dropping
+                // any PRIMARY KEY, UNIQUE, or NOT NULL constraint upstream is
+                // a non-event. Nullability flows from the desc into both the
+                // generated column definitions and the runtime column casts,
+                // which then skip NOT NULL enforcement.
+                desc.keys.clear();
+                for c in &mut desc.columns {
+                    c.nullable = true;
+                }
             }
 
             if let (Some(text_cols), Some(exclude_cols)) = (&text_columns, &exclude_columns) {
