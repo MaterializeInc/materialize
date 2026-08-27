@@ -35,8 +35,8 @@ Worth adding to the sweep even though the panel omits them: `mz_persist_compacti
 | `mz_persist_gc_seconds`, `_started`, `_finished`, `_noop`, `_merged_reqs` | counter | Garbage collection. The already-done case is `_noop`. There is no `mz_persist_gc_skipped`, and `skipped` exists only as `mz_persist_compaction_skipped`. |
 | `mz_persist_retry_retries_count`, `_started_count`, `_finished_count`, `_sleep_seconds` | counter | The panel excludes `op="next_listen_batch"`, which has its own panel because it retries by design. |
 | `mz_persist_shard_upper` | gauge, per shard | Counting distinct `shard` labels gives the shard count. |
-| `mz_persist_read_batch_part_bytes`, `_count` | counter, by `op` | The `op="unindexed"` slice is the `unindexed reads` panel. Rises by roughly 3x during rehydration. |
-| `mz_persist_pushdown_parts_filtered_count`, `_fetched_count`, `_inline_count`, `_faked_count` and their `_bytes` variants | counter | The ratio panels divide one by the sum of all four. |
+| `mz_persist_read_batch_part_bytes`, `mz_persist_read_batch_part_count` | counter, by `op` | The `op="unindexed"` slice is the `unindexed reads` panel. Rises by roughly 3x during rehydration. |
+| `mz_persist_pushdown_parts_filtered_count`, `_fetched_count`, `_inline_count`, `_faked_count` and their `mz_persist_pushdown_parts_filtered_bytes` variants | counter | The ratio panels divide one by the sum of all four. |
 | `mz_persist_blob_cache_hits_bytes`, `_hits_blobs`, `_evictions` | counter | |
 | `mz_txn_batch_unapplied_count`, `_unapplied_min_ts`, `_commit_count`, `_commit_bytes` | gauge, counter | Txn-shard backlog. |
 | `mz_txn_op_started_count`, `_succeeded_count`, `_retry_count`, `_errored_count` | counter, by `op` | |
