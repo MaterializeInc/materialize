@@ -2721,7 +2721,10 @@ def workflow_source_references(c: Composition, parser: WorkflowArgumentParser) -
             ), f"{args} suggested an unrelated reference:\n{result.stderr}"
 
         rows = c.sql_query(
-            "SELECT name FROM mz_tables WHERE name = 'widgets'", database="app"
+            "SELECT t.name FROM mz_tables t "
+            "JOIN mz_schemas sc ON t.schema_id = sc.id "
+            "WHERE t.name = 'widgets' AND sc.name = 'ingest'",
+            database="app",
         )
         assert len(rows) == 0, f"widgets must not have been created, got {rows}"
 
@@ -2743,7 +2746,10 @@ def workflow_source_references(c: Composition, parser: WorkflowArgumentParser) -
         assert result.returncode == 0, f"apply v3 failed: {result.stderr}"
 
         rows = c.sql_query(
-            "SELECT name FROM mz_tables WHERE name = 'gadgets'", database="app"
+            "SELECT t.name FROM mz_tables t "
+            "JOIN mz_schemas sc ON t.schema_id = sc.id "
+            "WHERE t.name = 'gadgets' AND sc.name = 'ingest'",
+            database="app",
         )
         assert len(rows) == 1, f"expected table 'gadgets', got {rows}"
 
@@ -2802,7 +2808,10 @@ def workflow_source_references_mysql(
         assert result.returncode == 0, f"apply v2 failed: {result.stderr}"
 
         rows = c.sql_query(
-            "SELECT name FROM mz_tables WHERE name = 't_in_mysql'", database="app"
+            "SELECT t.name FROM mz_tables t "
+            "JOIN mz_schemas sc ON t.schema_id = sc.id "
+            "WHERE t.name = 't_in_mysql' AND sc.name = 'ingest'",
+            database="app",
         )
         assert len(rows) == 1, f"expected table 't_in_mysql', got {rows}"
 
