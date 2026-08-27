@@ -11,15 +11,11 @@ aliases:
 
 Whether you're building, scaling, or debugging, we're here to help.
 
-{{< note >}}
-We're retiring access to Slack and Microsoft Teams workspaces. We've introduced the messenger app to streamline and scale how users engage with support — starting with AI-first assistance and seamless escalation paths when needed.
-{{< /note >}}
-
 ## Materialize Support
 
 We offer multiple support pathways depending on your platform and plan:
 
-### Messenger App
+### Messenger
 
 You can reach us directly from:
 - **materialize.com**
@@ -29,6 +25,8 @@ Our messenger now features Matty, our AI-powered support agent. Matty can help
 answer questions, suggest documentation, and assist with troubleshooting. You
 can also submit a request to **Talk to a human**. Just look for the messenger
 widget on the bottom right.
+
+**Don’t see the messenger?** Make sure cookies are enabled for materialize.com, then refresh the page.
 
 {{< tip >}}
 If you are an SLA Supported Customer who is experiencing an [**urgent** issue](#urgent-issues-for-sla-supported-customers-only),
@@ -103,7 +101,7 @@ your support ticket:
 
 ## Share your feedback
 
-Have ideas to improve Materialize? Use the messenger to start a conversation — you'll be guided to submit feature requests or report bugs. Your input goes straight to our Product and Engineering teams.
+Have ideas to improve Materialize? Use the messenger to open a ticket with support. Your input goes straight to our Product and Engineering teams.
 
 ## Questions about your support plan?
 
