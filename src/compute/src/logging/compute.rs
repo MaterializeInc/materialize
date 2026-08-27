@@ -58,11 +58,8 @@ pub struct Export {
     pub export_id: GlobalId,
     /// Timely worker index of the exporting dataflow.
     pub dataflow_index: usize,
-    /// The as-of of the exporting dataflow, unless it is the empty antichain.
-    ///
-    /// Every lifecycle stage is defined relative to the as-of, so the demux keeps it around to
-    /// report alongside the stages. Durations between stages are not comparable without it: the
-    /// same duration is a different amount of work for a recent as-of than for a far behind one.
+    /// The as-of of the exporting dataflow, unless it is the empty antichain. Reported in
+    /// `details` alongside every lifecycle stage, which are all defined relative to it.
     pub as_of: Option<Timestamp>,
 }
 
@@ -189,25 +186,15 @@ pub struct Lifecycle {
 }
 
 /// A stage of an export's lifecycle.
-///
-/// NOTE: Only the stages from [`LifecycleStage::SnapshotComplete`] on are carried by a
-/// [`Lifecycle`]
-/// event. `Installed` and `Started` are logged from the [`Export`] and [`HydrationStart`] events,
-/// which already mark those moments for the hydration time relation. They are variants here so
-/// that the stage vocabulary has a single definition.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Columnar)]
 pub enum LifecycleStage {
-    /// The export's dataflow was installed, still suspended.
+    /// The export's dataflow was installed, still suspended. Logged from [`Export`].
     Installed,
-    /// The export's dataflow was unsuspended, so hydration work may begin.
+    /// The export's dataflow was unsuspended, so hydration work may begin. Logged from
+    /// [`HydrationStart`].
     Started,
     /// The dataflow's own progress frontier passed its as-of, so its snapshot at the as-of is
-    /// computed.
-    ///
-    /// Deliberately not named for hydration. `mz_compute_hydration_times_per_worker.hydrated_at`
-    /// and `CollectionState::hydrated` are the durability reading, taken from a frontier that
-    /// folds in the write frontier, and they mean something different for an object that sinks to
-    /// persist. Sharing the word would put the ambiguity back.
+    /// computed. Logged from [`Lifecycle`], as are the stages below.
     SnapshotComplete,
     /// The export's sink may not write, because the dataflow is in read-only mode.
     WriteBlockedReadOnly,
@@ -219,9 +206,6 @@ pub enum LifecycleStage {
 
 impl LifecycleStage {
     /// The `event` and `reason` this stage is reported as.
-    ///
-    /// The reason is a closed vocabulary, so that "which exports are in this state, and why" stays
-    /// a filter over typed columns rather than a search through `details`.
     fn columns(self) -> (&'static str, Option<&'static str>) {
         match self {
             Self::Installed => ("installed", None),
@@ -563,23 +547,6 @@ fn epoch_offset_datum(offset: Duration) -> Datum<'static> {
     Datum::TimestampTz(timestamp)
 }
 
-/// Pack the `details` payload reported alongside every lifecycle stage of an export.
-///
-/// The as-of is rendered as a JSON string rather than a number. It is an `mz_timestamp`, which has
-/// no faithful JSON number counterpart, and a string round-trips it exactly.
-fn lifecycle_details(as_of: Option<Timestamp>) -> Row {
-    let mut row = Row::default();
-    let mut packer = row.packer();
-    match as_of {
-        Some(ts) => {
-            let ts = ts.to_string();
-            packer.push_dict([("as_of", Datum::String(&ts))]);
-        }
-        None => packer.push_dict([("as_of", Datum::JsonNull)]),
-    }
-    row
-}
-
 /// State maintained by the demux operator.
 struct DemuxState {
     /// The timely activations handle.
@@ -759,9 +726,21 @@ impl DemuxState {
         dataflow_index: usize,
         stage: LifecycleStage,
         occurred_at: Duration,
-        details: Datum<'_>,
+        as_of: Option<Timestamp>,
     ) -> (&RowRef, &RowRef) {
         let (event, reason) = stage.columns();
+
+        // The as-of is a JSON string rather than a number. It is an `mz_timestamp`, which has no
+        // faithful JSON number counterpart, and a string round-trips it exactly.
+        let mut details = Row::default();
+        match as_of {
+            Some(ts) => {
+                let ts = make_string_datum(ts, &mut self.scratch_string_b);
+                details.packer().push_dict([("as_of", ts)]);
+            }
+            None => details.packer().push_dict([("as_of", Datum::JsonNull)]),
+        }
+
         self.lifecycle_packer.pack_slice(&[
             make_string_datum(export_id, &mut self.scratch_string_a),
             Datum::UInt64(u64::cast_from(self.worker_id)),
@@ -769,7 +748,7 @@ impl DemuxState {
             Datum::String(event),
             epoch_offset_datum(occurred_at),
             reason.map_or(Datum::Null, Datum::String),
-            details,
+            details.unpack_first(),
         ])
     }
 
@@ -918,20 +897,7 @@ struct ExportState {
     /// The lifecycle rows logged for this export so far, keyed by the stage they report.
     ///
     /// The lifecycle relation is append-only for the life of an export, so the rows are kept to
-    /// retract exactly what was inserted. That makes the retraction correct by construction rather
-    /// than contingent on `pack_lifecycle_update` remaining a pure function of state that outlives
-    /// the insert, which it is today.
-    ///
-    /// The relation declares no key, so `index_by` arranges by the whole row and each entry holds
-    /// one, around a kilobyte per export per worker once every stage is reached. That cost is
-    /// accepted in exchange for the guarantee. Keeping only each stage's `occurred_at` and
-    /// repacking at drop time would cost a small fraction of that, and is the change to make if
-    /// the memory ever matters more than the guarantee.
-    ///
-    /// Keying by stage is what makes "at most one row per export, worker and stage" true by
-    /// construction rather than a property of every caller getting its own guard right. A reader
-    /// takes an event's `occurred_at` without aggregating first, so a duplicate is not a cosmetic
-    /// problem.
+    /// retract exactly what was inserted.
     lifecycle_rows: BTreeMap<LifecycleStage, (Row, Row)>,
 }
 
@@ -1331,14 +1297,13 @@ impl DemuxHandler<'_, '_, '_> {
             return;
         };
 
-        let details = lifecycle_details(initial_as_of);
         let update = {
             let (key, value) = self.state.pack_lifecycle_update(
                 export_id,
                 dataflow_index,
                 stage,
                 occurred_at,
-                details.unpack_first(),
+                initial_as_of,
             );
             (key.to_owned(), value.to_owned())
         };

@@ -366,31 +366,9 @@ pub static MZ_COMPUTE_LIFECYCLE_EVENTS_PER_WORKER: LazyLock<BuiltinLog> =
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
             entity_name: "compute_lifecycle_event_per_worker",
-            description: "Lifecycle events of each compute export, as observed by the worker \
-                          that logged them. Every event carries the wallclock instant it \
-                          occurred at, so durations between stages are differences of \
-                          `occurred_at`. The `installed`, `started` and `snapshot_complete` events \
-                          logged by every worker, since each worker hydrates its own fragment \
-                          of the dataflow. The write events are logged only by the worker that \
-                          maintains the sink frontier, so they appear once per export rather \
-                          than once per worker. `installed` is logged unconditionally by every \
-                          worker, so counting the `installed` events for an export gives the \
-                          number of workers reporting on it. Compare a per-worker stage's count \
-                          against that to tell whether every worker has reached it, rather than \
-                          against the cluster's configured worker count. Each row also carries \
-                          the id of the dataflow maintaining the export. A dataflow can maintain \
-                          more than one export, and `installed` and `started` describe the \
-                          dataflow rather than the export, so those events share an instant \
-                          across a dataflow's exports rather than being independent facts. \
-                          A dataflow has the same id on every worker of a replica, since each \
-                          worker assigns indices from a counter advanced by the same command \
-                          sequence, so `dataflow_id` identifies the dataflow rather than a \
-                          per-worker artifact. It is a replica-local index, not a catalog id. \
-                          `mz_compute_dataflow_global_ids_per_worker` holds one row per object \
-                          rendered in a dataflow, so joining it on `dataflow_id` fans out over \
-                          those objects rather than resolving to the dataflow; join \
-                          `mz_compute_exports_per_worker` on (dataflow_id, worker_id) to reach \
-                          a dataflow's exports on one worker.",
+            description: "The lifecycle stages each compute export has reached, with the \
+                          wallclock instant each was reached at, reported by the worker that \
+                          observed it.",
             links: &const {
                 [OntologyLink {
                     name: "lifecycle_event_of",
@@ -402,9 +380,8 @@ pub static MZ_COMPUTE_LIFECYCLE_EVENTS_PER_WORKER: LazyLock<BuiltinLog> =
                         from_type: Some(SemanticType::GlobalId),
                         to_type: Some(SemanticType::GlobalId),
                         note: Some(
-                            "Both relations are per worker, so the exact join is on \
-                                 (export_id, worker_id). Joining on export_id alone multiplies \
-                                 each event by the number of workers.",
+                            "Both relations are per worker, so the join is on \
+                                 (export_id, worker_id).",
                         ),
                     },
                 }]

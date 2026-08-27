@@ -72,9 +72,6 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
         // Routing by metric key instead would spread the fold across workers, but each process
         // has its own registry, so one metric family could then be split across processes' scrape
         // outputs. Partition-by-key is a possible future refinement.
-        // NOTE: not `crate::sink::frontier_owner`, despite the same expression. That picks the
-        // worker whose copy of a persist sink's frontier carries write progress. This picks the
-        // worker that folds metrics, and every worker writes this sink's frontier.
         let active_worker_id = usize::cast_from(sink_id.hashed()) % scope.peers();
 
         let ok_stream = sinked_collection

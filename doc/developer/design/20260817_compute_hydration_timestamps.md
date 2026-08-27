@@ -562,8 +562,7 @@ coordinating with consumers rather than a detail:
 - `occurred_at` is a wallclock instant, carrying its worker's epoch anchor.
 - `snapshot_complete` is always the dataflow-progress reading and `written` is always
   "durable through the as-of, and this replica was permitted to write". Neither varies
-  by object type. That is the whole point of spending two terms on it rather than
-  overloading one.
+  by object type.
 - `mz_compute_hydration_times_per_worker.hydrated_at` and `time_ns` remain the
   durability reading, computed in the demux. That relation will not become a view over
   the lifecycle log. `mz_compute_hydration_statuses.hydrated` is `time_ns IS NOT NULL`
@@ -588,7 +587,7 @@ values that exist today:
 - New `event` values. The two candidates are a per-worker durability stage, and a
   stage recording that this replica's own append made the output durable.
 - New `reason` values. Two useful attributions are not observable today and are
-  described under "The lifecycle event log".
+  described under "Attributing why an export waited".
 - New keys in `details`.
 
 The corollary for `written` is worth stating on its own, because it is the one place

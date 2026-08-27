@@ -863,11 +863,11 @@ impl<'a> ActiveComputeState<'a> {
         self.compute_state.traces.remove(&id);
         // If the collection is unscheduled, remove it from the list of waiting collections.
         //
-        // NOTE: this can be the release that unsuspends the dataflow, when a multi-export
-        // dataflow's remaining exports are dropped before being scheduled. No hydration start is
-        // reported for that, unlike in `handle_schedule`, so the surviving exports would charge
-        // their queueing time to hydration. Unreachable while every dataflow reaching a replica
-        // has exactly one export, which `SequentialHydration::absorb_command` requires.
+        // NOTE: dropping the last unscheduled export of a multi-export dataflow releases the
+        // token here, which unsuspends the dataflow without reporting a hydration start. That
+        // would charge the surviving exports' queueing time to hydration. Unreachable while every
+        // dataflow reaching a replica has exactly one export, which
+        // `SequentialHydration::absorb_command` requires.
         self.compute_state.suspended_collections.remove(&id);
 
         // Drop the dataflow, if all its exports have been dropped.
@@ -1012,20 +1012,13 @@ impl<'a> ActiveComputeState<'a> {
                 .allows_reporting(&new_frontier)
                 .then(|| new_frontier.clone());
 
-            // Collect the frontier that measures the dataflow's own progress, which is what
-            // `snapshot_complete` is about.
+            // Collect the frontier that measures the dataflow's own progress, for
+            // `snapshot_complete`. Deliberately not the output frontier collected below, which
+            // folds in the write frontier and so measures durability instead, and is not uniform
+            // across workers for a collection that sinks to persist.
             //
-            // This is deliberately not the output frontier collected below. That folds in the
-            // write frontier, which makes it a measure of durability rather than of dataflow
-            // progress, and for a collection that sinks to persist it is not even uniform across
-            // workers: the sink's `mint` operator maintains the shared sink frontier on one
-            // elected worker and clears it on all the others, so the same dataflow would report
-            // the stage at two different times depending on which worker's log you read.
-            //
-            // A collection with a compute frontier produces its output before writing it, so that
-            // frontier is its progress. A collection without one produces its output *by* writing
-            // it, an index into its own trace, so there the write frontier is the progress and
-            // computing the snapshot coincides with making it durable.
+            // A collection without a compute frontier produces its output *by* writing it, an
+            // index into its own trace, so there the write frontier is the progress.
             snapshot_frontier.clear();
             match &collection.compute_probe {
                 Some(probe) => {
@@ -1301,20 +1294,12 @@ impl<'a> ActiveComputeState<'a> {
                     .set_reported_write_frontier(ReportedFrontier::Reported(new_frontier.clone()));
                 collection
                     .set_reported_input_frontier(ReportedFrontier::Reported(new_frontier.clone()));
-                // Only a non-empty batch upper measures progress here.
-                //
-                // `DroppedAt` carries the empty antichain, so a subscribe cancelled
-                // mid-computation would otherwise report a complete snapshot at the moment it is
-                // dropped. The completion batch carries it too: the sink manufactures an empty
-                // upper once `up_to <= frontier`, which says nothing about the as-of. For
-                // `SUBSCRIBE ... UP TO x AS OF x` the frontier only has to reach x, so x itself
-                // is not computed, and a subscribe that did compute through its as-of has already
+                // Only a non-empty batch upper measures progress here. A subscribe reports an
+                // empty upper both when cancelled and when complete, and completion says nothing
+                // about the as-of: the sink manufactures the empty upper once
+                // `up_to <= frontier`, which for `SUBSCRIBE ... UP TO x AS OF x` is reached
+                // without computing x. A subscribe that did compute through its as-of already
                 // reported the stage from an earlier, non-empty upper.
-                //
-                // NOTE: an empty frontier means the opposite in `report_frontiers`, where it comes
-                // from the dataflow's own progress reaching its end and so makes every time
-                // including the as-of final. That is why this check belongs here and not in
-                // `observe_snapshot`.
                 if matches!(response, SubscribeResponse::Batch(_)) && !new_frontier.is_empty() {
                     collection.observe_snapshot(&new_frontier);
                 }
@@ -2107,13 +2092,10 @@ pub struct CollectionState {
     logging: Option<CollectionLogging>,
     /// Metrics tracked for this collection.
     metrics: CollectionMetrics,
-    /// Whether this worker maintains the authoritative write frontier of this collection's sink.
-    ///
-    /// A persist sink elects one worker to track the output shard's upper and clears the shared
-    /// frontier on all the others, so only the elected worker's copy carries write progress. The
-    /// write lifecycle stages are logged by that worker alone, which also makes them a single
-    /// observation per export rather than one per worker. False for collections whose output
-    /// frontier is not a persist upper at all, such as indexes and metric sinks.
+    /// Whether this worker's copy of [`Self::sink_write_frontier`] carries the sink's write
+    /// progress. A persist sink maintains it on one worker and clears it on the others, so the
+    /// write lifecycle stages are logged by that worker alone, once per export. False for a
+    /// collection whose output frontier is not a persist upper, such as an index or a metric sink.
     ///
     /// Set through [`Self::set_sink_write_frontier`] together with the frontier it describes.
     owns_sink_frontier: bool,
@@ -2121,8 +2103,7 @@ pub struct CollectionState {
     ///
     /// Stages are only ever added, never removed. Reconciliation resets the reported frontiers of
     /// a retained dataflow, so without this the collection would look unfinished again and re-log
-    /// a stage it already reported. The lifecycle relation is append-only, so a repeat would show
-    /// up as a duplicate row rather than being dropped.
+    /// a stage it already reported.
     logged_stages: BTreeSet<LifecycleStage>,
     /// Send-side to transition a dataflow from read-only mode to read-write mode.
     ///
@@ -2225,8 +2206,7 @@ impl CollectionState {
     ///
     /// This is the output-frontier reading, which folds in the write frontier and so reports
     /// durability for a collection that sinks to persist. `observe_snapshot` reports the
-    /// dataflow-progress reading instead. Both are wanted, and they differ for a materialized view
-    /// by the time its snapshot takes to reach persist.
+    /// dataflow-progress reading instead.
     fn hydrated(&self) -> bool {
         match &self.reported_frontiers.output_frontier {
             ReportedFrontier::Reported(frontier) => PartialOrder::less_than(&self.as_of, frontier),
@@ -2250,20 +2230,10 @@ impl CollectionState {
     /// `progress` must measure the dataflow's own computation rather than the durability of its
     /// output. See the comment where it is collected in `report_frontiers`.
     ///
-    /// An empty `progress` counts as complete, matching [`Self::hydrated`]. The empty antichain
-    /// is the maximum of the order, and a dataflow that reaches it has computed everything it ever
-    /// will: an inputless collection, such as an index on `SELECT 1`, emits its rows and drops its
-    /// capability without ever holding a non-empty frontier beyond its as-of, so rejecting empty
-    /// would leave it permanently short of this stage while the durability reading calls it
-    /// hydrated. The write stages are gated on this one, so it would also never report a write.
-    ///
-    /// So emptiness here means "the dataflow's own progress reached its end". A caller whose
-    /// frontier can go empty for any other reason must exclude that itself, which
-    /// `process_subscribes` does: both a cancelled subscribe and a completed one report an empty
-    /// upper that says nothing about whether the as-of was computed.
-    ///
-    /// An empty as-of never reaches this stage, which is consistent with no dataflow being
-    /// created for one.
+    /// An empty `progress` counts as complete, matching [`Self::hydrated`]. A caller whose
+    /// frontier can go empty for a reason other than the dataflow running to its end must exclude
+    /// that itself, which `process_subscribes` does: a cancelled subscribe reports an empty upper
+    /// that says nothing about whether the as-of was computed.
     fn observe_snapshot(&mut self, progress: &Antichain<Timestamp>) {
         if PartialOrder::less_than(&self.as_of, progress) {
             self.log_stage(LifecycleStage::SnapshotComplete);
@@ -2285,21 +2255,17 @@ impl CollectionState {
     /// pre-refresh window and advances the shard's upper while the dataflow is still hydrating.
     ///
     /// NOTE: `written` promises that the output is durable through the as-of and that this replica
-    /// was permitted to write. It does *not* promise that this replica performed the write, and
-    /// cannot: `write_frontier` is the output shard's upper, which every replica's `mint` reads
-    /// back from persist, so it advances here when any replica wins the append. Replicas of a
-    /// cluster produce identical batches and race to append, so which one won is not an
-    /// operationally meaningful question, but the interval it implies is. The as-of is bounded to
-    /// one step below the upper for a non-empty storage export
-    /// (`as_of_selection::apply_downstream_storage_constraints`), so for a shard that already holds
-    /// data the predicate is true from installation and `written` lands with `snapshot_complete`
-    /// on a
-    /// restarted or scaled-out replica, and with `write_unblocked` at a cutover.
+    /// was permitted to write, not that this replica performed the write. `write_frontier` is the
+    /// output shard's upper, which every replica's `mint` reads back from persist, so it advances
+    /// here when any replica wins the append. The as-of is bounded to one step below the upper for
+    /// a non-empty storage export (`as_of_selection::apply_downstream_storage_constraints`), so for
+    /// a shard that already holds data the stage is reached as soon as it is gated on, together
+    /// with `snapshot_complete` on a restarted or scaled-out replica and with `write_unblocked` at
+    /// a cutover.
     ///
-    /// TODO: attributing the write to this replica needs a signal from its own append path, since
-    /// no reading of the shared upper can supply one. `next_append_worker` rotates independently of
-    /// `sink::frontier_owner`, so that signal has to cross workers to reach the worker that reports
-    /// the stage.
+    /// TODO: attributing the write to this replica needs a signal from its own append path.
+    /// `next_append_worker` rotates independently of `sink::frontier_owner`, so that signal has to
+    /// cross workers to reach the worker that reports the stage.
     fn observe_writes(&mut self, write_frontier: &Antichain<Timestamp>) {
         if !self.owns_sink_frontier {
             return;
@@ -2340,10 +2306,8 @@ impl CollectionState {
 
     /// Record the shared frontier a sink publishes its write progress through.
     ///
-    /// `owned` must say whether *this* worker's copy of the frontier carries that progress, which
-    /// for a persist sink means this worker is [`crate::sink::frontier_owner`]. Setting it wrongly
-    /// is not a missed optimization: a non-owning worker's copy is cleared to the empty antichain,
-    /// which is the maximum of the order and so reports having written everything immediately.
+    /// `owned` must be true exactly when *this* worker's copy of the frontier carries that
+    /// progress, which for a persist sink means this worker is [`crate::sink::frontier_owner`].
     pub(crate) fn set_sink_write_frontier(
         &mut self,
         frontier: Rc<RefCell<Antichain<Timestamp>>>,
