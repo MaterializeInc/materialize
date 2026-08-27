@@ -362,6 +362,11 @@ pub enum MySqlSourcePurificationError {
         option_name: String,
         items: Vec<UnresolvedItemName>,
     },
+    #[error("EXCLUDE CONSTRAINTS refers to constraints that do not exist on table {table}")]
+    DanglingExcludeConstraints {
+        table: String,
+        constraints: Vec<String>,
+    },
     #[error("Invalid MySQL table reference: {0}")]
     InvalidTableReference(String),
     #[error("No tables found for provided reference")]
@@ -401,6 +406,13 @@ impl MySqlSourcePurificationError {
                 "the following columns are referenced but not added: {}",
                 itertools::join(items, ", ")
             )),
+            Self::DanglingExcludeConstraints {
+                table: _,
+                constraints,
+            } => Some(format!(
+                "the following constraints were not found: {}",
+                constraints.join(", ")
+            )),
             Self::UnrecognizedTypes { cols } => Some(format!(
                 "the following columns contain unsupported types:\n{}",
                 itertools::join(
@@ -431,6 +443,11 @@ impl MySqlSourcePurificationError {
             }
             Self::InvalidTableReference(_) => Some(
                 "Specify tables names as SCHEMA_NAME.TABLE_NAME in a FOR TABLES (..) clause".into(),
+            ),
+            Self::DanglingExcludeConstraints { .. } => Some(
+                "Constraint names are matched exactly, including case, against the upstream \
+                 unique index names. The primary key's index is named PRIMARY."
+                    .into(),
             ),
             Self::UnrecognizedTypes { cols: _ } => Some(
                 "Check the docs -- some types can be supported using the TEXT COLUMNS option to \
