@@ -1126,6 +1126,13 @@ metrics:
   help: Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.
   source: src/compute/src/metrics.rs
   visibility: internal
+- name: mz_index_peek_walks_total
+  help: 'The total number of fast-path index peek walks, by the substrate that ran them: inline, offload, or capped (wanted the offload, ran inline because the worker was at its in-flight cap).'
+  labels:
+  - substrate
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_kafka_partition_offset_max
   help: High watermark offset on broker for partition
   labels:

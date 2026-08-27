@@ -626,6 +626,55 @@ pub const PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES: Config<usize> = Config::
     ParameterScope::Environment,
 );
 
+/// Whether to walk a fast-path index peek's cursor on a blocking task instead of inline on the
+/// timely worker that received it.
+///
+/// The serving worker still takes the snapshot, which costs a mutex and a handful of `Arc` clones,
+/// and then dispatches.
+///
+/// What it buys: a long scan no longer delays the peeks queued behind it on the serving worker.
+/// Without it, a worker that serves peeks inline blocks every peek behind the longest walk it is
+/// running.
+///
+/// What it costs: the walk now runs concurrently with the serving worker rather than instead of
+/// it, so on a CPU-saturated replica it competes for cores with the work that worker went on to
+/// do. Each in-flight walk also pins the batches its cursor covers, bounded by
+/// `index_peek_offload_max_inflight`.
+///
+/// Applies to peeks the peek response stash could take as well. The offloaded walk makes the same
+/// size-based diversion partway through, and drives the upload from its own thread rather than
+/// handing rows back to the worker to pump.
+pub const ENABLE_INDEX_PEEK_OFFLOAD: Config<bool> = Config::new(
+    "enable_index_peek_offload",
+    false,
+    "Walk fast-path index peeks on a blocking task rather than on the serving timely worker.",
+    ParameterScope::Replica,
+);
+
+/// How many offloaded index-peek walks one worker may have in flight before it falls back to
+/// walking inline.
+///
+/// Each in-flight walk retains the batches its snapshot covers, so unbounded concurrency trades
+/// memory for latency. It does not hold the trace back from compacting: the walk owns `Arc`
+/// batches and the dispatching path drops its trace handle before the walk starts. Serving inline
+/// bounds the retained set implicitly at one walk per worker, and this is the explicit form of
+/// that bound.
+///
+/// Counted per worker, so a replica retains up to `workers * this` snapshots at once and occupies
+/// that many blocking-pool threads. Size it against the replica's worker count, not against the
+/// replica.
+///
+/// NOTE: a walk that diverts to the peek response stash holds its slot and its blocking thread
+/// across the persist upload, not just the cursor walk, so under a stash-heavy workload slots turn
+/// over on network latency rather than on walk cost. `mz_index_peek_walks_total{substrate="capped"}`
+/// is what shows the cap being reached.
+pub const INDEX_PEEK_OFFLOAD_MAX_INFLIGHT: Config<usize> = Config::new(
+    "index_peek_offload_max_inflight",
+    16,
+    "Maximum offloaded index-peek walks in flight per worker before falling back to an inline walk.",
+    ParameterScope::Replica,
+);
+
 /// The number of batches to pump from the peek result iterator when stashing peek responses.
 pub const PEEK_STASH_NUM_BATCHES: Config<usize> = Config::new(
     "compute_peek_stash_num_batches",
@@ -726,6 +775,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PEEK_RESPONSE_STASH_BATCH_MAX_RUNS)
         .add(&PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES)
         .add(&PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES)
+        .add(&ENABLE_INDEX_PEEK_OFFLOAD)
+        .add(&INDEX_PEEK_OFFLOAD_MAX_INFLIGHT)
         .add(&PEEK_STASH_NUM_BATCHES)
         .add(&PEEK_STASH_BATCH_SIZE)
         .add(&COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL)

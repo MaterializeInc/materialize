@@ -14,10 +14,10 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 
 /// The merged cursor a [`TraceReader::cursor`] hands out over all of a trace's batches: a
-/// [`CursorList`] over the per-batch cursors.
-type TraceCursor<Tr> = CursorList<BatchCursor<Tr>>;
+/// `CursorList` over the per-batch cursors.
+pub(crate) type TraceCursor<Tr> = CursorList<BatchCursor<Tr>>;
 /// Backing storage for a [`TraceCursor`]: the batches the cursor borrows from.
-type TraceStorage<Tr> = Vec<<Tr as TraceReader>::Batch>;
+pub(crate) type TraceStorage<Tr> = Vec<<Tr as TraceReader>::Batch>;
 use mz_ore::result::ResultExt;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
@@ -148,6 +148,35 @@ where
     /// Returns the number of rows evaluated by the iterator.
     pub fn rows_processed(&self) -> usize {
         self.rows_processed
+    }
+
+    /// Builds a [`PeekResultIterator`] over an already-owned cursor and its backing storage.
+    ///
+    /// Unlike [`Self::new`], this takes the `(cursor, storage)` pair directly rather than a live
+    /// `&mut Tr`, so a caller that already holds an owned cursor can feed it without borrowing a
+    /// trace for the walk.
+    pub fn new_over_cursor(
+        target_id: GlobalId,
+        map_filter_project: mz_expr::SafeMfpPlan,
+        peek_timestamp: mz_repr::Timestamp,
+        literal_constraints: Option<&mut [Row]>,
+        mut cursor: TraceCursor<Tr>,
+        storage: TraceStorage<Tr>,
+    ) -> Self {
+        let literals = literal_constraints
+            .map(|constraints| Literals::new(constraints, &mut cursor, &storage));
+
+        Self {
+            target_id,
+            cursor,
+            storage,
+            map_filter_project,
+            peek_timestamp,
+            row_builder: Row::default(),
+            datum_vec: DatumVec::new(),
+            literals,
+            rows_processed: 0,
+        }
     }
 
     /// Returns `true` if the iterator has no more literals to process, or if there are no literals at all.
@@ -324,4 +353,18 @@ where
 
         false
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::{Diff, Timestamp};
+    use static_assertions::assert_impl_all;
+
+    use crate::typedefs::RowRowSpine;
+
+    // `TraceReader::cursor` returns its batches by value, and since #38396 those batches are
+    // `Arc`-backed, so an iterator built over them owns everything it reads. That is what lets a
+    // peek's walk run on a thread other than the worker that owns the trace, and it is a property
+    // of the cursor rather than of any wrapper, so assert it directly.
+    assert_impl_all!(super::PeekResultIterator<RowRowSpine<Timestamp, Diff>>: Send);
 }
