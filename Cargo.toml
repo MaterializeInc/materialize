@@ -557,7 +557,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "jso
 # graph. `axum` 0.8.9 is on `tokio-tungstenite` 0.29, which pins this to 0.29.
 # 0.30 additionally moves to `sha1` 0.11, duplicating the whole RustCrypto
 # hashing stack.
-tungstenite = "0.29.0"
+tungstenite = "0.30.0"
 turmoil = "0.7.2"
 uncased = "0.9.10"
 unicode-normalization = "0.1.25"
