@@ -13,6 +13,7 @@ use std::env;
 use indexmap::{IndexMap, IndexSet};
 use mz_cloud_resources::crd::materialize::v1;
 use mz_cloud_resources::crd::materialize::v1alpha1;
+use mz_cloud_resources::crd::materialize_debug;
 use schemars::schema_for;
 use serde::Serialize;
 
@@ -330,13 +331,18 @@ fn format_enum_variants_from_json(
 }
 
 fn main() {
+    const USAGE: &str = "usage: crd-writer <v1alpha1|v1> [materialize|materialize-debug]";
     let args: Vec<String> = env::args().collect();
-    let version = args.get(1).expect("usage: crd-writer <v1alpha1|v1>");
+    let version = args.get(1).expect(USAGE);
+    let kind = args.get(2).map_or("materialize", String::as_str);
 
-    let root_schema = match version.as_str() {
-        "v1alpha1" => schema_for!(v1alpha1::MaterializeSpec),
-        "v1" => schema_for!(v1::MaterializeSpec),
-        other => panic!("unknown version: {other}, expected v1alpha1 or v1"),
+    let root_schema = match (kind, version.as_str()) {
+        ("materialize", "v1alpha1") => schema_for!(v1alpha1::MaterializeSpec),
+        ("materialize", "v1") => schema_for!(v1::MaterializeSpec),
+        ("materialize-debug", "v1alpha1") => {
+            schema_for!(materialize_debug::v1alpha1::MaterializeDebugSpec)
+        }
+        (kind, version) => panic!("unknown kind/version {kind} {version}; {USAGE}"),
     };
     // Convert all to JSON for easier merging
     let schema_json = root_schema.to_value();

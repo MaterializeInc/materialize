@@ -10,6 +10,7 @@ rows:
       - `deployments/{namespace}/*.yaml`
       - `statefulsets/{namespace}/*.yaml`
       - `replicasets/{namespace}/*.yaml`
+      - `daemonsets/{namespace}/*.yaml`
       - `events/{namespace}/*.yaml`
       - `materializes/{namespace}/*.yaml`
 
@@ -35,7 +36,6 @@ rows:
   - "Resource Type": "Cluster-level"
     "Files": |
       - `nodes/*.yaml`
-      - `daemonsets/*.yaml`
-      - `mutatingwebhookconfigurations/{namespace}/*.yaml`
-      - `validatingwebhookconfigurations/{namespace}/*.yaml`
+      - `mutatingwebhookconfigurations/*.yaml`
+      - `validatingwebhookconfigurations/*.yaml`
       - `customresourcedefinitions/*.yaml`

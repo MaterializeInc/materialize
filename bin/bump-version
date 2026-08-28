@@ -75,6 +75,9 @@ for crd_version in v1alpha1 v1; do
     cargo run -p mz-cloud-resources --bin crd-writer -- "${crd_version}" > "${crd_descriptions_json}"
     git add "${crd_descriptions_json}"
 done
+crd_descriptions_json="doc/user/data/self_managed/materialize_debug_crd_descriptions_v1alpha1.json"
+cargo run -p mz-cloud-resources --bin crd-writer -- v1alpha1 materialize-debug > "${crd_descriptions_json}"
+git add "${crd_descriptions_json}"
 
 bin/helm-chart-version-bump --bump-orchestratord-version "v$version"
 

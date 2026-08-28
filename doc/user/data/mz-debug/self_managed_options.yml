@@ -12,25 +12,48 @@ rows:
 
       <a name="mz-instance-name"></a> **Required**. The Materialize instance to target.
 
-  - Option: "`--dump-k8s <boolean>`"
-    Description: |
-
-      <a name="dump-k8s"></a>
-      If `true`, dump debug information from the Kubernetes cluster.
-
-      Defaults to `true`.
-
-  - Option: "`--additional-k8s-namespace <NAMESPACE>`"
-    Description: |
-
-      <a name="additional-k8s-namespace"></a> Additional k8s namespaces to dump.
-
   - Option: "`--k8s-context <CONTEXT>`"
     Description: |
 
       <a name="k8s-context"></a> The Kubernetes context to use.
 
       Defaults to the `KUBERNETES_CONTEXT` environment variable.
+
+  - Option: "`--debug-name <NAME>`"
+    Description: |
+
+      <a name="debug-name"></a> The name of the `MaterializeDebug` resource to
+      download from, when it differs from the instance name. The operator names
+      the resource it creates for an instance after the instance.
+
+  - Option: "`--dump-k8s <boolean>`"
+    Description: |
+
+      <a name="dump-k8s"></a>
+      If `true`, the fresh snapshot includes Kubernetes resources, their
+      describe output, and pod logs.
+
+      Defaults to `true`.
+
+  - Option: "`--all-snapshots`"
+    Description: |
+
+      <a name="all-snapshots"></a> Download every snapshot the collector has
+      retained, not only the latest.
+
+  - Option: "`--no-fresh-snapshot`"
+    Description: |
+
+      <a name="no-fresh-snapshot"></a> Do not ask the collector for a fresh
+      snapshot; download what it has already collected.
+
+  - Option: "`--snapshot-timeout-seconds <SECONDS>`"
+    Description: |
+
+      <a name="snapshot-timeout-seconds"></a> How long to wait for the fresh
+      snapshot before falling back to the latest snapshot the collector has.
+
+      Defaults to `600`.
 
   - Option: "`-h`, `--help`"
     Description: |
