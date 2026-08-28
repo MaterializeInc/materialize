@@ -11,6 +11,8 @@ import queue
 import time
 from copy import deepcopy
 
+import psycopg
+
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.mysql import MySql
 from materialize.parallel_benchmark.framework import (
@@ -1320,13 +1322,14 @@ class HydrationChurn(Action):
         self.conn_info = conn_info
         self.name = name
         self.view_sql = view_sql
+        self.conn: psycopg.Connection | None = None
         self._connect()
 
     def _connect(self) -> None:
         conn = self.conn_info.connect()
         conn.autocommit = True
         cur = conn.cursor()
-        old = getattr(self, "conn", None)
+        old = self.conn
         self.conn = conn
         self.cur = cur
         if old is not None:
@@ -1490,6 +1493,14 @@ class ReadIsolationUnderHydration(Scenario):
                         for i in range(2)
                     ],
                 ),
+                # Nothing resets the services between scenarios when the
+                # benchmark runs against an existing environment, so the
+                # scenario that created these drops them. `big` takes the churn
+                # views with it if a load phase ended mid-iteration.
+                TdPhase("""
+                    > DROP TABLE IF EXISTS hot CASCADE
+                    > DROP TABLE IF EXISTS big CASCADE
+                    """),
             ],
             conn_pool_size=1000,
             conn_pool_setup=["SET TRANSACTION_ISOLATION TO 'SERIALIZABLE'"],
