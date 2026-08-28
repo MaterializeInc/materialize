@@ -529,6 +529,10 @@ def run_once(
                 periodic_dists={pd[0]: int(pd[1]) for pd in args.periodic_dist or []},
             )
             scenario = scenario_class(c, conn_infos)
+            # Bound before the try, because the finally reports against it and a
+            # setup() that raises would otherwise leave it unbound, replacing
+            # the failure with an UnboundLocalError.
+            start_time = time.time()
             Path(MZ_ROOT / "plots").mkdir(parents=True, exist_ok=True)
             try:
                 # Inside the try because setup() is what starts the worker
