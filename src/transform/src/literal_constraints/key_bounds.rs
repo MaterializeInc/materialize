@@ -29,8 +29,16 @@
 //! NOTE: A `KeyBounds` is only ever a *sound* bound. Over-approximating is always safe for
 //! choosing lookup values, because the residual filter still runs and the constant
 //! collection the lookups become has distinct rows, so the semi-join cannot duplicate.
-//! Removing a constraint from the filter is a different claim, and requires
-//! [`KeyBounds::exact`].
+//! Removing a constraint from the filter is a different claim, and requires both
+//! [`KeyBounds::exact`] and the absence of [`KeyBounds::widened`].
+//!
+//! NOTE: Literal values are compared as `Row`s, and `RowRef`'s `Ord` orders by the packed
+//! byte representation rather than by `Datum::cmp`. Two literals that compare equal in SQL
+//! can therefore land in different set elements: `munge_numeric` normalizes `-0` but not
+//! scale, so `n = 1.0 AND n = 1.00` intersects to the empty set even though `1.0 = 1.00`.
+//! The verdict is the same one the surrounding transform has always reached, but the set
+//! arithmetic here leans on it much harder, so treat byte identity as the definition of
+//! literal equality for these purposes.
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
@@ -67,12 +75,24 @@ pub struct KeyBounds {
     /// An empty list therefore means the predicate is never satisfied.
     boxes: Vec<KeyBox>,
     /// Whether `boxes` characterizes the predicate exactly, so that the predicate is
-    /// equivalent to "the key falls in one of these boxes".
+    /// equivalent, *as a filter*, to "the key falls in one of these boxes".
+    ///
+    /// "As a filter" is the operative part, and is what lets a literal `null` count as
+    /// unsatisfiable: a filter drops a `null` row exactly as it drops a `false` one. See
+    /// [`KeyBounds::leaf`].
     ///
     /// False either because the predicate constrains something besides the key fields, or
     /// because we widened to stay inside [`MAX_BOXES`]. Only an exact bound may be removed
     /// from the filter.
     exact: bool,
+    /// Whether any step of this bound's derivation widened, that is, replaced a disjunction
+    /// of boxes by a single box containing them.
+    ///
+    /// Widening keeps the bound sound, because it only ever admits more key values, so the
+    /// lookup values and [`KeyBounds::is_unsatisfiable`] stay correct. It breaks a stronger
+    /// property that only constraint removal needs. See
+    /// [`KeyBounds::widened`].
+    widened: bool,
     /// Whether matching a key field required inverting a cast on it. Reported so that the
     /// caller can prefer an index whose key needs no inversion.
     pub inv_cast: bool,
@@ -85,6 +105,7 @@ impl KeyBounds {
     /// predicate is not equivalent to that, so it must stay in the filter.
     fn top(arity: usize) -> Self {
         KeyBounds {
+            widened: false,
             boxes: vec![vec![None; arity]],
             exact: false,
             inv_cast: false,
@@ -99,6 +120,7 @@ impl KeyBounds {
     /// removed from the filter. `unit` stands for "there is nothing here to read".
     fn unit(arity: usize) -> Self {
         KeyBounds {
+            widened: false,
             boxes: vec![vec![None; arity]],
             exact: true,
             inv_cast: false,
@@ -109,6 +131,7 @@ impl KeyBounds {
     /// The bound of a predicate that is never satisfied.
     fn bottom(arity: usize) -> Self {
         KeyBounds {
+            widened: false,
             boxes: Vec::new(),
             exact: true,
             inv_cast: false,
@@ -185,19 +208,25 @@ impl KeyBounds {
         // Widen before multiplying, so the product stays inside the budget. Only the wider
         // operand is widened, because widening both would discard structure that
         // `MAX_BOXES` can still afford to keep.
-        let (left, right, exact) = if self.boxes.len() * other.boxes.len() > MAX_BOXES {
+        let (left, right, exact, widened) = if self.boxes.len() * other.boxes.len() > MAX_BOXES {
             if self.boxes.len() >= other.boxes.len() {
-                (Self::widen(&self.boxes, arity), other.boxes, false)
+                (Self::widen(&self.boxes, arity), other.boxes, false, true)
             } else {
-                (self.boxes, Self::widen(&other.boxes, arity), false)
+                (self.boxes, Self::widen(&other.boxes, arity), false, true)
             }
         } else {
-            (self.boxes, other.boxes, self.exact && other.exact)
+            (
+                self.boxes,
+                other.boxes,
+                self.exact && other.exact,
+                self.widened || other.widened,
+            )
         };
 
         Self {
             boxes: Self::product(&left, &right),
             exact,
+            widened: widened || self.widened || other.widened,
             inv_cast,
             arity,
         }
@@ -215,6 +244,7 @@ impl KeyBounds {
         for arg in args {
             debug_assert_eq!(arg.arity, arity);
             result.exact &= arg.exact;
+            result.widened |= arg.widened;
             result.inv_cast |= arg.inv_cast;
             boxes.extend(arg.boxes);
         }
@@ -222,6 +252,7 @@ impl KeyBounds {
         if result.boxes.len() > MAX_BOXES {
             result.boxes = Self::widen(&result.boxes, arity);
             result.exact = false;
+            result.widened = true;
         }
         result
     }
@@ -248,7 +279,18 @@ impl KeyBounds {
     fn normalize(mut boxes: Vec<KeyBox>, arity: usize) -> Vec<KeyBox> {
         boxes.sort();
         boxes.dedup();
+        if boxes.len() < 2 {
+            return boxes;
+        }
         for i in 0..arity {
+            // Merging on a field that every box agrees on is a no-op: two boxes sharing a
+            // group would then agree on every field and have been deduplicated already.
+            // Skipping those keeps the cost proportional to the fields that actually vary,
+            // which is what makes a wide key affordable when most of it is pinned to single
+            // values.
+            if boxes.iter().all(|b| b[i] == boxes[0][i]) {
+                continue;
+            }
             // Group by every field but `i`, then union field `i` within each group.
             let mut groups: BTreeMap<KeyBox, FieldBound> = BTreeMap::new();
             for mut b in boxes {
@@ -323,20 +365,17 @@ impl KeyBounds {
 
     /// The key values to look up.
     ///
-    /// An empty result means the predicate is never satisfied. `None` means the value count
-    /// exceeds [`MAX_LOOKUP_VALUES`], for which there is no useful advice to give: a full
-    /// scan really is the better plan.
-    ///
-    /// Callers must establish that every key field is bounded, via
-    /// [`KeyBounds::bounds_every_field`], before calling this.
+    /// An empty result means the predicate is never satisfied. `None` means there is nothing
+    /// worth looking up: either a key field is unbounded, or the value count exceeds
+    /// [`MAX_LOOKUP_VALUES`] and a full scan is the better plan. Callers that need to tell
+    /// those apart should consult [`KeyBounds::bounds_every_field`] first.
     pub fn lookup_values(&self) -> Option<Vec<Row>> {
-        assert!(self.bounds_every_field(), "unbounded key field");
+        if !self.bounds_every_field() {
+            return None;
+        }
         let mut values = BTreeSet::new();
         for b in &self.boxes {
-            let sets = b
-                .iter()
-                .map(|f| f.as_ref().expect("checked by bounds_every_field"))
-                .collect_vec();
+            let sets = b.iter().map(|f| f.as_ref()).collect::<Option<Vec<_>>>()?;
             for combination in sets.into_iter().multi_cartesian_product() {
                 values.insert(Row::pack(combination.iter().map(|r| r.unpack_first())));
                 if values.len() > MAX_LOOKUP_VALUES {
@@ -361,6 +400,19 @@ impl KeyBounds {
         (0..self.arity)
             .filter(|i| self.boxes.iter().all(|b| b[*i].is_some()))
             .collect()
+    }
+
+    /// Whether the derivation widened anywhere, which makes the bound a strict
+    /// over-approximation of what the predicate implies.
+    ///
+    /// Removal reasons about *containment*, not just exactness: dropping a predicate that is
+    /// exactly a bound on the key is sound only because the lookup values are the
+    /// intersection of what every predicate implies, so they fall inside the dropped
+    /// predicate's own bounds. Widening produces a superset of that intersection instead, so
+    /// a lookup value need no longer satisfy a dropped predicate, and the rows it finds would
+    /// go unfiltered. Callers that remove must refuse when this is set.
+    pub fn widened(&self) -> bool {
+        self.widened
     }
 
     /// Whether no key value at all satisfies the predicate, which makes the whole relation
@@ -391,6 +443,12 @@ impl KeyBounds {
 /// analyzed twice. A pruned child reports itself unsatisfiable, so a parent whose every
 /// disjunct died is pruned in the same pass. The leftover `false` arguments are for
 /// `MirScalarExpr::reduce` to clean up.
+///
+/// NOTE: Pruning suppresses errors that the pruned subtree would have raised, since a
+/// predicate that cannot be satisfied is replaced rather than evaluated. `a IN (1,2) AND
+/// a IN (3,4) AND 1/x > 0` returns empty instead of dividing by zero. That matches how
+/// contradictory disjuncts have always been dropped here, but the reach is wider, because a
+/// contradiction spanning two separate predicates is now visible too.
 /// Returns whether anything was pruned, and whether the conjunction is unsatisfiable as a
 /// whole. The latter covers contradictions that span two predicates, such as `c IN (1, 2)`
 /// alongside `c IN (3, 4)`, which no amount of pruning inside either one would reveal.
@@ -441,9 +499,9 @@ fn prune_inner(
 
 /// Every expression that the predicate constrains to literal values somewhere.
 ///
-/// Index-blind, and used for two things: cheaply rejecting an index whose key mentions an
-/// expression the predicate never pins, and recommending a key to a user whose index was
-/// too wide.
+/// Index-blind. Treating the result as a key asks what the predicate says about all of them
+/// at once, which is what drives contradiction pruning and what recommends a key to a user
+/// whose index was too wide.
 pub fn literal_constrained_exprs<'a>(
     predicates: impl IntoIterator<Item = &'a MirScalarExpr>,
 ) -> Vec<MirScalarExpr> {
@@ -456,4 +514,73 @@ pub fn literal_constrained_exprs<'a>(
         });
     }
     found.into_iter().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_expr::func;
+    use mz_repr::{Datum, ReprScalarType};
+
+    use super::*;
+
+    /// `(#0, #1) IN [(f(i), g(i)) for i in 0..n]`, as a disjunction of two-field conjunctions.
+    fn pair_list(n: i32, f: impl Fn(i32) -> i32, g: impl Fn(i32) -> i32) -> MirScalarExpr {
+        let eq = |col: usize, v: i32| {
+            MirScalarExpr::column(col).call_binary(
+                MirScalarExpr::literal_ok(Datum::Int32(v), ReprScalarType::Int32),
+                func::Eq,
+            )
+        };
+        MirScalarExpr::call_variadic(
+            Or,
+            (0..n)
+                .map(|i| MirScalarExpr::call_variadic(And, vec![eq(0, f(i)), eq(1, g(i))]))
+                .collect(),
+        )
+    }
+
+    fn key() -> Vec<MirScalarExpr> {
+        vec![MirScalarExpr::column(0), MirScalarExpr::column(1)]
+    }
+
+    /// Removal drops a predicate that exactly bounds the key, which is sound only while the
+    /// lookup values stay inside that predicate's own bounds. A widening in the conjunction
+    /// produces a superset of the intersection instead, so the bound must report it: two
+    /// disjoint pair lists whose product exceeds `MAX_BOXES` would otherwise both be dropped
+    /// and the lookup would find rows the predicate rejects.
+    #[mz_ore::test]
+    fn widening_in_a_conjunction_is_reported() {
+        let key = key();
+        let diagonal = pair_list(40, |i| i, |i| i);
+        let shifted = pair_list(40, |i| i, |i| i + 1);
+
+        // Each list on its own is an exact, unwidened bound, so each is removable alone.
+        for p in [&diagonal, &shifted] {
+            let bounds = KeyBounds::extract(p, &key);
+            assert!(bounds.exact(), "a pair list exactly bounds the key");
+            assert!(!bounds.widened(), "40 boxes is inside the budget");
+        }
+
+        // Together they exceed the budget, so the conjunction widens and says so.
+        let both = KeyBounds::conjunction([&diagonal, &shifted], &key);
+        assert!(both.widened(), "40 * 40 boxes must widen");
+        assert!(
+            !both.lookup_values().expect("bounded").is_empty(),
+            "widening leaves lookup values the predicate rejects, which is why \
+             removal has to consult `widened` and not just `exact`"
+        );
+    }
+
+    /// The budget is not reached, so the conjunction is a true intersection and removal stays
+    /// available. Two disjoint lists then leave nothing to look up at all.
+    #[mz_ore::test]
+    fn small_conjunctions_intersect_exactly() {
+        let key = key();
+        let both = KeyBounds::conjunction(
+            [&pair_list(4, |i| i, |i| i), &pair_list(4, |i| i, |i| i + 1)],
+            &key,
+        );
+        assert!(!both.widened());
+        assert!(both.is_unsatisfiable(), "the two lists are disjoint");
+    }
 }

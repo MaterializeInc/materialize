@@ -246,9 +246,14 @@ impl LiteralConstraints {
             .max_by_key(|(_idx_id, key, _vals, inv_cast)| (key.len(), *inv_cast))
             .map(|(idx_id, key, vals, _inv_cast)| (idx_id, key, vals));
 
-        if result.is_none() {
-            // Let's see if we can give a hint to the user.
-            //
+        // A hint is only worth computing when some index is close enough to receive one.
+        // `constrained` is the widest key in play, so the pass below is the most expensive
+        // one we do, and a Get with no indexes at all must not pay for it.
+        let advisable = index_matches
+            .iter()
+            .any(|(_, _, m)| matches!(m, IndexMatch::UnusableTooWide(_)));
+
+        if result.is_none() && advisable {
             // The recommendation is index-blind: gather every expression the predicate
             // pins to literal values anywhere, then keep those it pins in all cases. An
             // index on exactly those would have been usable.
@@ -332,8 +337,14 @@ impl LiteralConstraints {
     /// NOTE: This is sound only because the lookup values are the intersection of what
     /// *every* predicate implies, including the ones we keep. So the retained predicates
     /// can only narrow the key further, never widen it past what a removed predicate
-    /// allowed.
+    /// allowed. A widened bound is a superset of that intersection rather than the
+    /// intersection itself, which breaks exactly that step, so removal refuses outright when
+    /// the conjunction widened anywhere. Keeping the filter is always correct, since the
+    /// lookup then merely over-approximates.
     fn remove_literal_constraints(mfp: &mut MapFilterProject, key: &[MirScalarExpr]) -> bool {
+        if Self::key_bounds(mfp, key).widened() {
+            return false;
+        }
         let (map, predicates, project) = mfp.as_map_filter_project();
         let kept = predicates
             .into_iter()

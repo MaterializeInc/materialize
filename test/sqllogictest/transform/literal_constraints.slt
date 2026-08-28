@@ -1497,6 +1497,7 @@ SELECT u FROM t_uint_cast WHERE u::uint2 = 5::uint2
 # still uses the index, and the constraints still come out of the filter. The predicate is
 # read once per candidate index, so the conjuncts that say nothing about the index key
 # neither cost anything nor stand in the way.
+# See https://github.com/MaterializeInc/database-issues/issues/1924
 
 statement ok
 CREATE TABLE wide (shop_id text, sku_code text, created_at int, rule text, flag bool)
@@ -1668,3 +1669,27 @@ SELECT * FROM cover WHERE foo IN (1,2,3) AND bar IN (0,1,2,3,4,5,6,7,8,9,10,11) 
 1  1  1
 2  2  2
 3  3  3
+
+# Two disjoint pair lists whose box product exceeds the analysis budget. The bound widens to
+# stay inside it, which makes the lookup values a superset of what the predicate admits, so
+# the constraints must stay in the filter rather than being removed. Asserted on rows rather
+# than on the plan: over-approximating the lookup is allowed, returning a row is not.
+
+statement ok
+CREATE TABLE pairs (a int, b int)
+
+statement ok
+CREATE INDEX pairs_idx ON pairs(a, b)
+
+statement ok
+INSERT INTO pairs VALUES (5, 5), (5, 6), (7, 8)
+
+query II rowsort
+SELECT * FROM pairs WHERE (a,b) IN ((0,0),(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10),(11,11),(12,12),(13,13),(14,14),(15,15),(16,16),(17,17),(18,18),(19,19),(20,20),(21,21),(22,22),(23,23),(24,24),(25,25),(26,26),(27,27),(28,28),(29,29),(30,30),(31,31),(32,32),(33,33),(34,34),(35,35),(36,36),(37,37),(38,38),(39,39)) AND (a,b) IN ((0,1),(1,2),(2,3),(3,4),(4,5),(5,6),(6,7),(7,8),(8,9),(9,10),(10,11),(11,12),(12,13),(13,14),(14,15),(15,16),(16,17),(17,18),(18,19),(19,20),(20,21),(21,22),(22,23),(23,24),(24,25),(25,26),(26,27),(27,28),(28,29),(29,30),(30,31),(31,32),(32,33),(33,34),(34,35),(35,36),(36,37),(37,38),(38,39),(39,40))
+----
+
+# The same shape under the budget, where the intersection is exact and stays empty.
+
+query II rowsort
+SELECT * FROM pairs WHERE (a,b) IN ((0,0),(5,5)) AND (a,b) IN ((0,1),(5,6))
+----
