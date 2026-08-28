@@ -66,8 +66,12 @@ const FilterCheckboxRow = ({
   );
 };
 
-export interface MultiSelectFilterPanelProps<T extends string> {
-  column: AnyColumn;
+export interface MultiSelectFilterPanelProps<
+  T extends string,
+  TData = MaintainedObjectListItem,
+> {
+  /** Any table's column. The panel reads and writes only its filter value. */
+  column: Column<TData, unknown>;
   items: readonly T[];
   getLabel?: (item: T) => React.ReactNode;
   searchable?: boolean;
@@ -79,14 +83,17 @@ export interface MultiSelectFilterPanelProps<T extends string> {
  * Multi-select filter for a TanStack column whose filter value is a `T[]`.
  * An empty selection clears the column filter.
  */
-export const MultiSelectFilterPanel = <T extends string>({
+export const MultiSelectFilterPanel = <
+  T extends string,
+  TData = MaintainedObjectListItem,
+>({
   column,
   items,
   getLabel,
   searchable = false,
   searchPlaceholder = "Search...",
   emptyMessage = "No results",
-}: MultiSelectFilterPanelProps<T>) => {
+}: MultiSelectFilterPanelProps<T, TData>) => {
   const { colors } = useTheme<MaterializeTheme>();
   const selected = (column.getFilterValue() as T[] | undefined) ?? [];
   const [search, setSearch] = React.useState("");
