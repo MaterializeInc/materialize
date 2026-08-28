@@ -1,6 +1,6 @@
 ---
 source: src/compute-types/src/dyncfgs.rs
-revision: 32dcad4ade
+revision: c69fde3d50
 ---
 
 # compute-types::dyncfgs
@@ -12,6 +12,7 @@ Declares all dynamic configuration (`dyncfg`) constants for the compute layer. K
 - **Memory management**: `ENABLE_LGALLOC` (replica-scoped), `ENABLE_LGALLOC_EAGER_RECLAMATION`, `LGALLOC_BACKGROUND_INTERVAL`, `LGALLOC_FILE_GROWTH_DAMPENER`, `LGALLOC_LOCAL_BUFFER_BYTES`, `LGALLOC_SLOW_CLEAR_BYTES`, `ENABLE_COLUMNATION_LGALLOC`, `MEMORY_LIMITER_INTERVAL`, `MEMORY_LIMITER_USAGE_BIAS`, `MEMORY_LIMITER_BURST_FACTOR`.
 - **Backpressure**: `DATAFLOW_MAX_INFLIGHT_BYTES`, `DATAFLOW_MAX_INFLIGHT_BYTES_CC`, `ENABLE_COMPUTE_LOGICAL_BACKPRESSURE`, `COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES`, `COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK`.
 - **Peek stash**: `ENABLE_PEEK_RESPONSE_STASH`, `PEEK_RESPONSE_STASH_THRESHOLD_BYTES`, `PEEK_RESPONSE_STASH_BATCH_MAX_RUNS`, `PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES`, `PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES`, `PEEK_STASH_NUM_BATCHES`, `PEEK_STASH_BATCH_SIZE`.
+- **Peek row iteration limit**: `ENABLE_PEEK_ROW_ITERATION_LIMIT` (environment-scoped, default false) gates the feature; `PEEK_ROW_ITERATION_LIMIT` (environment-scoped, default 1000) sets the maximum number of rows a peek may examine per worker. The limit does not apply once a peek's results move to the peek stash.
 - **Other**: `HYDRATION_CONCURRENCY`, `COMPUTE_SERVER_MAINTENANCE_INTERVAL`, `ENABLE_COMPUTE_REPLICA_EXPIRATION`, `COMPUTE_REPLICA_EXPIRATION_OFFSET`, `COPY_TO_S3_*`, `COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL`, `SUBSCRIBE_SNAPSHOT_OPTIMIZATION`, `ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA`.
 
 Constants declare their `ParameterScope` as a required argument to `Config::new` (previously via a `.scoped()` builder call). Constants that carry `ParameterScope::Replica` are eligible for per-replica override through the scoped feature flags mechanism; those with `ParameterScope::Environment` apply environment-wide.

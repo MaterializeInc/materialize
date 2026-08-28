@@ -1,6 +1,6 @@
 ---
 source: src/pgrepr-consts/src/lib.rs
-revision: 30d929249e
+revision: c317ceee3c
 ---
 
 # mz-pgrepr-consts
@@ -9,7 +9,8 @@ Provides a single, stable registry of OID constants for all PostgreSQL and Mater
 
 ## Module structure
 
-* `oid` — the only module; contains every OID constant organized into PostgreSQL builtin types/functions, Materialize-specific builtins (starting at OID 16384), and boundary sentinels (`FIRST_UNPINNED_OID`, `FIRST_MATERIALIZE_OID`, `FIRST_USER_OID`).
+* `oid` — every OID constant organized into PostgreSQL builtin types/functions, Materialize-specific builtins (starting at OID 16384), and boundary sentinels (`FIRST_UNPINNED_OID`, `FIRST_MATERIALIZE_OID`, `FIRST_USER_OID`).
+* `regproc` — static OID-to-name table (`NAMES`) for text rendering of `regproc` values, with `name(oid)` and `oid(name)` lookup functions. The table covers all builtin function OIDs and is generated from the builtin function registry via `REWRITE=1 cargo test -p mz-catalog test_regproc_names_match_builtin_functions`; do not hand-edit entries.
 
 ## Key dependencies and consumers
 

@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/internal/state.rs
-revision: 5a4a36c4fd
+revision: 6ebd534824
 ---
 
 # persist-client::internal::state
@@ -9,3 +9,4 @@ Defines the core persist state data model: `State` / `TypedState` (the full shar
 State is parameterized over `(K, V, T, D)` codec types and tracks the shard's since and upper frontiers, registered reader/writer leases, and the compaction trace.
 All state transitions are pure functions that return a new `State` value, enabling compare-and-set semantics against consensus.
 `StateCollections::add_rollup` refuses to insert a rollup at a `SeqNo` below the minimum currently-kept rollup. This guard prevents a delayed retry of an indeterminate `add_rollup` commit from re-inserting an entry that GC has already physically removed, which would produce duplicate Insert/Delete events in the diff stream.
+`RunMeta` carries a `bounds_truncated` flag (stored in its `MetadataMap` under the key `"truncated"`) that records whether a run's parts may physically hold updates outside the batch's registered desc. This happens when a batch is appended under a desc narrower than the one it was written with. Readers filter such updates out, but write-time per-part statistics like `diffs_sum` count them, so any accounting that substitutes statistics for a real fetch must skip runs where `bounds_truncated()` returns true.
