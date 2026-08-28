@@ -1283,6 +1283,13 @@ class HydrationChurn(Action):
     `SELECT count(*)` blocks until the view has hydrated, so each iteration does
     real hydration work before the drop. Runs in a `ClosedLoop`, which is
     single-threaded, so a fixed view name is safe.
+
+    An iteration that fails is logged and skipped rather than allowed to
+    propagate. `ClosedLoop.run` is the thread's whole body and has no handler,
+    so an escaping exception would remove the contention for the rest of the
+    load phase while the measured loops kept reporting against a replica with
+    nothing else to do, which reads as the change under test having fixed read
+    isolation.
     """
 
     def __init__(self, conn_info: PgConnInfo, name: str, view_sql: str):
@@ -1294,14 +1301,24 @@ class HydrationChurn(Action):
         self.cur = self.conn.cursor()
 
     def _run(self, conns: queue.Queue):
-        self.cur.execute(
-            f"CREATE MATERIALIZED VIEW {self.name} AS {self.view_sql}".encode()
-        )
-        # Force hydration to complete before we drop, so the replica actually
-        # does the build work rather than cancelling it immediately.
-        self.cur.execute(f"SELECT count(*) FROM {self.name}".encode())
-        self.cur.fetchall()
-        self.cur.execute(f"DROP MATERIALIZED VIEW {self.name}".encode())
+        # `IF NOT EXISTS` and `IF EXISTS` keep an iteration that failed after
+        # its CREATE from wedging every iteration after it.
+        try:
+            execute_query(
+                self.cur,
+                f"CREATE MATERIALIZED VIEW IF NOT EXISTS {self.name} AS {self.view_sql}",
+            )
+            # Force hydration to complete before we drop, so the replica actually
+            # does the build work rather than cancelling it immediately.
+            execute_query(self.cur, f"SELECT count(*) FROM {self.name}")
+            self.cur.fetchall()
+        except Exception as e:
+            print(f"Hydration churn {self.name} failed, skipping iteration: {e}")
+        finally:
+            try:
+                execute_query(self.cur, f"DROP MATERIALIZED VIEW IF EXISTS {self.name}")
+            except Exception as e:
+                print(f"Hydration churn {self.name} could not drop its view: {e}")
 
     def __str__(self) -> str:
         return f"hydration churn {self.name}"
@@ -1321,8 +1338,17 @@ class ReadIsolationUnderHydration(Scenario):
     capture. That backlog is the signal: it is what a user issuing reads at a
     steady rate experiences when maintenance steals the serving capacity.
 
-    To A/B a change that claims to improve read isolation, run the scenario
-    twice with the flag that gates it and compare the SELECT p50/p99/qps:
+    The measured loops are pooled so that the backlog is the replica's.
+    `ReuseConnQuery` serializes an open loop on one connection behind one lock,
+    so read concurrency is one however large the thread pool is, and any query
+    slower than the inter-arrival time backs up in the client instead. The
+    percentiles that come out of that scale with the length of the load phase
+    rather than with peek latency, which is the same on both sides of an A/B.
+
+    Compare p50 and p99, not qps. An open loop offers a fixed number of
+    queries, every one of them is drained before the run ends, and each is
+    timestamped when it was scheduled rather than when it completed, so the
+    reported qps is the offered rate whatever the replica does:
 
         bin/mzcompose --find parallel-benchmark run default \
             --scenario ReadIsolationUnderHydration \
@@ -1361,21 +1387,15 @@ class ReadIsolationUnderHydration(Scenario):
                     actions=[
                         # Measured: fast-path index point lookup.
                         OpenLoop(
-                            action=ReuseConnQuery(
-                                "SELECT v FROM hot WHERE k = 42",
-                                mz,
-                                strict_serializable=False,
-                            ),
+                            action=PooledQuery("SELECT v FROM hot WHERE k = 42", mz),
                             dist=Periodic(per_second=50),
                             report_regressions=False,
                         ),
                         # Measured: slow-path range scan + reduce peek (more
                         # sensitive to contention on the replica).
                         OpenLoop(
-                            action=ReuseConnQuery(
-                                "SELECT count(*) FROM hot WHERE k < 50000",
-                                mz,
-                                strict_serializable=False,
+                            action=PooledQuery(
+                                "SELECT count(*) FROM hot WHERE k < 50000", mz
                             ),
                             dist=Periodic(per_second=12),
                             report_regressions=False,
@@ -1391,4 +1411,5 @@ class ReadIsolationUnderHydration(Scenario):
                     ],
                 ),
             ],
+            conn_pool_size=100,
         )
