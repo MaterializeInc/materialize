@@ -3059,6 +3059,7 @@ mod tests {
                 array: u32,
                 input: u32,
                 receive: u32,
+                send: u32,
             }
 
             struct PgOper {
@@ -3098,7 +3099,7 @@ mod tests {
             let pg_type: BTreeMap<_, _> = query(
                 &client,
                 sql!(
-                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive FROM pg_type"
+                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive, typsend::oid as typsend FROM pg_type"
                 ),
                 &[],
             )
@@ -3114,6 +3115,7 @@ mod tests {
                         array: row.get("typarray"),
                         input: row.get("typinput"),
                         receive: row.get("typreceive"),
+                        send: row.get("typsend"),
                     };
                     (oid, pg_type)
                 })
@@ -3205,10 +3207,15 @@ mod tests {
                             ty.oid, pg_ty.name, ty.name,
                         );
 
-                        let (typinput_oid, typreceive_oid) = match &ty.details.pg_metadata {
-                            None => (0, 0),
-                            Some(pgmeta) => (pgmeta.typinput_oid, pgmeta.typreceive_oid),
-                        };
+                        let (typinput_oid, typreceive_oid, typsend_oid) =
+                            match &ty.details.pg_metadata {
+                                None => (0, 0, 0),
+                                Some(pgmeta) => (
+                                    pgmeta.typinput_oid,
+                                    pgmeta.typreceive_oid,
+                                    pgmeta.typsend_oid,
+                                ),
+                            };
                         assert_eq!(
                             typinput_oid, pg_ty.input,
                             "type {} has typinput OID {:?} in mz but {:?} in pg",
@@ -3218,6 +3225,15 @@ mod tests {
                             typreceive_oid, pg_ty.receive,
                             "type {} has typreceive OID {:?} in mz but {:?} in pg",
                             ty.name, typreceive_oid, pg_ty.receive,
+                        );
+                        // Unlike typinput and typreceive below, typsend is not also
+                        // checked against `func_oids`. Nothing resolves a typsend OID
+                        // to a name, so the corresponding `*send` functions are
+                        // deliberately not registered as builtins.
+                        assert_eq!(
+                            typsend_oid, pg_ty.send,
+                            "type {} has typsend OID {:?} in mz but {:?} in pg",
+                            ty.name, typsend_oid, pg_ty.send,
                         );
                         if typinput_oid != 0 {
                             assert!(

@@ -139,6 +139,11 @@ def get_minimal_system_parameters(
         # End of list (ordered by name)
     }
 
+    if version >= MzVersion.parse_mz("v26.40.0-dev"):
+        # Exercise the row-limit check without constraining normal test queries.
+        config["compute_peek_row_iteration_limit"] = "1000000000"
+        config["enable_compute_peek_row_iteration_limit"] = "true"
+
     if version < MzVersion.parse_mz("v0.163.0-dev"):
         config["enable_compute_active_dataflow_cancelation"] = "true"
 
@@ -330,6 +335,19 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "enable_union_cancellation_after_relation_cse",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_upsert_paged_spill",
+            "true",
+            ["true", "false"],
+        ),
+        # On by default so CI exercises the chunked stash flavor, which is
+        # off in production while it earns trust. Only meaningful when
+        # enable_upsert_v2 is true.
+        VariableSystemParameter(
+            "enable_upsert_chunked_stash",
             "true",
             ["true", "false"],
         ),
@@ -643,7 +661,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "column_paged_batcher_spill_worker_count",
     "column_paged_batcher_eager_backing",
     "column_paged_batcher_pool_rss_target_fraction",
-    "enable_upsert_paged_spill",
     "enable_lgalloc_eager_reclamation",
     "lgalloc_background_interval",
     "lgalloc_file_growth_dampener",
@@ -800,6 +817,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "mz_metrics_lgalloc_map_refresh_interval",
     "mz_metrics_lgalloc_refresh_interval",
     "mz_metrics_rusage_refresh_interval",
+    "mz_metrics_usage_refresh_interval",
     "compute_peek_response_stash_batch_max_runs",
     "compute_peek_response_stash_read_batch_size_bytes",
     "compute_peek_response_stash_read_memory_budget_bytes",

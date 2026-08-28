@@ -194,6 +194,7 @@ pub const TYPE_MZ_ACL_ITEM_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };

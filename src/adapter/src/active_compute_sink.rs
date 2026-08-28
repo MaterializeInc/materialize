@@ -279,7 +279,10 @@ impl ActiveSubscribe {
                 mz_ore::iter::consolidate_update_iter(merged)
             }
             Err(s) => {
-                self.send(PeekResponseUnary::Error(s), 0);
+                self.send(
+                    PeekResponseUnary::Error(AdapterError::Unstructured(anyhow::Error::msg(s))),
+                    0,
+                );
                 return true;
             }
         };
@@ -507,13 +510,10 @@ impl ActiveSubscribe {
             ActiveComputeSinkRetireReason::BufferExceeded {
                 buffered_bytes,
                 max_buffered_bytes,
-            } => PeekResponseUnary::Error(
-                AdapterError::SubscribeFellBehind {
-                    buffered_bytes,
-                    max_buffered_bytes,
-                }
-                .to_string(),
-            ),
+            } => PeekResponseUnary::Error(AdapterError::SubscribeFellBehind {
+                buffered_bytes,
+                max_buffered_bytes,
+            }),
         };
         self.send(message, 0);
     }

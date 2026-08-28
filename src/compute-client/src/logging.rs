@@ -184,6 +184,8 @@ pub enum ComputeLog {
     DataflowGlobal,
     /// Prometheus metrics gathered from the metrics registry.
     PrometheusMetrics,
+    /// Resource usage observations of each replica process.
+    ResourceUsage,
 }
 
 impl LogVariant {
@@ -412,6 +414,14 @@ impl LogVariant {
                 .with_column("value", SqlScalarType::Float64.nullable(false))
                 .with_column("help", SqlScalarType::String.nullable(false))
                 .with_key(vec![0, 1, 3])
+                .finish(),
+
+            LogVariant::Compute(ComputeLog::ResourceUsage) => RelationDesc::builder()
+                .with_column("process_id", SqlScalarType::UInt64.nullable(false))
+                .with_column("source", SqlScalarType::String.nullable(false))
+                .with_column("metric", SqlScalarType::String.nullable(false))
+                .with_column("value", SqlScalarType::UInt64.nullable(false))
+                .with_key(vec![0, 1, 2])
                 .finish(),
         }
     }

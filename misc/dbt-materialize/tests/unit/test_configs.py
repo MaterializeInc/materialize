@@ -15,6 +15,7 @@
 
 import pytest
 from dbt.adapters.materialize.exceptions import (
+    IndexConfigError,
     PartitionByConfigError,
     RefreshIntervalConfigError,
 )
@@ -50,6 +51,16 @@ class TestIndexConfig:
         assert index.default is True
         assert index.name == "my_idx"
         assert index.cluster == "my_cluster"
+
+    def test_invalid_columns_type(self):
+        with pytest.raises(IndexConfigError):
+            MaterializeIndexConfig.parse({"columns": "a"})
+
+    def test_not_a_dict(self):
+        # jsonschema reports non-dict input as a ValidationError, so it lands
+        # in IndexConfigError like any other malformed shape.
+        with pytest.raises(IndexConfigError):
+            MaterializeIndexConfig.parse("a")
 
 
 class TestRefreshIntervalConfig:

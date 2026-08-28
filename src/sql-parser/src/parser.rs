@@ -2974,6 +2974,7 @@ impl<'a> Parser<'a> {
                 ENDPOINT,
                 GCP,
                 HOST,
+                OAUTH2,
                 PASSWORD,
                 PORT,
                 PUBLIC,
@@ -2993,10 +2994,14 @@ impl<'a> Parser<'a> {
                 USERNAME,
                 WAREHOUSE,
             ])? {
-                ACCESS => {
-                    self.expect_keywords(&[KEY, ID])?;
-                    ConnectionOptionName::AccessKeyId
-                }
+                ACCESS => match self.expect_one_of_keywords(&[KEY, DELEGATION])? {
+                    KEY => {
+                        self.expect_keyword(ID)?;
+                        ConnectionOptionName::AccessKeyId
+                    }
+                    DELEGATION => ConnectionOptionName::AccessDelegation,
+                    _ => unreachable!(),
+                },
                 ASSUME => {
                     self.expect_keyword(ROLE)?;
                     match self.expect_one_of_keywords(&[ARN, SESSION])? {
@@ -3031,6 +3036,10 @@ impl<'a> Parser<'a> {
                     ConnectionOptionName::GcpConnection
                 }
                 HOST => ConnectionOptionName::Host,
+                OAUTH2 => {
+                    self.expect_keywords(&[SERVER, URL])?;
+                    ConnectionOptionName::Oauth2ServerUrl
+                }
                 PASSWORD => ConnectionOptionName::Password,
                 PORT => ConnectionOptionName::Port,
                 PUBLIC => {

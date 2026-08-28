@@ -3026,6 +3026,16 @@ steps:
   - group: Language
     key: language-tests
     steps:
+      - id: adbc
+        label: Arrow ADBC driver
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: adbc
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
       - id: lang-csharp
         label: ":csharp:"
         depends_on: build-aarch64

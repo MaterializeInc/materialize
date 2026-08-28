@@ -8188,6 +8188,86 @@ def workflow_test_prometheus_metrics(c: Composition) -> None:
                 """))
 
 
+def workflow_test_resource_usage(c: Composition) -> None:
+    """Test that mz_cluster_replica_resource_usage reports observations per replica process."""
+
+    c.up("materialized")
+
+    # Sample fast, so the test does not have to wait out the default interval.
+    c.sql(
+        "ALTER SYSTEM SET mz_metrics_usage_refresh_interval = '1s';",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql("CREATE CLUSTER cluster1 SIZE 'scale=2,workers=2';")
+
+    def observations() -> dict[tuple[int, str, str], int]:
+        with c.sql_cursor() as cursor:
+            cursor.execute(b"SET cluster = cluster1")
+            # `process_id` and `value` are `uint8`, which psycopg has no adapter for and hands
+            # back as strings. Cast so the comparisons below are numeric, not lexicographic.
+            cursor.execute(b"""
+                SELECT process_id::int8, source, metric, value::int8
+                FROM mz_introspection.mz_cluster_replica_resource_usage
+                """)
+            return {(r[0], r[1], r[2]): r[3] for r in cursor.fetchall()}
+
+    # Both processes must report, and every process must report the same set of metrics: the two
+    # run the same binary in the same environment, so a metric readable on one and not the other
+    # means a reader failed rather than that the source is unavailable.
+    for _ in range(60):
+        before = observations()
+        processes = {process_id for process_id, _, _ in before}
+        per_process = {
+            process_id: {(s, m) for p, s, m in before if p == process_id}
+            for process_id in processes
+        }
+        if processes == {0, 1} and len(set(map(frozenset, per_process.values()))) == 1:
+            break
+        time.sleep(1)
+    else:
+        assert False, f"resource usage not reported for both processes: {before}"
+
+    # `rusage` and `proc_status` are available on any Linux replica, so their absence is a bug
+    # rather than an unsupported configuration. cgroup metrics are deliberately not asserted:
+    # `memory.peak` and `memory.swap.peak` depend on the kernel version.
+    metrics = {(source, metric) for _, source, metric in before}
+    for required in [("rusage", "max_rss"), ("proc_status", "vm_rss")]:
+        assert required in metrics, f"{required} missing from {sorted(metrics)}"
+
+    # Every reported value must be a plain number. Nothing is allowed to surface as a sentinel.
+    for key, value in before.items():
+        assert value >= 0, f"{key} reported {value}"
+
+    # Do some work to push usage up. Peaks must not go backwards, whether or not this particular
+    # workload moves them.
+    c.sql("""
+        SET cluster = cluster1;
+        CREATE TABLE t (a int);
+        INSERT INTO t SELECT generate_series(1, 500000);
+        CREATE MATERIALIZED VIEW mv AS SELECT count(*) FROM t;
+        """)
+    with c.sql_cursor() as cursor:
+        cursor.execute(b"SET cluster = cluster1")
+        cursor.execute(b"SELECT * FROM mv")
+        cursor.fetchall()
+
+    # Give the sampler a few intervals to observe the new usage.
+    time.sleep(5)
+
+    after = observations()
+
+    # Peaks are monotonic, whether the kernel maintains them or the sampler folds them. Current
+    # values are free to fall, so they are deliberately not checked here.
+    peaks = [key for key in before if key[2].endswith("peak") or key[2] == "max_rss"]
+    assert peaks, f"no peak metrics reported: {sorted(before)}"
+    for key in peaks:
+        assert key in after, f"{key} stopped being reported"
+        assert (
+            after[key] >= before[key]
+        ), f"{key} peak fell from {before[key]} to {after[key]}"
+
+
 def workflow_test_metrics_null_label(c: Composition) -> None:
     """SQL-198: `/metrics/mz_usage` must not abort environmentd when a
     Prometheus label column is SQL NULL. An unorchestrated cluster replica has

@@ -751,6 +751,14 @@ fn endpoint_instructions(
             } else {
                 ""
             };
+            // Same reasoning for the introspection rule: only route to the
+            // `query` tool when it is exposed, otherwise say that
+            // cluster-targeted introspection is unavailable here.
+            let introspection_rule = if query_tool_enabled {
+                "- mz_introspection relations (for example mz_dataflow_arrangement_sizes) are cluster-scoped and query_system_catalog answers about the session's default cluster: read them only through the query tool with its cluster argument (and cluster_replica on a multi-replica cluster), never through query_system_catalog"
+            } else {
+                "- mz_introspection relations (for example mz_dataflow_arrangement_sizes) are cluster-scoped and query_system_catalog answers about the session's default cluster only; cluster-targeted introspection is unavailable on this server (the query tool is disabled), so say so rather than reporting another cluster's numbers"
+            };
             Some(format!(
                 "You are connected to the Materialize developer MCP server for troubleshooting and observability.\n\n\
                  Tools:\n\
@@ -765,7 +773,8 @@ fn endpoint_instructions(
                  Key rules:\n\
                  - mz_source_statuses and mz_sink_statuses use `last_status_change_at` (NOT `updated_at`)\n\
                  - mz_cluster_replica_utilization only has `replica_id` — JOIN with mz_cluster_replicas and mz_clusters to get names\n\
-                 - Do NOT query mz_introspection.mz_dataflow_arrangement_sizes — it is cluster-scoped and has uint8/text type mismatches\n\
+                 {introspection_rule}\n\
+                 - mz_dataflow_arrangement_sizes.id and mz_dataflows.id are dataflow ids (uint8), not catalog ids: do not JOIN them to mz_catalog.mz_objects.id (text); join through mz_introspection.mz_compute_exports (dataflow_id to export_id) instead, or match the name column, which reads Dataflow: <database>.<schema>.<object>\n\
                  - Use SHOW COLUMNS FROM <table> to verify column names if unsure",
             ))
         }
@@ -2255,6 +2264,24 @@ mod tests {
         assert!(
             tool_names.contains(&"query"),
             "query tool should be present on developer when enabled"
+        );
+
+        let instructions = endpoint_instructions(McpEndpointType::Developer, true, true)
+            .expect("developer instructions must be present");
+        assert!(
+            instructions.contains("through the query tool with its cluster argument"),
+            "instructions must route mz_introspection through query: {instructions}",
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_developer_instructions_query_tool_disabled() {
+        let instructions = endpoint_instructions(McpEndpointType::Developer, false, true)
+            .expect("developer instructions must be present");
+        assert!(
+            instructions.contains("cluster-targeted introspection is unavailable")
+                && !instructions.contains("through the query tool"),
+            "instructions must not route to the hidden query tool: {instructions}",
         );
     }
 

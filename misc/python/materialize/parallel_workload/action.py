@@ -3064,6 +3064,10 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_compute_peek_response_stash"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["enable_compute_peek_row_iteration_limit"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        self.flags_with_values["compute_peek_row_iteration_limit"] = ["1000000000"]
         self.flags_with_values["compute_peek_response_stash_threshold_bytes"] = [
             "0",  # "force enabled"
             "1048576",  # 1 MiB, an in-between value
@@ -3134,6 +3138,7 @@ class FlipFlagsAction(Action):
             "0.02",
         ]
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_upsert_chunked_stash"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["column_chunk_compress_min_depth"] = [
             "0",  # compress every spilled body
             "1",  # the default: fresh chunks store uncompressed
@@ -3388,6 +3393,7 @@ class FlipFlagsAction(Action):
             "mz_metrics_lgalloc_map_refresh_interval",
             "mz_metrics_lgalloc_refresh_interval",
             "mz_metrics_rusage_refresh_interval",
+            "mz_metrics_usage_refresh_interval",
             "compute_peek_stash_num_batches",
             "compute_peek_stash_batch_size",
             "compute_peek_response_stash_batch_max_runs",
