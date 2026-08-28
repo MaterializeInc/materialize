@@ -3793,6 +3793,22 @@ impl Coordinator {
             }
         };
 
+        // Replanning uses a system session and discovers retained dependencies
+        // that `check_plan` could not authorize. Check them before secret guards
+        // or validation can resolve a secret.
+        let usage_check = {
+            let catalog = self.catalog().for_session(ctx.session());
+            rbac::check_usage(
+                &catalog,
+                ctx.session(),
+                &conn.resolved_ids,
+                &rbac::CREATE_ITEM_USAGE,
+            )
+        };
+        if let Err(err) = usage_check {
+            return ctx.retire(Err(err.into()));
+        }
+
         // `conn` is the whole re-planned connection, so this also rejects a
         // stored value the statement did not touch.
         if let Err(err) = check_connection_details(&conn.details) {
