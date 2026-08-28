@@ -182,11 +182,18 @@ mcp-developer
 200 OK
 {"jsonrpc":"2.0","id":41,"error":{"code":-32601,"message":"Method not found: unknown method","data":{"error_type":"MethodNotFound"}}}
 
-# Notification (no id) should return 200 with empty body.
+# No id, so 202 with an empty body per the Streamable HTTP transport.
 mcp-developer
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 ----
+202 Accepted
+
+# A request after the notification still gets its reply.
+mcp-developer
+{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"}}}
+----
 200 OK
+{"jsonrpc":"2.0","id":42,"result":{"content":[{"type":"text","text":"[\n  [\"materialize\"]\n]"}],"isError":false}}
 
 # String id should be echoed back.
 mcp-developer
@@ -267,9 +274,9 @@ mcp-developer
 # Null id notification
 # =============================================================================
 
-# Null id is treated as a notification by serde (Option<Value> deserializes
-# null as None): 200 with no response body.
+# Null id deserializes to None, so it is treated as a notification too.
+# NOTE: JSON-RPC 2.0 calls an explicit null id a request, so this is a deviation.
 mcp-developer
 {"jsonrpc":"2.0","id":null,"method":"tools/list"}
 ----
-200 OK
+202 Accepted
