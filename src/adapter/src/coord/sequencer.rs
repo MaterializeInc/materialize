@@ -418,7 +418,7 @@ impl Coordinator {
                 }
                 Plan::Select(plan) => {
                     let max_query = Some(ctx.session().vars().max_query_result_size());
-                    let max_heap = ctx.session().vars().max_query_heap_size();
+                    let max_heap = ctx.session().vars().effective_query_heap_limit();
                     self.sequence_peek(ctx, plan, target_cluster, max_query, max_heap)
                         .await;
                 }
@@ -433,7 +433,7 @@ impl Coordinator {
                 }
                 Plan::ShowColumns(show_columns_plan) => {
                     let max_query = Some(ctx.session().vars().max_query_result_size());
-                    let max_heap = ctx.session().vars().max_query_heap_size();
+                    let max_heap = ctx.session().vars().effective_query_heap_limit();
                     self.sequence_peek(
                         ctx,
                         show_columns_plan.select_plan,

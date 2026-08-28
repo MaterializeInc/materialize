@@ -505,7 +505,7 @@ impl Coordinator {
         }: SubscribeFinish,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let (mut df_desc, df_meta) = global_lir_plan.unapply();
-        df_desc.heap_size_limit = ctx.session().vars().max_query_heap_size();
+        df_desc.heap_size_limit = ctx.session().vars().effective_query_heap_limit();
         emit_optimizer_notices(&*self.catalog, ctx.session(), &df_meta.optimizer_notices);
         let conn_id = ctx.session.conn_id().clone();
         let session_uuid = ctx.session().uuid();

@@ -453,6 +453,8 @@ impl SessionVars {
             &AUTO_ROUTE_CATALOG_QUERIES,
             &ENABLE_SESSION_RBAC_CHECKS,
             &RESTRICT_TO_USER_OBJECTS,
+            &QUERY_HEAP_LIMIT,
+            &MAX_QUERY_HEAP_LIMIT,
             &ENABLE_SESSION_CARDINALITY_ESTIMATES,
             &MAX_IDENTIFIER_LENGTH,
             &STATEMENT_LOGGING_SAMPLE_RATE,
@@ -615,6 +617,7 @@ impl SessionVars {
 
         let name = UncasedStr::new(name);
         self.check_read_only(name)?;
+        self.check_query_heap_limit(name, input)?;
 
         self.vars
             .get_mut(name)
@@ -624,6 +627,38 @@ impl SessionVars {
             })
             .transpose()?
             .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
+    }
+
+    /// Returns an error if `input` would raise `query_heap_limit` above the session's ceiling.
+    ///
+    /// Rejecting rather than silently capping keeps the failure where the user can see it. The
+    /// value is still clamped when read, see [`SessionVars::effective_query_heap_limit`], because
+    /// the pair can come to disagree by routes that never pass through here.
+    fn check_query_heap_limit(&self, name: &UncasedStr, input: VarInput) -> Result<(), VarError> {
+        if name != QUERY_HEAP_LIMIT.name {
+            return Ok(());
+        }
+        let Some(max) = self.max_query_heap_limit() else {
+            return Ok(());
+        };
+
+        // Let the ordinary `set` path report a malformed value; here we only care whether a
+        // well-formed one clears the ceiling.
+        let Ok(limit) = Option::<ByteSize>::parse(input) else {
+            return Ok(());
+        };
+        let Some(limit) = limit.as_ref().map(ByteSize::as_bytes) else {
+            return Ok(());
+        };
+        if limit <= max {
+            return Ok(());
+        }
+
+        Err(VarError::InvalidParameterValue {
+            name: QUERY_HEAP_LIMIT.name.as_str(),
+            invalid_values: input.to_vec(),
+            reason: format!("exceeds max_query_heap_limit ({})", ByteSize::b(max)),
+        })
     }
 
     /// Sets the default value for the parameter named `name` to the value
@@ -656,7 +691,7 @@ impl SessionVars {
     /// (see the `PlannedAlterRoleOption::Variable` match arm). Without that
     /// check, any role could set the variable on themselves via ALTER ROLE.
     fn allow_role_default(name: &UncasedStr) -> bool {
-        name == RESTRICT_TO_USER_OBJECTS.name
+        name == RESTRICT_TO_USER_OBJECTS.name || name == MAX_QUERY_HEAP_LIMIT.name
     }
 
     /// Sets the configuration parameter named `name` to its default value.
@@ -715,6 +750,11 @@ impl SessionVars {
             // bypassing the restriction.
             Err(VarError::ReadOnlyParameter(
                 RESTRICT_TO_USER_OBJECTS.name.as_str(),
+            ))
+        } else if name == MAX_QUERY_HEAP_LIMIT.name {
+            // A ceiling a role could raise would not be a ceiling.
+            Err(VarError::ReadOnlyParameter(
+                MAX_QUERY_HEAP_LIMIT.name.as_str(),
             ))
         } else {
             Ok(())
@@ -933,11 +973,31 @@ impl SessionVars {
             .as_bytes()
     }
 
-    /// Returns the value of the `max_query_heap_size` configuration parameter.
-    pub fn max_query_heap_size(&self) -> Option<u64> {
-        self.expect_value::<Option<ByteSize>>(&MAX_QUERY_HEAP_SIZE)
+    /// Returns the value of the `query_heap_limit` configuration parameter.
+    pub fn query_heap_limit(&self) -> Option<u64> {
+        self.expect_value::<Option<ByteSize>>(&QUERY_HEAP_LIMIT)
             .as_ref()
             .map(ByteSize::as_bytes)
+    }
+
+    /// Returns the value of the `max_query_heap_limit` configuration parameter.
+    pub fn max_query_heap_limit(&self) -> Option<u64> {
+        self.expect_value::<Option<ByteSize>>(&MAX_QUERY_HEAP_LIMIT)
+            .as_ref()
+            .map(ByteSize::as_bytes)
+    }
+
+    /// Returns the heap limit to enforce for this session's queries.
+    ///
+    /// `SET query_heap_limit` rejects a value above the ceiling, but that check cannot be the
+    /// enforcement point: role defaults for the two are applied independently, and a superuser can
+    /// lower a role's ceiling after a session has already raised its own limit. Taking the minimum
+    /// here means the ceiling binds regardless of how the pair came to disagree.
+    pub fn effective_query_heap_limit(&self) -> Option<u64> {
+        match (self.query_heap_limit(), self.max_query_heap_limit()) {
+            (Some(limit), Some(max)) => Some(limit.min(max)),
+            (limit, max) => limit.or(max),
+        }
     }
 
     /// Sets the internal metadata associated with the user.
@@ -2533,7 +2593,6 @@ static SESSION_SYSTEM_VARS: LazyLock<BTreeMap<&'static UncasedStr, &'static VarD
             &TIMEZONE,
             &TRANSACTION_ISOLATION,
             &MAX_QUERY_RESULT_SIZE,
-            &MAX_QUERY_HEAP_SIZE,
         ]
         .into_iter()
         .map(|var| (UncasedStr::new(var.name()), var))
@@ -2663,6 +2722,142 @@ mod isolation_feature_flag_tests {
             &system_vars,
         )
         .expect("unrelated var ignored");
+    }
+}
+
+#[cfg(test)]
+mod query_heap_limit_tests {
+    use super::*;
+    use crate::session::user::SYSTEM_USER;
+
+    fn test_vars() -> SessionVars {
+        SessionVars::new_unchecked(&mz_build_info::DUMMY_BUILD_INFO, SYSTEM_USER.clone(), None)
+    }
+
+    /// Sets the ceiling the way a superuser's `ALTER ROLE ... SET` does, through the role-default
+    /// path rather than `set`, which rejects it.
+    fn set_ceiling(vars: &mut SessionVars, value: &str) {
+        vars.set_default("max_query_heap_limit", VarInput::Flat(value))
+            .expect("ceiling is allowed as a role default");
+    }
+
+    #[mz_ore::test]
+    fn ceiling_binds_when_session_limit_is_unset() {
+        let mut vars = test_vars();
+        assert_eq!(vars.effective_query_heap_limit(), None);
+
+        set_ceiling(&mut vars, "4GB");
+        assert_eq!(
+            vars.effective_query_heap_limit(),
+            Some(4 * 1024 * 1024 * 1024)
+        );
+    }
+
+    #[mz_ore::test]
+    fn session_limit_may_go_below_the_ceiling() {
+        let system_vars = SystemVars::new();
+        let mut vars = test_vars();
+        set_ceiling(&mut vars, "4GB");
+
+        vars.set(
+            &system_vars,
+            "query_heap_limit",
+            VarInput::Flat("1GB"),
+            false,
+        )
+        .expect("below the ceiling");
+        assert_eq!(vars.effective_query_heap_limit(), Some(1024 * 1024 * 1024));
+    }
+
+    #[mz_ore::test]
+    fn session_limit_may_not_go_above_the_ceiling() {
+        let system_vars = SystemVars::new();
+        let mut vars = test_vars();
+        set_ceiling(&mut vars, "4GB");
+
+        let err = vars
+            .set(
+                &system_vars,
+                "query_heap_limit",
+                VarInput::Flat("8GB"),
+                false,
+            )
+            .expect_err("above the ceiling");
+        assert!(
+            err.to_string().contains("exceeds max_query_heap_limit"),
+            "unexpected error: {err}"
+        );
+        // The rejected value must not have taken effect.
+        assert_eq!(
+            vars.effective_query_heap_limit(),
+            Some(4 * 1024 * 1024 * 1024)
+        );
+    }
+
+    #[mz_ore::test]
+    fn without_a_ceiling_any_session_limit_is_allowed() {
+        let system_vars = SystemVars::new();
+        let mut vars = test_vars();
+
+        vars.set(
+            &system_vars,
+            "query_heap_limit",
+            VarInput::Flat("8GB"),
+            false,
+        )
+        .expect("no ceiling to clear");
+        assert_eq!(
+            vars.effective_query_heap_limit(),
+            Some(8 * 1024 * 1024 * 1024)
+        );
+    }
+
+    /// The `set` check is UX, not enforcement: role defaults for the pair are applied
+    /// independently, so a session can hold a limit above its ceiling without ever passing
+    /// through `set`. The effective limit has to clamp anyway.
+    #[mz_ore::test]
+    fn effective_limit_clamps_a_session_limit_that_bypassed_the_check() {
+        let mut vars = test_vars();
+        vars.set_default("query_heap_limit", VarInput::Flat("8GB"))
+            .expect("role default");
+        set_ceiling(&mut vars, "2GB");
+
+        assert_eq!(vars.query_heap_limit(), Some(8 * 1024 * 1024 * 1024));
+        assert_eq!(
+            vars.effective_query_heap_limit(),
+            Some(2 * 1024 * 1024 * 1024)
+        );
+    }
+
+    #[mz_ore::test]
+    fn ceiling_cannot_be_set_by_the_session() {
+        let system_vars = SystemVars::new();
+        let mut vars = test_vars();
+        set_ceiling(&mut vars, "2GB");
+
+        // Even a superuser session cannot raise it in-session; the only route is ALTER ROLE.
+        let err = vars
+            .set(
+                &system_vars,
+                "max_query_heap_limit",
+                VarInput::Flat("8GB"),
+                false,
+            )
+            .expect_err("ceiling is read only for SET");
+        assert!(
+            matches!(err, VarError::ReadOnlyParameter("max_query_heap_limit")),
+            "unexpected error: {err}"
+        );
+
+        let err = vars
+            .reset(&system_vars, "max_query_heap_limit", false)
+            .expect_err("ceiling is read only for RESET");
+        assert!(
+            matches!(err, VarError::ReadOnlyParameter("max_query_heap_limit")),
+            "unexpected error: {err}"
+        );
+
+        assert_eq!(vars.max_query_heap_limit(), Some(2 * 1024 * 1024 * 1024));
     }
 }
 

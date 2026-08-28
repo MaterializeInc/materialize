@@ -1,0 +1,194 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test the `query_heap_limit` session variable and the `max_query_heap_limit` ceiling.
+#
+# `query_heap_limit` is an ordinary session variable a role sets for itself.
+# `max_query_heap_limit` is a ceiling on it that only a superuser can apply, via
+# `ALTER ROLE ... SET`. Three mechanisms have to agree for that to hold, and this file covers all
+# three: `allow_role_default` (permits the role default), `check_read_only` (rejects a direct
+# `SET`), and the superuser requirement in `generate_rbac_requirements`.
+
+mode cockroach
+
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE analyst LOGIN;
+----
+COMPLETE 0
+
+# =============================================================================
+# Without a ceiling, a role sets its own limit freely.
+# =============================================================================
+
+simple conn=analyst,user=analyst
+SELECT current_setting('query_heap_limit') = '';
+----
+t
+COMPLETE 1
+
+simple conn=analyst,user=analyst
+SET query_heap_limit = '8GB';
+----
+COMPLETE 0
+
+simple conn=analyst,user=analyst
+SHOW query_heap_limit;
+----
+8GB
+COMPLETE 1
+
+simple conn=analyst,user=analyst
+RESET query_heap_limit;
+----
+COMPLETE 0
+
+# =============================================================================
+# The ceiling is not settable by the role, by any route.
+# =============================================================================
+
+simple conn=analyst,user=analyst
+SET max_query_heap_limit = '8GB';
+----
+db error: ERROR: parameter "max_query_heap_limit" cannot be changed
+
+simple conn=analyst,user=analyst
+RESET max_query_heap_limit;
+----
+db error: ERROR: parameter "max_query_heap_limit" cannot be changed
+
+simple conn=analyst,user=analyst
+ALTER ROLE analyst SET max_query_heap_limit = '8GB';
+----
+db error: ERROR: permission denied to set max_query_heap_limit
+DETAIL: You must be a superuser to set max_query_heap_limit
+
+simple conn=analyst,user=analyst
+ALTER ROLE analyst RESET max_query_heap_limit;
+----
+db error: ERROR: permission denied to set max_query_heap_limit
+DETAIL: You must be a superuser to set max_query_heap_limit
+
+# CREATEROLE is not enough. This keeps the RBAC superuser check and `allow_role_default` in sync:
+# a role that can administer roles still cannot hand out heap ceilings.
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE role_admin LOGIN;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO role_admin;
+----
+COMPLETE 0
+
+simple conn=role_admin,user=role_admin
+ALTER ROLE analyst SET max_query_heap_limit = '8GB';
+----
+db error: ERROR: permission denied to set max_query_heap_limit
+DETAIL: You must be a superuser to set max_query_heap_limit
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEROLE ON SYSTEM FROM role_admin;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE role_admin;
+----
+COMPLETE 0
+
+# =============================================================================
+# A superuser applies the ceiling, which takes effect on the role's next connection.
+# =============================================================================
+
+simple conn=mz_system,user=mz_system
+ALTER ROLE analyst SET max_query_heap_limit = '4GB';
+----
+COMPLETE 0
+
+simple conn=capped,user=analyst
+SHOW max_query_heap_limit;
+----
+4GB
+COMPLETE 1
+
+# The ceiling binds on its own: the role never set a limit of its own.
+
+simple conn=capped,user=analyst
+SELECT current_setting('query_heap_limit') = '';
+----
+t
+COMPLETE 1
+
+# Below the ceiling is fine.
+
+simple conn=capped,user=analyst
+SET query_heap_limit = '1GB';
+----
+COMPLETE 0
+
+simple conn=capped,user=analyst
+SHOW query_heap_limit;
+----
+1GB
+COMPLETE 1
+
+# Above it is rejected rather than silently capped, so the role learns the value did not take.
+
+simple conn=capped,user=analyst
+SET query_heap_limit = '8GB';
+----
+db error: ERROR: parameter "query_heap_limit" cannot have value "8GB": exceeds max_query_heap_limit (4GB)
+
+# The rejected value left the previous one in place.
+
+simple conn=capped,user=analyst
+SHOW query_heap_limit;
+----
+1GB
+COMPLETE 1
+
+# Exactly at the ceiling is allowed.
+
+simple conn=capped,user=analyst
+SET query_heap_limit = '4GB';
+----
+COMPLETE 0
+
+# =============================================================================
+# A superuser can lift the ceiling again.
+# =============================================================================
+
+simple conn=mz_system,user=mz_system
+ALTER ROLE analyst RESET max_query_heap_limit;
+----
+COMPLETE 0
+
+simple conn=uncapped,user=analyst
+SELECT current_setting('max_query_heap_limit') = '';
+----
+t
+COMPLETE 1
+
+simple conn=uncapped,user=analyst
+SET query_heap_limit = '8GB';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE analyst;
+----
+COMPLETE 0

@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Test the `max_query_heap_size` session variable.
+# Test the `query_heap_limit` session variable.
 #
 # The limit is compared against the dataflow's heap usage summed over the whole replica, so this
 # runs on a cluster with an explicit multi-worker size rather than the composition's default. A
@@ -28,7 +28,7 @@ ALTER SYSTEM SET enable_compute_heap_size_limit = true
 
 # A limit far below any dataflow's footprint must trip.
 
-> SET max_query_heap_size = '1kB'
+> SET query_heap_limit = '1kB'
 
 > BEGIN
 
@@ -54,7 +54,7 @@ contains:Dataflow limit exceeded
 
 # A limit far above it must not.
 
-> SET max_query_heap_size = '512MB'
+> SET query_heap_limit = '512MB'
 
 > BEGIN
 
@@ -69,22 +69,9 @@ contains:Dataflow limit exceeded
 
 # Both spellings of "no limit" must clear it.
 
-> SET max_query_heap_size = '1kB'
+> SET query_heap_limit = '1kB'
 
-> RESET max_query_heap_size
-
-> BEGIN
-
-> DECLARE c CURSOR FOR SUBSCRIBE (SELECT max(a) FROM t1)
-
-> FETCH 1 c
-<TIMESTAMP> 1 10000
-
-> FETCH 1 FROM c WITH (TIMEOUT = '1s')
-
-> ROLLBACK
-
-> SET max_query_heap_size = 0
+> RESET query_heap_limit
 
 > BEGIN
 
@@ -97,7 +84,20 @@ contains:Dataflow limit exceeded
 
 > ROLLBACK
 
-> RESET max_query_heap_size
+> SET query_heap_limit = 0
+
+> BEGIN
+
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT max(a) FROM t1)
+
+> FETCH 1 c
+<TIMESTAMP> 1 10000
+
+> FETCH 1 FROM c WITH (TIMEOUT = '1s')
+
+> ROLLBACK
+
+> RESET query_heap_limit
 
 > SET cluster = quickstart
 

@@ -1342,6 +1342,15 @@ fn generate_rbac_requirements(
                     ..Default::default()
                 }
             }
+            // A role that could set its own ceiling could raise it.
+            plan::PlannedAlterRoleOption::Variable(var)
+                if var.name().eq_ignore_ascii_case("max_query_heap_limit") =>
+            {
+                RbacRequirements {
+                    superuser_action: Some("set max_query_heap_limit".to_string()),
+                    ..Default::default()
+                }
+            }
             // Roles are allowed to change their own other variables.
             plan::PlannedAlterRoleOption::Variable(_) if role_id == *id => {
                 RbacRequirements::default()

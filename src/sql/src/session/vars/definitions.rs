@@ -604,10 +604,26 @@ pub static MAX_QUERY_RESULT_SIZE: VarDefinition = VarDefinition::new(
     true,
 );
 
-pub static MAX_QUERY_HEAP_SIZE: VarDefinition = VarDefinition::new(
-    "max_query_heap_size",
+pub static QUERY_HEAP_LIMIT: VarDefinition = VarDefinition::new(
+    "query_heap_limit",
     value!(Option<ByteSize>; None),
-    "The maximum size in bytes for a single query's dataflow (Materialize).",
+    "The maximum heap size in bytes a single query's dataflow may occupy across the replica, or \
+        unset for no limit. Cannot exceed `max_query_heap_limit` (Materialize).",
+    true,
+);
+
+/// A ceiling on [`QUERY_HEAP_LIMIT`] that a role cannot raise or remove.
+///
+/// SECURITY: this is settable only through `ALTER ROLE ... SET` by a superuser. That rests on
+/// three pieces that have to agree: [`SessionVars::allow_role_default`] permits the role default,
+/// [`SessionVars::check_read_only`] rejects a direct `SET`, and the `PlannedAlterRoleOption::
+/// Variable` arm of `generate_rbac_requirements` requires superuser. Drop any one and a role can
+/// lift its own ceiling.
+pub static MAX_QUERY_HEAP_LIMIT: VarDefinition = VarDefinition::new(
+    "max_query_heap_limit",
+    value!(Option<ByteSize>; None),
+    "The ceiling on `query_heap_limit`, settable only by a superuser via ALTER ROLE. Applies on \
+        its own when `query_heap_limit` is unset (Materialize).",
     true,
 );
 
