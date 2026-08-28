@@ -8,7 +8,10 @@
 # by the Apache License, Version 2.0.
 
 import queue
+import time
 from copy import deepcopy
+
+import psycopg
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.mysql import MySql
@@ -16,12 +19,14 @@ from materialize.parallel_benchmark.framework import (
     Action,
     ClosedLoop,
     LoadPhase,
+    Measurement,
     OpenLoop,
     Periodic,
     PooledQuery,
     ReuseConnQuery,
     Scenario,
     StandaloneQuery,
+    State,
     TdAction,
     TdPhase,
     disabled,
@@ -333,9 +338,7 @@ class OpenIndexedSelects(Scenario):
                     duration=120,
                     actions=[
                         OpenLoop(
-                            action=PooledQuery(
-                                "SELECT * FROM t4", conn_info=conn_infos["materialized"]
-                            ),
+                            action=PooledQuery("SELECT * FROM t4"),
                             dist=Periodic(per_second=400),
                         ),
                     ],
@@ -445,9 +448,7 @@ class PoolRead(Scenario):
                     duration=120,
                     actions=[
                         OpenLoop(
-                            action=PooledQuery(
-                                "SELECT 1", conn_info=conn_infos["materialized"]
-                            ),
+                            action=PooledQuery("SELECT 1"),
                             dist=Periodic(per_second=100),
                             # dist=Gaussian(mean=0.01, stddev=0.05),
                         ),
@@ -567,9 +568,7 @@ class StatementLogging(Scenario):
                     duration=120,
                     actions=[
                         OpenLoop(
-                            action=PooledQuery(
-                                "SELECT 1", conn_info=conn_infos["materialized"]
-                            ),
+                            action=PooledQuery("SELECT 1"),
                             dist=Periodic(per_second=100),
                             # dist=Gaussian(mean=0.01, stddev=0.05),
                         ),
@@ -1222,9 +1221,7 @@ class StagingBench(Scenario):
                     duration=82800,
                     actions=[
                         OpenLoop(
-                            action=PooledQuery(
-                                "SELECT 1", conn_info=conn_infos["materialized"]
-                            ),
+                            action=PooledQuery("SELECT 1"),
                             dist=Periodic(per_second=500),
                         ),
                         ClosedLoop(
@@ -1283,25 +1280,97 @@ class HydrationChurn(Action):
     `SELECT count(*)` blocks until the view has hydrated, so each iteration does
     real hydration work before the drop. Runs in a `ClosedLoop`, which is
     single-threaded, so a fixed view name is safe.
+
+    An iteration that fails is logged and skipped rather than allowed to
+    propagate. `ClosedLoop.run` is the thread's whole body and has no handler,
+    so an escaping exception would remove the contention for the rest of the
+    load phase while the measured loops kept reporting against a replica with
+    nothing else to do, which reads as the change under test having fixed read
+    isolation.
+
+    A closed loop calls back to back with no pause of its own, so a failure that
+    repeats is backed off and the connection reopened. Without both, an unusable
+    cursor raises without a round trip and the loop spins, taking the
+    measurement store's process-wide lock against the threads that record the
+    measured reads.
+
+    Each iteration drops the view before it creates it, rather than trusting the
+    previous one to have cleaned up. An iteration whose own drop fails would
+    otherwise leave the view behind on a working session, and the next create
+    would find it already there, hydrate nothing, and record the milliseconds
+    that took as the fastest hydration of the run.
+
+    A failed iteration records no measurement, so the count of this action in
+    the report is the number of hydrations that actually happened. Recording one
+    would report the backoff as though it were a fast hydration, and the count
+    would rise as the contention fell.
     """
+
+    # Long enough that a persistently failing loop cannot crowd out the threads
+    # recording the measured reads, short enough to lose little contention.
+    RETRY_BACKOFF_SECONDS = 1.0
 
     def __init__(self, conn_info: PgConnInfo, name: str, view_sql: str):
         self.conn_info = conn_info
         self.name = name
         self.view_sql = view_sql
-        self.conn = conn_info.connect()
-        self.conn.autocommit = True
-        self.cur = self.conn.cursor()
+        self.conn: psycopg.Connection | None = None
+        self._connect()
+
+    def _connect(self) -> None:
+        conn = self.conn_info.connect()
+        conn.autocommit = True
+        cur = conn.cursor()
+        old = self.conn
+        self.conn = conn
+        self.cur = cur
+        if old is not None:
+            try:
+                old.close()
+            except Exception as e:
+                print(
+                    f"Hydration churn {self.name} could not close the old connection: {e}"
+                )
+
+    def run(self, start_time: float, conns: queue.Queue, state: State):
+        # `Action.run` records a measurement whenever `_run` returns. A failed
+        # iteration did no hydration and spent its time in the backoff, so it
+        # records nothing rather than entering the series as a fast one.
+        if not self._churn():
+            return
+        duration = time.time() - start_time
+        state.measurements.add(str(self), Measurement(duration, start_time))
 
     def _run(self, conns: queue.Queue):
-        self.cur.execute(
-            f"CREATE MATERIALIZED VIEW {self.name} AS {self.view_sql}".encode()
-        )
-        # Force hydration to complete before we drop, so the replica actually
-        # does the build work rather than cancelling it immediately.
-        self.cur.execute(f"SELECT count(*) FROM {self.name}".encode())
-        self.cur.fetchall()
-        self.cur.execute(f"DROP MATERIALIZED VIEW {self.name}".encode())
+        raise NotImplementedError("run() drives the churn directly")
+
+    def _churn(self) -> bool:
+        """Builds, hydrates and drops the view once. False if the iteration failed."""
+        try:
+            # Leading, so an iteration cleans up after whatever the last one
+            # left rather than depending on it. The create is deliberately not
+            # `IF NOT EXISTS`: a view that survived both this drop and the last
+            # one has to fail the iteration, not turn it into a no-op that
+            # records a hydration it never performed.
+            execute_query(self.cur, f"DROP MATERIALIZED VIEW IF EXISTS {self.name}")
+            execute_query(
+                self.cur,
+                f"CREATE MATERIALIZED VIEW {self.name} AS {self.view_sql}",
+            )
+            # Force hydration to complete before we drop, so the replica actually
+            # does the build work rather than cancelling it immediately.
+            execute_query(self.cur, f"SELECT count(*) FROM {self.name}")
+            self.cur.fetchall()
+            execute_query(self.cur, f"DROP MATERIALIZED VIEW IF EXISTS {self.name}")
+        except Exception as e:
+            print(f"Hydration churn {self.name} failed, retrying: {e}")
+            time.sleep(self.RETRY_BACKOFF_SECONDS)
+            try:
+                self._connect()
+            except Exception as e:
+                print(f"Hydration churn {self.name} could not reconnect: {e}")
+            return False
+        return True
 
     def __str__(self) -> str:
         return f"hydration churn {self.name}"
@@ -1321,8 +1390,40 @@ class ReadIsolationUnderHydration(Scenario):
     capture. That backlog is the signal: it is what a user issuing reads at a
     steady rate experiences when maintenance steals the serving capacity.
 
-    To A/B a change that claims to improve read isolation, run the scenario
-    twice with the flag that gates it and compare the SELECT p50/p99/qps:
+    The measured loops are pooled so that the backlog is the replica's, and the
+    pool is sized well above what they hold. By Little's law a local run held
+    about 73 connections in flight across the two loops, so the 100 they
+    started with left no room: a slower replica blocks in `conns.get()`, the
+    offered rate stops reaching the replica, and the percentiles collapse back
+    into the arrival-schedule artifact at concurrency 100 instead of 1. The
+    slower side of an A/B is the one that would hit it, and nothing in the
+    output distinguishes a pool-capped run from a replica-limited one.
+
+    `ReuseConnQuery` serializes an open loop on one connection behind one lock,
+    so read concurrency is one however large the thread pool is, and any query
+    slower than the inter-arrival time backs up in the client instead. The
+    percentiles that come out of that scale with the length of the load phase
+    rather than with peek latency, which is the same on both sides of an A/B.
+
+    The pool is set to SERIALIZABLE. Under STRICT SERIALIZABLE a peek is pinned
+    to the timestamp oracle and cannot answer until the index's frontier on the
+    replica reaches it, and advancing that frontier is compute work on the very
+    workers the churn saturates. The measurement would then blend peek service
+    time with frontier lag, and a change that lets peeks overtake maintenance
+    does not advance the frontier any sooner, so it would report no improvement
+    where there was one.
+
+    Compare p50 and p99, not qps. An open loop offers a fixed number of
+    queries, every one of them is drained before the run ends, and each is
+    timestamped when it was scheduled rather than when it completed, so the
+    reported qps is the offered rate whatever the replica does.
+
+    Check `queries` on both sides before comparing percentiles. A query that
+    raises is logged and dropped rather than recorded, so a run that lost
+    samples reports percentiles over the ones that survived, and the ones that
+    fail are the ones taken when the replica was worst.
+
+    To A/B a change that claims to improve read isolation:
 
         bin/mzcompose --find parallel-benchmark run default \
             --scenario ReadIsolationUnderHydration \
@@ -1361,21 +1462,15 @@ class ReadIsolationUnderHydration(Scenario):
                     actions=[
                         # Measured: fast-path index point lookup.
                         OpenLoop(
-                            action=ReuseConnQuery(
-                                "SELECT v FROM hot WHERE k = 42",
-                                mz,
-                                strict_serializable=False,
-                            ),
+                            action=PooledQuery("SELECT v FROM hot WHERE k = 42"),
                             dist=Periodic(per_second=50),
                             report_regressions=False,
                         ),
                         # Measured: slow-path range scan + reduce peek (more
                         # sensitive to contention on the replica).
                         OpenLoop(
-                            action=ReuseConnQuery(
-                                "SELECT count(*) FROM hot WHERE k < 50000",
-                                mz,
-                                strict_serializable=False,
+                            action=PooledQuery(
+                                "SELECT count(*) FROM hot WHERE k < 50000"
                             ),
                             dist=Periodic(per_second=12),
                             report_regressions=False,
@@ -1390,5 +1485,15 @@ class ReadIsolationUnderHydration(Scenario):
                         for i in range(2)
                     ],
                 ),
+                # Nothing resets the services between scenarios when the
+                # benchmark runs against an existing environment, so the
+                # scenario that created these drops them. `big` takes the churn
+                # views with it if a load phase ended mid-iteration.
+                TdPhase("""
+                    > DROP TABLE IF EXISTS hot CASCADE
+                    > DROP TABLE IF EXISTS big CASCADE
+                    """),
             ],
+            conn_pool_size=1000,
+            conn_pool_setup=["SET TRANSACTION_ISOLATION TO 'SERIALIZABLE'"],
         )
