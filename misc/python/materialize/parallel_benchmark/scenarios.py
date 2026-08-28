@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import queue
+import time
 from copy import deepcopy
 
 from materialize.mzcompose.composition import Composition
@@ -1290,19 +1291,33 @@ class HydrationChurn(Action):
     load phase while the measured loops kept reporting against a replica with
     nothing else to do, which reads as the change under test having fixed read
     isolation.
+
+    A closed loop calls back to back with no pause of its own, so a failure that
+    repeats is backed off and the connection reopened. Without both, an unusable
+    cursor raises without a round trip and the loop spins, taking the
+    measurement store's process-wide lock against the threads that record the
+    measured reads.
     """
+
+    # Long enough that a persistently failing loop cannot crowd out the threads
+    # recording the measured reads, short enough to lose little contention.
+    RETRY_BACKOFF_SECONDS = 1.0
 
     def __init__(self, conn_info: PgConnInfo, name: str, view_sql: str):
         self.conn_info = conn_info
         self.name = name
         self.view_sql = view_sql
-        self.conn = conn_info.connect()
+        self._connect()
+
+    def _connect(self) -> None:
+        self.conn = self.conn_info.connect()
         self.conn.autocommit = True
         self.cur = self.conn.cursor()
 
     def _run(self, conns: queue.Queue):
         # `IF NOT EXISTS` and `IF EXISTS` keep an iteration that failed after
-        # its CREATE from wedging every iteration after it.
+        # its CREATE from wedging every iteration after it. A view left behind
+        # is already hydrated, so the next iteration drops it and carries on.
         try:
             execute_query(
                 self.cur,
@@ -1312,13 +1327,14 @@ class HydrationChurn(Action):
             # does the build work rather than cancelling it immediately.
             execute_query(self.cur, f"SELECT count(*) FROM {self.name}")
             self.cur.fetchall()
+            execute_query(self.cur, f"DROP MATERIALIZED VIEW IF EXISTS {self.name}")
         except Exception as e:
-            print(f"Hydration churn {self.name} failed, skipping iteration: {e}")
-        finally:
+            print(f"Hydration churn {self.name} failed, retrying: {e}")
+            time.sleep(self.RETRY_BACKOFF_SECONDS)
             try:
-                execute_query(self.cur, f"DROP MATERIALIZED VIEW IF EXISTS {self.name}")
+                self._connect()
             except Exception as e:
-                print(f"Hydration churn {self.name} could not drop its view: {e}")
+                print(f"Hydration churn {self.name} could not reconnect: {e}")
 
     def __str__(self) -> str:
         return f"hydration churn {self.name}"
@@ -1344,6 +1360,14 @@ class ReadIsolationUnderHydration(Scenario):
     slower than the inter-arrival time backs up in the client instead. The
     percentiles that come out of that scale with the length of the load phase
     rather than with peek latency, which is the same on both sides of an A/B.
+
+    The pool is set to SERIALIZABLE. Under STRICT SERIALIZABLE a peek is pinned
+    to the timestamp oracle and cannot answer until the index's frontier on the
+    replica reaches it, and advancing that frontier is compute work on the very
+    workers the churn saturates. The measurement would then blend peek service
+    time with frontier lag, and a change that lets peeks overtake maintenance
+    does not advance the frontier any sooner, so it would report no improvement
+    where there was one.
 
     Compare p50 and p99, not qps. An open loop offers a fixed number of
     queries, every one of them is drained before the run ends, and each is
@@ -1412,4 +1436,5 @@ class ReadIsolationUnderHydration(Scenario):
                 ),
             ],
             conn_pool_size=100,
+            conn_pool_setup=["SET TRANSACTION_ISOLATION TO 'SERIALIZABLE'"],
         )
