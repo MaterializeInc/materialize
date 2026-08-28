@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/builtin/mz_catalog.rs
-revision: 8be80d79b9
+revision: c317ceee3c
 ---
 
 # catalog::builtin::mz_catalog
@@ -9,7 +9,7 @@ Defines all built-in catalog objects for the `mz_catalog` SQL schema.
 
 This module exports 76 public items: types, tables, materialized views, views, sources, and indexes.
 
-**Types** — Materialize-specific pseudo-types and their array forms: `TYPE_LIST`, `TYPE_MAP`, `TYPE_ANYCOMPATIBLELIST`, `TYPE_ANYCOMPATIBLEMAP`; unsigned integer types `TYPE_UINT2/4/8` and their arrays; `TYPE_MZ_TIMESTAMP`, `TYPE_MZ_TIMESTAMP_ARRAY`; `TYPE_MZ_ACL_ITEM`, `TYPE_MZ_ACL_ITEM_ARRAY`.
+**Types** — Materialize-specific pseudo-types and their array forms: `TYPE_LIST`, `TYPE_MAP`, `TYPE_ANYCOMPATIBLELIST`, `TYPE_ANYCOMPATIBLEMAP`; unsigned integer types `TYPE_UINT2/4/8` and their arrays; `TYPE_MZ_TIMESTAMP`, `TYPE_MZ_TIMESTAMP_ARRAY`; `TYPE_MZ_ACL_ITEM`, `TYPE_MZ_ACL_ITEM_ARRAY`. `CatalogTypePgMetadata` carries a `typsend_oid` field alongside `typinput_oid` and `typreceive_oid`; for `TYPE_MZ_ACL_ITEM_ARRAY` and all array types this is OID 2401 (the generic array send function).
 
 **Tables** — `BuiltinTable` statics covering type system metadata, operator and function definitions, column and type details, and cluster sizing information.
 

@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/active_compute_sink.rs
-revision: a1bcaebfe6
+revision: c69fde3d50
 ---
 
 # adapter::active_compute_sink
@@ -13,3 +13,4 @@ In the upsert envelope path, the number of value columns is computed as `self.ar
 `ActiveCopyTo` holds the oneshot channel used to return the final row count once the COPY TO operation completes.
 All active sinks must be retired via `retire` before being dropped, which notifies the client of the outcome (success, cancellation, dependency drop, or buffer exceeded).
 `SubscribeBacklogAccounting` tracks the per-message memory footprint of subscribe messages queued in the channel but not yet drained by the client writer. The producer records each message's footprint via `push`; the receiver side calls `pop` as it drains. `backlog_size` returns the bytes queued behind the message currently being drained (the front message is always tolerated, however large), and the coordinator checks this against `max_buffered_bytes` after each `process_response` to decide whether to retire the subscribe with `ActiveComputeSinkRetireReason::BufferExceeded`. A fixed per-message overhead (`SUBSCRIBE_MESSAGE_OVERHEAD_BYTES` = 1024 bytes) is charged on top of every message's payload so that frontier-only progress messages, which carry no rows, still count against the budget.
+When retiring with `BufferExceeded`, the retire message is constructed as `PeekResponseUnary::Error(AdapterError::SubscribeFellBehind { buffered_bytes, max_buffered_bytes })`, passing the structured `AdapterError` directly rather than converting it to a string first. Similarly, sort errors during batch processing are wrapped as `PeekResponseUnary::Error(AdapterError::Unstructured(...))`.

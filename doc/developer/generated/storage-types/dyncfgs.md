@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/dyncfgs.rs
-revision: c3ad2b4dd8
+revision: 844b947128
 ---
 
 # storage-types::dyncfgs
@@ -17,7 +17,7 @@ Covers:
 * **MySQL**: `MYSQL_REPLICATION_HEARTBEAT_INTERVAL`, `MYSQL_SOURCE_SNAPSHOT_PARALLELISM` (gates PK-range splitting of snapshot reads across workers, defaults `false`), `MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS` (tables whose optimizer row estimate exceeds this threshold report the estimate for the snapshot size gauge rather than running `COUNT(*)`; defaults to 1,000,000), `MYSQL_SOURCE_SNAPSHOT_PARTITION_MIN_ROWS` (smallest estimated row count the snapshot partitioner attempts to subdivide; defaults to 50,000), and `MYSQL_SOURCE_SNAPSHOT_PARTITION_PROBED_PREFIXES_PER_BILLION_ROWS` (cap on PK-prefix probes per billion estimated rows; limits time spent on high-cardinality partitioning and yields coarser boundaries when exhausted; defaults to 1,000; the per-table budget is additionally hard-capped at 5,000).
 * **PostgreSQL**: `PG_FETCH_SLOT_RESUME_LSN_INTERVAL`, `PG_SCHEMA_VALIDATION_INTERVAL`, and `PG_SOURCE_VALIDATE_TIMELINE` (whether a timeline switch is treated as a definite error, defaults `true`).
 * **SQL Server**: `SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY` (whether a restore-history change is treated as a definite error, defaults `true`), plus additional SQL Server configs registered from `crate::sources::sql_server` (`CDC_CLEANUP_CHANGE_TABLE`, `CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES`, `MAX_LSN_WAIT`, `SNAPSHOT_PROGRESS_REPORT_INTERVAL`).
-* **Upsert**: `STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING` (defaults `true`), `STORAGE_ROCKSDB_USE_MERGE_OPERATOR` (defaults `true`), `STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING`, `ENABLE_UPSERT_PAGED_SPILL` (allows the upsert-v2 stash to spill chunks to the shared buffer pool, defaults `false`), `STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT` (defaults `true`), and `ENABLE_UPSERT_V2` (defaults `false`).
+* **Upsert**: `STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING` (defaults `true`), `STORAGE_ROCKSDB_USE_MERGE_OPERATOR` (defaults `true`), `STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING`, `ENABLE_UPSERT_PAGED_SPILL` (allows the upsert-v2 stash to spill out of RSS, through the buffer pool for the chunked stash flavor or through the column pager for the paged stash flavor, defaults `false`), `ENABLE_UPSERT_CHUNKED_STASH` (selects between the chunked and paged stash flavors for the upsert-v2 operator; chunked uses differential's chunk merge batcher and a chunk-spine feedback arrangement; paged uses the paged columnar merge batcher and a `ValRowSpine`; read at operator construction time; defaults `false`), `STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT` (defaults `true`), and `ENABLE_UPSERT_V2` (defaults `false`).
 * **RocksDB**: `STORAGE_ROCKSDB_CLEANUP_TRIES`.
 * **Runtime**: `STORAGE_SUSPEND_AND_RESTART_DELAY`, `STORAGE_SERVER_MAINTENANCE_INTERVAL`.
 * **Sinks**: `SINK_PROGRESS_SEARCH` (iterative progress-topic search with increasing lookback, defaults `true`) and `SINK_ENSURE_TOPIC_CONFIG` (controls topic-config reconciliation: `"skip"`, `"check"`, or `"alter"`, defaults `"skip"`).

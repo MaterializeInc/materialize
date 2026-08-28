@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/builtin.rs
-revision: 3a822d8457
+revision: c317ceee3c
 ---
 
 # catalog::builtin
@@ -19,3 +19,5 @@ The `builtin` submodule generates four views: `mz_builtin_sources`, `mz_builtin_
 The `notice` submodule contains the optimizer-notice tables.
 The `ontology` submodule contains the static ontology entity definitions used to populate `mz_internal.mz_ontology_*` views.
 All built-in objects are auto-installed on catalog open; changes to their definitions are detected via fingerprinting and migrated automatically.
+`BUILTINS_STATIC` includes `MZ_CLUSTER_REPLICA_RESOURCE_USAGE` (a `BuiltinLog` for per-replica resource usage) in its log entries.
+A test `test_regproc_names_match_builtin_functions` verifies that `mz_pgrepr::regproc::NAMES` matches the builtin function registry; run with `REWRITE=1` to splice a recomputed table back into `src/pgrepr-consts/src/regproc.rs`. The helper `rewrite_regproc_names` performs the splice by anchoring on `// BEGIN GENERATED` / `// END GENERATED` markers in that file.

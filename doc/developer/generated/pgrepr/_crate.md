@@ -1,6 +1,6 @@
 ---
 source: src/pgrepr/src/lib.rs
-revision: 10a94621ed
+revision: c317ceee3c
 ---
 
 # mz-pgrepr
@@ -10,6 +10,7 @@ Provides representation and serialization of PostgreSQL data types for use in Ma
 ## Module structure
 
 * `oid` — re-exports OID constants from `mz-pgrepr-consts`.
+* `regproc` — re-exports the `regproc` name-lookup table from `mz-pgrepr-consts`; provides `name(oid)` and `oid(name)` for resolving builtin function OIDs to their text `regproc` renderings and back.
 * `types` — the `Type` enum mapping every supported PostgreSQL type (including Materialize extensions) to OIDs and type modifiers.
 * `value` — the `Value` enum, `Datum`↔`Value` conversion, and wire-format encoding/decoding; child modules handle complex types (numeric, interval, jsonb, record, unsigned integers).
 

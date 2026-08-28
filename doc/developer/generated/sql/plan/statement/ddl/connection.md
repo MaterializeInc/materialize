@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl/connection.rs
-revision: 31fb870f20
+revision: f40272e177
 ---
 
 # mz-sql::plan::statement::ddl::connection
@@ -11,5 +11,6 @@ The `build_tunnel_definition` function (also used by CSR, Postgres, MySQL, and S
 Kafka connection planning calls `get_brokers_and_rules` to split `BROKERS` entries into static brokers and `MATCHING` rules, then passes the rules to `build_tunnel_definition`; use of matching rules requires the `enable_kafka_broker_matching_rules` feature flag and at least one static broker address.
 `CreateConnectionType::GlueSchemaRegistry` is planned by resolving the `AwsConnection` reference and the `Registry` name string; it rejects an empty registry name.
 `CreateConnectionType::Gcp` is planned by extracting the `SERVICE ACCOUNT KEY` secret option (required) and building a `GcpConnection { credentials_json }`.
-For `IcebergCatalogType::Rest`, the catalog auth is expressed via `IcebergCatalogAuth`: `OAuth { credential, scope }` when a `CREDENTIAL` is supplied, or `Gcp(GcpConnectionReference)` when a `GCP CONNECTION` is supplied (mutually exclusive; at least one is required). GCP auth is only valid with the BigLake Iceberg REST Catalog URI (`https://biglake.googleapis.com/iceberg/v1/restcatalog`). `IcebergCatalogType::S3TablesRest` does not support a GCP connection.
+For `IcebergCatalogType::Rest`, the catalog auth is expressed via `IcebergCatalogAuth`: `OAuth { credential, scope, server_url }` when a `CREDENTIAL` is supplied (the optional `OAUTH2 SERVER URL` overrides the token endpoint), or `Gcp(GcpConnectionReference)` when a `GCP CONNECTION` is supplied (mutually exclusive; at least one is required). GCP auth is only valid with the BigLake Iceberg REST Catalog URI (`https://biglake.googleapis.com/iceberg/v1/restcatalog`), and rejects both `OAUTH2 SERVER URL` and `ACCESS DELEGATION` options. `IcebergCatalogType::S3TablesRest` does not support a GCP connection, `OAUTH2 SERVER URL`, or `ACCESS DELEGATION`.
+`RestIcebergCatalog` carries an `access_delegation: Option<IcebergAccessDelegation>` field; the only supported value is `IcebergAccessDelegation::VendedCredentials` (accepted as the string `"vended-credentials"`). It is passed through from the `ACCESS DELEGATION` connection option and stored in the plan.
 The `get_gcp_connection_reference` helper resolves a `GCP CONNECTION` option to a `GcpConnectionReference<ReferencedConnection>`, erroring if the referenced item is not a GCP connection.

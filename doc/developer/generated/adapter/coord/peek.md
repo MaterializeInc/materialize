@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/peek.rs
-revision: 770c31e9f8
+revision: c69fde3d50
 ---
 
 # adapter::coord::peek
@@ -10,6 +10,6 @@ Defines the data structures and execution logic for coordinator-side peeks (SELE
 `PlannedPeek` bundles a `PeekPlan` (either `FastPath` or `SlowPath`) with the timestamp determination, connection ID, result type, and source IDs needed for execution.
 `implement_peek_plan` ships the peek to the compute layer or evaluates it immediately; on success it takes ownership of the `ctx_extra` statement-logging guard (retiring it immediately for constant peeks, or moving it into `pending_peeks` for streaming peeks). On error the guard's contents are left intact so the caller can decide whether to `retire` or `defuse` the guard. `create_peek_response_stream` converts the compute-layer `PeekResponse` into a stream of `PeekResponseUnary` values carrying rows, errors, or a cancellation signal.
 `implement_slow_path_peek` is the coordinator command handler for `Command::ExecuteSlowPathPeek`; `implement_copy_to` accepts a `DataflowDescription<mz_compute_types::plan::LirRelationExpr>`, ships a COPY TO dataflow, and spawns a background task to await completion.
-`PeekResponseUnary` carries rows, errors, a cancellation signal, or a `DependencyDropped(DroppedDependency)` variant (used when a relation or cluster dependency was dropped mid-flight) back to the client.
+`PeekResponseUnary` carries rows, errors, a cancellation signal, or a `DependencyDropped(DroppedDependency)` variant (used when a relation or cluster dependency was dropped mid-flight) back to the client. The `Error` variant holds a structured `AdapterError` rather than a plain string; compute-layer `PeekResponse::Error(PeekError)` values are converted to `AdapterError` via `From<PeekError>` before being yielded.
 `DroppedDependency` is an enum with `Relation { name }` and `Cluster { name }` variants; it formats as a quoted SQL identifier with kind prefix (e.g. `relation "db.schema.t"`) and provides `query_terminated_error` and `to_concurrent_dependency_drop` helpers for producing user-facing error messages.
 `create_fast_path_plan` inspects the optimized dataflow plan to detect whether a fast-path execution is possible, returning a `FastPathPlan` if so.
