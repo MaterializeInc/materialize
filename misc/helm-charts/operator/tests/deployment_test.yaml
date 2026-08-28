@@ -242,6 +242,19 @@ tests:
       path: spec.template.spec.containers[0].args
       content: "--create-console"
 
+- it: should pass the debug collector default resources
+  set:
+    debugCollector.defaultResources:
+      limits:
+        memory: "2Gi"
+      requests:
+        cpu: "200m"
+        memory: "512Mi"
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: '--debug-collector-default-resources={"limits":{"memory":"2Gi"},"requests":{"cpu":"200m","memory":"512Mi"}}'
+
 - it: should configure console image tag map override correctly
   set:
     console.imageTagMapOverride:

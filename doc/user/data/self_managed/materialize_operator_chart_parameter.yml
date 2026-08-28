@@ -214,6 +214,30 @@
   linenumber: 392
   dependency: ""
   isglobal: false
+- key: debugCollector.defaultResources.limits
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{"memory":"1Gi"}`'
+  autodescription: Default resource limits for the debug collector's CPU and memory if not set in the MaterializeDebug CR
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 410
+  dependency: ""
+  isglobal: false
+- key: debugCollector.defaultResources.requests
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{"cpu":"100m","memory":"256Mi"}`'
+  autodescription: Default resources requested for the debug collector's CPU and memory if not set in the MaterializeDebug CR
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 414
+  dependency: ""
+  isglobal: false
 - key: environmentd.affinity
   type: k8s/affinity
   notationtype: k8s/affinity
@@ -283,7 +307,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 461
+  linenumber: 474
   dependency: ""
   isglobal: false
 - key: networkPolicies.egress.enabled
@@ -295,7 +319,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 459
+  linenumber: 472
   dependency: ""
   isglobal: false
 - key: networkPolicies.enabled
@@ -307,7 +331,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 446
+  linenumber: 459
   dependency: ""
   isglobal: false
 - key: networkPolicies.ingress.cidrs
@@ -319,7 +343,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 455
+  linenumber: 468
   dependency: ""
   isglobal: false
 - key: networkPolicies.ingress.enabled
@@ -331,7 +355,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 453
+  linenumber: 466
   dependency: ""
   isglobal: false
 - key: networkPolicies.internal.enabled
@@ -343,7 +367,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 449
+  linenumber: 462
   dependency: ""
   isglobal: false
 - key: observability.enabled
@@ -355,7 +379,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 427
+  linenumber: 440
   dependency: ""
   isglobal: false
 - key: observability.podMetrics.enabled
@@ -367,7 +391,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 432
+  linenumber: 445
   dependency: ""
   isglobal: false
 - key: observability.prometheus.scrapeAnnotations.enabled
@@ -379,7 +403,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 436
+  linenumber: 449
   dependency: ""
   isglobal: false
 - key: operator.additionalMaterializeCRDColumns
@@ -943,7 +967,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 408
+  linenumber: 421
   dependency: ""
   isglobal: false
 - key: schedulerName
@@ -955,7 +979,7 @@
   description: Optionally use a non-default kubernetes scheduler.
   section: ""
   column: 1
-  linenumber: 411
+  linenumber: 424
   dependency: ""
   isglobal: false
 - key: serviceAccount.annotations
@@ -967,7 +991,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 422
+  linenumber: 435
   dependency: ""
   isglobal: false
 - key: serviceAccount.create
@@ -979,7 +1003,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 416
+  linenumber: 429
   dependency: ""
   isglobal: false
 - key: serviceAccount.name
@@ -991,7 +1015,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 418
+  linenumber: 431
   dependency: ""
   isglobal: false
 - key: storage.storageClass.allowVolumeExpansion
@@ -1003,7 +1027,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 502
+  linenumber: 515
   dependency: ""
   isglobal: false
 - key: storage.storageClass.create
@@ -1015,7 +1039,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 488
+  linenumber: 501
   dependency: ""
   isglobal: false
 - key: storage.storageClass.name
@@ -1027,7 +1051,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 491
+  linenumber: 504
   dependency: ""
   isglobal: false
 - key: storage.storageClass.parameters
@@ -1039,7 +1063,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 497
+  linenumber: 510
   dependency: ""
   isglobal: false
 - key: storage.storageClass.provisioner
@@ -1051,7 +1075,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 494
+  linenumber: 507
   dependency: ""
   isglobal: false
 - key: storage.storageClass.reclaimPolicy
@@ -1063,7 +1087,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 503
+  linenumber: 516
   dependency: ""
   isglobal: false
 - key: storage.storageClass.volumeBindingMode
@@ -1075,7 +1099,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 504
+  linenumber: 517
   dependency: ""
   isglobal: false
 - key: telemetry.enabled
@@ -1087,7 +1111,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 439
+  linenumber: 452
   dependency: ""
   isglobal: false
 - key: telemetry.segmentApiKey
@@ -1099,7 +1123,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 440
+  linenumber: 453
   dependency: ""
   isglobal: false
 - key: telemetry.segmentClientSide
@@ -1111,7 +1135,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 441
+  linenumber: 454
   dependency: ""
   isglobal: false
 - key: tls.defaultCertificateSpecs
@@ -1123,6 +1147,6 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 465
+  linenumber: 478
   dependency: ""
   isglobal: false

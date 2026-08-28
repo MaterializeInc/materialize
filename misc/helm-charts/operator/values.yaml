@@ -402,6 +402,19 @@ console:
       cpu: "500m"
       memory: "256Mi"
 
+debugCollector:
+  # @notationType -- k8s/resources
+  defaultResources:
+    # -- Default resource limits for the debug collector's CPU and memory
+    # if not set in the MaterializeDebug CR
+    limits:
+      memory: "1Gi"
+    # -- Default resources requested for the debug collector's CPU and memory
+    # if not set in the MaterializeDebug CR
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+
 # RBAC (Role-Based Access Control) settings
 rbac:
   # -- Whether to create necessary RBAC roles and bindings

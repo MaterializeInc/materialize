@@ -1,0 +1,118 @@
+{{- if .Values.rbac.create -}}
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# The permissions of the in-cluster debug collector that the operator runs
+# for each Materialize instance (see the MaterializeDebug resource). They are
+# defined here rather than created by the operator because Kubernetes only
+# lets the operator grant permissions it holds itself; the operator is
+# instead allowed to `bind` these two ClusterRoles (see clusterrole.yaml).
+#
+# Everything is read-only, and secrets are deliberately absent: the collector
+# reads mz_system's password through a secretKeyRef in its pod spec, never
+# through the API.
+
+# Namespaced kinds, granted per collected namespace through a RoleBinding.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: materialize-debug-collector
+rules:
+- apiGroups: [""]
+  resources:
+  - pods
+  - pods/log
+  - services
+  - configmaps
+  - persistentvolumeclaims
+  - serviceaccounts
+  - events
+  - endpoints
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups: ["apps"]
+  resources:
+  - deployments
+  - statefulsets
+  - replicasets
+  - daemonsets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups: ["networking.k8s.io"]
+  resources:
+  - networkpolicies
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources:
+  - roles
+  - rolebindings
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups: ["materialize.cloud"]
+  resources:
+  - materializes
+  - materializedebugs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups: ["cert-manager.io"]
+  resources:
+  - certificates
+  verbs:
+  - get
+  - list
+  - watch
+---
+# Cluster-scoped kinds, granted through a ClusterRoleBinding.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: materialize-debug-collector-cluster
+rules:
+- apiGroups: [""]
+  resources:
+  - nodes
+  - persistentvolumes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups: ["storage.k8s.io"]
+  resources:
+  - storageclasses
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups: ["admissionregistration.k8s.io"]
+  resources:
+  - mutatingwebhookconfigurations
+  - validatingwebhookconfigurations
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups: ["apiextensions.k8s.io"]
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - get
+  - list
+  - watch
+{{- end }}
