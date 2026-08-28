@@ -23,9 +23,12 @@ use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
 use url::Url;
 
+use crate::collector::targets::{
+    HttpTarget, ServiceInfo, ServiceType, find_cluster_services, find_environmentd_service,
+    find_service_pods,
+};
 use crate::kubectl_port_forwarder::{
-    KubectlPortForwarder, PortForwardConnection, PortForwardTarget, ServiceInfo,
-    find_cluster_services, find_environmentd_service, find_service_pods,
+    KubectlPortForwarder, PortForwardConnection, PortForwardTarget,
 };
 use crate::{AuthMode, DumpConfig, EmulatorContext, PasswordAuthCredentials, SelfManagedContext};
 
@@ -64,12 +67,6 @@ const INTERNAL_HTTP_PORT_LABEL: &str = "internal-http";
 /// The label for the external HTTP port.
 // Even when not using TLS, the external HTTP port is labeled as "https".
 const EXTERNAL_HTTP_PORT_LABEL: &str = "https";
-
-#[derive(Debug, Clone, Copy)]
-enum ServiceType {
-    Clusterd,
-    Environmentd,
-}
 
 fn get_profile_endpoint(service_type: &ServiceType) -> &'static str {
     match service_type {
@@ -676,9 +673,9 @@ pub async fn dump_self_managed_http_resources(
             );
             continue;
         }
-        for pod_name in pod_names {
+        for pod in pod_names {
             pod_targets.push(PodDumpTarget {
-                pod_name,
+                pod_name: pod.name,
                 namespace: service_info.namespace.clone(),
                 service_ports: service_info.service_ports.clone(),
                 service_type,
@@ -859,6 +856,125 @@ pub async fn dump_self_managed_http_resources(
             }
         });
 
+        join_all(cpu_profile_futures).await;
+    }
+
+    Ok(())
+}
+
+/// Dumps heap profiles, Prometheus metrics and CPU profiles from processes
+/// reached directly, without port forwarding: the collector runs inside the
+/// cluster, so every target's `host:port` is routable as is.
+///
+/// A failure on one target is logged and skipped so one unreachable pod does
+/// not cost every other pod's data.
+pub async fn dump_in_cluster_http_resources(
+    config: &DumpConfig,
+    targets: &[HttpTarget],
+    auth_mode: &AuthMode,
+    http_client: &reqwest::Client,
+) -> Result<()> {
+    let dump_task = HttpDumpClient::new(config, auth_mode, http_client);
+
+    let port_for = |target: &HttpTarget, label: &'static str| -> Option<i32> {
+        target
+            .service_ports
+            .iter()
+            .find_map(|port_info| find_http_port_by_label(port_info, label))
+            .map(|port| port.port)
+    };
+
+    for target in targets {
+        let HttpPortLabels {
+            heap_profile_port_label,
+            prom_metrics_port_label,
+        } = get_port_labels(auth_mode, &target.service_type);
+        let (Some(heap_profile_port), Some(prom_metrics_port)) = (
+            port_for(target, heap_profile_port_label),
+            port_for(target, prom_metrics_port_label),
+        ) else {
+            warn!(
+                "Failed to find HTTP port for {}, heap_profile_port_label={}, prom_metrics_port_label={}",
+                target.name, heap_profile_port_label, prom_metrics_port_label
+            );
+            continue;
+        };
+
+        if config.dump_heap_profiles {
+            let endpoint = format!(
+                "{}:{}/{}",
+                target.host,
+                heap_profile_port,
+                get_profile_endpoint(&target.service_type)
+            );
+            info!("Dumping heap profile for {}", target.name);
+            if let Err(e) = dump_task.dump_heap_profile(&endpoint, &target.name).await {
+                warn!("Failed to dump heap profile for {}: {:#}", target.name, e);
+            }
+        }
+
+        if config.dump_prometheus_metrics {
+            let endpoint = format!(
+                "{}:{}/{}",
+                target.host, prom_metrics_port, PROM_METRICS_ENDPOINT
+            );
+            info!("Dumping prometheus metrics for {}", target.name);
+            if let Err(e) = dump_task
+                .dump_prometheus_metrics(&endpoint, &target.name)
+                .await
+            {
+                warn!(
+                    "Failed to dump prometheus metrics for {}: {:#}",
+                    target.name, e
+                );
+            }
+        }
+    }
+
+    // Capture CPU profiles after memory profiling, since each capture
+    // temporarily disables memory profiling on its process. The captures run
+    // in parallel, and a failure on one does not abort the others.
+    if config.dump_cpu_profiles {
+        info!(
+            "Capturing CPU profiles for {} seconds. Memory profiling is temporarily disabled on each process during its capture and restored afterwards.",
+            config.cpu_profile_duration_secs
+        );
+        let cpu_profile_futures = targets.iter().map(|target| {
+            // The CPU and mode endpoints are served on the same port as the
+            // heap profile endpoint.
+            let port_label =
+                get_port_labels(auth_mode, &target.service_type).heap_profile_port_label;
+            let dump_task = &dump_task;
+            async move {
+                let Some(port) = port_for(target, port_label) else {
+                    warn!(
+                        "Failed to find HTTP port `{}` for CPU profiling of {}",
+                        port_label, target.name
+                    );
+                    return;
+                };
+                let cpu_endpoint = format!(
+                    "{}:{}/{}",
+                    target.host,
+                    port,
+                    get_cpu_profile_endpoint(&target.service_type)
+                );
+                let mode_endpoint = format!(
+                    "{}:{}/{}",
+                    target.host,
+                    port,
+                    get_prof_mode_endpoint(&target.service_type)
+                );
+                dump_cpu_profile_and_verify_memory(
+                    dump_task,
+                    &cpu_endpoint,
+                    &mode_endpoint,
+                    &target.name,
+                    config.cpu_profile_duration_secs,
+                )
+                .await;
+            }
+        });
         join_all(cpu_profile_futures).await;
     }
 

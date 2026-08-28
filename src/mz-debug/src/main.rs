@@ -25,6 +25,7 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
+use crate::collector::CollectorArgs;
 use crate::docker_dumper::DockerDumper;
 use crate::internal_http_dumper::{dump_emulator_http_resources, dump_self_managed_http_resources};
 use crate::k8s_dumper::K8sDumper;
@@ -34,6 +35,7 @@ use crate::utils::{
     zip_debug_folder,
 };
 
+mod collector;
 mod describe;
 mod docker_dumper;
 mod internal_http_dumper;
@@ -89,6 +91,10 @@ pub enum DebugModeArgs {
     SelfManaged(SelfManagedDebugModeArgs),
     /// Debug emulator environments
     Emulator(EmulatorDebugModeArgs),
+    /// Run as the in-cluster collector. Deployed by the Materialize operator,
+    /// not meant to be invoked by hand.
+    #[clap(hide = true)]
+    Collector(CollectorArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -107,9 +113,10 @@ pub struct Args {
     dump_prometheus_metrics: bool,
     /// If true, the tool will collect CPU profiles from Materialize. While a CPU
     /// profile is captured, memory profiling is temporarily disabled on that
-    /// service and restored afterwards.
-    #[clap(long, default_value = "true", action = clap::ArgAction::Set, global = true)]
-    dump_cpu_profiles: bool,
+    /// service and restored afterwards. Defaults to true, except for the
+    /// collector's periodic snapshots, where it defaults to false.
+    #[clap(long, action = clap::ArgAction::Set, global = true)]
+    dump_cpu_profiles: Option<bool>,
     /// How long, in seconds, to sample each CPU profile.
     #[clap(
         long,
@@ -236,6 +243,20 @@ async fn main() {
         .with_target(false)
         .without_time();
 
+    if let DebugModeArgs::Collector(collector_args) = &args.debug_mode_args {
+        // The collector is a long-running server whose output is its pod's
+        // log, so it logs with timestamps and writes no log file of its own.
+        let _ = tracing_subscriber::registry()
+            .with(EnvFilter::new(ENV_FILTER))
+            .with(tracing_subscriber::fmt::layer().with_target(false))
+            .try_init();
+        if let Err(err) = collector::run(&args, collector_args).await {
+            error!("mz-debug: fatal: {}", err.display_with_causes());
+            process::exit(1);
+        }
+        return;
+    }
+
     if let Ok(file) = create_tracing_log_file(base_path.clone()) {
         let file_layer = tracing_subscriber::fmt::layer()
             .with_writer(file)
@@ -269,7 +290,7 @@ async fn main() {
     }
 }
 
-fn create_mz_connection_url(
+pub fn create_mz_connection_url(
     local_address: String,
     local_port: i32,
     credentials: Option<PasswordAuthCredentials>,
@@ -362,6 +383,7 @@ async fn initialize_context(
                 http_connection_auth_mode: auth_mode,
             })
         }
+        DebugModeArgs::Collector(_) => unreachable!("the collector runs before contexts are built"),
         DebugModeArgs::Emulator(args) => {
             let container_ip = docker_dumper::get_container_ip(&args.docker_container_id)
                 .await
@@ -413,7 +435,7 @@ async fn initialize_context(
             dump_system_catalog: global_args.dump_system_catalog,
             dump_heap_profiles: global_args.dump_heap_profiles,
             dump_prometheus_metrics: global_args.dump_prometheus_metrics,
-            dump_cpu_profiles: global_args.dump_cpu_profiles,
+            dump_cpu_profiles: global_args.dump_cpu_profiles.unwrap_or(true),
             cpu_profile_duration_secs: global_args.cpu_profile_duration_seconds,
         },
         debug_mode_context,

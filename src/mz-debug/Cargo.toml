@@ -11,10 +11,12 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+axum.workspace = true
 chrono.workspace = true
 clap = { workspace = true, features = ["env"] }
 csv-async.workspace = true
 futures.workspace = true
+humantime.workspace = true
 k8s-openapi.workspace = true
 kube.workspace = true
 mz-build-info = { path = "../build-info" }
@@ -27,6 +29,7 @@ postgres-openssl.workspace = true
 regex.workspace = true
 reqwest.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 serde_yaml.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
@@ -39,6 +42,7 @@ zip.workspace = true
 
 [dev-dependencies]
 maplit.workspace = true
+tempfile.workspace = true
 
 [features]
 default = []

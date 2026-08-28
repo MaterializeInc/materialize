@@ -21,6 +21,7 @@ use std::future::Future;
 use std::io::Write;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::time::Duration;
 
 use futures::future::join_all;
 use k8s_openapi::NamespaceResourceScope;
@@ -148,6 +149,8 @@ pub struct K8sDumper<'n> {
     /// The instant every relative age in this dump is computed against, so
     /// objects dumped seconds apart read consistently.
     now: Timestamp,
+    /// When set, only pod log lines from this long before now are dumped.
+    logs_since: Option<Duration>,
 }
 
 impl<'n> K8sDumper<'n> {
@@ -163,7 +166,16 @@ impl<'n> K8sDumper<'n> {
             k8s_namespace,
             k8s_additional_namespaces,
             now: Timestamp::now(),
+            logs_since: None,
         }
+    }
+
+    /// Bounds the pod logs to the trailing `window`. A collector taking
+    /// snapshots on an interval uses this so each snapshot carries only the
+    /// logs since the previous one, rather than the full logs every time.
+    pub fn with_logs_since(mut self, window: Duration) -> Self {
+        self.logs_since = Some(window);
+        self
     }
 
     /// Write cluster-level k8s resources to a yaml file per resource.
@@ -210,6 +222,7 @@ impl<'n> K8sDumper<'n> {
                 pod_name: &str,
                 file_path: &PathBuf,
                 is_previous: bool,
+                since_seconds: Option<i64>,
             ) -> Result<(), anyhow::Error> {
                 let suffix = if is_previous { "previous" } else { "current" };
                 let file_name = file_path.join(format!("{}.{}.log", pod_name, suffix));
@@ -220,6 +233,7 @@ impl<'n> K8sDumper<'n> {
                         &LogParams {
                             previous: is_previous,
                             timestamps: true,
+                            since_seconds,
                             ..Default::default()
                         },
                     )
@@ -237,7 +251,11 @@ impl<'n> K8sDumper<'n> {
                 Ok(())
             }
 
-            if let Err(e) = export_pod_logs(&pods, &pod_name, &file_path, true).await {
+            let since_seconds = self
+                .logs_since
+                .map(|window| i64::try_from(window.as_secs()).unwrap_or(i64::MAX));
+            if let Err(e) = export_pod_logs(&pods, &pod_name, &file_path, true, since_seconds).await
+            {
                 match e.downcast_ref::<kube::Error>() {
                     Some(kube::Error::Api(e)) if e.code == 400 => {
                         warn!("No previous logs available for pod {}", pod_name);
@@ -251,7 +269,9 @@ impl<'n> K8sDumper<'n> {
                 }
             }
 
-            if let Err(e) = export_pod_logs(&pods, &pod_name, &file_path, false).await {
+            if let Err(e) =
+                export_pod_logs(&pods, &pod_name, &file_path, false, since_seconds).await
+            {
                 warn!("Failed to export current logs for pod {}: {}", &pod_name, e);
             }
         }

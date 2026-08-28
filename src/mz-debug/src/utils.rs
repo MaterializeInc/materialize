@@ -16,7 +16,7 @@ use anyhow::Context as AnyhowContext;
 
 use std::fs::{File, create_dir_all, remove_dir_all};
 use std::io::{BufWriter, copy};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
@@ -49,7 +49,9 @@ pub fn create_tracing_log_file(dir: PathBuf) -> Result<File, std::io::Error> {
     file
 }
 
-/// Zips a folder
+/// Zips `folder_path` into `zip_file_name`. Entries are rooted at the
+/// folder's own name, so extracting the zip recreates the folder wherever it
+/// is extracted, regardless of where it lived when zipped.
 pub fn zip_debug_folder(zip_file_name: PathBuf, folder_path: &PathBuf) -> std::io::Result<()> {
     // Delete the zip file if it already exists
     if zip_file_name.exists() {
@@ -58,12 +60,16 @@ pub fn zip_debug_folder(zip_file_name: PathBuf, folder_path: &PathBuf) -> std::i
     let zip_file = File::create(&zip_file_name)?;
     let mut zip_writer = ZipWriter::new(BufWriter::new(zip_file));
 
+    let root = folder_path.parent().unwrap_or_else(|| Path::new(""));
     for entry in walkdir::WalkDir::new(folder_path) {
         let entry = entry?;
         let path = entry.path();
 
         if path.is_file() {
-            zip_writer.start_file(path.to_string_lossy(), SimpleFileOptions::default())?;
+            let name = path
+                .strip_prefix(root)
+                .expect("walked paths start with the folder path");
+            zip_writer.start_file(name.to_string_lossy(), SimpleFileOptions::default())?;
             let mut file = File::open(path)?;
             copy(&mut file, &mut zip_writer)?;
         }

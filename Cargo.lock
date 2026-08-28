@@ -7187,10 +7187,12 @@ name = "mz-debug"
 version = "0.5.0"
 dependencies = [
  "anyhow",
+ "axum",
  "chrono",
  "clap",
  "csv-async",
  "futures",
+ "humantime",
  "k8s-openapi",
  "kube",
  "maplit",
@@ -7204,7 +7206,9 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "serde",
+ "serde_json",
  "serde_yaml",
+ "tempfile",
  "tokio",
  "tokio-postgres",
  "tokio-util",
