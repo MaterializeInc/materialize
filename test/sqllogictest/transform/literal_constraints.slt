@@ -1497,7 +1497,6 @@ SELECT u FROM t_uint_cast WHERE u::uint2 = 5::uint2
 # still uses the index, and the constraints still come out of the filter. The predicate is
 # read once per candidate index, so the conjuncts that say nothing about the index key
 # neither cost anything nor stand in the way.
-# See https://github.com/MaterializeInc/database-issues/issues/1924
 
 statement ok
 CREATE TABLE wide (shop_id text, sku_code text, created_at int, rule text, flag bool)

@@ -13,8 +13,8 @@
 //! a constant collection.
 //!
 //! The detection is index-directed: for each candidate index we ask what the predicate says
-//! about that index's key expressions, and read the answer off in a single pass. See
-//! [`key_bounds`].
+//! about that index's key expressions, and read the answer off in a single pass. The
+//! `key_bounds` submodule holds that analysis.
 //!
 //! E.g.: Logically, we go from something like
 //! `SELECT f1, f2, f3 FROM t WHERE t.f1 = lit1 AND t.f2 = lit2`
