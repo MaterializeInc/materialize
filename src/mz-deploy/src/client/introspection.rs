@@ -16,7 +16,7 @@
 
 use crate::client::connection::{Client, IntrospectionClient};
 use crate::client::errors::ConnectionError;
-use crate::client::models::{Cluster, ClusterConfig, ClusterReplica, ObjectGrant};
+use crate::client::models::{Cluster, ClusterConfig, ClusterReplica, ObjectComment, ObjectGrant};
 use crate::client::sql_placeholders;
 use crate::client::staging_suffix_like_pattern;
 use crate::client::{parse_create_cluster, quote_identifier};
@@ -42,6 +42,35 @@ pub struct DependentSink {
     pub dependency_type: String,
 }
 
+/// A `target` CTE holding the `(database, schema, object)` name triples a bulk
+/// catalog read is restricted to.
+///
+/// The triples arrive as three parallel arrays bound to `$1`, `$2`, and `$3` by
+/// [`array_literal`], and are zipped back into rows server-side. The statement
+/// text is therefore identical however many objects a project manages, and a
+/// query that needs parameters of its own numbers them from `$4` on.
+///
+/// The three name components are matched separately rather than against a
+/// concatenated fully-qualified name. A concatenation would have to agree with
+/// the catalog on when an identifier needs quoting, and a name containing a `.`
+/// would make it ambiguous.
+const TARGET_OBJECTS_CTE: &str = "\
+    target AS (
+        SELECT
+            ($1::text::text[])[i] AS database,
+            ($2::text::text[])[i] AS schema,
+            ($3::text::text[])[i] AS object
+        FROM generate_series(1, array_length($1::text::text[], 1)) AS g(i)
+    )";
+
+/// A `target` CTE holding the names a bulk read over a named-object catalog
+/// table is restricted to.
+///
+/// Names arrive as one array bound to `$1` by [`array_literal`], so a query that
+/// needs parameters of its own numbers them from `$2` on.
+const TARGET_NAMES_CTE: &str = "\
+    target AS (SELECT name FROM unnest($1::text::text[]) AS u(name))";
+
 /// Encode `values` as a Postgres text array literal.
 ///
 /// Materialize's pgwire cannot decode an array bind parameter, so a query that
@@ -66,6 +95,34 @@ fn array_literal<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
     }
     literal.push('}');
     literal
+}
+
+/// The three parallel name arrays [`TARGET_OBJECTS_CTE`] zips back together,
+/// each encoded by [`array_literal`].
+fn target_object_arrays(objects: &BTreeSet<ObjectId>) -> [String; 3] {
+    [
+        array_literal(objects.iter().map(ObjectId::expect_database)),
+        array_literal(objects.iter().map(ObjectId::schema)),
+        array_literal(objects.iter().map(ObjectId::object)),
+    ]
+}
+
+/// Group rows carrying the `database`, `schema`, and `object` columns of
+/// [`TARGET_OBJECTS_CTE`] by the object they describe.
+///
+/// An object the catalog holds no rows for is absent from the map rather than
+/// present with an empty vector, so callers must treat a miss as "nothing
+/// recorded".
+fn group_by_object<T>(
+    rows: &[Row],
+    mut value: impl FnMut(&Row) -> T,
+) -> BTreeMap<ObjectId, Vec<T>> {
+    let mut grouped: BTreeMap<ObjectId, Vec<T>> = BTreeMap::new();
+    for row in rows {
+        let id = ObjectId::new(row.get("database"), row.get("schema"), row.get("object"));
+        grouped.entry(id).or_default().push(value(row));
+    }
+    grouped
 }
 
 /// Group rows by their `name` column, preserving the query's row order within
@@ -1239,6 +1296,92 @@ pub(super) async fn get_connection_create_sqls(
         .collect())
 }
 
+/// Get every comment recorded on `objects` and their columns, keyed by object.
+pub(super) async fn get_database_object_comments(
+    client: &Client,
+    objects: &BTreeSet<ObjectId>,
+    object_type: &str,
+) -> Result<BTreeMap<ObjectId, Vec<ObjectComment>>, ConnectionError> {
+    if objects.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let query = format!(
+        r#"
+        -- `object_sub_id` is NULL for a comment on the object itself and the
+        -- 1-based column position otherwise, so the LEFT JOIN resolves it to a
+        -- column name and leaves object-level comments with a NULL column.
+        WITH {}
+        SELECT
+            target.database,
+            target.schema,
+            target.object,
+            col.name AS column_name,
+            c.comment
+        FROM mz_internal.mz_comments c
+        JOIN mz_objects o ON c.id = o.id
+        JOIN mz_schemas s ON o.schema_id = s.id
+        JOIN mz_databases d ON s.database_id = d.id
+        JOIN target
+            ON target.database = d.name
+           AND target.schema = s.name
+           AND target.object = o.name
+        LEFT JOIN mz_columns col
+            ON col.id = c.id AND col.position::int4 = c.object_sub_id
+        WHERE o.type = $4
+        ORDER BY target.database, target.schema, target.object, c.object_sub_id
+        "#,
+        TARGET_OBJECTS_CTE
+    );
+
+    let [databases, schemas, names] = target_object_arrays(objects);
+    let rows = client
+        .query(&query, &[&databases, &schemas, &names, &object_type])
+        .await?;
+
+    Ok(group_by_object(&rows, |row| ObjectComment {
+        column: row.get("column_name"),
+        comment: row.get("comment"),
+    }))
+}
+
+/// Get the comments recorded on each of `names` in `catalog_table`, keyed by
+/// name.
+///
+/// A globally named object carries no column comments, so only object-level
+/// rows are read.
+pub(super) async fn get_named_object_comments(
+    client: &Client,
+    catalog_table: &str,
+    names: &[&str],
+) -> Result<BTreeMap<String, Vec<ObjectComment>>, ConnectionError> {
+    if names.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let query = format!(
+        r#"
+        WITH {}
+        SELECT target.name, c.comment
+        FROM mz_internal.mz_comments c
+        JOIN {} o ON c.id = o.id
+        JOIN target ON target.name = o.name
+        WHERE c.object_sub_id IS NULL
+        ORDER BY target.name
+        "#,
+        TARGET_NAMES_CTE, catalog_table
+    );
+
+    let rows = client
+        .query(&query, &[&array_literal(names.iter().copied())])
+        .await?;
+
+    Ok(group_by_name(&rows, |row| ObjectComment {
+        column: None,
+        comment: row.get("comment"),
+    }))
+}
+
 impl IntrospectionClient<'_> {
     /// Get the current Materialize user/role.
     pub async fn get_current_user(&self) -> Result<String, ConnectionError> {
@@ -1401,6 +1544,26 @@ impl IntrospectionClient<'_> {
         schema_exists(self.client, database, schema).await
     }
 
+    /// Get every comment recorded on `objects` and their columns, keyed by
+    /// object.
+    pub async fn get_database_object_comments(
+        &self,
+        objects: &BTreeSet<ObjectId>,
+        object_type: &str,
+    ) -> Result<BTreeMap<ObjectId, Vec<ObjectComment>>, ConnectionError> {
+        get_database_object_comments(self.client, objects, object_type).await
+    }
+
+    /// Get the comments recorded on each of `names` in `catalog_table`, keyed
+    /// by name.
+    pub async fn get_named_object_comments(
+        &self,
+        catalog_table: &str,
+        names: &[&str],
+    ) -> Result<BTreeMap<String, Vec<ObjectComment>>, ConnectionError> {
+        get_named_object_comments(self.client, catalog_table, names).await
+    }
+
     /// The subset of `names` that exist as network policies.
     pub async fn existing_network_policies(
         &self,
@@ -1547,7 +1710,9 @@ impl IntrospectionClient<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::array_literal;
+    use super::{array_literal, target_object_arrays};
+    use crate::project::ir::object_id::ObjectId;
+    use std::collections::BTreeSet;
 
     #[mz_ore::test]
     fn test_array_literal_quotes_every_element() {
@@ -1574,5 +1739,24 @@ mod tests {
         assert_eq!(array_literal([r#"say "hi""#]), r#"{"say \"hi\""}"#);
         assert_eq!(array_literal([r"back\slash"]), r#"{"back\\slash"}"#);
         assert_eq!(array_literal([r#"\""#]), r#"{"\\\""}"#);
+    }
+
+    /// The three arrays are parallel: index `i` of each names one component of
+    /// the same object, in the set's iteration order.
+    #[mz_ore::test]
+    fn test_target_object_arrays_stay_parallel() {
+        let objects = BTreeSet::from([
+            ObjectId::new("db1".into(), "s1".into(), "t1".into()),
+            ObjectId::new("db2".into(), "s2".into(), "t2".into()),
+        ]);
+
+        assert_eq!(
+            target_object_arrays(&objects),
+            [
+                r#"{"db1","db2"}"#.to_string(),
+                r#"{"s1","s2"}"#.to_string(),
+                r#"{"t1","t2"}"#.to_string(),
+            ]
+        );
     }
 }

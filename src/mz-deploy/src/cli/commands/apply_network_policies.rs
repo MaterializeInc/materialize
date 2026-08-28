@@ -10,15 +10,17 @@
 //! Network policies apply command - converge live network policy state to match definitions.
 
 use crate::cli::CliError;
-use crate::cli::commands::grants;
 use crate::cli::commands::reconcile::{ObjectKind, ReconcileTarget};
+use crate::cli::commands::{comments, grants};
 use crate::cli::executor::{
     ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult, connect_apply_client,
 };
-use crate::client::Client;
+use crate::client::{Client, ObjectComment};
 use crate::config::Settings;
 use crate::project::network_policies::{self, NetworkPolicyDefinition};
 use mz_sql_parser::ast::AlterNetworkPolicyStatement;
+
+const OBJECT_KIND: ObjectKind = ObjectKind::NetworkPolicy;
 
 /// Plan network policy changes without executing or printing.
 pub async fn plan(
@@ -40,16 +42,23 @@ pub async fn plan(
     }
 
     let names: Vec<&str> = definitions.iter().map(|def| def.name.as_str()).collect();
-    let existing = client
-        .introspection()
-        .existing_network_policies(&names)
-        .await
-        .map_err(CliError::Connection)?;
+    let introspection = client.introspection();
+    let (existing, current_comments) = futures::try_join!(
+        introspection.existing_network_policies(&names),
+        introspection.get_named_object_comments(OBJECT_KIND.catalog_table(), &names),
+    )
+    .map_err(CliError::Connection)?;
 
     let mut object_results = Vec::new();
     for def in &definitions {
-        let obj_result =
-            plan_network_policy(client, executor, def, existing.contains(&def.name)).await?;
+        let obj_result = plan_network_policy(
+            client,
+            executor,
+            def,
+            existing.contains(&def.name),
+            current_comments.get(&def.name).map_or(&[], Vec::as_slice),
+        )
+        .await?;
         object_results.push(obj_result);
     }
 
@@ -81,6 +90,7 @@ async fn plan_network_policy(
     executor: &DeploymentExecutor<'_>,
     def: &NetworkPolicyDefinition,
     exists: bool,
+    current_comments: &[ObjectComment],
 ) -> Result<ObjectResult, CliError> {
     let policy_name = &def.name;
 
@@ -100,19 +110,9 @@ async fn plan_network_policy(
         ObjectAction::Created
     };
 
-    // Reconcile grants
-    grants::reconcile(
-        client,
-        executor,
-        &ReconcileTarget::named(ObjectKind::NetworkPolicy, policy_name),
-        &def.grants,
-    )
-    .await?;
-
-    // Execute COMMENT statements
-    for comment in &def.comments {
-        executor.execute_sql(comment).await?;
-    }
+    let target = ReconcileTarget::named(OBJECT_KIND, policy_name);
+    grants::reconcile(client, executor, &target, &def.grants).await?;
+    comments::reconcile(executor, &target, &def.comments, current_comments).await?;
 
     Ok(ObjectResult {
         object: policy_name.clone(),

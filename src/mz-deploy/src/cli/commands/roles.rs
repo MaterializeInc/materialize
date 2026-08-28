@@ -10,17 +10,21 @@
 //! Roles apply command - converge live role state to match definitions.
 
 use crate::cli::CliError;
+use crate::cli::commands::comments;
+use crate::cli::commands::reconcile::{ObjectKind, ReconcileTarget};
 use crate::cli::executor::{
     ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult, connect_apply_client,
 };
-use crate::client::Client;
 use crate::client::quote_identifier;
+use crate::client::{Client, ObjectComment};
 use crate::config::Settings;
 use crate::project::roles::{self, RoleDefinition};
 use itertools::Itertools;
 use mz_sql_parser::ast::AlterRoleOption;
 use mz_sql_parser::ast::SetRoleVar;
 use std::collections::BTreeSet;
+
+const OBJECT_KIND: ObjectKind = ObjectKind::Role;
 
 /// Plan role changes without executing or printing.
 pub async fn plan(
@@ -42,10 +46,11 @@ pub async fn plan(
 
     let names: Vec<&str> = definitions.iter().map(|def| def.name.as_str()).collect();
     let introspection = client.introspection();
-    let (existing, members, parameters) = futures::try_join!(
+    let (existing, members, parameters, current_comments) = futures::try_join!(
         introspection.existing_roles(&names),
         introspection.get_role_members(&names),
         introspection.get_role_parameters(&names),
+        introspection.get_named_object_comments(OBJECT_KIND.catalog_table(), &names),
     )
     .map_err(CliError::Connection)?;
 
@@ -71,6 +76,7 @@ pub async fn plan(
             def,
             members.get(&def.name).map_or(&[], Vec::as_slice),
             parameters.get(&def.name).map_or(&[], Vec::as_slice),
+            current_comments.get(&def.name).map_or(&[], Vec::as_slice),
         )
         .await?;
         let mut statements = create_stmts;
@@ -112,6 +118,7 @@ async fn configure_role(
     def: &RoleDefinition,
     current_members: &[String],
     current_params: &[String],
+    current_comments: &[ObjectComment],
 ) -> Result<(), CliError> {
     let role_name = &def.name;
 
@@ -125,10 +132,13 @@ async fn configure_role(
         executor.execute_sql(grant).await?;
     }
 
-    // Execute COMMENT statements
-    for comment in &def.comments {
-        executor.execute_sql(comment).await?;
-    }
+    comments::reconcile(
+        executor,
+        &ReconcileTarget::named(OBJECT_KIND, role_name),
+        &def.comments,
+        current_comments,
+    )
+    .await?;
 
     // Revoke stale grants
     let desired_members: BTreeSet<String> = def

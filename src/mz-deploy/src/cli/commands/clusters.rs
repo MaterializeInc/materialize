@@ -12,12 +12,12 @@
 use std::collections::BTreeMap;
 
 use crate::cli::CliError;
-use crate::cli::commands::grants;
 use crate::cli::commands::reconcile::{ObjectKind, ReconcileTarget};
+use crate::cli::commands::{comments, grants};
 use crate::cli::executor::{
     ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult, connect_apply_client,
 };
-use crate::client::{Client, parse_create_cluster, quote_identifier};
+use crate::client::{Client, ObjectComment, parse_create_cluster, quote_identifier};
 use crate::config::Settings;
 use crate::project::clusters::{self, ClusterDefinition};
 use mz_repr::adt::interval::Interval;
@@ -26,6 +26,8 @@ use mz_sql_parser::ast::visit_mut::VisitMut;
 use mz_sql_parser::ast::{
     ClusterOption, ClusterOptionName, CreateClusterStatement, Raw, Value, WithOptionValue,
 };
+
+const OBJECT_KIND: ObjectKind = ObjectKind::Cluster;
 
 /// Plan cluster changes without executing or printing.
 pub async fn plan(
@@ -51,19 +53,35 @@ pub async fn plan(
     }
 
     let names: Vec<&str> = definitions.iter().map(|def| def.name.as_str()).collect();
-    let (live, default_replication_factor) =
-        futures::try_join!(live_clusters(client, &names), async {
+    let (live, current_comments, default_replication_factor) = futures::try_join!(
+        live_clusters(client, &names),
+        async {
+            client
+                .introspection()
+                .get_named_object_comments(OBJECT_KIND.catalog_table(), &names)
+                .await
+                .map_err(CliError::Connection)
+        },
+        async {
             client
                 .default_cluster_replication_factor()
                 .await
                 .map_err(CliError::Connection)
-        })?;
+        },
+    )?;
     let defaults = default_options(default_replication_factor);
 
     let mut object_results = Vec::new();
     for def in &definitions {
-        let obj_result =
-            plan_cluster(client, executor, def, live.get(&def.name), &defaults).await?;
+        let obj_result = plan_cluster(
+            client,
+            executor,
+            def,
+            live.get(&def.name),
+            &defaults,
+            current_comments.get(&def.name).map_or(&[], Vec::as_slice),
+        )
+        .await?;
         object_results.push(obj_result);
     }
 
@@ -96,6 +114,7 @@ async fn plan_cluster(
     def: &ClusterDefinition,
     live: Option<&CreateClusterStatement<Raw>>,
     defaults: &BTreeMap<ClusterOptionName, WithOptionValue<Raw>>,
+    current_comments: &[ObjectComment],
 ) -> Result<ObjectResult, CliError> {
     let cluster_name = &def.name;
 
@@ -142,19 +161,9 @@ async fn plan_cluster(
         }
     };
 
-    // Reconcile grants
-    grants::reconcile(
-        client,
-        executor,
-        &ReconcileTarget::named(ObjectKind::Cluster, cluster_name),
-        &def.grants,
-    )
-    .await?;
-
-    // Execute COMMENT statements
-    for comment in &def.comments {
-        executor.execute_sql(comment).await?;
-    }
+    let target = ReconcileTarget::named(OBJECT_KIND, cluster_name);
+    grants::reconcile(client, executor, &target, &def.grants).await?;
+    comments::reconcile(executor, &target, &def.comments, current_comments).await?;
 
     Ok(ObjectResult {
         object: cluster_name.clone(),
