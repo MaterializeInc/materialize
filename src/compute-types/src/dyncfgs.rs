@@ -697,6 +697,16 @@ pub const MV_SINK_ADVANCE_PERSIST_FRONTIERS: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether the MV sink withholds the read-back of its output shard until the `desired` snapshot
+/// has been absorbed.
+pub const MV_SINK_GATE_READBACK_ON_SNAPSHOT: Config<bool> = Config::new(
+    "compute_mv_sink_gate_readback_on_snapshot",
+    false,
+    "Whether the MV sink delays reading back its output shard until the desired snapshot has \
+     been absorbed into the correction buffer.",
+    ParameterScope::Environment,
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -749,6 +759,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL)
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
         .add(&MV_SINK_ADVANCE_PERSIST_FRONTIERS)
+        .add(&MV_SINK_GATE_READBACK_ON_SNAPSHOT)
         .add(&ENABLE_COLUMN_PAGED_BATCHER)
         .add(&ENABLE_COLUMNAR_MERGE_BATCHER)
         .add(&ENABLE_COLUMN_PAGED_BATCHER_SPILL)

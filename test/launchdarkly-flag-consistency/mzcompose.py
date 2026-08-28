@@ -210,6 +210,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     compute_flat_map_fuel
     compute_logical_backpressure_max_retained_capabilities
     compute_mv_sink_advance_persist_frontiers
+    compute_mv_sink_gate_readback_on_snapshot
     compute_peek_row_iteration_limit
     compute_peek_response_stash_batch_max_runs
     compute_peek_response_stash_read_batch_size_bytes

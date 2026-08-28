@@ -314,6 +314,11 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "compute_mv_sink_gate_readback_on_snapshot",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_password_auth",
             "true",
             ["true", "false"],

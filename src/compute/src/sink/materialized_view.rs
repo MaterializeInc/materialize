@@ -116,13 +116,16 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::pin::pin;
+use std::future::Future;
+use std::pin::{Pin, pin};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
-use mz_compute_types::dyncfgs::MV_SINK_ADVANCE_PERSIST_FRONTIERS;
+use mz_compute_types::dyncfgs::{
+    MV_SINK_ADVANCE_PERSIST_FRONTIERS, MV_SINK_GATE_READBACK_ON_SNAPSHOT,
+};
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
@@ -158,6 +161,9 @@ use crate::render::sinks::SinkRender;
 use crate::sink::correction::{ChannelLogging, Correction, CorrectionLogger};
 use crate::sink::materialized_view_v2;
 use crate::sink::refresh::apply_refresh;
+
+#[cfg(test)]
+mod tests;
 
 impl<'scope> SinkRender<'scope> for MaterializedViewSinkConnection<CollectionMetadata> {
     fn render_sink(
@@ -261,9 +267,25 @@ where
     let scope = ok_collection.scope();
     let desired = OkErr::new(ok_collection.inner, err_collection.inner);
 
+    // Withhold the read-back until the `desired` snapshot has been absorbed, to keep the
+    // correction buffer from holding both snapshots at once. See `SnapshotGate`.
+    let (snapshot_signal, snapshot_token) =
+        if MV_SINK_GATE_READBACK_ON_SNAPSHOT.get(&compute_state.worker_config) {
+            let (signal, token) = StartSignal::new();
+            (Some(signal), Some(token))
+        } else {
+            (None, None)
+        };
+
     // Read back the persist shard.
-    let (persist, persist_token) =
-        persist_source(scope, sink_id, target.clone(), compute_state, start_signal);
+    let (persist, persist_token) = persist_source(
+        scope,
+        sink_id,
+        target.clone(),
+        compute_state,
+        start_signal,
+        snapshot_signal,
+    );
 
     let persist_api = PersistApi {
         persist_clients: Arc::clone(&compute_state.persist_clients),
@@ -288,6 +310,7 @@ where
         persist,
         descs.clone(),
         read_only_rx,
+        snapshot_token,
         Rc::clone(&compute_state.worker_config),
     );
 
@@ -347,6 +370,65 @@ pub(super) fn advance(
     }
 }
 
+/// Withholds the read-back of the sink's output shard until the `desired` snapshot has been
+/// absorbed into the correction buffer.
+///
+/// The correction buffer holds `desired - persist`. During hydration both sides of that
+/// subtraction are snapshots of the same collection, so they are the same size and cancel almost
+/// entirely. They do not cancel while they are being accumulated, though: the read-back is I/O
+/// bound and parallel while `desired` is CPU bound, so the read-back lands in full long before
+/// `desired` has produced enough updates to cancel against, and the buffer peaks at the sum of
+/// both snapshots. Withholding the read-back until `desired` is complete bounds the peak at one
+/// snapshot plus whatever the read-back accumulates between consolidations.
+///
+/// Holding the read-back back costs no progress. The `mint` operator emits its first batch
+/// description only once the `desired` frontier is ahead of the output shard's upper, which
+/// already requires the `desired` snapshot to be complete, and the `write` operator then waits
+/// for the read-back to reach that description's `lower` regardless. So the gate reorders two
+/// phases that could never have overlapped in a way that produced a write, and gives up
+/// wall-clock overlap only.
+///
+/// The gate relies on the `desired` frontier moving beyond the `as_of` to open. That happens
+/// before any write is possible: for a non-empty output collection the `as_of` is hard
+/// constrained to be strictly less than the shard's upper (see the storage-export constraint in
+/// `mz_compute_client::as_of_selection`), and for an empty one there is no snapshot to read back.
+///
+/// NOTE: For a sink following a refresh schedule the gate can open before the snapshot has been
+/// emitted. `apply_refresh` rounds frontiers up to the next refresh time, so a sink whose `as_of`
+/// falls between two refresh times reports a frontier beyond the `as_of` from the start. The gate
+/// then opens immediately and the read-back proceeds as it does without the gate, which costs the
+/// memory saving but nothing else.
+pub(super) struct SnapshotGate {
+    /// The sink's `as_of`. The gate opens once the `desired` frontier moves beyond it.
+    as_of: Antichain<Timestamp>,
+    /// Dropped to open the gate. `None` once the gate is open, or when it was never armed.
+    token: Option<Rc<dyn Any>>,
+}
+
+impl SnapshotGate {
+    /// Arm a gate on the given `token`, or return an already-open gate if `token` is `None`.
+    pub(super) fn new(as_of: &Antichain<Timestamp>, token: Option<Rc<dyn Any>>) -> Self {
+        let mut gate = Self {
+            as_of: as_of.clone(),
+            token,
+        };
+        // The empty antichain is the maximum, so no `desired` frontier can ever move beyond an
+        // empty `as_of` and the gate would never open. A sink with an empty `as_of` has nothing
+        // left to write, so open immediately rather than withholding the read-back forever.
+        if gate.as_of.is_empty() {
+            gate.token = None;
+        }
+        gate
+    }
+
+    /// Open the gate if the given `desired` frontier has moved beyond the `as_of`.
+    pub(super) fn observe(&mut self, desired_frontier: &Antichain<Timestamp>) {
+        if self.token.is_some() && PartialOrder::less_than(&self.as_of, desired_frontier) {
+            self.token = None;
+        }
+    }
+}
+
 /// A persist API specialized to a single collection.
 #[derive(Clone)]
 pub(super) struct PersistApi {
@@ -393,6 +475,7 @@ pub(super) fn persist_source<'s>(
     target: CollectionMetadata,
     compute_state: &ComputeState,
     start_signal: StartSignal,
+    snapshot_signal: Option<StartSignal>,
 ) -> (PersistStreams<'s>, Vec<PressOnDropButton>) {
     // There is no guarantee that the sink as-of is beyond the persist shard's since. If it isn't,
     // instantiating a `persist_source` with it would panic. So instead we leave it to
@@ -409,6 +492,21 @@ pub(super) fn persist_source<'s>(
     let until = Antichain::new();
     let map_filter_project = None;
 
+    // `shard_source` awaits the start signal only after it has opened its read handle, so
+    // chaining the snapshot signal here delays fetching without giving up the `since` hold on
+    // the output shard.
+    let start_signal = start_signal.into_send_future();
+    let start_signal: Pin<Box<dyn Future<Output = ()> + Send>> = match snapshot_signal {
+        Some(snapshot_signal) => {
+            let snapshot_signal = snapshot_signal.into_send_future();
+            Box::pin(async move {
+                start_signal.await;
+                snapshot_signal.await;
+            })
+        }
+        None => Box::pin(start_signal),
+    };
+
     let (ok_stream, err_stream, token) =
         mz_storage_operators::persist_source::persist_source::<DataflowErrorSer>(
             scope,
@@ -422,7 +520,7 @@ pub(super) fn persist_source<'s>(
             until,
             map_filter_project,
             compute_state.dataflow_max_inflight_bytes(),
-            start_signal.into_send_future(),
+            start_signal,
             ErrorHandler::Halt("compute persist sink"),
         );
 
@@ -775,6 +873,7 @@ mod write {
     ///  * `desired`: The ok/err streams that should be sinked to persist.
     ///  * `persist`: The ok/err streams read back from the output persist shard.
     ///  * `descs`: The stream of batch descriptions produced by the `mint` operator.
+    ///  * `snapshot_token`: The token of the read-back's `SnapshotGate`, if armed.
     pub fn render<'s>(
         sink_id: GlobalId,
         persist_api: PersistApi,
@@ -783,6 +882,7 @@ mod write {
         persist: PersistStreams<'s>,
         descs: DescsStream<'s>,
         mut read_only_rx: watch::Receiver<bool>,
+        snapshot_token: Option<Rc<dyn Any>>,
         worker_config: Rc<ConfigSet>,
     ) -> (BatchesStream<'s>, PressOnDropButton) {
         let scope = desired.ok.scope();
@@ -843,6 +943,7 @@ mod write {
                 channel_logging,
                 as_of,
                 read_only,
+                snapshot_token,
                 &worker_config,
             );
             let mut correction_logger = correction_logger;
@@ -972,6 +1073,8 @@ mod write {
         /// batches, so the batch-write path never sweeps `consolidate_before(upper)` forward; the
         /// forced consolidation stands in for it and is re-armed as long as this holds.
         read_only: bool,
+        /// Gate withholding the output shard's read-back until the `desired` snapshot is in.
+        snapshot_gate: SnapshotGate,
     }
 
     impl State {
@@ -983,6 +1086,7 @@ mod write {
             logging: Option<ChannelLogging>,
             as_of: Antichain<Timestamp>,
             read_only: bool,
+            snapshot_token: Option<Rc<dyn Any>>,
             worker_config: &ConfigSet,
         ) -> Self {
             let worker_metrics = metrics.for_worker(worker_id);
@@ -990,6 +1094,7 @@ mod write {
             // Force a consolidation of `corrections` after the snapshot updates have been fully
             // processed, to ensure we get rid of those as quickly as possible.
             let force_consolidation_after = Some(as_of.clone());
+            let snapshot_gate = SnapshotGate::new(&as_of, snapshot_token);
 
             let mut state = Self {
                 sink_id,
@@ -1009,6 +1114,7 @@ mod write {
                 batch_description: None,
                 force_consolidation_after,
                 read_only,
+                snapshot_gate,
             };
 
             // Immediately advance the persist frontier tracking to the `as_of`.
@@ -1068,6 +1174,10 @@ mod write {
 
         /// Apply the effects of a previous `desired` frontier advancement.
         fn apply_desired_frontier_advancement(&mut self) {
+            // The `desired` snapshot is complete once its frontier moves beyond the `as_of`, at
+            // which point there is nothing left to gain from withholding the read-back.
+            self.snapshot_gate
+                .observe(self.desired_frontiers.frontier());
             self.maybe_force_consolidation();
         }
 

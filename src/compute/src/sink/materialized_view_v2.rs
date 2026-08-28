@@ -52,7 +52,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{Hashable, VecCollection};
-use mz_compute_types::dyncfgs::MV_SINK_ADVANCE_PERSIST_FRONTIERS;
+use mz_compute_types::dyncfgs::{
+    MV_SINK_ADVANCE_PERSIST_FRONTIERS, MV_SINK_GATE_READBACK_ON_SNAPSHOT,
+};
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::{Batch, ProtoBatch};
@@ -77,7 +79,7 @@ use crate::render::errors::DataflowErrorSer;
 use crate::sink::correction::{ChannelLogging, Correction, CorrectionLogger};
 use crate::sink::materialized_view::{
     BatchDescription, BatchesStream, DescsStream, DesiredStreams, OkErr, PersistApi,
-    PersistStreams, SharedSinkFrontier, advance, operator_name, persist_source,
+    PersistStreams, SharedSinkFrontier, SnapshotGate, advance, operator_name, persist_source,
 };
 
 /// Renders an MV sink writing the given desired collection into the `target` persist collection.
@@ -96,9 +98,25 @@ pub(super) fn persist_sink<'s>(
     let scope = ok_collection.scope();
     let desired = OkErr::new(ok_collection.inner, err_collection.inner);
 
+    // Withhold the read-back until the `desired` snapshot has been absorbed, to keep the
+    // correction buffer from holding both snapshots at once. See `SnapshotGate`.
+    let (snapshot_signal, snapshot_token) =
+        if MV_SINK_GATE_READBACK_ON_SNAPSHOT.get(&compute_state.worker_config) {
+            let (signal, token) = StartSignal::new();
+            (Some(signal), Some(token))
+        } else {
+            (None, None)
+        };
+
     // Read back the persist shard.
-    let (persist, persist_token) =
-        persist_source(scope, sink_id, target.clone(), compute_state, start_signal);
+    let (persist, persist_token) = persist_source(
+        scope,
+        sink_id,
+        target.clone(),
+        compute_state,
+        start_signal,
+        snapshot_signal,
+    );
 
     let persist_api = PersistApi {
         persist_clients: Arc::clone(&compute_state.persist_clients),
@@ -128,6 +146,7 @@ pub(super) fn persist_sink<'s>(
         persist,
         descs.clone(),
         read_only_rx,
+        snapshot_token,
         Rc::clone(&compute_state.worker_config),
     );
 
@@ -569,6 +588,7 @@ mod write {
     ///  * `desired`: The ok/err streams that should be sinked to persist.
     ///  * `persist`: The ok/err streams read back from the output persist shard.
     ///  * `descs`: The stream of batch descriptions produced by the `mint` operator.
+    ///  * `snapshot_token`: The token of the read-back's `SnapshotGate`, if armed.
     pub fn render<'s>(
         sink_id: GlobalId,
         persist_api: PersistApi,
@@ -577,6 +597,7 @@ mod write {
         persist: PersistStreams<'s>,
         descs: DescsStream<'s>,
         mut read_only_rx: watch::Receiver<bool>,
+        snapshot_token: Option<Rc<dyn Any>>,
         worker_config: Rc<ConfigSet>,
     ) -> BatchesStream<'s> {
         let scope = desired.ok.scope();
@@ -728,6 +749,7 @@ mod write {
                 as_of,
                 advance_persist_frontiers_at_startup,
                 read_only,
+                snapshot_token,
             );
 
             // Whether a batch write is currently in flight in the Tokio task.
@@ -1027,6 +1049,8 @@ mod write {
         /// batches, so the `WriteBatch` path never sweeps `consolidate_before(upper)` forward;
         /// the forced consolidation stands in for it and is re-armed as long as this holds.
         read_only: bool,
+        /// Gate withholding the output shard's read-back until the `desired` snapshot is in.
+        snapshot_gate: SnapshotGate,
     }
 
     impl State {
@@ -1036,10 +1060,12 @@ mod write {
             as_of: Antichain<Timestamp>,
             advance_persist_frontiers_at_startup: bool,
             read_only: bool,
+            snapshot_token: Option<Rc<dyn Any>>,
         ) -> Self {
             // Force a consolidation of corrections after the snapshot updates have been fully
             // processed, to ensure we get rid of those as quickly as possible.
             let force_consolidation_after = Some(as_of.clone());
+            let snapshot_gate = SnapshotGate::new(&as_of, snapshot_token);
 
             let mut state = Self {
                 sink_id,
@@ -1049,6 +1075,7 @@ mod write {
                 batch_description: None,
                 force_consolidation_after,
                 read_only,
+                snapshot_gate,
             };
 
             // Immediately advance the persist frontier tracking to the `as_of`.
@@ -1086,12 +1113,16 @@ mod write {
 
         fn advance_desired_ok_frontier(&mut self, frontier: AntichainRef<Timestamp>) {
             if advance(&mut self.desired_frontiers.ok, frontier) {
+                self.snapshot_gate
+                    .observe(self.desired_frontiers.frontier());
                 self.trace("advanced `desired` ok frontier");
             }
         }
 
         fn advance_desired_err_frontier(&mut self, frontier: AntichainRef<Timestamp>) {
             if advance(&mut self.desired_frontiers.err, frontier) {
+                self.snapshot_gate
+                    .observe(self.desired_frontiers.frontier());
                 self.trace("advanced `desired` err frontier");
             }
         }

@@ -767,6 +767,36 @@ SCENARIOS = [
         clusterd_memory="3.5Gb",
     ),
     Scenario(
+        name="mv-sink-rehydration",
+        # A pass-through materialized view with no index: the dataflow holds no arrangements, so
+        # replica memory is dominated by the MV sink's correction buffer, which accumulates
+        # `desired - persist`. On rehydration both sides of that subtraction are snapshots of the
+        # same collection and the same size, so a sink that accumulates them concurrently peaks at
+        # twice the output while one that absorbs `desired` first peaks at roughly the output.
+        # `clusterd_memory` is set between those two peaks.
+        pre_restart=dedent(f"""
+            > SET statement_timeout = '600 s';
+
+            > CREATE TABLE t1 (key INTEGER, payload TEXT)
+
+            > CREATE MATERIALIZED VIEW v1 IN CLUSTER clusterd AS
+              SELECT key, payload FROM t1
+
+            > INSERT INTO t1 (key, payload)
+              SELECT generate_series, repeat('x', 250)
+              FROM generate_series(1, {REPEAT} * {ITERATIONS})
+
+            > SELECT COUNT(*) FROM v1;
+            {REPEAT * ITERATIONS}
+            """),
+        post_restart=dedent(f"""
+            > SELECT COUNT(*) FROM v1;
+            {REPEAT * ITERATIONS}
+            """),
+        materialized_memory="4.5Gb",
+        clusterd_memory="1.5Gb",
+    ),
+    Scenario(
         name="table-aggregate",
         pre_restart=dedent(f"""
             > SET statement_timeout = '600 s';
