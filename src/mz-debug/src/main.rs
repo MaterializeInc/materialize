@@ -201,14 +201,20 @@ enum DebugModeContext {
     Emulator(EmulatorContext),
 }
 
+/// What a dump collects and where it writes it.
+#[derive(Debug, Clone)]
+pub struct DumpConfig {
+    pub base_path: PathBuf,
+    pub dump_system_catalog: bool,
+    pub dump_heap_profiles: bool,
+    pub dump_prometheus_metrics: bool,
+    pub dump_cpu_profiles: bool,
+    pub cpu_profile_duration_secs: u64,
+}
+
 pub struct Context {
-    base_path: PathBuf,
+    dump: DumpConfig,
     debug_mode_context: DebugModeContext,
-    dump_system_catalog: bool,
-    dump_heap_profiles: bool,
-    dump_prometheus_metrics: bool,
-    dump_cpu_profiles: bool,
-    cpu_profile_duration_secs: u64,
 }
 
 #[tokio::main]
@@ -401,13 +407,15 @@ async fn initialize_context(
     };
 
     Ok(Context {
-        base_path,
+        dump: DumpConfig {
+            base_path,
+            dump_system_catalog: global_args.dump_system_catalog,
+            dump_heap_profiles: global_args.dump_heap_profiles,
+            dump_prometheus_metrics: global_args.dump_prometheus_metrics,
+            dump_cpu_profiles: global_args.dump_cpu_profiles,
+            cpu_profile_duration_secs: global_args.cpu_profile_duration_seconds,
+        },
         debug_mode_context,
-        dump_system_catalog: global_args.dump_system_catalog,
-        dump_heap_profiles: global_args.dump_heap_profiles,
-        dump_prometheus_metrics: global_args.dump_prometheus_metrics,
-        dump_cpu_profiles: global_args.dump_cpu_profiles,
-        cpu_profile_duration_secs: global_args.cpu_profile_duration_seconds,
     })
 }
 
@@ -425,7 +433,7 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
         }) => {
             if *dump_k8s {
                 let dumper = K8sDumper::new(
-                    &context,
+                    &context.dump,
                     k8s_client.clone(),
                     k8s_namespace.clone(),
                     k8s_additional_namespaces.clone(),
@@ -440,7 +448,7 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
             ..
         }) => {
             if *dump_docker {
-                let dumper = DockerDumper::new(&context, docker_container_id.clone());
+                let dumper = DockerDumper::new(&context.dump, docker_container_id.clone());
                 dumper.dump_container_resources().await;
             }
         }
@@ -448,18 +456,20 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
 
     match &context.debug_mode_context {
         DebugModeContext::SelfManaged(self_managed_context) => {
-            if let Err(e) = dump_self_managed_http_resources(&context, self_managed_context).await {
+            if let Err(e) =
+                dump_self_managed_http_resources(&context.dump, self_managed_context).await
+            {
                 warn!("Failed to dump self-managed http resources: {:#}", e);
             }
         }
         DebugModeContext::Emulator(emulator_context) => {
-            if let Err(e) = dump_emulator_http_resources(&context, emulator_context).await {
+            if let Err(e) = dump_emulator_http_resources(&context.dump, emulator_context).await {
                 warn!("Failed to dump emulator http resources: {:#}", e);
             }
         }
     };
 
-    if context.dump_system_catalog {
+    if context.dump.dump_system_catalog {
         let connection_url = match &context.debug_mode_context {
             DebugModeContext::SelfManaged(self_managed_context) => {
                 match &self_managed_context.mz_connection_info {
@@ -500,7 +510,7 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
         };
         let catalog_dumper = match system_catalog_dumper::SystemCatalogDumper::new(
             &connection_url,
-            context.base_path.clone(),
+            context.dump.base_path.clone(),
         )
         .await
         {
@@ -518,9 +528,9 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
 
     info!("Zipping debug directory");
 
-    let zip_file_name = format!("{}.zip", context.base_path.display());
+    let zip_file_name = format!("{}.zip", context.dump.base_path.display());
 
-    if let Err(e) = zip_debug_folder(PathBuf::from(&zip_file_name), &context.base_path) {
+    if let Err(e) = zip_debug_folder(PathBuf::from(&zip_file_name), &context.dump.base_path) {
         warn!("Failed to zip debug directory: {:#}", e);
     } else {
         info!("Created zip debug at {:#}", &zip_file_name);

@@ -43,10 +43,10 @@ use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::{info, warn};
 
-use crate::{ContainerDumper, Context};
+use crate::{ContainerDumper, DumpConfig};
 
 struct K8sResourceDumper<'n, K> {
-    context: &'n Context,
+    config: &'n DumpConfig,
     api: Api<K>,
     namespace: Option<String>,
     resource_type: String,
@@ -56,21 +56,21 @@ impl<'n, K> K8sResourceDumper<'n, K>
 where
     K: kube::Resource<DynamicType = ()> + Clone + Debug + Serialize + DeserializeOwned,
 {
-    fn cluster(context: &'n Context, client: Client) -> Self {
+    fn cluster(config: &'n DumpConfig, client: Client) -> Self {
         Self {
-            context,
+            config,
             api: Api::<K>::all(client),
             namespace: None,
             resource_type: K::plural(&()).into_owned(),
         }
     }
 
-    fn namespaced(context: &'n Context, client: Client, namespace: String) -> Self
+    fn namespaced(config: &'n DumpConfig, client: Client, namespace: String) -> Self
     where
         K: kube::Resource<Scope = NamespaceResourceScope>,
     {
         Self {
-            context,
+            config,
             api: Api::<K>::namespaced(client, namespace.as_str()),
             namespace: Some(namespace),
             resource_type: K::plural(&()).into_owned(),
@@ -89,7 +89,7 @@ where
             return Ok(());
         }
         let file_path = format_resource_path(
-            self.context.base_path.clone(),
+            self.config.base_path.clone(),
             self.resource_type.as_str(),
             self.namespace.as_ref(),
         );
@@ -121,7 +121,7 @@ where
 }
 
 pub struct K8sDumper<'n> {
-    context: &'n Context,
+    config: &'n DumpConfig,
     /// The kubernetes client to use.
     client: Client,
     /// The k8s namespace to dump.
@@ -134,14 +134,14 @@ pub struct K8sDumper<'n> {
 
 impl<'n> K8sDumper<'n> {
     pub fn new(
-        context: &'n Context,
+        config: &'n DumpConfig,
         client: Client,
         k8s_namespace: String,
         k8s_additional_namespaces: Option<Vec<String>>,
         k8s_context: Option<String>,
     ) -> Self {
         Self {
-            context,
+            config,
             client,
             k8s_namespace,
             k8s_additional_namespaces,
@@ -191,7 +191,7 @@ impl<'n> K8sDumper<'n> {
         }
 
         let file_path = format_resource_path(
-            self.context.base_path.clone(),
+            self.config.base_path.clone(),
             resource_type.as_str(),
             namespace,
         );
@@ -220,42 +220,42 @@ impl<'n> K8sDumper<'n> {
 
     /// Write cluster-level k8s resources to a yaml file per resource.
     async fn dump_cluster_resources(&self) {
-        K8sResourceDumper::<Node>::cluster(self.context, self.client.clone())
+        K8sResourceDumper::<Node>::cluster(self.config, self.client.clone())
             .dump()
             .await;
 
-        K8sResourceDumper::<StorageClass>::cluster(self.context, self.client.clone())
+        K8sResourceDumper::<StorageClass>::cluster(self.config, self.client.clone())
             .dump()
             .await;
 
-        K8sResourceDumper::<PersistentVolume>::cluster(self.context, self.client.clone())
+        K8sResourceDumper::<PersistentVolume>::cluster(self.config, self.client.clone())
             .dump()
             .await;
 
         K8sResourceDumper::<MutatingWebhookConfiguration>::cluster(
-            self.context,
+            self.config,
             self.client.clone(),
         )
         .dump()
         .await;
 
         K8sResourceDumper::<ValidatingWebhookConfiguration>::cluster(
-            self.context,
+            self.config,
             self.client.clone(),
         )
         .dump()
         .await;
-        K8sResourceDumper::<DaemonSet>::cluster(self.context, self.client.clone())
+        K8sResourceDumper::<DaemonSet>::cluster(self.config, self.client.clone())
             .dump()
             .await;
-        K8sResourceDumper::<CustomResourceDefinition>::cluster(self.context, self.client.clone())
+        K8sResourceDumper::<CustomResourceDefinition>::cluster(self.config, self.client.clone())
             .dump()
             .await;
     }
 
     async fn _dump_k8s_pod_logs(&self, namespace: &String) -> Result<(), anyhow::Error> {
         let file_path =
-            format_resource_path(self.context.base_path.clone(), "logs", Some(namespace));
+            format_resource_path(self.config.base_path.clone(), "logs", Some(namespace));
         create_dir_all(&file_path)?;
 
         let pods: Api<Pod> = Api::<Pod>::namespaced(self.client.clone(), namespace);
@@ -329,84 +329,80 @@ impl<'n> K8sDumper<'n> {
 
     /// Write namespace-level k8s resources to a yaml file per resource.
     pub async fn dump_namespaced_resources(&self, namespace: String) {
-        K8sResourceDumper::<Pod>::namespaced(self.context, self.client.clone(), namespace.clone())
+        K8sResourceDumper::<Pod>::namespaced(self.config, self.client.clone(), namespace.clone())
             .dump()
             .await;
         K8sResourceDumper::<Service>::namespaced(
-            self.context,
+            self.config,
             self.client.clone(),
             namespace.clone(),
         )
         .dump()
         .await;
         K8sResourceDumper::<Deployment>::namespaced(
-            self.context,
+            self.config,
             self.client.clone(),
             namespace.clone(),
         )
         .dump()
         .await;
         K8sResourceDumper::<StatefulSet>::namespaced(
-            self.context,
+            self.config,
             self.client.clone(),
             namespace.clone(),
         )
         .dump()
         .await;
         K8sResourceDumper::<ReplicaSet>::namespaced(
-            self.context,
+            self.config,
             self.client.clone(),
             namespace.clone(),
         )
         .dump()
         .await;
         K8sResourceDumper::<NetworkPolicy>::namespaced(
-            self.context,
+            self.config,
             self.client.clone(),
             namespace.clone(),
         )
         .dump()
         .await;
-        K8sResourceDumper::<Event>::namespaced(
-            self.context,
-            self.client.clone(),
-            namespace.clone(),
-        )
-        .dump()
-        .await;
+        K8sResourceDumper::<Event>::namespaced(self.config, self.client.clone(), namespace.clone())
+            .dump()
+            .await;
         K8sResourceDumper::<Materialize>::namespaced(
-            self.context,
+            self.config,
             self.client.clone(),
             namespace.clone(),
         )
         .dump()
         .await;
-        K8sResourceDumper::<Role>::namespaced(self.context, self.client.clone(), namespace.clone())
+        K8sResourceDumper::<Role>::namespaced(self.config, self.client.clone(), namespace.clone())
             .dump()
             .await;
         K8sResourceDumper::<RoleBinding>::namespaced(
-            self.context,
+            self.config,
             self.client.clone(),
             namespace.clone(),
         )
         .dump()
         .await;
         K8sResourceDumper::<ConfigMap>::namespaced(
-            self.context,
+            self.config,
             self.client.clone(),
             namespace.clone(),
         )
         .dump()
         .await;
         K8sResourceDumper::<PersistentVolumeClaim>::namespaced(
-            self.context,
+            self.config,
             self.client.clone(),
             namespace.clone(),
         )
         .dump()
         .await;
         K8sResourceDumper::<ServiceAccount>::namespaced(
-            self.context,
+            self.config,
             self.client.clone(),
             namespace.clone(),
         )
@@ -414,7 +410,7 @@ impl<'n> K8sDumper<'n> {
         .await;
 
         K8sResourceDumper::<Certificate>::namespaced(
-            self.context,
+            self.config,
             self.client.clone(),
             namespace.clone(),
         )

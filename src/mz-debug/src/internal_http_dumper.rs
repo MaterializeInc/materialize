@@ -27,7 +27,7 @@ use crate::kubectl_port_forwarder::{
     KubectlPortForwarder, PortForwardConnection, PortForwardTarget, ServiceInfo,
     find_cluster_services, find_environmentd_service, find_service_pods,
 };
-use crate::{AuthMode, Context, EmulatorContext, PasswordAuthCredentials, SelfManagedContext};
+use crate::{AuthMode, DumpConfig, EmulatorContext, PasswordAuthCredentials, SelfManagedContext};
 
 static PROFILES_DIR: &str = "profiles";
 static PROM_METRICS_DIR: &str = "prom_metrics";
@@ -163,7 +163,7 @@ fn get_default_port(auth_mode: &AuthMode) -> HttpDefaultPorts {
 
 /// A struct that handles downloading and saving profile data from HTTP endpoints.
 pub struct HttpDumpClient<'n> {
-    context: &'n Context,
+    config: &'n DumpConfig,
     auth_mode: &'n AuthMode,
     http_client: &'n reqwest::Client,
 }
@@ -171,12 +171,12 @@ pub struct HttpDumpClient<'n> {
 /// A struct that handles downloading and exporting data from our internal HTTP endpoints.
 impl<'n> HttpDumpClient<'n> {
     pub fn new(
-        context: &'n Context,
+        config: &'n DumpConfig,
         auth_mode: &'n AuthMode,
         http_client: &'n reqwest::Client,
     ) -> Self {
         Self {
-            context,
+            config,
             auth_mode,
             http_client,
         }
@@ -284,7 +284,7 @@ impl<'n> HttpDumpClient<'n> {
 
     /// Downloads and saves heap profile data
     pub async fn dump_heap_profile(&self, relative_url: &str, service_name: &str) -> Result<()> {
-        let output_dir = self.context.base_path.join(PROFILES_DIR);
+        let output_dir = self.config.base_path.join(PROFILES_DIR);
         create_dir_all(&output_dir).await.with_context(|| {
             format!(
                 "Failed to create output directory: {}",
@@ -322,7 +322,7 @@ impl<'n> HttpDumpClient<'n> {
         service_name: &str,
         duration_secs: u64,
     ) -> Result<()> {
-        let output_dir = self.context.base_path.join(PROFILES_DIR);
+        let output_dir = self.config.base_path.join(PROFILES_DIR);
         create_dir_all(&output_dir).await.with_context(|| {
             format!(
                 "Failed to create output directory: {}",
@@ -380,7 +380,7 @@ impl<'n> HttpDumpClient<'n> {
         relative_url: &str,
         service_name: &str,
     ) -> Result<()> {
-        let output_dir = self.context.base_path.join(PROM_METRICS_DIR);
+        let output_dir = self.config.base_path.join(PROM_METRICS_DIR);
         create_dir_all(&output_dir).await.with_context(|| {
             format!(
                 "Failed to create output directory: {}",
@@ -499,17 +499,17 @@ async fn dump_cpu_profile_and_verify_memory(
 
 // TODO (debug_tool3): Scrape cluster profiles through a proxy when (database-issues#7049) is implemented
 pub async fn dump_emulator_http_resources(
-    context: &Context,
+    config: &DumpConfig,
     emulator_context: &EmulatorContext,
 ) -> Result<()> {
     let http_client = reqwest::Client::new();
     let dump_task = HttpDumpClient::new(
-        context,
+        config,
         &emulator_context.http_connection_auth_mode,
         &http_client,
     );
 
-    if context.dump_heap_profiles {
+    if config.dump_heap_profiles {
         let resource_name = "environmentd".to_string();
 
         // We assume the emulator is exposed on the local network and uses port 6878.
@@ -529,7 +529,7 @@ pub async fn dump_emulator_http_resources(
         }
     }
 
-    if context.dump_prometheus_metrics {
+    if config.dump_prometheus_metrics {
         let resource_name = "environmentd".to_string();
 
         if let Err(e) = dump_task
@@ -550,7 +550,7 @@ pub async fn dump_emulator_http_resources(
 
     // Capture the CPU profile after memory profiling, since the capture
     // temporarily disables memory profiling on the service.
-    if context.dump_cpu_profiles {
+    if config.dump_cpu_profiles {
         let resource_name = "environmentd".to_string();
         let port = get_default_port(&emulator_context.http_connection_auth_mode).heap_profile_port;
         let cpu_endpoint = format!(
@@ -568,14 +568,14 @@ pub async fn dump_emulator_http_resources(
 
         info!(
             "Capturing CPU profile for {} seconds. Memory profiling is temporarily disabled during the capture and restored afterwards.",
-            context.cpu_profile_duration_secs
+            config.cpu_profile_duration_secs
         );
         dump_cpu_profile_and_verify_memory(
             &dump_task,
             &cpu_endpoint,
             &mode_endpoint,
             &resource_name,
-            context.cpu_profile_duration_secs,
+            config.cpu_profile_duration_secs,
         )
         .await;
     }
@@ -613,12 +613,12 @@ async fn spawn_pod_port_forward(
 }
 
 pub async fn dump_self_managed_http_resources(
-    context: &Context,
+    config: &DumpConfig,
     self_managed_context: &SelfManagedContext,
 ) -> Result<()> {
     let http_client = reqwest::Client::new();
     let dump_task = HttpDumpClient::new(
-        context,
+        config,
         &self_managed_context.http_connection_auth_mode,
         &http_client,
     );
@@ -748,7 +748,7 @@ pub async fn dump_self_managed_http_resources(
             }
         };
 
-        if context.dump_heap_profiles {
+        if config.dump_heap_profiles {
             let profiling_endpoint = format!(
                 "{}:{}/{}",
                 heap_profile_http_connection.local_address,
@@ -768,7 +768,7 @@ pub async fn dump_self_managed_http_resources(
             }
         }
 
-        if context.dump_prometheus_metrics {
+        if config.dump_prometheus_metrics {
             let prom_metrics_endpoint = format!(
                 "{}:{}/{}",
                 prom_metrics_http_connection.local_address,
@@ -791,10 +791,10 @@ pub async fn dump_self_managed_http_resources(
     // Capture CPU profiles after memory profiling, since each capture
     // temporarily disables memory profiling on its pod. The captures run in
     // parallel, and a failure on one pod does not abort the others.
-    if context.dump_cpu_profiles {
+    if config.dump_cpu_profiles {
         info!(
             "Capturing CPU profiles for {} seconds. Memory profiling is temporarily disabled on each pod during its capture and restored afterwards.",
-            context.cpu_profile_duration_secs
+            config.cpu_profile_duration_secs
         );
 
         let cpu_profile_futures = pod_targets.iter().map(|pod_target| {
@@ -807,7 +807,7 @@ pub async fn dump_self_managed_http_resources(
             )
             .heap_profile_port_label;
             let dump_task = &dump_task;
-            let duration_secs = context.cpu_profile_duration_secs;
+            let duration_secs = config.cpu_profile_duration_secs;
 
             async move {
                 let Some(port) = pod_target
