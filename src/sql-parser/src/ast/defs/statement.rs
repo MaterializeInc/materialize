@@ -3634,6 +3634,9 @@ pub enum ShowObjectType<T: AstInfo> {
         in_cluster: Option<T::ClusterName>,
         on_object: Option<T::ItemName>,
     },
+    ForeignKey {
+        on_object: Option<T::ItemName>,
+    },
     Table {
         on_source: Option<T::ItemName>,
     },
@@ -3709,6 +3712,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Connection => "CONNECTIONS",
             ShowObjectType::MaterializedView { .. } => "MATERIALIZED VIEWS",
             ShowObjectType::Index { .. } => "INDEXES",
+            ShowObjectType::ForeignKey { .. } => "FOREIGN KEYS",
             ShowObjectType::Database => "DATABASES",
             ShowObjectType::Schema { .. } => "SCHEMAS",
             ShowObjectType::Subsource { .. } => "SUBSOURCES",
@@ -3718,7 +3722,9 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::NetworkPolicy => "NETWORK POLICIES",
         });
 
-        if let ShowObjectType::Index { on_object, .. } = &self.object_type {
+        if let ShowObjectType::Index { on_object, .. } | ShowObjectType::ForeignKey { on_object } =
+            &self.object_type
+        {
             if let Some(on_object) = on_object {
                 f.write_str(" ON ");
                 f.write_node(on_object);
@@ -3960,6 +3966,25 @@ impl<T: AstInfo> AstDisplay for ShowCreateIndexStatement<T> {
     }
 }
 impl_display_t!(ShowCreateIndexStatement);
+
+/// `SHOW [REDACTED] CREATE FOREIGN KEY <foreign_key>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ShowCreateForeignKeyStatement<T: AstInfo> {
+    pub foreign_key_name: T::ItemName,
+    pub redacted: bool,
+}
+
+impl<T: AstInfo> AstDisplay for ShowCreateForeignKeyStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW ");
+        if self.redacted {
+            f.write_str("REDACTED ");
+        }
+        f.write_str("CREATE FOREIGN KEY ");
+        f.write_node(&self.foreign_key_name);
+    }
+}
+impl_display_t!(ShowCreateForeignKeyStatement);
 
 /// `SHOW [REDACTED] CREATE CONNECTION <connection>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -5603,6 +5628,7 @@ pub enum ShowStatement<T: AstInfo> {
     ShowCreateSink(ShowCreateSinkStatement<T>),
     ShowCreateMetricSink(ShowCreateMetricSinkStatement<T>),
     ShowCreateIndex(ShowCreateIndexStatement<T>),
+    ShowCreateForeignKey(ShowCreateForeignKeyStatement<T>),
     ShowCreateConnection(ShowCreateConnectionStatement<T>),
     ShowCreateCluster(ShowCreateClusterStatement<T>),
     ShowCreateType(ShowCreateTypeStatement<T>),
@@ -5622,6 +5648,7 @@ impl<T: AstInfo> AstDisplay for ShowStatement<T> {
             ShowStatement::ShowCreateSink(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateMetricSink(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateIndex(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateForeignKey(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateConnection(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateCluster(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateType(stmt) => f.write_node(stmt),

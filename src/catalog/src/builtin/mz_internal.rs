@@ -3564,6 +3564,7 @@ SELECT
         WHEN obj ? 'Source'           THEN mz_internal.parse_catalog_id(obj->'Source')
         WHEN obj ? 'Sink'             THEN mz_internal.parse_catalog_id(obj->'Sink')
         WHEN obj ? 'Index'            THEN mz_internal.parse_catalog_id(obj->'Index')
+        WHEN obj ? 'ForeignKey'       THEN mz_internal.parse_catalog_id(obj->'ForeignKey')
         WHEN obj ? 'Func'             THEN mz_internal.parse_catalog_id(obj->'Func')
         WHEN obj ? 'Connection'       THEN mz_internal.parse_catalog_id(obj->'Connection')
         WHEN obj ? 'Type'             THEN mz_internal.parse_catalog_id(obj->'Type')
@@ -3582,6 +3583,7 @@ SELECT
         WHEN obj ? 'Source'           THEN 'source'
         WHEN obj ? 'Sink'             THEN 'sink'
         WHEN obj ? 'Index'            THEN 'index'
+        WHEN obj ? 'ForeignKey'       THEN 'foreign-key'
         WHEN obj ? 'Func'             THEN 'func'
         WHEN obj ? 'Connection'       THEN 'connection'
         WHEN obj ? 'Type'             THEN 'type'
@@ -3808,6 +3810,205 @@ pub const MZ_METRIC_SINKS_IND: BuiltinIndex = BuiltinIndex {
 ON mz_internal.mz_metric_sinks (id)",
     is_retained_metrics_object: false,
 };
+
+pub static MZ_FOREIGN_KEYS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_foreign_keys",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_FOREIGN_KEYS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("referencing_id", SqlScalarType::String.nullable(false))
+            .with_column("referenced_id", SqlScalarType::String.nullable(false))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .with_key(vec![1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for the foreign key."),
+            ("oid", "A PostgreSQL-compatible OID for the foreign key."),
+            (
+                "schema_id",
+                "The ID of the schema to which the foreign key belongs. Corresponds to `mz_schemas.id`.",
+            ),
+            ("name", "The name of the foreign key."),
+            (
+                "referencing_id",
+                "The ID of the relation holding the key. Corresponds to `mz_objects.id`.",
+            ),
+            (
+                "referenced_id",
+                "The ID of the relation the key points at. Corresponds to `mz_objects.id`.",
+            ),
+            (
+                "owner_id",
+                "The role ID of the owner of the foreign key. Corresponds to `mz_roles.id`.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL referencing_id,
+    ASSERT NOT NULL referenced_id,
+    ASSERT NOT NULL owner_id
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    (data->'value'->>'oid')::oid AS oid,
+    mz_internal.parse_catalog_id(data->'value'->'schema_id') AS schema_id,
+    data->'value'->>'name' AS name,
+    parsed->>'referencing_id' AS referencing_id,
+    parsed->>'referenced_id' AS referenced_id,
+    mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id
+FROM
+    mz_internal.mz_catalog_raw
+    CROSS JOIN LATERAL (
+        SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS l(parsed)
+WHERE
+    data->>'kind' = 'Item' AND
+    parsed->>'type' = 'foreign-key'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "foreign_key",
+            description: "A non-enforced foreign key declaring that columns of one relation correspond to columns of another",
+            links: &const {
+                [
+                    OntologyLink {
+                        name: "in_schema",
+                        target: "schema",
+                        properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
+                    },
+                    OntologyLink {
+                        name: "references_from",
+                        target: "relation",
+                        properties: LinkProperties::fk(
+                            "referencing_id",
+                            "id",
+                            Cardinality::ManyToOne,
+                        ),
+                    },
+                    OntologyLink {
+                        name: "references_to",
+                        target: "relation",
+                        properties: LinkProperties::fk(
+                            "referenced_id",
+                            "id",
+                            Cardinality::ManyToOne,
+                        ),
+                    },
+                    OntologyLink {
+                        name: "owned_by",
+                        target: "role",
+                        properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
+                    },
+                ]
+            },
+            column_semantic_types: &const {
+                [
+                    ("id", SemanticType::CatalogItemId),
+                    ("oid", SemanticType::OID),
+                    ("schema_id", SemanticType::SchemaId),
+                    ("referencing_id", SemanticType::CatalogItemId),
+                    ("referenced_id", SemanticType::CatalogItemId),
+                    ("owner_id", SemanticType::RoleId),
+                ]
+            },
+        }),
+    }
+});
+
+pub const MZ_FOREIGN_KEYS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_foreign_keys_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_FOREIGN_KEYS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_foreign_keys (id)",
+    is_retained_metrics_object: false,
+};
+
+/// The column pairs of each foreign key, one row per pair.
+///
+/// Columns are identified by name rather than by ordinal: names are what
+/// `create_sql` stores, and unlike positions they survive `ALTER TABLE ... ADD
+/// COLUMN`. `position` orders the pairs as the statement declared them, which is
+/// the order the correspondence is defined in and need not match either
+/// relation's own column order.
+pub static MZ_FOREIGN_KEY_COLUMNS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_foreign_key_columns",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_FOREIGN_KEY_COLUMNS_OID,
+        desc: RelationDesc::builder()
+            .with_column("foreign_key_id", SqlScalarType::String.nullable(false))
+            .with_column("position", SqlScalarType::UInt64.nullable(false))
+            .with_column("referencing_column", SqlScalarType::String.nullable(false))
+            .with_column("referenced_column", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "foreign_key_id",
+                "The ID of the foreign key this pair belongs to. Corresponds to `mz_internal.mz_foreign_keys.id`.",
+            ),
+            (
+                "position",
+                "The 1-indexed position of this pair within the foreign key, in the order the constraint declared them.",
+            ),
+            (
+                "referencing_column",
+                "The name of the column on the referencing relation. Corresponds to `mz_columns.name`.",
+            ),
+            (
+                "referenced_column",
+                "The name of the corresponding column on the referenced relation. Corresponds to `mz_columns.name`.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL foreign_key_id,
+    ASSERT NOT NULL position,
+    ASSERT NOT NULL referencing_column,
+    ASSERT NOT NULL referenced_column
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS foreign_key_id,
+    ord AS position,
+    pair->>'referencing' AS referencing_column,
+    pair->>'referenced' AS referenced_column
+FROM
+    mz_internal.mz_catalog_raw
+    CROSS JOIN LATERAL (
+        SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS l(parsed),
+    LATERAL jsonb_array_elements(parsed->'columns') WITH ORDINALITY AS e(pair, ord)
+WHERE
+    data->>'kind' = 'Item' AND
+    parsed->>'type' = 'foreign-key'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "foreign_key_column",
+            description: "One column pair of a foreign key",
+            links: &const {
+                [OntologyLink {
+                    name: "column_of",
+                    target: "foreign_key",
+                    properties: LinkProperties::fk("foreign_key_id", "id", Cardinality::ManyToOne),
+                }]
+            },
+            column_semantic_types: &[("foreign_key_id", SemanticType::CatalogItemId)],
+        }),
+    }
+});
 
 pub static MZ_HISTORY_RETENTION_STRATEGIES: LazyLock<BuiltinTable> = LazyLock::new(|| {
     BuiltinTable {
@@ -6283,6 +6484,62 @@ FROM
     mz_catalog.mz_materialized_views AS mviews
     JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = mviews.cluster_id
     LEFT JOIN comments ON mviews.id = comments.id",
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
+
+pub static MZ_SHOW_FOREIGN_KEYS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_show_foreign_keys",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_FOREIGN_KEYS_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::String.nullable(false))
+        .with_column("name", SqlScalarType::String.nullable(false))
+        .with_column("on", SqlScalarType::String.nullable(false))
+        .with_column("references", SqlScalarType::String.nullable(false))
+        .with_column(
+            "key",
+            SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
+        )
+        .with_column("on_id", SqlScalarType::String.nullable(false))
+        .with_column("references_id", SqlScalarType::String.nullable(false))
+        .with_column("schema_id", SqlScalarType::String.nullable(false))
+        .with_column("comment", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::new(),
+    // `key` renders each pair as `local = remote`, ordered by the position the
+    // constraint declared, so the array reads as the join condition it asserts.
+    sql: "
+WITH comments AS (
+    SELECT id, comment
+    FROM mz_internal.mz_comments
+    WHERE object_type = 'foreign-key' AND object_sub_id IS NULL
+)
+SELECT
+    fks.id AS id,
+    fks.name AS name,
+    on_objs.name AS on,
+    ref_objs.name AS references,
+    COALESCE(pairs.key, '{}'::_text) AS key,
+    fks.referencing_id AS on_id,
+    fks.referenced_id AS references_id,
+    fks.schema_id AS schema_id,
+    COALESCE(comments.comment, '') AS comment
+FROM
+    mz_internal.mz_foreign_keys AS fks
+    JOIN mz_catalog.mz_objects AS on_objs ON fks.referencing_id = on_objs.id
+    JOIN mz_catalog.mz_objects AS ref_objs ON fks.referenced_id = ref_objs.id
+    LEFT JOIN (
+        SELECT
+            foreign_key_id,
+            ARRAY_AGG(
+                referencing_column || ' = ' || referenced_column
+                ORDER BY position
+            ) AS key
+        FROM mz_internal.mz_foreign_key_columns
+        GROUP BY foreign_key_id
+    ) AS pairs ON pairs.foreign_key_id = fks.id
+    LEFT JOIN comments ON comments.id = fks.id",
     access: vec![PUBLIC_SELECT],
     ontology: None,
 });

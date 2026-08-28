@@ -1029,3 +1029,38 @@ SHOW REDACTED MATERIALIZED
 error: SHOW REDACTED is only supported for SHOW REDACTED CREATE ...
 SHOW REDACTED MATERIALIZED
               ^
+
+parse-statement
+SHOW CREATE FOREIGN KEY fk
+----
+SHOW CREATE FOREIGN KEY fk
+=>
+Show(ShowCreateForeignKey(ShowCreateForeignKeyStatement { foreign_key_name: Name(UnresolvedItemName([Ident("fk")])), redacted: false }))
+
+parse-statement
+SHOW REDACTED CREATE FOREIGN KEY s.fk
+----
+SHOW REDACTED CREATE FOREIGN KEY s.fk
+=>
+Show(ShowCreateForeignKey(ShowCreateForeignKeyStatement { foreign_key_name: Name(UnresolvedItemName([Ident("s"), Ident("fk")])), redacted: true }))
+
+parse-statement
+SHOW FOREIGN KEYS
+----
+SHOW FOREIGN KEYS
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: ForeignKey { on_object: None }, from: None, filter: None }))
+
+parse-statement
+SHOW FOREIGN KEYS ON t
+----
+SHOW FOREIGN KEYS ON t
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: ForeignKey { on_object: Some(Name(UnresolvedItemName([Ident("t")]))) }, from: None, filter: None }))
+
+parse-statement
+DROP FOREIGN KEY fk
+----
+DROP FOREIGN KEY fk
+=>
+DropObjects(DropObjectsStatement { object_type: ForeignKey, if_exists: false, names: [Item(UnresolvedItemName([Ident("fk")]))], cascade: false })

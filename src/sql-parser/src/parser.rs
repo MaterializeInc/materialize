@@ -8415,7 +8415,24 @@ impl<'a> Parser<'a> {
                         on_object,
                     }
                 }
-                ObjectType::ForeignKey | ObjectType::Func => {
+                ObjectType::ForeignKey => {
+                    let on_object = if self.parse_one_of_keywords(&[ON]).is_some() {
+                        Some(self.parse_raw_name()?)
+                    } else {
+                        None
+                    };
+
+                    if from.is_some() && on_object.is_some() {
+                        return parser_err!(
+                            self,
+                            self.peek_prev_pos(),
+                            "Cannot specify both FROM and ON"
+                        );
+                    }
+
+                    ShowObjectType::ForeignKey { on_object }
+                }
+                ObjectType::Func => {
                     return parser_err!(
                         self,
                         self.peek_prev_pos(),
@@ -8487,6 +8504,13 @@ impl<'a> Parser<'a> {
                 index_name: self.parse_raw_name()?,
                 redacted,
             }))
+        } else if self.parse_keywords(&[CREATE, FOREIGN, KEY]) {
+            Ok(ShowStatement::ShowCreateForeignKey(
+                ShowCreateForeignKeyStatement {
+                    foreign_key_name: self.parse_raw_name()?,
+                    redacted,
+                },
+            ))
         } else if self.parse_keywords(&[CREATE, CONNECTION]) {
             Ok(ShowStatement::ShowCreateConnection(
                 ShowCreateConnectionStatement {
@@ -10034,6 +10058,7 @@ impl<'a> Parser<'a> {
                 SINK,
                 METRIC,
                 INDEX,
+                FOREIGN,
                 TYPE,
                 ROLE,
                 USER,
@@ -10064,6 +10089,13 @@ impl<'a> Parser<'a> {
                     ObjectType::MetricSink
                 }
                 INDEX => ObjectType::Index,
+                FOREIGN => {
+                    if let Err(e) = self.expect_keyword(KEY) {
+                        self.prev_token();
+                        return Err(e);
+                    }
+                    ObjectType::ForeignKey
+                }
                 TYPE => ObjectType::Type,
                 ROLE | USER => ObjectType::Role,
                 CLUSTER => {
@@ -10101,6 +10133,7 @@ impl<'a> Parser<'a> {
                 SINK,
                 METRIC,
                 INDEX,
+                FOREIGN,
                 TYPE,
                 ROLE,
                 USER,
@@ -10133,6 +10166,14 @@ impl<'a> Parser<'a> {
                     }
                 }
                 INDEX => ObjectType::Index,
+                FOREIGN => {
+                    if self.parse_keyword(KEY) {
+                        ObjectType::ForeignKey
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
                 TYPE => ObjectType::Type,
                 ROLE | USER => ObjectType::Role,
                 CLUSTER => {
@@ -10170,6 +10211,7 @@ impl<'a> Parser<'a> {
                 SOURCES,
                 SINKS,
                 INDEXES,
+                FOREIGN,
                 TYPES,
                 ROLES,
                 USERS,
@@ -10193,6 +10235,13 @@ impl<'a> Parser<'a> {
                 SOURCES => ObjectType::Source,
                 SINKS => ObjectType::Sink,
                 INDEXES => ObjectType::Index,
+                FOREIGN => {
+                    if let Err(e) = self.expect_keyword(KEYS) {
+                        self.prev_token();
+                        return Err(e);
+                    }
+                    ObjectType::ForeignKey
+                }
                 TYPES => ObjectType::Type,
                 ROLES | USERS => ObjectType::Role,
                 CLUSTER => {
@@ -10224,6 +10273,7 @@ impl<'a> Parser<'a> {
                 SINKS,
                 METRIC,
                 INDEXES,
+                FOREIGN,
                 TYPES,
                 ROLES,
                 USERS,
@@ -10257,6 +10307,14 @@ impl<'a> Parser<'a> {
                     }
                 }
                 INDEXES => ObjectType::Index,
+                FOREIGN => {
+                    if self.parse_keyword(KEYS) {
+                        ObjectType::ForeignKey
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
                 TYPES => ObjectType::Type,
                 ROLES | USERS => ObjectType::Role,
                 CLUSTER => {

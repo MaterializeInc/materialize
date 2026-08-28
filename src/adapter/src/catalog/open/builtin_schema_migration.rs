@@ -450,6 +450,31 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_sources",
         ),
+        // `mz_audit_events` and `mz_comments` each gained a CASE arm, and
+        // `make_mz_indexes` inlines the builtin-index set as VALUES so adding
+        // `mz_foreign_keys_ind` changes its SQL too. Each fingerprint moves, so
+        // each needs an explicit replacement step. `mz_objects` also changed but
+        // is a plain view with no persisted shard, so it needs none. See the
+        // NOTE above: this version must stay at the workspace's current dev
+        // version until the change ships.
+        MigrationStep::replacement(
+            "26.40.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_audit_events",
+        ),
+        MigrationStep::replacement(
+            "26.40.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_comments",
+        ),
+        MigrationStep::replacement(
+            "26.40.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
     ]
 });
 

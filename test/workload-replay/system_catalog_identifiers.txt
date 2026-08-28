@@ -365,6 +365,7 @@ _float8
 float8in
 float8recv
 floor
+foreign_key_id
 format
 format_type
 form_of_use
@@ -843,6 +844,9 @@ mz_egress_ips
 mz_environment_id
 mz_error_if_null
 mz_expected_group_size_advice
+mz_foreign_key_columns
+mz_foreign_keys
+mz_foreign_keys_ind
 mz_format_privileges
 mz_frontiers
 mz_frontiers_ind
@@ -1032,6 +1036,7 @@ mz_show_database_privileges
 mz_show_databases
 mz_show_databases_ind
 mz_show_default_privileges
+mz_show_foreign_keys
 mz_show_indexes
 mz_show_indexes_ind
 mz_show_materialized_views
@@ -1326,8 +1331,12 @@ redacted_message
 redacted_sql
 redact_sql
 refclassid
+referenced_column
+referenced_id
 referenced_object_id
 referenced_object_ids
+referencing_column
+referencing_id
 referential_constraints
 refobjid
 refobjsubid

@@ -1,0 +1,274 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+reset-server
+
+# `CREATE FOREIGN KEY` planning, catalog visibility, and lifecycle. Nothing is
+# enforced, so these tests are about metadata, not about rejecting data.
+
+statement ok
+CREATE TABLE customers (id int NOT NULL, region text)
+
+statement ok
+CREATE TABLE orders (id int, customer_id int, region text, total numeric)
+
+# The flag is off by default.
+
+statement error CREATE FOREIGN KEY is not available
+CREATE FOREIGN KEY ON orders (customer_id) REFERENCES customers (id) NOT ENFORCED
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_foreign_key = true
+----
+COMPLETE 0
+
+# NOT ENFORCED is mandatory.
+
+statement error Expected NOT, found EOF
+CREATE FOREIGN KEY ON orders (customer_id) REFERENCES customers (id)
+
+statement ok
+CREATE FOREIGN KEY fk_orders_customers ON orders (customer_id) REFERENCES customers (id) NOT ENFORCED
+
+statement error foreign key .* already exists
+CREATE FOREIGN KEY fk_orders_customers ON orders (customer_id) REFERENCES customers (id) NOT ENFORCED
+
+statement ok
+CREATE FOREIGN KEY IF NOT EXISTS fk_orders_customers ON orders (customer_id) REFERENCES customers (id) NOT ENFORCED
+
+# IF NOT EXISTS without a name would be asking about a name the user never
+# chose.
+
+statement error Expected foreign key name, found ON
+CREATE FOREIGN KEY IF NOT EXISTS ON orders (customer_id) REFERENCES customers (id) NOT ENFORCED
+
+# An omitted name is inferred, and uniquified on collision.
+
+statement ok
+CREATE FOREIGN KEY ON orders (customer_id) REFERENCES customers (id) NOT ENFORCED
+
+statement ok
+CREATE FOREIGN KEY ON orders (customer_id) REFERENCES customers (id) NOT ENFORCED
+
+query T rowsort
+SELECT name FROM mz_internal.mz_foreign_keys
+----
+fk_orders_customers
+orders_customer_id_fkey
+orders_customer_id_fkey1
+
+# Composite keys name every column in the inferred name.
+
+statement ok
+CREATE FOREIGN KEY ON orders (customer_id, region) REFERENCES customers (id, region) NOT ENFORCED
+
+query T
+SELECT name FROM mz_internal.mz_foreign_keys WHERE name LIKE '%region%'
+----
+orders_customer_id_region_fkey
+
+# The column pairs keep the order the statement declared, which need not match
+# either relation's own column order.
+
+query ITT
+SELECT fkc.position, fkc.referencing_column, fkc.referenced_column
+FROM mz_internal.mz_foreign_key_columns fkc
+JOIN mz_internal.mz_foreign_keys fk ON fk.id = fkc.foreign_key_id
+WHERE fk.name = 'orders_customer_id_region_fkey'
+ORDER BY fkc.position
+----
+1  customer_id  id
+2  region  region
+
+# Both relations resolve, and the foreign key lives in the referencing
+# relation's schema.
+
+query TTT
+SELECT fk.name, o.name, r.name
+FROM mz_internal.mz_foreign_keys fk
+JOIN mz_objects o ON o.id = fk.referencing_id
+JOIN mz_objects r ON r.id = fk.referenced_id
+WHERE fk.name = 'fk_orders_customers'
+----
+fk_orders_customers  orders  customers
+
+query TT
+SELECT o.type, s.name
+FROM mz_objects o
+JOIN mz_schemas s ON s.id = o.schema_id
+WHERE o.name = 'fk_orders_customers'
+----
+foreign-key  public
+
+# SHOW
+
+query T
+SELECT create_sql FROM (SHOW CREATE FOREIGN KEY fk_orders_customers)
+----
+CREATE FOREIGN KEY fk_orders_customers ON materialize.public.orders (customer_id) REFERENCES materialize.public.customers (id) NOT ENFORCED;
+
+query TTT
+SELECT name, "on", "references" FROM (SHOW FOREIGN KEYS) WHERE name = 'orders_customer_id_region_fkey'
+----
+orders_customer_id_region_fkey  orders  customers
+
+# `key` renders each pair as the equality it asserts, in declared order.
+
+query T
+SELECT key::text FROM (SHOW FOREIGN KEYS) WHERE name = 'orders_customer_id_region_fkey'
+----
+{"customer_id = id","region = region"}
+
+# ON matches either side of the edge.
+
+query T rowsort
+SELECT name FROM (SHOW FOREIGN KEYS ON customers)
+----
+fk_orders_customers
+orders_customer_id_fkey
+orders_customer_id_fkey1
+orders_customer_id_region_fkey
+
+# Comments
+
+statement ok
+COMMENT ON FOREIGN KEY fk_orders_customers IS 'one order belongs to one customer'
+
+query TT
+SELECT object_type, object_sub_id IS NULL
+FROM mz_internal.mz_comments
+WHERE comment = 'one order belongs to one customer'
+----
+foreign-key  true
+
+query T
+SELECT comment FROM (SHOW FOREIGN KEYS) WHERE name = 'fk_orders_customers'
+----
+one order belongs to one customer
+
+# A foreign key has no columns of its own.
+
+statement error foreign key .* does not have columns
+COMMENT ON COLUMN fk_orders_customers.nope IS 'no'
+
+statement ok
+COMMENT ON FOREIGN KEY fk_orders_customers IS NULL
+
+# Validation
+
+statement error foreign key has 2 columns but references 1 column
+CREATE FOREIGN KEY ON orders (customer_id, region) REFERENCES customers (id) NOT ENFORCED
+
+statement error column "orders.nope" does not exist
+CREATE FOREIGN KEY ON orders (nope) REFERENCES customers (id) NOT ENFORCED
+
+statement error column "customer_id" appears twice in foreign key column list
+CREATE FOREIGN KEY ON orders (customer_id, customer_id) REFERENCES customers (id, region) NOT ENFORCED
+
+statement error CREATE FOREIGN KEY types text and integer cannot be matched
+CREATE FOREIGN KEY ON orders (region) REFERENCES customers (id) NOT ENFORCED
+
+# Numeric widths and precisions differ but still join, so they pair.
+
+statement ok
+CREATE TABLE widths (small_id int2, big_id int8, exact numeric(10,2))
+
+statement ok
+CREATE FOREIGN KEY w1 ON widths (big_id) REFERENCES customers (id) NOT ENFORCED
+
+statement ok
+CREATE FOREIGN KEY w2 ON widths (exact) REFERENCES customers (id) NOT ENFORCED
+
+statement ok
+DROP TABLE widths CASCADE
+
+# Foreign keys work over every relation kind, not just tables.
+
+statement ok
+CREATE VIEW customer_ids AS SELECT id FROM customers
+
+statement ok
+CREATE MATERIALIZED VIEW order_totals AS SELECT customer_id, sum(total) AS total FROM orders GROUP BY customer_id
+
+statement ok
+CREATE FOREIGN KEY fk_view ON order_totals (customer_id) REFERENCES customer_ids (id) NOT ENFORCED
+
+# Self-reference is a legitimate edge.
+
+statement ok
+CREATE TABLE employees (id int, manager_id int)
+
+statement ok
+CREATE FOREIGN KEY fk_self ON employees (manager_id) REFERENCES employees (id) NOT ENFORCED
+
+# Non-relations cannot be either side.
+
+statement ok
+CREATE INDEX customers_idx ON customers (id)
+
+statement error foreign key cannot reference .* because it is a index
+CREATE FOREIGN KEY ON orders (customer_id) REFERENCES customers_idx (id) NOT ENFORCED
+
+statement error foreign key cannot reference .* because it is a foreign key
+CREATE FOREIGN KEY ON orders (customer_id) REFERENCES fk_self (id) NOT ENFORCED
+
+# Dropping either relation cascades to the foreign key, and like an index it
+# does not block a non-cascade DROP.
+
+statement ok
+CREATE TABLE parent (id int)
+
+statement ok
+CREATE TABLE child (parent_id int)
+
+statement ok
+CREATE FOREIGN KEY fk_cascade ON child (parent_id) REFERENCES parent (id) NOT ENFORCED
+
+query I
+SELECT count(*) FROM mz_internal.mz_foreign_keys WHERE name = 'fk_cascade'
+----
+1
+
+statement ok
+DROP TABLE parent
+
+query I
+SELECT count(*) FROM mz_internal.mz_foreign_keys WHERE name = 'fk_cascade'
+----
+0
+
+# `child` survives its foreign key being dropped out from under it.
+
+query I
+SELECT count(*) FROM mz_tables WHERE name = 'child'
+----
+1
+
+statement ok
+DROP FOREIGN KEY fk_self
+
+query I
+SELECT count(*) FROM mz_internal.mz_foreign_keys WHERE name = 'fk_self'
+----
+0
+
+# The column pairs go with it.
+
+statement ok
+DROP FOREIGN KEY fk_orders_customers
+
+query I
+SELECT count(*)
+FROM mz_internal.mz_foreign_key_columns fkc
+LEFT JOIN mz_internal.mz_foreign_keys fk ON fk.id = fkc.foreign_key_id
+WHERE fk.id IS NULL
+----
+0
