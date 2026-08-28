@@ -4436,6 +4436,61 @@ fn test_durable_oids() {
     }
 }
 
+// Applying a materialized view replacement retains the target's existing
+// GlobalIds as prior versions while swapping in the replacement's definition.
+// The durable expression cache is keyed by GlobalId under the invariant that
+// the definition behind a GlobalId never changes, so the apply must invalidate
+// the cached expressions of the retained GlobalIds. If it doesn't, the next
+// bootstrap installs the stale optimized expression for the item, and if the
+// old definition's dependencies have since been dropped, timeline resolution
+// panics with "catalog out of sync" on every startup.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_replacement_materialized_view_invalidates_expression_cache() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default()
+        .data_directory(data_dir.path())
+        .with_system_parameter_default(
+            "enable_replacement_materialized_views".to_string(),
+            "true".to_string(),
+        );
+
+    {
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.batch_execute("CREATE TABLE t1 (a int)").unwrap();
+        client.batch_execute("INSERT INTO t1 VALUES (1)").unwrap();
+        client
+            .batch_execute("CREATE VIEW v1 AS SELECT a FROM t1")
+            .unwrap();
+        client
+            .batch_execute("CREATE MATERIALIZED VIEW mv AS SELECT a FROM v1")
+            .unwrap();
+        client.batch_execute("CREATE TABLE t2 (a int)").unwrap();
+        client.batch_execute("INSERT INTO t2 VALUES (2)").unwrap();
+        client
+            .batch_execute("CREATE VIEW v2 AS SELECT a FROM t2")
+            .unwrap();
+        client
+            .batch_execute("CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a FROM v2")
+            .unwrap();
+        client
+            .batch_execute("ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp")
+            .unwrap();
+        client.batch_execute("DROP VIEW v1").unwrap();
+        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
+        assert_eq!(row.get::<_, i32>(0), 2, "pre-restart");
+    }
+
+    {
+        let server = harness.start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
+        assert_eq!(row.get::<_, i32>(0), 2);
+    }
+}
+
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]
