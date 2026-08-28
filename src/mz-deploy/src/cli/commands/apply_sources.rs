@@ -57,6 +57,11 @@ pub async fn plan(
         .check_catalog_objects_exist(&target_ids, OBJECT_KIND.catalog_table())
         .await
         .map_err(CliError::Connection)?;
+    let current_comments = client
+        .introspection()
+        .get_database_object_comments(&existing, OBJECT_KIND.catalog_object_type())
+        .await
+        .map_err(CliError::Connection)?;
 
     let schemas: BTreeSet<_> = target_objects
         .iter()
@@ -84,6 +89,7 @@ pub async fn plan(
                 &obj_id,
                 typed_obj,
                 OBJECT_KIND,
+                current_comments.get(&obj_id).map_or(&[], Vec::as_slice),
             )
             .await?;
             ObjectAction::UpToDate
@@ -98,6 +104,7 @@ pub async fn plan(
                 &obj_id,
                 typed_obj,
                 OBJECT_KIND,
+                current_comments.get(&obj_id).map_or(&[], Vec::as_slice),
             )
             .await?;
             ObjectAction::Created

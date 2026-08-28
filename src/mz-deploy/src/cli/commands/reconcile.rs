@@ -10,9 +10,12 @@
 //! Shared object metadata for catalog reconciliation.
 
 use mz_sql_parser::ast::{
-    GrantTargetSpecification, GrantTargetSpecificationInner, Ident, ObjectType, Raw,
-    UnresolvedItemName, UnresolvedObjectName,
+    ColumnName, CommentObjectType, CommentStatement, GrantTargetSpecification,
+    GrantTargetSpecificationInner, Ident, ObjectType, Raw, RawClusterName, RawItemName,
+    RawNetworkPolicyName, UnresolvedItemName, UnresolvedObjectName,
 };
+
+use crate::cli::commands::comments::CommentTarget;
 
 use crate::project::ir::object_id::ObjectId;
 
@@ -24,6 +27,7 @@ pub enum ObjectKind {
     Secret,
     Connection,
     Cluster,
+    Role,
     NetworkPolicy,
 }
 
@@ -36,7 +40,19 @@ impl ObjectKind {
             Self::Secret => "mz_secrets",
             Self::Connection => "mz_connections",
             Self::Cluster => "mz_clusters",
+            Self::Role => "mz_roles",
             Self::NetworkPolicy => "mz_network_policies",
+        }
+    }
+
+    /// The object type stored in `mz_objects`.
+    pub fn catalog_object_type(self) -> &'static str {
+        match self {
+            Self::Table => "table",
+            Self::Source => "source",
+            Self::Secret => "secret",
+            Self::Connection => "connection",
+            _ => unreachable!("{} is not stored in mz_objects", self.label()),
         }
     }
 
@@ -48,6 +64,7 @@ impl ObjectKind {
             Self::Connection => "connection",
             Self::Cluster => "cluster",
             Self::NetworkPolicy => "network policy",
+            Self::Role => unreachable!("a role has no default privileges"),
         }
     }
 
@@ -58,6 +75,7 @@ impl ObjectKind {
             Self::Source => &["SELECT"],
             Self::Secret | Self::Connection | Self::NetworkPolicy => &["USAGE"],
             Self::Cluster => &["USAGE", "CREATE"],
+            Self::Role => &[],
         }
     }
 
@@ -69,6 +87,7 @@ impl ObjectKind {
             Self::Connection => ObjectType::Connection,
             Self::Cluster => ObjectType::Cluster,
             Self::NetworkPolicy => ObjectType::NetworkPolicy,
+            Self::Role => unreachable!("a role has no grant target"),
         }
     }
 
@@ -80,6 +99,7 @@ impl ObjectKind {
             Self::Secret => "secret",
             Self::Connection => "connection",
             Self::Cluster => "cluster",
+            Self::Role => "role",
             Self::NetworkPolicy => "network policy",
         }
     }
@@ -107,7 +127,7 @@ impl<'a> ReconcileTarget<'a> {
     pub fn named(kind: ObjectKind, name: &'a str) -> Self {
         debug_assert!(matches!(
             kind,
-            ObjectKind::Cluster | ObjectKind::NetworkPolicy
+            ObjectKind::Cluster | ObjectKind::Role | ObjectKind::NetworkPolicy
         ));
         Self::Named { kind, name }
     }
@@ -153,4 +173,82 @@ impl<'a> ReconcileTarget<'a> {
             object_spec_inner: GrantTargetSpecificationInner::Objects { names: vec![name] },
         }
     }
+
+    /// Build a statement that sets or clears one comment target.
+    pub fn comment_statement(
+        &self,
+        target: &CommentTarget,
+        comment: Option<String>,
+    ) -> CommentStatement<Raw> {
+        let object = match target {
+            CommentTarget::Column(column) => {
+                let Self::Item { id, .. } = self else {
+                    unreachable!("a {} cannot carry a column comment", self.kind().label());
+                };
+                CommentObjectType::Column {
+                    name: ColumnName {
+                        relation: item_name(id),
+                        column: Ident::new_unchecked(column),
+                    },
+                }
+            }
+            CommentTarget::Object => match self {
+                Self::Item {
+                    kind: ObjectKind::Table,
+                    id,
+                } => CommentObjectType::Table {
+                    name: item_name(id),
+                },
+                Self::Item {
+                    kind: ObjectKind::Source,
+                    id,
+                } => CommentObjectType::Source {
+                    name: item_name(id),
+                },
+                Self::Item {
+                    kind: ObjectKind::Secret,
+                    id,
+                } => CommentObjectType::Secret {
+                    name: item_name(id),
+                },
+                Self::Item {
+                    kind: ObjectKind::Connection,
+                    id,
+                } => CommentObjectType::Connection {
+                    name: item_name(id),
+                },
+                Self::Named {
+                    kind: ObjectKind::Cluster,
+                    name,
+                } => CommentObjectType::Cluster {
+                    name: RawClusterName::Unresolved(Ident::new_unchecked(*name)),
+                },
+                Self::Named {
+                    kind: ObjectKind::Role,
+                    name,
+                } => CommentObjectType::Role {
+                    name: Ident::new_unchecked(*name),
+                },
+                Self::Named {
+                    kind: ObjectKind::NetworkPolicy,
+                    name,
+                } => CommentObjectType::NetworkPolicy {
+                    name: RawNetworkPolicyName::Unresolved(Ident::new_unchecked(*name)),
+                },
+                Self::Item { kind, .. } | Self::Named { kind, .. } => {
+                    unreachable!("invalid {} target identity", kind.label())
+                }
+            },
+        };
+        CommentStatement { object, comment }
+    }
+}
+
+/// The fully-qualified name of a schema-qualified object.
+fn item_name(id: &ObjectId) -> RawItemName {
+    RawItemName::Name(UnresolvedItemName::qualified(&[
+        Ident::new_unchecked(id.expect_database()),
+        Ident::new_unchecked(id.schema()),
+        Ident::new_unchecked(id.object()),
+    ]))
 }

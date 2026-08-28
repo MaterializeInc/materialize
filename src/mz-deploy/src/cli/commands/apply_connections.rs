@@ -16,7 +16,7 @@ use crate::cli::executor::ObjectAction;
 use crate::cli::executor::{
     ApplyPlan, ApplyResult, DeploymentExecutor, ObjectResult, compile_apply_project_and_connect,
 };
-use crate::client::Client;
+use crate::client::{Client, ObjectComment};
 use crate::config::Settings;
 use crate::project;
 use crate::project::ast::Statement;
@@ -54,6 +54,7 @@ impl Connections {
         executor: &DeploymentExecutor<'_>,
         obj_id: &ObjectId,
         typed_obj: &compiled::DatabaseObject,
+        current_comments: &[ObjectComment],
         live_sql: Option<&str>,
     ) -> Result<ObjectAction, CliError> {
         let Statement::CreateConnection(ref create_stmt) = typed_obj.stmt else {
@@ -108,6 +109,7 @@ impl Connections {
             obj_id,
             typed_obj,
             OBJECT_KIND,
+            current_comments,
         )
         .await?;
 
@@ -120,6 +122,7 @@ impl Connections {
         executor: &DeploymentExecutor<'_>,
         obj_id: &ObjectId,
         typed_obj: &compiled::DatabaseObject,
+        current_comments: &[ObjectComment],
     ) -> Result<ObjectAction, CliError> {
         let resolved_stmt = match self
             .resolver
@@ -138,6 +141,7 @@ impl Connections {
             obj_id,
             typed_obj,
             OBJECT_KIND,
+            current_comments,
         )
         .await?;
 
@@ -174,6 +178,11 @@ pub async fn plan(
         .check_catalog_objects_exist(&target_ids, OBJECT_KIND.catalog_table())
         .await
         .map_err(CliError::Connection)?;
+    let current_comments = client
+        .introspection()
+        .get_database_object_comments(&existing, OBJECT_KIND.catalog_object_type())
+        .await
+        .map_err(CliError::Connection)?;
     let live_sqls = client
         .introspection()
         .get_connection_create_sqls(&existing)
@@ -205,12 +214,19 @@ pub async fn plan(
                     executor,
                     &obj_id,
                     typed_obj,
+                    current_comments.get(&obj_id).map_or(&[], Vec::as_slice),
                     live_sqls.get(&obj_id).map(String::as_str),
                 )
                 .await?
         } else {
             connections
-                .handle_new(client, executor, &obj_id, typed_obj)
+                .handle_new(
+                    client,
+                    executor,
+                    &obj_id,
+                    typed_obj,
+                    current_comments.get(&obj_id).map_or(&[], Vec::as_slice),
+                )
                 .await?
         };
         results.push(ObjectResult {

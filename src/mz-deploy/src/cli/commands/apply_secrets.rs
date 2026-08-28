@@ -16,7 +16,7 @@ use crate::cli::executor::ObjectAction;
 use crate::cli::executor::{
     ApplyPlan, ApplyResult, DeploymentExecutor, ObjectResult, compile_apply_project_and_connect,
 };
-use crate::client::Client;
+use crate::client::{Client, ObjectComment};
 use crate::config::Settings;
 use crate::project;
 use crate::project::ast::Statement;
@@ -50,6 +50,7 @@ impl Secrets {
         executor: &DeploymentExecutor<'_>,
         obj_id: &ObjectId,
         typed_obj: &compiled::DatabaseObject,
+        current_comments: &[ObjectComment],
     ) -> Result<(ObjectAction, Vec<String>), CliError> {
         let Statement::CreateSecret(ref create_stmt) = typed_obj.stmt else {
             unreachable!("filtered for CreateSecret");
@@ -68,6 +69,7 @@ impl Secrets {
             obj_id,
             typed_obj,
             OBJECT_KIND,
+            current_comments,
         )
         .await?;
 
@@ -80,6 +82,7 @@ impl Secrets {
         executor: &DeploymentExecutor<'_>,
         obj_id: &ObjectId,
         typed_obj: &compiled::DatabaseObject,
+        current_comments: &[ObjectComment],
     ) -> Result<(ObjectAction, Vec<String>), CliError> {
         let Statement::CreateSecret(ref create_stmt) = typed_obj.stmt else {
             unreachable!("filtered for CreateSecret");
@@ -93,6 +96,7 @@ impl Secrets {
             obj_id,
             typed_obj,
             OBJECT_KIND,
+            current_comments,
         )
         .await?;
 
@@ -129,6 +133,11 @@ pub async fn plan(
         .check_catalog_objects_exist(&target_ids, OBJECT_KIND.catalog_table())
         .await
         .map_err(CliError::Connection)?;
+    let current_comments = client
+        .introspection()
+        .get_database_object_comments(&existing, OBJECT_KIND.catalog_object_type())
+        .await
+        .map_err(CliError::Connection)?;
 
     let schemas: BTreeSet<_> = target_objects
         .iter()
@@ -150,11 +159,23 @@ pub async fn plan(
         executor.take_statements();
         let (action, redacted_statements) = if existing.contains(&obj_id) {
             secrets
-                .handle_existing(client, executor, &obj_id, typed_obj)
+                .handle_existing(
+                    client,
+                    executor,
+                    &obj_id,
+                    typed_obj,
+                    current_comments.get(&obj_id).map_or(&[], Vec::as_slice),
+                )
                 .await?
         } else {
             secrets
-                .handle_new(client, executor, &obj_id, typed_obj)
+                .handle_new(
+                    client,
+                    executor,
+                    &obj_id,
+                    typed_obj,
+                    current_comments.get(&obj_id).map_or(&[], Vec::as_slice),
+                )
                 .await?
         };
         results.push(ObjectResult {
