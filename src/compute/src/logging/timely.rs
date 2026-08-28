@@ -24,12 +24,13 @@ use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::replay::MzReplay;
-use timely::dataflow::Scope;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
-use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator::empty;
+use timely::dataflow::operators::{Leave, Operator};
+use timely::dataflow::{Scope, StreamVec};
 use timely::logging::{
     ChannelsEvent, MessagesEvent, OperatesEvent, ParkEvent, ScheduleEvent, ShutdownEvent,
     TimelyEvent,
@@ -47,9 +48,13 @@ use crate::typedefs::{KeyBatcher, KeyValBatcher, RowRowSpine};
 use mz_row_spine::RowRowBuilder;
 
 /// The return type of [`construct`].
-pub(super) struct Return {
+pub(super) struct Return<'scope> {
     /// Collections to export.
     pub collections: BTreeMap<LogVariant, LogCollection>,
+    /// Maps an operator id to the index of the dataflow that contains it.
+    ///
+    /// Covers only the operators of the worker that emits it.
+    pub operator_to_dataflow: StreamVec<'scope, Timestamp, Update<(usize, usize)>>,
 }
 
 /// Constructs the logging dataflow fragment for timely logs.
@@ -58,13 +63,14 @@ pub(super) struct Return {
 /// * `scope`: The Timely scope hosting the log analysis dataflow.
 /// * `config`: Logging configuration
 /// * `event_queue`: The source to read log events from.
-pub(super) fn construct(
-    scope: Scope<'_, Timestamp>,
+pub(super) fn construct<'scope>(
+    scope: Scope<'scope, Timestamp>,
     config: &LoggingConfig,
     event_queue: EventQueue<Vec<(Duration, TimelyEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
     storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
-) -> Return {
+) -> Return<'scope> {
+    let outer = scope;
     scope.scoped("timely logging", move |scope| {
         let enable_logging = config.enable_logging;
         let (logs, token) = if enable_logging {
@@ -233,6 +239,34 @@ pub(super) fn construct(
                 }
             },
         );
+
+        // Project the address log down to the enclosing dataflow. Taking the first element of the
+        // address is what identifies the dataflow; deeper elements address operators nested inside
+        // it. Both `Operates` and `Channels` events feed `addresses`, and timely draws operator and
+        // channel identifiers from one counter, so the ids here do not collide.
+        let operator_to_dataflow = addresses
+            .clone()
+            .unary::<CapacityContainerBuilder<Vec<_>>, _, _, _>(
+                Pipeline,
+                "OperatorToDataflow",
+                |_cap, _info| {
+                    move |input, output| {
+                        input.for_each_time(|time, data| {
+                            let mut session = output.session_with_builder(&time);
+                            for container in data {
+                                for ((op, address), time, diff) in container.iter() {
+                                    // A record with an empty address belongs to no dataflow.
+                                    // Timely does not emit one today, but skipping beats indexing
+                                    // out of bounds in a logging path.
+                                    if let Some(dataflow) = address.first() {
+                                        session.give(((*op, *dataflow), *time, *diff));
+                                    }
+                                }
+                            }
+                        });
+                    }
+                },
+            );
 
         // Types to make rustfmt happy.
         type KVB<K, V, T, D> = KeyValBatcher<K, V, T, D>;
@@ -426,7 +460,10 @@ pub(super) fn construct(
             }
         }
 
-        Return { collections }
+        Return {
+            collections,
+            operator_to_dataflow: operator_to_dataflow.leave(outer),
+        }
     })
 }
 

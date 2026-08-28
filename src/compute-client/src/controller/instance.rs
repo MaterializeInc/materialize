@@ -64,8 +64,9 @@ use crate::protocol::command::{
 };
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
-    ComputeResponse, CopyToResponse, FrontiersResponse, PeekError as ProtocolPeekError,
-    PeekResponse, StatusResponse, SubscribeBatch, SubscribeResponse,
+    ComputeResponse, CopyToResponse, DataflowLimitStatus, FrontiersResponse,
+    PeekError as ProtocolPeekError, PeekResponse, StatusResponse, SubscribeBatch,
+    SubscribeResponse,
 };
 
 #[derive(Error, Debug)]
@@ -1599,6 +1600,7 @@ impl Instance {
             refresh_schedule: dataflow.refresh_schedule,
             debug_name: dataflow.debug_name,
             time_dependence: dataflow.time_dependence,
+            heap_size_limit: dataflow.heap_size_limit,
         };
 
         if augmented_dataflow.is_transient() {
@@ -2301,9 +2303,50 @@ impl Instance {
         }
     }
 
-    fn handle_status_response(&self, response: StatusResponse, _replica_id: ReplicaId) {
+    fn handle_status_response(&mut self, response: StatusResponse, replica_id: ReplicaId) {
         match response {
-            StatusResponse::Placeholder => {}
+            StatusResponse::DataflowLimitExceeded(status) => {
+                self.handle_dataflow_limit_status(replica_id, status)
+            }
+        }
+    }
+
+    /// Handle a report that a dataflow exceeded its heap size limit.
+    ///
+    /// The replica does not tear the dataflow down itself, because controller clients do not
+    /// expect dataflows to disappear on their own. Instead we fail the peek or subscribe that
+    /// reads from it and rely on the client to cancel, which drops the dataflow through the
+    /// ordinary path.
+    fn handle_dataflow_limit_status(&mut self, replica_id: ReplicaId, status: DataflowLimitStatus) {
+        tracing::debug!(%replica_id, ?status, "dataflow limit exceeded");
+
+        if let Some(subscribe) = self.subscribes.get(&status.collection_id) {
+            self.deliver_response(ComputeControllerResponse::SubscribeResponse(
+                status.collection_id,
+                SubscribeBatch {
+                    lower: subscribe.frontier.clone(),
+                    upper: subscribe.frontier.clone(),
+                    updates: Err("Dataflow limit exceeded".to_string()),
+                },
+            ))
+        } else if let Some(uuid) = self
+            .peeks
+            .iter()
+            .find(|(_, peek)| peek.read_hold.id() == status.collection_id)
+            .map(|(uuid, _)| *uuid)
+        {
+            self.cancel_peek(
+                uuid,
+                PeekResponse::Error(ProtocolPeekError::unstructured("Dataflow limit exceeded")),
+            );
+        } else {
+            // Only peeks and subscribes carry a limit today, so anything else means a controller
+            // client set `heap_size_limit` on a dataflow we have no way to fail.
+            tracing::error!(
+                %replica_id,
+                collection_id = %status.collection_id,
+                "dataflow limit exceeded for collection that is neither a peek nor a subscribe",
+            );
         }
     }
 

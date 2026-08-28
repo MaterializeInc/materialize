@@ -381,9 +381,19 @@ impl SubscribeBatch {
 /// Status updates replicas can report to the controller.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum StatusResponse {
-    /// No status responses are implemented currently, but we're leaving the infrastructure around
-    /// in anticipation of materialize#31246.
-    Placeholder,
+    /// Reports limit violations for dataflows.
+    DataflowLimitExceeded(DataflowLimitStatus),
+}
+
+/// A dataflow exceeded its heap size limit.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DataflowLimitStatus {
+    /// The ID of the compute collection exported by the dataflow.
+    pub collection_id: GlobalId,
+    /// The dataflow's heap usage at the time it was observed over the limit, in bytes.
+    pub heap_size: u64,
+    /// The limit that was exceeded, in bytes.
+    pub limit: u64,
 }
 
 #[cfg(test)]

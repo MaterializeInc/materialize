@@ -33,11 +33,14 @@ use timely::progress::reachability::logging::{TrackerEvent, TrackerEventBuilder}
 use crate::arrangement::manager::TraceBundle;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
+use crate::logging::watchdog::DataflowHeapSizes;
 use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{ErrBatcher, ErrBuilder};
 
 /// Initialize logging dataflows.
+///
+/// `dataflow_heap_sizes` receives the watchdog's per-dataflow byte totals.
 ///
 /// Returns a logger for compute events, and for each `LogVariant` a trace bundle usable for
 /// retrieving logged records as well as the index of the exporting dataflow.
@@ -48,6 +51,7 @@ pub fn initialize(
     worker_config: Rc<ConfigSet>,
     workers_per_process: usize,
     storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
+    dataflow_heap_sizes: DataflowHeapSizes,
 ) -> LoggingTraces {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
@@ -74,6 +78,7 @@ pub fn initialize(
         worker_config,
         workers_per_process,
         storage_log_reader,
+        dataflow_heap_sizes,
     };
 
     // Depending on whether we should log the creation of the logging dataflows, we register the
@@ -114,6 +119,8 @@ struct LoggingContext<'a> {
     workers_per_process: usize,
     /// Optional reader for storage timely logging events.
     storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
+    /// Receives the watchdog's per-dataflow byte totals.
+    dataflow_heap_sizes: DataflowHeapSizes,
 }
 
 pub(crate) struct LoggingTraces {
@@ -134,6 +141,7 @@ impl LoggingContext<'_> {
 
             let super::timely::Return {
                 collections: timely_collections,
+                operator_to_dataflow,
             } = super::timely::construct(
                 scope,
                 self.config,
@@ -150,6 +158,7 @@ impl LoggingContext<'_> {
 
             let super::differential::Return {
                 collections: differential_collections,
+                batcher_heap_size,
             } = super::differential::construct(
                 scope,
                 self.config,
@@ -160,6 +169,7 @@ impl LoggingContext<'_> {
 
             let super::compute::Return {
                 collections: compute_collections,
+                arrangement_heap_size,
             } = super::compute::construct(
                 scope.clone(),
                 scope.activations(),
@@ -192,6 +202,13 @@ impl LoggingContext<'_> {
                 self.workers_per_process,
             );
             collections.extend(resource_usage_collections);
+
+            super::watchdog::construct(super::watchdog::Streams {
+                arrangement_heap_size,
+                batcher_heap_size,
+                operator_to_dataflow,
+                dataflow_heap_sizes: Rc::clone(&self.dataflow_heap_sizes),
+            });
 
             let errs = scope.scoped("logging errors", |scope| {
                 let collection: KeyCollection<_, DataflowErrorSer, Diff> =

@@ -64,8 +64,6 @@ const ColumnFilterTrigger = <TData,>({
   const isActive = header.column.getFilterValue() !== undefined;
   return (
     <Popover
-      isLazy
-      lazyBehavior="unmount"
       gutter={2}
       modifiers={viewportOverflowModifier}
       variant="dropdown"

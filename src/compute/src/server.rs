@@ -483,6 +483,7 @@ impl<'w> Worker<'w> {
                 compute_state.process_peeks();
                 compute_state.process_subscribes();
                 compute_state.process_copy_tos();
+                compute_state.process_limits();
             }
         }
     }

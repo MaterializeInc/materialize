@@ -697,6 +697,14 @@ pub const MV_SINK_ADVANCE_PERSIST_FRONTIERS: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether to render the logging watchdog dataflow fragment.
+pub const ENABLE_COMPUTE_HEAP_SIZE_LIMIT: Config<bool> = Config::new(
+    "enable_compute_heap_size_limit",
+    false,
+    "Whether to enable the heap size limit feature.",
+    ParameterScope::Replica,
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -733,6 +741,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPUTE_FLAT_MAP_FUEL)
         .add(&CONSOLIDATING_VEC_GROWTH_DAMPENER)
         .add(&ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION)
+        .add(&ENABLE_COMPUTE_HEAP_SIZE_LIMIT)
         .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)

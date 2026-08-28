@@ -1136,6 +1136,8 @@ Arrange Timely(MessagesSent)
 Arrange Timely(Operates)
 Arrange Timely(Parks)
 Arrange Timely(Reachability)
+Arrange watchdog operator_to_dataflow
+Arrange watchdog operator_to_heap_size
 
 statement ok
 COMMIT

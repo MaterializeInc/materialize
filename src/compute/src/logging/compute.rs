@@ -29,10 +29,10 @@ use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
-use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator::empty;
+use timely::dataflow::operators::{Leave, Operator};
 use timely::dataflow::{Scope, StreamVec};
 use timely::scheduling::activate::{Activations, Activator};
 use tracing::error;
@@ -40,8 +40,8 @@ use uuid::Uuid;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::{
-    ComputeLog, EventQueue, LogCollection, LogVariant, OutputSessionColumnar, PermutedRowPacker,
-    SharedLoggingState, Update,
+    ComputeLog, EventQueue, LogCollection, LogVariant, OutputSessionColumnar, OutputSessionVec,
+    PermutedRowPacker, SharedLoggingState, Update,
 };
 use crate::typedefs::RowRowSpine;
 use mz_row_spine::RowRowBuilder;
@@ -298,9 +298,13 @@ impl LirMetadata {
 }
 
 /// The return type of the [`construct`] function.
-pub(super) struct Return {
+pub(super) struct Return<'scope> {
     /// Collections returned by [`construct`].
     pub collections: BTreeMap<LogVariant, LogCollection>,
+    /// Per-operator arrangement heap size deltas, in bytes carried in the diff field.
+    ///
+    /// Covers only the operators of the worker that emits it.
+    pub arrangement_heap_size: StreamVec<'scope, Timestamp, Update<(usize, ())>>,
 }
 
 /// Constructs the logging dataflow fragment for compute logs.
@@ -318,9 +322,10 @@ pub(super) fn construct<'scope>(
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
-) -> Return {
+) -> Return<'scope> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
 
+    let outer = scope;
     scope.scoped("compute logging", move |scope| {
         let enable_logging = config.enable_logging;
         let (logs, token) = if enable_logging {
@@ -351,6 +356,8 @@ pub(super) fn construct<'scope>(
         let mut peek_duration_out = OutputBuilder::from(peek_duration_out);
         let (arrangement_heap_size_out, arrangement_heap_size) = demux.new_output();
         let mut arrangement_heap_size_out = OutputBuilder::from(arrangement_heap_size_out);
+        let (arrangement_heap_size_raw_out, arrangement_heap_size_raw) = demux.new_output();
+        let mut arrangement_heap_size_raw_out = OutputBuilder::from(arrangement_heap_size_raw_out);
         let (arrangement_heap_capacity_out, arrangement_heap_capacity) = demux.new_output();
         let mut arrangement_heap_capacity_out = OutputBuilder::from(arrangement_heap_capacity_out);
         let (arrangement_heap_allocations_out, arrangement_heap_allocations) = demux.new_output();
@@ -376,6 +383,7 @@ pub(super) fn construct<'scope>(
                 let mut peek = peek_out.activate();
                 let mut peek_duration = peek_duration_out.activate();
                 let mut arrangement_heap_size = arrangement_heap_size_out.activate();
+                let mut arrangement_heap_size_raw = arrangement_heap_size_raw_out.activate();
                 let mut arrangement_heap_capacity = arrangement_heap_capacity_out.activate();
                 let mut arrangement_heap_allocations = arrangement_heap_allocations_out.activate();
                 let mut error_count = error_count_out.activate();
@@ -396,6 +404,8 @@ pub(super) fn construct<'scope>(
                         arrangement_heap_capacity: arrangement_heap_capacity
                             .session_with_builder(&cap),
                         arrangement_heap_size: arrangement_heap_size.session_with_builder(&cap),
+                        arrangement_heap_size_raw: arrangement_heap_size_raw
+                            .session_with_builder(&cap),
                         error_count: error_count.session_with_builder(&cap),
                         hydration_time: hydration_time.session_with_builder(&cap),
                         operator_hydration_status: operator_hydration_status
@@ -461,7 +471,10 @@ pub(super) fn construct<'scope>(
             }
         }
 
-        Return { collections }
+        Return {
+            collections,
+            arrangement_heap_size: arrangement_heap_size_raw.leave(outer),
+        }
     })
 }
 
@@ -836,6 +849,7 @@ struct DemuxOutput<'a, 'b> {
     arrangement_heap_allocations: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     arrangement_heap_capacity: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     arrangement_heap_size: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    arrangement_heap_size_raw: OutputSessionVec<'a, 'b, Update<(usize, ())>>,
     hydration_time: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     operator_hydration_status: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     error_count: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
@@ -1266,8 +1280,12 @@ impl DemuxHandler<'_, '_, '_> {
 
         state.size += delta_size;
 
-        let datum = self.state.pack_arrangement_heap_size_update(operator_id);
         let diff = Diff::cast_from(delta_size);
+        self.output
+            .arrangement_heap_size_raw
+            .give(((operator_id, ()), ts, diff));
+
+        let datum = self.state.pack_arrangement_heap_size_update(operator_id);
         self.output.arrangement_heap_size.give((datum, ts, diff));
     }
 

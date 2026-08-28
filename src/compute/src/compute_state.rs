@@ -26,11 +26,12 @@ use mz_compute_client::protocol::command::{
 };
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
-    ComputeResponse, CopyToResponse, FrontiersResponse, PeekError, PeekResponse, SubscribeResponse,
+    ComputeResponse, CopyToResponse, DataflowLimitStatus, FrontiersResponse, PeekError,
+    PeekResponse, StatusResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
-    ENABLE_PEEK_RESPONSE_STASH, ENABLE_PEEK_ROW_ITERATION_LIMIT,
+    ENABLE_COMPUTE_HEAP_SIZE_LIMIT, ENABLE_PEEK_RESPONSE_STASH, ENABLE_PEEK_ROW_ITERATION_LIMIT,
     PEEK_RESPONSE_STASH_BATCH_MAX_RUNS, PEEK_RESPONSE_STASH_THRESHOLD_BYTES,
     PEEK_ROW_ITERATION_LIMIT, PEEK_STASH_BATCH_SIZE, PEEK_STASH_NUM_BATCHES,
 };
@@ -73,6 +74,7 @@ use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
 use crate::logging::initialize::LoggingTraces;
+use crate::logging::watchdog::DataflowHeapSizes;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
@@ -247,6 +249,11 @@ pub struct ComputeState {
 
     /// The storage worker forwards its introspection logs to the compute worker.
     pub storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
+
+    /// Heap usage in bytes per dataflow, maintained by the logging watchdog.
+    ///
+    /// A worker sees only the dataflows it owns; see [`crate::logging::watchdog`].
+    pub dataflow_heap_sizes: DataflowHeapSizes,
 }
 
 impl ComputeState {
@@ -288,6 +295,7 @@ impl ComputeState {
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
             storage_log_reader,
+            dataflow_heap_sizes: Rc::default(),
         }
     }
 
@@ -732,6 +740,7 @@ impl<'a> ActiveComputeState<'a> {
                     .map(|t| mz_ore::now::to_datetime(t.into())),
                 plan_until = ?dataflow.until.elements(),
                 until = ?until.elements(),
+                heap_size_limit = ?dataflow.heap_size_limit,
                 "creating dataflow",
             );
         } else {
@@ -747,6 +756,7 @@ impl<'a> ActiveComputeState<'a> {
                     .map(|t| mz_ore::now::to_datetime(t.into())),
                 plan_until = ?dataflow.until.elements(),
                 until = ?until.elements(),
+                heap_size_limit = ?dataflow.heap_size_limit,
                 "creating dataflow",
             );
         };
@@ -808,6 +818,21 @@ impl<'a> ActiveComputeState<'a> {
             self.compute_state
                 .suspended_collections
                 .insert(id, Rc::clone(&suspension_token));
+        }
+
+        // Only transient dataflows carry a limit: they are the peek and subscribe dataflows the
+        // controller can fail on our report. A limit on anything else has nothing to cancel.
+        if ENABLE_COMPUTE_HEAP_SIZE_LIMIT.get(&self.compute_state.worker_config)
+            && dataflow.is_transient()
+        {
+            for id in dataflow.export_ids() {
+                let collection = self
+                    .compute_state
+                    .collections
+                    .get_mut(&id)
+                    .expect("collection must exist");
+                collection.heap_size_limit = dataflow.heap_size_limit;
+            }
         }
 
         crate::render::build_compute_dataflow(
@@ -955,6 +980,7 @@ impl<'a> ActiveComputeState<'a> {
             Rc::clone(&self.compute_state.worker_config),
             self.compute_state.workers_per_process,
             storage_log_reader,
+            Rc::clone(&self.compute_state.dataflow_heap_sizes),
         );
 
         let dataflow_index = Rc::new(dataflow_index);
@@ -1322,6 +1348,58 @@ impl<'a> ActiveComputeState<'a> {
         let mut responses = self.compute_state.copy_to_response_buffer.borrow_mut();
         for (sink_id, response) in responses.drain(..) {
             self.send_compute_response(ComputeResponse::CopyToResponse(sink_id, response));
+        }
+    }
+
+    /// Reports collections whose dataflow has outgrown its heap size limit.
+    ///
+    /// The watchdog only records a dataflow's total on the worker that owns it, so each violation
+    /// is reported by exactly one worker and needs no de-duplication downstream. Reporting is
+    /// once per collection: the controller responds by failing the reading peek or subscribe, and
+    /// the dataflow lives on until the client cancels it.
+    pub fn process_limits(&mut self) {
+        let sizes = Rc::clone(&self.compute_state.dataflow_heap_sizes);
+        let sizes = sizes.borrow();
+        if sizes.is_empty() {
+            return;
+        }
+
+        let mut exceeded = Vec::new();
+        for (&collection_id, state) in self.compute_state.collections.iter() {
+            let Some(limit) = state.heap_size_limit else {
+                continue;
+            };
+            if state.heap_limit_reported {
+                continue;
+            }
+            let Some(&heap_size) = sizes.get(&*state.dataflow_index) else {
+                continue;
+            };
+            // A negative total means retractions outran their additions, which is a transient
+            // state the closed-time accumulation should prevent. Treat it as under the limit.
+            let Ok(heap_size) = u64::try_from(heap_size.into_inner()) else {
+                continue;
+            };
+            if heap_size >= limit {
+                exceeded.push((collection_id, heap_size, limit));
+            }
+        }
+
+        for (collection_id, heap_size, limit) in exceeded {
+            let collection = self
+                .compute_state
+                .collections
+                .get_mut(&collection_id)
+                .expect("collection just observed");
+            collection.heap_limit_reported = true;
+
+            self.send_compute_response(ComputeResponse::Status(
+                StatusResponse::DataflowLimitExceeded(DataflowLimitStatus {
+                    collection_id,
+                    heap_size,
+                    limit,
+                }),
+            ));
         }
     }
 
@@ -2134,6 +2212,13 @@ pub struct CollectionState {
     read_only_tx: watch::Sender<bool>,
     /// Receive-side to observe whether a dataflow is in read-only mode.
     pub read_only_rx: watch::Receiver<bool>,
+    /// The heap size limit for this collection's dataflow, in bytes.
+    pub heap_size_limit: Option<u64>,
+    /// Whether this collection was already reported as over its heap size limit.
+    ///
+    /// The dataflow keeps running until the controller's client cancels it, so without this the
+    /// worker would re-report on every tick in between.
+    pub heap_limit_reported: bool,
 }
 
 impl CollectionState {
@@ -2160,6 +2245,8 @@ impl CollectionState {
             metrics,
             read_only_tx,
             read_only_rx,
+            heap_size_limit: None,
+            heap_limit_reported: false,
         }
     }
 

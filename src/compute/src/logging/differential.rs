@@ -26,25 +26,29 @@ use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
-use timely::dataflow::operators::InputCapability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator::empty;
 use timely::dataflow::operators::generic::{OutputBuilder, Session};
+use timely::dataflow::operators::{InputCapability, Leave};
 use timely::dataflow::{Scope, StreamVec};
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::compute::{ArrangementHeapSizeOperatorDrop, ComputeEvent};
 use crate::logging::{
-    DifferentialLog, EventQueue, LogCollection, LogVariant, SharedLoggingState,
+    DifferentialLog, EventQueue, LogCollection, LogVariant, SharedLoggingState, Update,
     consolidate_and_pack,
 };
 use crate::typedefs::{KeyBatcher, RowRowSpine};
 use mz_row_spine::RowRowBuilder;
 
 /// The return type of [`construct`].
-pub(super) struct Return {
+pub(super) struct Return<'scope> {
     /// Collections to export.
     pub collections: BTreeMap<LogVariant, LogCollection>,
+    /// Per-operator batcher heap size deltas, in bytes carried in the diff field.
+    ///
+    /// Covers only the operators of the worker that emits it.
+    pub batcher_heap_size: StreamVec<'scope, Timestamp, Update<(usize, ())>>,
 }
 
 /// Constructs the logging dataflow fragment for differential logs.
@@ -54,14 +58,15 @@ pub(super) struct Return {
 /// * `config`: Logging configuration
 /// * `event_queue`: The source to read log events from.
 /// * `shared_state`: Shared state across all logging dataflow fragments.
-pub(super) fn construct(
-    scope: Scope<'_, Timestamp>,
+pub(super) fn construct<'scope>(
+    scope: Scope<'scope, Timestamp>,
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
-) -> Return {
+) -> Return<'scope> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
 
+    let outer = scope;
     scope.scoped("differential logging", move |scope| {
         let enable_logging = config.enable_logging;
         let (logs, token) = if enable_logging {
@@ -168,6 +173,7 @@ pub(super) fn construct(
         let arrangement_records = stream_to_collection(records, ArrangementRecords, worker_id);
         let sharing = stream_to_collection(sharing, Sharing, worker_id);
         let batcher_records = stream_to_collection(batcher_records, BatcherRecords, worker_id);
+        let batcher_heap_size = batcher_size.clone();
         let batcher_size = stream_to_collection(batcher_size, BatcherSize, worker_id);
         let batcher_capacity = stream_to_collection(batcher_capacity, BatcherCapacity, worker_id);
         let batcher_allocations =
@@ -209,7 +215,10 @@ pub(super) fn construct(
             }
         }
 
-        Return { collections }
+        Return {
+            collections,
+            batcher_heap_size: batcher_heap_size.leave(outer),
+        }
     })
 }
 

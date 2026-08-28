@@ -89,7 +89,7 @@ export const useUniversalTable = <TData>(
     resetPageIndex();
   };
 
-  const table = useReactTable({
+  return useReactTable({
     ...tableOptions,
     columns: tableOptions.columns as ColumnDef<TData, unknown>[],
     getCoreRowModel: getCoreRowModel(),
@@ -128,37 +128,6 @@ export const useUniversalTable = <TData>(
     filterFromLeafRows:
       tableOptions.filterFromLeafRows ?? Boolean(tableOptions.getSubRows),
   });
-
-  // TanStack slices the visible page straight from the stored page index, and
-  // auto-reset is off (see above), so an index can outlive the rows it was
-  // valid for: a page restored from a URL, a data set that shrank, a filter
-  // that narrowed. What renders then is a header with no rows beneath it, and
-  // `TablePagination` hides itself once there is only one page, so no control
-  // is left to page back with. Clamp to the last page that exists.
-  //
-  // A layout effect rather than an effect: this runs before the browser paints,
-  // so the page that never existed is not shown on the way to the one that
-  // does.
-  //
-  // A count of zero means the table has no rows to place the index against, not
-  // that the index is wrong: data that has not arrived yet, or a filter that
-  // currently matches nothing. Clamping then would throw away a page restored
-  // from a URL before the rows that justify it exist. Leaving it alone costs
-  // nothing, since a table with no rows shows no rows on any page, and the
-  // clamp runs again once there is a count to judge against.
-  //
-  // NOTE: skipped under `manualPagination`, where the page count comes from the
-  // caller and -1 means "not known yet" rather than "no pages".
-  const pageCount = table.getPageCount();
-  const { pageIndex } = table.getState().pagination;
-  React.useLayoutEffect(() => {
-    if (tableOptions.manualPagination || pageCount < 1) return;
-    if (pageIndex > pageCount - 1) {
-      table.setPageIndex(pageCount - 1);
-    }
-  }, [table, tableOptions.manualPagination, pageCount, pageIndex]);
-
-  return table;
 };
 
 /**

@@ -97,6 +97,7 @@ def get_minimal_system_parameters(
         "enable_coalesce_case_transform": "true",
         "enable_columnation_lgalloc": "false",
         "enable_compute_correction_v2": "true",
+        "enable_compute_heap_size_limit": "true",
         "enable_compute_logical_backpressure": "true",
         "enable_connection_validation_syntax": "true",
         "enable_create_table_from_source": "true",

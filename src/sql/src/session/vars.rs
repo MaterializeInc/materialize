@@ -933,6 +933,13 @@ impl SessionVars {
             .as_bytes()
     }
 
+    /// Returns the value of the `max_query_heap_size` configuration parameter.
+    pub fn max_query_heap_size(&self) -> Option<u64> {
+        self.expect_value::<Option<ByteSize>>(&MAX_QUERY_HEAP_SIZE)
+            .as_ref()
+            .map(ByteSize::as_bytes)
+    }
+
     /// Sets the internal metadata associated with the user.
     pub fn set_internal_user_metadata(&mut self, metadata: InternalUserMetadata) {
         self.user.internal_metadata = Some(metadata);
@@ -2526,6 +2533,7 @@ static SESSION_SYSTEM_VARS: LazyLock<BTreeMap<&'static UncasedStr, &'static VarD
             &TIMEZONE,
             &TRANSACTION_ISOLATION,
             &MAX_QUERY_RESULT_SIZE,
+            &MAX_QUERY_HEAP_SIZE,
         ]
         .into_iter()
         .map(|var| (UncasedStr::new(var.name()), var))

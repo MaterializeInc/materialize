@@ -67,6 +67,8 @@ pub struct DataflowDescription<P, S: 'static = ()> {
     pub debug_name: String,
     /// Description of how the dataflow's progress relates to wall-clock time. None for unknown.
     pub time_dependence: Option<TimeDependence>,
+    /// Optional heap size limit for this dataflow, in bytes.
+    pub heap_size_limit: Option<u64>,
 }
 
 impl<P, S> DataflowDescription<P, S> {
@@ -270,6 +272,7 @@ impl<P, S> DataflowDescription<P, S> {
             refresh_schedule: None,
             debug_name: name,
             time_dependence: None,
+            heap_size_limit: None,
         }
     }
 
@@ -597,6 +600,7 @@ where
             refresh_schedule: self.refresh_schedule.clone(),
             debug_name: self.debug_name.clone(),
             time_dependence: self.time_dependence.clone(),
+            heap_size_limit: self.heap_size_limit,
         }
     }
 }

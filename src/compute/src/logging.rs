@@ -16,6 +16,7 @@ mod prometheus;
 mod reachability;
 mod resource_usage;
 mod timely;
+pub(crate) mod watchdog;
 
 use std::any::Any;
 use std::collections::BTreeMap;
