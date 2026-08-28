@@ -221,14 +221,7 @@ impl Context {
             .publish(
                 mz,
                 Event {
-                    // A condition that went false is the environment failing to
-                    // reach the state it was asked for, which is worth flagging.
-                    // `Unknown` is a rollout still under way, which is not.
-                    type_: if condition.status == "False" {
-                        EventType::Warning
-                    } else {
-                        EventType::Normal
-                    },
+                    type_: transition_event_type(condition),
                     reason: condition.reason.clone(),
                     action: "Reconcile".into(),
                     note: Some(condition.message.clone()),
@@ -1024,6 +1017,26 @@ impl k8s_controller::Context for Context {
     }
 }
 
+/// The severity to report a lifecycle transition at.
+///
+/// `UpToDate=False` says the environment is not up to date, which is worth
+/// flagging for every reason that reports it but one. Waiting for approval is
+/// the operator doing exactly what it was configured to do, and a rollout
+/// nobody has requested yet is not a problem; reporting it as a warning would
+/// teach people to ignore warnings on Materialize resources. `Unknown` is a
+/// rollout under way, which is also not a problem.
+///
+/// A reason this does not recognize falls back to the condition's status, so a
+/// failure reason added later reports as a warning without having to be named
+/// here.
+fn transition_event_type(condition: &Condition) -> EventType {
+    match condition.reason.as_str() {
+        "WaitingForApproval" => EventType::Normal,
+        _ if condition.status == "False" => EventType::Warning,
+        _ => EventType::Normal,
+    }
+}
+
 fn wait_for_balancer(balancer: &Balancer) -> Result<Option<Action>, Error> {
     if let Some(conditions) = balancer
         .status
@@ -1039,4 +1052,45 @@ fn wait_for_balancer(balancer: &Balancer) -> Result<Option<Action>, Error> {
     }
 
     Ok(Some(Action::requeue(Duration::from_secs(1))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn condition(status: &str, reason: &str) -> Condition {
+        Condition {
+            type_: "UpToDate".into(),
+            status: status.into(),
+            reason: reason.into(),
+            message: String::new(),
+            last_transition_time: Time(Timestamp::now()),
+            observed_generation: None,
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_transition_event_type() {
+        // Every condition this controller writes, and how loudly it should be
+        // reported. Keep this in step with the `Condition`s built above.
+        for (status, reason, expected) in [
+            ("True", "Applied", EventType::Normal),
+            ("Unknown", "Applying", EventType::Normal),
+            ("Unknown", "ReadyToPromote", EventType::Normal),
+            ("Unknown", "Promoting", EventType::Normal),
+            // Not up to date, but by configuration rather than by failure.
+            ("False", "WaitingForApproval", EventType::Normal),
+            ("False", "FailedDeploy", EventType::Warning),
+            ("False", "RolloutTimeout", EventType::Warning),
+            // An unrecognized reason is judged by its status.
+            ("False", "SomeFutureFailure", EventType::Warning),
+            ("Unknown", "SomeFuturePhase", EventType::Normal),
+        ] {
+            assert_eq!(
+                transition_event_type(&condition(status, reason)),
+                expected,
+                "status={status} reason={reason}",
+            );
+        }
+    }
 }
