@@ -1497,3 +1497,93 @@ class ReadIsolationUnderHydration(Scenario):
             conn_pool_size=1000,
             conn_pool_setup=["SET TRANSACTION_ISOLATION TO 'SERIALIZABLE'"],
         )
+
+
+class PeekIsolationUnderExpensivePeeks(Scenario):
+    r"""Measures whether a cheap peek stays fast while expensive peeks occupy the
+    same workers.
+
+    Every query is a fast-path index peek, so nothing renders a dataflow during
+    the load phase. That is what separates this from
+    `ReadIsolationUnderHydration`, whose contention is dataflow maintenance and
+    one of whose measured queries is an aggregate.
+
+    The expensive query filters on a non-key column, so it walks every position
+    of the index and returns nothing: its cost is the walk, which keeps result
+    size and the peek response stash out of the measurement. The cheap query is
+    a literal lookup on the key, and its p99 is what this reports.
+
+    Three things the numbers depend on, none of which the output would reveal if
+    they stopped holding:
+
+    * The expensive loop has to leave the worker idle between walks, or the
+      lookups queue without bound and the percentiles report the length of the
+      load phase. The measured cluster is one worker, since `Materialized` boots
+      at the `bootstrap` replica size and `--size` does not reach it, so the rate
+      is set against one walk: at 100ns to 1us per position, 100,000 positions
+      is 10ms to 100ms, and 2/s of those is 2% to 20% of that worker. Raising
+      the rate or the row count means redoing this.
+    * The loops are pooled and the pool is far larger than the ~3 connections
+      they hold. Waiting for a connection is timed like waiting for the replica,
+      and `ReuseConnQuery` would cap concurrency at one and report a client-side
+      backlog instead.
+    * The pool is SERIALIZABLE. Under STRICT SERIALIZABLE a peek waits for the
+      index's frontier, which is work on the same worker the walks occupy, so
+      the tail would include frontier lag that no change to peek placement
+      shortens.
+
+    Check `queries` on both sides before comparing percentiles: a query that
+    raises is dropped from the sample rather than recorded as slow.
+
+    To A/B a change that claims to improve peek isolation, run the scenario
+    twice with the flag that gates it and compare the lookup p50/p99:
+
+        bin/mzcompose --find parallel-benchmark run default \
+            --scenario PeekIsolationUnderExpensivePeeks \
+            --this-params <flag>=true
+        bin/mzcompose --find parallel-benchmark run default \
+            --scenario PeekIsolationUnderExpensivePeeks \
+            --this-params <flag>=false
+    """
+
+    def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
+        self.init(
+            [
+                TdPhase("""
+                    > DROP TABLE IF EXISTS hot CASCADE
+
+                    # Sized so one full walk is long enough to delay what is
+                    # queued behind it and short enough to leave the worker idle
+                    # between walks. The class docstring has the arithmetic.
+                    > CREATE TABLE hot (k int, v int)
+                    > INSERT INTO hot SELECT n, n * 2 FROM generate_series(1, 100000) AS n
+                    > CREATE INDEX hot_k ON hot (k)
+
+                    # Wait for the index to hydrate before measuring.
+                    > SELECT v FROM hot WHERE k = 42
+                    84
+                    """),
+                LoadPhase(
+                    duration=120,
+                    actions=[
+                        # Measured: a literal lookup on the key, which is the
+                        # peek that has to stay fast.
+                        OpenLoop(
+                            action=PooledQuery("SELECT v FROM hot WHERE k = 42"),
+                            dist=Periodic(per_second=50),
+                            report_regressions=False,
+                        ),
+                        # Contention: a full walk of the same index. `v` is
+                        # always even and positive, so the filter matches
+                        # nothing and every position is examined for no rows.
+                        OpenLoop(
+                            action=PooledQuery("SELECT v FROM hot WHERE v = -1"),
+                            dist=Periodic(per_second=2),
+                            report_regressions=False,
+                        ),
+                    ],
+                ),
+            ],
+            conn_pool_size=100,
+            conn_pool_setup=["SET TRANSACTION_ISOLATION TO 'SERIALIZABLE'"],
+        )
