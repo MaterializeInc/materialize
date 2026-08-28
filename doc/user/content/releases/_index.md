@@ -24,7 +24,6 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Self-Managed: 2026-08-27* <br>
 
 ### Improvements {#v26.39-improvements}
-- **Object dependency graph in the system catalog**: A new `mz_internal.mz_object_graph_edges` view lists the dependency edges between maintained objects, including the edges linking a source to its subsources and tables.
 - **Improved connect modal in the console**: We've updated the UI to make it easier to connect coding agents to our MCP servers, and connect applications to Materialize.
 
 ### Agent Skills {#v26.39-agent-skills}
