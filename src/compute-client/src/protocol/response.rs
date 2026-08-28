@@ -222,9 +222,9 @@ impl PeekResponse {
 /// The error of an unsuccessful peek.
 ///
 /// The variant decides what the user sees: a `Dataflow` error keeps the structure the dataflow
-/// produced and so gets the same SQLSTATE constant folding would have assigned, a
-/// `RowIterationLimitExceeded` names a limit the user can raise, and an `Unstructured` error is
-/// reported as an internal error. Prefer the structured variants whenever the source has one.
+/// produced and so gets the same SQLSTATE constant folding would have assigned, the limit
+/// variants name a limit the user can raise, and an `Unstructured` error is reported as an
+/// internal error. Prefer the structured variants whenever the source has one.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PeekError {
     /// An error produced while executing the dataflow, for example evaluating an expression over
@@ -236,6 +236,13 @@ pub enum PeekError {
     RowIterationLimitExceeded {
         /// The limit that was in effect, in rows.
         limit: usize,
+    },
+    /// The dataflow serving the peek reached its `max_query_heap_size` limit.
+    HeapSizeLimitExceeded {
+        /// The heap size observed, in bytes. A lower bound, see [`HeapSizeLimitStatus::heap_size`].
+        heap_size: u64,
+        /// The limit that was in effect, in bytes.
+        limit: u64,
     },
 }
 
@@ -254,6 +261,11 @@ impl fmt::Display for PeekError {
             Self::RowIterationLimitExceeded { limit } => write!(
                 f,
                 "query exceeded the configured row iteration limit of {limit} rows"
+            ),
+            Self::HeapSizeLimitExceeded { heap_size, limit } => write!(
+                f,
+                "query exceeded the max_query_heap_size limit of {limit} bytes; \
+                 it was using at least {heap_size} bytes"
             ),
         }
     }
@@ -359,7 +371,7 @@ pub struct SubscribeBatch {
     /// may aggregate different batches together later as we combine results from different workers.
     ///
     /// An `Err` variant can be used to indicate e.g. that the size of the updates exceeds internal limits.
-    pub updates: Result<Vec<UpdateCollection>, String>,
+    pub updates: Result<Vec<UpdateCollection>, SubscribeError>,
 }
 
 impl SubscribeBatch {
@@ -372,18 +384,74 @@ impl SubscribeBatch {
                 self.updates = Err(format!(
                     "result exceeds max size of {}",
                     ByteSize::b(u64::cast_from(max_result_size))
-                ));
+                )
+                .into());
             }
         }
+    }
+}
+
+/// The error of a failed subscribe.
+///
+/// As with [`PeekError`], an `Unstructured` error is reported to the user as an internal error,
+/// so a condition the user can act on belongs in a variant of its own.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum SubscribeError {
+    /// An error with no structured form.
+    Unstructured(String),
+    /// The dataflow serving the subscribe reached its `max_query_heap_size` limit.
+    HeapSizeLimitExceeded {
+        /// The heap size observed, in bytes. A lower bound, see [`HeapSizeLimitStatus::heap_size`].
+        heap_size: u64,
+        /// The limit that was in effect, in bytes.
+        limit: u64,
+    },
+}
+
+impl fmt::Display for SubscribeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unstructured(error) => f.write_str(error),
+            Self::HeapSizeLimitExceeded { heap_size, limit } => write!(
+                f,
+                "query exceeded the max_query_heap_size limit of {limit} bytes; \
+                 it was using at least {heap_size} bytes"
+            ),
+        }
+    }
+}
+
+impl From<String> for SubscribeError {
+    fn from(error: String) -> Self {
+        Self::Unstructured(error)
+    }
+}
+
+impl From<&str> for SubscribeError {
+    fn from(error: &str) -> Self {
+        Self::Unstructured(error.into())
     }
 }
 
 /// Status updates replicas can report to the controller.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum StatusResponse {
-    /// No status responses are implemented currently, but we're leaving the infrastructure around
-    /// in anticipation of materialize#31246.
-    Placeholder,
+    /// Reports that a dataflow exceeded its heap size limit.
+    HeapSizeLimitExceeded(HeapSizeLimitStatus),
+}
+
+/// An update reporting that a dataflow exceeded its heap size limit.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HeapSizeLimitStatus {
+    /// The ID of the compute collection exported by the dataflow.
+    pub collection_id: GlobalId,
+    /// The heap size the dataflow was observed to occupy, in bytes.
+    ///
+    /// Summed across the replica's workers, and covering only instrumented allocations, so it is
+    /// a lower bound on the dataflow's actual memory use.
+    pub heap_size: u64,
+    /// The limit the dataflow exceeded, in bytes.
+    pub heap_size_limit: u64,
 }
 
 #[cfg(test)]

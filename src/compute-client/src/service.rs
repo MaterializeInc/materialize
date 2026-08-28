@@ -28,7 +28,7 @@ use uuid::Uuid;
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekError, PeekResponse,
-    StashedPeekResponse, SubscribeBatch, SubscribeResponse,
+    StashedPeekResponse, SubscribeBatch, SubscribeError, SubscribeResponse,
 };
 
 /// A client to a compute server.
@@ -506,7 +506,7 @@ struct PendingSubscribe {
     /// The subscribe frontiers of the partitioned shards.
     frontiers: MutableAntichain<Timestamp>,
     /// The updates we are holding back until their timestamps are complete.
-    stashed_updates: Result<Vec<UpdateCollection>, String>,
+    stashed_updates: Result<Vec<UpdateCollection>, SubscribeError>,
     /// The row size of stashed updates, for `max_result_size` checking.
     stashed_result_size: usize,
     /// Whether we have already emitted a `DroppedAt` response for this subscribe.
@@ -534,7 +534,11 @@ impl PendingSubscribe {
     ///
     /// This also implements the short-circuit behavior of error responses, and performs
     /// `max_result_size` checking.
-    fn stash(&mut self, new_updates: Result<Vec<UpdateCollection>, String>, max_result_size: u64) {
+    fn stash(
+        &mut self,
+        new_updates: Result<Vec<UpdateCollection>, SubscribeError>,
+        max_result_size: u64,
+    ) {
         match (&mut self.stashed_updates, new_updates) {
             (Err(_), _) => {
                 // Subscribe is borked; nothing to do.
@@ -551,7 +555,8 @@ impl PendingSubscribe {
                     self.stashed_updates = Err(format!(
                         "total result exceeds max size of {}",
                         ByteSize::b(max_result_size)
-                    ));
+                    )
+                    .into());
                 } else {
                     stashed.extend(new);
                 }

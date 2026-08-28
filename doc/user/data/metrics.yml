@@ -766,6 +766,12 @@ metrics:
   - instance_id
   source: src/compute-client/src/metrics.rs
   visibility: internal
+- name: mz_compute_heap_size_limits_exceeded_total
+  help: The total number of queries failed for exceeding their heap size limit.
+  labels:
+  - instance_id
+  source: src/compute-client/src/metrics.rs
+  visibility: internal
 - name: mz_compute_peek_duration_seconds_bucket
   help: A histogram of peek durations since restart.
   labels:

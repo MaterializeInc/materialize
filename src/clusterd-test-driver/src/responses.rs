@@ -158,7 +158,7 @@ impl Responses {
                             // path replaces the updates with a message.
                             Err(e) => {
                                 if state.error.is_none() {
-                                    state.error = Some(e);
+                                    state.error = Some(e.to_string());
                                 }
                             }
                         }

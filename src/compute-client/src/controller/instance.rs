@@ -64,8 +64,9 @@ use crate::protocol::command::{
 };
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
-    ComputeResponse, CopyToResponse, FrontiersResponse, PeekError as ProtocolPeekError,
-    PeekResponse, StatusResponse, SubscribeBatch, SubscribeResponse,
+    ComputeResponse, CopyToResponse, FrontiersResponse, HeapSizeLimitStatus,
+    PeekError as ProtocolPeekError, PeekResponse, StatusResponse, SubscribeBatch, SubscribeError,
+    SubscribeResponse,
 };
 
 #[derive(Error, Debug)]
@@ -1599,6 +1600,7 @@ impl Instance {
             refresh_schedule: dataflow.refresh_schedule,
             debug_name: dataflow.debug_name,
             time_dependence: dataflow.time_dependence,
+            heap_size_limit: dataflow.heap_size_limit,
         };
 
         if augmented_dataflow.is_transient() {
@@ -2301,9 +2303,87 @@ impl Instance {
         }
     }
 
-    fn handle_status_response(&self, response: StatusResponse, _replica_id: ReplicaId) {
+    fn handle_status_response(&mut self, response: StatusResponse, replica_id: ReplicaId) {
         match response {
-            StatusResponse::Placeholder => {}
+            StatusResponse::HeapSizeLimitExceeded(status) => {
+                self.handle_heap_size_limit_exceeded(status, replica_id)
+            }
+        }
+    }
+
+    /// Fails the query served by the dataflow that exceeded its heap size limit.
+    ///
+    /// Limits are only ever set on transient dataflows, so the collection identifies either a
+    /// subscribe or a peek.
+    fn handle_heap_size_limit_exceeded(
+        &mut self,
+        status: HeapSizeLimitStatus,
+        replica_id: ReplicaId,
+    ) {
+        let HeapSizeLimitStatus {
+            collection_id,
+            heap_size,
+            heap_size_limit,
+        } = status;
+        tracing::debug!(
+            %replica_id, %collection_id, %heap_size, %heap_size_limit,
+            "dataflow exceeded its heap size limit",
+        );
+
+        if self.subscribes.contains_key(&collection_id) {
+            self.metrics.heap_size_limits_exceeded_total.inc();
+            let frontier = self.subscribes[&collection_id].frontier.clone();
+            self.deliver_response(ComputeControllerResponse::SubscribeResponse(
+                collection_id,
+                SubscribeBatch {
+                    lower: frontier.clone(),
+                    upper: frontier,
+                    updates: Err(SubscribeError::HeapSizeLimitExceeded {
+                        heap_size,
+                        limit: heap_size_limit,
+                    }),
+                },
+            ));
+            return;
+        }
+
+        // Peeks are keyed by UUID, so find the one reading from this collection. A peek's read
+        // hold is on the collection its dataflow exports, which is what the replica reports.
+        let peek = self
+            .peeks
+            .iter()
+            .find(|(_, peek)| peek.read_hold.id() == collection_id)
+            .map(|(uuid, peek)| (*uuid, peek.otel_ctx.clone()));
+
+        match peek {
+            // Routing through `handle_peek_response` keeps the metrics, the peek notification,
+            // and the `CancelPeek` command consistent with a replica-reported peek error, and
+            // applies the replica-targeting filter for targeted peeks.
+            Some((uuid, otel_ctx)) => {
+                self.metrics.heap_size_limits_exceeded_total.inc();
+                self.handle_peek_response(
+                    uuid,
+                    PeekResponse::Error(ProtocolPeekError::HeapSizeLimitExceeded {
+                        heap_size,
+                        limit: heap_size_limit,
+                    }),
+                    otel_ctx,
+                    replica_id,
+                )
+            }
+            // A collection the controller does not know at all means the replica is running a
+            // dataflow the controller never installed.
+            None if !self.collections.contains_key(&collection_id) => soft_panic_or_log!(
+                "heap size limit exceeded for an unknown collection \
+                 (collection_id={collection_id}, replica_id={replica_id})",
+            ),
+            // Every replica running the dataflow reports independently, and the first report
+            // finishes the query, so later ones legitimately find nothing left to fail.
+            None => tracing::debug!(
+                %replica_id,
+                %collection_id,
+                "heap size limit exceeded for a collection that is no longer being read",
+            ),
         }
     }
 
