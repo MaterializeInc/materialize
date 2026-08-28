@@ -242,6 +242,20 @@ tests:
       path: spec.template.spec.containers[0].args
       content: "--create-console"
 
+- it: should enable debug collector creation when configured
+  set:
+    debugCollector.enabled: true
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--create-debug-collectors"
+
+- it: should not enable debug collector creation by default
+  asserts:
+  - notContains:
+      path: spec.template.spec.containers[0].args
+      content: "--create-debug-collectors"
+
 - it: should pass the debug collector default resources
   set:
     debugCollector.defaultResources:

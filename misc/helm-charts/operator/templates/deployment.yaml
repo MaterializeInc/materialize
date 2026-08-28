@@ -137,6 +137,9 @@ spec:
         {{- if .Values.console.enabled }}
         - "--create-console"
         {{- end }}
+        {{- if .Values.debugCollector.enabled }}
+        - "--create-debug-collectors"
+        {{- end }}
         - "--console-image-tag-default={{ .Values.operator.image.tag }}"
         {{- range $key, $value := .Values.console.imageTagMapOverride }}
         - "--console-image-tag-map={{ $key }}={{ $value }}"

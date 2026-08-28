@@ -403,6 +403,11 @@ console:
       memory: "256Mi"
 
 debugCollector:
+  # -- Flag to indicate whether to run an in-cluster debug collector for each
+  # Materialize instance. The collector continuously snapshots diagnostics
+  # (Kubernetes resources, logs, profiles, metrics, the system catalog) into a
+  # ring buffer for `mz-debug self-managed` to download.
+  enabled: false
   # @notationType -- k8s/resources
   defaultResources:
     # -- Default resource limits for the debug collector's CPU and memory

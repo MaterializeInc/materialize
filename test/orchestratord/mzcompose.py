@@ -4621,6 +4621,9 @@ def setup(c: Composition, args) -> dict[str, Any]:
     # definition["operator"]["networkPolicies"]["ingress"]["enabled"] = True
     # TODO: Remove when fixed: error: unexpected argument '--disable-license-key-checks' found
     definition["operator"]["operator"]["args"]["enableLicenseKeyChecks"] = True
+    # Off by default in the chart; on here so every scenario runs a debug
+    # collector, which `run_mz_debug` downloads a snapshot from.
+    definition["operator"]["debugCollector"]["enabled"] = True
     definition["operator"]["clusterd"]["nodeSelector"][
         "workload"
     ] = "materialize-instance"

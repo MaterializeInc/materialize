@@ -140,6 +140,8 @@ pub struct Args {
     #[clap(long)]
     create_console: bool,
     #[clap(long)]
+    create_debug_collectors: bool,
+    #[clap(long)]
     helm_chart_version: Option<String>,
     #[clap(long, default_value = "kubernetes")]
     secrets_controller: String,
@@ -647,6 +649,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             region: args.region,
             create_balancers: args.create_balancers,
             create_console: args.create_console,
+            create_debug_collectors: args.create_debug_collectors,
             helm_chart_version: args.helm_chart_version,
             secrets_controller: args.secrets_controller,
             collect_pod_metrics: args.collect_pod_metrics,
