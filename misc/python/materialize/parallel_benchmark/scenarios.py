@@ -1300,6 +1300,12 @@ class HydrationChurn(Action):
     measurement store's process-wide lock against the threads that record the
     measured reads.
 
+    Each iteration drops the view before it creates it, rather than trusting the
+    previous one to have cleaned up. An iteration whose own drop fails would
+    otherwise leave the view behind on a working session, and the next create
+    would find it already there, hydrate nothing, and record the milliseconds
+    that took as the fastest hydration of the run.
+
     A failed iteration records no measurement, so the count of this action in
     the report is the number of hydrations that actually happened. Recording one
     would report the backoff as though it were a fast hydration, and the count
@@ -1346,32 +1352,28 @@ class HydrationChurn(Action):
     def _churn(self) -> bool:
         """Builds, hydrates and drops the view once. False if the iteration failed."""
         try:
+            # Leading, so an iteration cleans up after whatever the last one
+            # left rather than depending on it. The create is deliberately not
+            # `IF NOT EXISTS`: a view that survived both this drop and the last
+            # one has to fail the iteration, not turn it into a no-op that
+            # records a hydration it never performed.
+            execute_query(self.cur, f"DROP MATERIALIZED VIEW IF EXISTS {self.name}")
             execute_query(
                 self.cur,
-                f"CREATE MATERIALIZED VIEW IF NOT EXISTS {self.name} AS {self.view_sql}",
+                f"CREATE MATERIALIZED VIEW {self.name} AS {self.view_sql}",
             )
             # Force hydration to complete before we drop, so the replica actually
             # does the build work rather than cancelling it immediately.
             execute_query(self.cur, f"SELECT count(*) FROM {self.name}")
             self.cur.fetchall()
+            execute_query(self.cur, f"DROP MATERIALIZED VIEW IF EXISTS {self.name}")
         except Exception as e:
             print(f"Hydration churn {self.name} failed, retrying: {e}")
             time.sleep(self.RETRY_BACKOFF_SECONDS)
             try:
-                # Dropped before the next iteration, because a view left behind
-                # turns the next `CREATE IF NOT EXISTS` into a no-op. The loop
-                # would then keep running with no build work in it, which is
-                # this scenario's contention source disappearing silently.
                 self._connect()
-                execute_query(self.cur, f"DROP MATERIALIZED VIEW IF EXISTS {self.name}")
             except Exception as e:
-                print(f"Hydration churn {self.name} could not recover: {e}")
-            return False
-
-        try:
-            execute_query(self.cur, f"DROP MATERIALIZED VIEW IF EXISTS {self.name}")
-        except Exception as e:
-            print(f"Hydration churn {self.name} could not drop its view: {e}")
+                print(f"Hydration churn {self.name} could not reconnect: {e}")
             return False
         return True
 
