@@ -604,6 +604,13 @@ pub static MAX_QUERY_RESULT_SIZE: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static MAX_QUERY_HEAP_SIZE: VarDefinition = VarDefinition::new(
+    "max_query_heap_size",
+    value!(Option<ByteSize>; None),
+    "The maximum heap size in bytes that a single query's dataflow may occupy (Materialize).",
+    true,
+);
+
 pub static MAX_COPY_FROM_ROW_SIZE: VarDefinition = VarDefinition::new(
     "max_copy_from_row_size",
     value!(ByteSize; ByteSize::mb(128)),

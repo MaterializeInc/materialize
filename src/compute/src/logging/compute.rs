@@ -29,10 +29,10 @@ use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
-use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator::empty;
+use timely::dataflow::operators::{Leave, Operator};
 use timely::dataflow::{Scope, StreamVec};
 use timely::scheduling::activate::{Activations, Activator};
 use tracing::error;
@@ -40,8 +40,8 @@ use uuid::Uuid;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::{
-    ComputeLog, EventQueue, LogCollection, LogVariant, OutputSessionColumnar, PermutedRowPacker,
-    SharedLoggingState, Update,
+    ComputeLog, EventQueue, LogCollection, LogVariant, OutputSessionColumnar, OutputSessionVec,
+    PermutedRowPacker, SharedLoggingState, Update,
 };
 use crate::typedefs::RowRowSpine;
 use mz_row_spine::RowRowBuilder;
@@ -298,9 +298,20 @@ impl LirMetadata {
 }
 
 /// The return type of the [`construct`] function.
-pub(super) struct Return {
+pub(super) struct Return<'scope> {
     /// Collections returned by [`construct`].
     pub collections: BTreeMap<LogVariant, LogCollection>,
+    /// Per-operator arrangement heap size deltas, in bytes carried in the diff field.
+    ///
+    /// Unlike the `ArrangementHeapSize` log collection this stream is keyed by operator ID rather
+    /// than packed into rows, so the watchdog can aggregate it without re-parsing datums. `None`
+    /// unless the caller asked for it, so that a replica that enforces no heap size limits pays
+    /// for neither the output nor the channel leaving the logging scope.
+    pub arrangement_heap_size: Option<StreamVec<'scope, Timestamp, Update<(usize, ())>>>,
+    /// Maps each arrangement operator to the dataflow hosting it, for as long as it exists.
+    ///
+    /// `None` under the same condition as [`Return::arrangement_heap_size`].
+    pub arrangement_dataflows: Option<StreamVec<'scope, Timestamp, Update<(usize, usize)>>>,
 }
 
 /// Constructs the logging dataflow fragment for compute logs.
@@ -312,15 +323,18 @@ pub(super) struct Return {
 /// * `event_queue`: The source to read compute log events from.
 /// * `compute_event_streams`: Additional compute event streams to absorb.
 /// * `shared_state`: Shared state between logging dataflow fragments.
+/// * `heap_size_watchdog`: Whether to produce the streams the watchdog fragment consumes.
 pub(super) fn construct<'scope>(
     scope: Scope<'scope, Timestamp>,
     activations: Rc<RefCell<Activations>>,
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
-) -> Return {
+    heap_size_watchdog: bool,
+) -> Return<'scope> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
 
+    let outer = scope;
     scope.scoped("compute logging", move |scope| {
         let enable_logging = config.enable_logging;
         let (logs, token) = if enable_logging {
@@ -366,6 +380,13 @@ pub(super) fn construct<'scope>(
         let mut lir_mapping_out = OutputBuilder::from(lir_mapping_out);
         let (dataflow_global_ids_out, dataflow_global_ids) = demux.new_output();
         let mut dataflow_global_ids_out = OutputBuilder::from(dataflow_global_ids_out);
+        let (arrangement_heap_size_bytes_out, arrangement_heap_size_bytes) =
+            heap_size_watchdog.then(|| demux.new_output()).unzip();
+        let mut arrangement_heap_size_bytes_out =
+            arrangement_heap_size_bytes_out.map(OutputBuilder::from);
+        let (arrangement_dataflows_out, arrangement_dataflows) =
+            heap_size_watchdog.then(|| demux.new_output()).unzip();
+        let mut arrangement_dataflows_out = arrangement_dataflows_out.map(OutputBuilder::from);
 
         let mut demux_state = DemuxState::new(activations, scope.index());
         demux.build(move |_capability| {
@@ -383,6 +404,11 @@ pub(super) fn construct<'scope>(
                 let mut operator_hydration_status = operator_hydration_status_out.activate();
                 let mut lir_mapping = lir_mapping_out.activate();
                 let mut dataflow_global_ids = dataflow_global_ids_out.activate();
+                let mut arrangement_heap_size_bytes = arrangement_heap_size_bytes_out
+                    .as_mut()
+                    .map(|out| out.activate());
+                let mut arrangement_dataflows =
+                    arrangement_dataflows_out.as_mut().map(|out| out.activate());
 
                 input.for_each(|cap, data| {
                     let mut output_sessions = DemuxOutput {
@@ -402,6 +428,12 @@ pub(super) fn construct<'scope>(
                             .session_with_builder(&cap),
                         lir_mapping: lir_mapping.session_with_builder(&cap),
                         dataflow_global_ids: dataflow_global_ids.session_with_builder(&cap),
+                        arrangement_heap_size_bytes: arrangement_heap_size_bytes
+                            .as_mut()
+                            .map(|out| out.session_with_builder(&cap)),
+                        arrangement_dataflows: arrangement_dataflows
+                            .as_mut()
+                            .map(|out| out.session_with_builder(&cap)),
                     };
 
                     let shared_state = &mut shared_state.borrow_mut();
@@ -461,7 +493,11 @@ pub(super) fn construct<'scope>(
             }
         }
 
-        Return { collections }
+        Return {
+            collections,
+            arrangement_heap_size: arrangement_heap_size_bytes.map(|stream| stream.leave(outer)),
+            arrangement_dataflows: arrangement_dataflows.map(|stream| stream.leave(outer)),
+        }
     })
 }
 
@@ -819,8 +855,11 @@ impl ExportState {
 }
 
 /// State for tracking arrangement sizes.
-#[derive(Default, Debug)]
+#[derive(Debug)]
 struct ArrangementSizeState {
+    /// The Timely dataflow hosting the arrangement, taken from the first element of the
+    /// arrangement operator's address.
+    dataflow_id: usize,
     size: isize,
     capacity: isize,
     count: isize,
@@ -841,6 +880,8 @@ struct DemuxOutput<'a, 'b> {
     error_count: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     lir_mapping: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     dataflow_global_ids: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    arrangement_heap_size_bytes: Option<OutputSessionVec<'a, 'b, Update<(usize, ())>>>,
+    arrangement_dataflows: Option<OutputSessionVec<'a, 'b, Update<(usize, usize)>>>,
 }
 
 /// Event handler of the demux operator.
@@ -1269,6 +1310,9 @@ impl DemuxHandler<'_, '_, '_> {
         let datum = self.state.pack_arrangement_heap_size_update(operator_id);
         let diff = Diff::cast_from(delta_size);
         self.output.arrangement_heap_size.give((datum, ts, diff));
+        if let Some(output) = &mut self.output.arrangement_heap_size_bytes {
+            output.give(((operator_id, ()), ts, diff));
+        }
     }
 
     /// Update the allocation capacity for an arrangement.
@@ -1327,16 +1371,27 @@ impl DemuxHandler<'_, '_, '_> {
             address,
         }: Ref<'_, ArrangementHeapSizeOperator>,
     ) {
-        let activator = Activator::new(
-            address.into_iter().collect(),
-            Rc::clone(&self.state.activations),
-        );
-        let existing = self
-            .state
-            .arrangement_size
-            .insert(operator_id, Default::default());
+        let address: Rc<[usize]> = address.into_iter().collect();
+        // An operator's address starts at the dataflow that hosts it, so its first element names
+        // the Timely dataflow index the compute controller knows the collection by.
+        let Some(&dataflow_id) = address.first() else {
+            error!(%operator_id, "arrangement size operator has an empty address");
+            return;
+        };
+        let activator = Activator::new(address, Rc::clone(&self.state.activations));
+        let state = ArrangementSizeState {
+            dataflow_id,
+            size: 0,
+            capacity: 0,
+            count: 0,
+        };
+        let existing = self.state.arrangement_size.insert(operator_id, state);
         if existing.is_some() {
             error!(%operator_id, "arrangement size operator already registered");
+        }
+        let ts = self.ts();
+        if let Some(output) = &mut self.output.arrangement_dataflows {
+            output.give(((operator_id, dataflow_id), ts, Diff::ONE));
         }
         let existing = self
             .shared_state
@@ -1374,6 +1429,13 @@ impl DemuxHandler<'_, '_, '_> {
             let size = self.state.pack_arrangement_heap_size_update(operator_id);
             let diff = -Diff::cast_from(state.size);
             self.output.arrangement_heap_size.give((size, ts, diff));
+            if let Some(output) = &mut self.output.arrangement_heap_size_bytes {
+                output.give(((operator_id, ()), ts, diff));
+            }
+
+            if let Some(output) = &mut self.output.arrangement_dataflows {
+                output.give(((operator_id, state.dataflow_id), ts, Diff::MINUS_ONE));
+            }
         }
         self.shared_state
             .arrangement_size_activators

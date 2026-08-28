@@ -63,6 +63,7 @@ pub struct ComputeControllerMetrics {
 
     // peeks
     peeks_total: IntCounterVec,
+    heap_size_limits_exceeded_total: IntCounterVec,
     peek_duration_seconds: HistogramVec,
 
     // replica connections
@@ -167,6 +168,11 @@ impl ComputeControllerMetrics {
                 help: "The total number of peeks served.",
                 var_labels: ["instance_id", "result"],
             )),
+            heap_size_limits_exceeded_total: metrics_registry.register(metric!(
+                name: "mz_compute_heap_size_limits_exceeded_total",
+                help: "The total number of queries failed for exceeding their heap size limit.",
+                var_labels: ["instance_id"],
+            )),
             peek_duration_seconds: metrics_registry.register(metric!(
                 name: "mz_compute_peek_duration_seconds",
                 help: "A histogram of peek durations since restart.",
@@ -231,6 +237,9 @@ impl ComputeControllerMetrics {
         let response_recv_count = self
             .response_recv_count
             .get_delete_on_drop_metric(labels.clone());
+        let heap_size_limits_exceeded_total = self
+            .heap_size_limits_exceeded_total
+            .get_delete_on_drop_metric(labels.clone());
         let connected_replica_count = self
             .connected_replica_count
             .get_delete_on_drop_metric(labels);
@@ -248,6 +257,7 @@ impl ComputeControllerMetrics {
             history_dataflow_count,
             peeks_total,
             peek_duration_seconds,
+            heap_size_limits_exceeded_total,
             response_send_count,
             response_recv_count,
             connected_replica_count,
@@ -281,6 +291,12 @@ pub struct InstanceMetrics {
     pub peeks_total: PeekMetrics<IntCounter>,
     /// Histogram tracking peek durations.
     pub peek_duration_seconds: PeekMetrics<Histogram>,
+    /// Counter tracking the number of queries failed for exceeding their heap size limit.
+    ///
+    /// Incremented once per report that names a peek or subscribe the controller is still
+    /// tracking, so the reports every other replica running the same dataflow sends do not
+    /// inflate it.
+    pub heap_size_limits_exceeded_total: IntCounter,
     /// Counter tracking the number of sends on the compute response queue.
     pub response_send_count: IntCounter,
     /// Counter tracking the number of receives on the compute response queue.

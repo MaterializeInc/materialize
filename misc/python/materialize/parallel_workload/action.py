@@ -2948,6 +2948,7 @@ class FlipFlagsAction(Action):
             "1048576",
             "134217728",
         ]
+        self.flags_with_values["enable_compute_heap_size_limit"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_public_metrics_endpoint"] = BOOLEAN_FLAG_VALUES
         # Applies to replicas provisioned after the flip.
         self.flags_with_values["enable_unified_cluster"] = BOOLEAN_FLAG_VALUES
