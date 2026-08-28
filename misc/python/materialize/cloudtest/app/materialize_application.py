@@ -21,6 +21,10 @@ from materialize.cloudtest.app.cloudtest_application_base import (
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.cockroach import cockroach_resources
 from materialize.cloudtest.k8s.debezium import debezium_resources
+from materialize.cloudtest.k8s.debug_collector import (
+    DebugCollectorDeployment,
+    DebugCollectorService,
+)
 from materialize.cloudtest.k8s.environmentd import (
     EnvironmentdSecret,
     EnvironmentdService,
@@ -58,6 +62,7 @@ class MaterializeApplication(CloudtestApplicationBase):
         self.listeners_configmap = ListenersConfigMap()
         self.environmentd = EnvironmentdService(self.instance_identity)
         self.materialized_alias = MaterializedAliasService()
+        self.debug_collector = DebugCollectorService()
         self.testdrive = TestdrivePod(
             release_mode=release_mode,
             aws_region=aws_region,
@@ -98,11 +103,17 @@ class MaterializeApplication(CloudtestApplicationBase):
             PersistPubSubService(),
             self.environmentd,
             self.materialized_alias,
+            DebugCollectorDeployment(
+                instance_identity=self.instance_identity,
+                release_mode=self.release_mode,
+                tag=self.tag,
+            ),
+            self.debug_collector,
             self.testdrive,
         ]
 
     def get_images(self) -> list[str]:
-        return ["environmentd", "clusterd", "testdrive", "postgres"]
+        return ["environmentd", "clusterd", "testdrive", "postgres", "mz-debug"]
 
     def register_vpc_endpoint(self) -> None:
         self.kubectl(
