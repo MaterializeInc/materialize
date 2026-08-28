@@ -1463,7 +1463,8 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
                    h.peak_disk_bytes::text, h.status
             FROM mz_internal.mz_replica_hydration_history AS h
             JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
-            WHERE r.name = 'r1'
+            JOIN mz_catalog.mz_clusters AS c ON c.id = h.cluster_id
+            WHERE r.name = 'r1' AND c.name = 'hydration_history'
             ORDER BY h.started_at""")
 
     def replica_episode_identities(episodes: list[list]) -> list[tuple[str, str]]:
