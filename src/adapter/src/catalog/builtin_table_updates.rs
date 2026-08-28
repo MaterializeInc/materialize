@@ -51,6 +51,7 @@ use mz_sql::names::SchemaSpecifier;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::client::TableData;
 use smallvec::smallvec;
+use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::active_compute_sink::ActiveSubscribe;
@@ -190,14 +191,9 @@ impl CatalogState {
             CatalogItem::Func(func) => {
                 self.pack_func_update(id, schema_id, name, owner_id, func, diff)
             }
-            // A metric sink packs no builtin-table row, so it holds a catalog name that no
-            // catalog relation reports. SQL-572 adds the `mz_metric_sinks` view. Until then,
-            // listing or dropping a metric sink requires knowing its name out of band.
-            //
-            // NOTE: creating a metric sink takes SELECT on the FROM relation, not ownership
-            // of it, so once metric sinks are user-creatable this gap would let a reader
-            // egress another role's rows with no catalog relation the owner could see it in.
-            // SQL-572 has to land before user-facing metric sink DDL does.
+            // Tables, views, and metric sinks are exposed through materialized
+            // views derived from `mz_catalog_raw`, and logs and secrets never
+            // had builtin-table rows, so none pack a row here.
             CatalogItem::Table(_)
             | CatalogItem::View(_)
             | CatalogItem::Log(_)
@@ -579,6 +575,7 @@ impl CatalogState {
                     Datum::String(&id.to_string()),
                     Datum::UInt32(pg_metadata.typinput_oid),
                     Datum::UInt32(pg_metadata.typreceive_oid),
+                    Datum::UInt32(pg_metadata.typsend_oid),
                 ]),
                 diff,
             ));
@@ -816,12 +813,13 @@ impl CatalogState {
         &self,
         id: GlobalId,
         subscribe: &ActiveSubscribe,
+        session_uuid: Uuid,
         diff: Diff,
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
         let mut row = Row::default();
         let mut packer = row.packer();
         packer.push(Datum::String(&id.to_string()));
-        packer.push(Datum::Uuid(subscribe.session_uuid));
+        packer.push(Datum::Uuid(session_uuid));
         packer.push(Datum::String(&subscribe.cluster_id.to_string()));
 
         let start_dt = mz_ore::now::to_datetime(subscribe.start_time);

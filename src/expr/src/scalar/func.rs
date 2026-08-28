@@ -480,17 +480,28 @@ fn add_time_interval(time: chrono::NaiveTime, interval: Interval) -> chrono::Nai
 fn round_numeric_binary(a: OrderedDecimal<Numeric>, mut b: i32) -> Result<Numeric, EvalError> {
     let mut a = a.0;
     let mut cx = numeric::cx_datum();
-    let a_exp = a.exponent();
-    if a_exp > 0 && b > 0 || a_exp < 0 && -a_exp < b {
-        // This condition indicates:
-        // - a is a value without a decimal point, b is a positive number
-        // - a has a decimal point, but b is larger than its scale
-        // In both of these situations, right-pad the number with zeroes, which // is most easily done with rescale.
+    let a_scale = numeric::get_scale(&a);
+    if a.is_finite() && i64::from(b) > i64::from(a_scale) {
+        // Rounding at or past `a`'s scale cannot change the value: right-pad
+        // with zeroes via rescale. The rounding path below shifts left by `b`
+        // first and overflows for large `b`.
+        //
+        // NOTE: Equal values can reach here with different scales, since
+        // `Row` encoding folds trailing zeroes into the exponent. The result,
+        // value or error, must not depend on which representation arrives: the
+        // abstract interpreter reads its datums back out of a `Row`, and if it
+        // calls infallible what the evaluator fails on, persist filter
+        // pushdown discards parts it has to keep.
+        //
+        // `Infinity` and `NaN` report a scale of zero, but `rescale` on an
+        // infinity yields `NaN` via invalid_operation, not the overflow
+        // checked below, so the specials take the rounding path, which
+        // propagates them unchanged, as PostgreSQL does.
 
         // Ensure rescale doesn't exceed max precision by putting a ceiling on
         // b equal to the maximum remaining scale the value can support.
         let max_remaining_scale = u32::from(numeric::NUMERIC_DATUM_MAX_PRECISION)
-            - (numeric::get_precision(&a) - numeric::get_scale(&a));
+            - (numeric::get_precision(&a) - a_scale);
         b = match i32::try_from(max_remaining_scale) {
             Ok(max_remaining_scale) => std::cmp::min(b, max_remaining_scale),
             Err(_) => b,

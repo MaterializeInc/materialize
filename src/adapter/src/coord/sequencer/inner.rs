@@ -113,7 +113,7 @@ use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{
     BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn, UserWriteResponder,
 };
-use crate::coord::read_then_write::validate_read_then_write_dependencies;
+use crate::coord::read_then_write::{DependencyPolicy, validate_read_then_write_dependencies};
 use crate::coord::sequencer::emit_optimizer_notices;
 use crate::coord::{
     AlterConnectionValidationReady, AlterMaterializedViewReadyContext, AlterSinkReadyContext,
@@ -2878,6 +2878,7 @@ impl Coordinator {
             self.catalog(),
             dependency_ids,
             max_rw_dependencies,
+            DependencyPolicy::UserDml,
         ) {
             ctx.retire(Err(err));
             return;
@@ -3052,9 +3053,7 @@ impl Coordinator {
                                     };
                                 }
                                 PeekResponseUnary::Canceled => break Err(AdapterError::Canceled),
-                                PeekResponseUnary::Error(e) => {
-                                    break Err(AdapterError::Unstructured(anyhow!(e)));
-                                }
+                                PeekResponseUnary::Error(e) => break Err(e),
                                 PeekResponseUnary::DependencyDropped(dep) => {
                                     break Err(dep.to_concurrent_dependency_drop());
                                 }
@@ -3793,6 +3792,22 @@ impl Coordinator {
                 return ctx.retire(Err(e));
             }
         };
+
+        // Replanning uses a system session and discovers retained dependencies
+        // that `check_plan` could not authorize. Check them before secret guards
+        // or validation can resolve a secret.
+        let usage_check = {
+            let catalog = self.catalog().for_session(ctx.session());
+            rbac::check_usage(
+                &catalog,
+                ctx.session(),
+                &conn.resolved_ids,
+                &rbac::CREATE_ITEM_USAGE,
+            )
+        };
+        if let Err(err) = usage_check {
+            return ctx.retire(Err(err.into()));
+        }
 
         // `conn` is the whole re-planned connection, so this also rejects a
         // stored value the statement did not touch.

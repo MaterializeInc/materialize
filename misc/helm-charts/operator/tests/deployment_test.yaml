@@ -47,6 +47,61 @@ tests:
       path: spec.template.spec.containers[0].args
       content: "--startup-log-filter=INFO,mz_orchestratord=TRACE"
 
+- it: should set a non-zero statement logging sample rate by default
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--statement-logging-max-sample-rate=0.99"
+
+- it: should set a custom statement logging sample rate
+  set:
+    operator.args.statementLoggingMaxSampleRate: 0.5
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--statement-logging-max-sample-rate=0.5"
+
+- it: should pass a zero statement logging sample rate to disable statement logging
+  set:
+    operator.args.statementLoggingMaxSampleRate: 0
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--statement-logging-max-sample-rate=0"
+
+- it: should omit the statement logging sample rate when unset
+  set:
+    operator.args.statementLoggingMaxSampleRate: null
+  asserts:
+  - notContains:
+      path: spec.template.spec.containers[0].args
+      content: "--statement-logging-max-sample-rate=0.99"
+  - notContains:
+      path: spec.template.spec.containers[0].args
+      content: "--statement-logging-max-sample-rate="
+
+- it: should omit the statement logging target data rate by default
+  asserts:
+  - notContains:
+      path: spec.template.spec.containers[0].args
+      content: "--statement-logging-target-data-rate="
+
+- it: should set a custom statement logging target data rate
+  set:
+    operator.args.statementLoggingTargetDataRate: 512
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--statement-logging-target-data-rate=512"
+
+- it: should render a large statement logging target data rate as an integer
+  values:
+  - values/large-target-data-rate.yaml
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--statement-logging-target-data-rate=1048576"
+
 - it: should set resources correctly
   asserts:
   - equal:

@@ -22,7 +22,7 @@ use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
 use futures_util::{StreamExt, stream};
-use mz_dyncfg::Config;
+use mz_dyncfg::{Config, ParameterScope};
 use mz_ore::cast::CastLossy;
 use mz_ore::halt;
 use mz_ore::instrument;
@@ -617,6 +617,7 @@ pub(crate) const READER_LEASE_DURATION: Config<Duration> = Config::new(
     "persist_reader_lease_duration",
     Duration::from_secs(60 * 15),
     "The time after which we'll clean up stale read leases",
+    ParameterScope::Environment,
 );
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
@@ -944,6 +945,7 @@ where
             let blob = Arc::clone(&self.blob);
             let metrics = Arc::clone(&self.metrics);
             let desc = batch.desc.clone();
+            let bounds_truncated = batch.runs().any(|(meta, _)| meta.bounds_truncated());
             for await part in batch.part_stream(self.shard_id(), &*blob, &*metrics) {
                 yield LeasedBatchPart {
                     metrics: Arc::clone(&self.metrics),
@@ -954,6 +956,7 @@ where
                     lease: lease.clone(),
                     reader_id: self.reader_id.clone(),
                     filter_pushdown_audit: false,
+                    bounds_truncated,
                 }
             }
         }
@@ -1457,6 +1460,103 @@ mod tests {
             "snapshot must have batches for test to be meaningful"
         );
         drop(subscribe);
+    }
+
+    // The ignored-data fetch optimization substitutes a part's write-time
+    // diffs_sum for a real fetch, but a truncated batch's parts may hold
+    // updates that a real fetch would filter out, so it must not fire for
+    // them.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn maybe_optimize_ignores_truncated_batches() {
+        use arrow::array::{ArrayRef, StringArray};
+
+        use crate::batch::{INLINE_WRITES_SINGLE_MAX_BYTES, INLINE_WRITES_TOTAL_MAX_BYTES};
+        use crate::cache::PersistClientCache;
+
+        let mut cache = PersistClientCache::new_no_metrics();
+        // Compaction rewrites truncated batches with exact bounds, which
+        // would undo the setup below.
+        cache.cfg.compaction_enabled = false;
+        // The optimization only applies to hollow parts.
+        cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        cache.cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
+        let client = cache
+            .open(crate::PersistLocation::new_in_mem())
+            .await
+            .expect("client construction failed");
+        let (mut write, mut read) = client
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
+
+        write
+            .expect_compare_and_append(&[(("0".to_owned(), "zero".to_owned()), 0, 1)], 0, 1)
+            .await;
+
+        // Write a batch over [0, 3) but append it under [1, 3): the update
+        // at 0 stays in the part while every read filters it out.
+        let mut batch = write
+            .expect_batch(
+                &[
+                    (("stale".to_owned(), "stale".to_owned()), 0, 1),
+                    (("1".to_owned(), "one".to_owned()), 1, 1),
+                    (("2".to_owned(), "two".to_owned()), 2, 1),
+                ],
+                0,
+                3,
+            )
+            .await;
+        write
+            .compare_and_append_batch(
+                &mut [&mut batch],
+                Antichain::from_elem(1),
+                Antichain::from_elem(3),
+                true,
+            )
+            .await
+            .expect("invalid usage")
+            .expect("unexpected upper");
+
+        // Advance the upper so a snapshot as_of 3 is available.
+        write
+            .expect_compare_and_append(&[(("3".to_owned(), "three".to_owned()), 3, 1)], 3, 4)
+            .await;
+
+        let parts = read
+            .snapshot(Antichain::from_elem(3))
+            .await
+            .expect("as_of unavailable");
+
+        let mut faked = 0;
+        let mut kept_truncated = 0;
+        for mut part in parts {
+            let key: ArrayRef = Arc::new(StringArray::from(vec!["k"]));
+            let val: ArrayRef = Arc::new(StringArray::from(vec!["v"]));
+            part.maybe_optimize(&cache.cfg, key, val);
+            match part.desc.lower().elements() {
+                [0] => {
+                    // Control: an untruncated batch below the as_of gets its
+                    // fetch optimized away.
+                    assert!(!part.bounds_truncated);
+                    assert!(part.part.is_inline(), "expected a faked part");
+                    faked += 1;
+                }
+                [1] => {
+                    // The truncated batch's statistics count the update at 0,
+                    // so the fetch must happen for real.
+                    assert!(part.bounds_truncated);
+                    assert!(
+                        !part.part.is_inline(),
+                        "must not substitute statistics for a truncated part"
+                    );
+                    kept_truncated += 1;
+                }
+                [3] => (),
+                x => panic!("unexpected part lower {:?}", x),
+            }
+        }
+        assert_eq!(faked, 1);
+        assert_eq!(kept_truncated, 1);
     }
 
     // Verifies that we streaming-consolidate away identical key-values in the same batch.

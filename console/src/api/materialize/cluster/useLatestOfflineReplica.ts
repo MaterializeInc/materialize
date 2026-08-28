@@ -14,14 +14,14 @@ import React from "react";
 import { queryBuilder } from "../db";
 import { useSubscribe } from "../useSubscribe";
 
-type ClusterId = string;
+type ReplicaId = string;
 
 export type LatestOfflineReplicaInfo = {
   shouldSurfaceOom: boolean;
   lastOfflineAt: Date;
 };
 
-export type LatestOfflineReplicaMap = Map<ClusterId, LatestOfflineReplicaInfo>;
+export type LatestOfflineReplicaMap = Map<ReplicaId, LatestOfflineReplicaInfo>;
 
 export type QueryPayload = {
   mz_state: string;
@@ -95,16 +95,22 @@ const useLatestOfflineReplica = () => {
   });
 
   const result = React.useMemo(() => {
-    const map = new Map();
+    const map: LatestOfflineReplicaMap = new Map();
     for (const row of data) {
-      const { lastOfflineAt: lastOfflineAt, isOom, clusterId } = row.data;
-      if (!lastOfflineAt) continue;
+      const { lastOfflineAt, isOom, replicaId } = row.data;
+      // `replicaId` comes from a left join, so it is nullable in the type even
+      // though the status filter means a matched row always has one.
+      if (!lastOfflineAt || !replicaId) continue;
 
-      const newLatestOfflineReplicaInfo: LatestOfflineReplicaInfo = {
-        lastOfflineAt: lastOfflineAt,
+      // The subscribe emits one row per process and does not order them, so
+      // compare timestamps rather than letting the last row win.
+      const existing = map.get(replicaId);
+      if (existing && existing.lastOfflineAt >= lastOfflineAt) continue;
+
+      map.set(replicaId, {
+        lastOfflineAt,
         shouldSurfaceOom: isOom && shouldSurfaceOom(new Date(), lastOfflineAt),
-      };
-      map.set(clusterId, newLatestOfflineReplicaInfo);
+      });
     }
 
     return map;

@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/read.rs
-revision: 1af97ffb4d
+revision: 6ebd534824
 ---
 
 # persist-client::read

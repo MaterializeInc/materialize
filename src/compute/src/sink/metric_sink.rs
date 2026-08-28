@@ -197,8 +197,9 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
 /// The source relation exposes `metric_name`, `labels`, `value`, and `help` of the required types,
 /// and `shape_metric_sink_source` adds the `metric_kind` and `name_valid` columns this reads.
 /// `resolve` panics if a column is missing. No tree caller enforces this column contract yet; the
-/// SQL planner will. `metric_name` and `value` may still be `Datum::Null`;
-/// the rest are non-null by construction. Column position within the row is unconstrained.
+/// SQL planner will. `metric_name`, `value`, and the values of the `labels` map may still be
+/// `Datum::Null` (a `map[text=>text]` has no per-value nullability); the columns themselves are
+/// non-null by construction. Column position within the row is unconstrained.
 struct ColumnIndices {
     metric_name: usize,
     labels: usize,
@@ -231,6 +232,10 @@ impl ColumnIndices {
 ///
 /// The planner already did the row-wise shaping.
 ///
+/// A null label value stays `None` rather than being coerced to a string. Neither a null nor a
+/// genuine empty-string value is a representable Prometheus label (an empty value reads as absent),
+/// so a row carrying either is skipped downstream instead of published.
+///
 /// Strings borrow from `datums`, so the caller must own what it needs
 /// (see `SinkState::stage_ok`) before the row backing `datums` is dropped.
 fn extract_row<'a>(
@@ -240,7 +245,7 @@ fn extract_row<'a>(
     &'a str,
     Option<MetricKind>,
     bool,
-    Vec<(&'a str, &'a str)>,
+    Vec<(&'a str, Option<&'a str>)>,
     Option<f64>,
     &'a str,
 ) {
@@ -250,10 +255,10 @@ fn extract_row<'a>(
     };
     let metric_kind = MetricKind::from_datum(datums[cols.metric_kind]);
     let name_valid = matches!(datums[cols.name_valid], Datum::True);
-    let mut labels: Vec<(&str, &str)> = datums[cols.labels]
+    let mut labels: Vec<(&str, Option<&str>)> = datums[cols.labels]
         .unwrap_map()
         .iter()
-        .map(|(k, v)| (k, v.unwrap_str()))
+        .map(|(k, v)| (k, (!v.is_null()).then(|| v.unwrap_str())))
         .collect();
     labels.sort();
     let value = match datums[cols.value] {
@@ -269,7 +274,8 @@ fn extract_row<'a>(
 ///
 /// A null value is its own distinct row identity, not a stand-in for any particular number,
 /// so it is kept apart from every `Some(_)` identity rather than coerced to
-/// one.
+/// one. A null label value is likewise distinct from a `''` value, so `{a => NULL}` and
+/// `{a => ''}` retract only against their own inserts even though both are unpublishable.
 /// The name and labels lead the tuple so that a `BTreeMap<RowKey, _>` keeps all rows of one
 /// `(metric_name, labels)` series adjacent.
 ///
@@ -279,7 +285,7 @@ fn extract_row<'a>(
 /// granularity of the `skipped` count for rows that are never published either way.
 type RowKey = (
     String,
-    Vec<(String, String)>,
+    Vec<(String, Option<String>)>,
     Option<u64>,
     Option<MetricKind>,
     bool,
@@ -363,6 +369,13 @@ fn is_valid_label_name(name: &str) -> bool {
     }
 }
 
+/// Whether a label value can be published as-is. A null (`None`) has no value to encode, and an
+/// empty string reads as absent to Prometheus, so `{a => ''}` would fold into `{}`. Both make the
+/// row that carries them unpublishable.
+fn is_publishable_label_value(value: Option<&str>) -> bool {
+    matches!(value, Some(v) if !v.is_empty())
+}
+
 impl SinkState {
     /// Buffers one ok-collection update under its timestamp.
     ///
@@ -375,7 +388,7 @@ impl SinkState {
         metric_name: &str,
         metric_kind: Option<MetricKind>,
         name_valid: bool,
-        labels: &[(&str, &str)],
+        labels: &[(&str, Option<&str>)],
         value: Option<f64>,
         help: &str,
         time: Timestamp,
@@ -385,7 +398,7 @@ impl SinkState {
             metric_name.to_string(),
             labels
                 .iter()
-                .map(|&(k, v)| (k.to_string(), v.to_string()))
+                .map(|&(k, v)| (k.to_string(), v.map(str::to_string)))
                 .collect(),
             value.map(f64::to_bits),
             metric_kind,
@@ -459,8 +472,8 @@ impl SinkState {
     }
 }
 
-/// Counts live working rows dropped for an unsupported `metric_type` or an invalid Prometheus
-/// metric or label name.
+/// Counts live working rows dropped for an unsupported `metric_type`, an invalid Prometheus
+/// metric or label name, or a null or empty label value.
 fn count_skipped(working: &BTreeMap<RowKey, i64>) -> u64 {
     let mut skipped = 0u64;
     for ((_name, labels, _bits, metric_kind, name_valid, _help), acc) in working {
@@ -468,7 +481,10 @@ fn count_skipped(working: &BTreeMap<RowKey, i64>) -> u64 {
             continue;
         }
         let unsupported = metric_kind.is_none();
-        let invalid = !name_valid || !labels.iter().all(|(k, _)| is_valid_label_name(k));
+        let invalid = !name_valid
+            || !labels
+                .iter()
+                .all(|(k, v)| is_publishable_label_value(v.as_deref()) && is_valid_label_name(k));
         if unsupported || invalid {
             skipped += 1;
         }
@@ -478,6 +494,9 @@ fn count_skipped(working: &BTreeMap<RowKey, i64>) -> u64 {
 
 /// Collapses the live, representable rows of `working` into one published entry per
 /// `(metric_name, labels)` series and counts colliding and null-suppressed series.
+///
+/// A row whose label set is not representable (an invalid label name, or a null or empty label
+/// value) is dropped here and counted by [`count_skipped`] instead.
 ///
 /// A series collides when more than one distinct live non-null value exists for its
 /// `(metric_name, labels)`: a genuine conflict of two source rows, unlike an ordinary
@@ -501,13 +520,31 @@ fn rebuild_published(
         let Some(kind) = metric_kind else {
             continue;
         };
+        // A null or empty label value has no representable Prometheus label (an empty value reads
+        // as absent, folding `{a => ''}` into `{}`), so the whole row is unpublishable. Drop it
+        // rather than emit a series the source never had.
+        let Some(labels) = labels
+            .iter()
+            .map(|(k, v)| {
+                is_publishable_label_value(v.as_deref()).then(|| {
+                    (
+                        k.clone(),
+                        v.as_ref().expect("publishable is non-null").clone(),
+                    )
+                })
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
         if !name_valid || !labels.iter().all(|(k, _)| is_valid_label_name(k)) {
             continue;
         }
-        grouped
-            .entry((name.clone(), labels.clone()))
-            .or_default()
-            .push((bits.map(f64::from_bits), *kind, help.clone()));
+        grouped.entry((name.clone(), labels)).or_default().push((
+            bits.map(f64::from_bits),
+            *kind,
+            help.clone(),
+        ));
     }
 
     let mut published = BTreeMap::new();
@@ -660,7 +697,7 @@ impl SinkCollector {
             ),
             skipped_gauge: gauge(
                 "mz_compute_metric_sink_skipped",
-                "The number of input rows skipped for an unsupported metric type or an invalid name.",
+                "The number of input rows skipped for an unsupported metric type, an invalid name, or a null or empty label value.",
             ),
             conflicts_gauge: gauge(
                 "mz_compute_metric_sink_conflicts",
@@ -727,10 +764,33 @@ mod tests {
     }
 
     /// `label_a()`, borrowed: what `stage_ok` now takes (see `extract_row`).
-    const LABEL_A: &[(&str, &str)] = &[("a", "1")];
+    const LABEL_A: &[(&str, Option<&str>)] = &[("a", Some("1"))];
 
     fn key_m() -> PublishedKey {
         ("m".into(), label_a())
+    }
+
+    /// Mirrors the shaped relation `shape_metric_sink_source` builds: `labels`/`help` are
+    /// non-null by construction, `metric_name`/`value` stay nullable, and `metric_kind`/
+    /// `name_valid` are the planner's computed classification columns.
+    fn shaped_desc() -> RelationDesc {
+        use mz_repr::SqlScalarType;
+
+        RelationDesc::builder()
+            .with_column("metric_name", SqlScalarType::String.nullable(true))
+            .with_column(
+                "labels",
+                SqlScalarType::Map {
+                    value_type: Box::new(SqlScalarType::String),
+                    custom_id: None,
+                }
+                .nullable(false),
+            )
+            .with_column("value", SqlScalarType::Float64.nullable(true))
+            .with_column("help", SqlScalarType::String.nullable(false))
+            .with_column("metric_kind", SqlScalarType::Int32.nullable(true))
+            .with_column("name_valid", SqlScalarType::Bool.nullable(true))
+            .finish()
     }
 
     /// Stages one gauge update for the `(m, {a:1})` series.
@@ -891,26 +951,7 @@ mod tests {
 
     #[mz_ore::test]
     fn extract_row_normalizes_null_datums() {
-        use mz_repr::SqlScalarType;
-
-        // Mirrors the shaped relation `shape_metric_sink_source` builds: `labels`/`help` are
-        // non-null by construction, `metric_name`/`value` stay nullable, and `metric_kind`/
-        // `name_valid` are the planner's computed classification columns.
-        let desc = RelationDesc::builder()
-            .with_column("metric_name", SqlScalarType::String.nullable(true))
-            .with_column(
-                "labels",
-                SqlScalarType::Map {
-                    value_type: Box::new(SqlScalarType::String),
-                    custom_id: None,
-                }
-                .nullable(false),
-            )
-            .with_column("value", SqlScalarType::Float64.nullable(true))
-            .with_column("help", SqlScalarType::String.nullable(false))
-            .with_column("metric_kind", SqlScalarType::Int32.nullable(true))
-            .with_column("name_valid", SqlScalarType::Bool.nullable(true))
-            .finish();
+        let desc = shaped_desc();
         let cols = ColumnIndices::resolve(&desc);
 
         let mut row = Row::default();
@@ -929,9 +970,75 @@ mod tests {
         assert_eq!(name, "");
         assert_eq!(metric_kind, None);
         assert!(!name_valid);
-        assert_eq!(labels, Vec::<(&str, &str)>::new());
+        assert_eq!(labels, Vec::new());
         assert_eq!(value, None);
         assert_eq!(help, "");
+    }
+
+    /// A null map value must survive extraction as `None`; unwrapping it as a string panicked the
+    /// worker and took down the replica.
+    #[mz_ore::test]
+    fn extract_row_keeps_null_label_values() {
+        let desc = shaped_desc();
+        let cols = ColumnIndices::resolve(&desc);
+
+        let mut row = Row::default();
+        {
+            let mut packer = row.packer();
+            packer.push(Datum::String("m"));
+            packer.push_dict_with(|row| {
+                row.push(Datum::String("bad"));
+                row.push(Datum::Null);
+                row.push(Datum::String("good"));
+                row.push(Datum::String("1"));
+            });
+            packer.push(Datum::Float64(1.0.into()));
+            packer.push(Datum::String("h"));
+            packer.push(Datum::Int32(0));
+            packer.push(Datum::True);
+        }
+
+        let datums: Vec<Datum> = row.iter().collect();
+        let (_name, _metric_kind, _name_valid, labels, _value, _help) = extract_row(&cols, &datums);
+        assert_eq!(labels, vec![("bad", None), ("good", Some("1"))]);
+    }
+
+    #[mz_ore::test]
+    fn null_or_empty_label_value_skips_row() {
+        let mut st = SinkState::default();
+        // A null label value has no representable label set: publishes nothing, counts as skipped.
+        st.stage_ok(
+            "m",
+            Some(MetricKind::Gauge),
+            true,
+            &[("a", None)],
+            Some(1.0),
+            "h",
+            Timestamp::from(1),
+            1,
+        );
+        st.integrate(&frontier(2));
+        st.publish_if_healthy();
+        assert!(st.published.is_empty());
+        assert_eq!(st.skipped, 1);
+
+        // An empty label value folds to `{}` in Prometheus, so it is skipped too rather than
+        // published as a bare `{}` series. It is a distinct identity from the null row, so both
+        // stay live and count: `skipped` reaches 2, not 1.
+        st.stage_ok(
+            "m",
+            Some(MetricKind::Gauge),
+            true,
+            &[("a", Some(""))],
+            Some(1.0),
+            "h",
+            Timestamp::from(3),
+            1,
+        );
+        st.integrate(&frontier(4));
+        st.publish_if_healthy();
+        assert!(st.published.is_empty());
+        assert_eq!(st.skipped, 2);
     }
 
     fn pkey(name: &str, labels: &[(&str, &str)]) -> PublishedKey {

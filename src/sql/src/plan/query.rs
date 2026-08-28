@@ -2066,6 +2066,10 @@ fn plan_set_expr(
                     show::plan_show_create_sink(qcx.scx, stmt.clone())?,
                     show::describe_show_create_sink(qcx.scx, stmt)?,
                 ),
+                ShowStatement::ShowCreateMetricSink(stmt) => to_hirscope(
+                    show::plan_show_create_metric_sink(qcx.scx, stmt.clone())?,
+                    show::describe_show_create_metric_sink(qcx.scx, stmt)?,
+                ),
                 ShowStatement::ShowCreateSource(stmt) => to_hirscope(
                     show::plan_show_create_source(qcx.scx, stmt.clone())?,
                     show::describe_show_create_source(qcx.scx, stmt)?,

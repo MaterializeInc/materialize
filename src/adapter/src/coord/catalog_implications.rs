@@ -39,7 +39,7 @@ use mz_catalog::memory::objects::{
 };
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::logging::LogVariant;
-use mz_compute_client::protocol::response::PeekResponse;
+use mz_compute_client::protocol::response::{PeekError, PeekResponse};
 use mz_controller::clusters::{ClusterRole, ReplicaConfig};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
@@ -697,9 +697,11 @@ impl Coordinator {
         // Apply replica-scoped overrides after clusters are created (so their
         // compute instances exist) but before replicas are created below. The
         // override layer must be set before `create_replica`, so the new
-        // replica's first configuration replays with its override. The push
-        // reads the catalog working copy, which already reflects this
-        // transaction's scoped-config changes.
+        // replica's first configuration replays with its override, and so the
+        // configuration the controller freezes into the replica's process at
+        // provisioning time resolves against it. The push reads the catalog
+        // working copy, which already reflects this transaction's scoped-config
+        // changes.
         if replica_scoped_config_changed {
             self.push_replica_dyncfg_overrides();
         }
@@ -999,7 +1001,9 @@ impl Coordinator {
             if !peeks_to_drop.is_empty() {
                 for (dep, uuid) in peeks_to_drop {
                     if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
-                        let cancel_reason = PeekResponse::Error(dep.query_terminated_error());
+                        let cancel_reason = PeekResponse::Error(PeekError::unstructured(
+                            dep.query_terminated_error(),
+                        ));
                         self.controller
                             .compute
                             .cancel_peek(pending_peek.cluster_id, uuid, cancel_reason)

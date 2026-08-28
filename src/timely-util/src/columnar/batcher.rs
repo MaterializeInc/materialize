@@ -260,23 +260,13 @@ where
 /// satisfying `cmp` — useful when one side of a sorted merge has long runs
 /// dominated by the other side.
 pub(crate) fn gallop(upper: usize, lower: &mut usize, mut cmp: impl FnMut(usize) -> bool) {
-    // If `cmp` is already false at `*lower`, the run is empty — nothing to do.
     if *lower < upper && cmp(*lower) {
-        // Phase 1 (overshoot): advance by exponentially growing steps as long
-        // as `cmp` holds. After this loop, `*lower` is the last position we
-        // confirmed satisfies `cmp`, and `*lower + step` either falls off the
-        // end or fails `cmp`. The boundary is somewhere in `(*lower, *lower +
-        // step]`.
         let mut step = 1;
         while *lower + step < upper && cmp(*lower + step) {
             *lower += step;
             step <<= 1;
         }
 
-        // Phase 2 (binary descent): halve `step` and probe `*lower + step`,
-        // accepting the advance only when `cmp` still holds. This narrows the
-        // search range by half each iteration, settling on the largest index
-        // still satisfying `cmp`.
         step >>= 1;
         while step > 0 {
             if *lower + step < upper && cmp(*lower + step) {
@@ -285,8 +275,8 @@ pub(crate) fn gallop(upper: usize, lower: &mut usize, mut cmp: impl FnMut(usize)
             step >>= 1;
         }
 
-        // `*lower` now points at the last index where `cmp` holds; the caller
-        // wants the first index where it doesn't, so step past it.
+        // `*lower` is the last index where `cmp` holds; step to the first
+        // where it does not.
         *lower += 1;
     }
 }
@@ -344,12 +334,10 @@ where
             1 => {
                 let other = &mut others[0];
                 let pos = &mut positions[0];
-                // If `self` is empty and `*pos == 0`, we can bulk swap in the other chunk.
                 if self.is_empty() && *pos == 0 {
                     std::mem::swap(self, other);
                     return false;
                 }
-                // Otherwise, bulk copy the remaining data from `other[*pos..]` into `self`.
                 let Column::Typed(self_c) = self else {
                     unreachable!("merger chunks are always Column::Typed");
                 };
@@ -476,11 +464,9 @@ where
                                 gallop(upper_l, &mut left_pos[0], |i| {
                                     (l_d.get(i), l_t.get(i)) < (d2, t2)
                                 });
-                                // Per-leaf bulk copy of the run. Each
-                                // call resolves to an `extend_from_slice`
-                                // on its leaf (recursively for nested
-                                // leaves), which the compiler can
-                                // autovectorize.
+                                // Per-leaf bulk copy of the run: each call
+                                // resolves to an `extend_from_slice` on its
+                                // leaf (recursively for nested leaves).
                                 sd.extend_from_self(l_d, start..left_pos[0]);
                                 st.extend_from_self(l_t, start..left_pos[0]);
                                 sr.extend_from_self(l_r, start..left_pos[0]);
@@ -531,8 +517,6 @@ where
             }
             // `Merger::merge` only ever calls `merge_from` with 0/1/2-input
             // slices (k-way merge isn't part of the merge-batcher contract).
-            // Defensive guard: if someone bumps that, this will panic
-            // immediately rather than silently produce wrong output.
             n => unreachable!("merge_from called with {n} inputs; expected 0, 1, or 2"),
         }
     }
@@ -565,12 +549,6 @@ where
         let self_view = self.borrow();
         let len = self_view.len();
 
-        // Yield to the framework when either output buffer reaches the
-        // ship threshold, so it can ship a full chunk and hand back a
-        // fresh one. Required by the merger's extract contract: the
-        // framework only checks `at_capacity` between calls, so without
-        // an inner-loop yield a single call can fill an output well past
-        // threshold.
         use columnar::Borrow as _;
         let mut owned_t = T::default();
         while *position < len
@@ -592,19 +570,11 @@ where
     }
 }
 
-/// `Merger` impl driving [`MergeBatcher`] over [`Column`]-shaped chunks.
-///
-/// `merge` walks two sorted chains of chunks in lockstep, calling
-/// `Column::merge_from` to consume up to one ship-threshold's worth of input
-/// per pass and shipping `result` to `output` whenever it crosses
-/// `at_capacity`. Exhausted input chunks are reset and pushed to `stash` for
-/// reuse. The drain phase appends remaining full chunks to `output`
-/// directly, with no per-element copy.
-///
-/// `extract` walks each chunk via `Column::extract`, partitioning records
-/// into `kept` (times beyond `upper`) and `ship` (sealed into the output
-/// batch); both grow chunk-by-chunk under the same `at_capacity` ship
-/// signal.
+/// `Merger` impl driving [`MergeBatcher`] over [`Column`]-shaped chunks,
+/// built on the inherent `Column::merge_from` and `Column::extract` methods.
+/// Exhausted input chunks are recycled through `stash`, and remaining full
+/// chunks on a drained side move to the output directly, with no per-element
+/// copy.
 ///
 /// [`MergeBatcher`]: differential_dataflow::trace::implementations::merge_batcher::MergeBatcher
 impl<D, T, R> Merger for ColumnMerger<D, T, R>
@@ -644,20 +614,13 @@ where
                 break;
             }
 
-            // Whole-chunk passthrough fast path. When one head's tail (from
-            // its current position) is sortable-before the other head's
-            // current record, the entire tail can be appended to `output`
-            // without per-record compares or per-leaf byte copies.
-            //
-            // Two probes (one record from each side) settle this — when it
-            // fires, it skips an entire `merge_from` invocation, including
-            // its gallop bulk-copies, and replaces the byte-level extend
-            // with a `mem::replace` of the head into `output`.
-            //
-            // Restricted to `positions[i] == 0` so we can hand the head off
-            // wholesale; partial-tail passthrough would require a 1-input
-            // `merge_from` to materialize the tail into a new chunk, which
-            // is what gallop already handles inside the merge loop.
+            // Whole-chunk passthrough fast path: when one head's tail (from
+            // its current position) sorts entirely before the other head's
+            // current record, the head moves to `output` wholesale, with two
+            // probe records in place of per-record compares and per-leaf
+            // byte copies. Restricted to `positions[i] == 0` so the head can
+            // be handed off intact; a partial tail is what gallop already
+            // handles inside the merge loop.
             let lhs_passthrough = positions[0] == 0 && upper_l > 0 && {
                 let lhs = heads[0].borrow();
                 let rhs = heads[1].borrow();

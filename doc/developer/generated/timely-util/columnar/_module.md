@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/columnar.rs
-revision: f0cdedca04
+revision: 32dcad4ade
 ---
 
 # timely-util::columnar
@@ -12,3 +12,4 @@ The `SizableContainer::at_capacity` implementation uses `at_serialized_capacity`
 The `batcher` submodule provides `Chunker` and `ColumnChunker` for sorting and consolidating columnar updates, the `builder` submodule provides `ColumnBuilder` for assembling batched aligned allocations, the `builder_input` submodule provides input container types for column builders, the `chunk` submodule provides `ColumnChunk`, a pool-spillable chunk type over `Column`-shaped sorted updates, the `consolidate` submodule provides consolidation utilities for columnar containers, the `merge_batcher` submodule provides `ColumnMergeBatcher`, a pager-aware merge batcher, and the `unload` submodule provides `UnloadChunk` and `UnloadBatch`, a bulk-read interface for extracting updates matching a sorted probe set from a chunk or batch without holding a reference into pool memory across calls.
 `Col2ValBatcher` and `Col2KeyBatcher` type aliases tie these pieces together, using `MergeBatcher<ColInternalMerger<...>>` where `ColInternalMerger` is the merge strategy from `mz_timely_util::columnation`.
 `Col2ValPagedBatcher<K, V, T, R>` is the pageable counterpart to `Col2ValBatcher`: it routes every chunk produced by chunking, merging, or extract through a `ColumnPager`, so memory pressure can spill chains to a backing store without touching the merge/extract bodies. It is an alias for `merge_batcher::ColumnMergeBatcher<(K, V), T, R>` and defaults to `ColumnPager::disabled`; inject a real pager via `ColumnMergeBatcher::set_pager`.
+`Col2ValColBatcher<K, V, T, R>` is a columnar-native counterpart to `Col2ValBatcher`, holding `Column` chunks rather than columnation stacks and merging them via `batcher::ColumnMerger`. It pairs with `batcher::ColumnChunker` and any builder whose `Input` is `Column<((K, V), T, R)>`; unlike `Col2ValPagedBatcher`, the chains stay resident with no pager and no spill budget.

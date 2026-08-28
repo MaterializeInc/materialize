@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog.rs
-revision: 39dcae2fba
+revision: c317ceee3c
 ---
 
 # adapter::catalog
@@ -15,3 +15,4 @@ Re-exports include `InjectedAuditEvent` from `transact`. Builtin materialized vi
 `Catalog::allocate_user_replica_ids`, `allocate_system_replica_ids`, and `allocate_replica_ids` delegate to the durable store to pre-allocate replica IDs out-of-band before a catalog transaction. `allocate_replica_ids` dispatches to user or system allocation based on the owning cluster's ID type.
 `Catalog::register_temporary_namespace` registers a connection's temporary namespace (the UUID-to-connection mapping used to stamp durable temporary items) before the first temporary-item transaction for that session. `Catalog::drop_temporary_namespace` removes the namespace when the session terminates. The `mz_temp` schema itself is created lazily when the first temporary item is applied.
 `CommentObjectId::MetricSink` maps to `ObjectType::MetricSink`; `COMMENT ON METRIC SINK` is rejected at parse, so no metric-sink comment id is built in practice. The arm exists only for exhaustiveness.
+The `pg_type` descriptor test fetches `typsend::oid as typsend` from PostgreSQL in addition to `typinput` and `typreceive`, and asserts that each builtin type's `pgmeta.typsend_oid` matches the PostgreSQL value. Unlike `typinput` and `typreceive`, the `*send` functions are not registered as builtins, so `typsend` OIDs are not cross-checked against `func_oids`.

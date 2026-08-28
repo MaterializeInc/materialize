@@ -35,7 +35,7 @@ use uuid::Uuid;
 
 use crate::types::{NumericConstraints, UINT2, UINT4, UINT8};
 use crate::value::error::{IntoDatumError, NulCharacterError};
-use crate::{Interval, Jsonb, Numeric, Type, UInt2, UInt4, UInt8};
+use crate::{Interval, Jsonb, Numeric, Type, UInt2, UInt4, UInt8, regproc};
 
 pub mod error;
 pub mod interval;
@@ -92,6 +92,12 @@ pub enum Value {
     Numeric(Numeric),
     /// An object identifier.
     Oid(u32),
+    /// An object identifier naming a function.
+    ///
+    /// Kept distinct from [`Value::Oid`] because the text encoding resolves the
+    /// OID to the function's name, matching PostgreSQL's `regprocout`. The
+    /// binary encoding is identical to an `oid`, as it is in PostgreSQL.
+    RegProc(u32),
     /// A sequence of heterogeneous values.
     Record(Vec<Option<Value>>),
     /// A time.
@@ -141,8 +147,12 @@ impl Value {
             (Datum::UInt8(c), SqlScalarType::PgLegacyChar) => Some(Value::Char(c)),
             (Datum::UInt16(u), SqlScalarType::UInt16) => Some(Value::UInt2(UInt2(u))),
             (Datum::UInt32(oid), SqlScalarType::Oid) => Some(Value::Oid(oid)),
+            (Datum::UInt32(oid), SqlScalarType::RegProc) => Some(Value::RegProc(oid)),
+            // NOTE: `regclass` and `regtype` collapse into `Value::Oid`, so they
+            // render as digits where PostgreSQL renders a name. Unlike `regproc`
+            // they can name objects a user created, which no static table can
+            // know. Resolution for those two lives in the SQL cast to `text`.
             (Datum::UInt32(oid), SqlScalarType::RegClass) => Some(Value::Oid(oid)),
-            (Datum::UInt32(oid), SqlScalarType::RegProc) => Some(Value::Oid(oid)),
             (Datum::UInt32(oid), SqlScalarType::RegType) => Some(Value::Oid(oid)),
             (Datum::UInt32(u), SqlScalarType::UInt32) => Some(Value::UInt4(UInt4(u))),
             (Datum::UInt64(u), SqlScalarType::UInt64) => Some(Value::UInt8(UInt8(u))),
@@ -305,7 +315,7 @@ impl Value {
                     })
                 })?
             }
-            Value::Oid(oid) => Datum::UInt32(oid),
+            Value::Oid(oid) | Value::RegProc(oid) => Datum::UInt32(oid),
             Value::Record(_) => {
                 // This situation is handled gracefully by Value::decode; if we
                 // wind up here it's a programming error.
@@ -422,6 +432,14 @@ impl Value {
             })
             .expect("provided closure never fails"),
             Value::Oid(oid) => strconv::format_uint32(buf, *oid),
+            // Mirrors PostgreSQL's `regprocout`.
+            Value::RegProc(oid) => match *oid {
+                0 => strconv::format_string(buf, REGPROC_NULL),
+                oid => match regproc::name(oid) {
+                    Some(name) => strconv::format_string(buf, name),
+                    None => strconv::format_uint32(buf, oid),
+                },
+            },
             Value::Record(elems) => strconv::format_record(buf, elems, |buf, elem| match elem {
                 None => Ok::<_, ()>(buf.write_null()),
                 Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer(), settings)),
@@ -544,7 +562,9 @@ impl Value {
                 Err("binary encoding of map types is not implemented".into())
             }
             Value::Name(s) => s.to_sql(&PgType::NAME, buf),
-            Value::Oid(i) => i.to_sql(&PgType::OID, buf),
+            // PostgreSQL's `regprocsend` is `int4send`, so binary is identical to
+            // an `oid`.
+            Value::Oid(i) | Value::RegProc(i) => i.to_sql(&PgType::OID, buf),
             Value::Record(fields) => {
                 let nfields = pg_len("record field length", fields.len())?;
                 buf.put_i32(nfields);
@@ -734,9 +754,8 @@ impl Value {
                 strconv::parse_numeric(s)?,
                 constraints.as_ref(),
             )?)),
-            Type::Oid | Type::RegClass | Type::RegProc | Type::RegType => {
-                Value::Oid(strconv::parse_oid(s)?)
-            }
+            Type::Oid | Type::RegClass | Type::RegType => Value::Oid(strconv::parse_oid(s)?),
+            Type::RegProc => Value::RegProc(parse_regproc(s)?),
             Type::Record(_) => {
                 return Err("input of anonymous composite types is not implemented".into());
             }
@@ -844,9 +863,10 @@ impl Value {
                 strconv::parse_numeric(s)?,
                 constraints.as_ref(),
             )?)),
-            Type::Oid | Type::RegClass | Type::RegProc | Type::RegType => {
+            Type::Oid | Type::RegClass | Type::RegType => {
                 packer.push(Datum::UInt32(strconv::parse_oid(s)?))
             }
+            Type::RegProc => packer.push(Datum::UInt32(parse_regproc(s)?)),
             Type::Record(_) => {
                 return Err("input of anonymous composite types is not implemented".into());
             }
@@ -933,9 +953,10 @@ impl Value {
                     constraints.as_ref(),
                 )?)))
             }
-            Type::Oid | Type::RegClass | Type::RegProc | Type::RegType => {
+            Type::Oid | Type::RegClass | Type::RegType => {
                 u32::from_sql(ty.inner(), raw).map(Value::Oid)
             }
+            Type::RegProc => u32::from_sql(ty.inner(), raw).map(Value::RegProc),
             Type::Record(_) => Err("input of anonymous composite types is not implemented".into()),
             Type::Text => decode_binary_string(ty, raw).map(Value::Text),
             Type::BpChar { .. } => decode_binary_string(ty, raw).map(Value::BpChar),
@@ -984,6 +1005,44 @@ impl Value {
             Type::AclItem => Err("aclitem has no binary encoding".into()),
         }
     }
+}
+
+/// The text PostgreSQL's `regprocout` emits for OID 0, and that `regprocin`
+/// reads back as OID 0.
+const REGPROC_NULL: &str = "-";
+
+/// Parses the text format of a `regproc`, matching PostgreSQL's `regprocin`.
+///
+/// Accepting names is what keeps a `COPY ... TO` rendering loadable by
+/// `COPY ... FROM`, since the text encoding emits names. An overloaded name
+/// renders schema-qualified and names every one of its impls, so it does not
+/// round trip, which is true of PostgreSQL as well.
+fn parse_regproc(s: &str) -> Result<u32, Box<dyn Error + Sync + Send>> {
+    if s == REGPROC_NULL {
+        return Ok(0);
+    }
+    match regproc::oid(s) {
+        Ok(oid) => Ok(oid),
+        // PostgreSQL refuses the same input rather than picking an overload.
+        Err(regproc::NameLookupError::Ambiguous) => {
+            Err(format!("more than one function named \"{}\"", s).into())
+        }
+        Err(regproc::NameLookupError::NotFound) => match strconv::parse_oid(s) {
+            Ok(oid) => Ok(oid),
+            // Number-shaped input keeps its numeric diagnosis, which is what
+            // reports an out of range OID. Anything else was meant as a name, so
+            // report a missing function, matching PostgreSQL.
+            Err(err) if is_number_shaped(s) => Err(err.into()),
+            Err(_) => Err(format!("function \"{}\" does not exist", s).into()),
+        },
+    }
+}
+
+/// Whether `s` is shaped like a decimal number, ignoring whether it is in range.
+fn is_number_shaped(s: &str) -> bool {
+    let digits = s.trim();
+    let digits = digits.strip_prefix(['+', '-']).unwrap_or(digits);
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// Session settings that affect how values are encoded as text.
@@ -1156,6 +1215,71 @@ mod tests {
                 .encode_binary(&pg_ty, &mut buf)
                 .expect("encode_binary must succeed when binary_encoding_error returns Ok");
         });
+    }
+
+    /// A `regproc` renders as the function's name in text format and as a bare
+    /// OID in binary, which is what PostgreSQL's `regprocout` and
+    /// `regprocsend` do.
+    #[mz_ore::test]
+    fn regproc_text_encoding_resolves_names() {
+        // 1242 is `boolin`, uniquely named. 1398 is one of six `abs` overloads,
+        // so PostgreSQL qualifies it. 99999 names no function. The qualified
+        // overload does not round trip, because its rendering names all six.
+        for (oid, expected, round_trips) in [
+            (0, "-", true),
+            (1242, "boolin", true),
+            (1398, "pg_catalog.abs", false),
+            (99999, "99999", true),
+            (u32::MAX, "4294967295", true),
+        ] {
+            let mut buf = BytesMut::new();
+            Value::from_datum(Datum::UInt32(oid), &SqlScalarType::RegProc)
+                .expect("a non-null datum encodes")
+                .encode_text(&mut buf, TextEncodeSettings::STABLE);
+            assert_eq!(str::from_utf8(&buf).unwrap(), expected, "regproc {oid}");
+
+            if round_trips {
+                let Value::RegProc(decoded) = Value::decode_text(&Type::RegProc, &buf).unwrap()
+                else {
+                    panic!("decoding a regproc must yield Value::RegProc");
+                };
+                assert_eq!(decoded, oid, "text rendering {expected} did not round trip");
+            }
+
+            let mut binary = BytesMut::new();
+            Value::RegProc(oid)
+                .encode_binary(&Type::RegProc, &mut binary)
+                .expect("regproc has a binary encoding");
+            assert_eq!(&binary[..], &oid.to_be_bytes()[..], "regproc {oid} binary");
+        }
+    }
+
+    /// An overloaded name is an error rather than an arbitrary choice, which is
+    /// what PostgreSQL does too.
+    #[mz_ore::test]
+    fn regproc_text_decoding_rejects_ambiguous_names() {
+        assert_eq!(
+            Value::decode_text(&Type::RegProc, b"pg_catalog.abs")
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+                .unwrap_err(),
+            "more than one function named \"pg_catalog.abs\"",
+        );
+        assert_eq!(
+            Value::decode_text(&Type::RegProc, b"no_such_function")
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+                .unwrap_err(),
+            "function \"no_such_function\" does not exist",
+        );
+        let out_of_range = Value::decode_text(&Type::RegProc, b"99999999999999")
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+            .unwrap_err();
+        assert!(
+            out_of_range.starts_with("invalid input syntax for type oid"),
+            "unexpected error for an out of range OID: {out_of_range}",
+        );
     }
 
     /// [`format_float_limited`] must match C's `%.*g`, which PostgreSQL's

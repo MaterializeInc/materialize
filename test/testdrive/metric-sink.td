@@ -191,3 +191,36 @@ contains:still depended upon by metric sink "s"
 0
 
 > DROP TABLE t
+
+# A null or empty label *value* has no representable Prometheus label set: a null has nothing to
+# encode, and an empty value reads as absent to Prometheus, which would fold `{a => ''}` into `{}`.
+# The sink skips the whole row and counts it in `mz_compute_metric_sink_skipped` rather than
+# publish a mislabeled series. `map_build` keeps a null value (it drops only null keys), so the two
+# rows reach the sink as `{a => NULL}` and `{a => ''}`, distinct identities that are each skipped.
+> CREATE TABLE lt (lv text)
+
+> INSERT INTO lt VALUES (NULL), ('')
+
+> CREATE VIEW lv AS
+  SELECT 'skip_test'::text AS metric_name,
+         'gauge'::text AS metric_type,
+         map_build(LIST[ROW('a', lv)])::map[text=>text] AS labels,
+         1::double AS value,
+         'a metric skipped by the metric sink e2e test'::text AS help
+  FROM lt
+
+> CREATE METRIC SINK s_skip IN CLUSTER quickstart FROM lv WITH (PREFIX = 'mz_metric_sink_skip_')
+
+# Both rows are skipped and stay distinct (a null value is not the same identity as an empty one),
+# so the gauge reads 2, not 1. This retrying read also waits for the scrape to observe the sink;
+# `s_skip` is the only metric sink here, so no `sink`-label filter is needed.
+> SELECT value FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_skipped'
+2
+
+# Neither row publishes a series under the sink's metric name.
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_skip_skip_test'
+0
+
+> DROP TABLE lt CASCADE

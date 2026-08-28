@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/lib.rs
-revision: 40e5dd1af8
+revision: c6be08fe4f
 ---
 
 # mz-expr

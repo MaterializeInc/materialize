@@ -21,7 +21,7 @@ use differential_dataflow::trace::Description;
 use futures::{Stream, pin_mut};
 use futures_util::StreamExt;
 use itertools::Either;
-use mz_dyncfg::Config;
+use mz_dyncfg::{Config, ParameterScope};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::now::NowFn;
@@ -145,6 +145,7 @@ pub(crate) const COMPACTION_MINIMUM_TIMEOUT: Config<Duration> = Config::new(
     "\
     The minimum amount of time to allow a persist compaction request to run \
     before timing it out (Materialize).",
+    ParameterScope::Environment,
 );
 
 pub(crate) const COMPACTION_CHECK_PROCESS_FLAG: Config<bool> = Config::new(
@@ -152,6 +153,7 @@ pub(crate) const COMPACTION_CHECK_PROCESS_FLAG: Config<bool> = Config::new(
     true,
     "Whether Compactor will obey the process_requests flag in PersistConfig, \
         which allows dynamically disabling compaction. If false, all compaction requests will be processed.",
+    ParameterScope::Environment,
 );
 
 /// Create a `[CompactionInput::IdRange]` from a set of `SpineId`s.

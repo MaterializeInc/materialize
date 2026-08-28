@@ -25,6 +25,7 @@ import { useSegment } from "~/analytics/segment";
 import Alert from "~/components/Alert";
 import { SecretCopyableBox } from "~/components/copyableComponents";
 import TextLink from "~/components/TextLink";
+import { SUPPORT_CHAT_URL } from "~/externalUrls";
 import {
   EmptyListHeader,
   EmptyListHeaderContents,
@@ -273,7 +274,7 @@ export const LicenseInformationContent = ({
               Questions about your license?{" "}
               <TextLink
                 as="a"
-                href="https://materialize.com/s/chat"
+                href={SUPPORT_CHAT_URL}
                 target="_blank"
                 rel="noreferrer"
               >

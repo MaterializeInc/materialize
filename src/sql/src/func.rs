@@ -3844,7 +3844,12 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 // prevents `sum(NULL)` from choosing the `Float64`
                 // implementation, so that we match PostgreSQL's behavior.
                 // Plus we will one day want to support this overload.
-                bail_unsupported!("sum(interval)");
+                //
+                // The message mentions `avg` because `avg(interval)` desugars
+                // to `sum(interval) / count(interval)` before type checking
+                // (see `plan_avg` in `transform_ast.rs`), so this error is all
+                // a user who typed only `avg` gets to see.
+                bail_unsupported!("sum(interval) and avg(interval)");
             }) => Interval, 2113;
         },
 

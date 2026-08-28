@@ -3059,3 +3059,27 @@ statement ok
 CREATE MATERIALIZED VIEW json_mv AS (
     SELECT * FROM jsons WHERE random_id = CAST(payload->>'my_field' AS uuid list)[random_index]
 )
+
+# ANY/ALL over a list desugars through the same `unnest` subquery as ANY/ALL over
+# an array, so a NULL list yields NULL while an empty list yields the empty-set
+# answer.
+
+query B
+SELECT 1 = ANY(NULL::int list)
+----
+NULL
+
+query B
+SELECT 1 = ALL(NULL::int list)
+----
+NULL
+
+query B
+SELECT 1 = ANY(LIST[]::int list)
+----
+false
+
+query B
+SELECT 1 = ALL(LIST[]::int list)
+----
+true

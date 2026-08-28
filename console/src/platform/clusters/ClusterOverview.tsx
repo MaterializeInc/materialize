@@ -234,7 +234,7 @@ const ClusterOverview = () => {
                     endTime={data.endDate}
                     offlineEvents={data.offlineEvents}
                     replicaColorMap={replicaColorMap}
-                    title="Memory Utilization"
+                    title="Heap Utilization"
                   />
                 </GridItem>
                 {clusterHasDisk && (

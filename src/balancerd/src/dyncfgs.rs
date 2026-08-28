@@ -13,7 +13,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use mz_dyncfg::{Config, ConfigSet, ConfigUpdates};
+use mz_dyncfg::{Config, ConfigSet, ConfigUpdates, ParameterScope};
 use mz_tracing::params::TracingParameters;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use tracing_subscriber::filter::Directive;
@@ -27,6 +27,7 @@ pub const SIGTERM_CONNECTION_WAIT: Config<Duration> = Config::new(
     "balancerd_sigterm_connection_wait",
     Duration::from_secs(60 * 9),
     "Duration to wait after listeners closed via SIGTERM for outstanding connections to complete.",
+    ParameterScope::Environment,
 );
 
 /// Duration to wait after SIGTERM to begin shutdown of servers.
@@ -34,6 +35,7 @@ pub const SIGTERM_LISTEN_WAIT: Config<Duration> = Config::new(
     "balancerd_sigterm_listen_wait",
     Duration::from_secs(60),
     "Duration to wait after SIGTERM to begin shutdown of servers.",
+    ParameterScope::Environment,
 );
 
 /// Whether to inject tcp proxy protocol headers to downstream http servers.
@@ -41,6 +43,7 @@ pub const INJECT_PROXY_PROTOCOL_HEADER_HTTP: Config<bool> = Config::new(
     "balancerd_inject_proxy_protocol_header_http",
     false,
     "Whether to inject tcp proxy protocol headers to downstream http servers.",
+    ParameterScope::Environment,
 );
 
 /// Sets the filter to apply to stderr logging.
@@ -48,6 +51,7 @@ pub const LOGGING_FILTER: Config<&str> = Config::new(
     "balancerd_log_filter",
     "info",
     "Sets the filter to apply to stderr logging.",
+    ParameterScope::Environment,
 );
 
 /// Sets the filter to apply to OpenTelemetry-backed distributed tracing.
@@ -55,6 +59,7 @@ pub const OPENTELEMETRY_FILTER: Config<&str> = Config::new(
     "balancerd_opentelemetry_filter",
     "info",
     "Sets the filter to apply to OpenTelemetry-backed distributed tracing.",
+    ParameterScope::Environment,
 );
 
 /// Sets additional default directives to apply to stderr logging.
@@ -66,6 +71,7 @@ pub const LOGGING_FILTER_DEFAULTS: Config<fn() -> String> = Config::new(
     "Sets additional default directives to apply to stderr logging. \
     These apply to all variations of `log_filter`. Directives other than \
     `module=off` are likely incorrect. Comma separated list.",
+    ParameterScope::Environment,
 );
 
 /// Sets additional default directives to apply to OpenTelemetry-backed
@@ -79,6 +85,7 @@ pub const OPENTELEMETRY_FILTER_DEFAULTS: Config<fn() -> String> = Config::new(
     distributed tracing. \
     These apply to all variations of `opentelemetry_filter`. Directives other than \
     `module=off` are likely incorrect. Comma separated list.",
+    ParameterScope::Environment,
 );
 
 /// Sets additional default directives to apply to sentry logging. \
@@ -90,6 +97,7 @@ pub const SENTRY_FILTERS: Config<fn() -> String> = Config::new(
     "Sets additional default directives to apply to sentry logging. \
     These apply on top of a default `info` directive. Directives other than \
     `module=off` are likely incorrect. Comma separated list.",
+    ParameterScope::Environment,
 );
 
 /// Adds the full set of all balancer `Config`s.

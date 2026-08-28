@@ -1,6 +1,6 @@
 ---
 source: src/compute-types/src/plan/render_plan.rs
-revision: e926ec3a86
+revision: c6be08fe4f
 ---
 
 # compute-types::plan::render_plan

@@ -18,6 +18,7 @@ import React, { ReactElement } from "react";
 import {
   BrowserRouter,
   MemoryRouter,
+  MemoryRouterProps,
   Route,
   useLocation,
 } from "react-router-dom";
@@ -134,7 +135,7 @@ export const renderComponent = async (
   element: ReactElement,
   options: {
     initializeState?: InitializeStateFn;
-    initialRouterEntries?: string[];
+    initialRouterEntries?: MemoryRouterProps["initialEntries"];
     queryClient?: QueryClient;
   } = {},
 ) => {
@@ -161,7 +162,7 @@ export interface ProviderWrapperProps {
       }
     | {
         type: "MEMORY_ROUTER";
-        initialRouterEntries?: string[];
+        initialRouterEntries?: MemoryRouterProps["initialEntries"];
       };
 
   queryClient?: QueryClient;

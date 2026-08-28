@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/internal/compact.rs
-revision: f0cdedca04
+revision: 5a4a36c4fd
 ---
 
 # persist-client::internal::compact

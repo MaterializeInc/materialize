@@ -93,12 +93,14 @@ use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::FRONTEND_READ_THEN_WRITE;
 use mz_adapter_types::dyncfgs::{
-    USER_ID_POOL_BATCH_SIZE, WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
+    ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS, USER_ID_POOL_BATCH_SIZE,
+    WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
 };
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{
-    BUILTINS, BUILTINS_STATIC, MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY, MZ_STORAGE_USAGE_BY_SHARD,
+    BUILTINS, BUILTINS_STATIC, MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY, MZ_OBJECT_HYDRATION_HISTORY,
+    MZ_STORAGE_USAGE_BY_SHARD,
 };
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
 use mz_catalog::durable::OpenableDurableCatalogState;
@@ -129,7 +131,7 @@ use mz_ore::channel::trigger::Trigger;
 use mz_ore::future::TimeoutError;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_ore::task::{JoinHandle, spawn};
+use mz_ore::task::{AbortOnDropHandle, JoinHandle, spawn};
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::url::SensitiveUrl;
@@ -149,7 +151,7 @@ use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{CatalogCluster, EnvironmentId};
-use mz_sql::names::{QualifiedItemName, ResolvedIds, SchemaSpecifier};
+use mz_sql::names::{QualifiedItemName, ResolvedIds};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{
     self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, HirRelationExpr,
@@ -171,6 +173,7 @@ use mz_storage_types::sources::{IngestionDescription, SourceExport, Timeline};
 use mz_timestamp_oracle::{TimestampOracleConfig, WriteTimestamp};
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
+use semver::Version;
 use serde::Serialize;
 use thiserror::Error;
 use timely::progress::{Antichain, Timestamp as _};
@@ -235,6 +238,7 @@ mod caught_up;
 mod command_handler;
 mod ddl;
 pub(crate) mod group_sync;
+mod hydration_history;
 mod indexes;
 mod info_metrics;
 mod introspection;
@@ -242,6 +246,17 @@ mod message_handler;
 mod privatelink_status;
 mod sql;
 mod validity;
+
+/// The oldest leader version against which a replacement-migrated builtin materialized view may
+/// write its new persist shard while this environment is still read-only.
+///
+/// Every builtin materialized view reads `mz_internal.mz_catalog_raw`, so its dataflow only makes
+/// progress up to the catalog shard's frontier. Holding that frontier at the current time is the
+/// leader's job, and leaders only started doing it in v26.17 (PR #35402). Write-enable such an MV
+/// against an older leader and it sits at a stale frontier and never reports caught up, which
+/// blocks promotion outright instead of merely leaving the collection cold at cut-over. We still
+/// support upgrading from before v26.17, so that leader is a real case, not a hypothetical.
+const MIN_LEADER_VERSION_FOR_MIGRATED_MV_WRITES: Version = Version::new(26, 17, 0);
 
 /// A pool of pre-allocated user IDs to avoid per-DDL persist writes.
 ///
@@ -385,6 +400,8 @@ pub enum Message {
     ArrangementSizesSnapshot,
     ArrangementSizesWrite(Vec<ArrangementSizeRecord>),
     ArrangementSizesPrune(Vec<BuiltinTableUpdate>),
+    HydrationHistorySchedule,
+    HydrationHistoryRun,
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
@@ -540,6 +557,8 @@ impl Message {
             Message::ArrangementSizesSnapshot => "arrangement_sizes_snapshot",
             Message::ArrangementSizesWrite(_) => "arrangement_sizes_write",
             Message::ArrangementSizesPrune(_) => "arrangement_sizes_prune",
+            Message::HydrationHistorySchedule => "hydration_history_schedule",
+            Message::HydrationHistoryRun => "hydration_history_run",
             Message::RetireExecute { .. } => "retire_execute",
             Message::ExecuteSingleStatementTransaction { .. } => {
                 "execute_single_statement_transaction"
@@ -2094,6 +2113,10 @@ pub struct Coordinator {
     connection_cancel_watches: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
     /// Active introspection subscribes.
     introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
+    /// The last replica visited by the sequential hydration-history sweep.
+    hydration_history_replica_cursor: Option<ReplicaId>,
+    /// Hydration-history sweep owned by the coordinator while one is in flight.
+    hydration_history_sweep: Option<AbortOnDropHandle<()>>,
 
     /// Locks that grant access to a specific object, populated lazily as objects are written to.
     write_locks: BTreeMap<CatalogItemId, Arc<tokio::sync::Mutex<()>>>,
@@ -2349,20 +2372,15 @@ impl Coordinator {
         })
     }
 
-    /// Resolves the replica-local scoped overrides from the catalog working copy
-    /// into the compute controller's per-replica dyncfg layer, then re-pushes
-    /// the environment-wide compute configuration so replicas observe the new
-    /// values. Driven by the catalog implication for replica-scoped
-    /// configuration changes, and called once on bootstrap.
-    pub(crate) fn push_replica_dyncfg_overrides(&mut self) {
-        // Clone the (sparse) replica overrides so we don't hold a catalog borrow
-        // across the mutable controller calls below.
-        let replica_overrides = self
-            .catalog()
-            .state()
-            .scoped_system_parameters()
-            .replica
-            .clone();
+    /// Renders the replica-local scoped overrides in the catalog working copy as
+    /// per-replica [`ConfigUpdates`], grouped by cluster.
+    ///
+    /// Sparse: only replicas with an override are present. Parameters that are
+    /// not dyncfgs are skipped, as are values that fail to parse.
+    pub(crate) fn replica_dyncfg_overrides(
+        &self,
+    ) -> BTreeMap<ComputeInstanceId, BTreeMap<ReplicaId, ConfigUpdates>> {
+        let replica_overrides = &self.catalog().state().scoped_system_parameters().replica;
 
         let dyncfgs = self.catalog().system_config().dyncfgs();
         let mut instance_overrides: BTreeMap<
@@ -2397,22 +2415,32 @@ impl Coordinator {
             }
         }
 
+        instance_overrides
+    }
+
+    /// Resolves the replica-local scoped overrides from the catalog working copy
+    /// into the controllers' per-replica dyncfg layers, then re-pushes the
+    /// environment-wide configuration so replicas observe the new values.
+    /// Driven by the catalog implication for replica-scoped configuration
+    /// changes, and called once on bootstrap.
+    pub(crate) fn push_replica_dyncfg_overrides(&mut self) {
+        let instance_overrides = self.replica_dyncfg_overrides();
+
         // Both controllers carry a per-replica dyncfg layer, because the two
         // protocols realize configs in different worker `ConfigSet`s on
         // `clusterd`. The compute worker's `handle_update_configuration`
         // applies the pushed dyncfg updates to compute's own worker
-        // `ConfigSet` and to the shared persist client `ConfigSet`
+        // `ConfigSet`, to the shared persist client `ConfigSet`
         // (`persist_clients.cfg()`) that the co-located storage server reads
-        // from the same `Arc`, which covers persist-backed and process-global
-        // configs such as persist client tuning and `lgalloc`. Configs
-        // realized from the storage worker's own `ConfigSet` (read in its
-        // `UpdateConfiguration` handler) are reached only by the storage
-        // controller's layer.
+        // from the same `Arc`, and to `mz_metrics`, which covers
+        // persist-backed and process-global configs such as persist client
+        // tuning and `lgalloc`. Configs realized from the storage worker's own
+        // `ConfigSet` (read in its `UpdateConfiguration` handler) are reached
+        // only by the storage controller's layer. A third class is not pushed
+        // to a running replica at all but baked into its process configuration
+        // when the controller provisions it, which is why the overrides also go
+        // to the outer controller.
         self.controller
-            .compute
-            .update_replica_dyncfg_overrides(instance_overrides.clone());
-        self.controller
-            .storage
             .update_replica_dyncfg_overrides(instance_overrides);
         // Re-push the env-wide configs so existing replicas pick up their
         // (possibly changed) overrides. This also reverts a removed override:
@@ -2445,6 +2473,7 @@ impl Coordinator {
         &mut self,
         boot_ts: Timestamp,
         migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
+        hydrate_migrated_mvs: bool,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
         cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
         uncached_local_exprs: BTreeMap<GlobalId, LocalExpressions>,
@@ -2501,6 +2530,16 @@ impl Coordinator {
             .update_orchestrator_scheduling_config(scheduling_config);
         self.controller.update_configuration(dyncfg_updates);
 
+        // Install the replica-local scoped overrides before creating any
+        // replica below. Parts of a replica's configuration (its `TimelyConfig`,
+        // its expiration offset) are resolved once, when the controller
+        // provisions the replica, and must see its overrides at that point. The
+        // push after the creation loop cannot serve this purpose, because those
+        // values are frozen by then.
+        let replica_dyncfg_overrides = self.replica_dyncfg_overrides();
+        self.controller
+            .update_replica_dyncfg_overrides(replica_dyncfg_overrides);
+
         // Skip the credit consumption check at bootstrap under DisableClusterCreation behavior:
         // this codepath validates existing replicas at startup, not cluster creation, so it
         // must not block startup. New cluster creation is still gated by the DDL-time check.
@@ -2556,7 +2595,7 @@ impl Coordinator {
         }
 
         // Now that the compute instances and their replicas exist, push the
-        // replica-local scoped overrides into the compute controller so existing
+        // replica-local scoped overrides into the controllers so existing
         // replicas observe them at startup. The scoped (per-cluster and
         // per-replica) working copy was restored from the durable cache into
         // `CatalogState` while opening the catalog, so the last-known values are
@@ -2770,10 +2809,30 @@ impl Coordinator {
                     self.ship_dataflow(df_desc, mview.cluster_id, mview.target_replica)
                         .await;
 
-                    // If this is a replacement MV, it must remain read-only until the replacement
-                    // gets applied.
+                    // A pending `REPLACEMENT FOR` MV must stay read-only until
+                    // `ALTER ... APPLY REPLACEMENT` swaps it in. Unrelated to the
+                    // builtin-migration `Replacement` mechanism below.
                     if mview.replacement_target.is_none() {
-                        self.allow_writes(mview.cluster_id, mview.global_id_writes());
+                        let gid = mview.global_id_writes();
+                        if hydrate_migrated_mvs
+                            && migrated_storage_collections_0dt.contains(&entry.id())
+                        {
+                            // `migrated_storage_collections_0dt` is `Replacement`-migrated items
+                            // only, so this is a fresh shard we own: nothing else writes it, and
+                            // writing it while read-only hydrates the MV and its dependents before
+                            // cut-over. An `Evolution`-migrated MV reuses the leader's live shard
+                            // and must never reach here.
+                            //
+                            // A *new* builtin MV gets no such treatment: its shard allocation
+                            // lives only in this read-only savepoint, so the promoted leader
+                            // allocates a different shard and discards whatever we wrote.
+                            self.controller
+                                .compute
+                                .allow_writes_in_read_only(mview.cluster_id, gid)
+                                .unwrap_or_terminate("allow_writes cannot fail");
+                        } else {
+                            self.allow_writes(mview.cluster_id, gid);
+                        }
                     }
                 }
                 CatalogItem::MetricSink(metric_sink) => {
@@ -3120,29 +3179,19 @@ impl Coordinator {
         debug!("coordinator init: resetting system tables");
         let read_ts = self.get_local_read_ts().await;
 
-        // Filter out tables whose contents must survive restarts:
-        // 'mz_storage_usage_by_shard' for billing, and
-        // 'mz_object_arrangement_size_history', which accumulates history that
-        // is pruned by its own retention period instead.
-        let mz_storage_usage_by_shard_schema: SchemaSpecifier = self
-            .catalog()
-            .resolve_system_schema(MZ_STORAGE_USAGE_BY_SHARD.schema)
-            .into();
-        let arrangement_size_history_schema: SchemaSpecifier = self
-            .catalog()
-            .resolve_system_schema(MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY.schema)
-            .into();
-        let is_retained_across_restarts = |meta: &TableMetadata| -> bool {
-            (meta.name.item == MZ_STORAGE_USAGE_BY_SHARD.name
-                && meta.name.qualifiers.schema_spec == mz_storage_usage_by_shard_schema)
-                || (meta.name.item == MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY.name
-                    && meta.name.qualifiers.schema_spec == arrangement_size_history_schema)
-        };
+        let retained_across_restarts = BTreeSet::from([
+            self.catalog()
+                .resolve_builtin_table(&MZ_STORAGE_USAGE_BY_SHARD),
+            self.catalog()
+                .resolve_builtin_table(&MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY),
+            self.catalog()
+                .resolve_builtin_table(&MZ_OBJECT_HYDRATION_HISTORY),
+        ]);
 
         let mut retraction_tasks = Vec::new();
         let system_tables: Vec<_> = table_metas
             .iter()
-            .filter(|meta| meta.id.is_system() && !is_retained_across_restarts(meta))
+            .filter(|meta| meta.id.is_system() && !retained_across_restarts.contains(&meta.id))
             .collect();
 
         for system_table in system_tables {
@@ -4056,6 +4105,7 @@ impl Coordinator {
 
             self.schedule_storage_usage_collection().await;
             self.schedule_arrangement_sizes_collection().await;
+            self.schedule_hydration_history_collection();
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
             self.spawn_catalog_info_metrics_task();
@@ -5021,6 +5071,7 @@ pub fn serve(
         ;
         let OpenCatalogResult {
             mut catalog,
+            last_seen_version,
             migrated_storage_collections_0dt,
             new_builtin_collections,
             builtin_table_updates,
@@ -5076,6 +5127,22 @@ pub fn serve(
             catalog_open_start.elapsed()
         );
 
+        // Whether replacement-migrated builtin MVs may write their new shards before cut-over.
+        // Both `bootstrap` and the readiness gate below read this, and they have to agree.
+        // `MIN_LEADER_VERSION_FOR_MIGRATED_MV_WRITES` explains why the leader's version settles it.
+        //
+        // While we are read-only, `last_seen_version` is that leader's version: our catalog
+        // transaction is a savepoint, so our own bump of the setting never lands. `None` means a
+        // freshly initialized catalog, with nothing migrated and no leader to be compatible with.
+        //
+        // `ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS` is the break-glass revert: off falls back to
+        // excluding migrated MVs from the caught-up gate, no redeploy needed.
+        let hydrate_migrated_mvs = ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS
+            .get(catalog.system_config().dyncfgs())
+            && last_seen_version
+                .as_ref()
+                .is_none_or(|version| *version >= MIN_LEADER_VERSION_FOR_MIGRATED_MV_WRITES);
+
         let coord_thread_start = Instant::now();
         info!("startup: coordinator init: coordinator thread start beginning");
 
@@ -5126,34 +5193,31 @@ pub fn serve(
 
                 // A collection that can't advance its write frontier in read-only mode
                 // stalls its transitive dependents too, so exclude those from the caught-up
-                // check as well. That's migrated MVs (their dataflows don't write in
-                // read-only mode) and new builtin MVs (their fresh shard has no writer until
-                // this deployment promotes). An excluded dependent may still be hydrating
-                // right after promotion, a brief blip we accept because these MVs are small
-                // and get a writer at cut-over.
+                // check as well. That's every *new* builtin collection, whose fresh shard has no
+                // writer until this deployment promotes, plus migrated MVs whenever the leader is
+                // too old for them to write. An excluded dependent may still be hydrating right
+                // after promotion, a brief blip we accept because these collections are small and
+                // get a writer at cut-over.
                 //
-                // TODO: Consider sending `allow_writes` for the dataflows of migrated MVs, which
-                //       would allow them to make progress even in read-only mode. This doesn't
-                //       work for MVs based on `mz_catalog_raw`, if the leader's version is less
-                //       than v26.17, since before that version the catalog shard's frontier wasn't
-                //       kept up-to-date with the current time. So this workaround has to remain in
-                //       place upgrades from a version less than v26.17 are no longer supported.
-                let new_builtin_mvs = new_builtin_collections
-                    .iter()
-                    .map(|global_id| {
-                        catalog
-                            .state()
-                            .try_get_entry_by_global_id(global_id)
-                            .expect("new builtin collections have catalog entries")
-                    })
-                    .filter(|entry| entry.is_materialized_view())
-                    .map(|entry| entry.id());
-                let mut todo: Vec<_> = migrated_storage_collections_0dt
+                // Seeded from all of `new_builtin_collections`, not just the MVs: a new builtin
+                // table or source has no read-only writer either (`register_table_collections`
+                // retains only *migrated* tables), so an MV reading one never advances past its
+                // empty frontier. A *migrated* table is the opposite case, even though a builtin
+                // MV can read one (`mz_clusters` joins `mz_cluster_replica_size_internal`):
+                // `read_only_mode_table_worker` keeps advancing migrated tables' uppers.
+                let new_builtin_items = new_builtin_collections.iter().map(|global_id| {
+                    catalog
+                        .state()
+                        .try_get_entry_by_global_id(global_id)
+                        .expect("new builtin collections have catalog entries")
+                        .id()
+                });
+                let frozen_migrated_mvs = migrated_storage_collections_0dt
                     .iter()
                     .copied()
-                    .filter(|id| catalog.state().get_entry(id).is_materialized_view())
-                    .chain(new_builtin_mvs)
-                    .collect();
+                    .filter(|_| !hydrate_migrated_mvs)
+                    .filter(|id| catalog.state().get_entry(id).is_materialized_view());
+                let mut todo: Vec<_> = new_builtin_items.chain(frozen_migrated_mvs).collect();
                 while let Some(item_id) = todo.pop() {
                     let entry = catalog.state().get_entry(&item_id);
                     exclude_collections.extend(entry.global_ids());
@@ -5275,6 +5339,8 @@ pub fn serve(
                     active_copies: BTreeMap::new(),
                     connection_cancel_watches: BTreeMap::new(),
                     introspection_subscribes: BTreeMap::new(),
+                    hydration_history_replica_cursor: None,
+                    hydration_history_sweep: None,
                     write_locks: BTreeMap::new(),
                     deferred_write_ops: BTreeMap::new(),
                     pending_writes: Vec::new(),
@@ -5326,6 +5392,7 @@ pub fn serve(
                         .bootstrap(
                             boot_ts,
                             migrated_storage_collections_0dt,
+                            hydrate_migrated_mvs,
                             builtin_table_updates,
                             cached_global_exprs,
                             uncached_local_exprs,

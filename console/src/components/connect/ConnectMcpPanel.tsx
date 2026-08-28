@@ -293,9 +293,7 @@ export const ConnectMcpPanel = ({ ctx }: ConnectMcpPanelProps) => {
     baseUrl: ctx.mcpBaseUrl,
     token: oauthActive ? undefined : (mcpToken ?? MCP_TOKEN_PLACEHOLDER),
   });
-  // Mask the token in the rendered snippet. The copy button copies the real
-  // value.
-  const displaySnippet = mcpToken
+  const obfuscatedSnippet = mcpToken
     ? snippet.replace(mcpToken, obfuscateSecret(mcpToken))
     : undefined;
   const installLink =
@@ -333,7 +331,7 @@ export const ConnectMcpPanel = ({ ctx }: ConnectMcpPanelProps) => {
               : undefined
         }
         contents={snippet}
-        displayContents={displaySnippet}
+        obfuscatedContents={obfuscatedSnippet}
       />
       {ctx.oauthAvailable && (
         <HStack justifyContent="flex-end">
@@ -366,8 +364,8 @@ export const ConnectMcpPanel = ({ ctx }: ConnectMcpPanelProps) => {
   const skillsStep = (
     <VStack alignItems="stretch" spacing="2">
       <Text fontSize="sm" color={colors.foreground.secondary}>
-        Ready-made instructions that help your agent work with Materialize
-        accurately.
+        Agent skills give your coding agent access to Materialize documentation,
+        reference material, and best practices.
       </Text>
       <LabeledCommandBox contents={AGENT_SKILLS_COMMAND} />
     </VStack>

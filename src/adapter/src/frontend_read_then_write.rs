@@ -133,6 +133,7 @@ use std::time::Duration;
 use bytesize::ByteSize;
 use differential_dataflow::consolidation;
 use mz_catalog::memory::error::ErrorKind;
+use mz_catalog::memory::objects::CatalogItem;
 use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::Eval;
@@ -154,15 +155,17 @@ use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+use crate::active_compute_sink::ActiveSubscribeOwner;
 use crate::catalog::Catalog;
-use crate::command::{Command, ExecuteResponse};
+use crate::command::{Command, ExecuteResponse, WriteAttemptKind};
 use crate::coord::appends::WriteResult;
-use crate::coord::read_then_write::validate_read_then_write_dependencies;
+use crate::coord::read_then_write::{DependencyPolicy, validate_read_then_write_dependencies};
 use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::{Coordinator, TargetCluster};
 use crate::error::AdapterError;
 use crate::optimize::Optimize;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, EvalTime, ExprPrep, ExprPrepOneShot};
+use crate::peek_client::CoordinatorClient;
 use crate::session::{Session, TransactionOps, WriteOp};
 use crate::statement_logging::{StatementLifecycleEvent, StatementLoggingId};
 use crate::{PeekClient, PeekResponseUnary, TimelineContext, optimize};
@@ -242,6 +245,73 @@ impl FrontendWriteAttemptState {
             .lock()
             .expect("cancellation lock poisoned")
             .map(AdapterError::from)
+    }
+}
+
+/// Which kind of caller is driving a read-then-write.
+///
+/// Dependency rules, replica selection, and write cancellation follow from the
+/// caller kind.
+#[derive(Clone, Copy)]
+enum RtwCaller {
+    /// A user statement. Cancelled with its connection, and restricted to
+    /// reading user tables.
+    Session,
+    /// Coordinator-owned maintenance, pinned to one replica.
+    ///
+    /// The caller must build the statement itself rather than accept one from a
+    /// user, and must tolerate reading a log relation that is sealed empty,
+    /// which is how a replica with introspection disabled presents one.
+    Background { replica_id: ReplicaId },
+}
+
+impl RtwCaller {
+    fn is_background(&self) -> bool {
+        matches!(self, RtwCaller::Background { .. })
+    }
+
+    /// Which relations the selection may read.
+    fn dependency_policy(&self) -> DependencyPolicy {
+        match self {
+            RtwCaller::Session => DependencyPolicy::UserDml,
+            RtwCaller::Background { .. } => DependencyPolicy::SystemReads,
+        }
+    }
+
+    /// The replica a background caller pins its subscribe to, overriding the
+    /// session's replica selection.
+    fn replica_override(&self) -> Option<ReplicaId> {
+        match self {
+            RtwCaller::Background { replica_id } => Some(*replica_id),
+            RtwCaller::Session => None,
+        }
+    }
+
+    /// Who owns the subscribe, which decides whether it is cancelled with a
+    /// connection and whether it counts against one.
+    fn subscribe_owner(
+        &self,
+        conn_id: &mz_adapter_types::connection::ConnectionId,
+        session_uuid: Uuid,
+    ) -> ActiveSubscribeOwner {
+        match self {
+            RtwCaller::Session => ActiveSubscribeOwner::Session {
+                conn_id: conn_id.clone(),
+                session_uuid,
+            },
+            RtwCaller::Background { .. } => ActiveSubscribeOwner::Background,
+        }
+    }
+
+    /// The connection a pending write is cancelled with, if any.
+    fn write_conn_id(
+        &self,
+        conn_id: &mz_adapter_types::connection::ConnectionId,
+    ) -> Option<mz_adapter_types::connection::ConnectionId> {
+        match self {
+            RtwCaller::Session => Some(conn_id.clone()),
+            RtwCaller::Background { .. } => None,
+        }
     }
 }
 
@@ -356,6 +426,7 @@ fn end_own_transaction(session: &mut Session, stages_rows: bool) {
 pub(crate) fn validate_selection_dependencies(
     catalog: &Catalog,
     depends_on: &BTreeSet<GlobalId>,
+    policy: DependencyPolicy,
 ) -> Result<(), AdapterError> {
     let dependency_ids = depends_on
         .iter()
@@ -370,7 +441,7 @@ pub(crate) fn validate_selection_dependencies(
         .collect::<Result<Vec<_>, _>>()?;
     let max_rw_dependencies = mz_adapter_types::dyncfgs::READ_THEN_WRITE_MAX_DEPENDENCIES
         .get(catalog.system_config().dyncfgs());
-    validate_read_then_write_dependencies(catalog, dependency_ids, max_rw_dependencies)
+    validate_read_then_write_dependencies(catalog, dependency_ids, max_rw_dependencies, policy)
 }
 
 /// Validates a read-then-write and resolves the context the rest of the
@@ -387,11 +458,15 @@ pub(crate) fn validate_selection_dependencies(
 /// serves planning, validation and optimization, so items the plan names
 /// cannot disappear from it, and the missing-entry branches below are
 /// failsafes rather than a live concurrent-DDL path.
+///
+/// `dependency_policy` decides which relations the selection may read. Both
+/// policies reject `mz_now()` anywhere in the transitive dependencies.
 fn validate_read_then_write(
     catalog: &Arc<Catalog>,
     session: &Session,
     plan: &plan::ReadThenWritePlan,
     target_cluster: TargetCluster,
+    dependency_policy: DependencyPolicy,
 ) -> Result<ValidationResult, AdapterError> {
     if contains_mz_now(plan) {
         return Err(AdapterError::Unsupported(
@@ -403,7 +478,7 @@ fn validate_read_then_write(
     // timeline validation below.
     let depends_on = plan.selection.depends_on();
 
-    validate_selection_dependencies(catalog, &depends_on)?;
+    validate_selection_dependencies(catalog, &depends_on, dependency_policy)?;
 
     let cluster = catalog.resolve_target_cluster(target_cluster, session)?;
     let cluster_id = cluster.id;
@@ -602,7 +677,7 @@ struct SubscribeHandle {
     rx: mpsc::UnboundedReceiver<PeekResponseUnary>,
     sink_id: GlobalId,
     /// Wrapped in `Option` so we can move it out in `Drop`.
-    client: Option<crate::Client>,
+    client: Option<CoordinatorClient>,
 }
 
 impl SubscribeHandle {
@@ -640,12 +715,85 @@ impl PeekClient {
     pub(crate) async fn frontend_read_then_write(
         &mut self,
         session: &mut Session,
-        mut plan: plan::ReadThenWritePlan,
+        plan: plan::ReadThenWritePlan,
         target_cluster: TargetCluster,
         catalog: &Arc<Catalog>,
         statement_logging_id: Option<StatementLoggingId>,
         attempt_state: Arc<FrontendWriteAttemptState>,
     ) -> Result<ExecuteResponse, AdapterError> {
+        self.read_then_write(
+            session,
+            plan,
+            target_cluster,
+            catalog,
+            statement_logging_id,
+            attempt_state,
+            RtwCaller::Session,
+        )
+        .await
+    }
+
+    /// Executes a coordinator-owned read-then-write against system relations,
+    /// pinned to `replica_id`.
+    ///
+    /// See `RtwCaller::Background` for what the caller takes on by using this.
+    pub(crate) async fn background_read_then_write(
+        &mut self,
+        session: &mut Session,
+        plan: plan::ReadThenWritePlan,
+        cluster_id: ComputeInstanceId,
+        replica_id: ReplicaId,
+        catalog: &Arc<Catalog>,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let is_system_table = matches!(plan.id, CatalogItemId::System(_))
+            && catalog
+                .try_get_entry(&plan.id)
+                .is_some_and(|entry| matches!(entry.item(), CatalogItem::Table(_)));
+        if !is_system_table {
+            soft_panic_or_log!(
+                "background read-then-write target {} is not a system table",
+                plan.id
+            );
+            return Err(AdapterError::Internal(
+                "background read-then-write target is not a system table".into(),
+            ));
+        }
+
+        self.read_then_write(
+            session,
+            plan,
+            TargetCluster::Transaction(cluster_id),
+            catalog,
+            None,
+            // Nothing cancels a background write, so this state only ever
+            // records that a write was submitted.
+            Arc::new(FrontendWriteAttemptState::new()),
+            RtwCaller::Background { replica_id },
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn read_then_write(
+        &mut self,
+        session: &mut Session,
+        mut plan: plan::ReadThenWritePlan,
+        target_cluster: TargetCluster,
+        catalog: &Arc<Catalog>,
+        statement_logging_id: Option<StatementLoggingId>,
+        attempt_state: Arc<FrontendWriteAttemptState>,
+        caller: RtwCaller,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        // The OCC dataflow emits raw diffs and does not apply top-level
+        // finishing. Silently dropping a LIMIT, OFFSET, projection or ordering
+        // can change the rows written, so this stage requires trivial finishing.
+        if !plan.finishing.is_trivial(plan.selection.arity()) {
+            soft_panic_or_log!("frontend read-then-write received nontrivial row-set finishing");
+            return Err(AdapterError::Internal(
+                "frontend read-then-write requires trivial row-set finishing".into(),
+            ));
+        }
+
         // A transaction that has taken a timestamped read, was opened READ
         // ONLY, or is committed to some other kind of operation cannot take a
         // write. Check up front, mirroring `sequence_insert`: the marker op
@@ -661,15 +809,24 @@ impl PeekClient {
             return Err(AdapterError::ReadOnlyTransaction);
         }
 
-        let validation_result = validate_read_then_write(catalog, session, &plan, target_cluster)?;
+        let validation_result = validate_read_then_write(
+            catalog,
+            session,
+            &plan,
+            target_cluster,
+            caller.dependency_policy(),
+        )?;
 
         let ValidationResult {
             cluster_id,
-            replica_id,
+            mut replica_id,
             timeline,
             depends_on,
             table_desc,
         } = validation_result;
+        if let Some(pinned) = caller.replica_override() {
+            replica_id = Some(pinned);
+        }
 
         // A write that reads no persisted state may join a surrounding
         // transaction. Its rows do not come from a snapshot, so staging them
@@ -745,10 +902,25 @@ impl PeekClient {
         //
         // The semaphore is owned by the coordinator and outlives every
         // session task, so `acquire_owned` cannot return `Err` in practice.
-        let permit = Arc::clone(&self.occ_write_semaphore)
-            .acquire_owned()
-            .await
-            .expect("semaphore is never closed during coordinator lifetime");
+        //
+        // Background maintenance skips the queue entirely. It is single-flight
+        // by construction, one sweep at a time and one mutation at a time, so it
+        // adds at most one concurrent read-then-write. Taking a permit instead
+        // would let it hold one for as long as a subscribe on a loaded user
+        // replica takes to hydrate, and with `max_concurrent_occ_writes` set low
+        // that stalls user DML behind a background sampler. The bound above does
+        // not apply to it either: it has no statement timeout, only its own much
+        // longer one.
+        let permit = if caller.is_background() {
+            None
+        } else {
+            Some(
+                Arc::clone(&self.occ_write_semaphore)
+                    .acquire_owned()
+                    .await
+                    .expect("semaphore is never closed during coordinator lifetime"),
+            )
+        };
 
         // Determine timestamp and acquire read holds.
         let oracle_read_ts = self.oracle_read_ts(&timeline).await?;
@@ -767,7 +939,7 @@ impl PeekClient {
                 real_time_recency_timeout,
                 tx,
             })
-            .await?
+            .await??
         } else {
             None
         };
@@ -823,7 +995,7 @@ impl PeekClient {
                     determination,
                     tx,
                 })
-                .await;
+                .await?;
             session.add_notice(crate::AdapterNotice::QueryTimestamp { explanation });
         }
 
@@ -870,8 +1042,7 @@ impl PeekClient {
                 as_of,
                 arity,
                 sink_id,
-                conn_id.clone(),
-                session_uuid,
+                caller.subscribe_owner(&conn_id, session_uuid),
                 start_time,
                 read_holds,
             )
@@ -889,7 +1060,7 @@ impl PeekClient {
                 row_set_finishing_seconds,
                 max_occ_retries,
                 table_desc,
-                conn_id.clone(),
+                caller.write_conn_id(&conn_id),
                 statement_logging_id,
                 as_of,
                 write_oracle,
@@ -910,7 +1081,7 @@ impl PeekClient {
         //
         // The zero-row linearization wait below is the one exception, and hands
         // the permit back before it parks.
-        let mut permit = Some(permit);
+        let mut permit = permit;
         let response = match result {
             Ok(OccOutcome::Committed { response, write_ts }) => {
                 // A committed write timestamp for a statement we meant to
@@ -992,6 +1163,12 @@ impl PeekClient {
                     .map(|()| response)
             }
             Ok(OccOutcome::Blind { response, diffs }) => {
+                if caller.is_background() {
+                    return Err(AdapterError::Internal(
+                        "background read-then-write unexpectedly had no persisted dependency"
+                            .into(),
+                    ));
+                }
                 // The subscribe closed on its own even though the selection
                 // reads persisted state, so the input is sealed and the diffs
                 // are frontier-independent after all. Staging them would be
@@ -1209,14 +1386,16 @@ impl PeekClient {
         attempt_state.mark_write_submitted();
         let result = self
             .call_coordinator(|tx| Command::AttemptWrite {
-                conn_id,
+                attempt: WriteAttemptKind::Session {
+                    conn_id,
+                    write_ts: None,
+                },
                 target_id,
                 target_global_id,
                 diffs,
-                write_ts: None,
                 tx,
             })
-            .await;
+            .await?;
 
         // Every outcome here terminates the attempt, so `write_submitted`
         // stays set per its contract.
@@ -1253,8 +1432,7 @@ impl PeekClient {
         as_of: Timestamp,
         arity: usize,
         sink_id: GlobalId,
-        conn_id: mz_adapter_types::connection::ConnectionId,
-        session_uuid: Uuid,
+        owner: ActiveSubscribeOwner,
         start_time: mz_ore::now::EpochMillis,
         read_holds: crate::ReadHolds,
     ) -> Result<SubscribeHandle, AdapterError> {
@@ -1267,13 +1445,12 @@ impl PeekClient {
                 as_of,
                 arity,
                 sink_id,
-                conn_id,
-                session_uuid,
+                owner,
                 start_time,
                 read_holds,
                 tx,
             })
-            .await?;
+            .await??;
 
         Ok(SubscribeHandle {
             rx,
@@ -1317,7 +1494,7 @@ impl PeekClient {
         row_set_finishing_seconds: Histogram,
         max_occ_retries: usize,
         table_desc: RelationDesc,
-        conn_id: mz_adapter_types::connection::ConnectionId,
+        write_conn_id: Option<mz_adapter_types::connection::ConnectionId>,
         statement_logging_id: Option<StatementLoggingId>,
         as_of: Timestamp,
         write_oracle: Option<Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
@@ -1554,16 +1731,25 @@ impl PeekClient {
             // in profiles. Every attempt clones every row, and we retry up to
             // `max_occ_retries` times.
             attempt_state.mark_write_submitted();
-            let result = self
+            let result = match self
                 .call_coordinator(|tx| Command::AttemptWrite {
-                    conn_id: conn_id.clone(),
+                    attempt: match write_conn_id.clone() {
+                        Some(conn_id) => WriteAttemptKind::Session {
+                            conn_id,
+                            write_ts: Some(target),
+                        },
+                        None => WriteAttemptKind::Background { write_ts: target },
+                    },
                     target_id,
                     target_global_id,
                     diffs: state.payload.clone(),
-                    write_ts: Some(target),
                     tx,
                 })
-                .await;
+                .await
+            {
+                Ok(result) => result,
+                Err(error) => break Err(error),
+            };
 
             match classify_write_result(result, target_id, attempt_state) {
                 WriteOutcome::Committed(timestamp) => {

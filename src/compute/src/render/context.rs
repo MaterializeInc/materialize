@@ -21,8 +21,8 @@ use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
-    ENABLE_COLUMN_PAGED_BATCHER, ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION,
-    ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY,
+    ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION, ENABLE_COMPUTE_TEMPORAL_BUCKETING,
+    TEMPORAL_BUCKETING_SUMMARY,
 };
 use mz_compute_types::plan::scalar::{LirScalarExpr, mfp_mir_to_lir_plan, mfp_plan_lir_to_mir};
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
@@ -34,7 +34,9 @@ use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, Col2ValPagedBatcher, columnar_exchange};
+use mz_timely_util::columnar::{
+    Col2ValBatcher, Col2ValColBatcher, Col2ValPagedBatcher, columnar_exchange,
+};
 use mz_timely_util::columnation::ColumnationChunker;
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, PushInto};
@@ -47,7 +49,7 @@ use timely::progress::operate::FrontierInterest;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::compute_state::ComputeState;
-use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
+use crate::extensions::arrange::{ArrangementBatcher, KeyCollection, MzArrange, MzArrangeCore};
 use crate::extensions::reduce::MzReduce;
 use crate::render::columnar::CollectionEdge;
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
@@ -1173,14 +1175,9 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 } else {
                     oks
                 };
-                let use_paged_path = ENABLE_COLUMN_PAGED_BATCHER.get(config_set);
-                let (oks, errs_keyed, passthrough) = Self::arrange_collection(
-                    &name,
-                    oks,
-                    key.clone(),
-                    thinning.clone(),
-                    use_paged_path,
-                );
+                let batcher = ArrangementBatcher::from_config(config_set);
+                let (oks, errs_keyed, passthrough) =
+                    Self::arrange_collection(&name, oks, key.clone(), thinning.clone(), batcher);
                 let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
                 self.collection = Some((CollectionEdge::Vec(passthrough), errs));
                 let errs =
@@ -1214,7 +1211,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         oks: VecCollection<'scope, T, Row, Diff>,
         key: Vec<LirScalarExpr>,
         thinning: Vec<usize>,
-        use_paged_path: bool,
+        batcher: ArrangementBatcher,
     ) -> (
         Arranged<'scope, RowRowAgent<T, Diff>>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
@@ -1270,22 +1267,28 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
 
         let exchange =
             ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
-        let oks = if use_paged_path {
-            ok_stream.mz_arrange_core::<
+        let oks = match batcher {
+            ArrangementBatcher::ColumnarPaged => ok_stream.mz_arrange_core::<
                 _,
                 batcher::ColumnChunker<_>,
                 Col2ValPagedBatcher<_, _, _, _>,
                 RowRowColPagedBuilder<_, _>,
                 RowRowSpine<_, _>,
-            >(exchange, name)
-        } else {
-            ok_stream.mz_arrange_core::<
+            >(exchange, name),
+            ArrangementBatcher::Columnar => ok_stream.mz_arrange_core::<
+                _,
+                batcher::ColumnChunker<_>,
+                Col2ValColBatcher<_, _, _, _>,
+                RowRowColPagedBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >(exchange, name),
+            ArrangementBatcher::Columnation => ok_stream.mz_arrange_core::<
                 _,
                 batcher::Chunker<_>,
                 Col2ValBatcher<_, _, _, _>,
                 RowRowBuilder<_, _>,
                 RowRowSpine<_, _>,
-            >(exchange, name)
+            >(exchange, name),
         };
         (
             oks,

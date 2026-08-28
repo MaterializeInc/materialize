@@ -29,6 +29,13 @@ Rendering is generic.
 Do not add special-interest structures serving other parts of the code here.
 If something special is needed, build the right abstractions to absorb the special-casing in a localized implementation.
 
+## Tests
+
+Move a module's `#[cfg(test)] mod tests` out of line once it exceeds 200 lines.
+Declare it as `#[cfg(test)] mod tests;` and put the body in `<module>/tests.rs`, the way `src/cluster-controller/src/lib.rs` does.
+Out-of-line tests still reach private items through `super::`, so moving them requires no visibility changes.
+A production module and its tests are read for different reasons, and a test module several times the size of the code it covers buries that code.
+
 ## Priorities
 
 Maintainability over complexity.

@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/sink/metric_sink.rs
-revision: a702b8be70
+revision: d7b0d9eb90
 ---
 
 # mz-compute::sink::metric_sink
@@ -15,7 +15,7 @@ The operator routes all data to one worker per process (chosen by hashing the si
 
 **`SinkState`** — the full working and published state for one metric sink. Incoming updates are buffered by timestamp in `pending_ok`/`pending_err` and folded into `working` only once the combined ok+err frontier has closed that timestamp. `working` holds a signed multiplicity per full row identity (`RowKey`). `published` is rebuilt from the live set of `working` on each healthy activation.
 
-**`RowKey`** — `(metric_name, labels, value_bits, metric_kind, name_valid, help)`. The name and labels lead the tuple so that a `BTreeMap<RowKey, _>` keeps all rows of one `(metric_name, labels)` series adjacent for efficient collision detection.
+**`RowKey`** — `(metric_name, labels, value_bits, metric_kind, name_valid, help)`. Labels are `Vec<(String, Option<String>)>` where `None` represents a null label value (distinct from an empty string). The name and labels lead the tuple so that a `BTreeMap<RowKey, _>` keeps all rows of one `(metric_name, labels)` series adjacent for efficient collision detection.
 
 **`MetricKind`** — `Gauge` or `Counter`, recovered from the `metric_kind` column the planner's `shape_metric_sink_source` already computed (`0` = gauge, `1` = counter).
 
@@ -28,6 +28,10 @@ A *collision* is a `(metric_name, labels)` series with more than one distinct li
 ## Publication freeze
 
 While the sink's error count (`errors`) is nonzero, `published` is not rebuilt; it stays at the last healthy snapshot. `working` continues integrating closed timestamps during the freeze so that the next healthy `publish_if_healthy` call reflects everything that happened while frozen.
+
+## Label null handling
+
+`extract_row` represents label values as `Option<&str>`: `None` for a null datum, `Some(v)` for a string. The helper `is_publishable_label_value` rejects both `None` and empty strings, since Prometheus treats an empty label value as absent; a row carrying a null or empty label value is skipped rather than published. A null label value is a distinct `RowKey` component from an empty string, so `{a => NULL}` and `{a => ''}` retract only against their own inserts.
 
 ## Planner contract
 

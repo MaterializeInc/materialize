@@ -638,44 +638,25 @@ impl Coordinator {
                     as_of,
                     arity,
                     sink_id,
-                    conn_id,
-                    session_uuid,
+                    owner,
                     start_time,
                     read_holds,
                     tx,
                 } => {
                     self.handle_create_internal_subscribe(
-                        *df_desc,
-                        cluster_id,
-                        replica_id,
-                        depends_on,
-                        as_of,
-                        arity,
-                        sink_id,
-                        conn_id,
-                        session_uuid,
-                        start_time,
-                        read_holds,
-                        tx,
+                        *df_desc, cluster_id, replica_id, depends_on, as_of, arity, sink_id, owner,
+                        start_time, read_holds, tx,
                     )
                     .await;
                 }
                 Command::AttemptWrite {
-                    conn_id,
+                    attempt,
                     target_id,
                     target_global_id,
                     diffs,
-                    write_ts,
                     tx,
                 } => {
-                    self.handle_attempt_write(
-                        conn_id,
-                        target_id,
-                        target_global_id,
-                        diffs,
-                        write_ts,
-                        tx,
-                    );
+                    self.handle_attempt_write(attempt, target_id, target_global_id, diffs, tx);
                 }
                 Command::DropInternalSubscribe { sink_id } => {
                     self.drop_internal_subscribe(sink_id).await;
@@ -1084,9 +1065,9 @@ impl Coordinator {
 
         // If the resolved `transaction_isolation` default names a feature-flagged
         // isolation level whose flag is now disabled (e.g. a role default set
-        // while `bounded staleness` was enabled, then the flag turned off), drop
-        // it so the session falls back to the built-in default rather than
-        // silently using a gated level.
+        // while `strong session serializable` was enabled, then the flag turned
+        // off), drop it so the session falls back to the built-in default rather
+        // than silently using a gated level.
         if let Some(value) = session_defaults.get(TRANSACTION_ISOLATION_VAR_NAME) {
             if check_transaction_isolation_feature_flag(
                 TRANSACTION_ISOLATION_VAR_NAME,

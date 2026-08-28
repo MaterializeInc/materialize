@@ -31,6 +31,10 @@ pub struct Metrics {
     pub storage_usage_collection_time_seconds: Histogram,
     pub arrangement_sizes_collection_time_seconds: Histogram,
     pub arrangement_sizes_rows_written: IntCounter,
+    pub hydration_history_mutations: IntCounterVec,
+    pub hydration_history_retention_batch_full: IntCounter,
+    pub hydration_history_rows_affected: IntCounterVec,
+    pub hydration_history_sweep_duration_seconds: Histogram,
     pub subscribe_outputs: IntCounterVec,
     pub canceled_peeks: IntCounter,
     pub linearize_message_seconds: HistogramVec,
@@ -88,7 +92,7 @@ impl Metrics {
             )),
             active_internal_subscribes: registry.register(metric!(
                 name: "mz_active_internal_subscribes",
-                help: "The number of active internal subscribes, which serve frontend-sequenced read-then-write.",
+                help: "The number of active internal subscribes used by read-then-write operations and background maintenance.",
                 var_labels: ["session_type"],
             )),
             active_copy_tos: registry.register(metric!(
@@ -138,6 +142,25 @@ impl Metrics {
             arrangement_sizes_rows_written: registry.register(metric!(
                 name: "mz_arrangement_sizes_rows_written_total",
                 help: "Total rows appended to mz_object_arrangement_size_history since process start.",
+            )),
+            hydration_history_mutations: registry.register(metric!(
+                name: "mz_hydration_history_mutations_total",
+                help: "Total hydration-history collection and retention mutations since process start.",
+                var_labels: ["operation", "outcome"],
+            )),
+            hydration_history_retention_batch_full: registry.register(metric!(
+                name: "mz_hydration_history_retention_batch_full_total",
+                help: "Total hydration-history sweeps whose retention batch was full. Repeated increments mean retention may not be keeping up with its schedule.",
+            )),
+            hydration_history_rows_affected: registry.register(metric!(
+                name: "mz_hydration_history_rows_affected_total",
+                help: "Total rows changed by hydration-history maintenance since process start.",
+                var_labels: ["action"],
+            )),
+            hydration_history_sweep_duration_seconds: registry.register(metric!(
+                name: "mz_hydration_history_sweep_duration_seconds",
+                help: "Wall time of a complete hydration-history collection and retention sweep.",
+                buckets: histogram_seconds_buckets(0.128, 1024.0),
             )),
             subscribe_outputs: registry.register(metric!(
                 name: "mz_subscribe_outputs",

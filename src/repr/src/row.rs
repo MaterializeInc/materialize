@@ -361,7 +361,6 @@ impl Ord for Row {
 /// `SourceData`, and `row.proto` is covered by the buf breaking lint.
 #[derive(
     Clone,
-    Debug,
     Default,
     Eq,
     PartialEq,
@@ -384,6 +383,12 @@ impl Deref for StableRow {
 
     fn deref(&self) -> &Row {
         &self.0
+    }
+}
+
+impl Debug for StableRow {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 

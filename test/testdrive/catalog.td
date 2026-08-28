@@ -610,6 +610,7 @@ mz_materialized_view_refresh_strategies  ""
 mz_object_arrangement_size_history       ""
 mz_object_dependencies                   ""
 mz_object_global_ids                     ""
+mz_object_hydration_history              ""
 mz_optimizer_notices                     ""
 mz_replacements                          ""
 mz_sessions                              ""
@@ -728,6 +729,7 @@ mz_cluster_workload_classes    mz_catalog_server   ""
 mz_comments                    mz_catalog_server   ""
 mz_internal_cluster_replicas   mz_catalog_server   ""
 mz_kafka_source_tables         mz_catalog_server   ""
+mz_metric_sinks                mz_catalog_server   ""
 mz_mysql_source_tables         mz_catalog_server   ""
 mz_network_policies            mz_catalog_server   ""
 mz_network_policy_rules        mz_catalog_server   ""
@@ -761,6 +763,7 @@ mz_compute_import_frontiers_per_worker       log   <null>    ""
 mz_compute_lir_mapping_per_worker            log   <null>    ""
 mz_compute_operator_durations_histogram_raw  log   <null>    ""
 mz_compute_operator_hydration_statuses_per_worker log <null> ""
+mz_cluster_replica_resource_usage             log   <null>    ""
 mz_cluster_prometheus_metrics     log   <null>    ""
 mz_dataflow_addresses_per_worker             log   <null>    ""
 mz_dataflow_channels_per_worker              log   <null>    ""
@@ -833,11 +836,11 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-29
+30
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-273
+280
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

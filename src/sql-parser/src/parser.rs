@@ -2974,6 +2974,7 @@ impl<'a> Parser<'a> {
                 ENDPOINT,
                 GCP,
                 HOST,
+                OAUTH2,
                 PASSWORD,
                 PORT,
                 PUBLIC,
@@ -2993,10 +2994,14 @@ impl<'a> Parser<'a> {
                 USERNAME,
                 WAREHOUSE,
             ])? {
-                ACCESS => {
-                    self.expect_keywords(&[KEY, ID])?;
-                    ConnectionOptionName::AccessKeyId
-                }
+                ACCESS => match self.expect_one_of_keywords(&[KEY, DELEGATION])? {
+                    KEY => {
+                        self.expect_keyword(ID)?;
+                        ConnectionOptionName::AccessKeyId
+                    }
+                    DELEGATION => ConnectionOptionName::AccessDelegation,
+                    _ => unreachable!(),
+                },
                 ASSUME => {
                     self.expect_keyword(ROLE)?;
                     match self.expect_one_of_keywords(&[ARN, SESSION])? {
@@ -3031,6 +3036,10 @@ impl<'a> Parser<'a> {
                     ConnectionOptionName::GcpConnection
                 }
                 HOST => ConnectionOptionName::Host,
+                OAUTH2 => {
+                    self.expect_keywords(&[SERVER, URL])?;
+                    ConnectionOptionName::Oauth2ServerUrl
+                }
                 PASSWORD => ConnectionOptionName::Password,
                 PORT => ConnectionOptionName::Port,
                 PUBLIC => {
@@ -8324,6 +8333,10 @@ impl<'a> Parser<'a> {
                     let in_cluster = self.parse_optional_in_cluster()?;
                     ShowObjectType::Sink { in_cluster }
                 }
+                ObjectType::MetricSink => {
+                    let in_cluster = self.parse_optional_in_cluster()?;
+                    ShowObjectType::MetricSink { in_cluster }
+                }
                 ObjectType::Type => ShowObjectType::Type,
                 ObjectType::Role => ShowObjectType::Role,
                 ObjectType::ClusterReplica => ShowObjectType::ClusterReplica,
@@ -8356,7 +8369,7 @@ impl<'a> Parser<'a> {
                         on_object,
                     }
                 }
-                ObjectType::Func | ObjectType::MetricSink => {
+                ObjectType::Func => {
                     return parser_err!(
                         self,
                         self.peek_prev_pos(),
@@ -8416,6 +8429,13 @@ impl<'a> Parser<'a> {
                 sink_name: self.parse_raw_name()?,
                 redacted,
             }))
+        } else if self.parse_keywords(&[CREATE, METRIC, SINK]) {
+            Ok(ShowStatement::ShowCreateMetricSink(
+                ShowCreateMetricSinkStatement {
+                    metric_sink_name: self.parse_raw_name()?,
+                    redacted,
+                },
+            ))
         } else if self.parse_keywords(&[CREATE, INDEX]) {
             Ok(ShowStatement::ShowCreateIndex(ShowCreateIndexStatement {
                 index_name: self.parse_raw_name()?,
@@ -10155,6 +10175,7 @@ impl<'a> Parser<'a> {
                 MATERIALIZED,
                 SOURCES,
                 SINKS,
+                METRIC,
                 INDEXES,
                 TYPES,
                 ROLES,
@@ -10180,6 +10201,14 @@ impl<'a> Parser<'a> {
                 }
                 SOURCES => ObjectType::Source,
                 SINKS => ObjectType::Sink,
+                METRIC => {
+                    if self.parse_keyword(SINKS) {
+                        ObjectType::MetricSink
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
                 INDEXES => ObjectType::Index,
                 TYPES => ObjectType::Type,
                 ROLES | USERS => ObjectType::Role,

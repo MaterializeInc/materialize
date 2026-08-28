@@ -1813,6 +1813,25 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
     ):
         c.up("mz_new")
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+
+        # The new generation is ready to promote while still read-only, so its migrated builtin MVs
+        # must already be hydrated off their replacement shards. If they were excluded from the
+        # caught-up gate they would hydrate at cut-over instead, spiking catalog-server CPU. Reading
+        # them here from the read-only generation asserts the write-enable-while-read-only path
+        # actually filled those shards.
+        #
+        # NOTE: this covers hydration, not the caught-up gate's lag comparison.
+        # `force_migrations="replacement"` replaces `mz_cluster_replica_frontiers` too, and the gate
+        # reads the leader's "live" frontiers out of that collection, so here it compares this
+        # generation against itself.
+        for relation in ["mz_databases", "mz_clusters"]:
+            count = c.sql_query(
+                f"SELECT count(*) FROM mz_catalog.{relation}",
+                service="mz_new",
+                reuse_connection=False,
+            )[0][0]
+            assert count > 0, f"{relation} returned {count} on the read-only generation"
+
         c.promote_mz("mz_new")
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 

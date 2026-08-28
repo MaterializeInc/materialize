@@ -1517,3 +1517,12 @@ query T
 SELECT ('1 month 10 days'::interval)::text;
 ----
 1 mon 10 days
+
+# `avg(interval)` desugars to `sum(interval) / count(interval)` before type
+# checking, so the unsupported-sum error is the only message a user who typed
+# `avg` sees. It must mention both function names.
+statement error sum\(interval\) and avg\(interval\) not yet supported
+SELECT sum('1 day'::interval)
+
+statement error sum\(interval\) and avg\(interval\) not yet supported
+SELECT avg('1 day'::interval)

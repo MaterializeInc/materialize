@@ -61,7 +61,9 @@ use mz_expr::{
 use mz_pgtz::timezone::Timezone;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::{CatalogItemId, GlobalId, ReprScalarType, SqlScalarType};
-use serde_reflection::{ContainerFormat, Registry, Samples, Tracer, TracerConfig};
+use serde_reflection::{
+    ContainerFormat, Format, FormatHolder, Registry, Samples, Tracer, TracerConfig,
+};
 
 const SNAPSHOT_DIR: &str = "tests/snapshots";
 
@@ -624,4 +626,30 @@ fn lir_schema_contains_only_stable_types() {
             "unstable type '{forbidden}' is reachable from LirRelationExpr"
         );
     }
+
+    // Opaque bytes are a hole in the schema: the registry cannot see what is
+    // inside them, so their contents are only as stable as whatever encodes
+    // them. StableRow and StableEvalError are the two sanctioned holes, their
+    // proto encodings are CI-guarded elsewhere (see the module docs). Any
+    // other container carrying BYTES smuggles an unguarded format into the
+    // stable surface.
+    let bytes_bearing: Vec<_> = registry
+        .iter()
+        .filter(|(_, container)| {
+            let mut has_bytes = false;
+            container
+                .visit(&mut |format| {
+                    has_bytes |= matches!(format, Format::Bytes);
+                    Ok(())
+                })
+                .expect("validated registry has no unresolved formats");
+            has_bytes
+        })
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(
+        bytes_bearing,
+        ["StableEvalError", "StableRow"],
+        "only StableRow and StableEvalError may serialize as opaque bytes"
+    );
 }

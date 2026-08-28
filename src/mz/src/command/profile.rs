@@ -170,6 +170,10 @@ pub async fn init(
         }
     }
 
+    // Fail before logging in, so that an unwritable configuration file doesn't
+    // leave behind an app password that no profile records.
+    config_file.ensure_writable().await?;
+
     let app_password = match no_browser {
         true => init_without_browser(admin_endpoint.clone()).await?,
         false => init_with_browser(cloud_endpoint.clone()).await?,

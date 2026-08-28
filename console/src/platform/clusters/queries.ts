@@ -67,6 +67,10 @@ import {
   fetchClusterReplicasWithUtilization,
 } from "~/api/materialize/cluster/replicasWithUtilization";
 import {
+  fetchReplicaUtilization,
+  ReplicaUtilization,
+} from "~/api/materialize/cluster/replicaUtilization";
+import {
   attachOfflineEvents,
   BinnedSubscribeRow,
   bucketRowsToBucketsByReplicaId,
@@ -182,6 +186,11 @@ export const clusterQueryKeys = {
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("clusterFreshness", params),
     ] as const,
+  replicaUtilization: () =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("replicaUtilization"),
+    ] as const,
   maintainedObjectNames: (objectIds: string[]) =>
     [
       ...clusterQueryKeys.all(),
@@ -191,6 +200,32 @@ export const clusterQueryKeys = {
       }),
     ] as const,
 };
+
+export type ReplicaUtilizationMap = Map<string, ReplicaUtilization>;
+
+const toUtilizationMap = ({
+  rows,
+}: Awaited<
+  ReturnType<typeof fetchReplicaUtilization>
+>): ReplicaUtilizationMap => new Map(rows.map((row) => [row.replicaId, row]));
+
+/**
+ * Last-hour peak utilization per replica, keyed by replica id.
+ *
+ * Polled rather than subscribed. Replica metrics only change on the
+ * controller's scrape, so a subscribe would hold a dataflow open on
+ * `mz_catalog_server` to deliver one update a minute, for every open tab and
+ * every page, for as long as the session lasts.
+ */
+export function useReplicaUtilization() {
+  return useQuery({
+    refetchInterval: 30_000,
+    queryKey: clusterQueryKeys.replicaUtilization(),
+    queryFn: ({ queryKey, signal }) =>
+      fetchReplicaUtilization({ queryKey, requestOptions: { signal } }),
+    select: toUtilizationMap,
+  });
+}
 
 export function useClusters(filters?: ClusterListFilters) {
   const { data, refetch } = useSuspenseQuery({

@@ -81,12 +81,14 @@ type CreateApiTokenVariables =
   | {
       type: "personal";
       description: string;
+      expiresInMinutes?: number;
     }
   | {
       type: "service";
       description: string;
       user: string;
       roleIds: string[];
+      expiresInMinutes?: number;
     };
 
 function formatAppPassword({ clientId, secret }: NewApiToken) {

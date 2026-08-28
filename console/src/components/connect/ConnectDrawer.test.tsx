@@ -21,6 +21,7 @@ import {
   renderComponent,
   setFakeEnvironment,
 } from "~/test/utils";
+import { toBase64 } from "~/utils/format";
 import { parseDbVersion } from "~/version/api";
 
 import ConnectDrawer from "./ConnectDrawer";
@@ -49,6 +50,9 @@ describe("ConnectDrawer", () => {
     ).toBeVisible();
     expect(screen.getByText(/materialize-developer/)).toBeVisible();
     expect(screen.getByText("Install agent skills (optional)")).toBeVisible();
+    expect(
+      screen.getByText(/Agent skills give your coding agent access/),
+    ).toBeVisible();
   });
 
   it("switches MCP config format per client", async () => {
@@ -148,6 +152,15 @@ describe("ConnectDrawer", () => {
       await screen.findByText(/App password created and added to the command/),
     ).toBeVisible();
     expect(screen.getByText(/Authorization: Basic \*+/)).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "visibility" }));
+
+    const expectedToken = toBase64(
+      `${dummyValidUser.email}:mzp_${"1".repeat(32)}${"2".repeat(32)}`,
+    );
+    expect(
+      screen.getByText((content) => content.includes(expectedToken)),
+    ).toBeVisible();
   });
 
   it("shows connection details on the External tools tab", async () => {
@@ -228,6 +241,10 @@ describe("ConnectDrawer", () => {
           `psql "postgres://${encodeURIComponent(dummyValidUser.email)}@${ENVIRONMENT_HOST}:6875/materialize\\?sslmode=require"`,
         ),
       ),
+    ).toBeVisible();
+    expect(screen.getByText("Enter your password")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Create new password" }),
     ).toBeVisible();
   });
 });

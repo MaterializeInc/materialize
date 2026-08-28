@@ -49,7 +49,15 @@ DEFAULT_MZ_VOLUMES = [
 # a new feature causes benchmarks to become flaky, consider that this can also
 # impact customers' experience and try to find a solution other than disabling
 # the feature here!
-ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {}
+ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
+    # Benchmarks measure the intended production configuration. For hedged
+    # blob gets that is the planned enablement state (on, at production
+    # tuning), not the CI-wide coverage tuning below, whose short delay
+    # would add duplicate fetches to any measured get slower than it.
+    "persist_blob_hedged_get_enabled": "true",
+    "persist_blob_hedged_get_delay": "2s",
+    "persist_blob_hedged_get_budget_ratio": "0.01",
+}
 
 
 def sanitizer_enabled() -> bool:
@@ -118,6 +126,7 @@ def get_minimal_system_parameters(
         "enable_storage_introspection_logs": "true",
         "enable_compute_error_distinct": "true",
         "enable_compute_temporal_bucketing": "true",
+        "enable_union_cancellation_after_relation_cse": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
         "grpc_client_http2_keep_alive_timeout": "5s",
@@ -130,6 +139,11 @@ def get_minimal_system_parameters(
         # End of list (ordered by name)
     }
 
+    if version >= MzVersion.parse_mz("v26.40.0-dev"):
+        # Exercise the row-limit check without constraining normal test queries.
+        config["compute_peek_row_iteration_limit"] = "1000000000"
+        config["enable_compute_peek_row_iteration_limit"] = "true"
+
     if version < MzVersion.parse_mz("v0.163.0-dev"):
         config["enable_compute_active_dataflow_cancelation"] = "true"
 
@@ -137,6 +151,9 @@ def get_minimal_system_parameters(
         config["enable_columnar_lgalloc"] = "false"
     if version < MzVersion.parse_mz("v26.25.0-dev"):
         config["enable_multi_replica_sources"] = "true"
+
+    if version >= MzVersion.parse_mz("v26.40.0-dev"):
+        config["hydration_history_collection_interval"] = "60s"
 
     if sanitizer_enabled():
         config["with_0dt_deployment_max_wait"] = "18000s"
@@ -206,6 +223,20 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_source_fetch_concurrency", "1", ["1", "2", "8", "16"]
         ),
+        VariableSystemParameter(
+            "persist_blob_hedged_get_enabled", "true", ["true", "false"]
+        ),
+        # 10ms (vs the 2s production default) makes hedges actually fire in
+        # every CI run; 0s makes every blob get hedge under randomized seeds.
+        VariableSystemParameter(
+            "persist_blob_hedged_get_delay", "10ms", ["0s", "10ms", "2s"]
+        ),
+        # The production ratio: with the 10ms delay above, a full refill
+        # would hedge nearly every get and double CI blob traffic. The 1.0
+        # variant lets randomized runs pair a full budget with delay=0s.
+        VariableSystemParameter(
+            "persist_blob_hedged_get_budget_ratio", "0.01", ["1.0", "0.01"]
+        ),
         # -----
         # Others (ordered by name),
         VariableSystemParameter(
@@ -234,6 +265,11 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "compute_apply_column_demands", "true", ["true", "false"]
+        ),
+        # On by default so CI exercises the columnar merge batcher, which is
+        # off in production while it earns trust.
+        VariableSystemParameter(
+            "enable_columnar_merge_batcher", "true", ["true", "false"]
         ),
         VariableSystemParameter(
             "compute_peek_response_stash_threshold_bytes",
@@ -294,6 +330,24 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "enable_simplify_from_less_existence",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_union_cancellation_after_relation_cse",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_upsert_paged_spill",
+            "true",
+            ["true", "false"],
+        ),
+        # On by default so CI exercises the chunked stash flavor, which is
+        # off in production while it earns trust. Only meaningful when
+        # enable_upsert_v2 is true.
+        VariableSystemParameter(
+            "enable_upsert_chunked_stash",
             "true",
             ["true", "false"],
         ),
@@ -462,6 +516,17 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "arrangement_size_history_retention_period", "7d", ["1min", "1h", "7d"]
         ),
+        *(
+            [
+                VariableSystemParameter(
+                    "hydration_history_retention_period",
+                    "30d",
+                    ["1min", "1h", "30d"],
+                )
+            ]
+            if version >= MzVersion.parse_mz("v26.40.0-dev")
+            else []
+        ),
         VariableSystemParameter(
             "persist_validate_part_bounds_on_read", "false", ["true", "false"]
         ),
@@ -589,13 +654,13 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "linear_join_yielding",
     "enable_column_paged_batcher",
     "enable_column_paged_batcher_spill",
+    "column_chunk_compress_min_depth",
     "column_paged_batcher_budget_fraction",
     "column_paged_batcher_lz4",
     "column_paged_batcher_swap_pageout",
     "column_paged_batcher_spill_worker_count",
     "column_paged_batcher_eager_backing",
     "column_paged_batcher_pool_rss_target_fraction",
-    "enable_upsert_paged_spill",
     "enable_lgalloc_eager_reclamation",
     "lgalloc_background_interval",
     "lgalloc_file_growth_dampener",
@@ -660,6 +725,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "persist_blob_operation_attempt_timeout",
     "persist_blob_connect_timeout",
     "persist_blob_read_timeout",
+    "persist_blob_hedged_get_max_concurrent",
+    "persist_blob_hedged_get_warm_interval",
     "persist_stats_collection_enabled",
     "persist_stats_filter_enabled",
     "persist_stats_budget_bytes",
@@ -744,11 +811,13 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "with_0dt_caught_up_check_cutoff",
     "enable_0dt_caught_up_replica_status_check",
     "enable_0dt_caught_up_stability_check",
+    "enable_0dt_hydrate_migrated_builtin_mvs",
     "plan_insights_notice_fast_path_clusters_optimize_duration",
     "enable_expression_cache",
     "mz_metrics_lgalloc_map_refresh_interval",
     "mz_metrics_lgalloc_refresh_interval",
     "mz_metrics_rusage_refresh_interval",
+    "mz_metrics_usage_refresh_interval",
     "compute_peek_response_stash_batch_max_runs",
     "compute_peek_response_stash_read_batch_size_bytes",
     "compute_peek_response_stash_read_memory_budget_bytes",

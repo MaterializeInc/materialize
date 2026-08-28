@@ -45,6 +45,7 @@ use mz_timestamp_oracle::TimestampOracle;
 use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 use uuid::Uuid;
 
+use crate::active_compute_sink::ActiveSubscribeOwner;
 use crate::catalog::Catalog;
 use crate::config::{ScopedParameters, ScopedParametersScope, SystemParameterFrontend};
 use crate::coord::appends::{BuiltinTableAppendNotify, WriteResult};
@@ -419,8 +420,7 @@ pub enum Command {
         as_of: mz_repr::Timestamp,
         arity: usize,
         sink_id: GlobalId,
-        conn_id: ConnectionId,
-        session_uuid: Uuid,
+        owner: ActiveSubscribeOwner,
         start_time: mz_ore::now::EpochMillis,
         read_holds: ReadHolds,
         tx: oneshot::Sender<Result<mpsc::UnboundedReceiver<PeekResponseUnary>, AdapterError>>,
@@ -437,14 +437,10 @@ pub enum Command {
     ///   including read-only, a changed target and cancellation, is reported the
     ///   same way in both modes.
     AttemptWrite {
-        /// Connection originating the write. Used so the coordinator can
-        /// cancel this pending write if the connection is cancelled before
-        /// the write commits.
-        conn_id: ConnectionId,
+        attempt: WriteAttemptKind,
         target_id: CatalogItemId,
         target_global_id: GlobalId,
         diffs: Vec<(Row, Diff)>,
-        write_ts: Option<mz_repr::Timestamp>,
         tx: oneshot::Sender<WriteResult>,
     },
 
@@ -453,6 +449,24 @@ pub enum Command {
     DropInternalSubscribe {
         sink_id: GlobalId,
     },
+}
+
+/// Who a read-then-write commits on behalf of, and how its timestamp is chosen.
+///
+/// Group commit picking the timestamp requires a connection to answer through,
+/// so that combination is only reachable from a session.
+#[derive(Debug)]
+pub enum WriteAttemptKind {
+    /// A session's write, cancelled with `conn_id` if the connection goes away
+    /// before it commits. A `write_ts` of `None` lets group commit pick the
+    /// timestamp, which then cannot be reported as passed.
+    Session {
+        conn_id: ConnectionId,
+        write_ts: Option<mz_repr::Timestamp>,
+    },
+    /// Coordinator background work. There is no connection to cancel with, so
+    /// the caller names the timestamp and handles `TimestampPassed` itself.
+    Background { write_ts: mz_repr::Timestamp },
 }
 
 impl Command {

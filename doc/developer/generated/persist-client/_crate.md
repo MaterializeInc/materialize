@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/lib.rs
-revision: 1af97ffb4d
+revision: 5a4a36c4fd
 ---
 
 # persist-client

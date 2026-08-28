@@ -35,6 +35,7 @@ from psycopg import sql as psycopg_sql
 from materialize import MZ_ROOT, buildkite
 from materialize.mz_env_util import print_environment_id
 from materialize.mz_version import MzVersion
+from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import (
     Composition,
     WorkflowArgumentParser,
@@ -90,7 +91,7 @@ def staging_credentials() -> tuple[str, str]:
     return staging_username_for_account(index), app_password
 
 
-MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
+MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS | {
     "memory_limiter_interval": "0s",
     "max_credit_consumption_rate": "1024",
     # Headroom over the 30k default cap from `--envd-objects-scalability-sizes`,

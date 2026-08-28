@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/ast/defs/statement.rs
-revision: 39dcae2fba
+revision: 96c4e5a965
 ---
 
 # mz-sql-parser::ast::defs::statement
@@ -52,3 +52,11 @@ In redacted `AstDisplay` output, `WithOptionValue::Secret` is not redacted: a se
 `FetchStatement<T>`'s `AstDisplay` impl force-quotes a cursor name equal to `forward` (case-insensitive) when no count is present, preventing the optional leading `FORWARD` keyword from consuming the cursor name on reparse.
 
 `GrantTargetSpecification<T>`'s `AstDisplay` impl uses the private `write_grant_object_type_plural` helper to pluralize the object type keyword. `ObjectType::NetworkPolicy` pluralizes to `POLICIES`; all other types append `S` to their keyword. The preceding space before `IN DATABASE` and `IN SCHEMA` is emitted by the helper as part of the separator string.
+
+`AbbreviatedGrantStatement<T>` and `AbbreviatedRevokeStatement<T>`'s `AstDisplay` impls use the same `write_grant_object_type_plural` helper to emit the pluralized object type in `GRANT ... ON <type>S TO ...` and `REVOKE ... ON <type>S FROM ...` output.
+
+`ShowObjectType` includes a `MetricSink { in_cluster: Option<T::ClusterName> }` variant. Its `AstDisplay` impl prints `METRIC SINKS` and, when `in_cluster` is set, appends `IN CLUSTER <name>`.
+
+`ShowCreateMetricSinkStatement<T>` represents a `SHOW [REDACTED] CREATE METRIC SINK <metric_sink_name>` statement. Fields: `metric_sink_name: T::ItemName`, `redacted: bool`. `ShowStatement` includes a `ShowCreateMetricSink(ShowCreateMetricSinkStatement<T>)` variant.
+
+`ClusterFeatureName` includes an `EnableUnionCancellationAfterRelationCse` variant whose `redact_value()` returns `false`. `ExplainPlanOptionName` likewise includes an `EnableUnionCancellationAfterRelationCse` variant with `redact_value()` returning `false`.

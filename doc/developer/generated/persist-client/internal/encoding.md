@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/internal/encoding.rs
-revision: 95baa04a85
+revision: 6ebd534824
 ---
 
 # persist-client::internal::encoding

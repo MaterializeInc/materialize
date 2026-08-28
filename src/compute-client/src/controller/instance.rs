@@ -64,8 +64,8 @@ use crate::protocol::command::{
 };
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
-    ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse, StatusResponse,
-    SubscribeBatch, SubscribeResponse,
+    ComputeResponse, CopyToResponse, FrontiersResponse, PeekError as ProtocolPeekError,
+    PeekResponse, StatusResponse, SubscribeBatch, SubscribeResponse,
 };
 
 #[derive(Error, Debug)]
@@ -1294,6 +1294,11 @@ impl Instance {
     pub fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ReplicaMissing> {
         let replica = self.replicas.remove(&id).ok_or(ReplicaMissing(id))?;
 
+        // The coordinator only re-pushes the override map when the scoped configuration itself
+        // changes, so a dropped replica's entry would otherwise be retained until the next such
+        // change.
+        self.replica_dyncfg_overrides.remove(&id);
+
         // Before dropping the replica state (and the contained input read holds), log read holds
         // that are the last line of defense against compaction of a dataflow's storage inputs. If
         // the corresponding global read hold has already been released, dropping the per-replica
@@ -1357,7 +1362,8 @@ impl Instance {
             self.deliver_response(response);
         }
         for uuid in to_drop {
-            let response = PeekResponse::Error(ERROR_TARGET_REPLICA_FAILED.into());
+            let response =
+                PeekResponse::Error(ProtocolPeekError::unstructured(ERROR_TARGET_REPLICA_FAILED));
             self.finish_peek(uuid, response);
         }
 

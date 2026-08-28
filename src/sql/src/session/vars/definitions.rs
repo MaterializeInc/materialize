@@ -2286,6 +2286,13 @@ feature_flags!(
         scope: ParameterScope::Cluster,
     },
     {
+        name: enable_union_cancellation_after_relation_cse,
+        desc: "Run UnionBranchCancellation one more time after the last RelationCSE.",
+        default: true,
+        enable_for_item_parsing: false,
+        scope: ParameterScope::Cluster,
+    },
+    {
         name: enable_less_reduce_in_eqprop,
         desc: "Run MSE::reduce in EquivalencePropagation only if reduce_expr changed something.",
         default: true,
@@ -2374,8 +2381,12 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_bounded_staleness_isolation,
-        desc: "the `bounded staleness <duration>` transaction isolation level",
+        // An escape hatch: the `CASE` guard defeats the batched lowering that shares one
+        // `unnest` across several `ANY`/`ALL` operands, so a query with multiple `ANY`/`ALL`
+        // over a non-constant array plans into more arrangements than before. Turning the flag
+        // off restores the old plans at the cost of the wrong answer for a NULL array.
+        name: enable_any_all_null_array_semantics,
+        desc: "PostgreSQL-compatible NULL semantics for `ANY`/`ALL` over a NULL array or list.",
         default: true,
         enable_for_item_parsing: false,
     },
@@ -2395,6 +2406,8 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_join_prioritize_arranged: vars.enable_join_prioritize_arranged(),
             enable_projection_pushdown_after_relation_cse: vars
                 .enable_projection_pushdown_after_relation_cse(),
+            enable_union_cancellation_after_relation_cse: vars
+                .enable_union_cancellation_after_relation_cse(),
             enable_less_reduce_in_eqprop: vars.enable_less_reduce_in_eqprop(),
             enable_dequadratic_eqprop_map: vars.enable_dequadratic_eqprop_map(),
             enable_eq_classes_withholding_errors: vars.enable_eq_classes_withholding_errors(),
@@ -2446,6 +2459,7 @@ mod tests {
             reoptimize_imported_views,
             enable_join_prioritize_arranged,
             enable_projection_pushdown_after_relation_cse,
+            enable_union_cancellation_after_relation_cse,
             enable_less_reduce_in_eqprop,
             enable_dequadratic_eqprop_map,
             enable_fast_path_plan_insights,
@@ -2478,6 +2492,7 @@ mod tests {
         let _ = reoptimize_imported_views; // no corresponding var
         set_var!(enable_join_prioritize_arranged);
         set_var!(enable_projection_pushdown_after_relation_cse);
+        set_var!(enable_union_cancellation_after_relation_cse);
         set_var!(enable_less_reduce_in_eqprop);
         set_var!(enable_dequadratic_eqprop_map);
         set_var!(enable_fast_path_plan_insights);

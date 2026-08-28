@@ -222,6 +222,11 @@ impl Instance {
     pub fn drop_replica(&mut self, id: ReplicaId) {
         let replica = self.replicas.remove(&id);
 
+        // The coordinator only re-pushes the override map when the scoped configuration itself
+        // changes, so a dropped replica's entry would otherwise be retained until the next such
+        // change.
+        self.replica_dyncfg_overrides.remove(&id);
+
         let mut needs_rescheduling = false;
         for (ingestion_id, ingestion) in self.active_ingestions.iter_mut() {
             let was_running = ingestion.active_replicas.remove(&id);

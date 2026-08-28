@@ -31,7 +31,8 @@ use crate::names::{
 };
 use crate::plan::{self, PlanKind};
 use crate::plan::{
-    DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, UpdatePrivilege,
+    DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, TableDataSource,
+    UpdatePrivilege,
 };
 use crate::session::metadata::SessionMetadata;
 use crate::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
@@ -635,17 +636,33 @@ fn generate_rbac_requirements(
         }
         Plan::CreateTable(plan::CreateTablePlan {
             name,
-            table: _,
+            table,
             if_not_exists: _,
-        }) => RbacRequirements {
-            privileges: vec![(
+        }) => {
+            let mut privileges = vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
                 AclMode::CREATE,
                 role_id,
-            )],
-            item_usage: &CREATE_ITEM_USAGE,
-            ..Default::default()
-        },
+            )];
+            // `CREATE TABLE ... FROM SOURCE` reads the source's data, so it
+            // requires `SELECT` on the source.
+            if let TableDataSource::DataSource {
+                desc: DataSourceDesc::IngestionExport { ingestion_id, .. },
+                timeline: _,
+            } = &table.data_source
+            {
+                privileges.extend(generate_read_privileges(
+                    catalog,
+                    iter::once(*ingestion_id),
+                    role_id,
+                ));
+            }
+            RbacRequirements {
+                privileges,
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
         Plan::CreateView(plan::CreateViewPlan {
             name,
             view: _,

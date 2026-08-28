@@ -17,6 +17,7 @@ import SideDrawer from "~/components/SideDrawer";
 import { useAppConfig } from "~/config/useAppConfig";
 import { User } from "~/external-library-wrappers/frontegg";
 import { type AuthContextProps } from "~/external-library-wrappers/oidc";
+import { useHideIntercomLauncher } from "~/hooks/useIntercom";
 import { useSelfManagedProfile } from "~/hooks/useSelfManagedProfile";
 import { ConnectionIcon, MonitorIcon, TerminalIcon } from "~/icons";
 import { ClusterDetailParams } from "~/platform/clusters/ClusterRoutes";
@@ -233,6 +234,7 @@ const ConnectDrawer = ({
   forAppPassword,
 }: ConnectDrawerProps) => {
   const appConfig = useAppConfig();
+  useHideIntercomLauncher(isOpen);
 
   return (
     <SideDrawer

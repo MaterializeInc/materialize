@@ -262,6 +262,44 @@ class Action:
         share = max(1, MAX_ROWS // exe.db.num_threads)
         return self.rng.randint(1, min(available, share))
 
+    def view_predicate(self, exe: Executor, table: Table) -> str | None:
+        """A predicate over a view, adding a second input to a read-then-write's
+        selection.
+
+        The selection's frontier is the minimum over its inputs, and an UPDATE
+        or DELETE reads its target too, so the table holds it near the wall
+        clock while a REFRESH view is free to sit far ahead. Neither may reach
+        the write timestamp, which comes from the timeline's oracle.
+        `InsertSelectAction` covers the view-only case. None when no view offers
+        a comparable column. Views reaching a source are excluded: the adapter
+        refuses such a selection outright, which would make this vacuous."""
+        views = [
+            view
+            for view in exe.db.views
+            if view.read_then_write_input
+            and (not view.temp or view in exe.temp_objects)
+        ]
+        self.rng.shuffle(views)
+        for view in views:
+            pairs = [
+                (table_column, view_column)
+                for table_column in table.columns
+                for view_column in view.columns
+                # A map has no equality operator, so it cannot drive an IN.
+                if table_column.data_type == view_column.data_type
+                and table_column.data_type != TextTextMap
+            ]
+            if not pairs:
+                continue
+            table_column, view_column = self.rng.choice(pairs)
+            # The alias keeps the inner reference off the outer target, the
+            # LIMIT bounds an expensive view body.
+            return (
+                f"{table_column.name(True)} IN (SELECT rtw_src.{view_column.name(True)}"
+                f" FROM {view} AS rtw_src LIMIT 100)"
+            )
+        return None
+
     def create_system_connection(
         self, exe: Executor, num_attempts: int = 10
     ) -> Connection:
@@ -1171,9 +1209,17 @@ class InsertSelectAction(Action):
         if not tables:
             return False
         table = self.rng.choice(tables)
-        # Reading the insert target itself makes the target a read dependency
-        # too, the most contended shape a read-then-write can have.
-        source = table if self.rng.choice([True, False]) else self.rng.choice(tables)
+        # Reading the insert target itself is the most contended shape a
+        # read-then-write can have. A view is the opposite: the target is
+        # written but not read, so a REFRESH view alone pins the selection's
+        # frontier, see `Action.view_predicate`.
+        sources = tables + [
+            view
+            for view in exe.db.views
+            if view.read_then_write_input
+            and (not view.temp or view in exe.temp_objects)
+        ]
+        source = table if self.rng.choice([True, False]) else self.rng.choice(sources)
 
         column_names = ", ".join(column.name(True) for column in table.columns)
         # The cast is an identity cast: `expression` returns the requested type
@@ -1464,7 +1510,12 @@ class UpdateAction(Action):
             f"{c.name(True)} = {expression(c.data_type, table.columns, self.rng, kind=ExprKind.WRITE)}"
             for c in set_columns
         )
-        query = f"UPDATE {table} SET {set_clause} WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
+        predicate = expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)
+        if self.rng.random() < 0.2:
+            view_predicate = self.view_predicate(exe, table)
+            if view_predicate:
+                predicate = f"({predicate}) AND {view_predicate}"
+        query = f"UPDATE {table} SET {set_clause} WHERE {predicate}"
         if self.rng.choice([True, False]):
             self.stmt_id += 1
             self.exe_prepared(query, f"update{self.stmt_id}", exe)
@@ -1516,7 +1567,8 @@ class DeleteAction(Action):
             "canceling statement due to statement timeout",
             OCC_CONTENTION_EXHAUSTED_ERROR,
         ] + super().errors_to_ignore(exe)
-        if exe.db.scenario == Scenario.Rename:
+        # The predicate can name a view, which DDL drops concurrently.
+        if exe.db.complexity == Complexity.DDL or exe.db.scenario == Scenario.Rename:
             errors += ["does not exist"]
         return errors
 
@@ -1553,7 +1605,14 @@ class DeleteAction(Action):
             query += f" USING {using_table}"
             query += f" WHERE {expression(Boolean, all_columns, self.rng, kind=ExprKind.WRITE)}"
         elif self.rng.random() < 0.95:
-            query += f" WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
+            predicate = expression(
+                Boolean, table.columns, self.rng, kind=ExprKind.WRITE
+            )
+            if self.rng.random() < 0.2:
+                view_predicate = self.view_predicate(exe, table)
+                if view_predicate:
+                    predicate = f"({predicate}) AND {view_predicate}"
+            query += f" WHERE {predicate}"
         if self.rng.choice([True, False]):
             self.stmt_id += 1
             self.exe_prepared(query, f"delete{self.stmt_id}", exe)
@@ -2679,15 +2738,10 @@ class BoundedStalenessReadAction(Action):
     restored afterwards, since bounded staleness is read-only and would break
     writes."""
 
-    def applicable(self, exe: Executor) -> bool:
-        return exe.db.flags.get("enable_bounded_staleness_isolation", "FALSE") == "TRUE"
-
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
         result.extend(
             [
-                # The flag was flipped off between applicable() and run().
-                "is not available",
                 # The freshness bound could not be met. Bounded staleness
                 # never blocks, it errors instead.
                 "not been materialized",
@@ -2877,6 +2931,12 @@ class FlipFlagsAction(Action):
             "8",
             "16",
         ]
+        self.flags_with_values["persist_blob_hedged_get_enabled"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_blob_hedged_get_delay"] = [
+            "'0s'",
+            "'10ms'",
+            "'2s'",
+        ]
         self.flags_with_values["enable_variadic_left_join_lowering"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -2949,6 +3009,16 @@ class FlipFlagsAction(Action):
             "'1h'",
             "'7d'",
         ]
+        self.flags_with_values["hydration_history_collection_interval"] = [
+            "'0s'",
+            "'1s'",
+            "'1min'",
+        ]
+        self.flags_with_values["hydration_history_retention_period"] = [
+            "'1min'",
+            "'1h'",
+            "'30d'",
+        ]
         # Keep these generous: a tight timeout would abort the oracle's own
         # queries (they are retried, but it adds noise). "0s" leaves it unset.
         self.flags_with_values["pg_timestamp_oracle_statement_timeout"] = [
@@ -2988,15 +3058,16 @@ class FlipFlagsAction(Action):
         )
         self.flags_with_values["enable_compute_error_distinct"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["enable_bounded_staleness_isolation"] = (
-            BOOLEAN_FLAG_VALUES
-        )
         self.flags_with_values["enable_arrangement_dictionary_compression_alpha"] = (
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_compute_peek_response_stash"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["enable_compute_peek_row_iteration_limit"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        self.flags_with_values["compute_peek_row_iteration_limit"] = ["1000000000"]
         self.flags_with_values["compute_peek_response_stash_threshold_bytes"] = [
             "0",  # "force enabled"
             "1048576",  # 1 MiB, an in-between value
@@ -3015,14 +3086,21 @@ class FlipFlagsAction(Action):
             "false",
         ]
         self.flags_with_values["enable_case_literal_transform"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_union_cancellation_after_relation_cse"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_cast_elimination"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_fixed_correlated_cte_lowering"] = (
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_upsert_v2"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_coalesce_case_transform"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_any_all_null_array_semantics"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_compute_sync_mv_sink"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_column_paged_batcher"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_columnar_merge_batcher"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_column_paged_batcher_spill"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -3060,6 +3138,12 @@ class FlipFlagsAction(Action):
             "0.02",
         ]
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_upsert_chunked_stash"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["column_chunk_compress_min_depth"] = [
+            "0",  # compress every spilled body
+            "1",  # the default: fresh chunks store uncompressed
+            "4",  # exempt several young generations
+        ]
         # 0 forces the estimated-size path for every table, the default forces
         # the exact COUNT(*) path for workload-sized tables.
         self.flags_with_values["mysql_source_snapshot_exact_count_max_rows"] = [
@@ -3113,6 +3197,9 @@ class FlipFlagsAction(Action):
             # takes effect after a restart. Flipping it here would be a no-op
             # for the running process.
             "enable_adapter_frontend_occ_read_then_write",
+            "persist_blob_hedged_get_budget_ratio",
+            "persist_blob_hedged_get_max_concurrent",
+            "persist_blob_hedged_get_warm_interval",
             "enable_compute_half_join2",
             "enable_mz_join_core",
             "enable_compute_correction_v2",
@@ -3289,6 +3376,7 @@ class FlipFlagsAction(Action):
             "with_0dt_caught_up_check_cutoff",
             "with_0dt_caught_up_check_stability_period",
             "enable_0dt_caught_up_stability_check",
+            "enable_0dt_hydrate_migrated_builtin_mvs",
             "enable_statement_lifecycle_logging",
             "enable_introspection_subscribes",
             "plan_insights_notice_fast_path_clusters_optimize_duration",
@@ -3305,6 +3393,7 @@ class FlipFlagsAction(Action):
             "mz_metrics_lgalloc_map_refresh_interval",
             "mz_metrics_lgalloc_refresh_interval",
             "mz_metrics_rusage_refresh_interval",
+            "mz_metrics_usage_refresh_interval",
             "compute_peek_stash_num_batches",
             "compute_peek_stash_batch_size",
             "compute_peek_response_stash_batch_max_runs",

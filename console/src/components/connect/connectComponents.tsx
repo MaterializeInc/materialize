@@ -7,11 +7,26 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Box, Flex, HStack, Text, useTheme, VStack } from "@chakra-ui/react";
-import React from "react";
+import {
+  Box,
+  Button,
+  Flex,
+  HStack,
+  Input,
+  Text,
+  useTheme,
+  VStack,
+} from "@chakra-ui/react";
+import React, { useState } from "react";
 
-import { CopyableBox } from "~/components/copyableComponents";
+import {
+  CopyableBox,
+  SecretCopyableBox,
+} from "~/components/copyableComponents";
+import TextLink from "~/components/TextLink";
+import { useCreateApiToken } from "~/queries/frontegg";
 import { MaterializeTheme } from "~/theme";
+import { obfuscateSecret } from "~/utils/format";
 
 export interface ConnectStepProps {
   stepNumber: number;
@@ -64,16 +79,14 @@ export const ConnectStep = ({
 export interface LabeledCommandBoxProps {
   contents: string;
   label?: React.ReactNode;
-  /** Shown instead of `contents`, e.g. with secrets masked. Copying always
-   * copies `contents`. */
-  displayContents?: string;
+  obfuscatedContents?: string;
 }
 
 /** A copyable command or config snippet with an optional instruction above. */
 export const LabeledCommandBox = ({
   contents,
   label,
-  displayContents,
+  obfuscatedContents,
 }: LabeledCommandBoxProps) => {
   const { colors } = useTheme<MaterializeTheme>();
 
@@ -84,12 +97,17 @@ export const LabeledCommandBox = ({
           {label}
         </Text>
       )}
-      <CopyableBox variant="default" wrap contents={contents}>
-        {displayContents}
-      </CopyableBox>
+      <CopyableBox
+        variant="default"
+        wrap
+        contents={contents}
+        obfuscatedContents={obfuscatedContents}
+      />
     </VStack>
   );
 };
+
+const DETAIL_LABEL_WIDTH = "88px";
 
 export interface ConnectionDetailRowProps {
   label: string;
@@ -108,7 +126,7 @@ export const ConnectionDetailRow = ({
       <Text
         fontSize="sm"
         color={colors.foreground.secondary}
-        w="88px"
+        w={DETAIL_LABEL_WIDTH}
         flexShrink={0}
       >
         {label}
@@ -122,6 +140,171 @@ export const ConnectionDetailRow = ({
         w="auto"
       />
     </HStack>
+  );
+};
+
+export interface CreateAppPasswordRowProps {
+  onCreated?: (password: string) => void;
+}
+
+/** Inline app password creation: name it, create it, copy it once. */
+export const CreateAppPasswordRow = ({
+  onCreated,
+}: CreateAppPasswordRowProps) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  const [isNaming, setIsNaming] = useState(false);
+  const [name, setName] = useState("");
+  const {
+    mutate: createAppPassword,
+    isPending,
+    data: newPassword,
+  } = useCreateApiToken();
+
+  React.useEffect(() => {
+    if (newPassword?.password) {
+      onCreated?.(newPassword.password);
+    }
+  }, [newPassword, onCreated]);
+
+  const create = () => {
+    if (name.trim().length === 0 || isPending) return;
+    createAppPassword({ type: "personal", description: name.trim() });
+  };
+
+  return (
+    <Box>
+      <HStack alignItems="center" spacing="3">
+        <Text
+          fontSize="sm"
+          color={colors.foreground.secondary}
+          w={DETAIL_LABEL_WIDTH}
+          flexShrink={0}
+        >
+          Password
+        </Text>
+        {newPassword?.password ? (
+          <SecretCopyableBox
+            label="Password"
+            contents={newPassword.password}
+            obfuscatedContent={newPassword.obfuscatedPassword}
+            overflow="hidden"
+            flex="1"
+            w="auto"
+            minWidth={0}
+          />
+        ) : isNaming ? (
+          <HStack spacing="2" flex="1">
+            <Input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              maxW="220px"
+              isDisabled={isPending}
+              placeholder="Password name"
+              aria-label="App password name"
+              autoFocus
+              onKeyDown={(event) => {
+                if (event.key === "Enter") create();
+              }}
+            />
+            <Button
+              variant="primary"
+              size="sm"
+              px="3"
+              flexShrink={0}
+              isLoading={isPending}
+              loadingText="Creating"
+              isDisabled={name.trim().length === 0}
+              onClick={create}
+            >
+              Create
+            </Button>
+            <Button
+              variant="borderless"
+              size="sm"
+              flexShrink={0}
+              isDisabled={isPending}
+              onClick={() => {
+                setIsNaming(false);
+                setName("");
+              }}
+            >
+              Cancel
+            </Button>
+          </HStack>
+        ) : (
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setIsNaming(true)}
+          >
+            Create new password
+          </Button>
+        )}
+      </HStack>
+      {isNaming && !newPassword?.password && (
+        <Text
+          fontSize="sm"
+          color={colors.foreground.secondary}
+          mt="1.5"
+          ml={`calc(${DETAIL_LABEL_WIDTH} + 12px)`}
+        >
+          You are naming this password. The password itself is generated for
+          you.
+        </Text>
+      )}
+      {newPassword?.password && (
+        <Text
+          fontSize="sm"
+          color={colors.foreground.secondary}
+          mt="1.5"
+          ml={`calc(${DETAIL_LABEL_WIDTH} + 12px)`}
+        >
+          Copy it now. It will not be shown again. Manage in{" "}
+          <TextLink href="/access/app-passwords">App Passwords</TextLink>.
+        </Text>
+      )}
+    </Box>
+  );
+};
+
+export interface IdTokenRowProps {
+  idToken: string;
+}
+
+/** Self-managed OIDC deployments use the ID token as the SQL password. */
+export const IdTokenRow = ({ idToken }: IdTokenRowProps) => {
+  const { colors } = useTheme<MaterializeTheme>();
+
+  return (
+    <Box>
+      <HStack alignItems="center" spacing="3">
+        <Text
+          fontSize="sm"
+          color={colors.foreground.secondary}
+          w={DETAIL_LABEL_WIDTH}
+          flexShrink={0}
+        >
+          Password
+        </Text>
+        <SecretCopyableBox
+          label="idToken"
+          contents={idToken}
+          obfuscatedContent={obfuscateSecret(idToken)}
+          overflow="hidden"
+          flex="1"
+          w="auto"
+          minWidth={0}
+        />
+      </HStack>
+      <Text
+        fontSize="sm"
+        color={colors.foreground.secondary}
+        mt="1.5"
+        ml={`calc(${DETAIL_LABEL_WIDTH} + 12px)`}
+      >
+        When prompted for a password, paste this ID token.
+      </Text>
+    </Box>
   );
 };
 

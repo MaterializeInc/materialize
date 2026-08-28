@@ -41,6 +41,7 @@ tracing.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
 
 [dev-dependencies]
+bincode.workspace = true
 futures.workspace = true
 
 [features]

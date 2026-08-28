@@ -83,7 +83,7 @@ known_errors = [
     "result exceeds max size of",  # Seems expected with huge queries
     "expected expression, but found reserved keyword",  # Should fix, but only happens rarely with subqueries
     "Expected right parenthesis, found left parenthesis",  # Should fix, but only happens rarely with cast+coalesce
-    "invalid selection: operation may only (transitively) refer to non-source, non-system tables",  # Seems expected when using catalog tables
+    "invalid selection: every relation leaf must be a writable user table",  # Expected when using catalog tables
     "Unsupported temporal predicate",  # Expected, see https://github.com/MaterializeInc/database-issues/issues/5288
     "Unsupported temporal operation: NotEq",
     "Unsupported binary temporal operation: NotEq",

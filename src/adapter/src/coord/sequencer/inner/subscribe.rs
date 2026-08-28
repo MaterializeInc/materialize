@@ -31,7 +31,9 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{Instrument, Span};
 use uuid::Uuid;
 
-use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe, SubscribeBacklogAccounting};
+use crate::active_compute_sink::{
+    ActiveComputeSink, ActiveSubscribe, ActiveSubscribeOwner, SubscribeBacklogAccounting,
+};
 use crate::command::ExecuteResponse;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::peek::PeekResponseUnary;
@@ -557,8 +559,10 @@ impl Coordinator {
         let max_buffered_bytes =
             SUBSCRIBE_MAX_BUFFERED_BYTES.get(self.catalog().system_config().dyncfgs());
         let active_subscribe = ActiveSubscribe {
-            conn_id: conn_id.clone(),
-            session_uuid,
+            owner: ActiveSubscribeOwner::Session {
+                conn_id: conn_id.clone(),
+                session_uuid,
+            },
             channel: tx,
             backlog_accounting: Arc::clone(&backlog_accounting),
             max_buffered_bytes,

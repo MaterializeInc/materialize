@@ -40,6 +40,7 @@ import { NavLink, NavLinkProps } from "react-router-dom";
 
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import ImpersonationAlert from "~/components/ImpersonationAlert";
+import { LicenseExpiredBanner } from "~/components/LicenseExpiredBanner";
 import { MfaAlert } from "~/components/MfaAlert";
 import WelcomeDialog from "~/components/WelcomeDialog/WelcomeDialog";
 import { NavBar } from "~/layouts/NavBar";
@@ -100,6 +101,7 @@ export const BaseLayout = (props: BaseLayoutProps) => {
     >
       <WelcomeDialog />
       <MfaAlert />
+      <LicenseExpiredBanner />
       <ImpersonationAlert />
       <Flex
         direction={{ base: "column", lg: "row" }}

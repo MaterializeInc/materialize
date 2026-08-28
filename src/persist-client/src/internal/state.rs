@@ -31,7 +31,7 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use futures::Stream;
 use futures_util::StreamExt;
 use itertools::Itertools;
-use mz_dyncfg::Config;
+use mz_dyncfg::{Config, ParameterScope};
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_ore::soft_panic_or_log;
@@ -57,7 +57,7 @@ use uuid::Uuid;
 use crate::critical::{CriticalReaderId, Opaque};
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{
-    LazyInlineBatchPart, LazyPartStats, LazyProto, MetadataMap, parse_id,
+    LazyInlineBatchPart, LazyPartStats, LazyProto, MetadataKey, MetadataMap, parse_id,
 };
 use crate::internal::gc::GcReq;
 use crate::internal::machine::retry_external;
@@ -92,6 +92,7 @@ pub(crate) const ROLLUP_THRESHOLD: Config<usize> = Config::new(
     "persist_rollup_threshold",
     128,
     "The number of seqnos between rollups.",
+    ParameterScope::Environment,
 );
 
 /// Determines how long to wait before an active rollup is considered
@@ -100,6 +101,7 @@ pub(crate) const ROLLUP_FALLBACK_THRESHOLD_MS: Config<usize> = Config::new(
     "persist_rollup_fallback_threshold_ms",
     5000,
     "The number of milliseconds before a worker claims an already claimed rollup.",
+    ParameterScope::Environment,
 );
 
 /// Feature flag the new active rollup tracking mechanism.
@@ -108,6 +110,7 @@ pub(crate) const ROLLUP_USE_ACTIVE_ROLLUP: Config<bool> = Config::new(
     "persist_rollup_use_active_rollup",
     true,
     "Whether to use the new active rollup tracking mechanism.",
+    ParameterScope::Environment,
 );
 
 /// Determines how long to wait before an active GC is considered
@@ -116,6 +119,7 @@ pub(crate) const GC_FALLBACK_THRESHOLD_MS: Config<usize> = Config::new(
     "persist_gc_fallback_threshold_ms",
     900000,
     "The number of milliseconds before a worker claims an already claimed GC.",
+    ParameterScope::Environment,
 );
 
 /// See the config description string.
@@ -123,6 +127,7 @@ pub(crate) const GC_MIN_VERSIONS: Config<usize> = Config::new(
     "persist_gc_min_versions",
     32,
     "The number of un-GCd versions that may exist in state before we'll trigger a GC.",
+    ParameterScope::Environment,
 );
 
 /// See the config description string.
@@ -130,6 +135,7 @@ pub(crate) const GC_MAX_VERSIONS: Config<usize> = Config::new(
     "persist_gc_max_versions",
     128_000,
     "The maximum number of versions to GC in a single GC run.",
+    ParameterScope::Environment,
 );
 
 /// Feature flag the new active GC tracking mechanism.
@@ -138,12 +144,14 @@ pub(crate) const GC_USE_ACTIVE_GC: Config<bool> = Config::new(
     "persist_gc_use_active_gc",
     false,
     "Whether to use the new active GC tracking mechanism.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const ENABLE_INCREMENTAL_COMPACTION: Config<bool> = Config::new(
     "persist_enable_incremental_compaction",
     false,
     "Whether to enable incremental compaction.",
+    ParameterScope::Environment,
 );
 
 /// A token to disambiguate state commands that could not otherwise be
@@ -815,6 +823,30 @@ pub struct RunMeta {
     /// Additional unstructured metadata.
     #[serde(skip_serializing_if = "MetadataMap::is_empty")]
     pub(crate) meta: MetadataMap,
+}
+
+/// Metadata key for [RunMeta::bounds_truncated].
+const RUN_META_BOUNDS_TRUNCATED: MetadataKey<bool> = MetadataKey::new("truncated");
+
+impl RunMeta {
+    /// Whether this run's parts may hold updates outside the registered desc
+    /// of the batch that contains them.
+    ///
+    /// Set when a batch is appended under a desc narrower than the one it was
+    /// written with (truncation). Readers filter such updates out against the
+    /// registered desc, but per-part statistics like `diffs_sum` are computed
+    /// at write time over everything physically in the part, so accounting
+    /// that compares those statistics against data seen through a read must
+    /// skip runs with this bit set.
+    pub(crate) fn bounds_truncated(&self) -> bool {
+        self.meta.get(RUN_META_BOUNDS_TRUNCATED).unwrap_or(false)
+    }
+
+    /// Marks this run as possibly holding updates outside its batch's
+    /// registered desc. See [Self::bounds_truncated].
+    pub(crate) fn set_bounds_truncated(&mut self) {
+        self.meta.set(RUN_META_BOUNDS_TRUNCATED, true);
+    }
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.

@@ -27,11 +27,8 @@ use differential_dataflow::trace::chunk::{Chunk, ChunkBatch};
 /// into caller-owned staging.
 ///
 /// This is the bulk, copy-out way to read a chunk: extraction is finished
-/// with a chunk's body when the call returns, so a spilled body is read for
-/// the scope of one call and no reference into pool memory ever exists
-/// outside it. That contract is what lets a buffer pool evict with no reader
-/// accounting, where navigation-style access would need the body kept
-/// readable for as long as the reader holds it.
+/// with a chunk's body when the call returns, so any read of a spilled body
+/// is scoped to one call (the buffer pool's no-reader-accounting contract).
 ///
 /// Callers usually read whole batches, not single chunks: the [`UnloadBatch`]
 /// extension on [`ChunkBatch`] looks up a probe set across the batch's chunk

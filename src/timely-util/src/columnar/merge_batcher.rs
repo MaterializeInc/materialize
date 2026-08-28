@@ -232,9 +232,6 @@ where
     type Time = T;
 
     fn new(logger: Option<Logger>, operator_id: usize) -> Self {
-        // No pager snapshot taken here — `self.pager()` reads
-        // `column_pager::global_pager` per call, so dyncfg-driven re-installs
-        // take effect on the next chunk.
         Self {
             chains: Vec::new(),
             lower: Antichain::from_elem(T::minimum()),
@@ -291,12 +288,10 @@ where
         );
         self.lower = upper;
 
-        // Drop the recycle stash now that this round's hot work is done.
-        // The next merge after the next `push_into` will re-pay one
-        // chunk's worth of leaf-`Vec` grow tax, but that's a few hundred µs
-        // amortized over a seal cycle, well worth handing the leaf bytes
-        // back to the allocator so they're not held resident across what
-        // may be a quiet stretch.
+        // Drop the recycle stash now that this round's hot work is done:
+        // the next merge re-pays one chunk's worth of leaf grow tax, and in
+        // exchange the leaf bytes are not held resident across what may be
+        // a quiet stretch.
         self.stash.clear();
 
         (readied, description)
@@ -433,13 +428,9 @@ where
 /// matches the recycling discipline the upstream `differential_dataflow`
 /// merge-batcher carries via `Merger::merge`'s `stash` parameter.
 ///
-/// Whole-chunk passthrough: heads arrive materialized from [`FetchIter`], so
-/// peeking endpoints is free. When the current head on one side sorts
-/// entirely before the current record on the other side, ship it wholesale
-/// and skip the per-record merge. Gated on `positions[i] == 0` so we hand
-/// the head off intact — partial-tail passthrough would need a 1-input
-/// `merge_from` to copy the tail, which is what the inner loop's gallop
-/// already covers.
+/// Whole-chunk passthrough mirrors the fast path in `super::batcher`'s
+/// `Merger::merge`: a head that sorts entirely before the other side's
+/// current record ships wholesale.
 pub fn merge_chains<D, T, R, Sink>(
     list1: FetchIter<'_, D, T, R>,
     list2: FetchIter<'_, D, T, R>,
@@ -681,8 +672,6 @@ mod tests {
     use super::*;
     use crate::column_pager::{PageDecision, PageEvent, PageHint, PagingPolicy};
 
-    // ----- helpers -----------------------------------------------------------
-
     type KvUpdate = ((u64, u64), u64, i64);
 
     fn col(rows: &[KvUpdate]) -> Column<KvUpdate> {
@@ -803,8 +792,6 @@ mod tests {
         collect_pc(&output, &pager)
     }
 
-    // ----- merge_chains correctness -----------------------------------------
-
     /// Disjoint chains: same data as the legacy passthrough test. Without
     /// passthrough, the merger runs per-record but should still produce the
     /// fully ordered output.
@@ -827,7 +814,6 @@ mod tests {
         assert_eq!(out, expected);
     }
 
-    /// Interleaved chains: every record alternates between the two chains.
     #[mz_ore::test]
     fn merge_chains_interleaved() {
         let out = drive_merge(
@@ -945,8 +931,6 @@ mod tests {
         assert_eq!(collected, expected);
     }
 
-    // ----- extract_chain correctness ----------------------------------------
-
     #[mz_ore::test]
     fn extract_chain_partitions_by_frontier() {
         let pager = ColumnPager::disabled();
@@ -982,8 +966,6 @@ mod tests {
         }
         assert_eq!(shipped.len() + kept.len(), data.len());
     }
-
-    // ----- ColumnMergeBatcher end-to-end ------------------------------------
 
     #[mz_ore::test]
     fn batcher_seal_round_trip() {

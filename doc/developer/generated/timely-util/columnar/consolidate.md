@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/columnar/consolidate.rs
-revision: a766b48485
+revision: 24cd10bf65
 ---
 
 # timely-util::columnar::consolidate

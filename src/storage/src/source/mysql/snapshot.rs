@@ -236,6 +236,7 @@ fn worker_pk_range(
 const SUPPORTED_PK_COLLATION: &str = "utf8mb4_bin";
 const SUPPORTED_PK_CHARSET: &str = "utf8mb4";
 const MIN_PROBED_PREFIXES: u64 = 64;
+const MAX_PROBED_PREFIXES: u64 = 5_000;
 
 /// Partitioning configuration settings bundled to avoid accidental mixing.
 struct PartitionSettings {
@@ -277,7 +278,7 @@ async fn compute_sampled_splits(
     // that can take hours to snapshot.
     let max_probed_prefixes = (row_count.saturating_mul(settings.probed_prefixes_per_billion_rows)
         / 1_000_000_000)
-        .max(MIN_PROBED_PREFIXES);
+        .clamp(MIN_PROBED_PREFIXES, MAX_PROBED_PREFIXES);
     let params = mz_mysql_util::PartitionParams {
         num_workers: worker_count,
         estimated_row_count: row_count,

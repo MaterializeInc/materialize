@@ -1852,6 +1852,16 @@ impl CatalogItem {
         }
     }
 
+    /// Returns a mutable reference to the dataflow metainfo, if this item has one.
+    pub fn dataflow_metainfo_mut(&mut self) -> Option<&mut DataflowMetainfo<Arc<OptimizerNotice>>> {
+        match self {
+            CatalogItem::Index(idx) => idx.dataflow_metainfo.as_mut(),
+            CatalogItem::MaterializedView(mv) => mv.dataflow_metainfo.as_mut(),
+            CatalogItem::MetricSink(ms) => ms.dataflow_metainfo.as_mut(),
+            _ => None,
+        }
+    }
+
     /// Returns mutable references to the plan fields (`optimized_plan`,
     /// `physical_plan`, `dataflow_metainfo`) on plan-bearing items
     /// (`Index`, `MaterializedView`), or `None` for
@@ -2021,6 +2031,33 @@ impl CatalogItem {
             CatalogItem::MetricSink(_) => {}
         }
         uses
+    }
+
+    /// Returns direct dependencies to traverse when finding this item's query leaves.
+    ///
+    /// Functions and views return all of their uses. Materialized views do the
+    /// same except for the replacement target, which is lifecycle metadata. All
+    /// other items are query leaves or cannot be selected from.
+    pub fn query_dependencies(&self) -> BTreeSet<CatalogItemId> {
+        match self {
+            CatalogItem::Func(_) | CatalogItem::View(_) => self.uses(),
+            CatalogItem::MaterializedView(mv) => {
+                let mut dependencies = self.uses();
+                if let Some(target) = mv.replacement_target {
+                    dependencies.remove(&target);
+                }
+                dependencies
+            }
+            CatalogItem::Index(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::Table(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => BTreeSet::new(),
+        }
     }
 
     /// Returns the connection ID that this item belongs to, if this item is
