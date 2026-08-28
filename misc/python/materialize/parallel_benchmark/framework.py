@@ -271,15 +271,25 @@ class PooledConn:
 
     def _connect(self) -> psycopg.Connection:
         conn = self.conn_info.connect()
-        conn.autocommit = True
-        for statement in self.setup:
-            with conn.cursor() as cur:
-                cur.execute(statement.encode())
+        try:
+            conn.autocommit = True
+            for statement in self.setup:
+                with conn.cursor() as cur:
+                    cur.execute(statement.encode())
+        except Exception:
+            # A half-built connection is not usable and nothing else holds a
+            # reference to it, so close it rather than leaking the session.
+            conn.close()
+            raise
         return conn
 
     def reconnect(self) -> None:
+        # Built before the old one is discarded, so a failure here leaves this
+        # slot holding a working connection rather than a closed one. The
+        # caller returns the slot to the pool however this ends.
+        conn = self._connect()
         self.conn.close()
-        self.conn = self._connect()
+        self.conn = conn
 
     def close(self) -> None:
         self.conn.close()
@@ -537,6 +547,12 @@ class Scenario:
         # where it would put a round trip inside every measured duration.
         for i in range(self.conn_pool_size):
             self.conns.put(PooledConn(conn_info, self.conn_pool_setup))
+        # A pool that came up short silently narrows the concurrency every
+        # pooled action gets, which shows up as latency rather than as an
+        # error, so state the count rather than discovering it in the numbers.
+        assert (
+            self.conns.qsize() == self.conn_pool_size
+        ), f"pool has {self.conns.qsize()} of {self.conn_pool_size} connections"
 
     def run(
         self,

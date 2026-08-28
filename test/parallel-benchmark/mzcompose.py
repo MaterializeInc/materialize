@@ -529,10 +529,14 @@ def run_once(
                 periodic_dists={pd[0]: int(pd[1]) for pd in args.periodic_dist or []},
             )
             scenario = scenario_class(c, conn_infos)
-            scenario.setup(c, conn_infos)
             start_time = time.time()
             Path(MZ_ROOT / "plots").mkdir(parents=True, exist_ok=True)
             try:
+                # Inside the try because setup() is what starts the worker
+                # threads and builds the connection pool. A failure partway
+                # through leaves those threads parked on an empty job queue,
+                # and only teardown()'s sentinels release them.
+                scenario.setup(c, conn_infos)
                 if not args.benchmarking_env:
                     # Don't let the garbage collector interfere with our measurements
                     gc.disable()

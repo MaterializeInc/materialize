@@ -17,12 +17,14 @@ from materialize.parallel_benchmark.framework import (
     Action,
     ClosedLoop,
     LoadPhase,
+    Measurement,
     OpenLoop,
     Periodic,
     PooledQuery,
     ReuseConnQuery,
     Scenario,
     StandaloneQuery,
+    State,
     TdAction,
     TdPhase,
     disabled,
@@ -1297,6 +1299,11 @@ class HydrationChurn(Action):
     cursor raises without a round trip and the loop spins, taking the
     measurement store's process-wide lock against the threads that record the
     measured reads.
+
+    A failed iteration records no measurement, so the count of this action in
+    the report is the number of hydrations that actually happened. Recording one
+    would report the backoff as though it were a fast hydration, and the count
+    would rise as the contention fell.
     """
 
     # Long enough that a persistently failing loop cannot crowd out the threads
@@ -1310,14 +1317,34 @@ class HydrationChurn(Action):
         self._connect()
 
     def _connect(self) -> None:
-        self.conn = self.conn_info.connect()
-        self.conn.autocommit = True
-        self.cur = self.conn.cursor()
+        conn = self.conn_info.connect()
+        conn.autocommit = True
+        cur = conn.cursor()
+        old = getattr(self, "conn", None)
+        self.conn = conn
+        self.cur = cur
+        if old is not None:
+            try:
+                old.close()
+            except Exception as e:
+                print(
+                    f"Hydration churn {self.name} could not close the old connection: {e}"
+                )
+
+    def run(self, start_time: float, conns: queue.Queue, state: State):
+        # `Action.run` records a measurement whenever `_run` returns. A failed
+        # iteration did no hydration and spent its time in the backoff, so it
+        # records nothing rather than entering the series as a fast one.
+        if not self._churn():
+            return
+        duration = time.time() - start_time
+        state.measurements.add(str(self), Measurement(duration, start_time))
 
     def _run(self, conns: queue.Queue):
-        # `IF NOT EXISTS` and `IF EXISTS` keep an iteration that failed after
-        # its CREATE from wedging every iteration after it. A view left behind
-        # is already hydrated, so the next iteration drops it and carries on.
+        raise NotImplementedError("run() drives the churn directly")
+
+    def _churn(self) -> bool:
+        """Builds, hydrates and drops the view once. False if the iteration failed."""
         try:
             execute_query(
                 self.cur,
@@ -1327,14 +1354,26 @@ class HydrationChurn(Action):
             # does the build work rather than cancelling it immediately.
             execute_query(self.cur, f"SELECT count(*) FROM {self.name}")
             self.cur.fetchall()
-            execute_query(self.cur, f"DROP MATERIALIZED VIEW IF EXISTS {self.name}")
         except Exception as e:
             print(f"Hydration churn {self.name} failed, retrying: {e}")
             time.sleep(self.RETRY_BACKOFF_SECONDS)
             try:
+                # Dropped before the next iteration, because a view left behind
+                # turns the next `CREATE IF NOT EXISTS` into a no-op. The loop
+                # would then keep running with no build work in it, which is
+                # this scenario's contention source disappearing silently.
                 self._connect()
+                execute_query(self.cur, f"DROP MATERIALIZED VIEW IF EXISTS {self.name}")
             except Exception as e:
-                print(f"Hydration churn {self.name} could not reconnect: {e}")
+                print(f"Hydration churn {self.name} could not recover: {e}")
+            return False
+
+        try:
+            execute_query(self.cur, f"DROP MATERIALIZED VIEW IF EXISTS {self.name}")
+        except Exception as e:
+            print(f"Hydration churn {self.name} could not drop its view: {e}")
+            return False
+        return True
 
     def __str__(self) -> str:
         return f"hydration churn {self.name}"
@@ -1354,7 +1393,15 @@ class ReadIsolationUnderHydration(Scenario):
     capture. That backlog is the signal: it is what a user issuing reads at a
     steady rate experiences when maintenance steals the serving capacity.
 
-    The measured loops are pooled so that the backlog is the replica's.
+    The measured loops are pooled so that the backlog is the replica's, and the
+    pool is sized well above what they hold. By Little's law a local run held
+    about 73 connections in flight across the two loops, so the 100 they
+    started with left no room: a slower replica blocks in `conns.get()`, the
+    offered rate stops reaching the replica, and the percentiles collapse back
+    into the arrival-schedule artifact at concurrency 100 instead of 1. The
+    slower side of an A/B is the one that would hit it, and nothing in the
+    output distinguishes a pool-capped run from a replica-limited one.
+
     `ReuseConnQuery` serializes an open loop on one connection behind one lock,
     so read concurrency is one however large the thread pool is, and any query
     slower than the inter-arrival time backs up in the client instead. The
@@ -1372,7 +1419,14 @@ class ReadIsolationUnderHydration(Scenario):
     Compare p50 and p99, not qps. An open loop offers a fixed number of
     queries, every one of them is drained before the run ends, and each is
     timestamped when it was scheduled rather than when it completed, so the
-    reported qps is the offered rate whatever the replica does:
+    reported qps is the offered rate whatever the replica does.
+
+    Check `queries` on both sides before comparing percentiles. A query that
+    raises is logged and dropped rather than recorded, so a run that lost
+    samples reports percentiles over the ones that survived, and the ones that
+    fail are the ones taken when the replica was worst.
+
+    To A/B a change that claims to improve read isolation:
 
         bin/mzcompose --find parallel-benchmark run default \
             --scenario ReadIsolationUnderHydration \
@@ -1435,6 +1489,6 @@ class ReadIsolationUnderHydration(Scenario):
                     ],
                 ),
             ],
-            conn_pool_size=100,
+            conn_pool_size=1000,
             conn_pool_setup=["SET TRANSACTION_ISOLATION TO 'SERIALIZABLE'"],
         )
