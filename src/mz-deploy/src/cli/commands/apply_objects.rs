@@ -11,6 +11,7 @@
 
 use crate::cli::CliError;
 use crate::cli::commands::grants;
+use crate::cli::commands::reconcile::{ObjectKind, ReconcileTarget};
 use crate::cli::executor::DeploymentExecutor;
 use crate::client::Client;
 use crate::project::ir::compiled;
@@ -22,9 +23,15 @@ pub async fn reconcile_grants_and_comments(
     executor: &DeploymentExecutor<'_>,
     obj_id: &ObjectId,
     typed_obj: &compiled::DatabaseObject,
-    grant_kind: &grants::GrantObjectKind,
+    kind: ObjectKind,
 ) -> Result<(), CliError> {
-    grants::reconcile(client, executor, obj_id, &typed_obj.grants, grant_kind).await?;
+    grants::reconcile(
+        client,
+        executor,
+        &ReconcileTarget::item(kind, obj_id),
+        &typed_obj.grants,
+    )
+    .await?;
     for comment in &typed_obj.comments {
         executor.execute_sql(comment).await?;
     }
