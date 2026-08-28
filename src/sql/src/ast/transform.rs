@@ -18,11 +18,11 @@ use mz_sql_parser::ast::CreateTableFromSourceStatement;
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
 use crate::ast::{
-    AstInfo, CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateMetricSinkStatement, CreateSecretStatement, CreateSinkStatement, CreateSourceStatement,
-    CreateSubsourceStatement, CreateTableStatement, CreateViewStatement,
-    CreateWebhookSourceStatement, Expr, Ident, Query, Raw, RawDataType, RawItemName, Statement,
-    UnresolvedItemName, ViewDefinition,
+    AstInfo, CreateConnectionStatement, CreateForeignKeyStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateMetricSinkStatement, CreateSecretStatement,
+    CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement, CreateTableStatement,
+    CreateViewStatement, CreateWebhookSourceStatement, Expr, Ident, Query, Raw, RawDataType,
+    RawItemName, Statement, UnresolvedItemName, ViewDefinition,
 };
 use crate::names::FullItemName;
 
@@ -48,6 +48,7 @@ pub fn create_stmt_rename_schema_refs(
         | stmt @ Statement::CreateTable(_)
         | stmt @ Statement::CreateTableFromSource(_)
         | stmt @ Statement::CreateIndex(_)
+        | stmt @ Statement::CreateForeignKey(_)
         | stmt @ Statement::CreateType(_)
         | stmt @ Statement::CreateSecret(_) => {
             let mut visitor = CreateSqlRewriteSchema {
@@ -159,7 +160,8 @@ impl<'a, 'ast> VisitMut<'ast, Raw> for CreateSqlRewriteSchema<'a> {
 pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String) {
     // TODO(sploiselle): Support renaming schemas and databases.
     match create_stmt {
-        Statement::CreateIndex(CreateIndexStatement { name, .. }) => {
+        Statement::CreateIndex(CreateIndexStatement { name, .. })
+        | Statement::CreateForeignKey(CreateForeignKeyStatement { name, .. }) => {
             *name = Some(Ident::new_unchecked(to_item_name));
         }
         Statement::CreateSink(CreateSinkStatement {
@@ -219,6 +221,14 @@ pub fn create_stmt_rename_refs(
     match create_stmt {
         Statement::CreateIndex(CreateIndexStatement { on_name, .. }) => {
             maybe_update_item_name(on_name.name_mut());
+        }
+        Statement::CreateForeignKey(CreateForeignKeyStatement {
+            on_name,
+            references,
+            ..
+        }) => {
+            maybe_update_item_name(on_name.name_mut());
+            maybe_update_item_name(references.name_mut());
         }
         Statement::CreateSink(CreateSinkStatement { from, .. }) => {
             maybe_update_item_name(from.name_mut());

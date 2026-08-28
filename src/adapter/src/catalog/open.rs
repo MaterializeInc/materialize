@@ -964,6 +964,7 @@ fn add_new_remove_old_builtin_items_migration(
             CatalogItemType::Sink
             | CatalogItemType::MetricSink
             | CatalogItemType::Index
+            | CatalogItemType::ForeignKey
             | CatalogItemType::Type
             | CatalogItemType::Func
             | CatalogItemType::Secret

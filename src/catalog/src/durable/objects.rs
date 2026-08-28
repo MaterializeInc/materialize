@@ -1565,6 +1565,10 @@ pub fn item_type(create_sql: &str) -> CatalogItemType {
             CatalogItemType::MetricSink
         }
         Some("INDEX") => CatalogItemType::Index,
+        Some("FOREIGN") => {
+            assert_eq!(tokens.next(), Some("KEY"));
+            CatalogItemType::ForeignKey
+        }
         Some("TYPE") => CatalogItemType::Type,
         Some("FUNCTION") => CatalogItemType::Func,
         Some("SECRET") => CatalogItemType::Secret,

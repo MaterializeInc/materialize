@@ -1329,7 +1329,8 @@ impl Coordinator {
                         | CatalogItem::Index(_)
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
-                        | CatalogItem::MetricSink(_) => {}
+                        | CatalogItem::MetricSink(_)
+                        | CatalogItem::ForeignKey(_) => {}
                     }
                 }
                 Op::DropObjects(drop_object_infos) => {
@@ -1409,7 +1410,8 @@ impl Coordinator {
                                     | CatalogItem::Index(_)
                                     | CatalogItem::Type(_)
                                     | CatalogItem::Func(_)
-                                    | CatalogItem::MetricSink(_) => {}
+                                    | CatalogItem::MetricSink(_)
+                                    | CatalogItem::ForeignKey(_) => {}
                                 }
                             }
                         }
@@ -1435,6 +1437,7 @@ impl Coordinator {
                     | CatalogItem::Sink(_)
                     | CatalogItem::MaterializedView(_)
                     | CatalogItem::Secret(_)
+                    | CatalogItem::ForeignKey(_)
                     | CatalogItem::Log(_)
                     | CatalogItem::View(_)
                     | CatalogItem::Index(_)

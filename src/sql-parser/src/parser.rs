@@ -2084,6 +2084,9 @@ impl<'a> Parser<'a> {
         } else if self.peek_keyword(INDEX) || self.peek_keywords(&[DEFAULT, INDEX]) {
             self.parse_create_index()
                 .map_parser_err(StatementKind::CreateIndex)
+        } else if self.peek_keywords(&[FOREIGN, KEY]) {
+            self.parse_create_foreign_key()
+                .map_parser_err(StatementKind::CreateForeignKey)
         } else if self.peek_keyword(SOURCE) {
             self.parse_create_source()
                 .map_parser_err(StatementKind::CreateSource)
@@ -2144,9 +2147,9 @@ impl<'a> Parser<'a> {
                     }
                     (false, true) => "TABLE, or VIEW after CREATE TEMPORARY",
                     (false, false) => {
-                        "DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, [TEMPORARY] TABLE, \
-                        SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW \
-                        after CREATE"
+                        "DATABASE, SCHEMA, ROLE, TYPE, INDEX, FOREIGN KEY, SINK, SOURCE, \
+                        [TEMPORARY] TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or \
+                        [OR REPLACE] MATERIALIZED VIEW after CREATE"
                     }
                 };
                 self.expected(self.peek_pos(), expected_msg, self.peek_token())
@@ -4396,6 +4399,45 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    fn parse_create_foreign_key(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keywords(&[FOREIGN, KEY])?;
+
+        let if_not_exists = self.parse_if_not_exists()?;
+        // The name is optional, so a leading `ON` means there isn't one. An
+        // inferred name plus `IF NOT EXISTS` would be asking whether a name the
+        // user never chose already exists, so require an explicit one.
+        let name = if self.peek_keyword(ON) {
+            if if_not_exists {
+                return self.expected(self.peek_pos(), "foreign key name", self.peek_token());
+            }
+            None
+        } else {
+            Some(self.parse_identifier()?)
+        };
+
+        self.expect_keyword(ON)?;
+        let on_name = self.parse_raw_name()?;
+        let columns = self.parse_parenthesized_column_list(Mandatory)?;
+
+        self.expect_keyword(REFERENCES)?;
+        let references = self.parse_raw_name()?;
+        let referenced_columns = self.parse_parenthesized_column_list(Mandatory)?;
+
+        // Required, not optional. Nothing is enforced today, and demanding the
+        // qualifier keeps the unqualified spelling free to mean an enforced
+        // foreign key without changing what this statement means.
+        self.expect_keywords(&[NOT, ENFORCED])?;
+
+        Ok(Statement::CreateForeignKey(CreateForeignKeyStatement {
+            name,
+            if_not_exists,
+            on_name,
+            columns,
+            references,
+            referenced_columns,
+        }))
+    }
+
     fn parse_table_option_name(&mut self) -> Result<TableOptionName, ParserError> {
         // this is only so we can test redacted values, of which no other
         // examples exist as of its introduction.
@@ -5092,6 +5134,7 @@ impl<'a> Parser<'a> {
             | ObjectType::Sink
             | ObjectType::MetricSink
             | ObjectType::Index
+            | ObjectType::ForeignKey
             | ObjectType::Type
             | ObjectType::Secret
             | ObjectType::Connection => {
@@ -5857,9 +5900,10 @@ impl<'a> Parser<'a> {
             ObjectType::Index => self.parse_alter_index(),
             ObjectType::Secret => self.parse_alter_secret(),
             ObjectType::Connection => self.parse_alter_connection(),
-            ObjectType::View | ObjectType::MaterializedView | ObjectType::Table => {
-                self.parse_alter_views(object_type)
-            }
+            ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Table
+            | ObjectType::ForeignKey => self.parse_alter_views(object_type),
             ObjectType::Type => {
                 let if_exists = self
                     .parse_if_exists()
@@ -6691,6 +6735,7 @@ impl<'a> Parser<'a> {
             ObjectType::Table => &[SET, RENAME, OWNER, RESET, ADD],
             ObjectType::MaterializedView => &[SET, RENAME, OWNER, RESET, APPLY],
             ObjectType::View => &[SET, RENAME, OWNER, RESET],
+            ObjectType::ForeignKey => &[RENAME, OWNER],
             ObjectType::Source
             | ObjectType::Sink
             | ObjectType::MetricSink
@@ -7542,6 +7587,7 @@ impl<'a> Parser<'a> {
             | ObjectType::Sink
             | ObjectType::MetricSink
             | ObjectType::Index
+            | ObjectType::ForeignKey
             | ObjectType::Type
             | ObjectType::Secret
             | ObjectType::Connection
@@ -8369,7 +8415,7 @@ impl<'a> Parser<'a> {
                         on_object,
                     }
                 }
-                ObjectType::Func => {
+                ObjectType::ForeignKey | ObjectType::Func => {
                     return parser_err!(
                         self,
                         self.peek_prev_pos(),
@@ -9955,6 +10001,7 @@ impl<'a> Parser<'a> {
             ObjectType::Sink
             | ObjectType::MetricSink
             | ObjectType::Index
+            | ObjectType::ForeignKey
             | ObjectType::ClusterReplica
             | ObjectType::Role
             | ObjectType::Func
@@ -10407,6 +10454,7 @@ impl<'a> Parser<'a> {
             SOURCE,
             SINK,
             INDEX,
+            FOREIGN,
             FUNCTION,
             CONNECTION,
             TYPE,
@@ -10441,6 +10489,11 @@ impl<'a> Parser<'a> {
             INDEX => {
                 let name = self.parse_raw_name()?;
                 CommentObjectType::Index { name }
+            }
+            FOREIGN => {
+                self.expect_keyword(KEY)?;
+                let name = self.parse_raw_name()?;
+                CommentObjectType::ForeignKey { name }
             }
             FUNCTION => {
                 let name = self.parse_raw_name()?;

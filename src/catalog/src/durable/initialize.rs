@@ -388,6 +388,7 @@ pub(crate) async fn initialize(
             ObjectType::Sink => mz_audit_log::ObjectType::Sink,
             ObjectType::MetricSink => mz_audit_log::ObjectType::MetricSink,
             ObjectType::Index => mz_audit_log::ObjectType::Index,
+            ObjectType::ForeignKey => mz_audit_log::ObjectType::ForeignKey,
             ObjectType::Type => mz_audit_log::ObjectType::Type,
             ObjectType::Role => mz_audit_log::ObjectType::Role,
             ObjectType::Cluster => mz_audit_log::ObjectType::Cluster,

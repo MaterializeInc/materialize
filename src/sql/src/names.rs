@@ -1234,6 +1234,7 @@ impl From<CommentObjectId> for ObjectId {
             | CommentObjectId::Sink(item_id)
             | CommentObjectId::MetricSink(item_id)
             | CommentObjectId::Index(item_id)
+            | CommentObjectId::ForeignKey(item_id)
             | CommentObjectId::Func(item_id)
             | CommentObjectId::Connection(item_id)
             | CommentObjectId::Type(item_id)
@@ -1295,6 +1296,7 @@ pub enum CommentObjectId {
     Sink(CatalogItemId),
     MetricSink(CatalogItemId),
     Index(CatalogItemId),
+    ForeignKey(CatalogItemId),
     Func(CatalogItemId),
     Connection(CatalogItemId),
     Type(CatalogItemId),

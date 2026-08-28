@@ -613,7 +613,8 @@ impl CatalogState {
                 | CatalogItem::Source(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
-                | CatalogItem::Secret(_) => (),
+                | CatalogItem::Secret(_)
+                | CatalogItem::ForeignKey(_) => (),
             }
         }
 
@@ -2083,6 +2084,7 @@ impl CatalogState {
             | CatalogItemType::View
             | CatalogItemType::MaterializedView
             | CatalogItemType::Index
+            | CatalogItemType::ForeignKey
             | CatalogItemType::Secret
             | CatalogItemType::Connection => schema.items[builtin.name()],
         }
@@ -2909,6 +2911,7 @@ impl CatalogState {
             | CommentObjectId::Sink(id)
             | CommentObjectId::MetricSink(id)
             | CommentObjectId::Index(id)
+            | CommentObjectId::ForeignKey(id)
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
@@ -2939,6 +2942,7 @@ impl CatalogState {
             | CommentObjectId::Sink(id)
             | CommentObjectId::MetricSink(id)
             | CommentObjectId::Index(id)
+            | CommentObjectId::ForeignKey(id)
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)

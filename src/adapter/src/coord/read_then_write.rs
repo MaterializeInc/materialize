@@ -330,7 +330,7 @@ pub(crate) fn validate_read_then_write_dependencies(
                 typ @ (Func | View | MaterializedView) => id.is_user() || matches!(typ, Func),
                 Source | Secret | Connection => false,
                 // Cannot select from sinks or indexes.
-                Sink | MetricSink | Index => unreachable!(),
+                Sink | MetricSink | Index | ForeignKey => unreachable!(),
                 Table => id.is_user() && is_writable_table,
                 Type => true,
             },

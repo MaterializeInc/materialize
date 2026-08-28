@@ -1697,6 +1697,7 @@ pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType
         // metric-sink comment id is ever built. The arm exists only for exhaustiveness.
         CommentObjectId::MetricSink(_) => ObjectType::MetricSink,
         CommentObjectId::Index(_) => ObjectType::Index,
+        CommentObjectId::ForeignKey(_) => ObjectType::ForeignKey,
         CommentObjectId::Func(_) => ObjectType::Func,
         CommentObjectId::Connection(_) => ObjectType::Connection,
         CommentObjectId::Type(_) => ObjectType::Type,
@@ -1728,6 +1729,7 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::Sink => ObjectType::Sink,
             mz_sql::catalog::ObjectType::MetricSink => ObjectType::MetricSink,
             mz_sql::catalog::ObjectType::Index => ObjectType::Index,
+            mz_sql::catalog::ObjectType::ForeignKey => ObjectType::ForeignKey,
             mz_sql::catalog::ObjectType::Type => ObjectType::Type,
             mz_sql::catalog::ObjectType::Role => ObjectType::Role,
             mz_sql::catalog::ObjectType::Cluster => ObjectType::Cluster,

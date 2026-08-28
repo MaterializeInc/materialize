@@ -796,6 +796,7 @@ pub fn show_columns<'a>(
         | CatalogItemType::MaterializedView => (),
         ty @ CatalogItemType::Connection
         | ty @ CatalogItemType::Index
+        | ty @ CatalogItemType::ForeignKey
         | ty @ CatalogItemType::Func
         | ty @ CatalogItemType::Secret
         | ty @ CatalogItemType::Type

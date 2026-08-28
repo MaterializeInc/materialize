@@ -97,6 +97,7 @@ impl Catalog {
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::Secret(_)
+                        | CatalogItem::ForeignKey(_)
                         | CatalogItem::Connection(_)
                         | CatalogItem::Log(_) => {}
                     }
@@ -235,6 +236,7 @@ impl Catalog {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
+                    | CatalogItem::ForeignKey(_)
                     | CatalogItem::Connection(_) => {}
                 }
             }

@@ -40,7 +40,7 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, ColumnName, RelationDesc, RelationVersion, RelationVersionSelector,
+    CatalogItemId, ColumnName, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
     SqlColumnType, SqlRelationType, SqlScalarType, Timestamp, VersionedRelationDesc,
     preserves_order, strconv,
 };
@@ -59,31 +59,31 @@ use mz_sql_parser::ast::{
     ClusterOptionName, ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType,
     CommentStatement, ConnectionOption, ConnectionOptionName, CreateClusterReplicaStatement,
     CreateClusterStatement, CreateConnectionOption, CreateConnectionOptionName,
-    CreateConnectionStatement, CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
-    CreateMaterializedViewStatement, CreateMetricSinkOption, CreateMetricSinkOptionName,
-    CreateMetricSinkStatement, CreateNetworkPolicyStatement, CreateRoleStatement,
-    CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
-    CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceOption,
-    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
-    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableFromSourceStatement,
-    CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
-    CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
-    CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
-    CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
-    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
-    FormatSpecifier, GlueAvroOption, GlueAvroOptionName, IcebergSinkConfigOption, Ident,
-    IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
-    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, NetworkPolicyOption,
-    NetworkPolicyOptionName, NetworkPolicyRuleDefinition, NetworkPolicyRuleOption,
-    NetworkPolicyRuleOptionName, OnHydrationOptionValue, PgConfigOption, PgConfigOptionName,
-    ProtobufSchema, QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue,
-    RefreshOptionValue, ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute,
-    SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption,
-    SqlServerConfigOptionName, Statement, TableConstraint, TableFromSourceColumns,
-    TableFromSourceOption, TableFromSourceOptionName, TableOption, TableOptionName,
-    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
-    ViewDefinition, WithOptionValue,
+    CreateConnectionStatement, CreateConnectionType, CreateDatabaseStatement,
+    CreateForeignKeyStatement, CreateIndexStatement, CreateMaterializedViewStatement,
+    CreateMetricSinkOption, CreateMetricSinkOptionName, CreateMetricSinkStatement,
+    CreateNetworkPolicyStatement, CreateRoleStatement, CreateSchemaStatement,
+    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
+    CreateSinkStatement, CreateSourceConnection, CreateSourceOption, CreateSourceOptionName,
+    CreateSourceStatement, CreateSubsourceOption, CreateSubsourceOptionName,
+    CreateSubsourceStatement, CreateTableFromSourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
+    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
+    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf,
+    CsvColumns, DeferredItemName, DocOnIdentifier, DocOnSchema, DropObjectsStatement,
+    DropOwnedStatement, Expr, Format, FormatSpecifier, GlueAvroOption, GlueAvroOptionName,
+    IcebergSinkConfigOption, Ident, IfExistsBehavior, IndexOption, IndexOptionName,
+    KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName,
+    MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName,
+    NetworkPolicyOption, NetworkPolicyOptionName, NetworkPolicyRuleDefinition,
+    NetworkPolicyRuleOption, NetworkPolicyRuleOptionName, OnHydrationOptionValue, PgConfigOption,
+    PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
+    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
+    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
+    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
+    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -140,13 +140,14 @@ use crate::names::{
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
+use crate::plan::hir::CoercibleScalarType;
 use crate::plan::query::{
     ExprContext, QueryLifetime, TypeResolutionBudget, plan_expr, scalar_type_from_sql,
 };
 use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCLUSIVE_SETS};
 use crate::plan::statement::{StatementContext, StatementDesc, scl};
-use crate::plan::typeconv::CastContext;
+use crate::plan::typeconv::{self, CastContext};
 use crate::plan::with_options::{OptionalDuration, OptionalString, TryFromValue};
 use crate::plan::{
     AlterClusterPlan, AlterClusterPlanStrategy, AlterClusterRenamePlan,
@@ -159,20 +160,21 @@ use crate::plan::{
     ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, ConnectionDetails,
     CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
     CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateMaterializedViewPlan, CreateMetricSinkPlan, CreateNetworkPolicyPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
-    DropOwnedPlan, HirRelationExpr, Index, MaterializedView, MetricSink, NetworkPolicyRule,
-    NetworkPolicyRuleAction, NetworkPolicyRuleDirection, OnHydration, Plan, PlanClusterOption,
-    PlanNotice, PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, Table,
-    TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
-    WebhookHeaders, WebhookValidation, literal, plan_utils, query, transform_ast,
+    CreateForeignKeyPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateMetricSinkPlan,
+    CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
+    DropObjectsPlan, DropOwnedPlan, ForeignKey, HirRelationExpr, Index, MaterializedView,
+    MetricSink, NetworkPolicyRule, NetworkPolicyRuleAction, NetworkPolicyRuleDirection,
+    OnHydration, Plan, PlanClusterOption, PlanNotice, PolicyAddress, QueryContext, ReplicaConfig,
+    Secret, Sink, Source, Table, TableDataSource, Type, VariableValue, View, WebhookBodyFormat,
+    WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal, plan_utils, query,
+    transform_ast,
 };
 use crate::session::vars::{
     self, ENABLE_AUTO_SCALING_STRATEGY, ENABLE_CLUSTER_SCHEDULE_REFRESH,
-    ENABLE_COLLECTION_PARTITION_BY, ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS,
-    ENABLE_METRIC_SINK, ENABLE_REFRESH_EVERY_MVS, ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS,
-    VarInput,
+    ENABLE_COLLECTION_PARTITION_BY, ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_FOREIGN_KEY,
+    ENABLE_KAFKA_SINK_HEADERS, ENABLE_METRIC_SINK, ENABLE_REFRESH_EVERY_MVS,
+    ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS, VarInput,
 };
 use crate::{names, parse};
 
@@ -3317,7 +3319,7 @@ fn plan_sink(
                     });
                 }
             }
-            Sink | MetricSink | View | Index | Type | Func | Secret | Connection => {
+            Sink | MetricSink | View | Index | ForeignKey | Type | Func | Secret | Connection => {
                 let name = scx.catalog.minimal_qualification(from.name());
                 return Err(PlanError::InvalidSinkFrom {
                     name: name.to_string(),
@@ -4416,7 +4418,7 @@ pub fn plan_create_index(
                     );
                 }
             }
-            Sink | MetricSink | Index | Type | Func | Secret | Connection => {
+            Sink | MetricSink | Index | ForeignKey | Type | Func | Secret | Connection => {
                 sql_bail!(
                     "index cannot be created on {} because it is a {}",
                     on_name.full_name_str(),
@@ -4552,6 +4554,209 @@ pub fn plan_create_index(
             keys,
             cluster_id,
             compaction_window,
+        },
+        if_not_exists,
+    }))
+}
+
+pub fn describe_create_foreign_key(
+    _: &StatementContext,
+    _: CreateForeignKeyStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+/// Resolves one side of a foreign key: the relation must be one a foreign key
+/// can name, and each column must resolve to exactly one position in it.
+///
+/// Duplicate columns within a single side are rejected. Repeating a column makes
+/// the pairing ambiguous, and no correct constraint needs it.
+fn plan_foreign_key_columns(
+    scx: &StatementContext,
+    name: &ResolvedItemName,
+    columns: &[Ident],
+) -> Result<(GlobalId, RelationDesc, Vec<usize>), PlanError> {
+    let item = scx.get_item_by_resolved_name(name)?;
+
+    {
+        use CatalogItemType::*;
+        match item.item_type() {
+            Table | Source | View | MaterializedView => {
+                if item.replacement_target().is_some() {
+                    sql_bail!(
+                        "foreign key cannot reference {} because it is a replacement {}",
+                        name.full_name_str(),
+                        item.item_type(),
+                    );
+                }
+            }
+            Sink | MetricSink | Index | ForeignKey | Type | Func | Secret | Connection => {
+                sql_bail!(
+                    "foreign key cannot reference {} because it is a {}",
+                    name.full_name_str(),
+                    item.item_type(),
+                );
+            }
+        }
+    }
+
+    // A foreign key is never itself temporary, so one naming a temporary
+    // relation would be a non-temporary item depending on a temporary one. The
+    // catalog rejects that, but only once the transaction is underway and with a
+    // message about dependencies rather than about foreign keys.
+    if item.name().qualifiers.schema_spec == SchemaSpecifier::Temporary {
+        sql_bail!(
+            "foreign key cannot reference {} because it is a temporary object",
+            name.full_name_str(),
+        );
+    }
+
+    let desc = item
+        .relation_desc()
+        .ok_or_else(|| sql_err!("item does not have a relation description"))?;
+
+    let mut positions = Vec::with_capacity(columns.len());
+    let mut seen = BTreeSet::new();
+    for column in columns {
+        let column = normalize::column_name(column.clone());
+        let (position, _typ) =
+            desc.get_by_name(&column)
+                .ok_or_else(|| PlanError::UnknownColumn {
+                    table: Some(scx.catalog.minimal_qualification(item.name())),
+                    column: column.clone(),
+                    similar: Box::new([]),
+                })?;
+        if !seen.insert(position) {
+            sql_bail!(
+                "column {} appears twice in foreign key column list",
+                column.as_str().quoted(),
+            );
+        }
+        positions.push(position);
+    }
+
+    Ok((item.global_id(), desc.into_owned(), positions))
+}
+
+pub fn plan_create_foreign_key(
+    scx: &StatementContext,
+    mut stmt: CreateForeignKeyStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&ENABLE_FOREIGN_KEY)?;
+
+    let CreateForeignKeyStatement {
+        name,
+        if_not_exists,
+        on_name,
+        columns,
+        references,
+        referenced_columns,
+    } = &mut stmt;
+
+    if columns.is_empty() {
+        sql_bail!("foreign key must name at least one column");
+    }
+    if columns.len() != referenced_columns.len() {
+        sql_bail!(
+            "foreign key has {} column{} but references {} column{}",
+            columns.len(),
+            if columns.len() == 1 { "" } else { "s" },
+            referenced_columns.len(),
+            if referenced_columns.len() == 1 {
+                ""
+            } else {
+                "s"
+            },
+        );
+    }
+
+    let (referencing_gid, referencing_desc, referencing_positions) =
+        plan_foreign_key_columns(scx, on_name, columns)?;
+    let (referenced_gid, referenced_desc, referenced_positions) =
+        plan_foreign_key_columns(scx, references, referenced_columns)?;
+
+    // Paired columns have to be comparable, which is the same question SQL
+    // already answers for two values meeting in an expression: they must share a
+    // type category and have a common type both cast to implicitly. Stricter
+    // would reject `int4` against `int8`, which joins fine; looser would accept
+    // pairs that cannot be joined at all.
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+    let scope = Scope::empty();
+    let relation_type = SqlRelationType::empty();
+    let ecx = ExprContext {
+        qcx: &qcx,
+        name: "CREATE FOREIGN KEY",
+        scope: &scope,
+        relation_type: &relation_type,
+        allow_aggregates: false,
+        allow_subqueries: false,
+        allow_parameters: false,
+        allow_windows: false,
+    };
+    for (referencing_pos, referenced_pos) in referencing_positions.iter().zip(&referenced_positions)
+    {
+        let referencing_type = &referencing_desc.typ().column_types[*referencing_pos];
+        let referenced_type = &referenced_desc.typ().column_types[*referenced_pos];
+        typeconv::guess_best_common_type(
+            &ecx,
+            &[
+                CoercibleScalarType::Coerced(referencing_type.scalar_type.clone()),
+                CoercibleScalarType::Coerced(referenced_type.scalar_type.clone()),
+            ],
+        )?;
+    }
+
+    let referencing_item = scx.get_item_by_resolved_name(on_name)?;
+    let foreign_key_name = if let Some(name) = name {
+        QualifiedItemName {
+            qualifiers: referencing_item.name().qualifiers.clone(),
+            item: normalize::ident(name.clone()),
+        }
+    } else {
+        // PostgreSQL's convention: `<table>_<_-separated columns>_fkey`.
+        let mut fk_name = QualifiedItemName {
+            qualifiers: referencing_item.name().qualifiers.clone(),
+            item: referencing_item.name().item.clone(),
+        };
+        let suffix = columns
+            .iter()
+            .map(|c| normalize::column_name(c.clone()).to_string())
+            .join("_");
+        write!(fk_name.item, "_{suffix}_fkey").expect("write on strings cannot fail");
+        fk_name.item = normalize::ident(Ident::new(&fk_name.item)?);
+        scx.catalog.find_available_name(fk_name)
+    };
+
+    let full_name = scx.catalog.resolve_full_name(&foreign_key_name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if let (Ok(item), false, false) = (
+        scx.catalog.resolve_item(&partial_name),
+        *if_not_exists,
+        scx.pcx().map_or(false, |pcx| pcx.ignore_if_exists_errors),
+    ) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
+    // Normalize `stmt`: bake in the inferred name so the stored SQL is
+    // unconditional and re-parses to the same item.
+    *name = Some(Ident::new(foreign_key_name.item.clone())?);
+    let if_not_exists = *if_not_exists;
+
+    let create_sql = normalize::create_statement(scx, Statement::CreateForeignKey(stmt))?;
+
+    Ok(Plan::CreateForeignKey(CreateForeignKeyPlan {
+        name: foreign_key_name,
+        foreign_key: ForeignKey {
+            create_sql,
+            referencing: referencing_gid,
+            referenced: referenced_gid,
+            columns: referencing_positions
+                .into_iter()
+                .zip(referenced_positions)
+                .collect(),
         },
         if_not_exists,
     }))
@@ -6199,6 +6404,7 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
         | ObjectType::Sink
         | ObjectType::MetricSink
         | ObjectType::Index
+        | ObjectType::ForeignKey
         | ObjectType::Role
         | ObjectType::Cluster
         | ObjectType::ClusterReplica
@@ -6218,7 +6424,7 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
             | CatalogItemType::Type
             | CatalogItemType::Secret
             | CatalogItemType::Connection => true,
-            CatalogItemType::Index => false,
+            CatalogItemType::Index | CatalogItemType::ForeignKey => false,
         },
     }
 }
@@ -7009,6 +7215,7 @@ pub fn plan_alter_item_set_cluster(
         }
         ObjectType::Table
         | ObjectType::View
+        | ObjectType::ForeignKey
         | ObjectType::Type
         | ObjectType::Role
         | ObjectType::Cluster
@@ -7454,6 +7661,7 @@ pub fn plan_alter_object_swap(
             | ObjectType::Sink
             | ObjectType::MetricSink
             | ObjectType::Index
+            | ObjectType::ForeignKey
             | ObjectType::Type
             | ObjectType::Role
             | ObjectType::ClusterReplica
@@ -8320,6 +8528,7 @@ pub fn plan_comment(
         | com_ty @ CommentObjectType::View { name }
         | com_ty @ CommentObjectType::MaterializedView { name }
         | com_ty @ CommentObjectType::Index { name }
+        | com_ty @ CommentObjectType::ForeignKey { name }
         | com_ty @ CommentObjectType::Func { name }
         | com_ty @ CommentObjectType::Connection { name }
         | com_ty @ CommentObjectType::Source { name }
@@ -8338,6 +8547,9 @@ pub fn plan_comment(
                 }
                 (CommentObjectType::Index { .. }, CatalogItemType::Index) => {
                     (CommentObjectId::Index(item.id()), None)
+                }
+                (CommentObjectType::ForeignKey { .. }, CatalogItemType::ForeignKey) => {
+                    (CommentObjectId::ForeignKey(item.id()), None)
                 }
                 (CommentObjectType::Func { .. }, CatalogItemType::Func) => {
                     (CommentObjectId::Func(item.id()), None)
@@ -8360,6 +8572,7 @@ pub fn plan_comment(
                         CommentObjectType::View { .. } => ObjectType::View,
                         CommentObjectType::MaterializedView { .. } => ObjectType::MaterializedView,
                         CommentObjectType::Index { .. } => ObjectType::Index,
+                        CommentObjectType::ForeignKey { .. } => ObjectType::ForeignKey,
                         CommentObjectType::Func { .. } => ObjectType::Func,
                         CommentObjectType::Connection { .. } => ObjectType::Connection,
                         CommentObjectType::Source { .. } => ObjectType::Source,
@@ -8547,6 +8760,7 @@ pub(crate) fn resolve_item_or_type<'a>(
         | ObjectType::Sink
         | ObjectType::MetricSink
         | ObjectType::Index
+        | ObjectType::ForeignKey
         | ObjectType::Role
         | ObjectType::Cluster
         | ObjectType::ClusterReplica

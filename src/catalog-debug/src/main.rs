@@ -731,6 +731,7 @@ async fn upgrade_check(
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::ForeignKey(_)
             | CatalogItem::Connection(_) => None,
         });
 

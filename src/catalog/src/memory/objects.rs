@@ -866,6 +866,7 @@ pub enum CatalogItem {
     Secret(Secret),
     Connection(Connection),
     MetricSink(MetricSink),
+    ForeignKey(ForeignKey),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1646,6 +1647,38 @@ impl MetricSink {
     }
 }
 
+/// A non-enforced foreign key: catalog metadata asserting that columns of
+/// `referencing` correspond to columns of `referenced`.
+///
+/// Nothing validates that the correspondence holds. It must not be used to
+/// justify any transformation whose correctness depends on it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ForeignKey {
+    /// Parse-able SQL that defines this foreign key.
+    pub create_sql: String,
+    /// [`GlobalId`] used to reference this foreign key from outside the catalog.
+    pub global_id: GlobalId,
+    /// The relation holding the key.
+    pub referencing: GlobalId,
+    /// The relation pointed at.
+    pub referenced: GlobalId,
+    /// Column pairs, in the order the statement declared them, as positions into
+    /// each side's own `RelationDesc`. Not durable on their own: like the two
+    /// relation ids they ride in `create_sql` and are recovered by re-parsing it
+    /// on boot.
+    pub columns: Vec<(usize, usize)>,
+    /// Other catalog objects referenced by this foreign key, namely the two
+    /// relations it names.
+    pub resolved_ids: ResolvedIds,
+}
+
+impl ForeignKey {
+    /// The [`GlobalId`] that refers to this foreign key.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Type {
     /// Parse-able SQL that defines this type.
@@ -1774,6 +1807,7 @@ impl CatalogItem {
             CatalogItem::Type(_) => CatalogItemType::Type,
             CatalogItem::Func(_) => CatalogItemType::Func,
             CatalogItem::Secret(_) => CatalogItemType::Secret,
+            CatalogItem::ForeignKey(_) => CatalogItemType::ForeignKey,
             CatalogItem::Connection(_) => CatalogItemType::Connection,
             CatalogItem::MetricSink(_) => CatalogItemType::MetricSink,
         }
@@ -1793,6 +1827,7 @@ impl CatalogItem {
             CatalogItem::Func(func) => func.global_id,
             CatalogItem::Type(ty) => ty.global_id,
             CatalogItem::Secret(secret) => secret.global_id,
+            CatalogItem::ForeignKey(fk) => fk.global_id,
             CatalogItem::Connection(conn) => conn.global_id,
             CatalogItem::MetricSink(metric_sink) => metric_sink.global_id,
             CatalogItem::Table(table) => {
@@ -1816,6 +1851,7 @@ impl CatalogItem {
             CatalogItem::Func(func) => func.global_id,
             CatalogItem::Type(ty) => ty.global_id,
             CatalogItem::Secret(secret) => secret.global_id,
+            CatalogItem::ForeignKey(fk) => fk.global_id,
             CatalogItem::Connection(conn) => conn.global_id,
             CatalogItem::MetricSink(metric_sink) => metric_sink.global_id,
             CatalogItem::Table(table) => table.global_id_writes(),
@@ -1906,6 +1942,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::ForeignKey(_)
             | CatalogItem::Connection(_)
             | CatalogItem::MetricSink(_) => false,
         }
@@ -1932,6 +1969,7 @@ impl CatalogItem {
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::ForeignKey(_)
             | CatalogItem::Connection(_)
             | CatalogItem::Type(_)
             | CatalogItem::MetricSink(_) => None,
@@ -2000,6 +2038,7 @@ impl CatalogItem {
             CatalogItem::View(view) => &view.resolved_ids,
             CatalogItem::MaterializedView(mview) => &mview.resolved_ids,
             CatalogItem::Secret(_) => &*EMPTY,
+            CatalogItem::ForeignKey(fk) => &fk.resolved_ids,
             CatalogItem::Connection(connection) => &connection.resolved_ids,
             CatalogItem::MetricSink(metric_sink) => &metric_sink.resolved_ids,
         }
@@ -2027,6 +2066,7 @@ impl CatalogItem {
                 uses.extend(mview.dependencies.0.iter().copied())
             }
             CatalogItem::Secret(_) => {}
+            CatalogItem::ForeignKey(_) => {}
             CatalogItem::Connection(_) => {}
             CatalogItem::MetricSink(_) => {}
         }
@@ -2055,6 +2095,7 @@ impl CatalogItem {
             | CatalogItem::Table(_)
             | CatalogItem::Type(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::ForeignKey(_)
             | CatalogItem::Connection(_)
             | CatalogItem::MetricSink(_) => BTreeSet::new(),
         }
@@ -2072,6 +2113,7 @@ impl CatalogItem {
             | CatalogItem::Sink(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::ForeignKey(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Connection(_)
@@ -2091,6 +2133,7 @@ impl CatalogItem {
             | CatalogItem::Sink(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::ForeignKey(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Connection(_)
@@ -2116,6 +2159,7 @@ impl CatalogItem {
             | CatalogItem::Sink(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::ForeignKey(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Connection(_)
@@ -2189,6 +2233,11 @@ impl CatalogItem {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Secret(i))
+            }
+            CatalogItem::ForeignKey(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::ForeignKey(i))
             }
             CatalogItem::Connection(i) => {
                 let mut i = i.clone();
@@ -2268,6 +2317,11 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Secret(i))
             }
+            CatalogItem::ForeignKey(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::ForeignKey(i))
+            }
             CatalogItem::Func(_) | CatalogItem::Type(_) => {
                 unreachable!("{}s cannot be renamed", self.typ())
             }
@@ -2334,6 +2388,11 @@ impl CatalogItem {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql);
                 CatalogItem::Secret(i)
+            }
+            CatalogItem::ForeignKey(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::ForeignKey(i)
             }
             CatalogItem::Func(_) | CatalogItem::Type(_) => {
                 unreachable!("references of {}s cannot be replaced", self.typ())
@@ -2525,6 +2584,7 @@ impl CatalogItem {
             | CatalogItem::MaterializedView(MaterializedView { create_sql, .. })
             | CatalogItem::Index(Index { create_sql, .. })
             | CatalogItem::Secret(Secret { create_sql, .. })
+            | CatalogItem::ForeignKey(ForeignKey { create_sql, .. })
             | CatalogItem::Connection(Connection { create_sql, .. })
             | CatalogItem::MetricSink(MetricSink { create_sql, .. }) => Some(create_sql),
             CatalogItem::Func(_) | CatalogItem::Log(_) => None,
@@ -2562,6 +2622,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::ForeignKey(_)
             | CatalogItem::Connection(_) => None,
         }
     }
@@ -2591,6 +2652,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::ForeignKey(_)
             | CatalogItem::Connection(_) => false,
         }
     }
@@ -2619,6 +2681,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::ForeignKey(_)
             | CatalogItem::Connection(_) => None,
         }
     }
@@ -2637,6 +2700,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::ForeignKey(_)
             | CatalogItem::Connection(_)
             | CatalogItem::MetricSink(_) => None,
         }
@@ -2659,6 +2723,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::ForeignKey(_)
             | CatalogItem::Connection(_)
             | CatalogItem::MetricSink(_) => return None,
         };
@@ -2684,6 +2749,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::ForeignKey(_)
             | CatalogItem::Connection(_)
             | CatalogItem::MetricSink(_) => return None,
         };
@@ -2705,6 +2771,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::ForeignKey(_)
             | CatalogItem::Connection(_)
             | CatalogItem::MetricSink(_) => false,
         }
@@ -2764,6 +2831,7 @@ impl CatalogItem {
             ),
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
             CatalogItem::MetricSink(ms) => (ms.create_sql.clone(), ms.global_id, BTreeMap::new()),
+            CatalogItem::ForeignKey(fk) => (fk.create_sql.clone(), fk.global_id, BTreeMap::new()),
         }
     }
 
@@ -2805,6 +2873,7 @@ impl CatalogItem {
                 (create_sql, typ.global_id, BTreeMap::new())
             }
             CatalogItem::Secret(secret) => (secret.create_sql, secret.global_id, BTreeMap::new()),
+            CatalogItem::ForeignKey(fk) => (fk.create_sql, fk.global_id, BTreeMap::new()),
             CatalogItem::Connection(connection) => {
                 (connection.create_sql, connection.global_id, BTreeMap::new())
             }
@@ -2827,6 +2896,7 @@ impl CatalogItem {
             CatalogItem::Type(ty) => return Some(ty.global_id),
             CatalogItem::Func(func) => return Some(func.global_id),
             CatalogItem::Secret(secret) => return Some(secret.global_id),
+            CatalogItem::ForeignKey(fk) => return Some(fk.global_id),
             CatalogItem::Connection(conn) => return Some(conn.global_id),
             CatalogItem::MetricSink(metric_sink) => return Some(metric_sink.global_id),
         };
@@ -3033,6 +3103,7 @@ impl CatalogEntry {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::ForeignKey(_)
             | CatalogItem::Connection(_)
             | CatalogItem::MetricSink(_) => None,
         }
@@ -3164,6 +3235,7 @@ impl CatalogEntry {
             View => CommentObjectId::View(self.id),
             MaterializedView => CommentObjectId::MaterializedView(self.id),
             Index => CommentObjectId::Index(self.id),
+            ForeignKey => CommentObjectId::ForeignKey(self.id),
             Func => CommentObjectId::Func(self.id),
             Connection => CommentObjectId::Connection(self.id),
             Type => CommentObjectId::Type(self.id),
@@ -4176,6 +4248,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
                 create_sql.as_deref().unwrap_or("<builtin>")
             }
             CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,
+            CatalogItem::ForeignKey(ForeignKey { create_sql, .. }) => create_sql,
             CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
             CatalogItem::MetricSink(MetricSink { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "<builtin>",
