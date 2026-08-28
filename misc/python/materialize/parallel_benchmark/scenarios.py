@@ -338,9 +338,7 @@ class OpenIndexedSelects(Scenario):
                     duration=120,
                     actions=[
                         OpenLoop(
-                            action=PooledQuery(
-                                "SELECT * FROM t4", conn_info=conn_infos["materialized"]
-                            ),
+                            action=PooledQuery("SELECT * FROM t4"),
                             dist=Periodic(per_second=400),
                         ),
                     ],
@@ -450,9 +448,7 @@ class PoolRead(Scenario):
                     duration=120,
                     actions=[
                         OpenLoop(
-                            action=PooledQuery(
-                                "SELECT 1", conn_info=conn_infos["materialized"]
-                            ),
+                            action=PooledQuery("SELECT 1"),
                             dist=Periodic(per_second=100),
                             # dist=Gaussian(mean=0.01, stddev=0.05),
                         ),
@@ -572,9 +568,7 @@ class StatementLogging(Scenario):
                     duration=120,
                     actions=[
                         OpenLoop(
-                            action=PooledQuery(
-                                "SELECT 1", conn_info=conn_infos["materialized"]
-                            ),
+                            action=PooledQuery("SELECT 1"),
                             dist=Periodic(per_second=100),
                             # dist=Gaussian(mean=0.01, stddev=0.05),
                         ),
@@ -1227,9 +1221,7 @@ class StagingBench(Scenario):
                     duration=82800,
                     actions=[
                         OpenLoop(
-                            action=PooledQuery(
-                                "SELECT 1", conn_info=conn_infos["materialized"]
-                            ),
+                            action=PooledQuery("SELECT 1"),
                             dist=Periodic(per_second=500),
                         ),
                         ClosedLoop(
@@ -1470,7 +1462,7 @@ class ReadIsolationUnderHydration(Scenario):
                     actions=[
                         # Measured: fast-path index point lookup.
                         OpenLoop(
-                            action=PooledQuery("SELECT v FROM hot WHERE k = 42", mz),
+                            action=PooledQuery("SELECT v FROM hot WHERE k = 42"),
                             dist=Periodic(per_second=50),
                             report_regressions=False,
                         ),
@@ -1478,7 +1470,7 @@ class ReadIsolationUnderHydration(Scenario):
                         # sensitive to contention on the replica).
                         OpenLoop(
                             action=PooledQuery(
-                                "SELECT count(*) FROM hot WHERE k < 50000", mz
+                                "SELECT count(*) FROM hot WHERE k < 50000"
                             ),
                             dist=Periodic(per_second=12),
                             report_regressions=False,

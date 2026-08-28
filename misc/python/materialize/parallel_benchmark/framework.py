@@ -296,9 +296,14 @@ class PooledConn:
 
 
 class PooledQuery(Action):
-    def __init__(self, query: str, conn_info: PgConnInfo):
+    """Runs `query` on a connection from the scenario's pool.
+
+    Takes no `PgConnInfo`: the pool is built from the scenario's connection
+    info, and reconnecting a failed slot is the pool's own business.
+    """
+
+    def __init__(self, query: str):
         self.query = query
-        self.conn_info = conn_info
 
     def _run(self, conns: queue.Queue):
         pooled = conns.get()
