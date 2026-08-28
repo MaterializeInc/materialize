@@ -17,7 +17,7 @@ tests:
       of: Deployment
   - equal:
       path: spec.template.spec.containers[0].image
-      value: materialize/orchestratord:v26.38.1
+      value: materialize/orchestratord:v26.40.0-rc.1
   - equal:
       path: spec.template.spec.containers[0].imagePullPolicy
       value: IfNotPresent
@@ -71,7 +71,7 @@ tests:
 
 - it: should omit the statement logging sample rate when unset
   set:
-    operator.args.statementLoggingMaxSampleRate: null
+    operator.args.statementLoggingMaxSampleRate:
   asserts:
   - notContains:
       path: spec.template.spec.containers[0].args
