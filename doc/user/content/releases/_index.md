@@ -19,6 +19,38 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.40.0
+*Released to Materialize Cloud: 2026-09-03* <br>
+*Released to Materialize Self-Managed: 2026-09-04* <br>
+
+### Query History for Self-Managed {#v26.40-query-history-for-self-managed}
+Self-Managed deployments can now use the Console's Query History view, which was previously reachable only on Materialize Cloud. The Materialize operator Helm chart no longer hard-disables statement logging: `operator.args.statementLoggingMaxSampleRate` defaults to `0.99`, matching Materialize Cloud, and `operator.args.statementLoggingTargetDataRate` bounds how much statement logging writes. When an operator sets the sample rate to `0`, Query History says sampling is off rather than showing an empty filter result.
+
+### Catalog-Vended Credentials for Iceberg Sinks {#v26.40-catalog-vended-credentials-for-iceberg-sinks}
+Iceberg catalog connections accept `ACCESS DELEGATION = 'vended-credentials'`, which asks the catalog for temporary, table-scoped storage credentials instead of using static keys, and `OAUTH2 SERVER URL`, which names a token endpoint that does not sit under the catalog URI. Materialize refreshes vended credentials ahead of expiry, so a sink that runs longer than one credential lifetime keeps writing. Together these let you sink to catalogs such as Unity Catalog and Polaris without handing Materialize long-lived storage keys.
+
+### Improvements {#v26.40-improvements}
+- **Bounded staleness isolation is generally available**: The `bounded staleness <duration>` transaction isolation level is out of public preview and is now a supported part of the `transaction_isolation` surface.
+- **Replica resource usage introspection**: A new `mz_introspection.mz_cluster_replica_resource_usage` relation reports each replica process's own memory, swap, and disk observations at a higher cadence than the roughly once-a-minute orchestrator samples, so a spike between two samples is no longer invisible.
+- **App password expirations in the Console**: App passwords can now be created with a 30-, 60-, or 90-day expiration, defaulting to 90 days, and the list shows each password's expiry with an expired or expiring-soon marker.
+- **Expired-license banner for Self-Managed**: Super-users in a Self-Managed deployment now see a dismissible banner when the enterprise license has expired, instead of the status being visible only on the license admin page.
+- **Clearer error for `avg(interval)`**: The unsupported-`sum` error now names `avg(interval)` alongside `sum(interval)`, so a query that never mentions `sum` no longer reports an error about it.
+
+### Agent Skills {#v26.40-agent-skills}
+- **mcp-developer-analysis**: The skill's guidance was corrected against the developer MCP server, an emulator run, and a Cloud environment; most notably it no longer tells agents to avoid `mz_dataflow_arrangement_sizes` outright, and it now gives the working join path from dataflow ids to catalog objects.
+
+### Bug Fixes {#v26.40-bug-fixes}
+- `CREATE TABLE ... FROM SOURCE` now requires `SELECT` on the source and `USAGE` on its schema, closing a case where `CREATE` on any schema a role controlled was enough to read a source that role had been denied; deployments where a platform team owns sources and application teams attach tables into their own schemas will need those `SELECT` grants added.
+- Fixed `ALTER CONNECTION` letting a connection owner keep secrets and connections they lack `USAGE` privileges on, and read those secrets during content checks or connection validation.
+- Fixed `ANY`/`ALL` over a `NULL` array or list returning the empty-set answer instead of `NULL`, and `array_position` failing to find `NULL` elements, both now matching PostgreSQL.
+- Fixed `round(numeric, scale)` erroring on a scale that reaches past the value's fractional digits, such as `round(123::numeric, 38)`, which could also let filter pushdown discard data a query matched.
+- Fixed identity-provider group sync silently finding nothing when `oidc_group_claim` names a claim the token declares directly, such as `roles`, so group-to-role mapping now works without a custom claim or JWT prehook.
+- Fixed Arrow ADBC clients failing to connect by adding the missing `pg_type.typsend` column, and fixed `typreceive` rendering as a numeric OID rather than the function name, so those clients resolve every column to its real type.
+- Fixed Iceberg sinks ignoring a table's `write.data.path` property and always writing data files to the default location.
+- Fixed sources on the Console's Objects page being described in replica-hydration terms, which could show a healthy source as `Not Hydrated`, leave a webhook source with no status, and hold a completed snapshot at 99%.
+- Fixed several `dbt-materialize` error paths reporting confusing failures instead of the intended messages, covering the index config parser, renaming a view, dropping an unsupported relation type, connection option parsing, and the version check against a server that is not Materialize.
+- Fixed the `mz` CLI failing on read-only commands such as `mz sql` when `mz.toml` sits on a read-only mount.
+
 ## v26.38.2
 *Released to Materialize Cloud: 2026-08-19* <br>
 *Released to Materialize Self-Managed: 2026-08-25* <br>
