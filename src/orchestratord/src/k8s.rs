@@ -177,6 +177,11 @@ pub async fn register_crds(
                     conversion: None,
                 },
                 VersionedCrd {
+                    crds: vec![crd::materialize_debug::v1alpha1::MaterializeDebug::crd()],
+                    stored_version: String::from("v1alpha1"),
+                    conversion: None,
+                },
+                VersionedCrd {
                     crds: vec![crd::vpc_endpoint::v1::VpcEndpoint::crd()],
                     stored_version: String::from("v1"),
                     conversion: None,
