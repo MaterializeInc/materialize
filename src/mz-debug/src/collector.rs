@@ -30,7 +30,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use kube::Client;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 use tokio::time::MissedTickBehavior;
 use tracing::{error, info};
@@ -101,7 +101,7 @@ pub struct CollectorArgs {
 }
 
 /// A snapshot that is running or waiting to run.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotStatus {
     pub id: String,
     pub kind: SnapshotKind,

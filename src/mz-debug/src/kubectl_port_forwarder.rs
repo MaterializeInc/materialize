@@ -13,50 +13,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Port forwards k8s service via Kubectl
+//! Port forwards a k8s service via kubectl.
 
-use anyhow::{Context, Result};
-use kube::Client;
+use anyhow::Result;
 use tokio::io::AsyncBufReadExt;
-
 use tracing::info;
-
-use crate::collector::targets::find_environmentd_service;
-
-/// A Kubernetes resource that `kubectl port-forward` can target.
-///
-/// Forwarding a `Service` lets Kubernetes pick one arbitrary backing pod, which
-/// is what you want when any pod will do (for example the environmentd SQL
-/// listener, where the service routes to the active leader). Forwarding a `Pod`
-/// reaches one specific process, which is what profiling a multi-pod (scaled)
-#[derive(Debug, Clone)]
-pub enum PortForwardTarget {
-    Service(String),
-    Pod(String),
-}
-
-impl PortForwardTarget {
-    /// The `kubectl` resource argument, for example `services/foo` or
-    /// `pods/foo`.
-    fn kubectl_arg(&self) -> String {
-        match self {
-            PortForwardTarget::Service(name) => format!("services/{name}"),
-            PortForwardTarget::Pod(name) => format!("pods/{name}"),
-        }
-    }
-
-    /// The bare resource name, for logging and error messages.
-    pub fn name(&self) -> &str {
-        match self {
-            PortForwardTarget::Service(name) | PortForwardTarget::Pod(name) => name,
-        }
-    }
-}
 
 #[derive(Debug)]
 pub struct KubectlPortForwarder {
     pub namespace: String,
-    pub target: PortForwardTarget,
+    pub service_name: String,
     pub target_port: i32,
     pub context: Option<String>,
 }
@@ -77,7 +43,7 @@ impl KubectlPortForwarder {
     /// the port forward is established.
     pub async fn spawn_port_forward(&self) -> Result<PortForwardConnection, anyhow::Error> {
         let port_arg_str = format!(":{}", self.target_port);
-        let target_arg_str = self.target.kubectl_arg();
+        let target_arg_str = format!("services/{}", self.service_name);
         let mut args = vec![
             "port-forward",
             &target_arg_str,
@@ -131,11 +97,8 @@ impl KubectlPortForwarder {
 
                 if let (Some(local_address), Some(local_port)) = (local_address, local_port) {
                     info!(
-                        "Port forwarding established for {} from ports {}:{} -> {}",
-                        self.target.name(),
-                        local_address,
-                        local_port,
-                        &self.target_port
+                        "Port forwarding established for service {} from ports {}:{} -> {}",
+                        self.service_name, local_address, local_port, &self.target_port
                     );
                     return Ok(PortForwardConnection {
                         _lines: lines,
@@ -151,40 +114,5 @@ impl KubectlPortForwarder {
             }
         }
         Err(anyhow::anyhow!("Failed to spawn port forwarding process"))
-    }
-}
-
-/// Creates a port forwarder for the external pg wire port of environmentd.
-pub async fn create_pg_wire_port_forwarder(
-    client: &Client,
-    k8s_context: &Option<String>,
-    k8s_namespace: &String,
-    mz_instance_name: &String,
-) -> Result<KubectlPortForwarder> {
-    let service_info = find_environmentd_service(client, k8s_namespace, mz_instance_name)
-        .await
-        .with_context(|| "Cannot find ports for environmentd service")?;
-
-    let maybe_external_sql_port = service_info.service_ports.iter().find_map(|port_info| {
-        if let Some(port_name) = &port_info.name {
-            let port_name = port_name.to_lowercase();
-            if port_name == "sql" {
-                return Some(port_info);
-            }
-        }
-        None
-    });
-
-    if let Some(external_sql_port) = maybe_external_sql_port {
-        Ok(KubectlPortForwarder {
-            context: k8s_context.clone(),
-            namespace: service_info.namespace,
-            target: PortForwardTarget::Service(service_info.service_name),
-            target_port: external_sql_port.port,
-        })
-    } else {
-        Err(anyhow::anyhow!(
-            "No SQL port forwarding info found. Set --mz-connection-url to a Materialize instance."
-        ))
     }
 }

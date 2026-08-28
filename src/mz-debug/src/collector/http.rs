@@ -31,7 +31,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio_util::io::ReaderStream;
 use tracing::warn;
 
@@ -43,7 +43,7 @@ use crate::collector::{CollectorHandle, SnapshotStatus};
 /// asked for `latest` learns which one it got.
 pub const SNAPSHOT_ID_HEADER: &str = "x-mz-debug-snapshot-id";
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SnapshotList {
     /// Completed snapshots, oldest first.
     pub snapshots: Vec<SnapshotMeta>,
@@ -53,7 +53,7 @@ pub struct SnapshotList {
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SnapshotRequested {
     pub id: String,
 }
