@@ -12,18 +12,24 @@ menu:
 {{< public-preview />}}
 
 Iceberg sinks provide exactly once delivery of updates from Materialize into
-[Apache Iceberg](https://iceberg.apache.org/)[^1] tables hosted on either
-[Amazon S3
-Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html)[^2]
-or [Google Cloud BigLake](https://cloud.google.com/biglake)[^3]. As data
-changes in Materialize, the corresponding Iceberg tables are automatically
-kept up to date. You can sink data from a materialized view, a source, or a
-table.
+[Apache Iceberg](https://iceberg.apache.org/)[^1] tables. As data changes in
+Materialize, the corresponding Iceberg tables are automatically kept up to date.
+You can sink data from a materialized view, a source, or a table.
 
-Follow the guide for the platform hosting your Iceberg tables:
+Materialize reaches your tables through an Iceberg catalog. Follow the guide for
+the catalog hosting them:
 
-- [AWS S3 Tables](/serve-results/sink/iceberg-aws/)
-- [GCP BigLake](/serve-results/sink/iceberg-gcp/) {{< private-preview-inline />}}
+- [AWS S3
+  Tables](/serve-results/sink/iceberg-aws/)[^2], which authenticates through an
+  AWS connection.
+- [GCP BigLake](/serve-results/sink/iceberg-gcp/)[^3] {{< private-preview-inline />}},
+  which authenticates through a GCP connection.
+- [Iceberg REST catalog](/serve-results/sink/iceberg-rest/) {{< private-preview-inline />}},
+  for any catalog implementing the [Iceberg REST catalog
+  specification](https://iceberg.apache.org/spec/) with OAuth2 credentials.
+  [Databricks Unity
+  Catalog](https://docs.databricks.com/aws/en/external-access/iceberg) is such a
+  catalog: follow this guide to sink into it.
 
 [^1]: [Apache Iceberg](https://iceberg.apache.org/) is an open table format for
 large-scale analytics datasets.

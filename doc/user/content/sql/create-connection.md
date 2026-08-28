@@ -934,6 +934,7 @@ Materialize supports two catalog types:
 | --- | --- | --- |
 | `'s3tablesrest'` | [AWS S3 Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html) | [AWS connection](#aws) |
 | `'rest'` | [Google Cloud BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog) {{< private-preview-inline />}} | [GCP connection](#gcp) |
+| `'rest'` | Any [Iceberg REST catalog](/serve-results/sink/iceberg-rest/), including [Databricks Unity Catalog](https://docs.databricks.com/aws/en/external-access/iceberg) {{< private-preview-inline />}} | OAuth2 credentials in a secret |
 
 #### Syntax {#iceberg-catalog-syntax}
 
@@ -948,6 +949,13 @@ Materialize supports two catalog types:
 {{< private-preview />}}
 
 {{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog-biglake" %}}
+
+{{< /tab >}}
+{{< tab "Iceberg REST catalog" >}}
+
+{{< private-preview />}}
+
+{{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog-rest" %}}
 
 {{< /tab >}}
 {{< /tabs >}}
@@ -969,7 +977,46 @@ example="example-iceberg-catalog-connection" %}}
 example="example-iceberg-catalog-gcp-connection" %}}
 
 {{< /tab >}}
+{{< tab "Iceberg REST catalog" >}}
+
+{{< private-preview />}}
+
+{{% include-example file="examples/create_connection"
+example="example-iceberg-catalog-databricks-connection" %}}
+
+{{< /tab >}}
 {{< /tabs >}}
+
+#### Storage access delegation {#iceberg-catalog-access-delegation}
+
+Some Iceberg catalogs manage the object storage behind their tables and mint
+temporary, table-scoped credentials for it on request, rather than expecting
+clients to hold credentials of their own. The Iceberg specification calls this
+credential vending.
+
+The `ACCESS DELEGATION` option asks the catalog to vend credentials:
+
+| | |
+| --- | --- |
+| **Value** | `'vended-credentials'`. This is the only accepted value. |
+| **Default** | Unset, meaning Materialize does not request delegation. |
+| **Valid with** | `CATALOG TYPE = 'rest'` using `CREDENTIAL`. Not supported for `CATALOG TYPE = 's3tablesrest'`, which authenticates to storage through an [AWS connection](#aws), or for REST catalogs using `GCP CONNECTION`. |
+
+When set, Materialize writes to the table's storage using only the credentials
+the catalog vends, and refreshes them as they expire. When unset, Materialize
+writes using whatever storage credentials the catalog returns in its
+configuration, or the credentials of the associated AWS or GCP connection.
+
+Delegation is opt-in rather than always requested, because a catalog that gates
+it behind privileges the principal does not hold rejects the whole request
+rather than falling back. Requesting it unconditionally would break connections
+that work today.
+
+Some catalogs, including [Databricks Unity
+Catalog](/serve-results/sink/iceberg-rest/#databricks-unity-catalog), vend
+credentials as the only
+way to reach their storage, so `ACCESS DELEGATION` is required there rather than
+optional.
 
 For more information about using Iceberg sinks, see the [Iceberg sink documentation](/serve-results/sink/iceberg/).
 
