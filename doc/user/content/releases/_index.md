@@ -25,6 +25,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 ### Improvements {#v26.39-improvements}
 - **Improved connect modal in the console**: We've updated the UI to make it easier to connect coding agents to our MCP servers, and connect applications to Materialize.
+- **Parallel MySQL table snapshotting** {{< private-preview-inline />}}: Materialize can now split the initial snapshot of a single MySQL table across all the workers of the cluster hosting the source, so a source dominated by one very large table benefits from a larger cluster. Tables are eligible when they have a single-column `CHAR` or `VARCHAR` primary key using the `utf8mb4` character set with the `utf8mb4_bin` collation. For more information, see [MySQL snapshot parallelism](/ingest-data/mysql/snapshot-parallelism/).
 
 ### Agent Skills {#v26.39-agent-skills}
 - **mz-ontology-design**: A new skill that structures a Materialize SQL code base as a canonical ontology — a shared `raw` database, a shared `core` database, and one database per use case — with rules for semantic object grain and identity, temporal semantics, and a machine-readable relationship registry.
