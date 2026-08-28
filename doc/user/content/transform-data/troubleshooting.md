@@ -297,8 +297,11 @@ A query whose dataflow reaches the limit fails with an error instead of growing
 further:
 
 ```
-query exceeded the max_query_heap_size limit of 4294967296 bytes; it was using
-at least 4302568448 bytes
+ERROR:  query exceeded the max_query_heap_size limit of 4294967296 bytes
+DETAIL:  The query's dataflow was observed holding at least 4302568448 bytes
+across the cluster replica. The measurement covers the dataflow's internal state
+and is taken periodically, so the query may have grown past the limit by more
+than this.
 ```
 
 The limit applies per replica and covers all of a replica's workers, so it
