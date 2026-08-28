@@ -7193,6 +7193,7 @@ dependencies = [
  "futures",
  "k8s-openapi",
  "kube",
+ "maplit",
  "mz-build-info",
  "mz-cloud-resources",
  "mz-ore",

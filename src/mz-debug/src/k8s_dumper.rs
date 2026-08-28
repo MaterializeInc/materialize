@@ -35,6 +35,7 @@ use k8s_openapi::api::networking::v1::NetworkPolicy;
 use k8s_openapi::api::rbac::v1::{Role, RoleBinding};
 use k8s_openapi::api::storage::v1::StorageClass;
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
+use k8s_openapi::jiff::Timestamp;
 use kube::api::{ListParams, LogParams};
 use kube::{Api, Client};
 use mz_cloud_resources::crd::generated::cert_manager::certificates::Certificate;
@@ -43,6 +44,7 @@ use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::{info, warn};
 
+use crate::describe::{DescribeResource, describe};
 use crate::{ContainerDumper, DumpConfig};
 
 struct K8sResourceDumper<'n, K> {
@@ -50,22 +52,25 @@ struct K8sResourceDumper<'n, K> {
     api: Api<K>,
     namespace: Option<String>,
     resource_type: String,
+    /// The instant relative ages in `describe.txt` are computed against.
+    now: Timestamp,
 }
 
 impl<'n, K> K8sResourceDumper<'n, K>
 where
-    K: kube::Resource<DynamicType = ()> + Clone + Debug + Serialize + DeserializeOwned,
+    K: DescribeResource + Clone + Debug + Serialize + DeserializeOwned,
 {
-    fn cluster(config: &'n DumpConfig, client: Client) -> Self {
+    fn cluster(config: &'n DumpConfig, client: Client, now: Timestamp) -> Self {
         Self {
             config,
             api: Api::<K>::all(client),
             namespace: None,
             resource_type: K::plural(&()).into_owned(),
+            now,
         }
     }
 
-    fn namespaced(config: &'n DumpConfig, client: Client, namespace: String) -> Self
+    fn namespaced(config: &'n DumpConfig, client: Client, namespace: String, now: Timestamp) -> Self
     where
         K: kube::Resource<Scope = NamespaceResourceScope>,
     {
@@ -74,10 +79,14 @@ where
             api: Api::<K>::namespaced(client, namespace.as_str()),
             namespace: Some(namespace),
             resource_type: K::plural(&()).into_owned(),
+            now,
         }
     }
 
-    async fn _dump(&self) -> Result<(), anyhow::Error> {
+    /// Writes one YAML file per object plus a `describe.txt` covering all of
+    /// them. `events` is the namespace's Event list, from which each object's
+    /// events are joined; cluster-scoped kinds pass an empty slice.
+    async fn _dump(&self, events: &[Event]) -> Result<(), anyhow::Error> {
         let object_list = self.api.list(&ListParams::default()).await?;
 
         if object_list.items.is_empty() {
@@ -95,6 +104,7 @@ where
         );
         create_dir_all(&file_path)?;
 
+        let mut described = Vec::with_capacity(object_list.items.len());
         for (i, item) in object_list.items.iter().enumerate() {
             let file_name = file_path.join(format!(
                 "{}.yaml",
@@ -108,13 +118,20 @@ where
             serde_yaml::to_writer(&mut file, &item)?;
 
             info!("Exported {}", file_name.display());
+
+            described.push(describe(item, events, self.now));
         }
+
+        let describe_file_name = file_path.join("describe.txt");
+        let mut file = File::create(&describe_file_name)?;
+        file.write_all(described.join("\n\n").as_bytes())?;
+        info!("Exported {}", describe_file_name.display());
 
         Ok(())
     }
 
-    async fn dump(&self) {
-        if let Err(e) = self._dump().await {
+    async fn dump(&self, events: &[Event]) {
+        if let Err(e) = self._dump(events).await {
             warn!("Failed to write k8s {}: {}", self.resource_type, e);
         }
     }
@@ -128,8 +145,9 @@ pub struct K8sDumper<'n> {
     k8s_namespace: String,
     /// A list of additional k8s namespaces to dump.
     k8s_additional_namespaces: Option<Vec<String>>,
-    /// The kubernetes context to use.
-    k8s_context: Option<String>,
+    /// The instant every relative age in this dump is computed against, so
+    /// objects dumped seconds apart read consistently.
+    now: Timestamp,
 }
 
 impl<'n> K8sDumper<'n> {
@@ -138,119 +156,39 @@ impl<'n> K8sDumper<'n> {
         client: Client,
         k8s_namespace: String,
         k8s_additional_namespaces: Option<Vec<String>>,
-        k8s_context: Option<String>,
     ) -> Self {
         Self {
             config,
             client,
             k8s_namespace,
             k8s_additional_namespaces,
-            k8s_context,
-        }
-    }
-
-    async fn _dump_kubectl_describe<K>(
-        &self,
-        namespace: Option<&String>,
-    ) -> Result<(), anyhow::Error>
-    where
-        K: kube::Resource<DynamicType = ()>,
-    {
-        let resource_type = K::plural(&()).into_owned();
-        let mut args = vec!["describe", &resource_type];
-        if let Some(namespace) = namespace {
-            args.extend(["-n", namespace]);
-        } else {
-            args.push("--all-namespaces");
-        }
-
-        if let Some(k8s_context) = &self.k8s_context {
-            args.extend(["--context", k8s_context]);
-        }
-
-        let output = tokio::process::Command::new("kubectl")
-            .args(args)
-            .stderr(std::process::Stdio::null()) // Silence stderr
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Err(anyhow::anyhow!(
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-
-        if output.stdout.is_empty() {
-            let mut err_msg = format!("Describe: No {} found", resource_type);
-            if let Some(namespace) = namespace {
-                err_msg = format!("{} for namespace {}", err_msg, namespace);
-            }
-            warn!("{}", err_msg);
-            return Ok(());
-        }
-
-        let file_path = format_resource_path(
-            self.config.base_path.clone(),
-            resource_type.as_str(),
-            namespace,
-        );
-        let file_name = file_path.join("describe.txt");
-        create_dir_all(&file_path)?;
-        let mut file = File::create(&file_name)?;
-        file.write_all(&output.stdout)?;
-
-        info!("Exported {}", file_name.display());
-
-        Ok(())
-    }
-
-    async fn dump_kubectl_describe<K>(&self, namespace: Option<&String>)
-    where
-        K: kube::Resource<DynamicType = ()>,
-    {
-        if let Err(e) = self._dump_kubectl_describe::<K>(namespace).await {
-            warn!(
-                "Failed to dump kubectl describe for {}: {}",
-                K::plural(&()).into_owned(),
-                e
-            );
+            now: Timestamp::now(),
         }
     }
 
     /// Write cluster-level k8s resources to a yaml file per resource.
+    ///
+    /// Events for cluster-scoped objects live in namespaces the collector is
+    /// not granted, so their describe output carries no Events section.
     async fn dump_cluster_resources(&self) {
-        K8sResourceDumper::<Node>::cluster(self.config, self.client.clone())
-            .dump()
-            .await;
-
-        K8sResourceDumper::<StorageClass>::cluster(self.config, self.client.clone())
-            .dump()
-            .await;
-
-        K8sResourceDumper::<PersistentVolume>::cluster(self.config, self.client.clone())
-            .dump()
-            .await;
-
-        K8sResourceDumper::<MutatingWebhookConfiguration>::cluster(
-            self.config,
-            self.client.clone(),
-        )
-        .dump()
-        .await;
-
-        K8sResourceDumper::<ValidatingWebhookConfiguration>::cluster(
-            self.config,
-            self.client.clone(),
-        )
-        .dump()
-        .await;
-        K8sResourceDumper::<DaemonSet>::cluster(self.config, self.client.clone())
-            .dump()
-            .await;
-        K8sResourceDumper::<CustomResourceDefinition>::cluster(self.config, self.client.clone())
-            .dump()
-            .await;
+        let no_events: &[Event] = &[];
+        macro_rules! dump_cluster {
+            ($($kind:ty),* $(,)?) => {
+                $(
+                    K8sResourceDumper::<$kind>::cluster(self.config, self.client.clone(), self.now)
+                        .dump(no_events)
+                        .await;
+                )*
+            };
+        }
+        dump_cluster!(
+            Node,
+            StorageClass,
+            PersistentVolume,
+            MutatingWebhookConfiguration,
+            ValidatingWebhookConfiguration,
+            CustomResourceDefinition,
+        );
     }
 
     async fn _dump_k8s_pod_logs(&self, namespace: &String) -> Result<(), anyhow::Error> {
@@ -329,93 +267,54 @@ impl<'n> K8sDumper<'n> {
 
     /// Write namespace-level k8s resources to a yaml file per resource.
     pub async fn dump_namespaced_resources(&self, namespace: String) {
-        K8sResourceDumper::<Pod>::namespaced(self.config, self.client.clone(), namespace.clone())
-            .dump()
-            .await;
-        K8sResourceDumper::<Service>::namespaced(
-            self.config,
-            self.client.clone(),
-            namespace.clone(),
-        )
-        .dump()
-        .await;
-        K8sResourceDumper::<Deployment>::namespaced(
-            self.config,
-            self.client.clone(),
-            namespace.clone(),
-        )
-        .dump()
-        .await;
-        K8sResourceDumper::<StatefulSet>::namespaced(
-            self.config,
-            self.client.clone(),
-            namespace.clone(),
-        )
-        .dump()
-        .await;
-        K8sResourceDumper::<ReplicaSet>::namespaced(
-            self.config,
-            self.client.clone(),
-            namespace.clone(),
-        )
-        .dump()
-        .await;
-        K8sResourceDumper::<NetworkPolicy>::namespaced(
-            self.config,
-            self.client.clone(),
-            namespace.clone(),
-        )
-        .dump()
-        .await;
-        K8sResourceDumper::<Event>::namespaced(self.config, self.client.clone(), namespace.clone())
-            .dump()
-            .await;
-        K8sResourceDumper::<Materialize>::namespaced(
-            self.config,
-            self.client.clone(),
-            namespace.clone(),
-        )
-        .dump()
-        .await;
-        K8sResourceDumper::<Role>::namespaced(self.config, self.client.clone(), namespace.clone())
-            .dump()
-            .await;
-        K8sResourceDumper::<RoleBinding>::namespaced(
-            self.config,
-            self.client.clone(),
-            namespace.clone(),
-        )
-        .dump()
-        .await;
-        K8sResourceDumper::<ConfigMap>::namespaced(
-            self.config,
-            self.client.clone(),
-            namespace.clone(),
-        )
-        .dump()
-        .await;
-        K8sResourceDumper::<PersistentVolumeClaim>::namespaced(
-            self.config,
-            self.client.clone(),
-            namespace.clone(),
-        )
-        .dump()
-        .await;
-        K8sResourceDumper::<ServiceAccount>::namespaced(
-            self.config,
-            self.client.clone(),
-            namespace.clone(),
-        )
-        .dump()
-        .await;
+        // Fetched once up front so every kind's describe output can join its
+        // events without another round trip per kind.
+        let events = match Api::<Event>::namespaced(self.client.clone(), &namespace)
+            .list(&ListParams::default())
+            .await
+        {
+            Ok(list) => list.items,
+            Err(e) => {
+                warn!(
+                    "Failed to list events in namespace {}, describe output will have none: {}",
+                    namespace, e
+                );
+                Vec::new()
+            }
+        };
+        let events = events.as_slice();
 
-        K8sResourceDumper::<Certificate>::namespaced(
-            self.config,
-            self.client.clone(),
-            namespace.clone(),
-        )
-        .dump()
-        .await;
+        macro_rules! dump_namespaced {
+            ($($kind:ty),* $(,)?) => {
+                $(
+                    K8sResourceDumper::<$kind>::namespaced(
+                        self.config,
+                        self.client.clone(),
+                        namespace.clone(),
+                        self.now,
+                    )
+                    .dump(events)
+                    .await;
+                )*
+            };
+        }
+        dump_namespaced!(
+            Pod,
+            Service,
+            Deployment,
+            StatefulSet,
+            ReplicaSet,
+            DaemonSet,
+            NetworkPolicy,
+            Event,
+            Materialize,
+            Role,
+            RoleBinding,
+            ConfigMap,
+            PersistentVolumeClaim,
+            ServiceAccount,
+            Certificate,
+        );
 
         self.dump_k8s_pod_logs(&namespace).await;
     }
@@ -428,66 +327,7 @@ impl<'n> ContainerDumper for K8sDumper<'n> {
         let k8s_namespaces_iter = std::iter::once(&self.k8s_namespace)
             .chain(self.k8s_additional_namespaces.iter().flatten());
 
-        for namespace in k8s_namespaces_iter.clone() {
-            futs.push(Box::pin(self.dump_kubectl_describe::<Pod>(Some(namespace))));
-            futs.push(Box::pin(
-                self.dump_kubectl_describe::<Service>(Some(namespace)),
-            ));
-            futs.push(Box::pin(
-                self.dump_kubectl_describe::<Deployment>(Some(namespace)),
-            ));
-            futs.push(Box::pin(
-                self.dump_kubectl_describe::<StatefulSet>(Some(namespace)),
-            ));
-            futs.push(Box::pin(
-                self.dump_kubectl_describe::<ReplicaSet>(Some(namespace)),
-            ));
-            futs.push(Box::pin(
-                self.dump_kubectl_describe::<NetworkPolicy>(Some(namespace)),
-            ));
-            futs.push(Box::pin(
-                self.dump_kubectl_describe::<Event>(Some(namespace)),
-            ));
-            futs.push(Box::pin(
-                self.dump_kubectl_describe::<Materialize>(Some(namespace)),
-            ));
-            futs.push(Box::pin(
-                self.dump_kubectl_describe::<Role>(Some(namespace)),
-            ));
-            futs.push(Box::pin(
-                self.dump_kubectl_describe::<RoleBinding>(Some(namespace)),
-            ));
-            futs.push(Box::pin(
-                self.dump_kubectl_describe::<ConfigMap>(Some(namespace)),
-            ));
-            futs.push(Box::pin(
-                self.dump_kubectl_describe::<PersistentVolumeClaim>(Some(namespace)),
-            ));
-            futs.push(Box::pin(
-                self.dump_kubectl_describe::<ServiceAccount>(Some(namespace)),
-            ));
-            futs.push(Box::pin(
-                self.dump_kubectl_describe::<Certificate>(Some(namespace)),
-            ));
-        }
-
-        futs.push(Box::pin(self.dump_kubectl_describe::<Node>(None)));
-        futs.push(Box::pin(self.dump_kubectl_describe::<DaemonSet>(None)));
-        futs.push(Box::pin(self.dump_kubectl_describe::<StorageClass>(None)));
-        futs.push(Box::pin(
-            self.dump_kubectl_describe::<PersistentVolume>(None),
-        ));
-        futs.push(Box::pin(
-            self.dump_kubectl_describe::<MutatingWebhookConfiguration>(None),
-        ));
-        futs.push(Box::pin(
-            self.dump_kubectl_describe::<ValidatingWebhookConfiguration>(None),
-        ));
-        futs.push(Box::pin(
-            self.dump_kubectl_describe::<CustomResourceDefinition>(None),
-        ));
-
-        for namespace in k8s_namespaces_iter.clone() {
+        for namespace in k8s_namespaces_iter {
             futs.push(Box::pin(self.dump_namespaced_resources(namespace.clone())));
         }
         futs.push(Box::pin(self.dump_cluster_resources()));

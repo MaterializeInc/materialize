@@ -34,6 +34,7 @@ use crate::utils::{
     zip_debug_folder,
 };
 
+mod describe;
 mod docker_dumper;
 mod internal_http_dumper;
 mod k8s_dumper;
@@ -426,7 +427,6 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
         DebugModeContext::SelfManaged(SelfManagedContext {
             k8s_client,
             dump_k8s,
-            k8s_context,
             k8s_namespace,
             k8s_additional_namespaces,
             ..
@@ -437,7 +437,6 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
                     k8s_client.clone(),
                     k8s_namespace.clone(),
                     k8s_additional_namespaces.clone(),
-                    k8s_context.clone(),
                 );
                 dumper.dump_container_resources().await;
             }
