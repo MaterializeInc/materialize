@@ -8862,7 +8862,6 @@ dependencies = [
  "md-5 0.10.6",
  "mz-adapter-types",
  "mz-catalog",
- "mz-compute-types",
  "mz-controller",
  "mz-dyncfgs",
  "mz-environmentd",
