@@ -83,7 +83,7 @@ use mz_sql_parser::ast::{
     SqlServerConfigOptionName, Statement, TableConstraint, TableFromSourceColumns,
     TableFromSourceOption, TableFromSourceOptionName, TableOption, TableOptionName,
     UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
-    ViewDefinition, WithOptionValue,
+    ViewDefinition, ViewOption, ViewOptionName, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -2623,6 +2623,8 @@ pub fn describe_create_view(
     Ok(StatementDesc::new(None))
 }
 
+generate_extracted_config!(ViewOption, (SecurityBarrier, bool, Default(false)));
+
 pub fn plan_view(
     scx: &StatementContext,
     def: &mut ViewDefinition<Aug>,
@@ -2640,8 +2642,13 @@ pub fn plan_view(
     let ViewDefinition {
         name,
         columns,
+        with_options,
         query,
     } = def;
+
+    let ViewOptionExtracted {
+        security_barrier, ..
+    } = with_options.clone().try_into()?;
 
     let query::PlannedRootQuery {
         expr,
@@ -2692,6 +2699,7 @@ pub fn plan_view(
         dependencies,
         column_names: names,
         temporary,
+        security_barrier,
     };
 
     Ok((name, view))

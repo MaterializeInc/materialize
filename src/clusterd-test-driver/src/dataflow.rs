@@ -508,6 +508,9 @@ impl DataflowBuilder {
             let indexes = ImportedIndexOracle::new(&mir.index_imports);
             let typecheck_ctx = empty_typechecking_context();
             let mut df_meta = DataflowMetainfo::default();
+            // The driver builds dataflows from a MIR spec with no catalog
+            // behind it, so no import can be a security barrier.
+            let security_barriers = std::collections::BTreeSet::new();
             let mut ctx = TransformCtx::global(
                 &indexes,
                 &EmptyStatisticsOracle,
@@ -515,6 +518,7 @@ impl DataflowBuilder {
                 &typecheck_ctx,
                 &mut df_meta,
                 None,
+                &security_barriers,
             );
             optimize_dataflow(&mut mir, &mut ctx, false)
                 .map_err(|e| anyhow::anyhow!("optimizing dataflow failed: {e}"))?;
