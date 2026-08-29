@@ -1005,7 +1005,7 @@ impl Typecheck {
 
                 // Set as nonnull any columns where null values would cause
                 // any predicate to evaluate to null.
-                for column in non_nullable_columns(predicates) {
+                for column in mz_expr::non_nullable_columns_of(predicates) {
                     t_in[column].nullable = false;
                 }
 

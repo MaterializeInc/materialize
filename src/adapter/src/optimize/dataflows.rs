@@ -170,7 +170,8 @@ impl ExprPrep for ExprPrepMaintained {
         expr.0.try_visit_mut_post(&mut |e| {
             // Carefully test filter expressions, which may represent temporal filters.
             if let MirRelationExpr::Filter { input, predicates } = &*e {
-                let mfp = MapFilterProject::new(input.arity()).filter(predicates.iter().cloned());
+                let mfp = MapFilterProject::new(input.arity())
+                    .filter(predicates.iter().map(|p| p.expr.clone()));
                 match mfp.into_plan() {
                     Err(e) => Err(OptimizerError::UnsupportedTemporalExpression(e)),
                     Ok(mut mfp) => {

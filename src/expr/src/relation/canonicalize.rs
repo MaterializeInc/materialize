@@ -213,6 +213,38 @@ where
 ///
 /// Additionally, it also removes IS NOT NULL predicates if there is another
 /// null rejecting predicate for the same sub-expression.
+/// Canonicalize predicates that carry security levels.
+///
+/// Canonicalization reduces, splits, cross-reduces, sorts, and deduplicates,
+/// every one of which would otherwise launder a level away: splitting a
+/// conjunction loses which half was constrained, cross-reduction lets a
+/// constrained predicate simplify an unconstrained one, and dedup collapses two
+/// levels into whichever it happened to keep.
+///
+/// Canonicalizing each level in isolation sidesteps all of that. The only thing
+/// given up is simplification *across* levels, which is exactly the interaction
+/// a level exists to forbid.
+pub fn canonicalize_leveled_predicates(
+    predicates: &mut Vec<crate::relation::Predicate>,
+    repr_column_types: &[ReprColumnType],
+) {
+    let mut levels: std::collections::BTreeMap<u8, Vec<MirScalarExpr>> = Default::default();
+    for predicate in predicates.drain(..) {
+        levels
+            .entry(predicate.level)
+            .or_default()
+            .push(predicate.expr);
+    }
+    for (level, mut exprs) in levels {
+        canonicalize_predicates(&mut exprs, repr_column_types);
+        predicates.extend(
+            exprs
+                .into_iter()
+                .map(|expr| crate::relation::Predicate { expr, level }),
+        );
+    }
+}
+
 pub fn canonicalize_predicates(
     predicates: &mut Vec<MirScalarExpr>,
     repr_column_types: &[ReprColumnType],

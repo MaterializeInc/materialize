@@ -311,7 +311,10 @@ impl ProjectionPushdown {
                     for predicate in predicates.iter() {
                         predicate.support_into(&mut columns_to_pushdown);
                     }
-                    reverse_permute(predicates.iter_mut(), columns_to_pushdown.iter());
+                    reverse_permute(
+                        predicates.iter_mut().map(|p| &mut p.expr),
+                        columns_to_pushdown.iter(),
+                    );
                     let columns_to_pushdown = columns_to_pushdown.into_iter().collect::<Vec<_>>();
                     self.action(input, &columns_to_pushdown, gets)?;
                     columns_to_pushdown

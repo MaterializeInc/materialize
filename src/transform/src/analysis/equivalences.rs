@@ -163,7 +163,15 @@ impl Analysis for Equivalences {
             MirRelationExpr::Filter { predicates, .. } => {
                 let mut equivalences = results.get(index - 1).unwrap().clone();
                 if let Some(equivalences) = &mut equivalences {
-                    let mut class = predicates.clone();
+                    // A predicate constrained by a security level may not seed
+                    // an equivalence class unless it is leakproof: a derived
+                    // qual carries no level, so seeding from one would launder
+                    // the constraint away.
+                    let mut class: Vec<MirScalarExpr> = predicates
+                        .iter()
+                        .filter(|p| p.level == 0 || !mz_expr::Eval::could_error(&p.expr))
+                        .map(|p| p.expr.clone())
+                        .collect();
                     class.push(MirScalarExpr::literal_ok(Datum::True, ReprScalarType::Bool));
                     equivalences.classes.push(class);
                 }

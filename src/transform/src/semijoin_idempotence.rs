@@ -510,7 +510,7 @@ fn as_filtered_get(
 ) -> Vec<(Id, Vec<MirScalarExpr>)> {
     let mut results = Vec::new();
     while let MirRelationExpr::Filter { input, predicates } = expr {
-        results.extend(predicates.iter().cloned());
+        results.extend(predicates.iter().map(|p| p.expr.clone()));
         expr = &**input;
     }
     if let MirRelationExpr::Get { id, .. } = expr {

@@ -115,10 +115,10 @@ pub fn optimize_dataflow(
 
 /// Inline views used in one other view, and in no exported objects.
 ///
-/// Views in `security_barriers` are never inlined. Inlining rewrites a view
-/// into a `Let` binding, and `PredicatePushdown` pushes into a `Let` value
-/// while leaving a global `Get` opaque, so declining to inline is what keeps a
-/// barrier's plan from merging with its consumer's.
+/// A view in `security_barriers` is inlined like any other, but its consumer's
+/// predicates are first raised to a higher security level, so that predicate
+/// movement and evaluation order continue to respect the boundary that inlining
+/// dissolves. See `doc/developer/design/20260828_security_barrier_views.md`.
 #[mz_ore::instrument(
     target = "optimizer",
     level = "debug",
@@ -143,9 +143,6 @@ fn inline_views(
     for index in (0..dataflow.objects_to_build.len()).rev() {
         // Capture the name used by others to reference this view.
         let global_id = dataflow.objects_to_build[index].id;
-        if security_barriers.contains(&global_id) {
-            continue;
-        }
         // Determine if any exports directly reference this view.
         let mut occurs_in_export = false;
         for (_gid, sink_desc) in dataflow.sink_exports.iter() {
@@ -172,6 +169,14 @@ fn inline_views(
         // Inline if the view is referenced in one view and no exports.
         if !occurs_in_export && occurrences_in_later_views.len() == 1 {
             let other = occurrences_in_later_views[0];
+            // Inlining dissolves the object boundary that kept the consumer's
+            // predicates above the barrier's, so raise the consumer's level
+            // first. From here the level, not the boundary, carries the
+            // guarantee, which is what lets the barrier's body be optimized
+            // jointly with its consumer's.
+            if security_barriers.contains(&global_id) {
+                raise_security_level(dataflow.objects_to_build[other].plan.as_inner_mut());
+            }
             // We can remove this view and insert it in the later view,
             // but are not able to relocate the later view `other`.
 
@@ -444,6 +449,31 @@ where
         transform.action(view, predicates)?;
     }
     Ok(())
+}
+
+/// Raises the security level of every non-leakproof predicate in `expr`.
+///
+/// Applied to a barrier view's consumer just before the view is inlined, so that
+/// the consumer's predicates outrank the barrier's own, which enter the merged
+/// plan at their existing levels.
+///
+/// Incrementing rather than assigning a fixed level is what makes nested
+/// barriers work: inlining an inner barrier raises everything already merged,
+/// so each barrier's own predicates stay below every predicate that was written
+/// above it.
+///
+/// A leakproof predicate is left at its level, so the comparisons that drive
+/// persist pruning and index lookups keep moving freely.
+fn raise_security_level(expr: &mut MirRelationExpr) {
+    expr.visit_pre_mut(|e| {
+        if let MirRelationExpr::Filter { predicates, .. } = e {
+            for predicate in predicates.iter_mut() {
+                if !is_leakproof(&predicate.expr) {
+                    predicate.level = predicate.level.saturating_add(1);
+                }
+            }
+        }
+    });
 }
 
 /// Whether `predicate` may be evaluated against rows a security barrier would

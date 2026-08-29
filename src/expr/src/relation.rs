@@ -90,7 +90,15 @@ pub trait CollectionPlan {
 /// unless the higher one is leakproof. Level 0 is the default and means the
 /// predicate is subject to no ordering constraint.
 #[derive(
-    Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize
 )]
 pub struct Predicate {
     /// The predicate expression.
