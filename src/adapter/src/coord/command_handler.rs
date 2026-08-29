@@ -49,7 +49,6 @@ use mz_sql::pure::{
     materialized_view_option_contains_temporal, purify_create_materialized_view_options,
 };
 use mz_sql::rbac;
-use mz_sql::rbac::CREATE_ITEM_USAGE;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
     EndTransactionAction, NETWORK_POLICY, OwnedVarInput, STATEMENT_LOGGING_SAMPLE_RATE,
@@ -1593,17 +1592,18 @@ impl Coordinator {
                 task::spawn(|| format!("purify:{conn_id}"), async move {
                     let conn_catalog = catalog.for_session(ctx.session());
 
-                    // Checks if the session is authorized to purify a statement. Usually
-                    // authorization is checked after planning, however purification happens before
-                    // planning, which may require the use of some connections and secrets.
-                    if let Err(e) = rbac::check_usage(
+                    // Authorization is usually checked after planning, but purification
+                    // happens before planning and may use connections and secrets, so it
+                    // gets its own check.
+                    let source_dependency = match rbac::check_purification(
                         &conn_catalog,
                         ctx.session(),
+                        &stmt,
                         &resolved_ids,
-                        &CREATE_ITEM_USAGE,
                     ) {
-                        return ctx.retire(Err(e.into()));
-                    }
+                        Ok(id) => id,
+                        Err(e) => return ctx.retire(Err(e.into())),
+                    };
 
                     let (result, cluster_id) = mz_sql::pure::purify_statement(
                         conn_catalog,
@@ -1613,7 +1613,12 @@ impl Coordinator {
                     )
                     .await;
                     let result = result.map_err(|e| e.into());
-                    let dependency_ids = resolved_ids.items().copied().collect();
+                    // The resolved source of an `ALTER SOURCE` is not in
+                    // `resolved_ids`, so add it here: a source dropped while
+                    // purification ran off-thread must invalidate the result
+                    // rather than surface later as a missing catalog entry.
+                    let mut dependency_ids: BTreeSet<_> = resolved_ids.items().copied().collect();
+                    dependency_ids.extend(source_dependency);
                     let plan_validity = PlanValidity::new(
                         &catalog,
                         dependency_ids,
@@ -1817,6 +1822,10 @@ impl Coordinator {
     }
 
     /// Whether the statement must be purified off of the Coordinator thread.
+    // Every statement listed here is authorized by `rbac::check_purification`
+    // before purification runs. A new variant whose purification reaches an
+    // upstream system through an *existing* catalog item (rather than a named
+    // connection) needs its own arm there, or it is gated by nothing.
     fn must_spawn_purification<A: AstInfo>(stmt: &Statement<A>) -> bool {
         // `CREATE` and `ALTER` `SOURCE` and `SINK` statements must be purified off the main
         // coordinator thread.
