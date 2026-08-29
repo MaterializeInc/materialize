@@ -9,7 +9,7 @@
 
 import { useLiveQuery } from "@tanstack/react-db";
 import { useAtomValue } from "jotai";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 
 import { buildSubscribeQuery } from "~/api/materialize/buildSubscribeQuery";
 import {
@@ -19,6 +19,7 @@ import {
 import { createSubscribeCollection } from "~/api/materialize/subscribeCollection";
 import { SubscribeRow } from "~/api/materialize/SubscribeManager";
 import { useGlobalSubscribeCollection } from "~/api/materialize/useSubscribe";
+import { useSyncEngineCacheScope } from "~/store/syncEngineCache";
 
 /** Subset of AllNamespaceItem stored per row, matching the existing atom's select. */
 export type NamespaceItem = Pick<
@@ -34,11 +35,16 @@ export const allNamespacesCollection = createSubscribeCollection<NamespaceItem>(
   {
     id: "all-namespaces",
     getKey: namespaceKey,
-    persistKey: "mz-console:sync-engine:all-namespaces",
+    persistName: "all-namespaces",
   },
 );
 
 export function useSubscribeToAllNamespacesCollection() {
+  const scope = useSyncEngineCacheScope();
+  useEffect(() => {
+    if (scope) allNamespacesCollection.hydrate(scope);
+  }, [scope]);
+
   const subscribe = useMemo(() => {
     return buildSubscribeQuery(buildAllNamespacesQuery(), {
       upsertKey: ["schemaId", "databaseId"],

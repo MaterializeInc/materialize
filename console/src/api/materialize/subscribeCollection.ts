@@ -18,6 +18,21 @@ import { SubscribeError, SubscribeState } from "./SubscribeManager";
 /** Trailing-throttle window for persisting the collection to localStorage. */
 const PERSIST_THROTTLE_MS = 1000;
 
+/** localStorage key prefix shared by all sync-engine collection caches. */
+const PERSIST_PREFIX = "mz-console:sync-engine:";
+/** Bump when a collection's cached row shape changes, to invalidate old caches. */
+const PERSIST_VERSION = 1;
+
+/**
+ * Cache key for one collection under one auth/region scope, e.g.
+ * `mz-console:sync-engine:all-objects|<organizationId>|<regionId>|v1`. Scoping by
+ * `scope` keeps one tenant's catalog from seeding another tenant's session on a
+ * shared origin.
+ */
+export function syncEngineCacheKey(name: string, scope: string): string {
+  return `${PERSIST_PREFIX}${name}|${scope}|v${PERSIST_VERSION}`;
+}
+
 function readPersistedRows<T>(key: string): T[] {
   if (!storageAvailable("localStorage")) return [];
   try {
@@ -51,6 +66,12 @@ export interface SubscribeCollection<T extends object> {
    * full current row set is diffed against what's already synced and only the
    * delta is written into the collection. Safe to call before sync starts. */
   applySnapshot: (state: SubscribeState<T>) => void;
+  /** Seed the collection from the localStorage cache scoped to `scope`
+   * (`organizationId|regionId`) and route future writes to that scoped key.
+   * Deferred and scoped on purpose: a constant module-level key would seed one
+   * tenant's catalog into another's session after an org or region switch. Only
+   * the first call per scope seeds; later calls for the same scope no-op. */
+  hydrate: (scope: string) => void;
 }
 
 /**
@@ -63,29 +84,20 @@ export interface SubscribeCollection<T extends object> {
 export function createSubscribeCollection<T extends object>(options: {
   id: string;
   getKey: (row: T) => string;
-  /** When set, the row set is cached in localStorage under this key and used to
-   * seed the collection synchronously on creation, so consumers render the last
-   * known state instantly while the live SUBSCRIBE reconciles in the background. */
-  persistKey?: string;
+  /** Collection-name segment of the localStorage cache key, e.g. "all-objects".
+   * The full key is completed with the auth/region scope in `hydrate`; without a
+   * `persistName` the collection is not persisted. */
+  persistName?: string;
 }): SubscribeCollection<T> {
-  const { id, getKey, persistKey } = options;
+  const { id, getKey, persistName } = options;
 
-  // Latest desired full set, keyed. Seeded from the persisted cache so the
-  // collection has data before the first SUBSCRIBE snapshot arrives.
+  // Latest desired full set, keyed. Seeded lazily from the scoped cache in
+  // `hydrate`, then kept current by `applySnapshot`.
   let desired = new Map<string, T>();
-  if (persistKey) {
-    const cached = readPersistedRows<T>(persistKey);
-    if (cached.length) {
-      desired = new Map(cached.map((row) => [getKey(row), row]));
-    }
-  }
-  const seededFromCache = desired.size > 0;
 
   const statusAtom = atom<SubscribeCollectionStatus>({
     error: undefined,
-    // A cached full snapshot counts as complete for loading-gate purposes; the
-    // live snapshot will refresh it once it arrives.
-    snapshotComplete: seededFromCache,
+    snapshotComplete: false,
   });
 
   // Captured when the collection starts syncing; cleared when it pauses.
@@ -95,8 +107,14 @@ export function createSubscribeCollection<T extends object>(options: {
   let writeApi: WriteApi | undefined;
   // Signature of each row currently written, for cheap change detection.
   const synced = new Map<string, string>();
-  let lastSnapshotComplete = seededFromCache;
+  let lastSnapshotComplete = false;
   let ready = false;
+  // Full scoped cache key, set on first hydrate; persistence routes here.
+  let persistKey: string | undefined;
+  // Scope already hydrated, so repeat hydrations for the same scope no-op.
+  let hydratedScope: string | undefined;
+  // A live SUBSCRIBE snapshot has arrived, so the cache must not overwrite it.
+  let liveSnapshotApplied = false;
 
   const sig = (row: T) => JSON.stringify(row);
 
@@ -141,8 +159,8 @@ export function createSubscribeCollection<T extends object>(options: {
   const collection = createCollection<T, string>({
     id,
     getKey,
-    // Start syncing on creation; the activator hook holds a subscription to keep
-    // it alive for the app session (matching the global SUBSCRIBE atoms).
+    // Start syncing on creation so the collection can accept writes before any
+    // component queries it; the tree's live query keeps it active thereafter.
     startSync: true,
     sync: {
       // Each snapshot carries the entire row, so updates are full rows.
@@ -176,38 +194,83 @@ export function createSubscribeCollection<T extends object>(options: {
   let persistTimer: ReturnType<typeof setTimeout> | undefined;
   const schedulePersist = () => {
     if (!persistKey || persistTimer) return;
+    const key = persistKey;
     persistTimer = setTimeout(() => {
       persistTimer = undefined;
-      writePersistedRows(persistKey, Array.from(desired.values()));
+      writePersistedRows(key, Array.from(desired.values()));
     }, PERSIST_THROTTLE_MS);
+  };
+
+  const writeStatus = (next: SubscribeCollectionStatus) => {
+    const store = getStore();
+    const current = store.get(statusAtom);
+    if (
+      current.error !== next.error ||
+      current.snapshotComplete !== next.snapshotComplete
+    ) {
+      store.set(statusAtom, next);
+    }
   };
 
   const applySnapshot = (state: SubscribeState<T>) => {
     // Hold the current (possibly cache-seeded) state through a fresh manager's
     // empty pre-snapshot instead of clearing it back to a loading state. Keyed
-    // on our own `desired` map, which is reliably seeded before sync starts —
-    // not on collection.size, which lags sync materialization.
+    // on our own `desired` map, which is seeded before sync materializes — not on
+    // collection.size, which lags.
     const isEmptyPreload =
       !state.snapshotComplete && state.data.length === 0 && !state.error;
     if (isEmptyPreload && desired.size > 0) return;
 
+    liveSnapshotApplied = true;
     desired = new Map(state.data.map((row) => [getKey(row), row]));
     lastSnapshotComplete = state.snapshotComplete;
     materialize();
     // Only cache a complete snapshot, so we never seed from partial state.
     if (state.snapshotComplete) schedulePersist();
-    const store = getStore();
-    const current = store.get(statusAtom);
-    if (
-      current.error !== state.error ||
-      current.snapshotComplete !== state.snapshotComplete
-    ) {
-      store.set(statusAtom, {
-        error: state.error,
-        snapshotComplete: state.snapshotComplete,
-      });
+    writeStatus({
+      error: state.error,
+      snapshotComplete: state.snapshotComplete,
+    });
+  };
+
+  // Drop this collection's cache entries for every scope but the current one, so
+  // a previous tenant's catalog does not linger at rest after a switch.
+  const pruneOtherScopes = (currentKey: string) => {
+    if (!persistName || !storageAvailable("localStorage")) return;
+    const prefix = `${PERSIST_PREFIX}${persistName}|`;
+    try {
+      const stale: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(prefix) && key !== currentKey)
+          stale.push(key);
+      }
+      stale.forEach((key) => localStorage.removeItem(key));
+    } catch {
+      // Best-effort cleanup.
     }
   };
 
-  return { collection, statusAtom, applySnapshot };
+  const hydrate = (scope: string) => {
+    if (!persistName || hydratedScope === scope) return;
+    hydratedScope = scope;
+    persistKey = syncEngineCacheKey(persistName, scope);
+    pruneOtherScopes(persistKey);
+    if (liveSnapshotApplied) {
+      // Live data already arrived; don't overwrite it with the cache, but do
+      // persist it now that the scoped key is known.
+      if (lastSnapshotComplete) schedulePersist();
+      return;
+    }
+    const cached = readPersistedRows<T>(persistKey);
+    if (!cached.length) return;
+    desired = new Map(cached.map((row) => [getKey(row), row]));
+    // A cached full snapshot counts as complete for the loading gate; the live
+    // snapshot refreshes it once it arrives.
+    lastSnapshotComplete = true;
+    materialize();
+    writeStatus({ error: undefined, snapshotComplete: true });
+  };
+
+  return { collection, statusAtom, applySnapshot, hydrate };
 }

@@ -9,7 +9,10 @@
 
 import { getStore } from "~/jotai";
 
-import { createSubscribeCollection } from "./subscribeCollection";
+import {
+  createSubscribeCollection,
+  syncEngineCacheKey,
+} from "./subscribeCollection";
 import { SubscribeState } from "./SubscribeManager";
 
 type Row = { id: string; name: string };
@@ -24,11 +27,11 @@ const state = (
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 let counter = 0;
-const freshCollection = (persistKey?: string) =>
+const freshCollection = (persistName?: string) =>
   createSubscribeCollection<Row>({
     id: `test-collection-${counter++}`,
     getKey: (row) => row.id,
-    persistKey,
+    persistName,
   });
 
 describe("createSubscribeCollection", () => {
@@ -61,23 +64,44 @@ describe("createSubscribeCollection", () => {
     expect(collection.get("3")?.name).toBe("c"); // inserted
   });
 
-  it("seeds from the persisted cache before any snapshot arrives", async () => {
-    const persistKey = "test:seed";
+  it("hydrates from the scoped cache before any snapshot arrives", async () => {
+    const name = "seed";
+    const scope = "org1|region1";
     localStorage.setItem(
-      persistKey,
+      syncEngineCacheKey(name, scope),
       JSON.stringify([
         { id: "1", name: "a" },
         { id: "2", name: "b" },
       ]),
     );
 
-    const { collection, statusAtom } = freshCollection(persistKey);
+    const { collection, statusAtom, hydrate } = freshCollection(name);
+    hydrate(scope);
     await flush();
 
     expect(collection.size).toBe(2);
     expect(collection.get("1")?.name).toBe("a");
     // A cached full snapshot counts as complete for loading-gate purposes.
     expect(getStore().get(statusAtom).snapshotComplete).toBe(true);
+  });
+
+  it("scopes the cache per org/region and prunes other scopes on hydrate", async () => {
+    const name = "scoped";
+    const keyA = syncEngineCacheKey(name, "orgA|region");
+    const keyB = syncEngineCacheKey(name, "orgB|region");
+    localStorage.setItem(keyA, JSON.stringify([{ id: "1", name: "from-a" }]));
+    localStorage.setItem(keyB, JSON.stringify([{ id: "9", name: "from-b" }]));
+
+    const { collection, hydrate } = freshCollection(name);
+    hydrate("orgA|region");
+    await flush();
+
+    // Only org A's cache seeds the collection; org B's rows never appear.
+    expect(collection.has("1")).toBe(true);
+    expect(collection.has("9")).toBe(false);
+    // Org B's cache is pruned from disk; org A's remains.
+    expect(localStorage.getItem(keyB)).toBeNull();
+    expect(localStorage.getItem(keyA)).not.toBeNull();
   });
 
   it("holds the current rows through an empty pre-snapshot", async () => {
@@ -106,18 +130,21 @@ describe("createSubscribeCollection", () => {
     expect(getStore().get(statusAtom).error).toEqual(error);
   });
 
-  it("persists only completed snapshots to the cache", () => {
+  it("persists only completed snapshots, to the scoped key", () => {
     vi.useFakeTimers();
     try {
-      const persistKey = "test:persist";
-      const { applySnapshot } = freshCollection(persistKey);
+      const name = "persist";
+      const scope = "org1|region1";
+      const key = syncEngineCacheKey(name, scope);
+      const { applySnapshot, hydrate } = freshCollection(name);
+      hydrate(scope);
 
       // Incomplete snapshot: never cached, so we never seed from partial state.
       applySnapshot(state([{ id: "1", name: "a" }], false));
       vi.advanceTimersByTime(1100);
-      expect(localStorage.getItem(persistKey)).toBeNull();
+      expect(localStorage.getItem(key)).toBeNull();
 
-      // Complete snapshot: cached after the trailing-throttle window.
+      // Complete snapshot: cached under the scoped key after the throttle window.
       applySnapshot(
         state([
           { id: "1", name: "a" },
@@ -125,7 +152,7 @@ describe("createSubscribeCollection", () => {
         ]),
       );
       vi.advanceTimersByTime(1100);
-      expect(JSON.parse(localStorage.getItem(persistKey) ?? "[]")).toEqual([
+      expect(JSON.parse(localStorage.getItem(key) ?? "[]")).toEqual([
         { id: "1", name: "a" },
         { id: "2", name: "b" },
       ]);

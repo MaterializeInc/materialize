@@ -14,6 +14,7 @@ import React from "react";
 import { DatabaseObject } from "~/api/materialize/objects";
 import { createSubscribeCollection } from "~/api/materialize/subscribeCollection";
 import { allObjects } from "~/store/allObjects";
+import { useSyncEngineCacheScope } from "~/store/syncEngineCache";
 
 /**
  * TanStack DB-backed view of the `allObjects` jotai atom, so consumers can run
@@ -23,7 +24,7 @@ import { allObjects } from "~/store/allObjects";
 export const allObjectsCollection = createSubscribeCollection<DatabaseObject>({
   id: "all-objects",
   getKey: (object) => object.id,
-  persistKey: "mz-console:sync-engine:all-objects",
+  persistName: "all-objects",
 });
 
 /**
@@ -35,6 +36,10 @@ export const allObjectsCollection = createSubscribeCollection<DatabaseObject>({
  */
 export function useSubscribeToAllObjectsCollection() {
   const state = useAtomValue(allObjects);
+  const scope = useSyncEngineCacheScope();
+  React.useEffect(() => {
+    if (scope) allObjectsCollection.hydrate(scope);
+  }, [scope]);
   React.useEffect(() => {
     allObjectsCollection.applySnapshot(state);
   }, [state]);
