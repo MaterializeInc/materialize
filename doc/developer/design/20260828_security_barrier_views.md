@@ -242,7 +242,7 @@ physical layer and the protocol that ships plans to compute.
 | Perf, barrier views | view is not inlined: no cross-boundary folding, an extra collection and often an arrangement per boundary, no fast-path peek | inlining preserved; a related spike measured zero plan delta |
 | Perf, non-barrier views | none | none: every text plan in the `EXPLAIN` corpus is byte-identical |
 | Generalizes to row-level security | no | yes |
-| Prototype status | complete and verified end to end | compiles and is inert without barriers; the barrier path does not yet plan |
+| Prototype status | complete and verified end to end | complete and verified end to end |
 
 Row four is the one that outlives this design. Under A the safe behavior is the
 default: a transform that has never heard of security barriers cannot reach
@@ -264,14 +264,26 @@ so all of that cost comes from declining to inline rather than from the security
 property. One case regresses from `Constant <empty>` to a full differential join
 with two arrangements over a base collection, to compute a provably empty result.
 
-The unresolved cost of B is symmetrical. Ordering has to be enforced inside a
-single `MapFilterProject`, because LIR has no `Filter` operator and lowering
-asserts every filter was extracted into one. Encoding the level in a predicate's
-position is unsound, since `memoize_expressions` indexes `expressions` by
-position. Declining to fuse across levels leaves a `Filter` that cannot lower.
-So `MapFilterProject` has to carry the level, which reaches LIR, `MfpPlan`, and
-the compute protocol: roughly 48 further sites beyond the ~40 the MIR type
-change already touches.
+B's cost lands in a different place. Ordering has to be enforced inside a single
+`MapFilterProject`, because LIR has no `Filter` operator and lowering asserts
+every filter was extracted into one. Two cheaper encodings were tried and both
+failed: putting the level in a predicate's position is unsound, since
+`memoize_expressions` indexes `expressions` by position, and declining to fuse
+across levels leaves a `Filter` that cannot lower. So `MapFilterProject` carries
+the level, which puts it in LIR and on the compute protocol. The runtime does
+not need it: `SafeMfpPlan` already evaluates predicates in vector order, so the
+sort discharges the constraint. It crosses because `MapFilterProject` is one
+generic type shared by both plan levels.
+
+The finished prototype touches ~90 sites across 24 files. Every one is a
+predicate conversion that had to state whether it was creating a new
+unconstrained predicate or re-applying an existing one, because there is no
+blanket conversion from an expression to a predicate. That is what surfaced
+three real level-dropping bugs, in `into_map_filter_project`,
+`literal_constraints`, and `canonicalize_mfp`, each of which would have compiled
+silently under a blanket conversion. It is also the standing cost: the same
+discipline applies to every future transform that touches predicates, and
+nothing enforces it but the review.
 
 Two smaller costs specific to B: `Predicate` is 104 bytes against
 `MirScalarExpr`'s 96, and the serialized MIR nests `{expr, level}`, changing
@@ -358,13 +370,20 @@ resulting `EXPLAIN` plans. The existing `EXPLAIN` and privilege suites pass
 unchanged, confirming the default path is untouched.
 
 **B, security levels**
-([#38566](https://github.com/MaterializeInc/materialize/pull/38566)) is
-incomplete. The type change and the movement, derivation, and canonicalization
-seams are in place, the workspace compiles, and the change is inert without
-barriers: every text plan in the `EXPLAIN` corpus is byte-identical. A query
-against a barrier view does not yet plan, for the `MapFilterProject` reason in
-[Comparison](#comparison). B is built on A's branch, so it inherits the SQL
-surface and tests; only the mechanism differs.
+([#38566](https://github.com/MaterializeInc/materialize/pull/38566)) is also
+complete. 1768 sqllogictest assertions pass, and no text plan in the `EXPLAIN`
+corpus changes: only the JSON goldens move, for the serialization shape, which
+implies an expression-cache format bump. The guarantee is pinned by physical
+plans over a table whose column order would otherwise schedule the reader's
+fallible cast ahead of the tenant filter:
+
+```
+plain   filter=((text_to_integer(#0{secret}) > 0) AND (#1{tenant} = "alice"))
+barrier filter=((#1{tenant} = "alice") AND (text_to_integer(#0{secret}) > 0))
+```
+
+Both are fully inlined, so ordering is the only difference. B is built on A's
+branch, so it inherits the SQL surface and tests; only the mechanism differs.
 
 Deliberately left out of both:
 
@@ -460,11 +479,13 @@ for any future non-error channel.
   design is contingent on that. If yes, this is table stakes and the current
   behavior is a security bug. If no, the honest move is to document that views
   are not a security boundary and close this out.
-- Which mechanism? A is complete, fails closed, and confines the concept to two
-  gates, but forecloses a safe default and costs real performance on barrier
-  views. B preserves performance and generalizes to row-level security, but
-  reaches the compute protocol and fails open at any seam that is missed. This
-  document deliberately does not pick.
+- Which mechanism? Both prototypes work and close the same exposure. A fails
+  closed and confines the concept to two gates, but forecloses a safe default
+  and costs real performance on barrier views. B preserves performance and is
+  the mechanism row-level security would need, but puts the concept on the
+  compute protocol and carries a standing obligation: every future transform
+  that touches predicates has to preserve the level, and nothing enforces that
+  but review. This document deliberately does not pick.
 - `MirScalarExpr::could_error` is currently maintained to keep persist filter
   pushdown correct. Promoting it to a security boundary means a wrong
   `could_error = false` becomes a vulnerability rather than a performance bug.
