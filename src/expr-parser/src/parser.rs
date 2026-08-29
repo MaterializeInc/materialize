@@ -477,6 +477,7 @@ mod relation {
         let parse_input = ParseChildren::new(input, filter.span().start());
         let input = Box::new(parse_input.parse_one(ctx, parse_expr)?);
 
+        let predicates = predicates.into_iter().map(Into::into).collect();
         Ok(MirRelationExpr::Filter { input, predicates })
     }
 

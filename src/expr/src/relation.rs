@@ -84,6 +84,40 @@ pub trait CollectionPlan {
     }
 }
 
+/// A predicate together with the security level it was introduced at.
+///
+/// A predicate at a lower level must be evaluated before one at a higher level,
+/// unless the higher one is leakproof. Level 0 is the default and means the
+/// predicate is subject to no ordering constraint.
+#[derive(
+    Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize,
+)]
+pub struct Predicate {
+    /// The predicate expression.
+    pub expr: MirScalarExpr,
+    /// The security level the predicate was introduced at.
+    pub level: u8,
+}
+
+impl std::ops::Deref for Predicate {
+    type Target = MirScalarExpr;
+    fn deref(&self) -> &MirScalarExpr {
+        &self.expr
+    }
+}
+
+impl std::ops::DerefMut for Predicate {
+    fn deref_mut(&mut self) -> &mut MirScalarExpr {
+        &mut self.expr
+    }
+}
+
+impl From<MirScalarExpr> for Predicate {
+    fn from(expr: MirScalarExpr) -> Self {
+        Predicate { expr, level: 0 }
+    }
+}
+
 /// An abstract syntax tree which defines a collection.
 ///
 /// The AST is meant to reflect the capabilities of the `differential_dataflow::Collection` type,
@@ -202,7 +236,7 @@ pub enum MirRelationExpr {
         /// The source collection.
         input: Box<MirRelationExpr>,
         /// Predicates, each of which must be true.
-        predicates: Vec<MirScalarExpr>,
+        predicates: Vec<Predicate>,
     },
     /// Join several collections, where some columns must be equal.
     ///
@@ -474,7 +508,7 @@ impl MirRelationExpr {
 
                 // Set as nonnull any columns where null values would cause
                 // any predicate to evaluate to null.
-                for column in non_nullable_columns(predicates) {
+                for column in non_nullable_columns_of(predicates) {
                     result[column].nullable = false;
                 }
                 result
@@ -703,7 +737,7 @@ impl MirRelationExpr {
                     // of the lesser.
                     let mut union_find = Vec::new();
 
-                    for expr in predicates.iter() {
+                    for expr in predicates.iter().map(|p| &p.expr) {
                         if let MirScalarExpr::CallBinary {
                             func: crate::BinaryFunc::Eq(_),
                             expr1,
@@ -1199,7 +1233,8 @@ impl MirRelationExpr {
     /// Retain only the rows satisfying each of several predicates.
     pub fn filter<I>(mut self, predicates: I) -> Self
     where
-        I: IntoIterator<Item = MirScalarExpr>,
+        I: IntoIterator,
+        I::Item: Into<Predicate>,
     {
         // Extract existing predicates
         let mut new_predicates = if let MirRelationExpr::Filter { input, predicates } = self {
@@ -1209,7 +1244,7 @@ impl MirRelationExpr {
             Vec::new()
         };
         // Normalize collection of predicates.
-        new_predicates.extend(predicates);
+        new_predicates.extend(predicates.into_iter().map(Into::into));
         new_predicates.retain(|p| !p.is_literal_true());
         new_predicates.sort();
         new_predicates.dedup();
@@ -2166,6 +2201,15 @@ impl MirRelationExpr {
 /// Augment non-nullability of columns, by observing either
 /// 1. Predicates that explicitly test for null values, and
 /// 2. Columns that if null would make a predicate be null.
+pub fn non_nullable_columns_of(predicates: &[Predicate]) -> BTreeSet<usize> {
+    non_nullable_columns(
+        &predicates
+            .iter()
+            .map(|p| p.expr.clone())
+            .collect::<Vec<_>>(),
+    )
+}
+
 pub fn non_nullable_columns(predicates: &[MirScalarExpr]) -> BTreeSet<usize> {
     let mut nonnull_required_columns = BTreeSet::new();
     for predicate in predicates {

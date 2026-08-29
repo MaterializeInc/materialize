@@ -274,7 +274,7 @@ impl MapFilterProject<MirScalarExpr> {
             }
             MirRelationExpr::Filter { input, predicates } => {
                 let (mfp, expr) = Self::extract_from_expression(input);
-                (mfp.filter(predicates.iter().cloned()), expr)
+                (mfp.filter(predicates.iter().map(|p| p.expr.clone())), expr)
             }
             MirRelationExpr::Project { input, outputs } => {
                 let (mfp, expr) = Self::extract_from_expression(input);
@@ -307,7 +307,7 @@ impl MapFilterProject<MirScalarExpr> {
                 if predicates.iter().all(|p| !p.is_literal_err()) =>
             {
                 let (mfp, expr) = Self::extract_non_errors_from_expr(input);
-                (mfp.filter(predicates.iter().cloned()), expr)
+                (mfp.filter(predicates.iter().map(|p| p.expr.clone())), expr)
             }
             MirRelationExpr::Project { input, outputs } => {
                 let (mfp, expr) = Self::extract_non_errors_from_expr(input);
@@ -348,7 +348,7 @@ impl MapFilterProject<MirScalarExpr> {
                     if predicates.iter().all(|p| !p.is_literal_err()) =>
                 {
                     let (mfp, expr) = Self::extract_non_errors_from_expr_ref_mut(input);
-                    (mfp.filter(predicates.iter().cloned()), expr)
+                    (mfp.filter(predicates.iter().map(|p| p.expr.clone())), expr)
                 }
                 MirRelationExpr::Project { input, outputs } => {
                     let (mfp, expr) = Self::extract_non_errors_from_expr_ref_mut(input);
@@ -385,7 +385,7 @@ impl MapFilterProject<MirScalarExpr> {
                 if predicates.iter().all(|p| !p.is_literal_err()) =>
             {
                 let mfp = Self::extract_non_errors_from_expr_mut(input)
-                    .filter(predicates.iter().cloned());
+                    .filter(predicates.iter().map(|p| p.expr.clone()));
                 *expr = input.take_dangerous();
                 mfp
             }
