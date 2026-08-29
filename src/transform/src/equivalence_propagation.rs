@@ -404,7 +404,7 @@ impl EquivalencePropagation {
                     // See the equivalent filter in `analysis::equivalences`.
                     let mut class: Vec<MirScalarExpr> = predicates
                         .iter()
-                        .filter(|p| p.level == 0 || !mz_expr::Eval::could_error(&p.expr))
+                        .filter(|p| p.level() == 0 || !mz_expr::Eval::could_error(&p.expr))
                         .map(|p| p.expr.clone())
                         .collect();
                     class.push(MirScalarExpr::literal_ok(Datum::True, ReprScalarType::Bool));

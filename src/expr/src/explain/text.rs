@@ -585,7 +585,7 @@ impl MirRelationExpr {
                                 .map(|p| p.expr.clone())
                                 .collect::<Vec<_>>();
                             let predicates_levels =
-                                predicates.iter().map(|p| p.level).collect::<Vec<_>>();
+                                predicates.iter().map(|p| p.level()).collect::<Vec<_>>();
                             let predicates = mode.seq(&exprs, cols);
                             let predicates = separated(" AND ", predicates);
                             write!(f, "{}Filter {}", ctx.indent, predicates)?;

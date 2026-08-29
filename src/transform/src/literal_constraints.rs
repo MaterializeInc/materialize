@@ -599,7 +599,7 @@ impl LiteralConstraints {
         let level = mfp
             .predicates
             .iter()
-            .map(|(_, p)| p.level)
+            .map(|(_, p)| p.level())
             .min()
             .unwrap_or(0);
         let new_predicates = vec![mz_expr::Predicate::at_level(

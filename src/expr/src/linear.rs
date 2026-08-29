@@ -183,8 +183,8 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
     /// Expression order breaks remaining ties, which keeps plans deterministic.
     fn sort_predicates(&mut self) {
         self.predicates.sort_by(|(pos_a, a), (pos_b, b)| {
-            (a.level, E::is_literal_err(a), *pos_a)
-                .cmp(&(b.level, E::is_literal_err(b), *pos_b))
+            (a.level(), E::is_literal_err(a), *pos_a)
+                .cmp(&(b.level(), E::is_literal_err(b), *pos_b))
                 .then_with(|| a.expr.cmp(&b.expr))
         });
     }

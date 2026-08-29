@@ -175,9 +175,9 @@ impl PredicatePushdown {
             // ordering bookkeeping. See
             // `doc/developer/design/20260828_security_barrier_views.md`.
             if let MirRelationExpr::Filter { predicates, .. } = relation {
-                if predicates.iter().any(|p| p.level > 0) {
+                if predicates.iter().any(|p| p.level() > 0) {
                     let (levelled, unconstrained): (Vec<_>, Vec<_>) =
-                        predicates.drain(..).partition(|p| p.level > 0);
+                        predicates.drain(..).partition(|p| p.level() > 0);
                     let MirRelationExpr::Filter { input, .. } = relation else {
                         unreachable!("matched immediately above")
                     };

@@ -231,7 +231,7 @@ pub fn canonicalize_leveled_predicates(
     let mut levels: std::collections::BTreeMap<u8, Vec<MirScalarExpr>> = Default::default();
     for predicate in predicates.drain(..) {
         levels
-            .entry(predicate.level)
+            .entry(predicate.level())
             .or_default()
             .push(predicate.expr);
     }
@@ -240,7 +240,7 @@ pub fn canonicalize_leveled_predicates(
         predicates.extend(
             exprs
                 .into_iter()
-                .map(|expr| crate::relation::Predicate { expr, level }),
+                .map(|expr| crate::predicate::Predicate::at_level(expr, level)),
         );
     }
 }

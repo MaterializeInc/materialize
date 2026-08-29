@@ -469,7 +469,7 @@ fn raise_security_level(expr: &mut MirRelationExpr) {
         if let MirRelationExpr::Filter { predicates, .. } = e {
             for predicate in predicates.iter_mut() {
                 if !is_leakproof(&predicate.expr) {
-                    predicate.level = predicate.level.saturating_add(1);
+                    predicate.raise();
                 }
             }
         }

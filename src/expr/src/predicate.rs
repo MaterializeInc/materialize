@@ -48,7 +48,13 @@ pub type SecurityLevel = u8;
 )]
 pub struct Predicate<E = MirScalarExpr> {
     /// The security level the predicate was introduced at.
-    pub level: SecurityLevel,
+    ///
+    /// Private, and deliberately so. A predicate's level may be read, and may
+    /// be [raised](Predicate::raise), but there is no operation that lowers it.
+    /// Losing a constraint therefore requires constructing a fresh predicate
+    /// through [`Predicate::unconstrained`], which is a named call a reviewer
+    /// can grep for, rather than an assignment that reads like nothing.
+    level: SecurityLevel,
     /// The predicate expression.
     pub expr: E,
 }
@@ -67,6 +73,11 @@ impl<E> Predicate<E> {
     /// A predicate that must be evaluated after every predicate below `level`.
     pub fn at_level(expr: E, level: SecurityLevel) -> Self {
         Predicate { level, expr }
+    }
+
+    /// The security level this predicate must be evaluated at.
+    pub fn level(&self) -> SecurityLevel {
+        self.level
     }
 
     /// Whether an ordering constraint applies to this predicate.
