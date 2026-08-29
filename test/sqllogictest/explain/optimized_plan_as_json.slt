@@ -197,30 +197,33 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                 [
                   1,
                   {
-                    "CallBinary": {
-                      "func": {
-                        "Gt": null
-                      },
-                      "expr1": {
-                        "Column": [
-                          0,
-                          "a"
-                        ]
-                      },
-                      "expr2": {
-                        "Literal": [
-                          {
-                            "Ok": {
-                              "data": [
-                                44
-                              ]
+                    "level": 0,
+                    "expr": {
+                      "CallBinary": {
+                        "func": {
+                          "Gt": null
+                        },
+                        "expr1": {
+                          "Column": [
+                            0,
+                            "a"
+                          ]
+                        },
+                        "expr2": {
+                          "Literal": [
+                            {
+                              "Ok": {
+                                "data": [
+                                  44
+                                ]
+                              }
+                            },
+                            {
+                              "scalar_type": "Int32",
+                              "nullable": false
                             }
-                          },
-                          {
-                            "scalar_type": "Int32",
-                            "nullable": false
-                          }
-                        ]
+                          ]
+                        }
                       }
                     }
                   }
@@ -228,30 +231,33 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                 [
                   2,
                   {
-                    "CallBinary": {
-                      "func": {
-                        "Lt": null
-                      },
-                      "expr1": {
-                        "Column": [
-                          1,
-                          "b"
-                        ]
-                      },
-                      "expr2": {
-                        "Literal": [
-                          {
-                            "Ok": {
-                              "data": [
-                                44
-                              ]
+                    "level": 0,
+                    "expr": {
+                      "CallBinary": {
+                        "func": {
+                          "Lt": null
+                        },
+                        "expr1": {
+                          "Column": [
+                            1,
+                            "b"
+                          ]
+                        },
+                        "expr2": {
+                          "Literal": [
+                            {
+                              "Ok": {
+                                "data": [
+                                  44
+                                ]
+                              }
+                            },
+                            {
+                              "scalar_type": "Int32",
+                              "nullable": false
                             }
-                          },
-                          {
-                            "scalar_type": "Int32",
-                            "nullable": false
-                          }
-                        ]
+                          ]
+                        }
                       }
                     }
                   }
@@ -259,30 +265,33 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                 [
                   3,
                   {
-                    "CallBinary": {
-                      "func": {
-                        "Gt": null
-                      },
-                      "expr1": {
-                        "Column": [
-                          2,
-                          null
-                        ]
-                      },
-                      "expr2": {
-                        "Literal": [
-                          {
-                            "Ok": {
-                              "data": [
-                                44
-                              ]
+                    "level": 0,
+                    "expr": {
+                      "CallBinary": {
+                        "func": {
+                          "Gt": null
+                        },
+                        "expr1": {
+                          "Column": [
+                            2,
+                            null
+                          ]
+                        },
+                        "expr2": {
+                          "Literal": [
+                            {
+                              "Ok": {
+                                "data": [
+                                  44
+                                ]
+                              }
+                            },
+                            {
+                              "scalar_type": "Int32",
+                              "nullable": false
                             }
-                          },
-                          {
-                            "scalar_type": "Int32",
-                            "nullable": false
-                          }
-                        ]
+                          ]
+                        }
                       }
                     }
                   }
@@ -382,6 +391,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
               },
               "predicates": [
                 {
+                  "level": 0,
                   "expr": {
                     "CallBinary": {
                       "func": {
@@ -409,10 +419,10 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                         ]
                       }
                     }
-                  },
-                  "level": 0
+                  }
                 },
                 {
+                  "level": 0,
                   "expr": {
                     "CallBinary": {
                       "func": {
@@ -440,10 +450,10 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                         ]
                       }
                     }
-                  },
-                  "level": 0
+                  }
                 },
                 {
+                  "level": 0,
                   "expr": {
                     "CallBinary": {
                       "func": {
@@ -471,8 +481,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                         ]
                       }
                     }
-                  },
-                  "level": 0
+                  }
                 }
               ]
             }
@@ -496,105 +505,114 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
           [
             1,
             {
-              "CallBinary": {
-                "func": {
-                  "Gt": null
-                },
-                "expr1": {
-                  "Column": [
-                    0,
-                    "a"
-                  ]
-                },
-                "expr2": {
-                  "Literal": [
-                    {
-                      "Ok": {
-                        "data": [
-                          44
-                        ]
+              "level": 0,
+              "expr": {
+                "CallBinary": {
+                  "func": {
+                    "Gt": null
+                  },
+                  "expr1": {
+                    "Column": [
+                      0,
+                      "a"
+                    ]
+                  },
+                  "expr2": {
+                    "Literal": [
+                      {
+                        "Ok": {
+                          "data": [
+                            44
+                          ]
+                        }
+                      },
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": false
                       }
-                    },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": false
-                    }
-                  ]
-                }
-              }
-            }
-          ],
-          [
-            2,
-            {
-              "CallBinary": {
-                "func": {
-                  "Lt": null
-                },
-                "expr1": {
-                  "Column": [
-                    1,
-                    "b"
-                  ]
-                },
-                "expr2": {
-                  "Literal": [
-                    {
-                      "Ok": {
-                        "data": [
-                          44
-                        ]
-                      }
-                    },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": false
-                    }
-                  ]
-                }
-              }
-            }
-          ],
-          [
-            2,
-            {
-              "CallBinary": {
-                "func": {
-                  "Gt": null
-                },
-                "expr1": {
-                  "CallBinary": {
-                    "func": {
-                      "AddInt32": null
-                    },
-                    "expr1": {
-                      "Column": [
-                        0,
-                        "a"
-                      ]
-                    },
-                    "expr2": {
-                      "Column": [
-                        1,
-                        "b"
-                      ]
-                    }
+                    ]
                   }
-                },
-                "expr2": {
-                  "Literal": [
-                    {
-                      "Ok": {
-                        "data": [
-                          44
+                }
+              }
+            }
+          ],
+          [
+            2,
+            {
+              "level": 0,
+              "expr": {
+                "CallBinary": {
+                  "func": {
+                    "Lt": null
+                  },
+                  "expr1": {
+                    "Column": [
+                      1,
+                      "b"
+                    ]
+                  },
+                  "expr2": {
+                    "Literal": [
+                      {
+                        "Ok": {
+                          "data": [
+                            44
+                          ]
+                        }
+                      },
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": false
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          [
+            2,
+            {
+              "level": 0,
+              "expr": {
+                "CallBinary": {
+                  "func": {
+                    "Gt": null
+                  },
+                  "expr1": {
+                    "CallBinary": {
+                      "func": {
+                        "AddInt32": null
+                      },
+                      "expr1": {
+                        "Column": [
+                          0,
+                          "a"
+                        ]
+                      },
+                      "expr2": {
+                        "Column": [
+                          1,
+                          "b"
                         ]
                       }
-                    },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": false
                     }
-                  ]
+                  },
+                  "expr2": {
+                    "Literal": [
+                      {
+                        "Ok": {
+                          "data": [
+                            44
+                          ]
+                        }
+                      },
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": false
+                      }
+                    ]
+                  }
                 }
               }
             }
@@ -1654,6 +1672,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                     },
                                     "predicates": [
                                       {
+                                        "level": 0,
                                         "expr": {
                                           "CallBinary": {
                                             "func": {
@@ -1672,8 +1691,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                               ]
                                             }
                                           }
-                                        },
-                                        "level": 0
+                                        }
                                       }
                                     ]
                                   }
@@ -1983,6 +2001,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                     },
                                     "predicates": [
                                       {
+                                        "level": 0,
                                         "expr": {
                                           "CallBinary": {
                                             "func": {
@@ -2001,8 +2020,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                               ]
                                             }
                                           }
-                                        },
-                                        "level": 0
+                                        }
                                       }
                                     ]
                                   }
@@ -2330,6 +2348,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                             },
                                             "predicates": [
                                               {
+                                                "level": 0,
                                                 "expr": {
                                                   "CallUnary": {
                                                     "func": {
@@ -2349,8 +2368,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                       }
                                                     }
                                                   }
-                                                },
-                                                "level": 0
+                                                }
                                               }
                                             ]
                                           }
@@ -2537,6 +2555,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                 },
                                                 "predicates": [
                                                   {
+                                                    "level": 0,
                                                     "expr": {
                                                       "CallUnary": {
                                                         "func": {
@@ -2556,8 +2575,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                           }
                                                         }
                                                       }
-                                                    },
-                                                    "level": 0
+                                                    }
                                                   }
                                                 ]
                                               }
@@ -3204,20 +3222,23 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
           [
             2,
             {
-              "CallUnary": {
-                "func": {
-                  "Not": null
-                },
-                "expr": {
-                  "CallUnary": {
-                    "func": {
-                      "IsNull": null
-                    },
-                    "expr": {
-                      "Column": [
-                        1,
-                        "b"
-                      ]
+              "level": 0,
+              "expr": {
+                "CallUnary": {
+                  "func": {
+                    "Not": null
+                  },
+                  "expr": {
+                    "CallUnary": {
+                      "func": {
+                        "IsNull": null
+                      },
+                      "expr": {
+                        "Column": [
+                          1,
+                          "b"
+                        ]
+                      }
                     }
                   }
                 }
@@ -3287,6 +3308,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
               },
               "predicates": [
                 {
+                  "level": 0,
                   "expr": {
                     "CallUnary": {
                       "func": {
@@ -3306,8 +3328,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                         }
                       }
                     }
-                  },
-                  "level": 0
+                  }
                 }
               ]
             }
@@ -4362,6 +4383,7 @@ FROM
                           },
                           "predicates": [
                             {
+                              "level": 0,
                               "expr": {
                                 "CallBinary": {
                                   "func": {
@@ -4380,8 +4402,7 @@ FROM
                                     ]
                                   }
                                 }
-                              },
-                              "level": 0
+                              }
                             }
                           ]
                         }
@@ -4697,6 +4718,7 @@ FROM
                           },
                           "predicates": [
                             {
+                              "level": 0,
                               "expr": {
                                 "CallBinary": {
                                   "func": {
@@ -4715,8 +4737,7 @@ FROM
                                     ]
                                   }
                                 }
-                              },
-                              "level": 0
+                              }
                             }
                           ]
                         }
@@ -4947,6 +4968,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
               },
               "predicates": [
                 {
+                  "level": 0,
                   "expr": {
                     "CallUnary": {
                       "func": {
@@ -4966,8 +4988,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                         }
                       }
                     }
-                  },
-                  "level": 0
+                  }
                 }
               ]
             }
@@ -5377,6 +5398,7 @@ WHERE a = c and d = e and b = f
                         },
                         "predicates": [
                           {
+                            "level": 0,
                             "expr": {
                               "CallUnary": {
                                 "func": {
@@ -5396,10 +5418,10 @@ WHERE a = c and d = e and b = f
                                   }
                                 }
                               }
-                            },
-                            "level": 0
+                            }
                           },
                           {
+                            "level": 0,
                             "expr": {
                               "CallUnary": {
                                 "func": {
@@ -5419,8 +5441,7 @@ WHERE a = c and d = e and b = f
                                   }
                                 }
                               }
-                            },
-                            "level": 0
+                            }
                           }
                         ]
                       }
@@ -5553,6 +5574,7 @@ WHERE a = c and d = e and b = f
                         },
                         "predicates": [
                           {
+                            "level": 0,
                             "expr": {
                               "CallUnary": {
                                 "func": {
@@ -5572,10 +5594,10 @@ WHERE a = c and d = e and b = f
                                   }
                                 }
                               }
-                            },
-                            "level": 0
+                            }
                           },
                           {
+                            "level": 0,
                             "expr": {
                               "CallUnary": {
                                 "func": {
@@ -5595,8 +5617,7 @@ WHERE a = c and d = e and b = f
                                   }
                                 }
                               }
-                            },
-                            "level": 0
+                            }
                           }
                         ]
                       }
@@ -6262,6 +6283,7 @@ WHERE b = c and d = e
               },
               "predicates": [
                 {
+                  "level": 0,
                   "expr": {
                     "CallUnary": {
                       "func": {
@@ -6281,10 +6303,10 @@ WHERE b = c and d = e
                         }
                       }
                     }
-                  },
-                  "level": 0
+                  }
                 },
                 {
+                  "level": 0,
                   "expr": {
                     "CallUnary": {
                       "func": {
@@ -6304,8 +6326,7 @@ WHERE b = c and d = e
                         }
                       }
                     }
-                  },
-                  "level": 0
+                  }
                 }
               ]
             }
@@ -6376,6 +6397,7 @@ SELECT s FROM t2 WHERE s ~ 'a.*';
               },
               "predicates": [
                 {
+                  "level": 0,
                   "expr": {
                     "CallUnary": {
                       "func": {
@@ -6392,8 +6414,7 @@ SELECT s FROM t2 WHERE s ~ 'a.*';
                         ]
                       }
                     }
-                  },
-                  "level": 0
+                  }
                 }
               ]
             }
@@ -6416,19 +6437,22 @@ SELECT s FROM t2 WHERE s ~ 'a.*';
           [
             1,
             {
-              "CallUnary": {
-                "func": {
-                  "IsRegexpMatch": {
-                    "pattern": "a.*",
-                    "case_insensitive": false,
-                    "dot_matches_new_line": true
+              "level": 0,
+              "expr": {
+                "CallUnary": {
+                  "func": {
+                    "IsRegexpMatch": {
+                      "pattern": "a.*",
+                      "case_insensitive": false,
+                      "dot_matches_new_line": true
+                    }
+                  },
+                  "expr": {
+                    "Column": [
+                      0,
+                      "s"
+                    ]
                   }
-                },
-                "expr": {
-                  "Column": [
-                    0,
-                    "s"
-                  ]
                 }
               }
             }

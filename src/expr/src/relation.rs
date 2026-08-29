@@ -42,6 +42,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Id::Local;
 use crate::explain::{HumanizedExpr, HumanizerMode};
+use crate::predicate::Predicate;
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::row::{RowCollection, RowCollectionIter};
 use crate::scalar::columns::Columns;
@@ -81,48 +82,6 @@ pub trait CollectionPlan {
         let mut out = BTreeSet::new();
         self.depends_on_into(&mut out);
         out
-    }
-}
-
-/// A predicate together with the security level it was introduced at.
-///
-/// A predicate at a lower level must be evaluated before one at a higher level,
-/// unless the higher one is leakproof. Level 0 is the default and means the
-/// predicate is subject to no ordering constraint.
-#[derive(
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Hash,
-    Serialize,
-    Deserialize
-)]
-pub struct Predicate {
-    /// The predicate expression.
-    pub expr: MirScalarExpr,
-    /// The security level the predicate was introduced at.
-    pub level: u8,
-}
-
-impl std::ops::Deref for Predicate {
-    type Target = MirScalarExpr;
-    fn deref(&self) -> &MirScalarExpr {
-        &self.expr
-    }
-}
-
-impl std::ops::DerefMut for Predicate {
-    fn deref_mut(&mut self) -> &mut MirScalarExpr {
-        &mut self.expr
-    }
-}
-
-impl From<MirScalarExpr> for Predicate {
-    fn from(expr: MirScalarExpr) -> Self {
-        Predicate { expr, level: 0 }
     }
 }
 
@@ -1239,10 +1198,18 @@ impl MirRelationExpr {
     }
 
     /// Retain only the rows satisfying each of several predicates.
-    pub fn filter<I>(mut self, predicates: I) -> Self
+    pub fn filter<I>(self, predicates: I) -> Self
     where
-        I: IntoIterator,
-        I::Item: Into<Predicate>,
+        I: IntoIterator<Item = MirScalarExpr>,
+    {
+        self.filter_leveled(predicates.into_iter().map(Predicate::unconstrained))
+    }
+
+    /// Retains rows satisfying all `predicates`, each carrying its own security
+    /// level.
+    pub fn filter_leveled<I>(mut self, predicates: I) -> Self
+    where
+        I: IntoIterator<Item = Predicate>,
     {
         // Extract existing predicates
         let mut new_predicates = if let MirRelationExpr::Filter { input, predicates } = self {
@@ -1252,7 +1219,7 @@ impl MirRelationExpr {
             Vec::new()
         };
         // Normalize collection of predicates.
-        new_predicates.extend(predicates.into_iter().map(Into::into));
+        new_predicates.extend(predicates);
         new_predicates.retain(|p| !p.is_literal_true());
         new_predicates.sort();
         new_predicates.dedup();
@@ -2209,6 +2176,9 @@ impl MirRelationExpr {
 /// Augment non-nullability of columns, by observing either
 /// 1. Predicates that explicitly test for null values, and
 /// 2. Columns that if null would make a predicate be null.
+/// Columns that a `Predicate` list requires to be non-null.
+///
+/// The [`Predicate`] slice counterpart of [`non_nullable_columns`].
 pub fn non_nullable_columns_of(predicates: &[Predicate]) -> BTreeSet<usize> {
     non_nullable_columns(
         &predicates
@@ -2218,6 +2188,10 @@ pub fn non_nullable_columns_of(predicates: &[Predicate]) -> BTreeSet<usize> {
     )
 }
 
+/// Columns that a predicate list requires to be non-null.
+///
+/// A column is included when some predicate would evaluate to null, and so
+/// reject the row, were that column null.
 pub fn non_nullable_columns(predicates: &[MirScalarExpr]) -> BTreeSet<usize> {
     let mut nonnull_required_columns = BTreeSet::new();
     for predicate in predicates {

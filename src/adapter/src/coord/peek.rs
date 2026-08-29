@@ -340,6 +340,7 @@ impl FastPathPlan {
                     *ctx.as_mut() += 1;
                 }
                 if !filter.is_empty() {
+                    let filter = filter.iter().map(|p| p.expr.clone()).collect::<Vec<_>>();
                     let predicates = separated(" AND ", mode.seq(&filter, cols.as_ref()));
                     writeln!(f, "{}Filter {}", ctx.as_mut(), predicates)?;
                     *ctx.as_mut() += 1;
@@ -388,6 +389,7 @@ impl FastPathPlan {
                     *ctx.as_mut() += 1;
                 }
                 if !filter.is_empty() {
+                    let filter = filter.iter().map(|p| p.expr.clone()).collect::<Vec<_>>();
                     let predicates = separated(" AND ", mode.seq(&filter, cols.as_ref()));
                     writeln!(f, "{}Filter {}", ctx.as_mut(), predicates)?;
                     *ctx.as_mut() += 1;

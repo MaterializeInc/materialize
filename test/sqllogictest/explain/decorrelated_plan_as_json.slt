@@ -425,6 +425,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                     },
                     "predicates": [
                       {
+                        "level": 0,
                         "expr": {
                           "CallVariadic": {
                             "func": {
@@ -539,8 +540,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                               }
                             ]
                           }
-                        },
-                        "level": 0
+                        }
                       }
                     ]
                   }
@@ -1812,6 +1812,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                 },
                                 "predicates": [
                                   {
+                                    "level": 0,
                                     "expr": {
                                       "CallVariadic": {
                                         "func": {
@@ -1850,8 +1851,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                           }
                                         ]
                                       }
-                                    },
-                                    "level": 0
+                                    }
                                   }
                                 ]
                               }
@@ -1984,6 +1984,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                           },
                                                           "predicates": [
                                                             {
+                                                              "level": 0,
                                                               "expr": {
                                                                 "CallBinary": {
                                                                   "func": {
@@ -2002,8 +2003,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                                     ]
                                                                   }
                                                                 }
-                                                              },
-                                                              "level": 0
+                                                              }
                                                             }
                                                           ]
                                                         }
@@ -2276,13 +2276,13 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                         },
                         "predicates": [
                           {
+                            "level": 0,
                             "expr": {
                               "Column": [
                                 2,
                                 null
                               ]
-                            },
-                            "level": 0
+                            }
                           }
                         ]
                       }
@@ -2421,6 +2421,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                               },
                                               "predicates": [
                                                 {
+                                                  "level": 0,
                                                   "expr": {
                                                     "CallBinary": {
                                                       "func": {
@@ -2439,8 +2440,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                         ]
                                                       }
                                                     }
-                                                  },
-                                                  "level": 0
+                                                  }
                                                 }
                                               ]
                                             }
@@ -2713,13 +2713,13 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
             },
             "predicates": [
               {
+                "level": 0,
                 "expr": {
                   "Column": [
                     2,
                     null
                   ]
-                },
-                "level": 0
+                }
               }
             ]
           }
@@ -3022,6 +3022,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                             },
                                                             "predicates": [
                                                               {
+                                                                "level": 0,
                                                                 "expr": {
                                                                   "CallBinary": {
                                                                     "func": {
@@ -3040,8 +3041,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                       ]
                                                                     }
                                                                   }
-                                                                },
-                                                                "level": 0
+                                                                }
                                                               }
                                                             ]
                                                           }
@@ -3607,6 +3607,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                             },
                                                             "predicates": [
                                                               {
+                                                                "level": 0,
                                                                 "expr": {
                                                                   "CallBinary": {
                                                                     "func": {
@@ -3625,8 +3626,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                                       ]
                                                                     }
                                                                   }
-                                                                },
-                                                                "level": 0
+                                                                }
                                                               }
                                                             ]
                                                           }
@@ -4942,6 +4942,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
             },
             "predicates": [
               {
+                "level": 0,
                 "expr": {
                   "CallVariadic": {
                     "func": {
@@ -4988,8 +4989,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                       }
                     ]
                   }
-                },
-                "level": 0
+                }
               }
             ]
           }
@@ -5201,6 +5201,7 @@ INNER JOIN t as t3 ON t2.b = t3.b
                             },
                             "predicates": [
                               {
+                                "level": 0,
                                 "expr": {
                                   "CallBinary": {
                                     "func": {
@@ -5219,8 +5220,7 @@ INNER JOIN t as t3 ON t2.b = t3.b
                                       ]
                                     }
                                   }
-                                },
-                                "level": 0
+                                }
                               }
                             ]
                           }
@@ -5385,6 +5385,7 @@ INNER JOIN t as t3 ON t2.b = t3.b
                         },
                         "predicates": [
                           {
+                            "level": 0,
                             "expr": {
                               "CallBinary": {
                                 "func": {
@@ -5403,8 +5404,7 @@ INNER JOIN t as t3 ON t2.b = t3.b
                                   ]
                                 }
                               }
-                            },
-                            "level": 0
+                            }
                           }
                         ]
                       }
@@ -5659,6 +5659,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                             },
                             "predicates": [
                               {
+                                "level": 0,
                                 "expr": {
                                   "CallBinary": {
                                     "func": {
@@ -5677,8 +5678,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                       ]
                                     }
                                   }
-                                },
-                                "level": 0
+                                }
                               }
                             ]
                           }
@@ -5775,6 +5775,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                           },
                                                           "predicates": [
                                                             {
+                                                              "level": 0,
                                                               "expr": {
                                                                 "CallUnary": {
                                                                   "func": {
@@ -5794,8 +5795,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                                     }
                                                                   }
                                                                 }
-                                                              },
-                                                              "level": 0
+                                                              }
                                                             }
                                                           ]
                                                         }
@@ -6074,6 +6074,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                         },
                         "predicates": [
                           {
+                            "level": 0,
                             "expr": {
                               "CallBinary": {
                                 "func": {
@@ -6092,8 +6093,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                   ]
                                 }
                               }
-                            },
-                            "level": 0
+                            }
                           }
                         ]
                       }
@@ -6200,6 +6200,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                           },
                                                           "predicates": [
                                                             {
+                                                              "level": 0,
                                                               "expr": {
                                                                 "CallUnary": {
                                                                   "func": {
@@ -6219,8 +6220,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                                     }
                                                                   }
                                                                 }
-                                                              },
-                                                              "level": 0
+                                                              }
                                                             }
                                                           ]
                                                         }
@@ -7198,6 +7198,7 @@ FROM
                                   },
                                   "predicates": [
                                     {
+                                      "level": 0,
                                       "expr": {
                                         "CallBinary": {
                                           "func": {
@@ -7216,8 +7217,7 @@ FROM
                                             ]
                                           }
                                         }
-                                      },
-                                      "level": 0
+                                      }
                                     }
                                   ]
                                 }
@@ -7653,6 +7653,7 @@ FROM
                               },
                               "predicates": [
                                 {
+                                  "level": 0,
                                   "expr": {
                                     "CallVariadic": {
                                       "func": {
@@ -7722,8 +7723,7 @@ FROM
                                         }
                                       ]
                                     }
-                                  },
-                                  "level": 0
+                                  }
                                 }
                               ]
                             }
@@ -8687,6 +8687,7 @@ FROM
                                                     },
                                                     "predicates": [
                                                       {
+                                                        "level": 0,
                                                         "expr": {
                                                           "CallVariadic": {
                                                             "func": {
@@ -8743,8 +8744,7 @@ FROM
                                                               }
                                                             ]
                                                           }
-                                                        },
-                                                        "level": 0
+                                                        }
                                                       }
                                                     ]
                                                   }
@@ -8796,6 +8796,7 @@ FROM
                               },
                               "predicates": [
                                 {
+                                  "level": 0,
                                   "expr": {
                                     "CallBinary": {
                                       "func": {
@@ -8814,8 +8815,7 @@ FROM
                                         ]
                                       }
                                     }
-                                  },
-                                  "level": 0
+                                  }
                                 }
                               ]
                             }

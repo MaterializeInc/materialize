@@ -584,7 +584,7 @@ impl ReducePlan {
             let (m, f, p) = non_temporal.into_map_filter_project();
             mfp_push = MapFilterProject::new(input_arity)
                 .map(m.clone())
-                .filter(f)
+                .filter_leveled(f)
                 .project(0..input_arity);
             output_arity = input_arity;
 

@@ -776,10 +776,10 @@ pub fn mfp_mir_to_lir(mfp: MapFilterProject<MirScalarExpr>) -> MapFilterProject<
         .predicates
         .iter()
         .map(|(pos, pred)| {
-            (
-                *pos,
-                LirScalarExpr::try_from(pred).expect("unmaterializable in MFP predicate"),
-            )
+            let pred = pred.clone().map_expr(|expr| {
+                LirScalarExpr::try_from(&expr).expect("unmaterializable in MFP predicate")
+            });
+            (*pos, pred)
         })
         .collect();
     MapFilterProject::<LirScalarExpr> {
@@ -830,7 +830,7 @@ pub fn mfp_plan_lir_to_mir(plan: MfpPlan<LirScalarExpr>) -> MfpPlan<MirScalarExp
     let predicates = mfp
         .predicates
         .iter()
-        .map(|(pos, pred)| (*pos, MirScalarExpr::from(pred)))
+        .map(|(pos, pred)| (*pos, pred.clone().map_expr(|e| MirScalarExpr::from(&e))))
         .collect();
     let mir_mfp = MapFilterProject::<MirScalarExpr> {
         expressions,

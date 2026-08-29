@@ -245,6 +245,18 @@ pub fn canonicalize_leveled_predicates(
     }
 }
 
+/// Canonicalize predicates of a filter.
+///
+/// This function reduces and canonicalizes the structure of each individual
+/// predicate. Then, it transforms predicates of the form "A and B" into two: "A"
+/// and "B". Afterwards, it reduces predicates based on information from other
+/// predicates in the set. Finally, it sorts and deduplicates the predicates.
+///
+/// Additionally, it also removes IS NOT NULL predicates if there is another
+/// null rejecting predicate for the same sub-expression.
+///
+/// Every predicate here is treated as sharing one security level. Use
+/// [`canonicalize_leveled_predicates`] where that is not guaranteed.
 pub fn canonicalize_predicates(
     predicates: &mut Vec<MirScalarExpr>,
     repr_column_types: &[ReprColumnType],

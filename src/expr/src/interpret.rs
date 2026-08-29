@@ -1363,6 +1363,7 @@ impl Interpreter for Trace {
 
 #[cfg(test)]
 mod tests {
+    use crate::Predicate;
     use itertools::Itertools;
     use mz_repr::adt::datetime::DateTimeUnits;
     use mz_repr::{Datum, PropDatum, RowArena, SqlScalarType};
@@ -2507,7 +2508,10 @@ mod tests {
             }],
             predicates: vec![(
                 1,
-                MirScalarExpr::literal_ok(Datum::True, ReprScalarType::Bool),
+                Predicate::unconstrained(MirScalarExpr::literal_ok(
+                    Datum::True,
+                    ReprScalarType::Bool,
+                )),
             )],
             projection: vec![0, 1],
             input_arity: 1,
@@ -2596,26 +2600,26 @@ mod tests {
                 // Always fails on the known input range
                 (
                     1,
-                    CallUnary {
+                    Predicate::unconstrained(CallUnary {
                         func: UnaryFunc::IsNull(IsNull),
                         expr: Box::new(CallBinary {
                             func: MulInt32.into(),
                             expr1: Box::new(MirScalarExpr::column(0)),
                             expr2: Box::new(MirScalarExpr::column(0)),
                         }),
-                    },
+                    }),
                 ),
                 // Always returns false on the known input range
                 (
                     1,
-                    CallBinary {
+                    Predicate::unconstrained(CallBinary {
                         func: Eq.into(),
                         expr1: Box::new(MirScalarExpr::column(0)),
                         expr2: Box::new(MirScalarExpr::literal_ok(
                             Datum::Int32(1727694505),
                             ReprScalarType::Int32,
                         )),
-                    },
+                    }),
                 ),
             ],
             projection: vec![],

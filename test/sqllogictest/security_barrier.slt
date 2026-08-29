@@ -58,11 +58,7 @@ EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT * FROM barrier_orders WHERE amount / (length(secret) - 3) > 0
 ----
 Explained Query:
-  Filter ((#2{amount} / (char_length(#1{secret}) - 3)) > 0)
-    ReadGlobalFromSameDataflow materialize.public.barrier_orders
-
-materialize.public.barrier_orders:
-  Filter (#0{tenant} = "alice")
+  Filter (#0{tenant} = "alice") AND ((#2{amount} / (char_length(#1{secret}) - 3)) > 0) [levels: [0, 1]]
     ReadStorage materialize.public.orders
 
 Source materialize.public.orders
@@ -78,15 +74,75 @@ EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT * FROM barrier_orders WHERE amount = 42
 ----
 Explained Query:
-  Filter (#2{amount} = 42)
-    ReadGlobalFromSameDataflow materialize.public.barrier_orders
-
-materialize.public.barrier_orders:
   Filter (#0{tenant} = "alice") AND (#2{amount} = 42)
     ReadStorage materialize.public.orders
 
 Source materialize.public.orders
   filter=((#0{tenant} = "alice") AND (#2{amount} = 42))
+
+Target cluster: quickstart
+
+EOF
+
+# Security levels: the barrier view is inlined, so its body is optimized jointly
+# with the reader's query, and ordering is what holds the guarantee instead of
+# the object boundary.
+
+statement ok
+CREATE TABLE t (secret text, tenant text)
+
+statement ok
+CREATE VIEW plain_t AS SELECT * FROM t WHERE tenant = 'alice'
+
+statement ok
+CREATE VIEW barrier_t WITH (SECURITY BARRIER) AS SELECT * FROM t WHERE tenant = 'alice'
+
+# `secret` is column #0 and `tenant` is #1, so position-based ordering alone
+# would schedule the reader's fallible cast ahead of the tenant filter. Without
+# a barrier it does exactly that, and the cast also reaches the base collection.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+SELECT * FROM plain_t WHERE secret::int > 0
+----
+Explained Query:
+  Get::Collection materialize.public.t
+    raw=true
+
+Source materialize.public.t
+  filter=((text_to_integer(#0{secret}) > 0) AND (#1{tenant} = "alice"))
+
+Target cluster: quickstart
+
+EOF
+
+# With a barrier the tenant filter is evaluated first, even though it references
+# a later column, and the cast no longer reaches the base collection.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+SELECT * FROM barrier_t WHERE secret::int > 0
+----
+Explained Query:
+  Get::Collection materialize.public.t
+    raw=true
+
+Source materialize.public.t
+  filter=((#1{tenant} = "alice") AND (text_to_integer(#0{secret}) > 0))
+
+Target cluster: quickstart
+
+EOF
+
+# A leakproof predicate carries no level and still moves freely.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT * FROM barrier_t WHERE secret = 'x'
+----
+Explained Query:
+  Filter (#0{secret} = "x") AND (#1{tenant} = "alice")
+    ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=((#0{secret} = "x") AND (#1{tenant} = "alice"))
 
 Target cluster: quickstart
 

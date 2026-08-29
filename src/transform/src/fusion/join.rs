@@ -172,7 +172,11 @@ impl Join {
 
                             mfp.optimize();
                             let (mut map, mut filter, mut project) = mfp.as_map_filter_project();
-                            filter.extend(unpack_equivalences(equivalences));
+                            filter.extend(
+                                unpack_equivalences(equivalences)
+                                    .into_iter()
+                                    .map(mz_expr::Predicate::unconstrained),
+                            );
                             // We need to rewrite column references in map and filter.
                             // the applied map elements will be at the end, starting at `outer_arity`.
                             for expr in map.iter_mut() {
@@ -209,7 +213,7 @@ impl Join {
                             }
 
                             outer_mfp = outer_mfp.map(map.clone());
-                            outer_mfp = outer_mfp.filter(filter);
+                            outer_mfp = outer_mfp.filter_leveled(filter);
                             let projection = (0..arity_so_far)
                                 .chain(project.clone())
                                 .chain(arity_so_far + mfp.input_arity..outer_arity)
@@ -239,7 +243,7 @@ impl Join {
                     _ => MirRelationExpr::join(new_inputs, Vec::new()),
                 }
                 .map(map)
-                .filter(filter)
+                .filter_leveled(filter)
                 .project(project);
 
                 return Ok(true);
