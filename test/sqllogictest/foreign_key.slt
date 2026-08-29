@@ -410,3 +410,34 @@ SELECT foreign_keys->'references'->0->>'relation' FROM mz_internal.mz_mcp_data_p
 ----
 "materialize"."public"."dp_customers_v"
 COMPLETE 1
+
+# An edge whose far side is readable but is not a data product does not appear.
+# A plain table is never a data product, so an agent is never handed a join path
+# this endpoint cannot serve.
+
+statement ok
+CREATE TABLE dp_plain (id int)
+
+statement ok
+CREATE FOREIGN KEY dp_dangling ON dp_orders_v (customer_id) REFERENCES dp_plain (id) NOT ENFORCED
+
+# The foreign key itself exists and is visible in the catalog...
+
+query I
+SELECT count(*) FROM mz_internal.mz_foreign_keys WHERE name = 'dp_dangling'
+----
+1
+
+# ...but MCP still reports only the edge to the other data product.
+
+query IT
+SELECT
+    jsonb_array_length(foreign_keys->'references'),
+    foreign_keys->'references'->0->>'relation'
+FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."public"."dp_orders_v"'
+----
+1  "materialize"."public"."dp_customers_v"
+
+statement ok
+DROP FOREIGN KEY dp_dangling

@@ -47,7 +47,8 @@ the edges to write a correct join.
   Restricting it to tables would exclude most of what users actually model in
   Materialize.
 - An agent querying data product details receives the edges its role is
-  entitled to see, and only those.
+  entitled to see, and only those. Every edge it receives is one it can
+  actually follow.
 - A PostgreSQL client that discovers join paths through `pg_constraint` finds
   them, and can tell from `convalidated` that they were never verified.
 - Declaring a foreign key changes no query's plan and no query's result.
@@ -269,10 +270,17 @@ would invite it to be treated as a stable identifier the agent could reason
 about or repeat back. The comment does come through, as `description`, because
 that is where a human explains what the edge means.
 
-An edge is visible only if the role has `SELECT` on both relations. The check
-reuses the session-scoped privilege view that already decides what counts as a
-data product at all, so the rule falls out of the same SQL rather than living in
-a second place that can drift from the first.
+An edge is visible only if **both** relations are data products the role can
+read. Privilege alone is not the bar. The endpoint serves materialized views and
+indexed views, so an edge into anything else names a relation the agent cannot
+fetch through any tool it has, and a join path you cannot follow is worse than
+no join path: it invites the agent to plan a query it will then fail to run.
+
+The check falls out of the same SQL that decides what counts as a data product
+in the first place, rather than living in a second place that can drift from it.
+The cost is that declaring a foreign key onto a plain table records the edge in
+the catalog and shows nothing over MCP until that table is served. That is the
+honest answer rather than a surprising one.
 
 ## Minimal Viable Prototype
 
@@ -326,16 +334,6 @@ where it would be harder to see and easier to trust.
 **Enforce it.** Covered under Out of Scope.
 
 ## Open questions
-
-**Dangling edges in the MCP payload.** The visibility rule is `SELECT` on both
-relations, but the details view lists only materialized views and indexed views.
-An edge can therefore point at a relation the role may read by privilege yet
-cannot reach through any MCP tool, and an agent that trusts the edge will
-attempt a join it cannot complete. There are three ways out. Leave it, on the
-grounds that knowing the edge exists is still worth something. Require the far
-side to be a data product too, and drop the rest. Or keep every edge and mark
-which ones are reachable. This should be settled in review, not discovered in
-the code.
 
 **When these graduate to `mz_catalog`.** Shipping in `mz_internal` is the safe
 default while the shape is provisional. What evidence would tell us the shape is

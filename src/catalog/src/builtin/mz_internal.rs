@@ -6757,7 +6757,7 @@ pub static MZ_MCP_DATA_PRODUCT_DETAILS: LazyLock<BuiltinView> = LazyLock::new(||
         ),
         (
             "foreign_keys",
-            "Declared join paths to other data products, as a JSON object with `references` (this data product points at the other) and `referenced_by` (the other points at this one). Both keys are always present, empty when there are none. Each edge has `relation`, `columns` (pairs of `local`, a column of this data product, and `remote`, the column it corresponds to on `relation`), and an optional `description`. An edge appears only if you can read both relations. Nothing enforces these: they record what the author says the data means, so they tell you how to join, not that every value matches.",
+            "Declared join paths to other data products, as a JSON object with `references` (this data product points at the other) and `referenced_by` (the other points at this one). Both keys are always present, empty when there are none. Each edge has `relation`, `columns` (pairs of `local`, a column of this data product, and `remote`, the column it corresponds to on `relation`), and an optional `description`. An edge appears only if both relations are data products you can read, so every edge is one you can actually follow. Nothing enforces these: they record what the author says the data means, so they tell you how to join, not that every value matches.",
         ),
         (
             "hydration",
@@ -6890,17 +6890,21 @@ hydration AS (
     GROUP BY object_name, cluster
 )
 ,
--- Object ids the role can read, with the quoted name the payload uses. An edge
--- is visible only when both of its ends appear here, so a role never learns a
--- join path into something it cannot select from.
-readable AS (
-    SELECT
+-- Data products this role can read, keyed by object id so foreign keys can join
+-- to them. Joining `details_raw` is what restricts this to data products: being
+-- readable is not enough, because an edge into a relation this endpoint does not
+-- serve is a join path the agent cannot follow. An edge needs both of its ends
+-- here, so a role is never handed one it cannot read or cannot reach.
+readable_products AS (
+    SELECT DISTINCT
         o.id AS id,
-        '"' || op.database || '"."' || op.schema || '"."' || op.name || '"' AS object_name
+        dr.object_name AS object_name
     FROM mz_internal.mz_show_my_object_privileges op
     JOIN mz_objects o ON op.name = o.name AND op.object_type = o.type
     JOIN mz_schemas s ON s.name = op.schema AND s.id = o.schema_id
     JOIN mz_databases dbs ON dbs.name = op.database AND dbs.id = s.database_id
+    JOIN details_raw dr
+        ON dr.object_name = '"' || op.database || '"."' || op.schema || '"."' || op.name || '"'
     WHERE op.privilege_type = 'SELECT'
 ),
 -- Each foreign key twice, once per end, so an edge can be reported from either
@@ -6937,8 +6941,8 @@ fk_edges AS (
             'description', cmt.comment
         )) AS edge
     FROM fk_sides AS sides
-    JOIN readable AS near ON near.id = sides.near_id
-    JOIN readable AS far ON far.id = sides.far_id
+    JOIN readable_products AS near ON near.id = sides.near_id
+    JOIN readable_products AS far ON far.id = sides.far_id
     JOIN fk_columns AS cols ON cols.foreign_key_id = sides.id
     LEFT JOIN mz_internal.mz_comments AS cmt
         ON cmt.id = sides.id AND cmt.object_type = 'foreign-key' AND cmt.object_sub_id IS NULL

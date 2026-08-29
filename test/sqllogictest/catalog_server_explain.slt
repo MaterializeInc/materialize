@@ -9611,24 +9611,31 @@ Explained Query:
         →Arranged mz_internal.mz_hydration_statuses
     cte l42 =
       →Arrange (#0{id})
-        →Differential Join %0:l11[#0{name}, #1{object_type}] » %1:mz_objects[#2{name}, #3{type}] » %2:l35[#0{id}, #2{name}] » %3:l8[#0{id}, #1{name}]
-          after %1:
-            Project: #2..=#6
-            Map: (((((("\"" || #3{database}) || "\".\"") || #2{schema}) || "\".\"") || #0{name}) || "\"")
-          →Arrange (#0{name}, #1{object_type})
+        →Differential Join %1[#0] » %0[#1]
+          →Arrange (#1)
+            →Distinct GroupAggregate
+              Key:
+                Project: #3, #4
+                Map: (((((("\"" || #2{database}) || "\".\"") || #1{schema}) || "\".\"") || #0{name}) || "\"")
+              →Differential Join %0:l11[#0{name}, #1{object_type}] » %1:mz_objects[#2{name}, #3{type}] » %2:l35[#0{id}, #2{name}] » %3:l8[#0{id}, #1{name}]
+                →Arrange (#0{name}, #1{object_type})
+                  →Fused with Child Map/Filter/Project
+                    Project: #0, #1, #3, #4
+                    Filter: (#2{privilege_type} = "SELECT")
+                      →Read l11
+                →Arrange (#2{name}, #3{type})
+                  →Fused with Child Map/Filter/Project
+                    Project: #1, #0, #3, #4
+                      →Arranged mz_catalog.mz_objects
+                        Key: (#2{schema_id})
+                →Arrange (#0{id}, #2{name})
+                  →Stream l35
+                →Arrange (#0{id}, #1{name})
+                  →Stream l8
+          →Distinct GroupAggregate
             →Fused with Child Map/Filter/Project
-              Project: #0, #1, #3, #4
-              Filter: (#2{privilege_type} = "SELECT")
-                →Read l11
-          →Arrange (#2{name}, #3{type})
-            →Fused with Child Map/Filter/Project
-              Project: #1, #0, #3, #4
-                →Arranged mz_catalog.mz_objects
-                  Key: (#2{schema_id})
-          →Arrange (#0{id}, #2{name})
-            →Stream l35
-          →Arrange (#0{id}, #1{name})
-            →Stream l8
+              Project: #0
+                →Read l34
     cte l43 =
       →One-Shot Delta Join [%0 » %3[#0] » %4[#0] » %1:l42[#0{id}] » %2:l42[#0{id}]]
         →Unarranged Raw Stream
