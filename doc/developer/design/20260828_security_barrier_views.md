@@ -217,15 +217,45 @@ predicate must be evaluated after every lower-level one.
 
 ### Comparison
 
+The difference underneath every row below is that A rides a boundary Materialize
+already has, while B introduces a new one.
+
+A dataflow is already a set of objects that are optimized independently, and an
+object referenced from another is opaque by construction. A does not add a rule,
+it declines to dissolve a boundary that exists anyway, and because objects are a
+runtime concept that boundary is represented at every layer: the mid-level plan,
+the physical plan, and the running dataflow.
+
+B inlines the view, so the boundary is gone, and asserts in its place an
+invariant that exists only during planning. By the time a plan reaches the
+physical layer all filtering has been fused into one operator, so there is no
+filter left to order, which is why the ordering has to be pushed down into the
+physical layer and the protocol that ships plans to compute.
+
 | | A. Object gates | B. Levels |
 | --- | --- | --- |
+| What the optimizer may do across the view | nothing but leakproof predicates; the view and the query are planned separately | everything; the view is planned as part of the query, and only evaluation order is constrained |
+| Unit of the constraint | the whole view | one predicate relative to another |
 | Where the guarantee lives | structural: nothing from a consumer can enter a producer's plan | by rule, at each seam that moves, orders, or derives predicates |
+| Failure mode of a missed site | costs an optimization | silently produces an insecure plan |
 | Reaches LIR / compute protocol | no | yes, once `MapFilterProject` carries the level |
 | Perf, barrier views | view is not inlined: no cross-boundary folding, an extra collection and often an arrangement per boundary, no fast-path peek | inlining preserved; a related spike measured zero plan delta |
 | Perf, non-barrier views | none | none: every text plan in the `EXPLAIN` corpus is byte-identical |
 | Generalizes to row-level security | no | yes |
-| Failure mode of a missed site | costs an optimization | silently produces an insecure plan |
 | Prototype status | complete and verified end to end | compiles and is inert without barriers; the barrier path does not yet plan |
+
+Row four is the one that outlives this design. Under A the safe behavior is the
+default: a transform that has never heard of security barriers cannot reach
+across an object boundary, because reaching across is not something a transform
+can do, so forgetting costs an optimization. Under B the optimizing behavior is
+the default: a transform that has never heard of levels moves predicates freely,
+because moving predicates is its job, so forgetting costs the guarantee and
+nothing reports it.
+
+Row eight is why B was explored at all. Row-level security means a table's own
+policy predicates must be evaluated before the user's, and there is no object
+boundary at a table scan to hang that on, so A cannot express it at any price.
+B's per-predicate ordering is the shape row-level security needs.
 
 The measured perf gap is the whole reason B exists. Applying barriers to every
 user view under A changes 327 lines of the `EXPLAIN` corpus, and running the
