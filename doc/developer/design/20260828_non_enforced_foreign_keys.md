@@ -53,6 +53,9 @@ the edges to write a correct join.
   them, and can tell from `convalidated` that they were never verified.
 - Declaring a foreign key changes no query's plan and no query's result.
 - A relationship cannot outlive either relation it describes.
+- A relationship can be declared from the tooling that builds the model, dbt
+  and mz-deploy, rather than only by DDL typed at a prompt. An edge nobody can
+  check into a repository is an edge nobody maintains.
 
 ## Out of Scope
 
@@ -146,7 +149,9 @@ ends rather than over one end and a schema.
 The cost is real and worth naming: a role cannot declare an edge into a shared
 dimension table it does not own. It has to ask the owner. We think that is the
 right default for a metadata surface that drives automated query generation, and
-it is the more conservative direction to relax from later.
+it is the more conservative direction to relax from later. Declaring edges from
+a project is where the cost gets paid, so it is picked up again under
+[Declaring edges from a project](#declaring-edges-from-a-project).
 
 ### Catalog
 
@@ -282,10 +287,109 @@ The cost is that declaring a foreign key onto a plain table records the edge in
 the catalog and shows nothing over MCP until that table is served. That is the
 honest answer rather than a surprising one.
 
+### Declaring edges from a project
+
+The DDL is the mechanism, not the interface most users will meet. Models in
+Materialize are built by dbt or by mz-deploy, out of files in a repository, and
+an edge that lives only in someone's psql history drifts from the model the
+first time a column is renamed. Both tools need a spelling, and the two
+spellings should agree about where the edge goes.
+
+The edge is declared on the referencing side, in the file that defines the
+relation named in the `ON` clause. A foreign key asserts what a column of
+*this* relation means, so keeping it here keeps one relation's semantics in one
+file, beside the query that produces the column. Declaring on the referenced
+side would fill `customers`'s file with claims about every relation that
+happens to point at it, and would put each claim where the person who wrote the
+referencing column will not look. PostgreSQL made the same call, for the same
+reason: the constraint belongs to the referencing table.
+
+#### dbt
+
+dbt already has the shape. A model can carry a `foreign_key` constraint whose
+`to` field holds a `ref()` or `source()` expression, and dbt-core does the work
+around it. It parses the expression, appends it to the node's refs or sources
+so the referenced model builds first, and rewrites it into a fully qualified
+relation before any adapter code runs.
+
+```yaml
+models:
+  - name: orders
+    constraints:
+      - type: foreign_key
+        name: orders_customer_fkey
+        columns: [customer_id]
+        to: ref('customers')
+        to_columns: [id]
+```
+
+The adapter renders that as a `CREATE FOREIGN KEY` once the relation exists, in
+the same place `create_indexes` and `persist_docs` already run. A single-column
+edge may instead be written as a column-level constraint, which dbt resolves
+identically.
+
+Every materialization that produces a relation a user models against carries
+this: view, materialized view, table, incremental, and source table. The
+`source` materialization does not, because a `CREATE SOURCE` in Materialize
+exports its data through tables rather than being joined directly, so the
+useful edge lands on the table.
+
+Declaring one does not require `contract: {enforced: true}`. dbt couples
+constraints to contracts because a constraint is normally rendered inline in
+the `CREATE` statement, which has a column list to hang it on only once the
+contract has produced one. Nothing here needs that. The edge is a statement of
+its own, it asserts nothing about types, and requiring a user to declare every
+column and its data type in order to publish one join path would price the
+feature out of the projects that most need it. `CONSTRAINT_SUPPORT` reports
+`NOT_ENFORCED`, which is both the honest answer and one dbt already has a word
+for.
+
+#### mz-deploy
+
+mz-deploy needs no new spelling at all. A project file is SQL, and an object's
+file already collects the statements that attach to it.
+
+```sql
+-- orders.sql
+CREATE MATERIALIZED VIEW orders AS ...;
+
+CREATE INDEX orders_id_idx ON orders (id);
+CREATE FOREIGN KEY ON orders (customer_id)
+    REFERENCES customers (id) NOT ENFORCED;
+COMMENT ON FOREIGN KEY orders_customer_id_fkey
+    IS 'one order belongs to one customer';
+```
+
+The `ON` clause must name the file's own object, which is the self-containment
+rule indexes already follow. `REFERENCES` may name any object in the project or
+any declared external dependency.
+
+The referenced object is checked to exist and then deliberately left out of the
+build graph. A foreign key cannot change a plan. Edges are applied in a pass
+once every object exists.
+
+For the same reason a foreign key stays out of the content hash that decides
+whether an object gets rebuilt. Indexes are in that hash because an index is
+part of what the object is. Grants and comments are not, and an edge belongs
+with them. Editing one should cost a `CREATE FOREIGN KEY`, not a rehydration of
+a materialized view.
+
+#### Reconciliation
+
+Both tools reconcile rather than accumulate. Before creating, each drops the
+foreign keys the catalog holds for the relation it is building, then creates
+the set the project declares. Without it a removed edge outlives its
+declaration and goes on being served to agents, which is the failure this
+design exists to prevent, now with the model's own tooling as the source.
+
+The drop covers the edges whose referencing relation is the one being built,
+which is exactly the set that relation's file owns. Edges pointing *at* it,
+declared in other files, are left alone.
+
 ## Minimal Viable Prototype
 
 The syntax is small and the semantics are metadata, so the prototype is the
-flag-gated implementation itself rather than a mock. Validation comes in two
+flag-gated implementation itself rather than a mock. Validation comes in three
 steps.
 
 First, the SQL surface with the catalog relations, behind
@@ -299,6 +403,12 @@ The test is whether an agent given the edges writes correct joins it would
 otherwise have guessed at. That is a question about the payload shape and the
 field descriptions, not about the DDL, and it wants a real model and a real
 agent rather than a unit test. Worth doing before the flag goes on by default.
+
+Third, the project surfaces. These are what decide whether declared edges
+survive contact with a model that changes every week, and they are also what
+supplies the second step with a real model to judge against. An edge that has
+to be re-typed by hand after every deploy will not be there when the agent
+asks.
 
 ## Alternatives
 
