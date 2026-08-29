@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner.rs
-revision: c69fde3d50
+revision: a4bf5283a4
 ---
 
 # adapter::coord::sequencer::inner
@@ -21,3 +21,4 @@ Write operations (`sequence_insert`, `sequence_read_then_write`) reject sessions
 `execute_side_effecting_func` (used by the frontend peek path) performs no RBAC check itself; RBAC is pre-checked by the caller via `rbac::check_plan` before `Command::ExecuteSideEffectingFunc` is sent. The caller retains the target connection's `ConnectionId` handle until the command completes so that the connection found in `active_conns` during execution is the same one the check was performed against.
 `sequence_alter_sink` handles `ALTER SINK` operations including `SET FROM` and option changes (e.g. `COMMIT INTERVAL`). It syncs `resolved_ids` to match the new `create_sql` and `from` target before constructing the updated `Sink` and emitting `Op::UpdateItem`. The `resolved_ids` derived from the old `create_sql` still references the old input; without this sync the in-memory catalog disagrees with `create_sql` until the next reload, and the temporary-dependency check in `Op::UpdateItem` (which reads `uses()`) would not see the new input. Option edits from the plan's `set_options` and `reset_options` fields are applied to the `CREATE SINK` statement via `plan::apply_sink_option_edits` after name resolution.
 When consuming `PeekResponseUnary::Error(e)` from `sequence_read_then_write`'s inner response loop, the structured `AdapterError` is propagated directly as `Err(e)` rather than re-wrapping it.
+`finish_materialized_view_replacement_application` invalidates the durable expression cache for the target's existing `GlobalId`s before committing the catalog transaction. The expression cache is keyed by `GlobalId` under the invariant that the definition behind a `GlobalId` never changes; applying a replacement violates that invariant, so the cached expressions are invalidated and the invalidation is awaited before the transaction commits to prevent bootstrap from pairing the new definition with a stale cached expression whose dependencies may have been dropped.

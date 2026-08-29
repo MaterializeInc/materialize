@@ -1,6 +1,6 @@
 ---
 source: src/sqllogictest/src/bin/sqllogictest.rs
-revision: c69fde3d50
+revision: d2819e95a3
 ---
 
 # sqllogictest binary
@@ -10,5 +10,4 @@ The `sqllogictest` binary entry point; parses CLI arguments (verbosity, quiet mo
 Supports walking directory trees, collecting per-file `Outcomes`, generating JUnit XML reports, and exiting with a non-zero status on failures.
 Validates and injects required system parameter defaults (e.g., `enable_logical_compaction_window`) before constructing a `RunConfig`.
 Force-enables the `enable_background_alter_cluster` dyncfg so that a config-shape `ALTER CLUSTER` returns immediately rather than blocking on the wait-shim; a caller-supplied value takes precedence.
-Force-enables `enable_peek_row_iteration_limit` (set to `true`) and sets `peek_row_iteration_limit` to `1000000000` so the row-iteration guard is active in the suite without constraining normal test queries; a caller-supplied value takes precedence for both.
 An `OutputStream` wrapper optionally prefixes each output line with a UTC timestamp.
