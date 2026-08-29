@@ -6736,6 +6736,7 @@ pub static MZ_MCP_DATA_PRODUCT_DETAILS: LazyLock<BuiltinView> = LazyLock::new(||
         .with_column("description", SqlScalarType::String.nullable(true))
         .with_column("schema", SqlScalarType::Jsonb.nullable(false))
         .with_column("hydration", SqlScalarType::Jsonb.nullable(false))
+        .with_column("foreign_keys", SqlScalarType::Jsonb.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
         (
@@ -6753,6 +6754,10 @@ pub static MZ_MCP_DATA_PRODUCT_DETAILS: LazyLock<BuiltinView> = LazyLock::new(||
         (
             "schema",
             "JSON Schema describing the object's columns and types.",
+        ),
+        (
+            "foreign_keys",
+            "Declared join paths to other data products, as a JSON object with `references` (this data product points at the other) and `referenced_by` (the other points at this one). Both keys are always present, empty when there are none. Each edge has `relation`, `columns` (pairs of `local`, a column of this data product, and `remote`, the column it corresponds to on `relation`), and an optional `description`. An edge appears only if you can read both relations. Nothing enforces these: they record what the author says the data means, so they tell you how to join, not that every value matches.",
         ),
         (
             "hydration",
@@ -6884,6 +6889,70 @@ hydration AS (
     FROM hydration_per_replica
     GROUP BY object_name, cluster
 )
+,
+-- Object ids the role can read, with the quoted name the payload uses. An edge
+-- is visible only when both of its ends appear here, so a role never learns a
+-- join path into something it cannot select from.
+readable AS (
+    SELECT
+        o.id AS id,
+        '"' || op.database || '"."' || op.schema || '"."' || op.name || '"' AS object_name
+    FROM mz_internal.mz_show_my_object_privileges op
+    JOIN mz_objects o ON op.name = o.name AND op.object_type = o.type
+    JOIN mz_schemas s ON s.name = op.schema AND s.id = o.schema_id
+    JOIN mz_databases dbs ON dbs.name = op.database AND dbs.id = s.database_id
+    WHERE op.privilege_type = 'SELECT'
+),
+-- Each foreign key twice, once per end, so an edge can be reported from either
+-- side with `local`/`remote` already oriented around the near end.
+fk_sides AS (
+    SELECT id, referencing_id AS near_id, referenced_id AS far_id, true AS outgoing
+    FROM mz_internal.mz_foreign_keys
+    UNION ALL
+    SELECT id, referenced_id AS near_id, referencing_id AS far_id, false AS outgoing
+    FROM mz_internal.mz_foreign_keys
+),
+fk_columns AS (
+    SELECT
+        foreign_key_id,
+        jsonb_agg(
+            jsonb_build_object('local', referencing_column, 'remote', referenced_column)
+            ORDER BY position
+        ) AS outgoing_pairs,
+        jsonb_agg(
+            jsonb_build_object('local', referenced_column, 'remote', referencing_column)
+            ORDER BY position
+        ) AS incoming_pairs
+    FROM mz_internal.mz_foreign_key_columns
+    GROUP BY foreign_key_id
+),
+fk_edges AS (
+    SELECT
+        near.object_name AS object_name,
+        sides.outgoing AS outgoing,
+        jsonb_strip_nulls(jsonb_build_object(
+            'relation', far.object_name,
+            'columns',
+            CASE WHEN sides.outgoing THEN cols.outgoing_pairs ELSE cols.incoming_pairs END,
+            'description', cmt.comment
+        )) AS edge
+    FROM fk_sides AS sides
+    JOIN readable AS near ON near.id = sides.near_id
+    JOIN readable AS far ON far.id = sides.far_id
+    JOIN fk_columns AS cols ON cols.foreign_key_id = sides.id
+    LEFT JOIN mz_internal.mz_comments AS cmt
+        ON cmt.id = sides.id AND cmt.object_type = 'foreign-key' AND cmt.object_sub_id IS NULL
+),
+foreign_keys AS (
+    SELECT
+        object_name,
+        jsonb_build_object(
+            'references', COALESCE(jsonb_agg(edge) FILTER (WHERE outgoing), '[]'::jsonb),
+            'referenced_by', COALESCE(jsonb_agg(edge) FILTER (WHERE NOT outgoing), '[]'::jsonb)
+        ) AS foreign_keys
+    FROM fk_edges
+    GROUP BY object_name
+)
 SELECT
     d.object_name,
     -- Null the advertised cluster unless the role has USAGE on it (DEX-66),
@@ -6901,11 +6970,18 @@ SELECT
         COALESCE(h.replica_count > 0 AND h.hydrated_replica_count = h.replica_count, false),
         'replica_count', COALESCE(h.replica_count, 0),
         'hydrated_replica_count', COALESCE(h.hydrated_replica_count, 0)
-    ) AS hydration
+    ) AS hydration,
+    -- A data product with no visible edges gets both keys with empty arrays
+    -- rather than a null, so a consumer never has to tell absent from empty.
+    COALESCE(
+        fk.foreign_keys,
+        '{"references": [], "referenced_by": []}'::jsonb
+    ) AS foreign_keys
 FROM details_raw d
 LEFT JOIN hydration h
     ON h.object_name = d.object_name
    AND h.cluster IS NOT DISTINCT FROM d.cluster
+LEFT JOIN foreign_keys fk ON fk.object_name = d.object_name
 "#,
     access: vec![PUBLIC_SELECT],
     ontology: None,

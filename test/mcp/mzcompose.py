@@ -887,8 +887,8 @@ def workflow_endpoints(c: Composition) -> None:
         assert rows, f"expected at least one details row, got: {rows}"
         row = rows[0]
         assert (
-            len(row) == 5
-        ), f"details row should have 5 cells (object_name, cluster, description, schema, hydration), got: {row}"
+            len(row) == 6
+        ), f"details row should have 6 cells (object_name, cluster, description, schema, hydration, foreign_keys), got: {row}"
         hydration = row[4]
         assert isinstance(hydration, dict), f"hydration should be a dict: {hydration}"
         for key in ("hydrated", "replica_count", "hydrated_replica_count"):

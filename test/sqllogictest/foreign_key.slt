@@ -272,3 +272,141 @@ LEFT JOIN mz_internal.mz_foreign_keys fk ON fk.id = fkc.foreign_key_id
 WHERE fk.id IS NULL
 ----
 0
+
+# The agent MCP endpoint reports the edges as join paths. A data product needs
+# an index or a materialized view to qualify, so index the two tables first.
+
+statement ok
+CREATE TABLE dp_customers (id int NOT NULL)
+
+statement ok
+CREATE TABLE dp_orders (customer_id int)
+
+statement ok
+CREATE VIEW dp_customers_v AS SELECT id FROM dp_customers
+
+statement ok
+CREATE VIEW dp_orders_v AS SELECT customer_id FROM dp_orders
+
+statement ok
+CREATE DEFAULT INDEX ON dp_customers_v
+
+statement ok
+CREATE DEFAULT INDEX ON dp_orders_v
+
+statement ok
+CREATE FOREIGN KEY dp_fk ON dp_orders_v (customer_id) REFERENCES dp_customers_v (id) NOT ENFORCED
+
+statement ok
+COMMENT ON FOREIGN KEY dp_fk IS 'each order names a customer'
+
+# The referencing side sees an outgoing edge, oriented local/remote around
+# itself, carrying the comment.
+
+query T
+SELECT foreign_keys->'references'->0->>'relation'
+FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."public"."dp_orders_v"'
+----
+"materialize"."public"."dp_customers_v"
+
+query TTT
+SELECT
+    foreign_keys->'references'->0->'columns'->0->>'local',
+    foreign_keys->'references'->0->'columns'->0->>'remote',
+    jsonb_array_length(foreign_keys->'referenced_by')
+FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."public"."dp_orders_v"'
+----
+customer_id  id  0
+
+query T
+SELECT foreign_keys->'references'->0->>'description'
+FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."public"."dp_orders_v"'
+----
+each order names a customer
+
+# The referenced side sees the same edge pointing the other way, with
+# local/remote flipped so `local` is always a column of the product asked about.
+
+query TTT
+SELECT
+    foreign_keys->'referenced_by'->0->>'relation',
+    foreign_keys->'referenced_by'->0->'columns'->0->>'local',
+    foreign_keys->'referenced_by'->0->'columns'->0->>'remote'
+FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."public"."dp_customers_v"'
+----
+"materialize"."public"."dp_orders_v"  id  customer_id
+
+# A data product with no edges gets both keys as empty arrays, never null.
+
+statement ok
+CREATE VIEW dp_lonely_v AS SELECT 1 AS x
+
+statement ok
+CREATE DEFAULT INDEX ON dp_lonely_v
+
+query TTT
+SELECT
+    foreign_keys IS NOT NULL,
+    jsonb_array_length(foreign_keys->'references'),
+    jsonb_array_length(foreign_keys->'referenced_by')
+FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."public"."dp_lonely_v"'
+----
+true  0  0
+
+# An edge is visible only to a role that can read *both* relations. A role with
+# SELECT on one end sees the data product but not the join path, so it is never
+# told about a relation it cannot query.
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE half_reader
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA public TO half_reader
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON CLUSTER quickstart TO half_reader
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON dp_orders_v TO half_reader
+----
+COMPLETE 0
+
+# It sees the data product...
+
+simple conn=half,user=half_reader
+SELECT object_name FROM mz_internal.mz_mcp_data_product_details WHERE object_name LIKE '%dp_orders_v%';
+----
+"materialize"."public"."dp_orders_v"
+COMPLETE 1
+
+# ...but no edge, because it cannot read the far side.
+
+simple conn=half,user=half_reader
+SELECT jsonb_array_length(foreign_keys->'references'), jsonb_array_length(foreign_keys->'referenced_by') FROM mz_internal.mz_mcp_data_product_details WHERE object_name LIKE '%dp_orders_v%';
+----
+0,0
+COMPLETE 1
+
+# Granting the far side makes the edge appear, with nothing else changing.
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON dp_customers_v TO half_reader
+----
+COMPLETE 0
+
+simple conn=half2,user=half_reader
+SELECT foreign_keys->'references'->0->>'relation' FROM mz_internal.mz_mcp_data_product_details WHERE object_name LIKE '%dp_orders_v%';
+----
+"materialize"."public"."dp_customers_v"
+COMPLETE 1
