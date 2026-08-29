@@ -1,6 +1,6 @@
 # Security barrier views
 
-- Associated: (none yet)
+- Associated: [#38562](https://github.com/MaterializeInc/materialize/pull/38562) (prototype)
 
 ## The Problem
 
@@ -259,9 +259,9 @@ Source materialize.public.orders
 
 ## Minimal Viable Prototype
 
-Implemented on branch `security-barrier-views`, roughly 230 lines across 28
-files, most of it option plumbing. The optimizer change proper is two gates and
-one predicate in `src/transform/src/dataflow.rs`.
+Implemented in [#38562](https://github.com/MaterializeInc/materialize/pull/38562),
+roughly 230 lines across 28 files, most of it option plumbing. The optimizer
+change proper is two gates and one predicate in `src/transform/src/dataflow.rs`.
 
 - `src/transform/tests/test_security_barrier.rs` asserts all three behaviors
   above at the `optimize_dataflow_filters_inner` seam, including a test that
