@@ -278,21 +278,79 @@ Deliberately left out of the prototype:
 - `ALTER VIEW ... SET (SECURITY BARRIER)`.
 - Documentation under `doc/user/`.
 
+## When to enable a barrier
+
+The option defaults off, so this is guidance a user needs in order to make the
+choice. Two measurements frame it.
+
+The cost of a barrier comes almost entirely from declining to inline the view,
+not from blocking predicates. Applying barriers to every user view and
+re-running the `EXPLAIN` corpus changes 8 files and 327 lines. Running the same
+experiment with the predicate gate disabled, leaving only the inlining gate,
+produces a byte-identical diff. On that corpus the security property itself is
+free and the mechanism is what costs.
+
+The second measurement is that the cost is zero for views that are already
+materialized. `import_into_dataflow` resolves an index or a materialized view
+before it ever considers a view plan, so neither gate fires.
+
+That yields a straightforward rule.
+
+**Enable it when the view is the access boundary**: the reader holds `SELECT`
+on the view and not on what it reads, and the rows it filters out are rows the
+reader must not learn about. That is the only case the feature is for. A view
+that merely tidies up a query the reader could have written themselves does not
+need one.
+
+**The barrier is close to free when** the view is indexed on every cluster its
+readers use, or is a materialized view, since neither gate fires. It is also
+cheap when readers filter with comparisons, because `=`, `<`, `>`, `AND`, and
+`IS NULL` are all infallible and still cross.
+
+**The barrier is expensive when** the view sits partway up a stack of other
+views, because the whole stack above and below it loses joint optimization, or
+when readers issue point lookups, because a barrier view occupies
+`objects_to_build[0]` and disqualifies the fast-path peek. A dataflow that would
+have folded to a constant will instead be built and run.
+
+**Materializing is not a substitute**, for three reasons. An index only helps on
+the cluster that holds it, and a reader chooses their own cluster, so an
+attacker runs the query somewhere the index is absent and the view is inlined
+again. A materialized view that is a replacement target is imported from its
+view definition rather than its shard, and is inlined. And a view whose
+predicate calls `current_user` can be neither indexed nor materialized, because
+`ExprPrepMaintained` rejects unmaterializable functions. What a barrier adds
+over materializing is that the guarantee stops depending on where the query
+runs.
+
 ## Alternatives
 
 **Per-predicate security levels, as in PostgreSQL 9.5 and later.** Carrying a
-level on each predicate would let barrier views be inlined and still preserve
-ordering, recovering the fusion the object-level barrier gives up. It also
-generalizes to row-level security. It is a far larger change: `Filter`'s
-`predicates` field, `MapFilterProject`, and every transform that constructs or
-reorders predicates would have to carry and respect the level, and any transform
-that forgets silently produces an insecure plan. The object-level barrier gets
-the same guarantee from two gates and can be upgraded later if RLS arrives.
+level on each predicate lets a barrier view be inlined and still preserve
+ordering, which recovers all of the measured cost, since all of it comes from
+not inlining. It is the mechanism a safe default would need.
+
+It is also a much larger change, and its failure mode is worse. Twenty-two files
+in `mz-transform` construct or match on `MirRelationExpr::Filter`; each would
+have to carry the level through, and one that forgets produces an insecure plan
+silently, where the object-level gates fail closed. Whether that risk can be
+contained is the subject of a separate spike, which also considers designs
+PostgreSQL does not use.
+
+For an opt-in feature the object-level barrier is the right trade: the same
+guarantee from two gates, paid for only where it is asked for.
 
 **Make every view a barrier.** Correct by default and immune to a user
-forgetting the option, but it would remove cross-view predicate pushdown from
-every workload in order to protect the small fraction of views used for access
-control. Not viable.
+forgetting the option. Measured on the `EXPLAIN` corpus, restricted to user
+views so that builtin catalog views keep their current plans, it changes 327
+lines: an extra collection and often an arrangement at every view boundary, the
+loss of fast-path peeks, and the loss of cross-boundary folding. One case in the
+corpus regresses from `Constant <empty>` to a full differential join with two
+arrangements over a base collection, to compute a result that is provably empty.
+
+The A/B above shows this cost belongs to the inlining gate rather than to the
+security property. That makes the choice of mechanism, not the choice of
+default, the thing standing between us and a safe default. See the entry below.
 
 **Document that views are not a security boundary.** Legitimate, and strictly
 cheaper. It is the right answer if we conclude that view-based row filtering is
