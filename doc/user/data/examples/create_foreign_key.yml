@@ -1,0 +1,31 @@
+- name: "syntax"
+  code: |
+    CREATE FOREIGN KEY [IF NOT EXISTS] [<constraint_name>]
+    ON <referencing_object> (<col>, ...)
+    REFERENCES <referenced_object> (<col>, ...)
+    NOT ENFORCED;
+  syntax_elements:
+    - name: "`IF NOT EXISTS`"
+      description: |
+        Do not return an error if a foreign key of the same name already
+        exists. Requires `<constraint_name>`.
+    - name: "`<constraint_name>`"
+      description: |
+        A name for the foreign key. If omitted, Materialize derives one from the
+        referencing object and its columns, in the form
+        `<referencing_object>_<col>_..._fkey`, adding a numeric suffix if that
+        name is taken. The foreign key belongs to the schema of
+        `<referencing_object>`.
+    - name: "`ON <referencing_object> (<col>, ...)`"
+      description: |
+        The relation holding the key, and its columns. Can be a table, view,
+        materialized view, or source.
+    - name: "`REFERENCES <referenced_object> (<col>, ...)`"
+      description: |
+        The relation the key points at, and the columns each of the referencing
+        columns corresponds to. The two column lists are matched by position, so
+        they must have the same number of columns, and each pair must have
+        comparable types.
+    - name: "`NOT ENFORCED`"
+      description: |
+        Required. Materialize does not check that the referenced values exist.

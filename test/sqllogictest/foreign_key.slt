@@ -127,6 +127,15 @@ SELECT key::text FROM (SHOW FOREIGN KEYS) WHERE name = 'orders_customer_id_regio
 ----
 {"customer_id = id","region = region"}
 
+# `WHERE` filters on the projected columns, including `references`, which needs
+# quoting because it is a keyword. This is the filter shown in the
+# `SHOW FOREIGN KEYS` reference page.
+
+query T
+SELECT name FROM (SHOW FOREIGN KEYS FROM public WHERE "references" = 'customers') WHERE name = 'fk_orders_customers'
+----
+fk_orders_customers
+
 # ON matches either side of the edge.
 
 query T rowsort

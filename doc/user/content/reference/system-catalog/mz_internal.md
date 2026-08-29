@@ -646,6 +646,7 @@ has no replicas — needs operator action."
 | `description` | [`text`] | Index comment if available, otherwise object comment. Used as data product description.   |
 | `schema`      | [`jsonb`]| JSON Schema describing the object's columns and types.                                   |
 | `hydration`   | [`jsonb`]| Readiness summary as a JSON object with `hydrated` (bool), `replica_count` (int), and `hydrated_replica_count` (int). `hydrated` is true only when the cluster has at least one replica and the dataflow is hydrated on every replica. Reads against a non-hydrated data product block until the dataflow catches up (they never return partial data). Check this before reading: if `hydrated` is false and `replica_count > 0`, wait and retry; if `replica_count` is 0, the cluster has no replicas and that needs operator action, not a retry. |
+| `foreign_keys`| [`jsonb`]| Declared join paths to other data products, as a JSON object with `references` (this data product points at the other) and `referenced_by` (the other points at this one). Both keys are always present, empty when there are none. Each edge has `relation`, `columns` (pairs of `local`, a column of this data product, and `remote`, the column it corresponds to on `relation`), and an optional `description`. An edge appears only if both relations are data products you can read, so every edge is one you can actually follow. Nothing enforces these: they record what the author says the data means, so they tell you how to join, not that every value matches. |
 
 ## `mz_object_dependencies`
 
@@ -754,6 +755,13 @@ The view is defined as the transitive closure of [`mz_object_dependencies`](#mz_
 | ----------------------- | ------------ | --------                                                                                                              |
 | `object_id`             | [`text`]     | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).                          |
 | `referenced_object_id`  | [`text`]     | The ID of the (possibly transitively) referenced object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_foreign_keys -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_foreign_key_columns -->
+<!-- TODO(foreign-key): promote both to documented RELATION_SPECs once
+     `enable_foreign_key` defaults on. They already ship full per-column
+     comments, so this "undocumented" marker is only correct while the feature
+     is gated off. -->
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_metric_sinks -->
 <!-- TODO(metric-sink): promote to a documented RELATION_SPEC once
@@ -1580,6 +1588,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_columns -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_connections -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_databases -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_foreign_keys -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_indexes -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_materialized_views -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_network_policies -->
