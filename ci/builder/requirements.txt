@@ -15,9 +15,9 @@ aiohttp==3.14.3
 black==26.3.1
 # Pulls in dependencies that make launchdarkly/cloud tests fail, keep for now
 boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts,s3tables]==1.41.5
-boto3==1.43.76
+boto3==1.43.82
 click==8.1.3
-cryptography==50.0.0
+cryptography==50.0.1
 colored==2.3.2
 docker==7.2.0
 ec2instanceconnectcli==1.0.3
@@ -67,7 +67,7 @@ scipy==1.15.3; python_version < "3.11"
 scipy==1.17.1; python_version >= "3.11"
 scipy-stubs==1.15.3.0
 semver==3.0.4
-shtab==1.11.0
+shtab==1.12.0
 sqlparse==0.6.0
 toml==0.10.2
 twine==7.0.0
@@ -91,5 +91,5 @@ pyarrow-stubs==20.0.0.20251215
 pyarrow==23.0.1
 minio==7.2.15
 zstandard==0.25.0
-build==1.5.1
+build==1.6.0
 hatchling==1.32.0
