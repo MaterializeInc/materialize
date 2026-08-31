@@ -198,6 +198,16 @@ Two gates, both in `optimize_dataflow`. Nothing else in the pipeline needs to
 know the concept exists, because the boundary is between dataflow objects and
 the optimizer already respects those.
 
+Worth being precise about what "the boundary holds" means here, because it is
+not isolation. The view and its consumer remain two objects in one dataflow, and
+`optimize_dataflow_relations` runs the whole transform pipeline over each
+object separately, so no transform ever sees both plans at once. Three
+cross-object passes still run: `optimize_dataflow_filters`, which the gate
+restricts to leakproof predicates, and `optimize_dataflow_demand` and
+`optimize_dataflow_monotonic`, which are not gated at all. Column pruning and
+monotonicity therefore cross a barrier freely, which is safe because neither
+decides whether a row is produced.
+
 ### B. Security levels on predicates
 
 Prototype: [#38566](https://github.com/MaterializeInc/materialize/pull/38566).
@@ -235,7 +245,7 @@ physical layer and the protocol that ships plans to compute.
 
 | | A. Object gates | B. Levels |
 | --- | --- | --- |
-| What the optimizer may do across the view | nothing but leakproof predicates; the view and the query are planned separately | everything; the view is planned as part of the query, and only evaluation order is constrained |
+| What the optimizer may do across the view | the two plans stay distinct objects, so no transform sees both at once; leakproof predicates, column demand, and monotonicity still cross | the two plans merge into one, so every transform applies to both; only evaluation order is constrained |
 | Unit of the constraint | the whole view | one predicate relative to another |
 | Where the guarantee lives | structural: nothing from a consumer can enter a producer's plan | by rule, at each seam that moves, orders, or derives predicates |
 | Failure mode of a missed site | costs an optimization | silently produces an insecure plan |
