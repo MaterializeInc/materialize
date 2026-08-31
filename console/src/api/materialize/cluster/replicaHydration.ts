@@ -11,15 +11,16 @@ import { QueryKey } from "@tanstack/react-query";
 import { InferResult, sql } from "kysely";
 
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
+import { buildHydrationStatusesTable } from "~/api/materialize/expressionBuilders";
 
 /**
  * Per-replica hydration: how many of the dataflow objects installed on a
  * replica report `hydrated = true`, out of the objects counted for it.
  *
- * The counted set matches `buildHydrationAggregateQuery`, which backs the
- * Maintained Objects status column, so the two tables classify a replica the
- * same way. That means subsources and progress collections are left out, and
- * everything else `mz_hydration_statuses` reports is counted.
+ * Reads `buildHydrationStatusesTable`, the same counted set the Maintained
+ * Objects status column aggregates, so the two tables classify an object the
+ * same way. Only the grouping differs: that feed counts replicas per object,
+ * this counts objects per replica.
  *
  * NOTE: at replica grain that inherits two things the object-grain feed never
  * has to face. Sinks are counted, and they are the only branch of the view that
@@ -39,15 +40,8 @@ import { executeSqlV2, queryBuilder } from "~/api/materialize";
  */
 export function buildReplicaHydrationQuery() {
   return queryBuilder
-    .selectFrom("mz_hydration_statuses as hs")
-    .leftJoin("mz_sources as s", "s.id", "hs.object_id")
+    .selectFrom(buildHydrationStatusesTable().as("hs"))
     .where("hs.replica_id", "is not", null)
-    .where((eb) =>
-      eb.or([
-        eb("s.type", "is", null),
-        eb("s.type", "not in", ["subsource", "progress"]),
-      ]),
-    )
     .select((eb) => [
       "hs.replica_id as replicaId",
       sql<bigint>`count(*) FILTER (WHERE ${eb.ref("hs.hydrated")})`.as(
