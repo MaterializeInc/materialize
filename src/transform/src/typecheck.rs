@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use itertools::Itertools;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode};
+use mz_expr::visit::Visit;
 use mz_expr::{
     AggregateExpr, ColumnOrder, Id, JoinImplementation, LocalId, MirRelationExpr, MirScalarExpr,
     RECURSION_LIMIT, non_nullable_columns,
@@ -1475,6 +1476,13 @@ impl Typecheck {
         })
     }
 
+    /// Typecheck a `MirScalarExpr`.
+    ///
+    /// The walk is iterative, so it is safe at any expression depth. `types`
+    /// carries the results of already-visited subexpressions: post-order
+    /// guarantees that a node with `n` children finds their types as the top
+    /// `n` entries, so each arm drains that many and pushes its own result.
+    /// One entry remains when the walk finishes, and it is the answer.
     fn typecheck_scalar<'a>(
         &self,
         expr: &'a MirScalarExpr,
@@ -1483,84 +1491,103 @@ impl Typecheck {
     ) -> Result<ReprColumnType, TypeError<'a>> {
         use MirScalarExpr::*;
 
-        self.checked_recur(|tc| match expr {
-            Column(i, _) => match column_types.get(*i) {
-                Some(ty) => Ok(ty.clone()),
-                None => Err(TypeError::NoSuchColumn {
-                    source,
-                    expr,
-                    col: *i,
-                }),
-            },
-            Literal(row, typ) => {
-                let typ = typ.clone();
-                if let Ok(row) = row {
-                    let datums = row.unpack();
+        let mut types = Vec::<ReprColumnType>::new();
 
-                    row_difference_with_column_types(source, &datums, std::slice::from_ref(&typ))?;
+        expr.try_visit_post(&mut |e: &'a MirScalarExpr| -> Result<(), TypeError<'a>> {
+            let typ = match e {
+                Column(i, _) => match column_types.get(*i) {
+                    Some(ty) => ty.clone(),
+                    None => {
+                        return Err(TypeError::NoSuchColumn {
+                            source,
+                            expr: e,
+                            col: *i,
+                        });
+                    }
+                },
+                Literal(row, typ) => {
+                    let typ = typ.clone();
+                    if let Ok(row) = row {
+                        let datums = row.unpack();
+
+                        row_difference_with_column_types(
+                            source,
+                            &datums,
+                            std::slice::from_ref(&typ),
+                        )?;
+                    }
+
+                    typ
                 }
-
-                Ok(typ)
-            }
-            CallUnmaterializable(func) => Ok(func.output_type()),
-            CallUnary { expr, func } => {
-                let typ_in = tc.typecheck_scalar(expr, source, column_types)?;
-                let typ_out = func.output_type(typ_in);
-                Ok(typ_out)
-            }
-            CallBinary { expr1, expr2, func } => {
-                let typ_in1 = tc.typecheck_scalar(expr1, source, column_types)?;
-                let typ_in2 = tc.typecheck_scalar(expr2, source, column_types)?;
-                let typ_out = func.output_type(&[typ_in1, typ_in2]);
-                Ok(typ_out)
-            }
-            CallVariadic { exprs, func } => Ok(func.output_type(
-                exprs
-                    .iter()
-                    .map(|e| tc.typecheck_scalar(e, source, column_types))
-                    .collect::<Result<Vec<_>, TypeError>>()?,
-            )),
-            If { cond, then, els } => {
-                let cond_type = tc.typecheck_scalar(cond, source, column_types)?;
-
-                // condition must be boolean
-                // ignoring nullability: null is treated as false
-                // NB this behavior is slightly different from columns_match (for which we would set nullable to false in the expected type)
-                if cond_type.scalar_type != ReprScalarType::Bool {
-                    let sub = cond_type.scalar_type.clone();
-
-                    return Err(TypeError::MismatchColumn {
-                        source,
-                        got: cond_type,
-                        expected: ReprColumnType {
-                            scalar_type: ReprScalarType::Bool,
-                            nullable: true,
-                        },
-                        diffs: vec![ReprColumnTypeDifference::NotSubtype {
-                            sub,
-                            sup: ReprScalarType::Bool,
-                        }],
-                        message: "expected boolean condition".to_string(),
-                    });
+                CallUnmaterializable(func) => func.output_type(),
+                CallUnary { expr: _, func } => {
+                    let typ_in = types.pop().expect("CallUnary child");
+                    func.output_type(typ_in)
                 }
-
-                let mut then_type = tc.typecheck_scalar(then, source, column_types)?;
-                let else_type = tc.typecheck_scalar(els, source, column_types)?;
-
-                let diffs = column_union(&mut then_type, &else_type);
-                if !diffs.is_empty() {
-                    return Err(TypeError::MismatchColumn {
-                        source,
-                        got: then_type,
-                        expected: else_type,
-                        diffs,
-                        message: "couldn't compute union of column types for If".to_string(),
-                    });
+                CallBinary {
+                    expr1: _,
+                    expr2: _,
+                    func,
+                } => {
+                    let typ_in2 = types.pop().expect("CallBinary children");
+                    let typ_in1 = types.pop().expect("CallBinary children");
+                    func.output_type(&[typ_in1, typ_in2])
                 }
+                CallVariadic { exprs, func } => {
+                    assert!(types.len() >= exprs.len(), "CallVariadic children");
+                    let typ_in = types.split_off(types.len() - exprs.len());
+                    func.output_type(typ_in)
+                }
+                If {
+                    cond: _,
+                    then: _,
+                    els: _,
+                } => {
+                    let else_type = types.pop().expect("If children");
+                    let mut then_type = types.pop().expect("If children");
+                    let cond_type = types.pop().expect("If children");
 
-                Ok(then_type)
-            }
-        })
+                    // condition must be boolean
+                    // ignoring nullability: null is treated as false
+                    // NB this behavior is slightly different from columns_match (for which we would set nullable to false in the expected type)
+                    if cond_type.scalar_type != ReprScalarType::Bool {
+                        let sub = cond_type.scalar_type.clone();
+
+                        return Err(TypeError::MismatchColumn {
+                            source,
+                            got: cond_type,
+                            expected: ReprColumnType {
+                                scalar_type: ReprScalarType::Bool,
+                                nullable: true,
+                            },
+                            diffs: vec![ReprColumnTypeDifference::NotSubtype {
+                                sub,
+                                sup: ReprScalarType::Bool,
+                            }],
+                            message: "expected boolean condition".to_string(),
+                        });
+                    }
+
+                    let diffs = column_union(&mut then_type, &else_type);
+                    if !diffs.is_empty() {
+                        return Err(TypeError::MismatchColumn {
+                            source,
+                            got: then_type,
+                            expected: else_type,
+                            diffs,
+                            message: "couldn't compute union of column types for If".to_string(),
+                        });
+                    }
+
+                    then_type
+                }
+            };
+
+            types.push(typ);
+            Ok(())
+        })?;
+
+        Ok(types.pop().expect("root type"))
     }
 
     /// Typecheck an `AggregateExpr`
@@ -1570,13 +1597,11 @@ impl Typecheck {
         source: &'a MirRelationExpr,
         column_types: &[ReprColumnType],
     ) -> Result<ReprColumnType, TypeError<'a>> {
-        self.checked_recur(|tc| {
-            let t_in = tc.typecheck_scalar(&expr.expr, source, column_types)?;
+        let t_in = self.typecheck_scalar(&expr.expr, source, column_types)?;
 
-            // TODO check that t_in is actually acceptable for `func`
+        // TODO check that t_in is actually acceptable for `func`
 
-            Ok(expr.func.output_type(t_in))
-        })
+        Ok(expr.func.output_type(t_in))
     }
 }
 
@@ -2154,5 +2179,53 @@ mod tests {
         assert!(!datum.is_instance_of(&typ));
         let diff = datum_difference_with_column_type(&datum, &typ);
         assert_err!(diff);
+    }
+    /// A scalar expression far deeper than `RECURSION_LIMIT` typechecks, on a
+    /// thread whose stack is far smaller than `mz_ore::stack::STACK_RED_ZONE`.
+    /// The walk keeps its worklist on the heap, so neither the recursion guard
+    /// nor the native stack bounds the depth it accepts.
+    ///
+    /// `MirScalarExpr`'s `Drop` is recursive, which shapes the rest of the test:
+    /// the expression is built and dismantled with loops, and the outcome is
+    /// reduced to shallow values before anything can panic. An assertion that
+    /// unwound past a `DEPTH`-deep expression would overflow this thread while
+    /// dropping it and report that instead of the failure it caught.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer`
+    fn deep_scalar_typechecks_without_recursing() {
+        const DEPTH: usize = 20 * RECURSION_LIMIT;
+        const THREAD_STACK_SIZE: usize = 256 << 10;
+
+        std::thread::Builder::new()
+            .stack_size(THREAD_STACK_SIZE)
+            .spawn(|| {
+                let mut expr = MirScalarExpr::column(0);
+                for _ in 0..DEPTH {
+                    expr = expr.not();
+                }
+
+                let source = MirRelationExpr::constant(vec![], ReprRelationType::empty());
+                let column_types = vec![ReprColumnType {
+                    scalar_type: ReprScalarType::Bool,
+                    nullable: false,
+                }];
+
+                let outcome = Typecheck::new(empty_typechecking_context())
+                    .typecheck_scalar(&expr, &source, &column_types)
+                    .map(|typ| typ.scalar_type)
+                    .map_err(|err| match err {
+                        TypeError::Recursion { .. } => "recursion limit",
+                        _ => "type error",
+                    });
+
+                while let MirScalarExpr::CallUnary { expr: inner, .. } = expr {
+                    expr = *inner;
+                }
+
+                assert_eq!(outcome, Ok(ReprScalarType::Bool));
+            })
+            .expect("spawn")
+            .join()
+            .expect("deep scalar typecheck must not overflow the stack");
     }
 }
