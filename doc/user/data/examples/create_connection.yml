@@ -836,7 +836,7 @@
         Required for catalogs that manage their own storage and vend credentials
         as the only way to reach it.
 
-        See [Storage access delegation](#iceberg-catalog-access-delegation).
+        See [Storage access delegation](/sql/create-connection/#iceberg-catalog-access-delegation).
 
 - name: "example-iceberg-catalog-connection"
   description: |
