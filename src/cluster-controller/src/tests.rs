@@ -1617,7 +1617,10 @@ fn graceful_deadline_fires_at_exact_timestamp() {
             c,
             "100cc",
             1,
-            vec![observed(replica(1), "r0", "100cc")],
+            vec![
+                observed(replica(1), "r0", "100cc"),
+                observed(replica(2), "r1", "200cc"),
+            ],
             record_on_timeout("200cc", 1, deadline, on_timeout),
             BTreeSet::new(),
         )
@@ -2040,21 +2043,17 @@ async fn graceful_commit_at_timeout_cuts_over_through_seam() {
 }
 
 #[mz_ore::test(tokio::test)]
-async fn resource_exhaustion_sheds_the_reconfiguration() {
-    // A reconfiguration is in flight and the target replica does not exist yet,
-    // so phase 2 emits a create. The apply reports resource exhaustion, and the
-    // controller must shed the reconfiguration: a follow-up state write under
-    // the same expected witness, which marks the record resource-exhausted without
-    // touching the realized config or the existing replica.
+async fn resource_exhaustion_sheds_a_zero_timeout_reconfiguration() {
+    // The elapsed commit deadline does not finalize before the target replica
+    // exists. Phase 2 attempts the swap, which reports resource exhaustion,
+    // then the controller sheds the still-in-progress reconfiguration.
     let c = cluster(1);
     let (state, _signals) = reconfiguring_state(
         c,
         "100cc",
         1,
         vec![observed(replica(1), "r0", "100cc")],
-        // A deadline far past the fake's `now`, so the deadline machinery stays
-        // out of the picture and phase 1 writes nothing.
-        record("200cc", 1, 9999),
+        record_on_timeout("200cc", 1, 0, OnTimeout::Commit),
         BTreeSet::new(),
     );
     let expected = state.expected();
@@ -2064,11 +2063,13 @@ async fn resource_exhaustion_sheds_the_reconfiguration() {
 
     controller.reconcile(&mut ctx).await;
 
-    // Two applies: the exhausted create batch, then the shed.
+    // Two applies: the exhausted swap batch, then the shed.
     assert_eq!(ctx.applied.len(), 2);
     assert!(
-        matches!(ctx.applied[0][0], Decision::CreateReplica { .. }),
-        "the exhausted batch was the target create"
+        ctx.applied[0]
+            .iter()
+            .any(|d| matches!(d, Decision::CreateReplica { .. })),
+        "the exhausted batch carries the target create"
     );
     let [shed] = &ctx.applied[1][..] else {
         panic!("the shed is a single decision, got {:?}", ctx.applied[1]);
@@ -2112,6 +2113,243 @@ async fn resource_exhaustion_sheds_the_reconfiguration() {
     let before = ctx.applied.len();
     controller.reconcile(&mut ctx).await;
     assert_eq!(ctx.applied.len(), before, "stable after the shed");
+}
+
+#[mz_ore::test(tokio::test)]
+async fn forced_cutover_swaps_the_replica_set_in_one_transaction() {
+    // A forced cut-over never overlaps the two replica sets: the baseline
+    // yields, so the tick that provisions the target also retires the realized
+    // replicas, in one transaction. That is what lets a reshape land on a
+    // budget with no room for both sets at once.
+    let c = cluster(1);
+    let (state, _signals) = reconfiguring_state(
+        c,
+        "100cc",
+        1,
+        vec![observed(replica(1), "r0", "100cc")],
+        record_on_timeout("200cc", 1, 0, OnTimeout::Commit),
+        BTreeSet::new(),
+    );
+    let mut ctx = FakeCtx::new(vec![state]);
+    let controller = controller();
+
+    controller.reconcile(&mut ctx).await;
+
+    assert_eq!(ctx.applied.len(), 1, "the swap is a single apply");
+    let swap = &ctx.applied[0];
+    assert_eq!(
+        swap.iter()
+            .filter(|d| matches!(d, Decision::CreateReplica { .. }))
+            .count(),
+        1,
+        "the target replica is created"
+    );
+    assert_eq!(
+        swap.iter()
+            .filter(|d| matches!(d, Decision::DropReplica { .. }))
+            .count(),
+        1,
+        "the realized replica is retired in the same batch"
+    );
+    let sizes: Vec<_> = ctx.states[&c]
+        .replicas
+        .iter()
+        .filter_map(|r| r.owned_shape().map(|shape| shape.size.as_str()))
+        .collect();
+    assert_eq!(sizes, vec!["200cc"], "no overlap was ever materialized");
+    assert_eq!(
+        ctx.states[&c].size, "100cc",
+        "the cut-over itself waits for the next tick's first phase"
+    );
+
+    // With the target now present, the deadline commits it.
+    controller.reconcile(&mut ctx).await;
+    assert_eq!(ctx.states[&c].size, "200cc", "the forced cut-over lands");
+    assert_eq!(
+        reconfiguration_status(&ctx.states[&c]),
+        Some(ReconfigurationStatus::Finalized)
+    );
+
+    // The retired record hands the set back to the baseline, which desires the
+    // same replicas the swap created. Nothing is suppressed and nothing churns.
+    let before = ctx.applied.len();
+    controller.reconcile(&mut ctx).await;
+    assert_eq!(ctx.applied.len(), before, "steady after the cut-over");
+    assert_eq!(ctx.states[&c].replicas.len(), 1);
+}
+
+#[mz_ore::test]
+fn forced_cutover_yield_is_covered_by_the_target_contribution() {
+    // The baseline yields on the same `is_in_progress` predicate that makes the
+    // graceful strategy contribute the target set, so the yield can never leave
+    // the union short. Asserted over the states that reach the yield window,
+    // because the two conditions live in different strategies and could drift.
+    use crate::strategy::BaselineStrategy;
+
+    let c = cluster(1);
+    let deadline = 1000u64;
+    let baseline = BaselineStrategy;
+    let graceful = GracefulReconfigurationStrategy;
+    let mut yields = 0;
+
+    for on_timeout in [OnTimeout::Commit, OnTimeout::Rollback] {
+        for now in [deadline - 1, deadline, deadline + 1] {
+            for status in [
+                ReconfigurationStatus::InProgress,
+                ReconfigurationStatus::Finalized,
+                ReconfigurationStatus::TimedOut,
+                ReconfigurationStatus::Cancelled,
+                ReconfigurationStatus::ResourceExhausted,
+            ] {
+                let rec = ReconfigurationRecord {
+                    status,
+                    ..record_on_timeout("200cc", 2, deadline, on_timeout)
+                };
+                let (state, signals) = reconfiguring_state(
+                    c,
+                    "100cc",
+                    2,
+                    vec![observed(replica(1), "r0", "100cc")],
+                    rec,
+                    BTreeSet::new(),
+                );
+                let now = Timestamp::from(now);
+                let from_baseline = baseline.desired_replicas(&state, &signals, &config(), now);
+                if !from_baseline.is_empty() {
+                    continue;
+                }
+                yields += 1;
+                let from_graceful = graceful.desired_replicas(&state, &signals, &config(), now);
+                assert_eq!(
+                    from_graceful.len(),
+                    2,
+                    "baseline yielded at {status:?}/{on_timeout:?}/{now} with no target set to \
+                     take its place"
+                );
+                assert!(
+                    from_graceful
+                        .iter()
+                        .all(|desired| desired.shape.size == "200cc")
+                );
+            }
+        }
+    }
+    assert_eq!(yields, 2, "the matrix must actually reach the yield window");
+}
+
+#[mz_ore::test(tokio::test)]
+async fn forced_cutover_swap_preserves_the_burst_replica() {
+    // The baseline yields, the other strategies do not. A hydration burst in
+    // flight keeps its replica (and with it the hydration work it has done)
+    // across the swap, exactly as it does across a graceful cut-over.
+    use crate::ctx::{BurstRecord, OnHydrationPolicy};
+
+    let c = cluster(1);
+    let (mut state, _signals) = reconfiguring_state(
+        c,
+        "100cc",
+        1,
+        vec![
+            observed(replica(1), "r0", "100cc"),
+            observed(replica(2), "r0-burst", "400cc"),
+        ],
+        record_on_timeout("200cc", 1, 0, OnTimeout::Commit),
+        BTreeSet::new(),
+    );
+    state.auto_scaling_policy = Some(AutoScalingPolicy {
+        on_hydration: Some(OnHydrationPolicy {
+            hydration_size: "400cc".to_string(),
+            linger_duration: Some(Duration::from_secs(60)),
+        }),
+    });
+    state.burst = Some(BurstRecord {
+        burst_size: "400cc".to_string(),
+        linger_duration: Duration::from_secs(60),
+        steady_hydrated_at: None,
+    });
+
+    let mut ctx = FakeCtx::new(vec![state]);
+    ctx.has_hydratable_objects.insert(c, true);
+    let controller = controller();
+
+    controller.reconcile(&mut ctx).await;
+
+    let mut sizes: Vec<_> = ctx.states[&c]
+        .replicas
+        .iter()
+        .filter_map(|r| r.owned_shape().map(|shape| shape.size.as_str()))
+        .collect();
+    sizes.sort();
+    assert_eq!(
+        sizes,
+        vec!["200cc", "400cc"],
+        "the realized replica was swapped out and the burst replica kept"
+    );
+    let burst_id = ctx.states[&c]
+        .replicas
+        .iter()
+        .find(|r| r.name == "r0-burst")
+        .map(|r| r.replica_id);
+    assert_eq!(burst_id, Some(replica(2)), "the burst keeps its identity");
+}
+
+#[mz_ore::test(tokio::test)]
+async fn resource_exhaustion_leaves_an_unaffordable_burst_armed() {
+    // A hydration burst is not shed on exhaustion. Nothing durable would record
+    // that it was unaffordable, so the unchanged policy would arm it again on
+    // the next tick and every cycle would write a start and a finish. The burst
+    // stays armed and its create is simply retried.
+    use crate::ctx::{BurstRecord, OnHydrationPolicy};
+
+    let c = cluster(1);
+    let (mut state, _signals) = reconfiguring_state(
+        c,
+        "100cc",
+        1,
+        vec![observed(replica(1), "r0", "100cc")],
+        record("200cc", 1, 5000),
+        BTreeSet::new(),
+    );
+    state.auto_scaling_policy = Some(AutoScalingPolicy {
+        on_hydration: Some(OnHydrationPolicy {
+            hydration_size: "400cc".to_string(),
+            linger_duration: Some(Duration::from_secs(60)),
+        }),
+    });
+    state.burst = Some(BurstRecord {
+        burst_size: "400cc".to_string(),
+        linger_duration: Duration::from_secs(60),
+        steady_hydrated_at: None,
+    });
+
+    let mut ctx = FakeCtx::new(vec![state]);
+    ctx.has_hydratable_objects.insert(c, true);
+    let controller = controller();
+
+    ctx.exhaust_next = 1;
+    controller.reconcile(&mut ctx).await;
+    assert_eq!(
+        reconfiguration_status(&ctx.states[&c]),
+        Some(ReconfigurationStatus::ResourceExhausted),
+        "the graceful reconfiguration is shed"
+    );
+    assert!(
+        ctx.states[&c].burst.is_some(),
+        "the burst survives the shed"
+    );
+
+    ctx.exhaust_next = 1;
+    let before = ctx.applied.len();
+    controller.reconcile(&mut ctx).await;
+    assert!(
+        ctx.states[&c].burst.is_some(),
+        "a later exhausted apply still leaves the burst alone"
+    );
+    assert_eq!(
+        ctx.applied.len(),
+        before + 1,
+        "the exhausted create is the only apply: no shed follows it"
+    );
 }
 
 #[mz_ore::test(tokio::test)]
@@ -2762,12 +3000,12 @@ async fn on_refresh_graceful_record_settles_then_normalizes() {
     // graceful strategy owns the record to settlement: its cut-over writes the
     // target (including rf 2) alone, without contending with the on-refresh
     // normalization (a dual write of `new_replication_factor` would trip the
-    // merge tripwire's soft panic and fail this test). The next tick sees the
+    // merge tripwire's soft panic and fail this test). A following tick sees the
     // record settled and normalizes rf back to 0.
     let c = cluster(1);
     let (mut state, _signals) = scheduled_state(c, "100cc", 1, 0, Vec::new(), None);
-    // The deadline (500) already passed at the fake's now (1000) under COMMIT,
-    // so the first tick cuts over without waiting for hydration.
+    // The deadline (500) already passed at the fake's now (1000) under COMMIT.
+    // The first tick provisions the target set without finalizing early.
     state.reconfiguration = Some(record_on_timeout("200cc", 2, 500, OnTimeout::Commit));
     let mut ctx = FakeCtx::new(vec![state]);
     ctx.set_refresh_window(c, window_inputs(100, 0, Some(200), refresh_at(50)));
@@ -2775,8 +3013,17 @@ async fn on_refresh_graceful_record_settles_then_normalizes() {
     let controller = controller();
     controller.reconcile(&mut ctx).await;
 
-    // The cut-over landed alone: the realized config advanced to the target and
-    // the record settled, with rf briefly at the target's value.
+    assert_eq!(ctx.states[&c].size, "100cc");
+    assert_eq!(ctx.states[&c].replicas.len(), 2);
+    assert_eq!(
+        reconfiguration_status(&ctx.states[&c]),
+        Some(ReconfigurationStatus::InProgress)
+    );
+
+    // With the target materialized, the next tick cuts over without requiring
+    // hydration. The on-refresh normalization deferred at the phase-1 read, so
+    // the realized factor briefly carries the target value.
+    controller.reconcile(&mut ctx).await;
     assert_eq!(ctx.states[&c].size, "200cc");
     assert_eq!(ctx.states[&c].replication_factor, 2);
     assert_eq!(
@@ -2784,7 +3031,7 @@ async fn on_refresh_graceful_record_settles_then_normalizes() {
         Some(ReconfigurationStatus::Finalized)
     );
 
-    // The next tick normalizes the scheduled cluster's rf back to 0.
+    // The following tick sees the settled record and normalizes rf back to 0.
     controller.reconcile(&mut ctx).await;
     assert_eq!(ctx.states[&c].replication_factor, 0);
 }
