@@ -208,6 +208,14 @@ restricts to leakproof predicates, and `optimize_dataflow_demand` and
 monotonicity therefore cross a barrier freely, which is safe because neither
 decides whether a row is produced.
 
+#### A (risk)
+
+Mechanism A's guarantee rests on an architectural property that nothing states
+and no type enforces: a transform sees one object at a time. A new cross-object
+pass has to be gated by hand, the way `inline_views` and
+`optimize_dataflow_filters` are, and a new place predicates can live would
+escape `inline_views` unnoticed.
+
 ### B. Security levels on predicates
 
 Prototype: [#38566](https://github.com/MaterializeInc/materialize/pull/38566).
@@ -225,18 +233,6 @@ below a lower level nor be reported at a `Get`; **derivation**, where an
 equivalence class is seeded only from leakproof or unconstrained predicates,
 since a derived qual carries no level; and **ordering**, where a levelled
 predicate must be evaluated after every lower-level one.
-
-### Residual risk
-
-#### A (risk)
-
-Mechanism A's guarantee rests on an architectural property rather than on a
-check: nothing crosses an object boundary because the transform pipeline runs
-over one object at a time. Nothing states that property, and no type enforces
-it. A new cross-object pass would have to be gated by hand the way
-`inline_views` and `optimize_dataflow_filters` are, and a new place predicates
-can live would escape `inline_views` unnoticed. The surface is small, four
-cross-object passes today, but it is guarded by convention.
 
 #### B (risk)
 
@@ -274,22 +270,12 @@ physical layer and the protocol that ships plans to compute.
 | What the optimizer may do across the view | the two plans stay distinct objects, so no transform sees both at once; leakproof predicates, column demand, and monotonicity still cross | the two plans merge into one, so every transform applies to both; only evaluation order is constrained |
 | Unit of the constraint | the whole view | one predicate relative to another |
 | Where the guarantee lives | structural: nothing from a consumer can enter a producer's plan | by rule, at each seam that moves, orders, or derives predicates |
-| Failure mode of a missed site | costs an optimization | silently produces an insecure plan, for the three shapes below |
 | Reaches LIR / compute protocol | no | yes, once `MapFilterProject` carries the level |
 | Perf, barrier views | view is not inlined: no cross-boundary folding, an extra collection and often an arrangement per boundary, no fast-path peek | inlining preserved; a related spike measured zero plan delta |
 | Perf, non-barrier views | none | none: every text plan in the `EXPLAIN` corpus is byte-identical |
 | Generalizes to row-level security | no | yes |
-| Prototype status | complete and verified end to end | complete and verified end to end |
 
-Row four is the one that outlives this design. Under A the safe behavior is the
-default: a transform that has never heard of security barriers cannot reach
-across an object boundary, because reaching across is not something a transform
-can do, so forgetting costs an optimization. Under B the optimizing behavior is
-the default: a transform that has never heard of levels moves predicates freely,
-because moving predicates is its job, so forgetting costs the guarantee and
-nothing reports it.
-
-Row eight is why B was explored at all. Row-level security means a table's own
+The last row is why B was explored at all. Row-level security means a table's own
 policy predicates must be evaluated before the user's, and there is no object
 boundary at a table scan to hang that on, so A cannot express it at any price.
 B's per-predicate ordering is the shape row-level security needs.
@@ -311,18 +297,6 @@ the level, which puts it in LIR and on the compute protocol. The runtime does
 not need it: `SafeMfpPlan` already evaluates predicates in vector order, so the
 sort discharges the constraint. It crosses because `MapFilterProject` is one
 generic type shared by both plan levels.
-
-The finished prototype touches ~90 sites across 24 files. Every one is a
-predicate conversion that had to state whether it was creating a new
-unconstrained predicate or re-applying an existing one, because there is no
-blanket conversion from an expression to a predicate. That is what surfaced
-three real level-dropping bugs, in `into_map_filter_project`,
-`literal_constraints`, and `canonicalize_mfp`, each of which would have compiled
-silently under a blanket conversion.
-
-So the existing tree is checked rather than assumed. What B carries instead is
-an obligation on code that does not exist yet, scoped in
-[What a future transform has to know](#what-a-future-transform-has-to-know).
 
 Two smaller costs specific to B: `Predicate` is 104 bytes against
 `MirScalarExpr`'s 96, and the serialized MIR nests `{expr, level}`, changing
@@ -391,45 +365,6 @@ materialize.public.barrier_orders:
 Source materialize.public.orders
   filter=((#0{tenant} = "alice") AND (#2{amount} = 42))
 ```
-
-## Minimal Viable Prototype
-
-Two prototypes, one per mechanism, so that they can be compared rather than
-argued about.
-
-**A, object-level gates**
-([#38562](https://github.com/MaterializeInc/materialize/pull/38562)) is complete
-and verified end to end. The optimizer change proper is two gates and one
-predicate in `src/transform/src/dataflow.rs`; the rest is option plumbing.
-`src/transform/tests/test_security_barrier.rs` asserts the blocked, admitted,
-and unprotected cases at the `optimize_dataflow_filters_inner` seam, including a
-test that pins the current exposure so a regression is visible.
-`test/sqllogictest/security_barrier.slt` covers the SQL surface and the
-resulting `EXPLAIN` plans. The existing `EXPLAIN` and privilege suites pass
-unchanged, confirming the default path is untouched.
-
-**B, security levels**
-([#38566](https://github.com/MaterializeInc/materialize/pull/38566)) is also
-complete. 1768 sqllogictest assertions pass, and no text plan in the `EXPLAIN`
-corpus changes: only the JSON goldens move, for the serialization shape, which
-implies an expression-cache format bump. The guarantee is pinned by physical
-plans over a table whose column order would otherwise schedule the reader's
-fallible cast ahead of the tenant filter:
-
-```
-plain   filter=((text_to_integer(#0{secret}) > 0) AND (#1{tenant} = "alice"))
-barrier filter=((#1{tenant} = "alice") AND (text_to_integer(#0{secret}) > 0))
-```
-
-Both are fully inlined, so ordering is the only difference. B is built on A's
-branch, so it inherits the SQL surface and tests; only the mechanism differs.
-
-Deliberately left out of both:
-
-- An `mz_views` catalog column reporting the flag. `SHOW CREATE VIEW` already
-  reflects it through `create_sql`.
-- `ALTER VIEW ... SET (SECURITY BARRIER)`.
-- Documentation under `doc/user/`.
 
 ## Why the option is opt-in
 
@@ -539,6 +474,7 @@ query, not an optimizer change, and it can back a warning, a linting view, or an
 barriers. That closes the asymmetry at a fraction of the cost of default-on, and
 it is worth doing whichever mechanism is chosen.
 
+
 ## When to enable a barrier
 
 **Enable it when the view is the access boundary**: the reader holds `SELECT`
@@ -570,6 +506,45 @@ predicate calls `current_user` can be neither indexed nor materialized, because
 `ExprPrepMaintained` rejects unmaterializable functions. What a barrier adds
 over materializing is that the guarantee stops depending on where the query
 runs.
+
+## Minimal Viable Prototype
+
+Two prototypes, one per mechanism, so that they can be compared rather than
+argued about.
+
+**A, object-level gates**
+([#38562](https://github.com/MaterializeInc/materialize/pull/38562)) is complete
+and verified end to end. The optimizer change proper is two gates and one
+predicate in `src/transform/src/dataflow.rs`; the rest is option plumbing.
+`src/transform/tests/test_security_barrier.rs` asserts the blocked, admitted,
+and unprotected cases at the `optimize_dataflow_filters_inner` seam, including a
+test that pins the current exposure so a regression is visible.
+`test/sqllogictest/security_barrier.slt` covers the SQL surface and the
+resulting `EXPLAIN` plans. The existing `EXPLAIN` and privilege suites pass
+unchanged, confirming the default path is untouched.
+
+**B, security levels**
+([#38566](https://github.com/MaterializeInc/materialize/pull/38566)) is also
+complete. 1768 sqllogictest assertions pass, and no text plan in the `EXPLAIN`
+corpus changes: only the JSON goldens move, for the serialization shape, which
+implies an expression-cache format bump. The guarantee is pinned by physical
+plans over a table whose column order would otherwise schedule the reader's
+fallible cast ahead of the tenant filter:
+
+```
+plain   filter=((text_to_integer(#0{secret}) > 0) AND (#1{tenant} = "alice"))
+barrier filter=((#1{tenant} = "alice") AND (text_to_integer(#0{secret}) > 0))
+```
+
+Both are fully inlined, so ordering is the only difference. B is built on A's
+branch, so it inherits the SQL surface and tests; only the mechanism differs.
+
+Deliberately left out of both:
+
+- An `mz_views` catalog column reporting the flag. `SHOW CREATE VIEW` already
+  reflects it through `create_sql`.
+- `ALTER VIEW ... SET (SECURITY BARRIER)`.
+- Documentation under `doc/user/`.
 
 ## Alternatives
 
@@ -618,7 +593,7 @@ for any future non-error channel.
   barrier views beyond the shared cost. B preserves that performance and is the
   mechanism row-level security would need, but puts the concept on the compute
   protocol and carries an obligation on future code, scoped to three shapes in
-  [What a future transform has to know](#what-a-future-transform-has-to-know),
+  [B (risk)](#b-risk),
   of which one is mechanically closable and one stays soft. This document
   deliberately does not pick.
 - The default is settled in this document and the mechanism is not. If the team
