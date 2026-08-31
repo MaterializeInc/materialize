@@ -226,6 +226,54 @@ equivalence class is seeded only from leakproof or unconstrained predicates,
 since a derived qual carries no level; and **ordering**, where a levelled
 predicate must be evaluated after every lower-level one.
 
+### What a future transform has to know
+
+Mechanism B's residual risk is often stated as "every future transform that
+touches predicates has to preserve the level." That is too broad on two counts,
+and being precise about it matters, because the imprecise version is both
+unactionable and more alarming than the truth.
+
+**A new transform cannot fail to notice that levels exist.** There is no blanket
+conversion from an expression to a predicate, so constructing one requires
+naming a level: `Predicate::unconstrained` or `Predicate::at_level`. And `level`
+is private with `raise` as its only mutator, so no code can lower one. What a
+new author can miss is not the mechanism but the contract.
+
+**Reordering predicates within a plan is self-healing.** `MapFilterProject`
+sorts by level, so however much a transform shuffles predicates in the
+mid-level plan, the order is re-established when they fuse into one operator.
+The sort is a convergent enforcement point, not a step that can be skipped.
+
+That leaves three specific shapes, and they are the whole contract:
+
+1. **Relocating a predicate across operators.** The sort only helps when the
+   predicates end up in the same `MapFilterProject`. A transform that moves a
+   levelled predicate into an operator evaluated earlier than the one holding a
+   lower-level predicate breaks the guarantee. `PredicatePushdown` has an
+   explicit hold for this; a new relocating transform does not inherit it.
+2. **Deriving a predicate from a levelled one.** A derived predicate must
+   inherit the minimum level of its sources. The compiler forces the author to
+   name a level and cannot tell them which one is correct, and
+   `Predicate::unconstrained` is the natural thing to write. The two existing
+   derivation sites handle this by declining to seed an equivalence class from a
+   levelled non-leakproof predicate; a new site has no way to learn that rule.
+3. **A new place a predicate can live.** A new `MirRelationExpr` variant holding
+   predicates, or a new fused-operator representation.
+   `raise_security_level` walks `Filter` nodes and would not find it, and the
+   sort would not cover it.
+
+Shape 1 is mechanically closable. Because a descendant filter always evaluates
+before an ancestor filter on the same row, the requirement is a plan-tree
+invariant: for any `Filter` D that is a descendant of `Filter` A,
+`max_level(D) <= min_level(A)`. Levels below higher levels are correct; the
+violation is the reverse. `Typecheck` already runs between transforms validating
+plan invariants and is where this belongs, which would turn shape 1 from review
+discipline into a test failure.
+
+Shape 2 is the one that stays soft, and it is the line to put at the top of a
+risk register. Shape 3 is shared with mechanism A, whose `raise_security_level`
+equivalent has the same blind spot.
+
 ### Comparison
 
 The difference underneath every row below is that A rides a boundary Materialize
@@ -248,7 +296,7 @@ physical layer and the protocol that ships plans to compute.
 | What the optimizer may do across the view | the two plans stay distinct objects, so no transform sees both at once; leakproof predicates, column demand, and monotonicity still cross | the two plans merge into one, so every transform applies to both; only evaluation order is constrained |
 | Unit of the constraint | the whole view | one predicate relative to another |
 | Where the guarantee lives | structural: nothing from a consumer can enter a producer's plan | by rule, at each seam that moves, orders, or derives predicates |
-| Failure mode of a missed site | costs an optimization | silently produces an insecure plan |
+| Failure mode of a missed site | costs an optimization | silently produces an insecure plan, for the three shapes below |
 | Reaches LIR / compute protocol | no | yes, once `MapFilterProject` carries the level |
 | Perf, barrier views | view is not inlined: no cross-boundary folding, an extra collection and often an arrangement per boundary, no fast-path peek | inlining preserved; a related spike measured zero plan delta |
 | Perf, non-barrier views | none | none: every text plan in the `EXPLAIN` corpus is byte-identical |
@@ -292,9 +340,11 @@ unconstrained predicate or re-applying an existing one, because there is no
 blanket conversion from an expression to a predicate. That is what surfaced
 three real level-dropping bugs, in `into_map_filter_project`,
 `literal_constraints`, and `canonicalize_mfp`, each of which would have compiled
-silently under a blanket conversion. It is also the standing cost: the same
-discipline applies to every future transform that touches predicates, and
-nothing enforces it but the review.
+silently under a blanket conversion.
+
+So the existing tree is checked rather than assumed. What B carries instead is
+an obligation on code that does not exist yet, scoped in
+[What a future transform has to know](#what-a-future-transform-has-to-know).
 
 Two smaller costs specific to B: `Predicate` is 104 bytes against
 `MirScalarExpr`'s 96, and the serialized MIR nests `{expr, level}`, changing
@@ -589,9 +639,10 @@ for any future non-error channel.
   closed and confines the concept to two gates, but costs real performance on
   barrier views beyond the shared cost. B preserves that performance and is the
   mechanism row-level security would need, but puts the concept on the compute
-  protocol and carries a standing obligation: every future transform that
-  touches predicates has to preserve the level, and nothing enforces that but
-  review. This document deliberately does not pick.
+  protocol and carries an obligation on future code, scoped to three shapes in
+  [What a future transform has to know](#what-a-future-transform-has-to-know),
+  of which one is mechanically closable and one stays soft. This document
+  deliberately does not pick.
 - The default is settled in this document and the mechanism is not. If the team
   disagrees with opt-in, the argument to engage is in
   [The argument against](#the-argument-against-and-what-to-do-about-it), and the
