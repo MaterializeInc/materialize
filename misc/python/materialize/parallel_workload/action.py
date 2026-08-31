@@ -3106,6 +3106,13 @@ class FlipFlagsAction(Action):
             "1048576",  # 1 MiB, an in-between value
             "314572800",  # 300 MiB, the production value
         ]
+        # The default, a value that cuts every batch at the threshold, and one
+        # that puts any answer this workload stashes into a single batch.
+        self.flags_with_values["compute_peek_response_stash_batch_bytes"] = [
+            "1048576",
+            "0",
+            "1073741824",
+        ]
         self.flags_with_values["compute_subscribe_snapshot_optimization"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -3427,8 +3434,6 @@ class FlipFlagsAction(Action):
             "mz_metrics_lgalloc_refresh_interval",
             "mz_metrics_rusage_refresh_interval",
             "mz_metrics_usage_refresh_interval",
-            "compute_peek_stash_num_batches",
-            "compute_peek_stash_batch_size",
             "compute_peek_response_stash_batch_max_runs",
             "compute_peek_response_stash_read_batch_size_bytes",
             "compute_peek_response_stash_read_memory_budget_bytes",

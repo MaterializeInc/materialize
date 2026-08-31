@@ -59,8 +59,9 @@ fn beginning_an_activation_refills_the_aggregate() {
 }
 
 /// With the offload off, every peek is granted unbounded fuel however much the peeks before it
-/// spent, which is what makes the kill switch restore the worker's old behaviour rather than
-/// approximate it.
+/// spent, which is how the kill switch keeps a peek that answers inline on the worker. It says
+/// nothing about a peek whose rows belong in the stash, which suspends on its batch rather
+/// than on its fuel and leaves the worker either way.
 #[mz_ore::test]
 fn the_kill_switch_grants_every_peek_an_unbounded_slice() {
     let config = mz_dyncfgs::all_dyncfgs();

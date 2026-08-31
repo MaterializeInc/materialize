@@ -11,17 +11,24 @@
 
 use std::num::NonZeroUsize;
 
+use mz_compute_types::dyncfgs::{ENABLE_PEEK_ROW_ITERATION_LIMIT, PEEK_ROW_ITERATION_LIMIT};
 use mz_dyncfg::ConfigUpdates;
 use mz_expr::RowSetFinishing;
 use mz_expr::row::RowCollection;
+use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metrics::MetricsRegistry;
-use mz_repr::Row;
+use mz_ore::num::NonNeg;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_types::PersistLocation;
+use mz_repr::{IntoRowIterator, Row, RowIterator, RowRef};
 
+use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::index_peek_tests::{
     cancelling_errors, index_peek, ok_row, rows_answer, trace_bundle, trivial_finishing,
     wide_ok_rows,
 };
-use crate::compute_state::peek_scan::PeekScan;
+use crate::compute_state::peek_scan::{PeekScan, StashBounds};
+use crate::compute_state::peek_stash::tests::{CountedBlob, stashed_rows};
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
 use crate::server::ComputeRuntimeRole;
 
@@ -59,9 +66,46 @@ fn worker_metrics() -> WorkerMetrics {
     ComputeMetrics::register_with(&MetricsRegistry::new(), ComputeRuntimeRole::Solo).for_worker(0)
 }
 
-/// The size the scan accounts a single-column row at.
-fn row_size() -> usize {
-    ok_row(0).byte_len() + size_of::<NonZeroUsize>()
+/// The size the scan accounts the widest row of `keys` at.
+///
+/// Taken as the widest rather than as one row's, because a `UInt64` packs into the fewest bytes
+/// that hold its value: a threshold built from the widest row is one that the same number of
+/// rows crosses in every batch of a walk, whatever values those rows carry.
+///
+/// The rows these tests walk are [`wide_ok_rows`], which carry the `UInt64` the peek's result
+/// description declares, and that is the schema the stash writes its batch under.
+fn widest_row_size(keys: &[Row]) -> usize {
+    keys.iter()
+        .map(crate::compute_state::peek_scan::entry_byte_len)
+        .max()
+        .expect("an index a peek walks holds rows")
+}
+
+/// The stash `peek` writes to, over the in-memory location `clients` opens.
+fn stash_target(peek: &Peek, clients: &Arc<PersistClientCache>) -> StashTarget {
+    StashTarget::new(peek, Arc::clone(clients), PersistLocation::new_in_mem())
+}
+
+/// The batches and the inline rows of a stashed response, as one sorted row set.
+///
+/// A peek's answer is both halves together, so a test that compared only one of them would
+/// pass on a driver that wrote the rows to the wrong half.
+async fn stashed_answer_rows(
+    clients: &PersistClientCache,
+    response: PeekResponse,
+) -> (Vec<Row>, Vec<Row>) {
+    let PeekResponse::Stashed(stashed) = response else {
+        panic!("a walk that reached the stash answers with a stashed response, not {response:?}")
+    };
+
+    let mut inline: Vec<Row> = stashed
+        .inline_rows
+        .iter()
+        .flat_map(|rows| rows.clone().into_row_iter().map(RowRef::to_owned))
+        .collect();
+    inline.sort();
+
+    (stashed_rows(clients, *stashed).await, inline)
 }
 
 /// Opens a scan of `peek` over `bundle`, the way the peek path opens one.
@@ -80,26 +124,53 @@ fn open(
         errs,
         oks,
         u64::MAX,
-        stash_threshold_bytes.is_some(),
-        stash_threshold_bytes.unwrap_or(usize::MAX),
+        StashBounds {
+            eligible: stash_threshold_bytes.is_some(),
+            threshold_bytes: stash_threshold_bytes.unwrap_or(usize::MAX),
+            batch_bytes: 0,
+        },
     )
 }
 
 /// The configuration an offloaded walk reads, with the yield granularity set to
 /// `yield_granularity` so a test can choose how many slices a walk is cut into.
 fn offload_config(yield_granularity: usize) -> OffloadConfig {
+    offload_config_with(yield_granularity, |_updates| ())
+}
+
+/// The same, with `configure` applied on top, as `UpdateConfiguration` applies a change.
+fn offload_config_with(
+    yield_granularity: usize,
+    configure: impl FnOnce(&mut ConfigUpdates),
+) -> OffloadConfig {
     let config = mz_dyncfgs::all_dyncfgs();
     let mut updates = ConfigUpdates::default();
     updates.add(&INDEX_PEEK_YIELD_GRANULARITY, yield_granularity);
+    configure(&mut updates);
     updates.apply(&config);
     OffloadConfig::new(&config)
 }
+
+/// The configuration a walk whose blob traffic a test counts reads.
+///
+/// A builder over the run limit merges its runs, which writes parts of its own and leaves the
+/// parts it merged from behind, so a test counting what a walk wrote raises the limit past the
+/// runs the walk produces.
+fn counted_blob_config(yield_granularity: usize) -> OffloadConfig {
+    offload_config_with(yield_granularity, |updates| {
+        updates.add(&PEEK_RESPONSE_STASH_BATCH_MAX_RUNS, NO_RUN_MERGING);
+    })
+}
+
+/// A run limit above the parts any walk here writes, which is at most one per key of the
+/// longest trace these tests hold.
+const NO_RUN_MERGING: usize = 8_000;
 
 /// A finishing that orders the peek's one column descending, which is the reverse of the order
 /// the trace holds its keys in.
 ///
 /// A peek carrying an order is never eligible for the peek stash, because `is_streamable`
-/// requires an empty `order_by`, so an offloaded walk of one answers rather than handing back.
+/// requires an empty `order_by`, so an offloaded walk of one answers with its rows.
 fn descending_finishing() -> RowSetFinishing {
     let mut finishing = trivial_finishing();
     finishing.order_by = vec![ColumnOrder {
@@ -125,37 +196,16 @@ fn ordered_rows_answer(rows: impl IntoIterator<Item = Row>) -> PeekResponse {
     PeekResponse::Rows(vec![builder.build()])
 }
 
-/// What an offloaded walk handed back, in a form a test can compare whole.
+/// Runs the runtime until `offloaded`'s walk answers the peek, and reports the answer.
 ///
-/// Mirrors [`OffloadOutcome`], which carries no comparison of its own because nothing on the
-/// peek path compares one.
-#[derive(Debug, PartialEq)]
-enum HandBack {
-    Answered(PeekResponse),
-    NeedsStash,
-}
-
-impl From<OffloadOutcome> for HandBack {
-    fn from(outcome: OffloadOutcome) -> Self {
-        match outcome {
-            OffloadOutcome::Answered(response) => HandBack::Answered(response),
-            OffloadOutcome::NeedsStash => HandBack::NeedsStash,
-        }
-    }
-}
-
-/// Runs the runtime until `offloaded`'s walk hands something back, and reports what.
-///
-/// Bounded, so a walk that yields without ever reaching an outcome fails here rather than
-/// hanging the suite. That is the failure a scan holding a full batch produces, which is the
-/// case this driver's batch-ready arm exists to avoid.
-async fn hand_back(offloaded: &mut OffloadedPeek) -> HandBack {
+/// Bounded, so a walk that never reaches an answer fails here rather than hanging the suite.
+async fn answer(offloaded: &mut OffloadedPeek) -> PeekResponse {
     let Ok(handed_back) = tokio::time::timeout(DRIVE_BOUND, &mut offloaded.result).await else {
-        panic!("the offloaded walk handed nothing back within {DRIVE_BOUND:?}");
+        panic!("the offloaded walk did not answer within {DRIVE_BOUND:?}");
     };
-    let (outcome, _elapsed) =
-        handed_back.expect("the offloaded walk ended without handing anything back");
-    HandBack::from(outcome)
+    let (response, _elapsed) =
+        handed_back.expect("the offloaded walk ended without answering the peek");
+    response
 }
 
 /// Runs the runtime until `condition` holds, where `what` names what the test is waiting for.
@@ -184,21 +234,17 @@ async fn an_offloaded_walk_finishes_the_answer_the_inline_slice_started() {
     let mut bundle = trace_bundle(&keys, cancelling_errors(2));
     let mut scan = open(&mut bundle, &peek, None);
 
-    // Two positions leave the walk suspended with nothing to hand over, which is the state
-    // the worker offloads and the only one it offloads.
+    // Two positions leave the walk suspended for want of fuel, with the rest of the trace
+    // ahead of it.
     let mut fuel = 2;
     assert_eq!(scan.step(None, &mut fuel), ScanOutcome::Suspended);
-    assert!(
-        !scan.batch_ready(),
-        "a scan holding a full batch is diverted rather than offloaded"
-    );
 
     let metrics = worker_metrics();
     let permits = Arc::new(PeekPermits::new(1));
     let mut offloaded = OffloadedPeek::start(
         peek.clone(),
-        bundle,
         scan,
+        None,
         Arc::clone(&permits),
         offload_config(*INDEX_PEEK_YIELD_GRANULARITY.default()),
         PeekWalkMetrics::new(&metrics),
@@ -206,8 +252,8 @@ async fn an_offloaded_walk_finishes_the_answer_the_inline_slice_started() {
     );
 
     assert_eq!(
-        hand_back(&mut offloaded).await,
-        HandBack::Answered(rows_answer((0..6).map(ok_row))),
+        answer(&mut offloaded).await,
+        rows_answer((0..6).map(ok_row)),
     );
     assert_eq!(
         metrics.index_peek_walks_offloaded.get(),
@@ -240,8 +286,8 @@ async fn an_offloaded_walk_answers_in_the_order_the_peek_asked_for() {
     let permits = Arc::new(PeekPermits::new(1));
     let mut offloaded = OffloadedPeek::start(
         peek.clone(),
-        bundle,
         scan,
+        None,
         Arc::clone(&permits),
         offload_config(*INDEX_PEEK_YIELD_GRANULARITY.default()),
         PeekWalkMetrics::new(&metrics),
@@ -249,51 +295,126 @@ async fn an_offloaded_walk_answers_in_the_order_the_peek_asked_for() {
     );
 
     assert_eq!(
-        hand_back(&mut offloaded).await,
-        HandBack::Answered(ordered_rows_answer((0..6).rev().map(ok_row))),
+        answer(&mut offloaded).await,
+        ordered_rows_answer((0..6).rev().map(ok_row)),
     );
 }
 
-/// An offloaded walk whose accumulated rows grow into a full batch hands the peek back rather
-/// than stepping a scan that cannot advance.
+/// An offloaded walk whose accumulated rows grow into a full batch writes the batch to the stash
+/// and carries on from where it stopped, so one walk produces the whole answer.
 ///
-/// A scan holding a full batch spends no fuel and moves no cursor when stepped, and this
-/// driver has nowhere to write the batch, so a driver that treated the suspension as resumable
-/// would yield forever without ever reaching an outcome. The bound in [`hand_back`] is what
-/// turns that into a failure rather than a hang.
+/// The rows the walk was still holding when it ended travel with the response rather than
+/// through a batch of their own, and the two halves together are every row the peek owes. The
+/// count of stashed rows is asserted as well, because a driver that wrote the tail to both
+/// halves would still answer with the right set.
+///
+/// What says the trace was walked once is the count of cursor positions the walk reported, not
+/// the rows it answered with: a second walk of the same trace produces the same rows, so an
+/// answer-only test passes against the very regression it is meant to catch.
 #[mz_ore::test(tokio::test)]
-async fn an_offloaded_walk_that_fills_a_batch_hands_back_rather_than_spinning() {
-    let keys: Vec<Row> = (0..6).map(ok_row).collect();
+async fn an_offloaded_walk_writes_full_batches_to_the_stash_and_walks_on() {
+    let keys = wide_ok_rows(8);
     let peek = index_peek(trivial_finishing(), None);
     let mut bundle = trace_bundle(&keys, cancelling_errors(0));
-    // Two rows fit under the threshold and the third crosses it, so the slice below offloads
-    // a scan with room left and the offloaded walk is the one that fills the batch.
-    let mut scan = open(&mut bundle, &peek, Some(2 * row_size()));
+    // Two rows fit under the threshold and the third crosses it, so the walk fills a batch
+    // twice over and holds the last two rows when the trace runs out.
+    let mut scan = open(&mut bundle, &peek, Some(2 * widest_row_size(&keys)));
 
     let mut fuel = 2;
     assert_eq!(scan.step(None, &mut fuel), ScanOutcome::Suspended);
-    assert!(
-        !scan.batch_ready(),
-        "the inline slice must offload a scan that still has room"
-    );
 
     let metrics = worker_metrics();
     let permits = Arc::new(PeekPermits::new(1));
+    let clients = Arc::new(PersistClientCache::new_no_metrics());
     let mut offloaded = OffloadedPeek::start(
         peek.clone(),
-        bundle,
         scan,
+        Some(stash_target(&peek, &clients)),
         Arc::clone(&permits),
         offload_config(*INDEX_PEEK_YIELD_GRANULARITY.default()),
         PeekWalkMetrics::new(&metrics),
         std::thread::current(),
     );
 
-    assert_eq!(hand_back(&mut offloaded).await, HandBack::NeedsStash);
+    let response = answer(&mut offloaded).await;
+    let PeekResponse::Stashed(stashed) = &response else {
+        panic!("a walk that reached the stash answers with a handle, not {response:?}");
+    };
+    assert_eq!(
+        stashed.num_rows_batches,
+        u64::cast_from(keys.len()),
+        "the rows the walk still held when the trace ran out went to the stash too"
+    );
+
+    let (batched, inline) = stashed_answer_rows(&clients, response).await;
+    assert_eq!(batched, keys);
+    assert_eq!(
+        inline,
+        Vec::<Row>::new(),
+        "a stashed answer carries no rows inline"
+    );
     assert_eq!(
         metrics.index_peek_walks_offloaded.get(),
         1,
-        "a hand-back is a terminal outcome of the offloaded walk"
+        "one walk produced the whole answer"
+    );
+    assert_eq!(
+        metrics.index_peek_stashed_total.get(),
+        1,
+        "the walk answered from the stash"
+    );
+    assert_eq!(
+        metrics.index_peek_row_iteration_rows.get_sample_count(),
+        1,
+        "one walk reports one ok phase, whatever it was cut into"
+    );
+    assert_eq!(
+        metrics.index_peek_row_iteration_rows.get_sample_sum(),
+        f64::cast_lossy(keys.len()),
+        "the walk evaluated each cursor position of the trace once"
+    );
+}
+
+/// An offloaded walk stops once the stash holds every row the peek's finishing can use, rather
+/// than walking the rest of a trace whose rows no answer could contain.
+#[mz_ore::test(tokio::test)]
+async fn an_offloaded_walk_stops_where_the_finishing_has_what_it_needs() {
+    let keys = wide_ok_rows(8);
+    let mut finishing = trivial_finishing();
+    finishing.limit = Some(NonNeg::try_from(2).expect("non-negative"));
+    let peek = index_peek(finishing, None);
+    let mut bundle = trace_bundle(&keys, cancelling_errors(0));
+    // Crossed by the second row, so the first batch already holds what the limit asks for.
+    let mut scan = open(&mut bundle, &peek, Some(widest_row_size(&keys)));
+
+    let mut fuel = 1;
+    assert_eq!(scan.step(None, &mut fuel), ScanOutcome::Suspended);
+
+    let metrics = worker_metrics();
+    let permits = Arc::new(PeekPermits::new(1));
+    let clients = Arc::new(PersistClientCache::new_no_metrics());
+    let mut offloaded = OffloadedPeek::start(
+        peek.clone(),
+        scan,
+        Some(stash_target(&peek, &clients)),
+        Arc::clone(&permits),
+        offload_config(*INDEX_PEEK_YIELD_GRANULARITY.default()),
+        PeekWalkMetrics::new(&metrics),
+        std::thread::current(),
+    );
+
+    let (batched, inline) = stashed_answer_rows(&clients, answer(&mut offloaded).await).await;
+    assert_eq!(batched, keys[..2], "the walk wrote what the limit asks for");
+    assert_eq!(
+        inline,
+        Vec::<Row>::new(),
+        "the batch that satisfied the stash was everything the walk held"
+    );
+    assert_eq!(
+        metrics.index_peek_row_iteration_seconds.get_sample_count(),
+        1,
+        "a walk that answered the peek reports its ok phase, whether it reached the end of the \
+         trace or the end of what the finishing can use"
     );
 }
 
@@ -322,8 +443,8 @@ async fn a_walk_cancelled_while_queued_never_takes_a_permit() {
 
     let offloaded = OffloadedPeek::start(
         peek.clone(),
-        bundle,
         scan,
+        None,
         Arc::clone(&permits),
         offload_config(*INDEX_PEEK_YIELD_GRANULARITY.default()),
         PeekWalkMetrics::new(&metrics),
@@ -398,8 +519,9 @@ async fn a_walk_cancelled_while_running_reports_no_outcome() {
             _permit: permit,
             result_tx,
         };
-        let (_state, outcome) = OffloadedPeek::walk(state, &config, &walk_metrics, order_by).await;
-        outcome.is_some()
+        let (_state, response) =
+            OffloadedPeek::walk(state, Uuid::nil(), None, &config, &walk_metrics, order_by).await;
+        response.is_some()
     });
 
     tokio::time::sleep(DRIVE_PAUSE).await;
@@ -450,8 +572,8 @@ async fn a_walk_waits_for_a_permit_held_elsewhere() {
 
     let mut offloaded = OffloadedPeek::start(
         peek.clone(),
-        bundle,
         scan,
+        None,
         Arc::clone(&permits),
         offload_config(*INDEX_PEEK_YIELD_GRANULARITY.default()),
         PeekWalkMetrics::new(&metrics),
@@ -474,8 +596,8 @@ async fn a_walk_waits_for_a_permit_held_elsewhere() {
     drop(held);
 
     assert_eq!(
-        hand_back(&mut offloaded).await,
-        HandBack::Answered(rows_answer((0..6).map(ok_row))),
+        answer(&mut offloaded).await,
+        rows_answer((0..6).map(ok_row))
     );
     assert_eq!(
         metrics.index_peek_permit_wait_seconds.get_sample_count(),
@@ -515,8 +637,8 @@ async fn dropping_an_offloaded_peek_cancels_its_walk() {
 
     let offloaded = OffloadedPeek::start(
         peek.clone(),
-        bundle,
         scan,
+        None,
         Arc::clone(&permits),
         offload_config(1),
         PeekWalkMetrics::new(&metrics),
@@ -570,6 +692,186 @@ fn the_permit_fraction_scales_with_the_worker_count() {
     // clamped to what a semaphore can take rather than wrapping to a tiny bound.
     assert_eq!(resized(4, 2.0), 8);
     assert_eq!(resized(4, f64::INFINITY), Semaphore::MAX_PERMITS);
+}
+
+/// A walk that is aborted after its upload has written parts leaves nothing in blob storage.
+///
+/// This is the whole of the cleanup a cancellation gets. Cancelling a peek removes the pending
+/// entry, which drops the handle to this task and aborts it, and an aborted task is dropped
+/// rather than polled again, so nothing the walk would have called runs. What deletes the parts
+/// is `Drop for StashUpload` spawning the deletion onto the runtime the upload captured when it
+/// opened, and this is the one test that drives an abort into that drop into that spawn.
+#[mz_ore::test(tokio::test)]
+async fn an_aborted_walk_deletes_the_parts_its_upload_wrote() {
+    let keys = wide_ok_rows(LONG_WALK_KEYS);
+    let peek = index_peek(trivial_finishing(), None);
+    let mut bundle = trace_bundle(&keys, cancelling_errors(0));
+    // Crossed by the third row, so the walk opens an upload a few positions in and keeps
+    // feeding it for the rest of a trace it cannot reach the end of before it is aborted.
+    let scan = open(&mut bundle, &peek, Some(2 * widest_row_size(&keys)));
+
+    let metrics = worker_metrics();
+    let permits = Arc::new(PeekPermits::new(1));
+    let blob = CountedBlob::new();
+    let offloaded = OffloadedPeek::start(
+        peek.clone(),
+        scan,
+        Some(stash_target(&peek, blob.clients())),
+        Arc::clone(&permits),
+        // One position per slice, so the walk is still far from the end of the trace when the
+        // first part reaches blob storage.
+        counted_blob_config(1),
+        PeekWalkMetrics::new(&metrics),
+        std::thread::current(),
+    );
+
+    blob.wait_until_something_is_written("a walk past the stash threshold")
+        .await;
+
+    // Dropping the whole entry is what a cancellation does, and it is the abort rather than
+    // any signal the walk observes.
+    drop(offloaded);
+
+    blob.wait_until_nothing_is_left("an aborted walk").await;
+    assert_eq!(
+        blob.deletes_of_nothing(),
+        0,
+        "the deletes must name the keys the upload wrote"
+    );
+    assert_eq!(
+        metrics.index_peek_walks_offloaded.get(),
+        0,
+        "an aborted walk reaches no outcome and counts on neither substrate"
+    );
+    assert_eq!(
+        metrics.index_peek_stashed_total.get(),
+        0,
+        "an aborted walk answers from no stash"
+    );
+}
+
+/// A walk that observes its cancellation while feeding an upload gives the upload up, which
+/// deletes the parts it had written, and reports no outcome.
+///
+/// The branch that sees the cancellation has to give the upload up rather than return past it.
+#[mz_ore::test(tokio::test)]
+async fn a_walk_cancelled_while_uploading_deletes_what_it_wrote() {
+    let keys = wide_ok_rows(LONG_WALK_KEYS);
+    let peek = index_peek(trivial_finishing(), None);
+    let mut bundle = trace_bundle(&keys, cancelling_errors(0));
+    let scan = open(&mut bundle, &peek, Some(2 * widest_row_size(&keys)));
+
+    let metrics = worker_metrics();
+    let walk_metrics = PeekWalkMetrics::new(&metrics);
+    let permits = Arc::new(PeekPermits::new(1));
+    permits.resize(1.0);
+    let permit = permits.try_acquire().expect("a permit is free");
+
+    let blob = CountedBlob::new();
+    let stash = stash_target(&peek, blob.clients());
+    let (result_tx, result_rx) = oneshot::channel();
+    let config = counted_blob_config(1);
+    let order_by: Arc<[ColumnOrder]> = peek.finishing.order_by.as_slice().into();
+    let walk = mz_ore::task::spawn(|| "peek_offload_test::walk", async move {
+        let state = WalkState {
+            scan,
+            _permit: permit,
+            result_tx,
+        };
+        let (_state, response) = OffloadedPeek::walk(
+            state,
+            Uuid::nil(),
+            Some(stash),
+            &config,
+            &walk_metrics,
+            order_by,
+        )
+        .await;
+        response.is_some()
+    });
+
+    blob.wait_until_something_is_written("a walk past the stash threshold")
+        .await;
+    assert!(
+        !walk.is_finished(),
+        "the walk must still be under way when it is cancelled"
+    );
+
+    drop(result_rx);
+
+    wait_until(|| walk.is_finished(), "the cancelled walk stopping").await;
+    assert_eq!(walk.await, false, "a cancelled walk reports no outcome");
+
+    blob.wait_until_nothing_is_left("a cancelled walk").await;
+    assert_eq!(
+        blob.deletes_of_nothing(),
+        0,
+        "the deletes must name the keys the upload wrote"
+    );
+    assert_eq!(
+        permits.available_permits(),
+        1,
+        "a cancelled walk releases the permit that admitted it"
+    );
+}
+
+/// A walk that fails after its upload has written parts answers with the failure and deletes
+/// those parts, because nothing will ever read them.
+///
+/// A failure reachable only once rows are already in the stash is what this driver created:
+/// the walk that produces the rows is now the walk that writes them, so its own error arm has
+/// an upload to answer for.
+#[mz_ore::test(tokio::test)]
+async fn a_walk_that_fails_after_writing_deletes_what_it_wrote() {
+    let keys = wide_ok_rows(20);
+    let peek = index_peek(trivial_finishing(), None);
+    let mut bundle = trace_bundle(&keys, cancelling_errors(0));
+    // Crossed by the third row, so two batches reach the stash before the limit below trips.
+    let scan = open(&mut bundle, &peek, Some(2 * widest_row_size(&keys)));
+
+    // Past the rows two batches hold and short of the trace, so the walk fails with an upload
+    // open and parts written.
+    let limit = 8;
+
+    let metrics = worker_metrics();
+    let permits = Arc::new(PeekPermits::new(1));
+    let blob = CountedBlob::new();
+    let mut offloaded = OffloadedPeek::start(
+        peek.clone(),
+        scan,
+        Some(stash_target(&peek, blob.clients())),
+        Arc::clone(&permits),
+        offload_config_with(1, |updates| {
+            updates.add(&PEEK_RESPONSE_STASH_BATCH_MAX_RUNS, NO_RUN_MERGING);
+            updates.add(&ENABLE_PEEK_ROW_ITERATION_LIMIT, true);
+            updates.add(&PEEK_ROW_ITERATION_LIMIT, limit);
+        }),
+        PeekWalkMetrics::new(&metrics),
+        std::thread::current(),
+    );
+
+    assert_eq!(
+        answer(&mut offloaded).await,
+        PeekResponse::Error(PeekError::RowIterationLimitExceeded { limit }),
+        "the peek is answered with the failure rather than with the rows already written",
+    );
+
+    blob.wait_until_nothing_is_left("a failed walk").await;
+    assert_eq!(
+        blob.deletes_of_nothing(),
+        0,
+        "the deletes must name the keys the upload wrote"
+    );
+    assert_eq!(
+        metrics.index_peek_stashed_total.get(),
+        0,
+        "a walk answered with an error answered from no stash"
+    );
+    assert_eq!(
+        metrics.index_peek_walks_offloaded.get(),
+        1,
+        "a failure is a terminal outcome, so the driver that reached it counts the walk"
+    );
 }
 
 #[mz_ore::test]

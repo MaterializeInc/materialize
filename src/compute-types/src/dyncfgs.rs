@@ -594,6 +594,20 @@ pub const PEEK_RESPONSE_STASH_THRESHOLD_BYTES: Config<usize> = Config::new(
     ParameterScope::Environment,
 );
 
+/// The size at which a peek bound for the stash hands its accumulated rows to the upload, once
+/// the first batch at [`PEEK_RESPONSE_STASH_THRESHOLD_BYTES`] has decided that the answer is not
+/// an inline one.
+///
+/// Kept apart from the threshold because they answer different questions: the threshold sizes
+/// what an inline answer may hold, this sizes one hand-over. Each hand-over costs a round trip
+/// through the blocking pool, and a scan retains up to this much between them.
+pub const PEEK_RESPONSE_STASH_BATCH_BYTES: Config<usize> = Config::new(
+    "compute_peek_response_stash_batch_bytes",
+    1024 * 1024,
+    "The size in bytes at which a peek bound for the peek response stash hands its rows to the upload, after the first batch at the stash threshold.",
+    ParameterScope::Replica,
+);
+
 /// The target number of maximum runs in the batches written to the stash.
 ///
 /// Setting this reasonably low will make it so batches get consolidated/sorted
@@ -626,23 +640,6 @@ pub const PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES: Config<usize> = Config::
     ParameterScope::Environment,
 );
 
-/// The number of batches to pump from the peek result iterator when stashing peek responses.
-pub const PEEK_STASH_NUM_BATCHES: Config<usize> = Config::new(
-    "compute_peek_stash_num_batches",
-    100,
-    "The number of batches to pump from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
-    ParameterScope::Environment,
-);
-
-/// The size of each batch, as number of rows, pumped from the peek result
-/// iterator when stashing peek responses.
-pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
-    "compute_peek_stash_batch_size",
-    100000,
-    "The size, as number of rows, of each batch pumped from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
-    ParameterScope::Environment,
-);
-
 /// Whether compute should stop peeks that iterate over too many rows.
 pub const ENABLE_PEEK_ROW_ITERATION_LIMIT: Config<bool> = Config::new(
     "enable_compute_peek_row_iteration_limit",
@@ -652,19 +649,24 @@ pub const ENABLE_PEEK_ROW_ITERATION_LIMIT: Config<bool> = Config::new(
 );
 
 /// The maximum number of rows a peek may iterate over on each worker.
+///
+/// The count spans a peek's whole walk of its arrangement, rows written to the peek stash
+/// included, because a peek walks its arrangement once and the count travels with that walk.
 pub const PEEK_ROW_ITERATION_LIMIT: Config<usize> = Config::new(
     "compute_peek_row_iteration_limit",
     1000,
-    "The maximum number of rows a peek may iterate over on each worker when enable_compute_peek_row_iteration_limit is enabled. Does not apply once a peek's results move to the peek stash.",
+    "The maximum number of rows a peek may iterate over on each worker when enable_compute_peek_row_iteration_limit is enabled. The count spans the peek's whole walk, rows written to the peek stash included.",
     ParameterScope::Environment,
 );
 
-/// Whether a fast-path index peek may move its walk off the timely worker.
+/// Whether a fast-path index peek may move its walk off the timely worker for latency.
 ///
-/// Off, a peek walks to completion on the worker that owns it, delaying every other message that
-/// worker serves. On, a peek that outruns [`INDEX_PEEK_INLINE_BUDGET`] finishes away from it.
+/// Off, a peek walks on the worker that owns it until it answers, delaying every other message
+/// that worker serves. On, a peek that outruns [`INDEX_PEEK_INLINE_BUDGET`] finishes away from it.
 ///
-/// The kill switch for the whole mechanism.
+/// This gates latency offload only. A peek whose rows outgrow an inline answer is offloaded either
+/// way, because the driver that writes to the peek stash is the offloaded one. Off means an ordinary
+/// peek runs where it used to, not that none leaves the worker.
 pub const ENABLE_INDEX_PEEK_OFFLOAD: Config<bool> = Config::new(
     "enable_compute_index_peek_offload",
     false,
@@ -711,9 +713,12 @@ pub const INDEX_PEEK_ACTIVATION_BUDGET: Config<usize> = Config::new(
 ///
 /// At a plausible 100ns to 1us per position this bounds cancellation latency to single-digit
 /// milliseconds. Larger than [`INDEX_PEEK_INLINE_BUDGET`] because an offloaded scan is off the
-/// worker's critical path, so its slices answer to cancellation latency rather than to the
-/// worker's availability. A check is a few loads and no hand-off, so a finer granularity costs
-/// little.
+/// worker's critical path, so its slices answer to cancellation latency, not to the worker's
+/// availability. A check is a few loads and no hand-off, so a finer granularity costs little.
+///
+/// An upper bound, not a period: a walk bound for the peek stash suspends once its accumulation
+/// crosses `peek_response_stash_threshold_bytes`, by far the smaller trigger at that threshold's
+/// default, and unspent fuel is not carried over.
 pub const INDEX_PEEK_YIELD_GRANULARITY: Config<usize> = Config::new(
     "compute_index_peek_yield_granularity",
     10000,
@@ -823,11 +828,10 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA)
         .add(&ENABLE_PEEK_RESPONSE_STASH)
         .add(&PEEK_RESPONSE_STASH_THRESHOLD_BYTES)
+        .add(&PEEK_RESPONSE_STASH_BATCH_BYTES)
         .add(&PEEK_RESPONSE_STASH_BATCH_MAX_RUNS)
         .add(&PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES)
         .add(&PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES)
-        .add(&PEEK_STASH_NUM_BATCHES)
-        .add(&PEEK_STASH_BATCH_SIZE)
         .add(&ENABLE_PEEK_ROW_ITERATION_LIMIT)
         .add(&PEEK_ROW_ITERATION_LIMIT)
         .add(&ENABLE_INDEX_PEEK_OFFLOAD)
