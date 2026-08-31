@@ -1357,7 +1357,7 @@ fn read_untagged_bytes<'a>(data: &mut &'a [u8]) -> &'a [u8] {
 /// Each arm reads the prefix at a constant width, which is a plain load; deriving the width and
 /// reading that many bytes measured twice as slow on long payloads.
 ///
-/// # Safety of the callers
+/// # Safety
 ///
 /// The contents are whatever `push_lengthed_bytes` wrote, so a caller may treat them as UTF-8
 /// only for a `String` tag.
@@ -1453,7 +1453,7 @@ fn truncate<const N: usize>(word: u64) -> [u8; N] {
 /// masking, with no compare and nothing to dispatch on: a column's tag varies with the magnitude
 /// and sign of every value, so any branch on it is one the predictor cannot learn.
 ///
-/// # Safety
+/// # Correctness
 ///
 /// `tag` must belong to the family starting at `first`, and `data` must hold its payload.
 #[inline(always)]
@@ -1467,6 +1467,9 @@ fn read_signed_varint<const N: usize>(data: &mut &[u8], tag: Tag, first: Tag) ->
 }
 
 /// Read a `len` byte payload and extend it to `N` bytes, with ones above it when `negative`.
+///
+/// `len` must not exceed `N`, since `truncate` keeps only the low `N` bytes and a wider payload
+/// would lose its top ones.
 #[inline(always)]
 fn read_varint_payload<const N: usize>(data: &mut &[u8], len: usize, negative: bool) -> [u8; N] {
     let mask = payload_mask(len);
@@ -1478,7 +1481,7 @@ fn read_varint_payload<const N: usize>(data: &mut &[u8], len: usize, negative: b
 ///
 /// As [`read_signed_varint`], without the sign.
 ///
-/// # Safety
+/// # Correctness
 ///
 /// `tag` must belong to the family starting at `first`, and `data` must hold its payload.
 #[inline(always)]
@@ -1931,33 +1934,36 @@ where
         Datum::False => data.push(Tag::False.into()),
         Datum::True => data.push(Tag::True.into()),
         Datum::Int16(i) => {
-            let mbs = min_bytes_signed(i);
             // The family alternates the signs at each width, so the width is two tags apart and
             // the sign is the low bit. The clamp folds both signs onto the widest tag, where the
             // payload carries its own sign. See `read_signed_varint`, which takes this apart.
-            let delta = ((mbs << 1) + u8::from(i.is_negative())).min(4);
+            const WIDEST_DELTA: u8 = Tag::Int16.byte() - Tag::NonNegativeInt16_0.byte();
+            let mbs = min_bytes_signed(i);
+            let delta = ((mbs << 1) + u8::from(i.is_negative())).min(WIDEST_DELTA);
             let tag = u8::from(Tag::NonNegativeInt16_0) + delta;
 
             data.push(tag);
             data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
         }
         Datum::Int32(i) => {
-            let mbs = min_bytes_signed(i);
             // The family alternates the signs at each width, so the width is two tags apart and
             // the sign is the low bit. The clamp folds both signs onto the widest tag, where the
             // payload carries its own sign. See `read_signed_varint`, which takes this apart.
-            let delta = ((mbs << 1) + u8::from(i.is_negative())).min(8);
+            const WIDEST_DELTA: u8 = Tag::Int32.byte() - Tag::NonNegativeInt32_0.byte();
+            let mbs = min_bytes_signed(i);
+            let delta = ((mbs << 1) + u8::from(i.is_negative())).min(WIDEST_DELTA);
             let tag = u8::from(Tag::NonNegativeInt32_0) + delta;
 
             data.push(tag);
             data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
         }
         Datum::Int64(i) => {
-            let mbs = min_bytes_signed(i);
             // The family alternates the signs at each width, so the width is two tags apart and
             // the sign is the low bit. The clamp folds both signs onto the widest tag, where the
             // payload carries its own sign. See `read_signed_varint`, which takes this apart.
-            let delta = ((mbs << 1) + u8::from(i.is_negative())).min(16);
+            const WIDEST_DELTA: u8 = Tag::Int64.byte() - Tag::NonNegativeInt64_0.byte();
+            let mbs = min_bytes_signed(i);
+            let delta = ((mbs << 1) + u8::from(i.is_negative())).min(WIDEST_DELTA);
             let tag = u8::from(Tag::NonNegativeInt64_0) + delta;
 
             data.push(tag);
