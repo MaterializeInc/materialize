@@ -110,14 +110,26 @@ pub trait VisitChildren<T> {
 ///
 /// All methods provided by this trait are iterative.
 ///
+/// The immutable visitors hand the callback references borrowed for the whole
+/// lifetime of `&self`, so a callback may keep them: accumulate them, or embed
+/// them in its error type. This is what lets a bottom-up fold report an error
+/// that points at the offending node.
+///
+/// The mutable visitors deliberately do not do this. Their callbacks are
+/// higher-ranked over the reference lifetime, which prevents a callback from
+/// retaining what it is handed. Retaining were it permitted would produce
+/// aliasing `&mut` references to a parent and its child, because a parent's
+/// pointer stays on the traversal stack while its children are visited. See
+/// [`VisitMutAction`] for the full argument.
+///
 /// NB that any visitor with mutable post-traversal uses unsafe code. It is critical
 /// that `VisitChildren::children_mut` be written using safe code, i.e., no aliasing
 /// of children or access to parents.
 pub trait Visit {
     /// Post-order immutable infallible visitor for `self`.
-    fn visit_post<F>(&self, f: &mut F)
+    fn visit_post<'a, F>(&'a self, f: &mut F)
     where
-        F: FnMut(&Self);
+        F: FnMut(&'a Self);
 
     /// Post-order mutable infallible visitor for `self`.
     fn visit_mut_post<F>(&mut self, f: &mut F)
@@ -125,9 +137,9 @@ pub trait Visit {
         F: FnMut(&mut Self);
 
     /// Post-order immutable fallible visitor for `self`.
-    fn try_visit_post<F, E>(&self, f: &mut F) -> Result<(), E>
+    fn try_visit_post<'a, F, E>(&'a self, f: &mut F) -> Result<(), E>
     where
-        F: FnMut(&Self) -> Result<(), E>;
+        F: FnMut(&'a Self) -> Result<(), E>;
 
     /// Post-order mutable fallible visitor for `self`.
     fn try_visit_mut_post<F, E>(&mut self, f: &mut F) -> Result<(), E>
@@ -135,9 +147,9 @@ pub trait Visit {
         F: FnMut(&mut Self) -> Result<(), E>;
 
     /// Pre-order immutable infallible visitor for `self`.
-    fn visit_pre<F>(&self, f: &mut F)
+    fn visit_pre<'a, F>(&'a self, f: &mut F)
     where
-        F: FnMut(&Self);
+        F: FnMut(&'a Self);
 
     /// Pre-order immutable infallible visitor for `self`, which also accumulates context
     /// information along the path from the root to the current node's parent.
@@ -150,15 +162,15 @@ pub trait Visit {
     /// When using it on a `MirRelationExpr`, one has to be mindful that `Let` bindings are not
     /// followed, i.e., the context won't include what happens with a `Let` binding in some other
     /// `MirRelationExpr` where the binding occurs in a `Get`.
-    fn visit_pre_with_context<Context, AccFun, Visitor>(
-        &self,
+    fn visit_pre_with_context<'a, Context, AccFun, Visitor>(
+        &'a self,
         init: Context,
         acc_fun: &mut AccFun,
         visitor: &mut Visitor,
     ) where
         Context: Clone,
-        AccFun: FnMut(Context, &Self) -> Context,
-        Visitor: FnMut(&Context, &Self);
+        AccFun: FnMut(Context, &'a Self) -> Context,
+        Visitor: FnMut(&Context, &'a Self);
 
     /// Pre-order mutable infallible visitor for `self`.
     fn visit_mut_pre<F>(&mut self, f: &mut F)
@@ -166,9 +178,9 @@ pub trait Visit {
         F: FnMut(&mut Self);
 
     /// Pre-order immutable fallible visitor for `self`.
-    fn try_visit_pre<F, E>(&self, f: &mut F) -> Result<(), E>
+    fn try_visit_pre<'a, F, E>(&'a self, f: &mut F) -> Result<(), E>
     where
-        F: FnMut(&Self) -> Result<(), E>;
+        F: FnMut(&'a Self) -> Result<(), E>;
 
     /// Pre-order mutable fallible visitor for `self`.
     fn try_visit_mut_pre<F, E>(&mut self, f: &mut F) -> Result<(), E>
@@ -182,10 +194,10 @@ pub trait Visit {
     ///
     /// Optionally, `pre` can return which children, if any, should be visited
     /// (default is to visit all children).
-    fn visit_pre_post<F1, F2>(&self, pre: &mut F1, post: &mut F2)
+    fn visit_pre_post<'a, F1, F2>(&'a self, pre: &mut F1, post: &mut F2)
     where
-        F1: FnMut(&Self) -> Option<Vec<&Self>>,
-        F2: FnMut(&Self);
+        F1: FnMut(&'a Self) -> Option<Vec<&'a Self>>,
+        F2: FnMut(&'a Self);
 
     /// A generalization of [`Visit::visit_mut_pre`] and [`Visit::visit_mut_post`].
     ///
@@ -241,9 +253,9 @@ enum VisitMutAction<T> {
 }
 
 impl<T: VisitChildren<T>> Visit for T {
-    fn visit_post<F>(&self, f: &mut F)
+    fn visit_post<'a, F>(&'a self, f: &mut F)
     where
-        F: FnMut(&Self),
+        F: FnMut(&'a Self),
     {
         use VisitAction::*;
         let mut stack = vec![Enter(self)];
@@ -287,9 +299,9 @@ impl<T: VisitChildren<T>> Visit for T {
         }
     }
 
-    fn try_visit_post<F, E>(&self, f: &mut F) -> Result<(), E>
+    fn try_visit_post<'a, F, E>(&'a self, f: &mut F) -> Result<(), E>
     where
-        F: FnMut(&Self) -> Result<(), E>,
+        F: FnMut(&'a Self) -> Result<(), E>,
     {
         use VisitAction::*;
         let mut stack = vec![Enter(self)];
@@ -337,9 +349,9 @@ impl<T: VisitChildren<T>> Visit for T {
         Ok(())
     }
 
-    fn visit_pre<F>(&self, f: &mut F)
+    fn visit_pre<'a, F>(&'a self, f: &mut F)
     where
-        F: FnMut(&Self),
+        F: FnMut(&'a Self),
     {
         let mut stack = vec![self];
         while let Some(elt) = stack.pop() {
@@ -349,15 +361,15 @@ impl<T: VisitChildren<T>> Visit for T {
         }
     }
 
-    fn visit_pre_with_context<Context, AccFun, Visitor>(
-        &self,
+    fn visit_pre_with_context<'a, Context, AccFun, Visitor>(
+        &'a self,
         init: Context,
         acc_fun: &mut AccFun,
         visitor: &mut Visitor,
     ) where
         Context: Clone,
-        AccFun: FnMut(Context, &Self) -> Context,
-        Visitor: FnMut(&Context, &Self),
+        AccFun: FnMut(Context, &'a Self) -> Context,
+        Visitor: FnMut(&Context, &'a Self),
     {
         let mut stack = vec![(self, init)];
         while let Some((elt, ctx)) = stack.pop() {
@@ -380,9 +392,9 @@ impl<T: VisitChildren<T>> Visit for T {
         }
     }
 
-    fn try_visit_pre<F, E>(&self, f: &mut F) -> Result<(), E>
+    fn try_visit_pre<'a, F, E>(&'a self, f: &mut F) -> Result<(), E>
     where
-        F: FnMut(&Self) -> Result<(), E>,
+        F: FnMut(&'a Self) -> Result<(), E>,
     {
         let mut stack = vec![self];
         while let Some(elt) = stack.pop() {
@@ -407,10 +419,10 @@ impl<T: VisitChildren<T>> Visit for T {
 
         Ok(())
     }
-    fn visit_pre_post<F1, F2>(&self, pre: &mut F1, post: &mut F2)
+    fn visit_pre_post<'a, F1, F2>(&'a self, pre: &mut F1, post: &mut F2)
     where
-        F1: FnMut(&Self) -> Option<Vec<&Self>>,
-        F2: FnMut(&Self),
+        F1: FnMut(&'a Self) -> Option<Vec<&'a Self>>,
+        F2: FnMut(&'a Self),
     {
         use VisitAction::*;
         let mut stack = vec![Enter(self)];
