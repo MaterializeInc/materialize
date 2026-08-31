@@ -19,6 +19,10 @@
 > - Resource exhaustion can terminate an active graceful reconfiguration as
 >   `ResourceExhausted`. A foreground `ALTER` reports insufficient resources.
 >   The baseline and hydration burst are not shed.
+> - The controller-owned implementation does not use `pending` as active
+>   replica lifecycle state. The durable field and catalog-open cleanup remain
+>   temporarily so an upgrade can reap a replica stranded by an older supported
+>   binary.
 
 ## The Problem
 
