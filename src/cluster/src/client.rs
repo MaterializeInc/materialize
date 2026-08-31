@@ -61,12 +61,123 @@ pub struct TimelyContainer<C: ClusterSpec> {
 }
 
 impl<C: ClusterSpec> TimelyContainer<C> {
-    fn worker_threads(&self) -> Vec<Thread> {
+    /// The threads of the Timely workers in this process.
+    pub fn worker_threads(&self) -> Vec<Thread> {
         self.worker_guards
             .guards()
             .iter()
             .map(|h| h.thread().clone())
             .collect()
+    }
+}
+
+/// SPIKE(unified-cluster): A client to a secondary ("guest") command stream served by workers of
+/// an existing Timely cluster. Like [`ClusterClient`], but the per-worker client channels are
+/// provided externally instead of coming from a [`TimelyContainer`] built for this command type.
+pub struct GuestClusterClient<Cmd, Resp>
+where
+    (Cmd, Resp): Partitionable<Cmd, Resp>,
+{
+    /// Per-worker channels over which to send endpoints for wiring up a new client.
+    client_txs: Arc<
+        Vec<
+            mpsc::UnboundedSender<(
+                Uuid,
+                mpsc::UnboundedReceiver<Cmd>,
+                mpsc::UnboundedSender<Resp>,
+            )>,
+        >,
+    >,
+    /// The worker threads, for unparking on send.
+    worker_threads: Vec<Thread>,
+    /// The actual client to talk to the cluster.
+    inner: Option<PartitionedClient<Cmd, Resp>>,
+}
+
+impl<Cmd, Resp> GuestClusterClient<Cmd, Resp>
+where
+    Cmd: fmt::Debug + Send + TryIntoProtocolNonce,
+    Resp: fmt::Debug + Send,
+    (Cmd, Resp): Partitionable<Cmd, Resp>,
+{
+    /// Create a new `GuestClusterClient`.
+    pub fn new(
+        client_txs: Arc<
+            Vec<
+                mpsc::UnboundedSender<(
+                    Uuid,
+                    mpsc::UnboundedReceiver<Cmd>,
+                    mpsc::UnboundedSender<Resp>,
+                )>,
+            >,
+        >,
+        worker_threads: Vec<Thread>,
+    ) -> Self {
+        Self {
+            client_txs,
+            worker_threads,
+            inner: None,
+        }
+    }
+
+    fn connect(&mut self, nonce: Uuid) {
+        let mut command_txs = Vec::new();
+        let mut response_rxs = Vec::new();
+        for client_tx in self.client_txs.iter() {
+            let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+            let (resp_tx, resp_rx) = mpsc::unbounded_channel();
+
+            client_tx
+                .send((nonce, cmd_rx, resp_tx))
+                .expect("worker not dropped");
+
+            command_txs.push(cmd_tx);
+            response_rxs.push(resp_rx);
+        }
+
+        self.inner = Some(LocalClient::new_partitioned(
+            response_rxs,
+            command_txs,
+            self.worker_threads.clone(),
+        ));
+    }
+}
+
+impl<Cmd, Resp> fmt::Debug for GuestClusterClient<Cmd, Resp>
+where
+    (Cmd, Resp): Partitionable<Cmd, Resp>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GuestClusterClient").finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl<Cmd, Resp> GenericClient<Cmd, Resp> for GuestClusterClient<Cmd, Resp>
+where
+    Cmd: fmt::Debug + Send + TryIntoProtocolNonce,
+    Resp: fmt::Debug + Send,
+    (Cmd, Resp): Partitionable<Cmd, Resp>,
+{
+    async fn send(&mut self, cmd: Cmd) -> Result<(), Error> {
+        match cmd.try_into_protocol_nonce() {
+            Ok(nonce) => {
+                self.connect(nonce);
+                Ok(())
+            }
+            Err(cmd) => self.inner.as_mut().expect("initialized").send(cmd).await,
+        }
+    }
+
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe, see [`ClusterClient::recv`].
+    async fn recv(&mut self) -> Result<Option<Resp>, Error> {
+        if let Some(client) = self.inner.as_mut() {
+            client.recv().await
+        } else {
+            future::pending().await
+        }
     }
 }
 
