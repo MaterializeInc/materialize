@@ -46,3 +46,21 @@ choosing which framework to use, start with **mz-test**.
 | Skill | When to use | What it does |
 |---|---|---|
 | **mz-adapter-guide** | Working on or asking about the adapter layer | Correctness invariants and architectural notes for the coordinator, pgwire, peek paths, timestamp oracle, and related crates |
+
+## Skills for working with Materialize
+
+The skills above are for hacking on this repository. We also publish a separate
+set of skills for *using* Materialize, covering SQL authoring, operational
+introspection, freshness debugging, dbt, Terraform, `mz-deploy`, and semantic
+layer design. They live in
+[MaterializeInc/agent-skills](https://github.com/MaterializeInc/agent-skills)
+and are documented at
+[Agent Skills](https://materialize.com/docs/integrations/coding-agent-skills/#skills),
+including the most recent additions, `mz-ontology-design` and
+`materialize-debug-freshness`.
+
+Install them into a project alongside the skills in this directory:
+
+```shell
+npx skills add MaterializeInc/agent-skills
+```

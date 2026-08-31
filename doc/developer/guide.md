@@ -509,6 +509,21 @@ acceptable for:
 
 ## Developer tools
 
+### Coding agents
+
+We check in agent skills that teach coding agents how to work in this codebase
+under [`.agents/skills`](/.agents/skills/README.md), covering building, testing,
+committing, reviewing, debugging CI, profiling, and the specialized test
+frameworks. `.claude/skills` is a compatibility symlink for Claude Code.
+
+Separately, we publish skills for *using* Materialize, covering SQL authoring,
+operational introspection, freshness debugging, dbt, Terraform, `mz-deploy`, and
+semantic layer design. Those are listed in the user documentation under [Agent
+Skills](https://materialize.com/docs/integrations/coding-agent-skills/#skills)
+and install with `npx skills add MaterializeInc/agent-skills`. Reach for them
+when you are working against a running Materialize rather than on the codebase
+itself.
+
 ### Editors and IDEs
 
 In principle, any text editor can be used to edit Rust code.
