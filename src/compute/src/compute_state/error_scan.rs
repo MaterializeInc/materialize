@@ -22,18 +22,6 @@ use crate::typedefs::ErrAgent;
 /// [`TraceBundle::errs_mut`](crate::arrangement::manager::TraceBundle::errs_mut) hands it out.
 pub(super) type ErrsHandle = PaddedTrace<ErrAgent<Timestamp, Diff>>;
 
-/// The state of an index peek's walk over its error trace.
-pub(super) enum ErrorScanState {
-    /// The walk has not started, and holds no cursor yet.
-    NotStarted,
-    /// The walk is under way, and resumes from the cursor position it stopped on.
-    Scanning(ErrorScan),
-    /// The walk is over, holding what it needs to report the same outcome again without a second
-    /// walk and without a cursor: the rows it examined reaching a trace with no error at the
-    /// peek's timestamp, or the error that answers the peek.
-    Finished(Result<usize, PeekError>),
-}
-
 /// A walk over an index peek's error trace, suspendable between cursor positions.
 ///
 /// Holds nothing of the ok trace or of the rows a peek returns. A peek reaches those only once
@@ -68,11 +56,21 @@ impl ErrorScan {
     pub(super) fn new(errs: &mut ErrsHandle) -> Self {
         let scan_start = Instant::now();
         let (cursor, storage) = errs.cursor();
+        let mut scan = Self::from_cursor(cursor, storage);
+        scan.scan_time = scan_start.elapsed();
+        scan
+    }
+
+    /// Opens a walk over an already-opened cursor.
+    pub(super) fn from_cursor(
+        cursor: peek_result_iterator::TraceCursor<ErrsHandle>,
+        storage: peek_result_iterator::TraceStorage<ErrsHandle>,
+    ) -> Self {
         Self {
             cursor,
             storage,
             row_iteration_tracker: PeekRowIterationTracker::new(None, 0),
-            scan_time: scan_start.elapsed(),
+            scan_time: Duration::ZERO,
         }
     }
 
@@ -92,8 +90,8 @@ impl ErrorScan {
     ///
     /// This walk does not remember that it ended, and stepping it again after it reported
     /// [`ErrorScanStep::Finished`] walks a spent cursor.
-    /// [`IndexPeek::step_error_scan`](super::IndexPeek::step_error_scan) remembers instead: it
-    /// keeps the outcome and drops the walk, so a finished peek stops pinning error batches.
+    /// [`PeekScan`](super::peek_scan::PeekScan)'s error phase remembers instead: it keeps the
+    /// outcome and drops the walk, so a finished peek stops pinning error batches.
     pub(super) fn step(
         &mut self,
         peek_timestamp: Timestamp,
@@ -149,4 +147,4 @@ impl ErrorScan {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

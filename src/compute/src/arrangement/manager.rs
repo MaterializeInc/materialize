@@ -273,6 +273,20 @@ impl TraceBundle {
         &mut self.errs
     }
 
+    /// Returns mutable references to both traces.
+    ///
+    /// A reader of both, such as a peek that must rule out errors before it returns rows, cannot
+    /// take them one at a time, because each of [`TraceBundle::oks_mut`] and
+    /// [`TraceBundle::errs_mut`] borrows the whole bundle.
+    pub fn oks_errs_mut(
+        &mut self,
+    ) -> (
+        &mut PaddedTrace<RowRowAgent<Timestamp, Diff>>,
+        &mut PaddedTrace<ErrAgent<Timestamp, Diff>>,
+    ) {
+        (&mut self.oks, &mut self.errs)
+    }
+
     /// Returns a reference to the `to_drop` tokens.
     pub fn to_drop(&self) -> &Option<Rc<dyn Any>> {
         &self.to_drop

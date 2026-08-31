@@ -11,6 +11,7 @@
 
 use std::fmt;
 
+use bytesize::ByteSize;
 use mz_expr::EvalError;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
@@ -237,6 +238,11 @@ pub enum PeekError {
         /// The limit that was in effect, in rows.
         limit: usize,
     },
+    /// A worker accumulated more answer bytes than `max_result_size` allows.
+    ResultExceedsMaxSize {
+        /// The ceiling that was in effect, in bytes.
+        max_result_size: usize,
+    },
 }
 
 impl PeekError {
@@ -254,6 +260,11 @@ impl fmt::Display for PeekError {
             Self::RowIterationLimitExceeded { limit } => write!(
                 f,
                 "query exceeded the configured row iteration limit of {limit} rows"
+            ),
+            Self::ResultExceedsMaxSize { max_result_size } => write!(
+                f,
+                "result exceeds max size of {}",
+                ByteSize::b(u64::cast_from(*max_result_size))
             ),
         }
     }
@@ -365,7 +376,6 @@ pub struct SubscribeBatch {
 impl SubscribeBatch {
     /// Converts `self` to an error if a maximum size is exceeded.
     fn to_error_if_exceeds(&mut self, max_result_size: usize) {
-        use bytesize::ByteSize;
         if let Ok(updates) = &self.updates {
             let total_size: usize = updates.iter().map(|updates| updates.byte_len()).sum();
             if total_size > max_result_size {

@@ -123,8 +123,8 @@ fn literal_seek_is_fueled_and_resumable() {
 
 /// Builds an iterator over `keys`, constrained to `constraints`.
 ///
-/// Mirrors [`PeekResultIterator::new`], which cannot be used here because it takes a trace
-/// rather than a cursor over one.
+/// Goes through [`PeekResultIterator::from_cursor`], because [`PeekResultIterator::new`]
+/// takes a trace rather than a cursor over one.
 fn iterator(keys: &[Row], constraints: &mut [Row]) -> PeekResultIterator<TestTrace> {
     let (cursor, storage) = trace(keys);
     // The cursor's key and the literal each contribute one datum. The values are empty.
@@ -133,19 +133,16 @@ fn iterator(keys: &[Row], constraints: &mut [Row]) -> PeekResultIterator<TestTra
         .expect("valid plan")
         .into_nontemporal()
         .expect("non-temporal plan");
-    PeekResultIterator {
-        target_id: GlobalId::User(1),
+    PeekResultIterator::from_cursor(
+        GlobalId::User(1),
+        map_filter_project,
+        Timestamp::MIN,
+        Some(constraints),
         cursor,
         storage,
-        map_filter_project,
-        peek_timestamp: Timestamp::MIN,
-        row_builder: Row::default(),
-        datum_vec: DatumVec::new(),
-        literals: Some(Literals::new(constraints)),
-        rows_processed: 0,
-        row_iteration_tracker: PeekRowIterationTracker::new(None, 0),
-        exhausted: false,
-    }
+        None,
+        0,
+    )
 }
 
 /// Builds an iterator over `keys` with no literal constraints, filtered by `predicate`.
@@ -164,19 +161,16 @@ fn iterator_without_literals(
         .expect("valid plan")
         .into_nontemporal()
         .expect("non-temporal plan");
-    PeekResultIterator {
-        target_id: GlobalId::User(1),
+    PeekResultIterator::from_cursor(
+        GlobalId::User(1),
+        map_filter_project,
+        Timestamp::MIN,
+        None,
         cursor,
         storage,
-        map_filter_project,
-        peek_timestamp: Timestamp::MIN,
-        row_builder: Row::default(),
-        datum_vec: DatumVec::new(),
-        literals: None,
-        rows_processed: 0,
-        row_iteration_tracker: PeekRowIterationTracker::new(None, 0),
-        exhausted: false,
-    }
+        None,
+        0,
+    )
 }
 
 /// Fuel must be spent walking the rows a `map_filter_project` rejects, not only the rows it

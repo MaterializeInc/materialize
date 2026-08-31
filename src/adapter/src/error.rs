@@ -1682,6 +1682,9 @@ impl From<mz_compute_client::protocol::response::PeekError> for AdapterError {
             PeekError::RowIterationLimitExceeded { limit } => {
                 AdapterError::PeekRowIterationLimitExceeded { limit }
             }
+            error @ PeekError::ResultExceedsMaxSize { .. } => {
+                AdapterError::ResultSize(error.to_string())
+            }
         }
     }
 }
