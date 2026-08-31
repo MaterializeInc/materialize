@@ -7,22 +7,21 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::time::{Duration, Instant};
+use std::collections::BTreeSet;
+use std::time::Duration;
 
 use itertools::Itertools;
-use maplit::btreeset;
 use mz_adapter_types::cluster_state::ReconfigurationAudit;
 use mz_catalog::builtin::BUILTINS;
 use mz_catalog::durable::managed_cluster_replica_name;
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
-    Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, DataSourceDesc,
+    Cluster, ClusterConfig, ClusterVariant, ClusterVariantManaged, DataSourceDesc,
     ManagedReplicaConfigShape, ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{
-    ClusterStatus, ManagedReplicaLocation, ReplicaConfig, ReplicaLocation, ReplicaLogging,
+    ManagedReplicaLocation, ReplicaConfig, ReplicaLocation, ReplicaLogging,
 };
 use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
 use mz_ore::cast::CastFrom;
@@ -31,14 +30,13 @@ use mz_ore::instrument;
 use mz_repr::Timestamp;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::role_id::RoleId;
-use mz_sql::ast::{Ident, QualifiedReplica};
 use mz_sql::catalog::{CatalogCluster, CatalogError, ObjectType};
 use mz_sql::names::QualifiedItemName;
 use mz_sql::plan::{
     self, AlterClusterPlanStrategy, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
-    AlterClusterSwapPlan, AlterOptionParameter, AlterSetClusterPlan,
-    ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
-    CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant, PlanClusterOption,
+    AlterClusterSwapPlan, AlterOptionParameter, AlterSetClusterPlan, CreateClusterManagedPlan,
+    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
+    PlanClusterOption,
 };
 use mz_sql::plan::{AlterClusterPlan, OnTimeoutAction};
 use mz_sql::session::metadata::SessionMetadata;
@@ -46,23 +44,19 @@ use mz_sql::session::vars::{
     MAX_CREDIT_CONSUMPTION_RATE, MAX_REPLICAS_PER_CLUSTER, SystemVars, Var,
 };
 use mz_storage_types::sources::SourceConnection;
-use tracing::{Instrument, Span, debug};
+use tracing::{Instrument, Span};
 
 use mz_adapter_types::dyncfgs::{
     DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT, ENABLE_BACKGROUND_ALTER_CLUSTER,
 };
 
 use super::return_if_err;
-use crate::AdapterError::AlterClusterWhilePendingReplicas;
 use crate::catalog::{self, Op, ReplicaCreateDropReason};
 use crate::coord::{
-    AlterCluster, AlterClusterAwaitReconfiguration, AlterClusterFinalize,
-    AlterClusterWaitForHydrated, ClusterReplicaStatuses, ClusterStage, Coordinator, Message,
+    AlterCluster, AlterClusterAwaitReconfiguration, ClusterStage, Coordinator, Message,
     PlanValidity, StageResult, Staged,
 };
 use crate::{AdapterError, AdapterNotice, ExecuteContext, ExecuteResponse, session::Session};
-
-const PENDING_REPLICA_SUFFIX: &str = "-pending";
 
 impl Staged for ClusterStage {
     type Ctx = ExecuteContext;
@@ -70,8 +64,6 @@ impl Staged for ClusterStage {
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
             Self::Alter(stage) => &mut stage.validity,
-            Self::WaitForHydrated(stage) => &mut stage.validity,
-            Self::Finalize(stage) => &mut stage.validity,
             Self::AwaitReconfiguration(stage) => &mut stage.validity,
         }
     }
@@ -85,37 +77,6 @@ impl Staged for ClusterStage {
             Self::Alter(stage) => {
                 coord
                     .sequence_alter_cluster_stage(ctx.session(), stage.plan.clone(), stage.validity)
-                    .await
-            }
-            Self::WaitForHydrated(stage) => {
-                let AlterClusterWaitForHydrated {
-                    validity,
-                    plan,
-                    new_config,
-                    workload_class,
-                    timeout_time,
-                    on_timeout,
-                } = stage;
-                coord
-                    .check_if_pending_replicas_hydrated_stage(
-                        ctx.session(),
-                        plan,
-                        new_config,
-                        workload_class,
-                        timeout_time,
-                        on_timeout,
-                        validity,
-                    )
-                    .await
-            }
-            Self::Finalize(stage) => {
-                coord
-                    .finalize_alter_cluster_stage(
-                        ctx.session(),
-                        stage.plan.clone(),
-                        stage.new_config.clone(),
-                        stage.workload_class.clone(),
-                    )
                     .await
             }
             Self::AwaitReconfiguration(stage) => {
@@ -433,70 +394,15 @@ impl Coordinator {
         }
 
         match (&config.variant, &new_config.variant) {
-            (Managed(_), Managed(new_config_managed)) => {
-                let alter_followup = self
-                    .sequence_alter_cluster_managed_to_managed(
-                        Some(session),
-                        cluster_id,
-                        new_config.clone(),
-                        ReplicaCreateDropReason::Manual,
-                        strategy.clone(),
-                    )
-                    .await?;
+            (Managed(_), Managed(_)) => {
+                self.sequence_alter_cluster_managed_to_managed(
+                    session,
+                    cluster_id,
+                    new_config.clone(),
+                )
+                .await?;
                 if let Some(notice) = single_replica_sources_notice {
                     session.add_notice(notice);
-                }
-                if alter_followup == NeedsFinalization::Yes {
-                    // For non backgrounded zero-downtime alters, store the
-                    // cluster_id in the ConnMeta to allow for cancellation.
-                    self.active_conns
-                        .get_mut(session.conn_id())
-                        .expect("There must be an active connection")
-                        .pending_cluster_alters
-                        .insert(cluster_id.clone());
-                    let new_config_managed = new_config_managed.clone();
-                    return match &strategy {
-                        AlterClusterPlanStrategy::None => Err(AdapterError::Internal(
-                            "AlterClusterPlanStrategy must not be None if NeedsFinalization is Yes"
-                                .into(),
-                        )),
-                        AlterClusterPlanStrategy::For(duration) => {
-                            let span = Span::current();
-                            let plan = plan.clone();
-                            let duration = duration.clone().to_owned();
-                            let workload_class = new_config.workload_class.clone();
-                            Ok(StageResult::Handle(mz_ore::task::spawn(
-                                || "Finalize Alter Cluster",
-                                async move {
-                                    tokio::time::sleep(duration).await;
-                                    let stage = ClusterStage::Finalize(AlterClusterFinalize {
-                                        validity,
-                                        plan,
-                                        new_config: new_config_managed,
-                                        workload_class,
-                                    });
-                                    Ok(Box::new(stage))
-                                }
-                                .instrument(span),
-                            )))
-                        }
-                        AlterClusterPlanStrategy::UntilReady {
-                            timeout,
-                            on_timeout,
-                        } => Ok(StageResult::Immediate(Box::new(
-                            ClusterStage::WaitForHydrated(AlterClusterWaitForHydrated {
-                                validity,
-                                plan: plan.clone(),
-                                new_config: new_config_managed.clone(),
-                                workload_class: new_config.workload_class.clone(),
-                                timeout_time: Instant::now() + timeout.to_owned(),
-                                // The legacy foreground wait uses COMMIT as
-                                // its implicit default. The controller-owned
-                                // paths default to ROLLBACK.
-                                on_timeout: on_timeout.unwrap_or(OnTimeoutAction::Commit),
-                            }),
-                        ))),
-                    };
                 }
             }
             (Unmanaged, Managed(new_managed)) => {
@@ -682,7 +588,7 @@ impl Coordinator {
         // its target may already have. `ROLLBACK` (the default) reverts an
         // un-hydrated reconfiguration to its pre-reconfiguration shape rather
         // than cutting over to a not-yet-hydrated target, which could induce
-        // downtime. The legacy foreground path uses implicit `COMMIT`.
+        // downtime.
         let now = self.now();
         let deadline_from = |timeout: Duration| -> Timestamp {
             now.saturating_add(u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX))
@@ -868,259 +774,6 @@ impl Coordinator {
         }
     }
 
-    async fn finalize_alter_cluster_stage(
-        &mut self,
-        session: &Session,
-        AlterClusterPlan {
-            id: cluster_id,
-            name: cluster_name,
-            ..
-        }: AlterClusterPlan,
-        new_config: ClusterVariantManaged,
-        workload_class: Option<String>,
-    ) -> Result<StageResult<Box<ClusterStage>>, AdapterError> {
-        let cluster = self.catalog.get_cluster(cluster_id);
-        let mut ops = vec![];
-
-        // Gather the ops to remove the non pending replicas
-        // Also skip any billed_as free replicas
-        let remove_replicas = cluster
-            .replicas()
-            .filter_map(|r| {
-                if !r.config.location.pending() && !r.config.location.internal() {
-                    Some(catalog::DropObjectInfo::ClusterReplica((
-                        cluster_id.clone(),
-                        r.replica_id,
-                        ReplicaCreateDropReason::Manual,
-                    )))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        ops.push(catalog::Op::DropObjects(remove_replicas));
-
-        // Gather the Ops to remove the "-pending" suffix from the name and set
-        // pending to false
-        let finalize_replicas: Vec<catalog::Op> = cluster
-            .replicas()
-            .filter_map(|r| {
-                if r.config.location.pending() {
-                    let cluster_ident = match Ident::new(cluster.name.clone()) {
-                        Ok(id) => id,
-                        Err(err) => {
-                            return Some(Err(AdapterError::internal(
-                                "Unexpected error parsing cluster name",
-                                err,
-                            )));
-                        }
-                    };
-                    let replica_ident = match Ident::new(r.name.clone()) {
-                        Ok(id) => id,
-                        Err(err) => {
-                            return Some(Err(AdapterError::internal(
-                                "Unexpected error parsing replica name",
-                                err,
-                            )));
-                        }
-                    };
-                    Some(Ok((cluster_ident, replica_ident, r)))
-                } else {
-                    None
-                }
-            })
-            // Early collection is to handle errors from generating of the
-            // Idents
-            .collect::<Result<Vec<(Ident, Ident, &ClusterReplica)>, _>>()?
-            .into_iter()
-            .map(|(cluster_ident, replica_ident, replica)| {
-                let mut new_replica_config = replica.config.clone();
-                debug!("Promoting replica: {}", replica.name);
-                match new_replica_config.location {
-                    mz_controller::clusters::ReplicaLocation::Managed(ManagedReplicaLocation {
-                        ref mut pending,
-                        ..
-                    }) => {
-                        *pending = false;
-                    }
-                    mz_controller::clusters::ReplicaLocation::Unmanaged(_) => {}
-                }
-
-                let mut replica_ops = vec![];
-                let to_name = replica.name.strip_suffix(PENDING_REPLICA_SUFFIX);
-                if let Some(to_name) = to_name {
-                    replica_ops.push(catalog::Op::RenameClusterReplica {
-                        cluster_id: cluster_id.clone(),
-                        replica_id: replica.replica_id.to_owned(),
-                        name: QualifiedReplica {
-                            cluster: cluster_ident,
-                            replica: replica_ident,
-                        },
-                        to_name: to_name.to_owned(),
-                    });
-                }
-                replica_ops.push(catalog::Op::UpdateClusterReplicaConfig {
-                    cluster_id,
-                    replica_id: replica.replica_id.to_owned(),
-                    config: new_replica_config,
-                });
-                replica_ops
-            })
-            .flatten()
-            .collect();
-
-        ops.extend(finalize_replicas);
-
-        // Add the Op to update the cluster state. A stale in-progress
-        // reconfiguration record carried by this legacy write is retained as
-        // cancelled, with the matching audit intent declared.
-        let mut final_config = ClusterConfig {
-            variant: ClusterVariant::Managed(new_config),
-            workload_class: workload_class.clone(),
-        };
-        let reconfiguration_audit = cancel_carried_reconfiguration(&mut final_config);
-        ops.push(Op::UpdateClusterConfig {
-            id: cluster_id,
-            name: cluster_name,
-            config: final_config,
-            reconfiguration_audit,
-            burst_audit: None,
-        });
-        self.catalog_transact(Some(session), ops).await?;
-        // Remove the cluster being altered from the ConnMeta
-        // pending_cluster_alters BTreeSet
-        self.active_conns
-            .get_mut(session.conn_id())
-            .expect("There must be an active connection")
-            .pending_cluster_alters
-            .remove(&cluster_id);
-
-        Ok(StageResult::Response(ExecuteResponse::AlteredObject(
-            ObjectType::Cluster,
-        )))
-    }
-
-    async fn check_if_pending_replicas_hydrated_stage(
-        &mut self,
-        session: &Session,
-        plan: AlterClusterPlan,
-        new_config: ClusterVariantManaged,
-        workload_class: Option<String>,
-        timeout_time: Instant,
-        on_timeout: OnTimeoutAction,
-        validity: PlanValidity,
-    ) -> Result<StageResult<Box<ClusterStage>>, AdapterError> {
-        // wait and re-signal wait for hydrated if not hydrated
-        let cluster = self.catalog.get_cluster(plan.id);
-        let pending_replicas = cluster
-            .replicas()
-            .filter_map(|r| {
-                if r.config.location.pending() {
-                    Some(r.replica_id.clone())
-                } else {
-                    None
-                }
-            })
-            .collect_vec();
-        // Check For timeout
-        if Instant::now() > timeout_time {
-            // Timed out handle timeout action
-            match on_timeout {
-                OnTimeoutAction::Rollback => {
-                    self.active_conns
-                        .get_mut(session.conn_id())
-                        .expect("There must be an active connection")
-                        .pending_cluster_alters
-                        .remove(&cluster.id);
-                    self.drop_reconfiguration_replicas(btreeset!(cluster.id))
-                        .await?;
-                    return Err(AdapterError::AlterClusterTimeout);
-                }
-                OnTimeoutAction::Commit => {
-                    let span = Span::current();
-                    let poll_duration = self
-                        .catalog
-                        .system_config()
-                        .cluster_alter_check_ready_interval()
-                        .clone();
-                    return Ok(StageResult::Handle(mz_ore::task::spawn(
-                        || "Finalize Alter Cluster",
-                        async move {
-                            tokio::time::sleep(poll_duration).await;
-                            let stage = ClusterStage::Finalize(AlterClusterFinalize {
-                                validity,
-                                plan,
-                                new_config,
-                                workload_class,
-                            });
-                            Ok(Box::new(stage))
-                        }
-                        .instrument(span),
-                    )));
-                }
-            }
-        }
-        let compute_hydrated_fut = self
-            .controller
-            .compute
-            .collections_hydrated_for_replicas(cluster.id, pending_replicas.clone(), [].into())
-            .map_err(|e| AdapterError::internal("Failed to check hydration", e))?;
-
-        let storage_hydrated = self
-            .controller
-            .storage
-            .collections_hydrated_on_replicas(
-                Some(pending_replicas.clone()),
-                &cluster.id,
-                &[].into(),
-            )
-            .map_err(|e| AdapterError::internal("Failed to check hydration", e))?;
-
-        // Also require every pending replica to be online, in case it has no
-        // objects that need hydration on it (e.g. a single-replica source).
-        let replicas_online = pending_replicas.iter().all(|replica_id| {
-            let status = self
-                .cluster_replica_statuses
-                .try_get_cluster_replica_statuses(cluster.id, *replica_id)
-                .map(ClusterReplicaStatuses::cluster_replica_status);
-            matches!(status, Some(ClusterStatus::Online))
-        });
-
-        let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn(
-            || "Alter Cluster: wait for hydrated",
-            async move {
-                let compute_hydrated = compute_hydrated_fut
-                    .await
-                    .map_err(|e| AdapterError::internal("Failed to check hydration", e))?;
-
-                if compute_hydrated && storage_hydrated && replicas_online {
-                    // We're done
-                    Ok(Box::new(ClusterStage::Finalize(AlterClusterFinalize {
-                        validity,
-                        plan,
-                        new_config: new_config.clone(),
-                        workload_class: workload_class.clone(),
-                    })))
-                } else {
-                    // Check later
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                    let stage = ClusterStage::WaitForHydrated(AlterClusterWaitForHydrated {
-                        validity,
-                        plan,
-                        new_config,
-                        workload_class,
-                        timeout_time,
-                        on_timeout,
-                    });
-                    Ok(Box::new(stage))
-                }
-            }
-            .instrument(span),
-        )))
-    }
-
-    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn sequence_create_cluster(
         &mut self,
         session: &Session,
@@ -1540,10 +1193,8 @@ impl Coordinator {
     /// replication-factor domain. Replicas belonging to a reconfiguration's
     /// hydrate-overlap are deliberately not counted: they replace the serving
     /// set at cut-over rather than adding to it. Counting the replication
-    /// factor instead of replicas excludes them under both reconfiguration
-    /// mechanisms, the legacy graceful alter (which marks them pending) and
-    /// the cluster controller (which creates them as ordinary replicas of the
-    /// target shape).
+    /// factor instead of replicas excludes the ordinary replicas the cluster
+    /// controller creates for the target shape.
     fn notice_relevant_replica_count(&self, cluster: &Cluster) -> usize {
         match &cluster.config.variant {
             ClusterVariant::Managed(managed) => {
@@ -1751,9 +1402,14 @@ impl Coordinator {
         }
     }
 
-    /// When this is called by the automated cluster scheduling, `scheduling_decision_reason` should
-    /// contain information on why is a cluster being turned On/Off. It will be forwarded to the
-    /// `details` field of the audit log event that records creating or dropping replicas.
+    /// Applies a managed→managed `ALTER CLUSTER`.
+    ///
+    /// This is a config-only write: the cluster controller owns the replica set
+    /// and reconciles it to the new realized config on its next tick. Emitting
+    /// creates and drops here as well would fight it, since it derives replica
+    /// names from the observed set, so an adapter create by canonical `rN` can
+    /// collide with a controller-chosen name and an adapter drop by canonical
+    /// `rN` can miss a churned one.
     ///
     /// # Panics
     ///
@@ -1761,18 +1417,12 @@ impl Coordinator {
     /// Panics if `new_config` is not a configuration for a managed cluster.
     pub(crate) async fn sequence_alter_cluster_managed_to_managed(
         &mut self,
-        session: Option<&Session>,
+        session: &Session,
         cluster_id: ClusterId,
         new_config: ClusterConfig,
-        reason: ReplicaCreateDropReason,
-        strategy: AlterClusterPlanStrategy,
-    ) -> Result<NeedsFinalization, AdapterError> {
+    ) -> Result<(), AdapterError> {
         let cluster = self.catalog.get_cluster(cluster_id);
         let name = cluster.name().to_string();
-        let owner_id = cluster.owner_id();
-
-        let mut ops = vec![];
-        let mut finalization_needed = NeedsFinalization::No;
 
         let ClusterVariant::Managed(ClusterVariantManaged {
             size,
@@ -1789,14 +1439,6 @@ impl Coordinator {
         else {
             panic!("expected existing managed cluster config");
         };
-        // Clone the existing managed config out of the cluster so the immutable
-        // catalog borrow can be released before the out-of-band replica id
-        // allocation below, which needs mutable access to self.
-        let size = size.clone();
-        let availability_zones = availability_zones.clone();
-        let logging = logging.clone();
-        let arrangement_compression = *arrangement_compression;
-        let replication_factor = *replication_factor;
         let ClusterVariant::Managed(new_managed) = &new_config.variant else {
             panic!("expected new managed cluster config");
         };
@@ -1804,8 +1446,8 @@ impl Coordinator {
             size: new_size,
             replication_factor: new_replication_factor,
             availability_zones: new_availability_zones,
-            logging: new_logging,
-            arrangement_compression: new_arrangement_compression,
+            logging: _,
+            arrangement_compression: _,
             optimizer_feature_overrides: _,
             schedule: _,
             auto_scaling_strategy: new_auto_scaling_strategy,
@@ -1813,7 +1455,7 @@ impl Coordinator {
             burst: _,
         } = new_managed;
 
-        let role_id = session.map(|s| s.role_metadata().current_role);
+        let role_id = Some(session.role_metadata().current_role);
         self.catalog.ensure_valid_replica_size(
             &self.catalog().get_role_allowed_cluster_sizes(&role_id),
             new_size,
@@ -1852,49 +1494,18 @@ impl Coordinator {
             }
         }
 
-        // check for active updates
-        if cluster.replicas().any(|r| r.config.location.pending()) {
-            return Err(AlterClusterWhilePendingReplicas);
-        }
-
-        // Resolve existing replica ids by name before releasing the catalog
-        // borrow, so the drop branches below can build their ops without it.
-        let replica_id_by_name: BTreeMap<String, ReplicaId> = cluster
-            .replicas()
-            .map(|r| (r.name.clone(), r.replica_id))
-            .collect();
-        // The cluster's observed owned replica set, with the same exclusions
-        // as the controller's ownership test: internal and billed-as replicas
-        // are manually managed, pending ones belong to an in-flight
-        // reconfiguration (rejected above, so none exist here).
-        let owned_replica_ids: Vec<ReplicaId> = cluster
-            .replicas()
-            .filter(|r| {
-                !r.config.location.internal()
-                    && r.config.location.billed_as().is_none()
-                    && !r.config.location.pending()
-            })
-            .map(|r| r.replica_id)
-            .collect();
-
-        let compute = mz_sql::plan::ComputeReplicaConfig {
-            introspection: new_logging
-                .interval
-                .map(|interval| ComputeReplicaIntrospectionConfig {
-                    debugging: new_logging.log_logging,
-                    interval,
-                }),
-            arrangement_compression: *new_arrangement_compression,
-        };
-
-        // A replication-factor-only increase changes the committed baseline,
-        // which the controller cannot shed. Validate that floor without trying
-        // to predict the controller's transient strategy union. Concrete create
-        // transactions still validate the complete physical replica set.
-        if *new_replication_factor > replication_factor && cluster_id.is_user() {
+        // The committed baseline is an exact count, not a prediction of the
+        // controller's transient strategy union, and no strategy can shed it.
+        // Validate it here: `Op::UpdateClusterConfig` contributes nothing to
+        // `catalog_transact`'s replica accounting, because the controller
+        // materializes the replicas on a later tick rather than this transaction
+        // emitting creates. Without the check the ALTER would succeed and the
+        // controller would then fail its own create transaction on every tick.
+        // See database-issues#6046.
+        if new_replication_factor > replication_factor && cluster_id.is_user() {
             self.validate_resource_limit(
-                usize::cast_from(replication_factor),
-                i64::from(*new_replication_factor) - i64::from(replication_factor),
+                usize::cast_from(*replication_factor),
+                i64::from(*new_replication_factor) - i64::from(*replication_factor),
                 SystemVars::max_replicas_per_cluster,
                 "cluster replica",
                 MAX_REPLICAS_PER_CLUSTER.name(),
@@ -1921,206 +1532,32 @@ impl Coordinator {
             )?;
         }
 
-        // The controller owns the replica set of every managed cluster, so a
-        // non-record change reaching this path is replication-factor only.
-        // Config-shape changes (size, logging, AZ, and EXPERIMENTAL ARRANGEMENT
-        // COMPRESSION) are reshaped into a durable reconfiguration record before
-        // they get here. The controller reconciles the replica set to the realized
-        // config's new count on its next tick. We update only the realized config
-        // and emit no create/drop here because doing both fights the controller.
-        // It derives replica names from the observed set, so an adapter create by
-        // canonical `rN` can collide with a controller-chosen name. An adapter drop
-        // by canonical `rN` can miss a churned one.
-        //
-        // The direct create/drop branches below are unreachable while this holds.
-        // They go together with the staged reconfiguration machine.
-        let controller_owns = true;
-
-        // Count exactly as many replica ids as the branches below consume. The
-        // config-changed branches recreate all replicas. A pure scale-up creates
-        // only the delta. Scale-down and no-op create none. A controller-owned
-        // alter emits no create/drop at all, so it must not allocate. Allocating
-        // there burns those ids durably and throws them away. The controller
-        // allocates its own when it materializes the change.
         let config_changed = new_managed.replica_config_shape()
             != ManagedReplicaConfigShape::new(
-                &size,
-                &availability_zones,
-                &logging,
-                arrangement_compression,
+                size,
+                availability_zones,
+                logging,
+                *arrangement_compression,
             );
-        let needed_replica_ids = if controller_owns {
-            0
-        } else if config_changed {
-            *new_replication_factor
-        } else if *new_replication_factor > replication_factor {
-            *new_replication_factor - replication_factor
-        } else {
-            0
-        };
-        // Allocate the replica ids out-of-band via the durable allocator. Pick
-        // the id type from the target cluster, which may be a system cluster.
-        // This mirrors how cluster and item ids are allocated, so nothing
-        // allocates a replica id in-apply. Fetch the catalog write timestamp
-        // lazily here, since it needs mutable access to self (the cluster borrow
-        // above is already released) and scale-down, no-op, and automated
-        // scheduling turn-off alters must not pay an oracle round-trip just to
-        // allocate nothing.
-        let mut new_replica_ids = if needed_replica_ids > 0 {
-            let id_ts = self.get_catalog_write_ts().await;
-            let ids = self
-                .catalog()
-                .allocate_replica_ids(cluster_id, u64::from(needed_replica_ids), id_ts)
-                .await?;
-            ids.into_iter()
-        } else {
-            Vec::<ReplicaId>::new().into_iter()
-        };
-
-        if controller_owns {
-            // Defer all replica create/drop to the controller. Only the realized
-            // config update below is applied here. The target must still be
-            // valid: the controller creates replicas from the realized config
-            // without re-validating availability zones, so an invalid pool
-            // written here would produce an unplaceable replica.
-            if config_changed {
-                self.ensure_valid_azs(new_availability_zones.iter())?;
-            }
-        } else if config_changed {
+        // The controller creates replicas from the realized config without
+        // re-validating availability zones, so an invalid pool written here
+        // would produce an unplaceable replica.
+        if config_changed {
             self.ensure_valid_azs(new_availability_zones.iter())?;
-            // If we're not doing a zero-downtime reconfig tear down all
-            // replicas, create new ones else create the pending replicas and
-            // return early asking for finalization
-            match strategy {
-                AlterClusterPlanStrategy::None => {
-                    // Names can drift from the canonical `r1..rN` while the
-                    // controller owns the set (its name generator avoids
-                    // observed names), so a factor-derived name list can miss
-                    // replicas after a break-glass handoff. This branch
-                    // recreates the entire replica set anyway, so dropping the
-                    // observed owned set by id closes that. In the pure
-                    // canonical world the two sets are identical.
-                    let replica_ids_and_reasons = owned_replica_ids
-                        .iter()
-                        .map(|replica_id| {
-                            catalog::DropObjectInfo::ClusterReplica((
-                                cluster_id,
-                                *replica_id,
-                                reason.clone(),
-                            ))
-                        })
-                        .collect();
-                    ops.push(catalog::Op::DropObjects(replica_ids_and_reasons));
-                    for replica_name in
-                        (0..*new_replication_factor).map(managed_cluster_replica_name)
-                    {
-                        // The replica id is pre-allocated above like the create
-                        // paths so its scoped overrides can be folded below.
-                        let replica_id = new_replica_ids
-                            .next()
-                            .expect("pre-allocated enough replica ids");
-                        self.create_managed_cluster_replica_op(
-                            cluster_id,
-                            replica_id,
-                            replica_name.clone(),
-                            &compute,
-                            new_size,
-                            &mut ops,
-                            Some(new_availability_zones.as_ref()),
-                            false,
-                            owner_id,
-                            reason.clone(),
-                        )?;
-                    }
-                }
-                AlterClusterPlanStrategy::For(_) | AlterClusterPlanStrategy::UntilReady { .. } => {
-                    for replica_name in
-                        (0..*new_replication_factor).map(managed_cluster_replica_name)
-                    {
-                        let replica_name = format!("{replica_name}{PENDING_REPLICA_SUFFIX}");
-                        let replica_id = new_replica_ids
-                            .next()
-                            .expect("pre-allocated enough replica ids");
-                        self.create_managed_cluster_replica_op(
-                            cluster_id,
-                            replica_id,
-                            replica_name.clone(),
-                            &compute,
-                            new_size,
-                            &mut ops,
-                            Some(new_availability_zones.as_ref()),
-                            true,
-                            owner_id,
-                            reason.clone(),
-                        )?;
-                    }
-                    finalization_needed = NeedsFinalization::Yes;
-                }
-            }
-        } else if *new_replication_factor < replication_factor {
-            // Adjust replica count down
-            let replica_ids = (*new_replication_factor..replication_factor)
-                .map(managed_cluster_replica_name)
-                .filter_map(|name| replica_id_by_name.get(&name).copied())
-                .map(|replica_id| {
-                    catalog::DropObjectInfo::ClusterReplica((
-                        cluster_id,
-                        replica_id,
-                        reason.clone(),
-                    ))
-                })
-                .collect();
-            ops.push(catalog::Op::DropObjects(replica_ids));
-        } else if *new_replication_factor > replication_factor {
-            // Adjust replica count up
-            for replica_name in
-                (replication_factor..*new_replication_factor).map(managed_cluster_replica_name)
-            {
-                let replica_id = new_replica_ids
-                    .next()
-                    .expect("pre-allocated enough replica ids");
-                self.create_managed_cluster_replica_op(
-                    cluster_id,
-                    replica_id,
-                    replica_name.clone(),
-                    &compute,
-                    new_size,
-                    &mut ops,
-                    // AVAILABILITY ZONES hasn't changed, so existing replicas don't need to be
-                    // rescheduled.
-                    Some(new_availability_zones.as_ref()),
-                    false,
-                    owner_id,
-                    reason.clone(),
-                )?;
-            }
         }
 
-        // If finalization is needed, finalization should update the cluster
-        // config. Otherwise the config write happens here. A record still in
-        // progress belongs to a live, converging reconfiguration this write
-        // didn't touch, so carry it through untouched.
-        match finalization_needed {
-            NeedsFinalization::No => {
-                let mut new_config = new_config;
-                let reconfiguration_audit = if controller_owns {
-                    None
-                } else {
-                    cancel_carried_reconfiguration(&mut new_config)
-                };
-                ops.push(catalog::Op::UpdateClusterConfig {
-                    id: cluster_id,
-                    name: name.clone(),
-                    config: new_config,
-                    reconfiguration_audit,
-                    burst_audit: None,
-                });
-            }
-            NeedsFinalization::Yes => {}
-        }
+        // A record still in progress belongs to a live reconfiguration this
+        // cluster-level write did not touch, so carry it through unchanged.
+        let ops = vec![catalog::Op::UpdateClusterConfig {
+            id: cluster_id,
+            name,
+            config: new_config,
+            reconfiguration_audit: None,
+            burst_audit: None,
+        }];
 
-        self.catalog_transact(session, ops).await?;
-        Ok(finalization_needed)
+        self.catalog_transact(Some(session), ops).await?;
+        Ok(())
     }
 
     /// # Panics
@@ -2469,25 +1906,6 @@ fn terminal_reconfiguration_result(
     }
 }
 
-/// Retains a stale in-progress reconfiguration record carried by a direct
-/// config write as cancelled, returning the audit intent to declare with the
-/// write.
-///
-/// A direct write reshapes the replica set itself, superseding whatever target
-/// the record carries. Leaving the record in progress would have the controller
-/// keep converging on that stale target.
-fn cancel_carried_reconfiguration(config: &mut ClusterConfig) -> Option<ReconfigurationAudit> {
-    let ClusterVariant::Managed(managed) = &mut config.variant else {
-        return None;
-    };
-    let record = managed.reconfiguration.as_mut()?;
-    if !record.is_in_progress() {
-        return None;
-    }
-    record.status = ReconfigurationStatus::Cancelled;
-    Some(ReconfigurationAudit::Cancelled)
-}
-
 /// Whether an `ALTER` statement sets a replica config shape dimension (`SIZE`,
 /// `AVAILABILITY ZONES`, either `INTROSPECTION` option, or `EXPERIMENTAL
 /// ARRANGEMENT COMPRESSION`). These dimensions use a durable reconfiguration
@@ -2580,15 +1998,6 @@ fn fold_reconfiguration_target(
             new_target.arrangement_compression
         },
     }
-}
-
-/// The type of finalization needed after an
-/// operation such as alter_cluster_managed_to_managed.
-#[derive(PartialEq)]
-pub(crate) enum NeedsFinalization {
-    /// Wait for the provided duration before finalizing
-    Yes,
-    No,
 }
 
 #[cfg(test)]

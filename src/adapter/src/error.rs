@@ -314,7 +314,6 @@ pub enum AdapterError {
     /// The cluster controller could not provision a reconfiguration target
     /// within the environment's resource limits.
     AlterClusterResourceExhausted,
-    AlterClusterWhilePendingReplicas,
     /// Attempt to convert a cluster to unmanaged while a graceful
     /// reconfiguration is in progress.
     AlterClusterUnmanagedWhileReconfiguring,
@@ -1094,7 +1093,6 @@ impl AdapterError {
             AdapterError::ReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::AlterClusterTimeout => SqlState::QUERY_CANCELED,
             AdapterError::AlterClusterResourceExhausted => SqlState::INSUFFICIENT_RESOURCES,
-            AdapterError::AlterClusterWhilePendingReplicas => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterUnmanagedWhileReconfiguring => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterUnmanagedWhileBursting => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterReplicationFactorWhileReconfiguring => {
@@ -1579,9 +1577,6 @@ impl fmt::Display for AdapterError {
                     )?;
                 }
                 Ok(())
-            }
-            AdapterError::AlterClusterWhilePendingReplicas => {
-                write!(f, "cannot alter clusters with pending updates")
             }
             AdapterError::AlterClusterUnmanagedWhileReconfiguring => {
                 write!(

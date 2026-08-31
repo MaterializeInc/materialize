@@ -354,7 +354,7 @@ The `mz_internal_cluster_replicas` table lists the replicas that are created and
 
 ## `mz_pending_cluster_replicas`
 
-The `mz_pending_cluster_replicas` table lists the replicas that were created during managed cluster alter statement that has not yet finished. The configurations of these replica may differ from the cluster's configuration.
+The `mz_pending_cluster_replicas` table is retained for upgrade compatibility with older versions that could create pending replicas during `ALTER CLUSTER`. Materialize removes inherited pending replicas during startup before serving queries, and current versions do not create them, so this table is empty during normal operation. Active reconfiguration targets appear as ordinary rows in [`mz_cluster_replicas`](../mz_catalog/#mz_cluster_replicas).
 
 <!-- RELATION_SPEC mz_internal.mz_pending_cluster_replicas -->
 | Field      | Type     | Meaning                                                                                                     |
