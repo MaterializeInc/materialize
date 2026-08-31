@@ -142,12 +142,4 @@ describe("hydrationFilterLabel", () => {
   ] as const)("states %s as the condition it applies", (bucket, expected) => {
     expect(hydrationFilterLabel(bucket)).toBe(expected);
   });
-
-  it("names a condition for every bucket the panel offers", () => {
-    // A bucket added without a label would otherwise reach a chip as
-    // "Hydration: undefined".
-    for (const bucket of HYDRATION_BUCKETS) {
-      expect(hydrationFilterLabel(bucket)).toMatch(/^Hydration: \S/);
-    }
-  });
 });

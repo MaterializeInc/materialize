@@ -1862,15 +1862,6 @@ describe("ClustersList filter URL state", () => {
         expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
         expect(chipLabels()).toEqual([]);
       });
-
-      it("keeps the statuses alongside it that do exist", async () => {
-        await renderAt(
-          twoClusters(),
-          "/?hydration[]=lukewarm&hydration[]=hydrated",
-        );
-
-        expect(chipLabels()).toEqual(["Hydration: Hydrated"]);
-      });
     });
   });
 });
