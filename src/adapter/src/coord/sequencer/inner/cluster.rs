@@ -370,11 +370,11 @@ impl Coordinator {
             _ => None,
         };
 
-        // A shape-changing `ALTER` reshapes into a durable `reconfiguration`
-        // record (starting, retargeting, or cancelling one) instead of going
-        // through the legacy 3-stage machine. Everything else falls through to
-        // the realized-config update below without touching the record, in
-        // flight or not.
+        // A shape-changing `ALTER` on a MANUAL cluster reshapes into a durable
+        // `reconfiguration` record that the controller converges on. A scheduled
+        // cluster without an in-flight record takes the direct path below because
+        // it has no baseline replica set to overlap. Everything else falls through
+        // to the realized-config update without touching the record.
         //
         // With a record in flight the statement decides: an `ALTER` back to the
         // realized shape is value-identical yet must reach the reshape path to
@@ -556,15 +556,15 @@ impl Coordinator {
     /// dimension this `ALTER` did not mention. With no record in flight there is
     /// nothing to fold and the target is exactly `new_config`'s shape.
     ///
-    /// **Timeout action.** The record carries an `on_timeout` action (resolved
-    /// from `WITH (WAIT ...)`, defaulting to `ROLLBACK`), which the controller
-    /// applies at the deadline only if the target has not hydrated: `ROLLBACK`
-    /// marks the record timed out and drops the in-flight target set, leaving the
-    /// realized config untouched, so the cluster reverts to its
-    /// pre-reconfiguration shape and the strategy disengages. `COMMIT` cuts the
-    /// realized config over to the not-fully-hydrated target and marks the record
-    /// finalized. Success always takes precedence. A target that hydrates before the deadline cuts over regardless
-    /// of the action.
+    /// **Timeout action.** The record carries an `on_timeout` action resolved
+    /// from `WITH (WAIT ...)`, defaulting to `ROLLBACK`. At the deadline,
+    /// `ROLLBACK` marks the record timed out and drops the in-flight target set.
+    /// The realized config stays unchanged and the strategy disengages. For
+    /// `COMMIT`, the baseline yields while the complete target materializes in a
+    /// replacement transaction. A later reconciliation observes that target,
+    /// advances the realized config, and finalizes without requiring hydration.
+    /// Success always takes precedence. A target that hydrates before the
+    /// deadline cuts over regardless of the action.
     ///
     /// With `enable_background_alter_cluster` on, the statement returns
     /// immediately. With it off, the session blocks on a wait-shim
@@ -1923,14 +1923,14 @@ impl Coordinator {
 
         // The controller owns the replica set of every managed cluster, so a
         // non-record change reaching this path is replication-factor only.
-        // Config-shape changes (size/logging/AZ) are reshaped into a durable
-        // reconfiguration record before they get here. The controller reconciles
-        // the replica set to the realized config's new count on its next tick, so
-        // we update only the realized config and emit no create/drop here. Doing
-        // both fights the controller. It derives replica names from the observed
-        // set, so an adapter create by canonical `rN` can collide with a
-        // controller-chosen name, and an adapter drop by canonical `rN` can miss a
-        // churned one.
+        // Config-shape changes (size, logging, AZ, and EXPERIMENTAL ARRANGEMENT
+        // COMPRESSION) are reshaped into a durable reconfiguration record before
+        // they get here. The controller reconciles the replica set to the realized
+        // config's new count on its next tick. We update only the realized config
+        // and emit no create/drop here because doing both fights the controller.
+        // It derives replica names from the observed set, so an adapter create by
+        // canonical `rN` can collide with a controller-chosen name. An adapter drop
+        // by canonical `rN` can miss a churned one.
         //
         // The direct create/drop branches below are unreachable while this holds.
         // They go together with the staged reconfiguration machine.
@@ -2490,8 +2490,9 @@ fn cancel_carried_reconfiguration(config: &mut ClusterConfig) -> Option<Reconfig
 
 /// Whether an `ALTER` statement sets a replica config shape dimension (`SIZE`,
 /// `AVAILABILITY ZONES`, either `INTROSPECTION` option, or `EXPERIMENTAL
-/// ARRANGEMENT COMPRESSION`), the changes that need a durable
-/// `reconfiguration` record and a hydrate-overlap.
+/// ARRANGEMENT COMPRESSION`). These dimensions use a durable reconfiguration
+/// record for MANUAL clusters. Scheduled clusters without an in-flight record
+/// take the direct realized-config path instead.
 ///
 /// A statement-level check, used while a reconfiguration is in flight: an
 /// `ALTER` back to the realized shape sets a shape option without changing its

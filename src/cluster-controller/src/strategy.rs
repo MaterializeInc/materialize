@@ -167,10 +167,10 @@ pub struct LiveSignals {
 /// The implicit baseline strategy, always present.
 ///
 /// Desires `replication_factor` replicas at the cluster's realized shape
-/// (`cluster.size` plus its AZ pool and logging). It holds the steady-state set
-/// so that the policy strategies can be purely additive. They only ever add to
-/// the baseline. With only the baseline engaged, the desired set equals the
-/// realized set, so a steady-state managed cluster reconciles to no decisions.
+/// (`cluster.size` plus its AZ pool, logging, and arrangement compression). It
+/// holds the steady-state set so that policy strategies normally only add to
+/// it. With only the baseline engaged, the desired set equals the realized set,
+/// so a steady-state managed cluster reconciles to no decisions.
 ///
 /// The baseline holds the set only for MANUAL clusters. On a scheduled cluster
 /// the controller (not the user's `replication_factor`) owns the replica set,
@@ -584,8 +584,9 @@ impl Strategy for OnRefreshStrategy {
             return Vec::new();
         }
         // One replica at the realized shape (`cluster.size` plus the cluster's AZ
-        // pool and logging). The window decision rides inside the reason so the
-        // create it may produce can carry the audit detail.
+        // pool, logging, and arrangement compression). The window decision rides
+        // inside the reason so the create it may produce can carry the audit
+        // detail.
         vec![DesiredReplica {
             shape: state.realized_shape(),
             reason: CreateReason::OnRefresh(decision),
