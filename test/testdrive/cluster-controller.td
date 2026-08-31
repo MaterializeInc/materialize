@@ -757,6 +757,30 @@ scale=1,workers=1 2
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM RESET max_credit_consumption_rate
 
+# ----- Replication-factor increases validate their committed credit floor -----
+
+> CREATE CLUSTER cc_rf_credit (SIZE 'scale=2,workers=2', REPLICATION FACTOR 1)
+
+# The additional replica costs 4 credits. Leave only 3 credits of headroom, so
+# the ALTER must fail synchronously rather than commit an RF the controller
+# cannot materialize.
+$ set-from-sql var=rf_credit_limit
+SELECT (sum(s.credits_per_hour) + 3)::text FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id JOIN mz_catalog.mz_cluster_replica_sizes s ON r.size = s.size WHERE c.id LIKE 'u%'
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET max_credit_consumption_rate = ${rf_credit_limit}
+
+! ALTER CLUSTER cc_rf_credit SET (REPLICATION FACTOR 2)
+contains: creating cluster replica would violate max_credit_consumption_rate limit
+
+> SELECT replication_factor FROM mz_clusters WHERE name = 'cc_rf_credit'
+1
+
+> DROP CLUSTER cc_rf_credit
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM RESET max_credit_consumption_rate
+
 # ----- A forced cut-over swaps instead of overlapping -----
 #
 # Same budget shape as above (the settled target fits, the two sets at once do
