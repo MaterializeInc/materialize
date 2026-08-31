@@ -219,7 +219,7 @@ You can monitor a resize through the following:
 
 ##### Cancel a resize
 To **cancel** an in-flight resize, reissue `ALTER CLUSTER` with the cluster's
-current size. Materialize drops the pending replicas and keeps the current
+current size. Materialize drops the target replicas and keeps the current
 configuration.
 
 #### Downtime considerations for v26.34 or before
