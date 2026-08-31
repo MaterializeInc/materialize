@@ -91,6 +91,7 @@ duplicate pool for the whole upgrade.
 ```bash
 gcloud container node-pools update NODE_POOL_NAME \
   --cluster=CLUSTER_NAME \
+  --project=PROJECT_ID \
   --location=CONTROL_PLANE_LOCATION \
   --enable-blue-green-upgrade \
   --autoscaled-rollout-policy=wait-for-drain-duration=259200s
@@ -210,9 +211,9 @@ reach the metadata server. Workload identity credentials are fetched over
 plain HTTP on `169.254.169.254:80`, and under [GKE Dataplane
 V2](https://cloud.google.com/kubernetes-engine/docs/concepts/dataplane-v2)
 the metadata server also answers on `169.254.169.252:988`, which is the
-destination policy is enforced against after DNAT. Allow both, otherwise the
-trigger cannot authenticate and logs `no available authentication method
-found`.
+destination policy is enforced against after DNAT. Allow both to ensure the trigger 
+can authenticate otherwise you may see failures logging `no available authentication
+method found`.
 
 Plain HTTP is not a concern here. Both addresses are link-local and served by
 the `gke-metadata-server` agent running on the pod's own node, so credentials
