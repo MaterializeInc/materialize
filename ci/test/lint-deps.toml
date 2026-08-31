@@ -29,11 +29,12 @@ dependencies = [
     "mz-storage-client",
 ]
 
+# SPIKE(unified-cluster): mz-compute temporarily depends on mz-storage to host
+# storage objects on the compute Timely cluster.
 [[deny]]
 name = "mz-compute"
 dependencies = [
     "mz-storage-controller",
-    "mz-storage",
 ]
 
 [[deny]]

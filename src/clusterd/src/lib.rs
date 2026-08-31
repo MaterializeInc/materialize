@@ -435,8 +435,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     // SPIKE(unified-cluster): Host storage objects on the compute Timely cluster instead of
     // building a separate storage cluster. The storage and compute controller protocols are
-    // served unchanged, from the same cluster.
-    if std::env::var("MZ_UNIFIED_CLUSTER").is_ok() {
+    // served unchanged, from the same cluster. Default on; set MZ_UNIFIED_CLUSTER=0 to fall
+    // back to separate storage and compute clusters.
+    let unified_cluster = std::env::var("MZ_UNIFIED_CLUSTER").map_or(true, |v| v != "0");
+    if unified_cluster {
         info!("SPIKE: running with a unified timely cluster");
 
         let (compute_client_builder, storage_client_builder) = mz_compute::server::serve_unified(
