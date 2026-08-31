@@ -1998,8 +1998,8 @@ mod row_codec {
         /// All byte values >= this are safe to use as dictionary tags without
         /// observing the data, since no datum's first byte can have this value.
         ///
-        /// `mz_repr`'s `Row` `Tag` enum currently has 94 variants (discriminants
-        /// 0..=93), so the truly tight bound is 94. We deliberately pick a larger,
+        /// `mz_repr`'s `Row` `Tag` enum currently has 84 variants (discriminants
+        /// 0..=83), so the truly tight bound is 84. We deliberately pick a larger,
         /// round-ish constant to leave headroom for new tags without having to also
         /// bump the safe set, and the `test_safe_tag_base` test pins the real
         /// invariant: every datum the row format produces must encode with a first
