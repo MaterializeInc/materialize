@@ -211,7 +211,7 @@ reach the metadata server. Workload identity credentials are fetched over
 plain HTTP on `169.254.169.254:80`, and under [GKE Dataplane
 V2](https://cloud.google.com/kubernetes-engine/docs/concepts/dataplane-v2)
 the metadata server also answers on `169.254.169.252:988`, which is the
-destination policy is enforced against after DNAT. Allow both to ensure the trigger 
+destination policy is enforced against after DNAT. Allow both to ensure the trigger
 can authenticate otherwise you may see failures logging `no available authentication
 method found`.
 
