@@ -243,6 +243,45 @@ fn test_builtin_schema_migration() {
     }
 }
 
+/// A step pinned at the target version runs when the source version is below it.
+///
+/// The control for `test_builtin_schema_migration_dev_to_dev_same_version`: same
+/// objects, same step, same changed desc, and only the source version differs.
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_builtin_schema_migration_step_at_target_version() {
+    let (system_objects, migrations) = changed_builtin_table_fixture();
+
+    let result = run_one_migration(
+        Version::parse("26.39.0").unwrap(),
+        Version::parse("26.40.0-dev.0").unwrap(),
+        system_objects.clone(),
+        migrations,
+    );
+
+    assert_changed_builtins_migrated(&system_objects, &result);
+}
+
+/// Two dev builds sharing a version string must still run the registered steps.
+///
+/// Dev builds at one `X.Y.0-dev.0` version are not one binary, so a builtin's
+/// `RelationDesc` can change between two of them. `Migration::run` returns early
+/// when the source and target versions are equal, before planning and before
+/// `update_fingerprints`, so the step is skipped and nothing afterwards notices
+/// that the shard's schema no longer matches the one the binary presents. For a
+/// builtin table that mismatch aborts the process during bootstrap, when
+/// `TxnsHandle::register` fails to register the shard's schema.
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_builtin_schema_migration_dev_to_dev_same_version() {
+    let (system_objects, migrations) = changed_builtin_table_fixture();
+    let version = Version::parse("26.40.0-dev.0").unwrap();
+
+    let result = run_one_migration(version.clone(), version, system_objects.clone(), migrations);
+
+    assert_changed_builtins_migrated(&system_objects, &result);
+}
+
 /// Fuzz test builtin schema migration using turmoil.
 #[test] // allow(test-attribute)
 #[ignore = "runs forever"]
@@ -357,6 +396,123 @@ fn evolve_builtin_desc(builtin: &Builtin<NameReference>) -> &'static Builtin<Nam
         }
         _ => unimplemented!(),
     }
+}
+
+/// A builtin table whose desc has changed, plus a `Replacement` step for it pinned
+/// at `26.40.0-dev.0`.
+///
+/// The object carries the *new* desc alongside the fingerprint the catalog recorded
+/// under the old one, which is the state a process sees when a previous leader wrote
+/// the shard from an earlier build.
+fn changed_builtin_table_fixture() -> (
+    BTreeMap<SystemObjectDescription, ObjectInfo>,
+    Vec<MigrationStep>,
+) {
+    let (object, builtin) = make_builtin_table("table0".into());
+
+    let info = ObjectInfo {
+        global_id: GlobalId::System(0),
+        shard_id: Some(ShardId::new()),
+        fingerprint: builtin.fingerprint(),
+        builtin: evolve_builtin_desc(builtin),
+    };
+
+    let step = MigrationStep {
+        version: Version::parse("26.40.0-dev.0").unwrap(),
+        object: object.clone(),
+        mechanism: Mechanism::Replacement,
+    };
+
+    (BTreeMap::from([(object, info)]), vec![step])
+}
+
+/// Assert that every builtin whose desc no longer matches the fingerprint recorded
+/// in the catalog was migrated by this run.
+///
+/// A builtin that fails this check keeps a shard whose schema its binary disagrees
+/// with. `update_fingerprints` enforces the same invariant at the end of a migration,
+/// but the equal-version path returns before reaching it, so on that path nothing
+/// enforces it at all.
+fn assert_changed_builtins_migrated(
+    system_objects: &BTreeMap<SystemObjectDescription, ObjectInfo>,
+    result: &MigrationRunResult,
+) {
+    let unmigrated: Vec<_> = system_objects
+        .iter()
+        .filter(|(_, info)| info.builtin.fingerprint() != info.fingerprint)
+        .filter(|(object, info)| {
+            result.new_fingerprints.get(*object) != Some(&info.builtin.fingerprint())
+        })
+        .map(|(object, _)| &object.object_name)
+        .collect();
+
+    assert!(
+        unmigrated.is_empty(),
+        "builtins changed their desc but were not migrated: {unmigrated:?}; \
+         run produced fingerprints {:?} and shards {:?}",
+        result.new_fingerprints,
+        result.new_shards,
+    );
+}
+
+/// Run a single `Migration` to completion inside a turmoil simulation.
+fn run_one_migration(
+    source_version: Version,
+    target_version: Version,
+    system_objects: BTreeMap<SystemObjectDescription, ObjectInfo>,
+    migrations: Vec<MigrationStep>,
+) -> MigrationRunResult {
+    configure_tracing_for_turmoil();
+
+    let mut sim = turmoil::Builder::new().build();
+    let persist_location = init_persist(&mut sim);
+    let migration_shard = ShardId::new();
+
+    let result = Rc::new(RefCell::new(None));
+    sim.host("environmentd", {
+        let result = Rc::clone(&result);
+        move || {
+            let persist_location = persist_location.clone();
+            let source_version = source_version.clone();
+            let target_version = target_version.clone();
+            let system_objects = system_objects.clone();
+            let migrations = migrations.clone();
+            let result = Rc::clone(&result);
+
+            async move {
+                let persist_cache = PersistClientCache::new_for_turmoil();
+                let persist_client = persist_cache.open(persist_location).await.unwrap();
+
+                let migration = Migration {
+                    source_version,
+                    target_version,
+                    deploy_generation: 1,
+                    system_objects,
+                    migration_shard,
+                    config: BuiltinItemMigrationConfig {
+                        persist_client,
+                        read_only: false,
+                        force_migration: None,
+                    },
+                };
+
+                let mut res = migration.run(&migrations).await.unwrap();
+
+                // Apply the cleanup action, as `Catalog::open` does. We have not
+                // finalized the shards, but we don't care about leakage here.
+                let cleanup = std::mem::replace(&mut res.cleanup_action, async {}.boxed());
+                cleanup.await;
+
+                *result.borrow_mut() = Some(res);
+                Ok(())
+            }
+        }
+    });
+
+    while result.borrow().is_none() {
+        sim.step().unwrap();
+    }
+    result.borrow_mut().take().unwrap()
 }
 
 /// Configure tracing for turmoil tests.
