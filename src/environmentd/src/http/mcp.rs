@@ -542,11 +542,12 @@ async fn handle_mcp_request(
         "MCP request received"
     );
 
-    // Handle notifications (no response needed)
+    // No `id` means no reply, which the transport answers 202. SDK clients take
+    // any other status as a response to parse and close on the empty body.
     if is_notification {
         debug!(method = %request.method, "Received notification (no response will be sent)");
         record_request(McpCallStatus::Ok);
-        return StatusCode::OK.into_response();
+        return StatusCode::ACCEPTED.into_response();
     }
 
     let request_id = request.id.clone().unwrap_or(serde_json::Value::Null);
