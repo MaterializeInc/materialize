@@ -168,11 +168,11 @@ def get_minimal_system_parameters(
         )
 
     # The `WITH (WAIT ...)` graceful-reconfiguration surface. Always accepted
-    # from v26.39 on. Older binaries still gate it behind this feature flag, so
+    # from v26.41 on. Older binaries still gate it behind this feature flag, so
     # pin it on for them: the tests that use the surface no longer enable it
     # themselves, and in a mixed-version run some of their phases execute
     # against the old binary.
-    if version < MzVersion.parse_mz("v26.39.0-dev"):
+    if version < MzVersion.parse_mz("v26.41.0-dev"):
         config["enable_zero_downtime_cluster_reconfiguration"] = "true"
 
     return config
