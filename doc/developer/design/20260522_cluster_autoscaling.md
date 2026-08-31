@@ -2,6 +2,24 @@
 
 - Associated: (TBD — link epics/issues)
 
+> [!NOTE]
+> This document preserves the design context in which it was written. The
+> implementation has several refinements that matter when interpreting the
+> proposal:
+>
+> - Durable graceful-reconfiguration records apply to MANUAL clusters. Shape
+>   changes on non-MANUAL scheduled clusters update the realized config
+>   directly because there is no baseline set for hydration overlap.
+>   `WITH (WAIT ...)` is rejected on that path.
+> - `EXPERIMENTAL ARRANGEMENT COMPRESSION` is part of a replica's config shape.
+> - A forced `ON TIMEOUT COMMIT` replaces the realized replicas with the
+>   complete target in one transaction. The baseline yields during this
+>   transaction. A later reconciliation advances the realized config and
+>   finalizes without requiring hydration.
+> - Resource exhaustion can terminate an active graceful reconfiguration as
+>   `ResourceExhausted`. A foreground `ALTER` reports insufficient resources.
+>   The baseline and hydration burst are not shed.
+
 ## The Problem
 
 Two user-facing capabilities motivate this work:
