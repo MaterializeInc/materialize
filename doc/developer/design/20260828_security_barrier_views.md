@@ -433,6 +433,21 @@ joins, which is a narrower and better-defined thing to reason about.
 
 ### The case for opt-in
 
+**Default-on turns a query cost into an upgrade cost.** The expression cache is
+keyed on build version, so every plan is re-derived on every version bump. What
+makes that safe today is that the new version almost always arrives at the same
+plan, so a replica's memory requirement is the one it already met. Zero-downtime
+upgrade then runs both generations until the new one has re-hydrated, which
+commits the headroom that would absorb a change.
+
+Enabling barriers for every view would re-derive affected plans into ones that
+need more memory, per the example above, at the point in an environment's life
+when the least is spare. A replica that cannot fit the new plan cannot finish
+re-hydrating, and an upgrade whose new generation cannot finish re-hydrating does
+not cut over. That failure is not a slow query, it is an environment that cannot
+be upgraded, discovered during the upgrade. Opt-in avoids it by construction: an
+existing view's plan does not change unless somebody changes the view.
+
 **The cost has a recognizable shape.** It bites when a reader's predicate is
 fallible, selective, and sits above a join or an arrangement. That is a real
 pattern, not a corner case, and a user who hits it should be able to trace the
