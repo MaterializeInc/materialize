@@ -128,11 +128,20 @@ enum McpMethod {
     /// Initialize method - params accepted but not currently used
     #[serde(rename = "initialize")]
     Initialize(#[allow(dead_code)] InitializeParams),
+    /// `params` is accepted and ignored: clients may attach `_meta`, and a unit
+    /// variant would fail the whole request with a non-JSON-RPC 422.
     #[serde(rename = "tools/list")]
-    ToolsList,
+    ToolsList(#[allow(dead_code)] Option<serde_json::Value>),
     #[serde(rename = "tools/call")]
     ToolsCall(ToolsCallParams),
-    /// Catch-all for unknown methods (e.g. `notifications/initialized`)
+    /// Keepalive, and the post-initialize acknowledgement. Both are named so
+    /// their `params` deserialize; `#[serde(other)]` must be a unit variant, so
+    /// anything falling through to `Unknown` with `params` still fails the body.
+    #[serde(rename = "ping")]
+    Ping(#[allow(dead_code)] Option<serde_json::Value>),
+    #[serde(rename = "notifications/initialized")]
+    NotificationsInitialized(#[allow(dead_code)] Option<serde_json::Value>),
+    /// Catch-all for unrecognized methods.
     #[serde(other)]
     Unknown,
 }
@@ -141,8 +150,10 @@ impl std::fmt::Display for McpMethod {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             McpMethod::Initialize(_) => write!(f, "initialize"),
-            McpMethod::ToolsList => write!(f, "tools/list"),
+            McpMethod::ToolsList(_) => write!(f, "tools/list"),
             McpMethod::ToolsCall(_) => write!(f, "tools/call"),
+            McpMethod::Ping(_) => write!(f, "ping"),
+            McpMethod::NotificationsInitialized(_) => write!(f, "notifications/initialized"),
             McpMethod::Unknown => write!(f, "unknown"),
         }
     }
@@ -664,7 +675,7 @@ async fn handle_mcp_method(
                 read_data_product_tool_enabled,
             )
         }
-        McpMethod::ToolsList => {
+        McpMethod::ToolsList(_) => {
             debug!(endpoint = %endpoint_type, "Processing tools/list");
             handle_tools_list(
                 endpoint_type,
@@ -686,9 +697,9 @@ async fn handle_mcp_method(
             )
             .await
         }
-        McpMethod::Unknown => Err(McpRequestError::MethodNotFound(
-            "unknown method".to_string(),
-        )),
+        McpMethod::Ping(_) | McpMethod::NotificationsInitialized(_) | McpMethod::Unknown => Err(
+            McpRequestError::MethodNotFound("unknown method".to_string()),
+        ),
     }
 }
 
@@ -2283,6 +2294,62 @@ mod tests {
                 && !instructions.contains("through the query tool"),
             "instructions must not route to the hidden query tool: {instructions}",
         );
+    }
+
+    /// Clients attach `_meta` to `tools/list`. Rejecting it fails the whole
+    /// request with a 422, which the client reads as the server being down.
+    #[mz_ore::test]
+    fn test_tools_list_accepts_optional_params() {
+        for body in [
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":null}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"progressToken":0}}}"#,
+        ] {
+            let req: McpRequest = serde_json::from_str(body)
+                .unwrap_or_else(|e| panic!("tools/list must deserialize: {body}: {e}"));
+            assert!(
+                matches!(req.method, McpMethod::ToolsList(_)),
+                "expected ToolsList for {body}"
+            );
+        }
+    }
+
+    /// `ping` and `notifications/initialized` are named variants so their
+    /// `params` deserialize. A `_meta` on the acknowledgement would otherwise
+    /// fail the body with a 422 in the middle of the handshake.
+    #[mz_ore::test]
+    fn test_named_methods_accept_optional_params() {
+        for (body, want_ping) in [
+            (r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#, true),
+            (
+                r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}"#,
+                true,
+            ),
+            (
+                r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"_meta":{"progressToken":0}}}"#,
+                true,
+            ),
+            (
+                r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+                false,
+            ),
+            (
+                r#"{"jsonrpc":"2.0","method":"notifications/initialized","params":{"_meta":{"x":1}}}"#,
+                false,
+            ),
+        ] {
+            let req: McpRequest = serde_json::from_str(body)
+                .unwrap_or_else(|e| panic!("must deserialize: {body}: {e}"));
+            if want_ping {
+                assert!(matches!(req.method, McpMethod::Ping(_)), "for {body}");
+            } else {
+                assert!(
+                    matches!(req.method, McpMethod::NotificationsInitialized(_)),
+                    "for {body}"
+                );
+            }
+        }
     }
 
     // ── Response size cap tests ────────────────────────────────────────
