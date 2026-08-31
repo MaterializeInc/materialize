@@ -3067,6 +3067,40 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["compute_peek_row_iteration_limit"] = ["1000000000"]
+        self.flags_with_values["enable_compute_index_peek_offload"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        # The production default, a value that offloads all but the shortest
+        # peeks, and one that keeps every peek inline.
+        self.flags_with_values["compute_index_peek_inline_budget"] = [
+            "1024",
+            "1",
+            "1000000000",
+        ]
+        # The production default, a value that lets one activation serve a
+        # single position across all peeks, and one that lifts the aggregate
+        # so every pending peek spends its full inline budget in one pass.
+        self.flags_with_values["compute_index_peek_activation_budget"] = [
+            "8192",
+            "1",
+            "1000000000",
+        ]
+        # The production default, a value that checks for cancellation after
+        # every position, and one that checks once per walk of any arrangement
+        # this workload builds.
+        self.flags_with_values["compute_index_peek_yield_granularity"] = [
+            "10000",
+            "1",
+            "100000",
+        ]
+        # One permit per worker (the default), a bound that serializes every
+        # offloaded walk, and one that never queues. A fraction of the process's
+        # worker count, floored at one permit, so any tiny fraction serializes.
+        self.flags_with_values["compute_index_peek_permit_fraction"] = [
+            "1.0",
+            "0.0001",
+            "1000.0",
+        ]
         self.flags_with_values["compute_peek_response_stash_threshold_bytes"] = [
             "0",  # "force enabled"
             "1048576",  # 1 MiB, an in-between value

@@ -987,31 +987,31 @@ metrics:
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_cursor_setup_seconds_bucket
-  help: Time opening the trace cursor and sorting the literal constraints. Excludes seeking the cursor to the literals, which is part of row iteration.
+  help: Time opening the trace cursor and sorting the literal constraints, excluding the seek to those literals.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_cursor_setup_seconds_count
-  help: Time opening the trace cursor and sorting the literal constraints. Excludes seeking the cursor to the literals, which is part of row iteration.
+  help: Time opening the trace cursor and sorting the literal constraints, excluding the seek to those literals.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_cursor_setup_seconds_sum
-  help: Time opening the trace cursor and sorting the literal constraints. Excludes seeking the cursor to the literals, which is part of row iteration.
+  help: Time opening the trace cursor and sorting the literal constraints, excluding the seek to those literals.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_error_scan_seconds_bucket
-  help: Time scanning the error trace for errors. Sums the worker time of the calls the scan was sliced into, so it excludes the gaps between them. Only scans that find no error are observed.
+  help: Time scanning the error trace for errors, summed over the slices the scan was cut into and observed only for scans that find no error.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_error_scan_seconds_count
-  help: Time scanning the error trace for errors. Sums the worker time of the calls the scan was sliced into, so it excludes the gaps between them. Only scans that find no error are observed.
+  help: Time scanning the error trace for errors, summed over the slices the scan was cut into and observed only for scans that find no error.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_error_scan_seconds_sum
-  help: Time scanning the error trace for errors. Sums the worker time of the calls the scan was sliced into, so it excludes the gaps between them. Only scans that find no error are observed.
+  help: Time scanning the error trace for errors, summed over the slices the scan was cut into and observed only for scans that find no error.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_frontier_check_seconds_bucket
@@ -1026,6 +1026,38 @@ metrics:
   visibility: internal
 - name: mz_index_peek_frontier_check_seconds_sum
   help: Time checking trace frontiers.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_offload_seconds_bucket
+  help: Wall-clock time an offloaded index peek walk spent away from the timely worker, including the wait for a permit.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_offload_seconds_count
+  help: Wall-clock time an offloaded index peek walk spent away from the timely worker, including the wait for a permit.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_offload_seconds_sum
+  help: Wall-clock time an offloaded index peek walk spent away from the timely worker, including the wait for a permit.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_permit_queue_depth
+  help: The number of offloaded index peek walks waiting for a permit to run.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_permit_wait_seconds_bucket
+  help: Time an offloaded index peek walk waited for a permit, observed only for walks that were admitted.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_permit_wait_seconds_count
+  help: Time an offloaded index peek walk waited for a permit, observed only for walks that were admitted.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_permit_wait_seconds_sum
+  help: Time an offloaded index peek walk waited for a permit, observed only for walks that were admitted.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_result_sort_rows_bucket
@@ -1085,17 +1117,17 @@ metrics:
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_seconds_bucket
-  help: Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP. Sums the worker time of the calls the walk was sliced into, so it excludes the gaps between them.
+  help: Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP, summed over the slices the walk was cut into.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_seconds_count
-  help: Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP. Sums the worker time of the calls the walk was sliced into, so it excludes the gaps between them.
+  help: Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP, summed over the slices the walk was cut into.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_seconds_sum
-  help: Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP. Sums the worker time of the calls the walk was sliced into, so it excludes the gaps between them.
+  help: Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP, summed over the slices the walk was cut into.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_seek_fulfillment_seconds_bucket
@@ -1113,17 +1145,23 @@ metrics:
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_total_seconds_bucket
-  help: Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.
+  help: Time one visit to an index peek spent on the timely worker. A peek whose walk was offloaded contributes only the inline slice that offloaded it, and its time away from the worker is `mz_index_peek_offload_seconds`.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_total_seconds_count
-  help: Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.
+  help: Time one visit to an index peek spent on the timely worker. A peek whose walk was offloaded contributes only the inline slice that offloaded it, and its time away from the worker is `mz_index_peek_offload_seconds`.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_total_seconds_sum
-  help: Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.
+  help: Time one visit to an index peek spent on the timely worker. A peek whose walk was offloaded contributes only the inline slice that offloaded it, and its time away from the worker is `mz_index_peek_offload_seconds`.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_walks_total
+  help: 'The number of index peek walks that reached an outcome, by the substrate they ended on: `inline` on the timely worker, `offloaded` away from it.'
+  labels:
+  - substrate
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_kafka_partition_offset_max

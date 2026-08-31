@@ -18,8 +18,9 @@ use differential_dataflow::trace::cursor::BatchCursor;
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use mz_compute_client::protocol::command::Peek;
-use mz_compute_client::protocol::response::PeekError;
-use mz_expr::RowComparator;
+use mz_compute_client::protocol::response::{PeekError, PeekResponse};
+use mz_expr::row::RowCollection;
+use mz_expr::{ColumnOrder, RowComparator};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_panic_or_log;
 use mz_repr::fixed_length::ExtendDatums;
@@ -29,11 +30,28 @@ use timely::order::PartialOrder;
 use crate::compute_state::error_scan::{ErrorScan, ErrorScanStep, ErrsHandle};
 use crate::compute_state::peek_result_iterator::{PeekResultIterator, Step};
 
+/// The scan an index peek builds, over the ok trace of the arrangement that answers it.
+pub(super) type IndexPeekScan = PeekScan<
+    crate::arrangement::manager::PaddedTrace<crate::typedefs::RowRowAgent<Timestamp, Diff>>,
+>;
+
 /// Rows a scan hands to its driver, in the order the scan produced them.
 ///
 /// The form [`PeekResultIterator`] yields and the form the peek stash carries, so the path that
 /// moves large volumes never converts.
 pub(super) type RowBatch = Vec<(Row, NonZeroI64)>;
+
+/// Builds the peek's answer out of the rows a completed walk produced, sorted by `order_by`.
+pub(super) fn rows_response(rows: RowBatch, order_by: &[ColumnOrder]) -> PeekResponse {
+    let rows = rows
+        .into_iter()
+        .map(|(row, copies)| {
+            let copies = NonZeroUsize::try_from(copies).expect("fits into usize");
+            (row, copies)
+        })
+        .collect();
+    PeekResponse::Rows(vec![RowCollection::new(rows, order_by)])
+}
 
 /// The byte size of a row's count, as an answer built from a [`RowBatch`] stores it.
 const COUNT_BYTE_SIZE: usize = size_of::<NonZeroUsize>();
@@ -51,6 +69,28 @@ pub(super) fn entry_byte_len(row: &Row) -> usize {
     row.data_len()
         .saturating_add(OFFSET_BYTE_SIZE)
         .saturating_add(COUNT_BYTE_SIZE)
+}
+
+/// What a walk has spent, in the phases the peek metrics report.
+///
+/// Every number is cumulative over the slices the walk was cut into, wherever those slices ran.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct WalkPhases {
+    /// Worker time the error walk spent.
+    pub error_scan: Duration,
+    /// Worker time spent opening the ok cursor.
+    pub cursor_setup: Duration,
+    /// Whether the error walk ended without finding an error. The two numbers above describe a
+    /// finished phase only when it did.
+    pub error_trace_clean: bool,
+    /// Worker time the ok walk spent, including the time thinning spent sorting.
+    pub row_iteration: Duration,
+    /// Cursor positions the ok walk evaluated.
+    pub rows_processed: usize,
+    /// Worker time thinning spent sorting.
+    pub result_sort: Duration,
+    /// Rows handed to a sort, summed over the times thinning ran.
+    pub rows_sorted: usize,
 }
 
 /// The outcome of a fueled [`PeekScan::step`].
@@ -256,9 +296,27 @@ where
         Some(self.take_results())
     }
 
+    /// The collection this scan reads.
+    pub(super) fn target_id(&self) -> GlobalId {
+        self.target_id
+    }
+
     /// The number of cursor positions the ok walk has evaluated.
     pub(super) fn rows_processed(&self) -> usize {
         self.oks.rows_processed()
+    }
+
+    /// What the walk has spent so far, in the phases the peek metrics report.
+    pub(super) fn phases(&self) -> WalkPhases {
+        WalkPhases {
+            error_scan: self.error_scan_time,
+            cursor_setup: self.cursor_setup_time,
+            error_trace_clean: self.error_trace_clean(),
+            row_iteration: self.row_iteration_time,
+            rows_processed: self.rows_processed(),
+            result_sort: self.result_sort_time,
+            rows_sorted: self.rows_sorted,
+        }
     }
 
     /// Whether the walk over the error trace has ended without finding an error, which is the only

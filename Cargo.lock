@@ -7063,6 +7063,7 @@ dependencies = [
  "mz-proto",
  "mz-repr",
  "mz-row-spine",
+ "mz-secrets",
  "mz-storage-operators",
  "mz-storage-types",
  "mz-timely-util",

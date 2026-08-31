@@ -8,7 +8,7 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroUsize;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -67,7 +67,13 @@ use tracing::{Level, debug, error, info, span, trace, warn};
 use uuid::Uuid;
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
-use crate::compute_state::peek_scan::{PeekScan, ScanOutcome, entry_byte_len};
+use crate::compute_state::peek_budget::InlineBudget;
+use crate::compute_state::peek_metrics::{IndexPeekMetrics, PeekWalkMetrics};
+pub(crate) use crate::compute_state::peek_offload::PeekPermits;
+use crate::compute_state::peek_offload::{OffloadConfig, OffloadOutcome, OffloadedPeek};
+use crate::compute_state::peek_scan::{
+    IndexPeekScan, PeekScan, ScanOutcome, entry_byte_len, rows_response,
+};
 use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
 use crate::logging::initialize::LoggingTraces;
@@ -76,6 +82,9 @@ use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
 
 mod error_scan;
+mod peek_budget;
+mod peek_metrics;
+mod peek_offload;
 mod peek_result_iterator;
 mod peek_scan;
 mod peek_stash;
@@ -189,8 +198,17 @@ pub struct ComputeState {
     /// The entries are pairs of sink identifier (to identify the s3 oneshot instance)
     /// and the response itself.
     pub copy_to_response_buffer: Rc<RefCell<Vec<(GlobalId, CopyToResponse)>>>,
-    /// Peek commands that are awaiting fulfillment.
-    pub pending_peeks: BTreeMap<Uuid, PendingPeek>,
+    /// Index peeks awaiting their turn on the worker, in the order the sweep serves them.
+    ///
+    /// A sweep takes from the front and returns what it could not retire to the back, so a peek
+    /// it passed over is served before the peeks it served ahead of it, and a peek that arrives
+    /// later queues behind both. Keeping the order here spares the sweep a resume point.
+    pub queued_peeks: VecDeque<IndexPeek>,
+    /// Peeks a driver has taken over, awaiting the outcome that driver hands back.
+    ///
+    /// These are polled on every sweep and draw no budget, because the work they are waiting on is
+    /// not running on the worker.
+    pub pending_peeks: VecDeque<PendingPeek>,
     /// The persist location where we can stash large peek results.
     pub peek_stash_persist_location: Option<PersistLocation>,
     /// The logger, from Timely's logging framework, if logs are enabled.
@@ -233,6 +251,29 @@ pub struct ComputeState {
     /// The number of timely workers per process.
     pub workers_per_process: usize,
 
+    /// Bounds how many offloaded peek walks run at once, shared with the other workers of the same
+    /// `serve` call. A process running two compute runtime roles has one of these per role.
+    pub peek_permits: Arc<PeekPermits>,
+
+    /// The metrics an index peek walk reports, whichever driver runs it.
+    ///
+    /// Held here rather than assembled per peek, because an offload clones it into the task and
+    /// the inline driver reads it on every activation of every pending peek.
+    peek_walk_metrics: PeekWalkMetrics,
+
+    /// What this activation may spend walking index peeks on the worker, and what is left of it.
+    ///
+    /// Begun at the top of every sweep, but armed by the first peek that asks for a slice, which
+    /// may be one arriving between two sweeps. Such a peek draws from what the last sweep left, so
+    /// a batch of arrivals costs at most one more aggregate rather than one per peek.
+    peek_budget: InlineBudget,
+
+    /// Whether the last sweep passed a peek over for want of budget.
+    ///
+    /// Says only that such a peek exists, because [`ComputeState::queued_peeks`] already says
+    /// which one it is: the sweep left it at the front of the queue.
+    peek_passed_over: bool,
+
     /// Collections awaiting schedule instruction by the controller.
     ///
     /// Each entry stores a reference to a token that can be dropped to unsuspend the collection's
@@ -259,6 +300,14 @@ pub struct ComputeState {
 }
 
 impl ComputeState {
+    /// Whether a peek is waiting on nothing but its next turn in the sweep.
+    ///
+    /// Read by the worker loop before it parks. The sweep that serves such a peek runs on the same
+    /// thread, so the loop steps without parking rather than waking itself.
+    pub(crate) fn peeks_awaiting_turn(&self) -> bool {
+        self.peek_passed_over
+    }
+
     /// Construct a new `ComputeState`.
     pub fn new(
         persist_clients: Arc<PersistClientCache>,
@@ -268,16 +317,21 @@ impl ComputeState {
         context: ComputeInstanceContext,
         metrics_registry: MetricsRegistry,
         workers_per_process: usize,
+        peek_permits: Arc<PeekPermits>,
         storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
     ) -> Self {
+        let worker_config: Rc<ConfigSet> = mz_dyncfgs::all_dyncfgs().into();
         let traces = TraceManager::new(metrics.clone());
         let command_history = ComputeCommandHistory::new(metrics.for_history());
+        let peek_walk_metrics = PeekWalkMetrics::new(&metrics);
+        let peek_budget = InlineBudget::new(&worker_config);
 
         Self {
             collections: Default::default(),
             traces,
             subscribe_response_buffer: Default::default(),
             copy_to_response_buffer: Default::default(),
+            queued_peeks: Default::default(),
             pending_peeks: Default::default(),
             peek_stash_persist_location: None,
             compute_logger: None,
@@ -289,9 +343,13 @@ impl ComputeState {
             metrics,
             tracing_handle,
             context,
-            worker_config: mz_dyncfgs::all_dyncfgs().into(),
+            worker_config,
             metrics_registry,
             workers_per_process,
+            peek_permits,
+            peek_walk_metrics,
+            peek_budget,
+            peek_passed_over: false,
             suspended_collections: Default::default(),
             server_maintenance_interval: Duration::ZERO,
             init_system_time: mz_ore::now::SYSTEM_TIME(),
@@ -882,13 +940,26 @@ impl<'a> ActiveComputeState<'a> {
             logger.log(&pending.as_log_event(true));
         }
 
-        self.process_peek(&mut Antichain::new(), pending);
+        match pending {
+            PendingPeek::Index(peek) => self.serve_index_peek(&mut Antichain::new(), peek),
+            pending => self.poll_pending_peek(pending),
+        }
     }
 
     fn handle_cancel_peek(&mut self, uuid: Uuid) {
-        if let Some(peek) = self.compute_state.pending_peeks.remove(&uuid) {
-            self.send_peek_response(peek, PeekResponse::Canceled);
+        let queued = &mut self.compute_state.queued_peeks;
+        if let Some(index) = queued.iter().position(|peek| peek.peek.uuid == uuid) {
+            let peek = queued.remove(index).expect("found above");
+            self.send_peek_response(PendingPeek::Index(peek), PeekResponse::Canceled);
+            return;
         }
+
+        let pending = &mut self.compute_state.pending_peeks;
+        let Some(index) = pending.iter().position(|peek| peek.peek().uuid == uuid) else {
+            return;
+        };
+        let peek = pending.remove(index).expect("found above");
+        self.send_peek_response(peek, PeekResponse::Canceled);
     }
 
     fn handle_allow_writes(&mut self, id: GlobalId) {
@@ -1122,104 +1193,139 @@ impl<'a> ActiveComputeState<'a> {
         }
     }
 
-    /// Either complete the peek (and send the response) or put it in the pending set.
-    fn process_peek(&mut self, upper: &mut Antichain<Timestamp>, mut peek: PendingPeek) {
-        let response = match &mut peek {
-            PendingPeek::Index(peek) => {
-                let start = Instant::now();
+    /// Gives `peek` a turn on the worker if this activation's budget has one left, and queues it
+    /// for a later activation otherwise.
+    fn serve_index_peek(&mut self, upper: &mut Antichain<Timestamp>, peek: IndexPeek) {
+        match self.compute_state.peek_budget.grant() {
+            Some(fuel) => self.walk_index_peek(upper, peek, fuel),
+            None => {
+                // A scan is opened by the slice that walks it, so passing a peek over costs it an
+                // activation and nothing else.
+                self.compute_state.peek_passed_over = true;
+                self.compute_state.queued_peeks.push_back(peek);
+            }
+        }
+    }
 
-                let row_iteration_limit =
-                    peek_row_iteration_limit(&self.compute_state.worker_config);
+    /// Walks `peek` for up to `fuel` cursor positions and either answers it, hands it to a driver
+    /// that finishes it, or returns it to the queue for another turn.
+    fn walk_index_peek(
+        &mut self,
+        upper: &mut Antichain<Timestamp>,
+        mut peek: IndexPeek,
+        fuel: usize,
+    ) {
+        let start = Instant::now();
 
-                let peek_stash_eligible = peek
-                    .peek
-                    .finishing
-                    .is_streamable(peek.peek.result_desc.arity());
+        let row_iteration_limit = peek_row_iteration_limit(&self.compute_state.worker_config);
 
-                let peek_stash_enabled = {
-                    let enabled = ENABLE_PEEK_RESPONSE_STASH.get(&self.compute_state.worker_config);
-                    let peek_persist_stash_available =
-                        self.compute_state.peek_stash_persist_location.is_some();
-                    if !peek_persist_stash_available && enabled {
-                        error!("missing peek_stash_persist_location but peek stash is enabled");
-                    }
-                    enabled && peek_persist_stash_available
-                };
+        let peek_stash_eligible = peek
+            .peek
+            .finishing
+            .is_streamable(peek.peek.result_desc.arity());
 
-                let peek_stash_threshold_bytes =
-                    PEEK_RESPONSE_STASH_THRESHOLD_BYTES.get(&self.compute_state.worker_config);
+        let peek_stash_enabled = {
+            let enabled = ENABLE_PEEK_RESPONSE_STASH.get(&self.compute_state.worker_config);
+            let peek_persist_stash_available =
+                self.compute_state.peek_stash_persist_location.is_some();
+            if !peek_persist_stash_available && enabled {
+                error!("missing peek_stash_persist_location but peek stash is enabled");
+            }
+            enabled && peek_persist_stash_available
+        };
 
-                let metrics = IndexPeekMetrics {
-                    seek_fulfillment_seconds: &self
-                        .compute_state
-                        .metrics
-                        .index_peek_seek_fulfillment_seconds,
-                    frontier_check_seconds: &self
-                        .compute_state
-                        .metrics
-                        .index_peek_frontier_check_seconds,
-                    error_scan_seconds: &self.compute_state.metrics.index_peek_error_scan_seconds,
-                    cursor_setup_seconds: &self
-                        .compute_state
-                        .metrics
-                        .index_peek_cursor_setup_seconds,
-                    row_iteration_seconds: &self
-                        .compute_state
-                        .metrics
-                        .index_peek_row_iteration_seconds,
-                    row_iteration_rows: &self.compute_state.metrics.index_peek_row_iteration_rows,
-                    result_sort_seconds: &self.compute_state.metrics.index_peek_result_sort_seconds,
-                    result_sort_rows: &self.compute_state.metrics.index_peek_result_sort_rows,
-                    row_collection_seconds: &self
-                        .compute_state
-                        .metrics
-                        .index_peek_row_collection_seconds,
-                };
+        let peek_stash_threshold_bytes =
+            PEEK_RESPONSE_STASH_THRESHOLD_BYTES.get(&self.compute_state.worker_config);
 
-                let status = peek.seek_fulfillment(
-                    upper,
-                    self.compute_state.max_result_size,
-                    peek_stash_enabled && peek_stash_eligible,
-                    peek_stash_threshold_bytes,
-                    row_iteration_limit,
-                    &metrics,
+        let metrics = IndexPeekMetrics {
+            seek_fulfillment_seconds: &self
+                .compute_state
+                .metrics
+                .index_peek_seek_fulfillment_seconds,
+            frontier_check_seconds: &self.compute_state.metrics.index_peek_frontier_check_seconds,
+            walk: &self.compute_state.peek_walk_metrics,
+        };
+
+        let mut unspent = fuel;
+        let status = peek.seek_fulfillment(
+            upper,
+            self.compute_state.max_result_size,
+            peek_stash_enabled && peek_stash_eligible,
+            peek_stash_threshold_bytes,
+            row_iteration_limit,
+            &mut unspent,
+            &metrics,
+        );
+
+        // Charged with what the slice walked rather than with what it was granted, so a peek that
+        // answers in three positions leaves the activation's budget to the peeks behind it.
+        self.compute_state
+            .peek_budget
+            .charge(fuel.saturating_sub(unspent));
+
+        self.compute_state
+            .metrics
+            .index_peek_total_seconds
+            .observe(start.elapsed().as_secs_f64());
+
+        match status {
+            PeekStatus::Ready(response) => {
+                let _span =
+                    span!(parent: &peek.span, Level::DEBUG, "process_peek_response").entered();
+                self.send_peek_response(PendingPeek::Index(peek), response);
+            }
+            PeekStatus::NotReady => self.compute_state.queued_peeks.push_back(peek),
+            PeekStatus::Offload(scan) => {
+                let _span = span!(parent: &peek.span, Level::DEBUG, "offload_index_peek").entered();
+
+                let permits = Arc::clone(&self.compute_state.peek_permits);
+                let config = OffloadConfig::new(&self.compute_state.worker_config);
+                let walk_metrics = self.compute_state.peek_walk_metrics.clone();
+                let worker = std::thread::current();
+
+                let offloaded = OffloadedPeek::start(
+                    peek.peek,
+                    peek.trace_bundle,
+                    scan,
+                    permits,
+                    config,
+                    walk_metrics,
+                    worker,
                 );
 
                 self.compute_state
-                    .metrics
-                    .index_peek_total_seconds
-                    .observe(start.elapsed().as_secs_f64());
+                    .pending_peeks
+                    .push_back(PendingPeek::Offloaded(offloaded));
+            }
+            PeekStatus::UsePeekStash => {
+                let _span = span!(parent: &peek.span, Level::DEBUG, "process_stash_peek").entered();
 
-                match status {
-                    PeekStatus::Ready(result) => Some(result),
-                    PeekStatus::NotReady => None,
-                    PeekStatus::UsePeekStash => {
-                        let _span =
-                            span!(parent: &peek.span, Level::DEBUG, "process_stash_peek").entered();
+                let location = self
+                    .compute_state
+                    .peek_stash_persist_location
+                    .clone()
+                    .expect("stash location established before diverting");
+                let stash_task = self.start_stash_upload(&location, peek.peek, peek.trace_bundle);
 
-                        // NOTE: The row iteration limit does not follow a peek into the stash. The
-                        // stash restarts the scan and produces in bounded bursts, so a stashed
-                        // peek may examine any number of rows.
-                        let peek_stash_batch_max_runs = PEEK_RESPONSE_STASH_BATCH_MAX_RUNS
-                            .get(&self.compute_state.worker_config);
+                self.compute_state
+                    .pending_peeks
+                    .push_back(PendingPeek::Stash(stash_task));
+            }
+        }
+    }
 
-                        let stash_task = peek_stash::StashingPeek::start_upload(
-                            Arc::clone(&self.compute_state.persist_clients),
-                            self.compute_state
-                                .peek_stash_persist_location
-                                .as_ref()
-                                .expect("verified above"),
-                            peek.peek.clone(),
-                            peek.trace_bundle.clone(),
-                            peek_stash_batch_max_runs,
-                        );
-
-                        self.compute_state
-                            .pending_peeks
-                            .insert(peek.peek.uuid, PendingPeek::Stash(stash_task));
-                        return;
-                    }
-                }
+    /// Asks the driver that has taken `pending` over for its outcome, and sends the response when
+    /// one is ready.
+    fn poll_pending_peek(&mut self, mut pending: PendingPeek) {
+        let response = match &mut pending {
+            // An index peek reaches a driver only by leaving the queue, and the driver that takes
+            // it over replaces it with a variant of its own.
+            PendingPeek::Index(peek) => {
+                soft_panic_or_log!(
+                    "index peek on {} polled as if a driver had taken it over",
+                    peek.peek.target.id()
+                );
+                None
             }
             PendingPeek::Persist(peek) => peek.result.try_recv().ok().map(|(result, duration)| {
                 self.compute_state
@@ -1228,6 +1334,66 @@ impl<'a> ActiveComputeState<'a> {
                     .observe(duration.as_secs_f64());
                 result
             }),
+            PendingPeek::Offloaded(offloaded) => match offloaded.result.try_recv() {
+                Ok((outcome, duration)) => {
+                    // Both outcomes are timed, because a walk that hands back is the expensive
+                    // case rather than an aborted one.
+                    self.compute_state
+                        .metrics
+                        .index_peek_offload_seconds
+                        .observe(duration.as_secs_f64());
+
+                    match outcome {
+                        OffloadOutcome::Answered(response) => {
+                            trace!(?offloaded.peek, ?duration, "finished offloaded index peek walk");
+                            Some(response)
+                        }
+                        OffloadOutcome::NeedsStash => {
+                            let _span =
+                                span!(parent: &offloaded.span, Level::DEBUG, "process_stash_peek")
+                                    .entered();
+                            trace!(?offloaded.peek, ?duration, "handing offloaded index peek to the stash");
+
+                            match self.compute_state.peek_stash_persist_location.clone() {
+                                Some(location) => {
+                                    let PendingPeek::Offloaded(offloaded) = pending else {
+                                        unreachable!("matched as an offloaded peek")
+                                    };
+                                    let stash_task = self.start_stash_upload(
+                                        &location,
+                                        offloaded.peek,
+                                        offloaded.trace_bundle,
+                                    );
+                                    self.compute_state
+                                        .pending_peeks
+                                        .push_back(PendingPeek::Stash(stash_task));
+                                    return;
+                                }
+                                None => Some(PeekResponse::Error(PeekError::unstructured(
+                                    "peek result is too large to answer inline and this replica \
+                                     has no peek stash location",
+                                ))),
+                            }
+                        }
+                    }
+                }
+                Err(oneshot::error::TryRecvError::Empty) => None,
+                // The task drops its sender without sending only on a cancellation, which removes
+                // this entry, so an entry still here to be polled means the task died. Answering
+                // keeps the peek from waiting forever on a walk nothing is running.
+                //
+                // NOTE: a walk dropped by a shutting-down tokio runtime arrives here the same way.
+                // The worker is going away too, so the log line is noise rather than a lost signal.
+                Err(oneshot::error::TryRecvError::Closed) => {
+                    soft_panic_or_log!(
+                        "offloaded walk of peek on {} ended without an outcome",
+                        offloaded.peek.target.id()
+                    );
+                    Some(PeekResponse::Error(PeekError::unstructured(
+                        "offloaded peek walk failed",
+                    )))
+                }
+            },
             PendingPeek::Stash(stashing_peek) => {
                 let num_batches = PEEK_STASH_NUM_BATCHES.get(&self.compute_state.worker_config);
                 let batch_size = PEEK_STASH_BATCH_SIZE.get(&self.compute_state.worker_config);
@@ -1248,21 +1414,88 @@ impl<'a> ActiveComputeState<'a> {
         };
 
         if let Some(response) = response {
-            let _span = span!(parent: peek.span(), Level::DEBUG, "process_peek_response").entered();
-            self.send_peek_response(peek, response)
+            let _span =
+                span!(parent: pending.span(), Level::DEBUG, "process_peek_response").entered();
+            self.send_peek_response(pending, response)
         } else {
-            let uuid = peek.peek().uuid;
-            self.compute_state.pending_peeks.insert(uuid, peek);
+            self.compute_state.pending_peeks.push_back(pending);
         }
     }
 
-    /// Scan pending peeks and attempt to retire each.
+    /// Starts a peek stash upload for `peek`, which walks the ok trace of `trace_bundle` and
+    /// writes the rows it produces to persist.
+    ///
+    /// The walk starts over, so rows a previous walk of the same peek accumulated are produced
+    /// again rather than carried across.
+    fn start_stash_upload(
+        &self,
+        persist_location: &PersistLocation,
+        peek: Peek,
+        trace_bundle: TraceBundle,
+    ) -> peek_stash::StashingPeek {
+        // NOTE: The row iteration limit does not follow a peek into the stash. The stash restarts
+        // the scan and produces in bounded bursts, so a stashed peek may examine any number of
+        // rows.
+        let batch_max_runs =
+            PEEK_RESPONSE_STASH_BATCH_MAX_RUNS.get(&self.compute_state.worker_config);
+
+        peek_stash::StashingPeek::start_upload(
+            Arc::clone(&self.compute_state.persist_clients),
+            persist_location,
+            peek,
+            trace_bundle,
+            batch_max_runs,
+        )
+    }
+
+    /// Scan the peeks a driver is finishing and the peeks awaiting a turn, and attempt to retire
+    /// each.
+    ///
+    /// The queue of peeks awaiting a turn is served from the front and each peek it cannot retire
+    /// is returned to the back, so the next sweep resumes where this one ran out of budget without
+    /// either of them recording where that was.
     pub fn process_peeks(&mut self) {
-        let mut upper = Antichain::new();
-        let pending_peeks = std::mem::take(&mut self.compute_state.pending_peeks);
-        for (_uuid, peek) in pending_peeks {
-            self.process_peek(&mut upper, peek);
+        // Above the early return because this is the only place an activation begins. A replica
+        // whose peeks all answer inline leaves none pending, and beginning an activation only
+        // where there is work would let the aggregate drain across its arrivals.
+        self.compute_state.peek_budget.start_activation();
+
+        // Says what this sweep found, so it is cleared before the sweep rather than carried in
+        // from the last one. A peek cancelled or dropped between two sweeps would otherwise leave
+        // the worker spinning on a turn nothing is waiting for.
+        self.compute_state.peek_passed_over = false;
+
+        // Runs on every iteration of the worker loop, and almost every one finds no peek at all.
+        if self.compute_state.pending_peeks.is_empty() && self.compute_state.queued_peeks.is_empty()
+        {
+            return;
         }
+
+        let mut upper = Antichain::new();
+
+        // Both queues are taken out of the state for the sweep, because serving a peek borrows
+        // `self` mutably. A peek the sweep returns for another turn lands in the emptied queue.
+        let mut pending_peeks = std::mem::take(&mut self.compute_state.pending_peeks);
+        while let Some(peek) = pending_peeks.pop_front() {
+            self.poll_pending_peek(peek);
+        }
+
+        // The aggregate does not refill within an activation, so the first peek the budget cannot
+        // serve is also the last: every peek behind it would be passed over for the same reason.
+        let mut queued_peeks = std::mem::take(&mut self.compute_state.queued_peeks);
+        while let Some(peek) = queued_peeks.pop_front() {
+            let Some(fuel) = self.compute_state.peek_budget.grant() else {
+                queued_peeks.push_front(peek);
+                break;
+            };
+            self.walk_index_peek(&mut upper, peek, fuel);
+        }
+
+        // A peek the sweep never reached keeps its place ahead of the peeks it served, so the
+        // queue rotates instead of starving its tail.
+        self.compute_state.peek_passed_over = !queued_peeks.is_empty();
+        let served = std::mem::replace(&mut self.compute_state.queued_peeks, queued_peeks);
+        self.compute_state.queued_peeks.extend(served);
     }
 
     /// Sends a response for this peek's resolution to the coordinator.
@@ -1409,6 +1642,9 @@ pub enum PendingPeek {
     /// A peek against an index that is being stashed in the peek stash by an
     /// async background task.
     Stash(peek_stash::StashingPeek),
+    /// A peek against an index whose walk was offloaded from the worker and is running as an async
+    /// task.
+    Offloaded(OffloadedPeek),
 }
 
 impl PendingPeek {
@@ -1532,6 +1768,7 @@ impl PendingPeek {
             PendingPeek::Index(p) => &p.span,
             PendingPeek::Persist(p) => &p.span,
             PendingPeek::Stash(p) => &p.span,
+            PendingPeek::Offloaded(p) => &p.span,
         }
     }
 
@@ -1540,6 +1777,7 @@ impl PendingPeek {
             PendingPeek::Index(p) => &p.peek,
             PendingPeek::Persist(p) => &p.peek,
             PendingPeek::Stash(p) => &p.peek,
+            PendingPeek::Offloaded(p) => &p.peek,
         }
     }
 }
@@ -1697,22 +1935,6 @@ pub struct IndexPeek {
     span: tracing::Span,
 }
 
-/// Histogram metrics for index peek phases.
-///
-/// This struct bundles references to the various histogram metrics used to
-/// instrument the index peek processing pipeline.
-pub(crate) struct IndexPeekMetrics<'a> {
-    pub seek_fulfillment_seconds: &'a prometheus::Histogram,
-    pub frontier_check_seconds: &'a prometheus::Histogram,
-    pub error_scan_seconds: &'a prometheus::Histogram,
-    pub cursor_setup_seconds: &'a prometheus::Histogram,
-    pub row_iteration_seconds: &'a prometheus::Histogram,
-    pub row_iteration_rows: &'a prometheus::Histogram,
-    pub result_sort_seconds: &'a prometheus::Histogram,
-    pub result_sort_rows: &'a prometheus::Histogram,
-    pub row_collection_seconds: &'a prometheus::Histogram,
-}
-
 impl IndexPeek {
     /// Attempts to fulfill the peek and reports success.
     ///
@@ -1726,6 +1948,10 @@ impl IndexPeek {
     /// then for any time `t` less or equal to `peek.timestamp` it is
     /// not the case that `upper` is less or equal to that timestamp,
     /// and so the result cannot further evolve.
+    ///
+    /// `fuel` bounds how far the walk may go on this worker, in cursor positions, and is charged
+    /// for the positions it visits. A walk that exhausts it with work left is offloaded rather than
+    /// continued here, and a peek whose frontiers do not admit the read yet spends none of it.
     fn seek_fulfillment(
         &mut self,
         upper: &mut Antichain<Timestamp>,
@@ -1733,6 +1959,7 @@ impl IndexPeek {
         peek_stash_eligible: bool,
         peek_stash_threshold_bytes: usize,
         row_iteration_limit: Option<usize>,
+        fuel: &mut usize,
         metrics: &IndexPeekMetrics<'_>,
     ) -> PeekStatus {
         let method_start = Instant::now();
@@ -1765,6 +1992,7 @@ impl IndexPeek {
             peek_stash_eligible,
             peek_stash_threshold_bytes,
             row_iteration_limit,
+            fuel,
             metrics,
         );
 
@@ -1775,18 +2003,18 @@ impl IndexPeek {
         result
     }
 
-    /// Answers the peek by scanning the traces that fulfil it.
+    /// Answers the peek by scanning the traces that fulfil it, for as long as `fuel` allows.
     ///
-    /// One call drives one scan to an answer and drops it, so nothing survives the call and a
-    /// second call repeats both walks from the start. That is what the peek path asks for: it
-    /// reaches this only once the frontiers admit the read, and every outcome retires the peek
-    /// from the index-peek path, either with a response or by handing it to the stash.
+    /// One call opens one scan and either answers from it or hands it on, so nothing survives the
+    /// call. A scan that runs out of fuel with work left leaves with the [`PeekStatus::Offload`]
+    /// that reports it, so the positions it walked are not walked again.
     fn collect_finished_data(
         &mut self,
         max_result_size: u64,
         peek_stash_eligible: bool,
         peek_stash_threshold_bytes: usize,
         row_iteration_limit: Option<usize>,
+        fuel: &mut usize,
         metrics: &IndexPeekMetrics<'_>,
     ) -> PeekStatus {
         let peek = &self.peek;
@@ -1800,20 +2028,16 @@ impl IndexPeek {
             peek_stash_threshold_bytes,
         );
 
-        // No caller supplies a budget, so nothing stops the scan short of an answer but a full
-        // batch, and this driver has nowhere to write one.
-        let mut fuel = usize::MAX;
-        let outcome = scan.step(row_iteration_limit, &mut fuel);
+        let outcome = scan.step(row_iteration_limit, fuel);
 
-        // Both phases that precede the ok walk are reported only for a peek that reached that
-        // walk, so a peek answered by its error trace reports neither.
-        if scan.error_trace_clean() {
-            metrics
-                .error_scan_seconds
-                .observe(scan.error_scan_time.as_secs_f64());
-            metrics
-                .cursor_setup_seconds
-                .observe(scan.cursor_setup_time.as_secs_f64());
+        // A suspension the offload can resume is the one outcome that leaves the walk unfinished,
+        // so it is the one outcome this driver reports nothing for. Everything else ends the walk
+        // here, and this driver is the one that accounts for it.
+        let offloaded = matches!(outcome, ScanOutcome::Suspended) && !scan.batch_ready();
+        let phases = scan.phases();
+        if !offloaded {
+            metrics.walk.walked_inline();
+            metrics.walk.observe_error_phase(&phases);
         }
 
         let rows = match outcome {
@@ -1821,15 +2045,15 @@ impl IndexPeek {
             ScanOutcome::Finished(Err(error)) => {
                 return PeekStatus::Ready(PeekResponse::Error(error));
             }
+            // A scan that suspends without a batch has work left and rows it may still
+            // accumulate, so it travels to the offloaded walk with its positions and their cost.
+            // The offload costs one hand-off rather than a second walk.
+            ScanOutcome::Suspended if !scan.batch_ready() => return PeekStatus::Offload(scan),
             // Diversion is sound only for a scan whose error walk is over. The stash answers the
             // peek from a walk of the ok trace alone and never reads the error trace, so a peek
             // diverted with its error trace half-read would return rows where it must report an
-            // error.
-            //
-            // The batch is taken and dropped rather than left to the scan's own drop, because
-            // discarding it is this driver's decision: the stash's own walk supersedes it. It is
-            // taken only once diversion is established, so that no path disposes of rows it has
-            // not first earned the right to discard.
+            // error. Only the ok walk accumulates rows, so a scan holding a full batch has read
+            // the error trace out, and the guard states that rather than assuming it.
             ScanOutcome::Suspended => {
                 if !scan.error_trace_clean() {
                     soft_panic_or_log!(
@@ -1840,43 +2064,20 @@ impl IndexPeek {
                         "peek suspended before its error trace was read out",
                     )));
                 }
-                if scan.take_batch().is_none() {
-                    soft_panic_or_log!(
-                        "peek on {} suspended with no batch to hand over",
-                        self.peek.target.id()
-                    );
-                }
+                // Dropped here rather than with the scan, because discarding it is this driver's
+                // decision: the stash walks the ok trace again and produces these rows a second
+                // time.
+                let _batch = scan.take_batch();
                 return PeekStatus::UsePeekStash;
             }
         };
 
-        metrics
-            .row_iteration_seconds
-            .observe(scan.row_iteration_time.as_secs_f64());
-        metrics
-            .row_iteration_rows
-            .observe(f64::cast_lossy(scan.rows_processed()));
-        metrics
-            .result_sort_seconds
-            .observe(scan.result_sort_time.as_secs_f64());
-        metrics
-            .result_sort_rows
-            .observe(f64::cast_lossy(scan.rows_sorted));
+        metrics.walk.observe_ok_phase(&phases);
 
-        let row_collection_start = Instant::now();
-        let rows = rows
-            .into_iter()
-            .map(|(row, copies)| {
-                let copies = NonZeroUsize::try_from(copies).expect("fits into usize");
-                (row, copies)
-            })
-            .collect();
-        let collection = RowCollection::new(rows, &self.peek.finishing.order_by);
-        metrics
-            .row_collection_seconds
-            .observe(row_collection_start.elapsed().as_secs_f64());
-
-        PeekStatus::Ready(PeekResponse::Rows(vec![collection]))
+        let start = Instant::now();
+        let response = rows_response(rows, &self.peek.finishing.order_by);
+        metrics.walk.observe_row_collection(start.elapsed());
+        PeekStatus::Ready(response)
     }
 }
 
@@ -1889,6 +2090,9 @@ enum PeekStatus {
     /// The result size is above the configured threshold and the peek is
     /// eligible for using the peek result stash.
     UsePeekStash,
+    /// The walk stopped with work left and nothing to hand over, so it is finished away from the
+    /// worker. Carries the scan, which resumes from the cursor positions it stopped on.
+    Offload(IndexPeekScan),
     /// The peek result is ready.
     Ready(PeekResponse),
 }
@@ -2113,9 +2317,10 @@ impl CollectionState {
 #[cfg(test)]
 mod tests;
 
-/// Tests of the inline index-peek driver, and the fixtures a peek scan is tested over.
-///
-/// The fixtures are shared with [`peek_scan`]'s own tests, which build a scan from the same
-/// [`TraceBundle`] this driver hands one.
+/// Tests of the inline index-peek driver, and the fixtures [`peek_scan`]'s tests share with it.
 #[cfg(test)]
 pub(crate) mod index_peek_tests;
+
+/// Tests of the sweep that drives the pending index peeks.
+#[cfg(test)]
+mod peek_sweep_tests;

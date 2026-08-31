@@ -42,7 +42,7 @@ type OksHandle = PaddedTrace<RowRowAgent<Timestamp, Diff>>;
 const RESUMPTION_BOUND: usize = 100;
 
 /// The rows `value` values yield, in the order the ok walk produces them.
-fn rows(values: impl IntoIterator<Item = u8>) -> Vec<Row> {
+fn rows(values: impl IntoIterator<Item = u64>) -> Vec<Row> {
     values.into_iter().map(row).collect()
 }
 
@@ -57,7 +57,7 @@ fn row_size() -> usize {
 }
 
 /// The rows and counts a completed scan over `values` hands back.
-fn expected(values: impl IntoIterator<Item = u8>) -> RowBatch {
+fn expected(values: impl IntoIterator<Item = u64>) -> RowBatch {
     values
         .into_iter()
         .map(|value| (row(value), NonZeroI64::new(1).expect("non-zero")))
