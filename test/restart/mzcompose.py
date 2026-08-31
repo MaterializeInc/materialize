@@ -16,6 +16,7 @@ further restart scenarios.
 import copy
 import json
 import time
+from datetime import datetime
 from textwrap import dedent
 
 import requests
@@ -1440,10 +1441,13 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
     """Durable object and replica hydration rows outlive their writer.
 
     Killing the service also restarts clusterd, so the replica hydrates again
-    and legitimately records a *second* episode with a fresh `installed_at`.
-    What must hold is that the pre-restart episode is still there afterwards,
-    unchanged, and that repeated sweeps do not duplicate it. Asserting a total
-    row count of one would instead assert that rehydration goes unrecorded.
+    and legitimately records fresh episodes: one when rehydration forms a
+    single episode, more when the introspection indexes complete before the
+    user dataflows install. What must hold is that the pre-restart episodes
+    are still there afterwards, unchanged, that every fresh episode starts
+    after every pre-restart finish, and that repeated sweeps do not duplicate
+    anything. Asserting exact row counts would instead assert on collection
+    timing.
     """
 
     def episodes(name: str = "hydration_history_i") -> list[list]:
@@ -1469,6 +1473,9 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
 
     def replica_episode_identities(episodes: list[list]) -> list[tuple[str, str]]:
         return [(episode[0], episode[1]) for episode in episodes]
+
+    def parse_ts(text: str) -> datetime:
+        return datetime.fromisoformat(text)
 
     c.down(destroy_volumes=True)
     with c.override(
@@ -1514,11 +1521,6 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
                 break
             time.sleep(0.5)
         assert replica_before, "replica hydration history timed out before restart"
-        replica_before_ids = replica_episode_identities(replica_before)
-        replica_before_started_at = {identity[1] for identity in replica_before_ids}
-        assert len(replica_before_ids) == len(
-            set(replica_before_ids)
-        ), f"duplicate replica hydration identities before restart: {replica_before}"
 
         # Discover which MV's persist-sink worker is off worker 0 instead of
         # predicting it from user-ID allocation and hashing. Enough input data
@@ -1586,6 +1588,32 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
             f"worker 0 finished at {worker_zero_finish}"
         )
 
+        # Re-read the pre-restart episodes immediately before the kill. The
+        # waits above leave minutes in which a further legitimate episode can
+        # be recorded, and the fresh-episode assertions after the restart
+        # assume this set is current. Two equal consecutive reads shrink the
+        # remaining window to a sweep that starts and commits within one poll
+        # gap.
+        deadline = time.time() + 120
+        replica_before = replica_episodes()
+        replica_before_settled = False
+        while time.time() < deadline:
+            time.sleep(2.0)
+            current = replica_episodes()
+            replica_before_settled = current == replica_before
+            if replica_before_settled:
+                break
+            replica_before = current
+        assert (
+            replica_before_settled
+        ), f"pre-restart replica episodes did not settle: {replica_before}"
+        replica_before_ids = replica_episode_identities(replica_before)
+        replica_before_started_at = {identity[1] for identity in replica_before_ids}
+        assert len(replica_before_ids) == len(
+            set(replica_before_ids)
+        ), f"duplicate replica hydration identities before restart: {replica_before}"
+        latest_before_finish = max(parse_ts(episode[2]) for episode in replica_before)
+
         c.kill("materialized")
         c.up("materialized")
 
@@ -1624,9 +1652,18 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
         assert set(replica_before_ids) <= set(
             replica_after_ids
         ), f"restart lost replica episodes: had {replica_before}, now {replica_after}"
+        # Rehydration can record one fresh episode or several: the
+        # introspection indexes can finish before the user dataflows install,
+        # forming an earlier disconnected episode that is recorded on its own.
+        # The monotonic history guard orders them all after pre-restart
+        # history.
         assert (
-            len(replica_fresh_ids) == 1
-        ), f"restart did not produce exactly one fresh replica identity: {replica_after}"
+            replica_fresh_ids
+        ), f"restart did not produce a fresh replica identity: {replica_after}"
+        assert all(
+            parse_ts(identity[1]) > latest_before_finish
+            for identity in replica_fresh_ids
+        ), f"fresh replica episode overlaps pre-restart history: {replica_after}"
         assert all(
             identity[1] not in replica_before_started_at
             for identity in replica_fresh_ids
@@ -1635,8 +1672,9 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
             set(replica_after_ids)
         ), f"restart produced duplicate replica hydration identities: {replica_after}"
 
-        # Let several sweeps run. The pre-restart episode must not be duplicated,
-        # and the post-restart episode must settle at one row too.
+        # Let several sweeps run. The pre-restart episodes must not be
+        # duplicated, and everything recorded since the restart must stay
+        # ordered after them.
         time.sleep(10)
         settled = episodes()
         assert (
@@ -1661,10 +1699,10 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
         assert replica_fresh_ids <= set(
             replica_settled_ids
         ), f"post-restart replica episodes disappeared: {replica_settled}"
-        assert len(replica_settled_ids) == len(replica_before_ids) + 1, (
-            f"expected exactly one settled replica episode after restart: "
-            f"{replica_settled}"
-        )
+        assert all(
+            parse_ts(identity[1]) > latest_before_finish
+            for identity in set(replica_settled_ids) - set(replica_before_ids)
+        ), f"settled replica episodes overlap pre-restart history: {replica_settled}"
 
 
 def workflow_default(c: Composition) -> None:

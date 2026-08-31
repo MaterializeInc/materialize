@@ -409,8 +409,20 @@ fn object_collection_sql(cluster_id: ClusterId, replica_id: ReplicaId, cutoff: &
 /// Returns SQL for the latest completed compute hydration episode and its
 /// process resource peaks.
 ///
-/// Collection waits until every visible non-transient export has hydrated and
-/// every configured replica process has reported resource usage.
+/// Episodes are connected components of export hydration intervals. An export
+/// that has not hydrated keeps its component open: whether it is slow or
+/// permanently stuck is unobservable, so an open component is simply an
+/// in-progress episode, recorded when (if) it completes. It blocks only its
+/// own component: an unhydrated export installed at or before a completed
+/// component's finish would extend that component, one installed later belongs
+/// to a later episode. The latest completed component disconnected from every
+/// open one is recorded. The monotonic history guard still admits an open
+/// episode once it completes, because its start lies after every recorded
+/// finish. Cross-process clock skew can break that ordering, in which case the
+/// guard suppresses the episode rather than misrecording it.
+///
+/// Collection also waits until every configured replica process has reported
+/// resource usage.
 fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
     let ReplicaTarget {
         cluster_id,
@@ -453,21 +465,44 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
                 ) AS prior_finished_at
             FROM running
         ),
-        episode_start AS (
-            SELECT max(installed_at) FILTER (
-                WHERE prior_finished_at IS NULL OR prior_finished_at < installed_at
-            ) AS started_at
+        marked AS (
+            SELECT
+                object_id,
+                installed_at,
+                hydrated_at,
+                prior_finished_at IS NULL
+                    OR prior_finished_at < installed_at AS starts_episode
             FROM ordered
         ),
-        episode AS (
+        labeled AS (
             SELECT
-                s.started_at,
-                max(o.hydrated_at) AS finished_at,
+                object_id,
+                installed_at,
+                hydrated_at,
+                max(CASE WHEN starts_episode THEN installed_at END) OVER (
+                    ORDER BY installed_at, object_id
+                    ROWS UNBOUNDED PRECEDING
+                ) AS episode_started_at
+            FROM marked
+        ),
+        episodes AS (
+            SELECT
+                episode_started_at AS started_at,
+                max(hydrated_at) AS finished_at,
                 count(*)::uint8 AS object_count
-            FROM ordered AS o
-            CROSS JOIN episode_start AS s
-            WHERE o.installed_at >= s.started_at
-            GROUP BY s.started_at
+            FROM labeled
+            GROUP BY episode_started_at
+        ),
+        episode AS (
+            SELECT e.started_at, e.finished_at, e.object_count
+            FROM episodes AS e
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM objects AS o
+                WHERE NOT o.hydrated AND o.installed_at <= e.finished_at
+            )
+            ORDER BY e.started_at DESC
+            LIMIT 1
         ),
         resources AS (
             SELECT
@@ -497,8 +532,7 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
                 'hydrated'::text AS status
             FROM episode AS e
             CROSS JOIN resources AS r
-            WHERE (SELECT bool_and(hydrated) FROM objects)
-              AND r.process_count = {process_count}::uint8
+            WHERE r.process_count = {process_count}::uint8
               AND e.finished_at >= TIMESTAMPTZ '{cutoff}'
         )
         SELECT c.*
@@ -901,7 +935,9 @@ mod tests {
     }
 
     /// Replica episodes are connected components of object hydration intervals.
-    /// The query must also wait for every replica process before it snapshots
+    /// An unhydrated export blocks only components its open interval touches, so
+    /// an earlier disconnected completed episode is still recorded. The query
+    /// must also wait for every replica process before it snapshots
     /// process-local high-water marks.
     #[mz_ore::test]
     fn replica_collection_uses_latest_completed_interval_island() {
@@ -913,12 +949,23 @@ mod tests {
             },
             "1970-01-01T00:00:00+00:00",
         );
+        let normalized_sql = sql.split_whitespace().collect::<Vec<_>>().join(" ");
 
         assert!(sql.contains("ROWS UNBOUNDED PRECEDING"), "{sql}");
         assert!(sql.contains("lag(finished_through)"), "{sql}");
         assert!(sql.contains("prior_finished_at < installed_at"), "{sql}");
+        assert!(sql.contains("GROUP BY episode_started_at"), "{sql}");
+        // The unfinished-export guard applies per episode. A replica-wide
+        // all-hydrated gate would lose a completed episode for good: once the
+        // in-progress one finishes, it is the latest and the earlier one is
+        // never recorded.
+        assert!(!sql.contains("bool_and(hydrated)"), "{sql}");
         assert!(
-            sql.contains("SELECT bool_and(hydrated) FROM objects"),
+            normalized_sql.contains("WHERE NOT o.hydrated AND o.installed_at <= e.finished_at"),
+            "{sql}"
+        );
+        assert!(
+            normalized_sql.contains("ORDER BY e.started_at DESC LIMIT 1"),
             "{sql}"
         );
         assert!(sql.contains("r.process_count = 3::uint8"), "{sql}");
@@ -926,7 +973,6 @@ mod tests {
         assert!(!sql.contains("WHERE t.export_id LIKE 'u%'"), "{sql}");
         assert!(!sql.contains("mz_object_global_ids"), "{sql}");
         assert!(!sql.contains("mz_catalog.mz_objects"), "{sql}");
-        let normalized_sql = sql.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(
             normalized_sql
                 .contains("max(value) FILTER ( WHERE source = 'cgroup' AND metric = 'memory_peak'"),

@@ -14,9 +14,9 @@ This document describes only the replica-level additions.
 ## Episode boundaries
 
 Each live non-transient compute export contributes an interval from its earliest
-worker installation to its latest worker hydration. The collector waits until
-every visible worker of every live non-transient export has hydrated. Transient
-query dataflows are excluded because the collection query itself creates one.
+worker installation to its latest worker hydration, and counts as hydrated once
+every visible worker has reported its finish. Transient query dataflows are
+excluded because the collection query itself creates one.
 
 A replica episode is a connected component in the union of those export
 intervals. Two intervals belong to one episode if they overlap directly or
@@ -25,10 +25,13 @@ hydrated before the next export was installed, so the next interval starts a
 new episode.
 
 Each sweep records only the latest completed episode visible in its snapshot.
-Episodes that complete between sweeps and exports that retract before a sweep
-leave no evidence. The current inputs can therefore record successful episodes
-only. Failed, canceled, and OOM-killed outcomes need an additional durable
-replica signal.
+An export that has not hydrated keeps its episode in progress. Whether it is
+slow or permanently stuck is unobservable, so an in-progress episode is not a
+failure state: it is recorded when it completes and does not block earlier,
+disconnected completed episodes. Episodes that complete between sweeps and
+exports that retract before a sweep leave no evidence. The current inputs can
+therefore record successful episodes only. Failed, canceled, and OOM-killed
+outcomes need an additional durable replica signal.
 
 Process-local clocks stamp both interval endpoints. Clock skew can merge
 episodes that did not overlap in real time. Once an episode is recorded, a

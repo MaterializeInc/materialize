@@ -63,7 +63,8 @@ si true
 
 # A system-only replica hydration episode covers every visible non-transient
 # export. Its existence also proves the collector excludes its own transient
-# subscribe, which would otherwise keep the completeness check open.
+# subscribe, whose intervals would otherwise show up as spurious episodes in
+# later snapshots.
 > SELECT h.status,
          h.object_count = (
              SELECT count(DISTINCT export_id)::uint8
@@ -630,6 +631,121 @@ mv_wmr_stuck hydrated_test_4 false
 > DROP MATERIALIZED VIEW mv_wmr
 > DROP MATERIALIZED VIEW mv_wmr_const
 > DROP MATERIALIZED VIEW mv_wmr_stuck
+
+# An in-progress replica episode must not block recording an earlier,
+# disconnected completed episode. A gate that waits for every live export to
+# hydrate is lossy, not just late: once the in-progress episode completes it is
+# the latest, and the earlier episode is never recorded. Retention is still 0s
+# here, so the history stays empty while the fixture is arranged and the
+# assertion below sees exactly the episodes created now.
+
+> CREATE CLUSTER episodes REPLICAS (episodes_r1 (SIZE 'scale=1,workers=1'))
+> SET cluster = episodes
+
+> CREATE INDEX episode_a_idx ON t (a)
+
+# Wait until every non-transient export on the replica has hydrated before
+# installing the stuck view. A's interval can sit inside the introspection log
+# indexes' interval (they hydrate concurrently), so only a fully hydrated
+# replica guarantees that the stuck view's interval starts a new episode
+# instead of connecting to the one containing A.
+> SET cluster_replica = episodes_r1
+
+> SELECT count(*) > 0 AND count(*) = count(h.hydrated_at),
+         count(*) FILTER (WHERE o.name = 'episode_a_idx') = 1
+  FROM mz_introspection.mz_compute_hydration_times_per_worker AS h
+  LEFT JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.export_id
+  LEFT JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+  WHERE h.export_id NOT LIKE 't%';
+true true
+
+# The finish of the episode containing A: the latest hydration on the fully
+# hydrated replica. Stamps are immutable, and nothing else is installed before
+# the stuck view, so this is the finish the collector must record.
+$ set-from-sql var=episode-finished-at
+SELECT max(hydrated_at)::text
+FROM mz_introspection.mz_compute_hydration_times_per_worker
+WHERE export_id NOT LIKE 't%'
+
+> RESET cluster_replica
+
+# Whether this view is stuck or merely slow is not observable from the
+# hydration log, so its open interval is an in-progress episode, not an error.
+> CREATE MATERIALIZED VIEW episode_stuck AS
+  WITH MUTUALLY RECURSIVE
+      x (a int) AS (
+          VALUES (1)
+          UNION ALL
+          SELECT a + 1 FROM x
+      )
+  SELECT * FROM x;
+
+> SET cluster_replica = episodes_r1
+
+> SELECT count(*) > 0 AND count(h.hydrated_at) = 0
+  FROM mz_introspection.mz_compute_hydration_times_per_worker AS h
+  JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.export_id
+  JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+  WHERE o.name = 'episode_stuck';
+true
+
+> RESET cluster_replica
+
+> CREATE INDEX episode_b_idx ON t (a + 1)
+
+# B hydrates while the stuck view's interval is open, which connects B to the
+# in-progress episode: the episode containing A finished before the stuck view
+# was installed, B after.
+> SET cluster_replica = episodes_r1
+
+> WITH
+      u AS (
+          SELECT min(h.installed_at) AS installed_at
+          FROM mz_introspection.mz_compute_hydration_times_per_worker AS h
+          JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.export_id
+          JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+          WHERE o.name = 'episode_stuck'
+      ),
+      b AS (
+          SELECT max(h.hydrated_at) AS finished_at,
+                 count(*) > 0 AND count(*) = count(h.hydrated_at) AS hydrated
+          FROM mz_introspection.mz_compute_hydration_times_per_worker AS h
+          JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.export_id
+          JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+          WHERE o.name = 'episode_b_idx'
+      )
+  SELECT TIMESTAMPTZ '${episode-finished-at}' < u.installed_at,
+         u.installed_at <= b.finished_at,
+         b.hydrated
+  FROM u, b;
+true true true
+
+$ set-from-sql var=stuck-installed-at
+SELECT min(h.installed_at)::text
+FROM mz_introspection.mz_compute_hydration_times_per_worker AS h
+JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.export_id
+JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+WHERE o.name = 'episode_stuck'
+
+> RESET cluster_replica
+
+# Re-enabling retention lets episodes be recorded again. Exactly A's episode
+# lands: it is the latest completed episode disconnected from the in-progress
+# one, which is not recorded (it never completes here) and carries B with it.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET hydration_history_retention_period = '30d';
+
+> SELECT count(*),
+         bool_and(h.status = 'hydrated'),
+         bool_and(h.finished_at = TIMESTAMPTZ '${episode-finished-at}'),
+         bool_and(h.finished_at < TIMESTAMPTZ '${stuck-installed-at}')
+  FROM mz_internal.mz_replica_hydration_history AS h
+  JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
+  WHERE r.name = 'episodes_r1';
+1 true true true
+
+> DROP CLUSTER episodes CASCADE
+> SET cluster = test
 
 # Test that incorrectly configured sinks do _not_ show as hydrated.
 
