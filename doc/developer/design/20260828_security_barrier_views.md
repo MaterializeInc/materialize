@@ -120,7 +120,8 @@ a barrier are the ones that are always inlined into the reader's dataflow.
   operator-level record counts and query latency remain observable. PostgreSQL
   has the same class of hole and does not address it either. See
   [Open questions](#open-questions).
-- Making the barrier the default for all views.
+- Making the barrier the default for all views. Considered and rejected; see
+  [Why the option is opt-in](#why-the-option-is-opt-in).
 
 ## Solution Proposal
 
@@ -392,24 +393,115 @@ Deliberately left out of both:
 - `ALTER VIEW ... SET (SECURITY BARRIER)`.
 - Documentation under `doc/user/`.
 
+## Why the option is opt-in
+
+The option defaults off. That is a recommendation this document does make, and
+it is independent of which mechanism is chosen: both pay the cost below, and
+neither can avoid it.
+
+### A plan that a barrier makes more expensive
+
+Put the security filter and the reader's predicate on different tables, so that
+the reader's predicate would otherwise be pushed into a scan the security filter
+does not cover.
+
+```sql
+CREATE TABLE acct (tenant text, id int);
+CREATE TABLE det  (id int, secret text);
+
+CREATE VIEW my_det AS
+  SELECT det.id, det.secret
+  FROM acct JOIN det ON acct.id = det.id
+  WHERE acct.tenant = current_user;
+
+SELECT * FROM my_det WHERE secret::int > 0;
+```
+
+Without a barrier the cast is applied at the read of `det`:
+
+```
+Source materialize.public.det
+  filter=((#0{id}) IS NOT NULL AND (text_to_integer(#1{secret}) > 0))
+```
+
+so the arrangement on `det` only ever receives rows that passed it. With a
+barrier the cast moves into the join's per-match closure and leaves the source
+filter:
+
+```
+Join::Linear
+  linear_stage[0]
+    closure
+      filter=((text_to_integer(#1{secret}) > 0))
+...
+Source materialize.public.det
+  filter=((#0{id}) IS NOT NULL)
+```
+
+`det` is now arranged in full rather than pre-filtered. Arrangement size is the
+dominant memory cost in a Materialize dataflow, so the penalty is the
+selectivity of the reader's predicate: a cast that admits one row in a hundred
+costs roughly a hundredfold on that arrangement.
+
+Two things about this example are worth stating plainly.
+
+**The cost is inherent, not an artifact of either mechanism.** Filtering `det`
+by the reader's cast before the join would evaluate that cast against rows
+belonging to every tenant, which is exactly the disclosure the barrier exists to
+prevent. There is no correct plan that filters `det` early. The cheap plan is
+cheap because it is wrong. Mechanism A pays the same cost and adds to it, since
+it also declines to inline.
+
+**It is not a scan-volume cost.** Persist filter pushdown already treats a
+fallible expression conservatively, because it must not discard a part whose
+interior rows would error, so such a predicate was never driving much part
+pruning. What a barrier gives up is early filtering ahead of arrangements and
+joins, which is a narrower and better-defined thing to reason about.
+
+### The case for opt-in
+
+**The cost has a recognizable shape.** It bites when a reader's predicate is
+fallible, selective, and sits above a join or an arrangement. That is a real
+pattern, not a corner case, and a user who hits it should be able to trace the
+regression to a decision somebody made rather than to a property the system
+applies invisibly.
+
+**Attribution matters more than the average.** Applying barriers to every user
+view changes nothing in the `EXPLAIN` corpus, so the average cost may well be
+near zero. But the corpus does not contain the shape above, and an average is
+the wrong statistic for a cost that is concentrated. A query that silently loses
+early filtering because a cast happened to land above a join is very hard to
+explain to the person who wrote it.
+
+**The marker means something beyond the optimizer.** It records which views are
+access-control boundaries, which is information a reader of the schema wants and
+which no amount of default-on behaviour supplies. It also scopes what we have to
+defend: "declared views enforce ordering" is a claim we can state and test,
+where "no view ever evaluates a reader's fallible predicate early" is a
+whole-system property about every view, forever.
+
+**PostgreSQL has kept it opt-in since 9.2**, and its stated reason is the same
+category of cost. Their version is worse, because a non-leakproof qual cannot
+become an index qual and a row store then falls back to a sequential scan, which
+Materialize's streaming filters do not have an analogue for. But the direction
+of their conclusion survives the difference.
+
+### The argument against, and what to do about it
+
+The failure modes are not symmetric. Forgetting the option is silent data
+disclosure. Enabling it unnecessarily is a slower query. Anyone arguing for
+default-on is making a sound argument, and the measurements above do not refute
+it.
+
+The answer to that is not to pay the cost everywhere, but to make forgetting
+detectable. A view is being used as an access boundary exactly when some role
+holds `SELECT` on it and lacks `SELECT` on what it reads. That is a catalog
+query, not an optimizer change, and it can back a warning, a linting view, or an
+`mz_internal` relation listing views that look like boundaries but are not
+barriers. That closes the asymmetry at a fraction of the cost of default-on, and
+it is worth doing whichever mechanism is chosen.
+
 ## When to enable a barrier
-
-The option defaults off, so this is guidance a user needs in order to make the
-choice. The costs below are mechanism A's; under mechanism B most of them do not
-arise. Two measurements frame it.
-
-The cost of a barrier comes almost entirely from declining to inline the view,
-not from blocking predicates. Applying barriers to every user view and
-re-running the `EXPLAIN` corpus changes 8 files and 327 lines. Running the same
-experiment with the predicate gate disabled, leaving only the inlining gate,
-produces a byte-identical diff. On that corpus the security property itself is
-free and the mechanism is what costs.
-
-The second measurement is that the cost is zero for views that are already
-materialized. `import_into_dataflow` resolves an index or a materialized view
-before it ever considers a view plan, so neither gate fires.
-
-That yields a straightforward rule.
 
 **Enable it when the view is the access boundary**: the reader holds `SELECT`
 on the view and not on what it reads, and the rows it filters out are rows the
@@ -417,16 +509,19 @@ reader must not learn about. That is the only case the feature is for. A view
 that merely tidies up a query the reader could have written themselves does not
 need one.
 
-**The barrier is close to free when** the view is indexed on every cluster its
-readers use, or is a materialized view, since neither gate fires. It is also
-cheap when readers filter with comparisons, because `=`, `<`, `>`, `AND`, and
-`IS NULL` are all infallible and still cross.
+**The barrier is free when** the view is a materialized view, or is indexed on
+every cluster its readers use, because `import_into_dataflow` resolves an index
+or a materialized view before it ever considers a view plan and so no mechanism
+engages at all. It is also cheap whenever readers filter with comparisons: `=`,
+`<`, `>`, `AND`, and `IS NULL` are all infallible, so they are leakproof and
+cross the barrier untouched.
 
-**The barrier is expensive when** the view sits partway up a stack of other
-views, because the whole stack above and below it loses joint optimization, or
-when readers issue point lookups, because a barrier view occupies
-`objects_to_build[0]` and disqualifies the fast-path peek. A dataflow that would
-have folded to a constant will instead be built and run.
+**The barrier is expensive when** a reader's fallible predicate is selective and
+sits above a join or an arrangement, per the example above. Under mechanism A it
+is additionally expensive when the view sits partway up a stack of other views,
+because the whole stack loses joint optimization, and when readers issue point
+lookups, because a barrier view occupies `objects_to_build[0]` and disqualifies
+the fast-path peek.
 
 **Materializing is not a substitute**, for three reasons. An index only helps on
 the cluster that holds it, and a reader chooses their own cluster, so an
@@ -445,11 +540,12 @@ they are in [Mechanisms](#mechanisms). What follows are approaches rejected
 before either was prototyped.
 
 **Make every view a barrier.** Correct by default and immune to a user
-forgetting the option. Under mechanism A this changes 327 lines of the `EXPLAIN`
-corpus, measured with barriers restricted to user views so that builtin catalog
-views keep their plans. Under mechanism B it would be close to free, which is
-the reason B was explored. Whether a safe default is reachable therefore depends
-entirely on which mechanism is chosen.
+forgetting the option. Rejected, for the reasons in
+[Why the option is opt-in](#why-the-option-is-opt-in): the cost is concentrated
+rather than average, so applying it everywhere makes a real regression
+unattributable. The measurements are there too, including that mechanism A moves
+327 lines of the `EXPLAIN` corpus under this default while B moves none, which
+is what motivated exploring B in the first place.
 
 **Wrap the predicate in an opaque marker instead of carrying a level.** A
 `SecurityFence` unary function that the optimizer refuses to move. Prototyped:
@@ -480,12 +576,16 @@ for any future non-error channel.
   behavior is a security bug. If no, the honest move is to document that views
   are not a security boundary and close this out.
 - Which mechanism? Both prototypes work and close the same exposure. A fails
-  closed and confines the concept to two gates, but forecloses a safe default
-  and costs real performance on barrier views. B preserves performance and is
-  the mechanism row-level security would need, but puts the concept on the
-  compute protocol and carries a standing obligation: every future transform
-  that touches predicates has to preserve the level, and nothing enforces that
-  but review. This document deliberately does not pick.
+  closed and confines the concept to two gates, but costs real performance on
+  barrier views beyond the shared cost. B preserves that performance and is the
+  mechanism row-level security would need, but puts the concept on the compute
+  protocol and carries a standing obligation: every future transform that
+  touches predicates has to preserve the level, and nothing enforces that but
+  review. This document deliberately does not pick.
+- The default is settled in this document and the mechanism is not. If the team
+  disagrees with opt-in, the argument to engage is in
+  [The argument against](#the-argument-against-and-what-to-do-about-it), and the
+  detection idea there is the part worth keeping either way.
 - `MirScalarExpr::could_error` is currently maintained to keep persist filter
   pushdown correct. Promoting it to a security boundary means a wrong
   `could_error = false` becomes a vulnerability rather than a performance bug.
