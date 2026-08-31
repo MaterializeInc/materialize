@@ -16,12 +16,6 @@
 # new replica until cut-over drops the old one. Readiness must therefore not
 # wait for the source to hydrate on the target, but must still wait for the
 # target's processes to come online before cutting over.
-#
-# The background flag is pinned explicitly so the test does not depend on the
-# harness defaults.
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true
 
 > CREATE SECRET pgpass AS 'postgres'
 > CREATE CONNECTION pg TO POSTGRES (
