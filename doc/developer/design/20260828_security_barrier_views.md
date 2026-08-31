@@ -208,6 +208,14 @@ restricts to leakproof predicates, and `optimize_dataflow_demand` and
 monotonicity therefore cross a barrier freely, which is safe because neither
 decides whether a row is produced.
 
+#### A (risk)
+
+Mechanism A's guarantee rests on an architectural property that nothing states
+and no type enforces: a transform sees one object at a time. A new cross-object
+pass has to be gated by hand, the way `inline_views` and
+`optimize_dataflow_filters` are, and a new place predicates can live would
+escape `inline_views` unnoticed.
+
 ### B. Security levels on predicates
 
 Prototype: [#38566](https://github.com/MaterializeInc/materialize/pull/38566).
@@ -267,7 +275,7 @@ physical layer and the protocol that ships plans to compute.
 | Perf, non-barrier views | none | none: every text plan in the `EXPLAIN` corpus is byte-identical |
 | Generalizes to row-level security | no | yes |
 
-Row five is why B was explored at all. Row-level security means a table's own
+The last row is why B was explored at all. Row-level security means a table's own
 policy predicates must be evaluated before the user's, and there is no object
 boundary at a table scan to hang that on, so A cannot express it at any price.
 B's per-predicate ordering is the shape row-level security needs.
@@ -585,7 +593,7 @@ for any future non-error channel.
   barrier views beyond the shared cost. B preserves that performance and is the
   mechanism row-level security would need, but puts the concept on the compute
   protocol and carries an obligation on future code, scoped to three shapes in
-  [What a future transform has to know](#what-a-future-transform-has-to-know),
+  [B (risk)](#b-risk),
   of which one is mechanically closable and one stays soft. This document
   deliberately does not pick.
 - The default is settled in this document and the mechanism is not. If the team
