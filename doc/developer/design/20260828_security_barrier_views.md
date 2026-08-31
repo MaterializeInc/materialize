@@ -226,52 +226,31 @@ equivalence class is seeded only from leakproof or unconstrained predicates,
 since a derived qual carries no level; and **ordering**, where a levelled
 predicate must be evaluated after every lower-level one.
 
-### What a future transform has to know
+### Residual risk
 
-Mechanism B's residual risk lies entirely in code that does not exist yet, and
-it is narrower than "a future transform has to preserve the level" for two
-reasons.
+#### A (risk)
 
-**A new transform cannot fail to notice that levels exist.** There is no blanket
-conversion from an expression to a predicate, so constructing one requires
-naming a level: `Predicate::unconstrained` or `Predicate::at_level`. And `level`
-is private with `raise` as its only mutator, so no code can lower one. What a
-new author can miss is not the mechanism but the contract.
+Mechanism A's guarantee rests on an architectural property rather than on a
+check: nothing crosses an object boundary because the transform pipeline runs
+over one object at a time. Nothing states that property, and no type enforces
+it. A new cross-object pass would have to be gated by hand the way
+`inline_views` and `optimize_dataflow_filters` are, and a new place predicates
+can live would escape `inline_views` unnoticed. The surface is small, four
+cross-object passes today, but it is guarded by convention.
 
-**Reordering predicates within a plan is self-healing.** `MapFilterProject`
-sorts by level, so however much a transform shuffles predicates in the
-mid-level plan, the order is re-established when they fuse into one operator.
-The sort is a convergent enforcement point, not a step that can be skipped.
+#### B (risk)
 
-Three shapes remain, and they are the whole contract:
-
-1. **Relocating a predicate across operators.** The sort only helps when the
-   predicates end up in the same `MapFilterProject`. A transform that moves a
-   levelled predicate into an operator evaluated earlier than the one holding a
-   lower-level predicate breaks the guarantee. `PredicatePushdown` has an
-   explicit hold for this; a new relocating transform does not inherit it.
-2. **Deriving a predicate from a levelled one.** A derived predicate must
-   inherit the minimum level of its sources. The compiler forces the author to
-   name a level and cannot tell them which one is correct, and
-   `Predicate::unconstrained` is the natural thing to write. The two existing
-   derivation sites handle this by declining to seed an equivalence class from a
-   levelled non-leakproof predicate; a new site has no way to learn that rule.
-3. **A new place a predicate can live.** A new `MirRelationExpr` variant holding
-   predicates, or a new fused-operator representation.
-   `raise_security_level` walks `Filter` nodes and would not find it, and the
-   sort would not cover it.
-
-Shape 1 is mechanically closable. Because a descendant filter always evaluates
-before an ancestor filter on the same row, the requirement is a plan-tree
-invariant: for any `Filter` D that is a descendant of `Filter` A,
-`max_level(D) <= min_level(A)`. Levels below higher levels are correct; the
-violation is the reverse. `Typecheck` already runs between transforms validating
-plan invariants and is where this belongs, which would turn shape 1 from review
-discipline into a test failure.
-
-Shape 2 is the one that stays soft, and it is the line to put at the top of a
-risk register. Shape 3 is shared with mechanism A, whose `raise_security_level`
-equivalent has the same blind spot.
+Mechanism B's residual risk lies entirely in code that does not exist yet. If a
+**new transform mishandles a level it may generate an insecure plan, and nothing
+reports it**. There is no blanket conversion from an expression to a predicate,
+so constructing one requires naming a level: `Predicate::unconstrained` or
+`Predicate::at_level`. And `level` is private with `raise` as its only mutator,
+so no code can lower one. What a new author can miss is therefore not the
+mechanism but the contract, which is recorded on the `mz_expr::predicate`
+module: where a levelled predicate may be relocated to, what level a derived
+predicate inherits, and what a new predicate-bearing operator owes. The first of
+those is expressible as a plan-tree invariant and belongs in `Typecheck`; the
+second has no mechanical check; the third applies to mechanism A equally.
 
 ### Comparison
 
