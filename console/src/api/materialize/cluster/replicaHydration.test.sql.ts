@@ -187,8 +187,6 @@ describe("buildReplicaHydrationQuery", () => {
   });
 
   it("omits a replica whose every object is excluded", async () => {
-    // Nothing counted means no row at all, which the column renders as a dash
-    // rather than as an unhydrated replica.
     await testdrive(
       seed({
         hydration: `('u1', 'u10', true)`,

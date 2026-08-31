@@ -60,7 +60,7 @@ export const hydrationFilterFn = <TData>(
  */
 export const hydrationFilterFromUrl = (raw: string[]) => {
   const buckets = HYDRATION_BUCKETS.filter((bucket) => raw.includes(bucket));
-  return buckets.length ? [...buckets] : undefined;
+  return buckets.length ? buckets : undefined;
 };
 
 /**

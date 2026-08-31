@@ -65,10 +65,6 @@ beforeEach(() => {
 // Utilization arrives from its own polled query, so the fixtures register it
 // here and the table reads it back through the mocked hook.
 const replicaUtilization = new Map<string, ReplicaUtilization>();
-
-// Hydration arrives from its own polled query, on the same footing as
-// utilization. A replica absent from this map is one the query reported no
-// counted objects for, which the column renders as a dash.
 const replicaHydration = new Map<string, ReplicaHydrationCounts>();
 
 vi.mock("./queries", async () => {
