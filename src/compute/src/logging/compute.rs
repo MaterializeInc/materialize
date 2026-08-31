@@ -57,6 +57,8 @@ pub struct Export {
     pub export_id: GlobalId,
     /// Timely worker index of the exporting dataflow.
     pub dataflow_index: usize,
+    /// Name of the export's type, as produced by `DataflowDescription::export_types`.
+    pub export_type: String,
 }
 
 /// The export for a global id was dropped.
@@ -628,16 +630,18 @@ impl DemuxState {
         ])
     }
 
-    /// Pack an export update key-value for the given export ID and dataflow index.
+    /// Pack an export update key-value for the given export ID, dataflow index, and export type.
     fn pack_export_update(
         &mut self,
         export_id: GlobalId,
         dataflow_index: usize,
+        export_type: &str,
     ) -> (&RowRef, &RowRef) {
         self.export_packer.pack_slice(&[
             make_string_datum(export_id, &mut self.scratch_string_a),
             Datum::UInt64(u64::cast_from(self.worker_id)),
             Datum::UInt64(u64::cast_from(dataflow_index)),
+            Datum::String(export_type),
         ])
     }
 
@@ -782,6 +786,10 @@ struct HydrationTimestamps {
 struct ExportState {
     /// The ID of the dataflow maintaining this export.
     dataflow_index: usize,
+    /// Name of the export's type.
+    ///
+    /// Retained so the drop of the export can retract the row it inserted.
+    export_type: String,
     /// Number of errors in this export.
     ///
     /// This must be a signed integer, since per-worker error counts can be negative, only the
@@ -802,9 +810,10 @@ struct ExportState {
 }
 
 impl ExportState {
-    fn new(dataflow_index: usize, installed_at: Duration) -> Self {
+    fn new(dataflow_index: usize, export_type: String, installed_at: Duration) -> Self {
         Self {
             dataflow_index,
+            export_type,
             error_count: Diff::ZERO,
             created_at: Instant::now(),
             hydration_time_ns: None,
@@ -899,21 +908,25 @@ impl DemuxHandler<'_, '_, '_> {
         ExportReference {
             export_id,
             dataflow_index,
+            export_type,
         }: Ref<'_, Export>,
     ) {
         let export_id = Columnar::into_owned(export_id);
+        let export_type: String = Columnar::into_owned(export_type);
         let ts = self.ts();
-        let datum = self.state.pack_export_update(export_id, dataflow_index);
+        let datum = self
+            .state
+            .pack_export_update(export_id, dataflow_index, &export_type);
         self.output.export.give((datum, ts, Diff::ONE));
 
         // Stamp the event time, not `ts`, which is rounded up to the logging interval. The rounding
         // then only delays when an update becomes visible, rather than skewing recorded instants.
         let installed_at = self.time;
 
-        let existing = self
-            .state
-            .exports
-            .insert(export_id, ExportState::new(dataflow_index, installed_at));
+        let existing = self.state.exports.insert(
+            export_id,
+            ExportState::new(dataflow_index, export_type, installed_at),
+        );
         if existing.is_some() {
             error!(%export_id, "export already registered");
         }
@@ -943,7 +956,9 @@ impl DemuxHandler<'_, '_, '_> {
         let ts = self.ts();
         let dataflow_index = export.dataflow_index;
 
-        let datum = self.state.pack_export_update(export_id, dataflow_index);
+        let datum = self
+            .state
+            .pack_export_update(export_id, dataflow_index, &export.export_type);
         self.output.export.give((datum, ts, Diff::MINUS_ONE));
 
         // Remove error count logging for this export.
@@ -1454,11 +1469,13 @@ impl CollectionLogging {
         export_id: GlobalId,
         logger: Logger,
         dataflow_index: usize,
+        export_type: &str,
         import_ids: impl Iterator<Item = GlobalId>,
     ) -> Self {
         logger.log(&ComputeEvent::Export(Export {
             export_id,
             dataflow_index,
+            export_type: export_type.to_string(),
         }));
 
         let mut self_ = Self {

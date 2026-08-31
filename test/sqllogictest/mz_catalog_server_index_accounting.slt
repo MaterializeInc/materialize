@@ -350,6 +350,7 @@ mz_compute_error_counts_raw  export_id
 mz_compute_error_counts_raw  worker_id
 mz_compute_exports_per_worker  dataflow_id
 mz_compute_exports_per_worker  export_id
+mz_compute_exports_per_worker  export_type
 mz_compute_exports_per_worker  worker_id
 mz_compute_frontiers_per_worker  export_id
 mz_compute_frontiers_per_worker  time

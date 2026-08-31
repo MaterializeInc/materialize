@@ -868,6 +868,7 @@ pub static MZ_COMPUTE_EXPORTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
     desc: RelationDesc::builder()
         .with_column("export_id", SqlScalarType::String.nullable(false))
         .with_column("dataflow_id", SqlScalarType::UInt64.nullable(false))
+        .with_column("export_type", SqlScalarType::String.nullable(false))
         .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -879,9 +880,13 @@ pub static MZ_COMPUTE_EXPORTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
             "dataflow_id",
             "The ID of the dataflow. Corresponds to `mz_dataflows.id`.",
         ),
+        (
+            "export_type",
+            "The type of the export: `index`, `materialized_view`, `subscribe`, `copy_to_s3_oneshot`, or `metric_sink`. Only a `materialized_view` writes its results back to storage.",
+        ),
     ]),
     sql: "
-SELECT export_id, dataflow_id
+SELECT export_id, dataflow_id, export_type
 FROM mz_introspection.mz_compute_exports_per_worker
 WHERE worker_id = 0::uint8",
     access: vec![PUBLIC_SELECT],

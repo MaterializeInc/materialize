@@ -313,6 +313,7 @@ impl LogVariant {
                 .with_column("export_id", SqlScalarType::String.nullable(false))
                 .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
                 .with_column("dataflow_id", SqlScalarType::UInt64.nullable(false))
+                .with_column("export_type", SqlScalarType::String.nullable(false))
                 .with_key(vec![0, 1])
                 .finish(),
 

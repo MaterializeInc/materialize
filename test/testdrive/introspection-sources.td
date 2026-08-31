@@ -146,6 +146,35 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
     df.name LIKE '%my_unique_mv_name%'
 1
 
+# Test that mz_compute_exports reports the type of each export.
+
+> CREATE INDEX my_unique_index_name ON t (a)
+
+> SELECT exp.export_type
+  FROM mz_indexes idx
+  JOIN mz_internal.mz_object_global_ids gid ON gid.id = idx.id
+  JOIN mz_introspection.mz_compute_exports exp ON exp.export_id = gid.global_id
+  WHERE idx.name = 'my_unique_index_name'
+index
+
+> SELECT exp.export_type
+  FROM mz_materialized_views mv
+  JOIN mz_internal.mz_object_global_ids gid ON gid.id = mv.id
+  JOIN mz_introspection.mz_compute_exports exp ON exp.export_id = gid.global_id
+  WHERE mv.name = 'my_unique_mv_name'
+materialized_view
+
+> DROP INDEX my_unique_index_name
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE (
+  SELECT true
+  FROM mz_introspection.mz_compute_exports e, mz_internal.mz_subscriptions s
+  WHERE e.export_id = s.id AND e.export_type = 'subscribe')
+> FETCH 1 c WITH (timeout='20s')
+<TIMESTAMP> 1 true
+> COMMIT
+
 # Test that each operator has at most one parent
 
 > SELECT max(count) FROM (
