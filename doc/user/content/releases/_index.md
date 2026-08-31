@@ -37,9 +37,11 @@ Iceberg catalog connections accept `ACCESS DELEGATION = 'vended-credentials'`, w
 - **Clearer error for `avg(interval)`**: The unsupported-`sum` error now names `avg(interval)` alongside `sum(interval)`, so a query that never mentions `sum` no longer reports an error about it.
 
 ### Agent Skills {#v26.40-agent-skills}
+- **mz-optimize-memory**: A new skill that works top-down from a cluster's largest arrangements to a table of memory-reducing fixes — index changes, outer-join and subquery rewrites, window-function patterns, and arrangement size hints — with rules for estimating each saving before making the change and verifying it afterwards.
 - **mcp-developer-analysis**: The skill's guidance was corrected against the developer MCP server, an emulator run, and a Cloud environment; most notably it no longer tells agents to avoid `mz_dataflow_arrangement_sizes` outright, and it now gives the working join path from dataflow ids to catalog objects.
 
 ### Bug Fixes {#v26.40-bug-fixes}
+- Fixed the MCP servers rejecting `tools/list`, `ping`, and `notifications/initialized` requests that carry any `params` — including the `_meta` field MCP clients are allowed to attach — with a non-JSON-RPC HTTP 422 that clients read as the server being unavailable.
 - Fixed `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` leaving a stale cached query plan behind, which put `environmentd` into a crash loop on every subsequent restart once a dependency of the replaced definition was dropped, and could otherwise leave the view computing its old definition.
 - `CREATE TABLE ... FROM SOURCE` now requires `SELECT` on the source and `USAGE` on its schema, closing a case where `CREATE` on any schema a role controlled was enough to read a source that role had been denied; deployments where a platform team owns sources and application teams attach tables into their own schemas will need those `SELECT` grants added.
 - Fixed `ALTER CONNECTION` letting a connection owner keep secrets and connections they lack `USAGE` privileges on, and read those secrets during content checks or connection validation.
