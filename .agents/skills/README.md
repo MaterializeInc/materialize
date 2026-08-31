@@ -51,13 +51,11 @@ choosing which framework to use, start with **mz-test**.
 
 The skills above are for hacking on this repository. We also publish a separate
 set of skills for *using* Materialize, covering SQL authoring, operational
-introspection, freshness debugging, dbt, Terraform, `mz-deploy`, and semantic
-layer design. They live in
+introspection, freshness debugging, cluster memory optimization, dbt, Terraform,
+`mz-deploy`, and semantic layer design. They live in
 [MaterializeInc/agent-skills](https://github.com/MaterializeInc/agent-skills)
 and are documented at
-[Agent Skills](https://materialize.com/docs/integrations/coding-agent-skills/#skills),
-including the most recent additions, `mz-ontology-design` and
-`materialize-debug-freshness`.
+[Agent Skills](https://materialize.com/docs/integrations/coding-agent-skills/#skills).
 
 Install them into a project alongside the skills in this directory:
 
