@@ -228,10 +228,9 @@ predicate must be evaluated after every lower-level one.
 
 ### What a future transform has to know
 
-Mechanism B's residual risk is often stated as "every future transform that
-touches predicates has to preserve the level." That is too broad on two counts,
-and being precise about it matters, because the imprecise version is both
-unactionable and more alarming than the truth.
+Mechanism B's residual risk lies entirely in code that does not exist yet, and
+it is narrower than "a future transform has to preserve the level" for two
+reasons.
 
 **A new transform cannot fail to notice that levels exist.** There is no blanket
 conversion from an expression to a predicate, so constructing one requires
@@ -244,7 +243,7 @@ sorts by level, so however much a transform shuffles predicates in the
 mid-level plan, the order is re-established when they fuse into one operator.
 The sort is a convergent enforcement point, not a step that can be skipped.
 
-That leaves three specific shapes, and they are the whole contract:
+Three shapes remain, and they are the whole contract:
 
 1. **Relocating a predicate across operators.** The sort only helps when the
    predicates end up in the same `MapFilterProject`. A transform that moves a
