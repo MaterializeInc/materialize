@@ -29,6 +29,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_repr::Timestamp;
+use mz_repr::adt::numeric::Numeric;
 use mz_repr::role_id::RoleId;
 use mz_sql::ast::{Ident, QualifiedReplica};
 use mz_sql::catalog::{CatalogCluster, CatalogError, ObjectType};
@@ -41,7 +42,9 @@ use mz_sql::plan::{
 };
 use mz_sql::plan::{AlterClusterPlan, OnTimeoutAction};
 use mz_sql::session::metadata::SessionMetadata;
-use mz_sql::session::vars::{MAX_REPLICAS_PER_CLUSTER, SystemVars, Var};
+use mz_sql::session::vars::{
+    MAX_CREDIT_CONSUMPTION_RATE, MAX_REPLICAS_PER_CLUSTER, SystemVars, Var,
+};
 use mz_storage_types::sources::SourceConnection;
 use tracing::{Instrument, Span, debug};
 
@@ -1885,8 +1888,9 @@ impl Coordinator {
         };
 
         // A replication-factor-only increase changes the committed baseline,
-        // which the controller cannot shed. Unlike a reshape's transient
-        // strategy union, the resulting replica count is exact here.
+        // which the controller cannot shed. Validate that floor without trying
+        // to predict the controller's transient strategy union. Concrete create
+        // transactions still validate the complete physical replica set.
         if *new_replication_factor > replication_factor && cluster_id.is_user() {
             self.validate_resource_limit(
                 usize::cast_from(replication_factor),
@@ -1894,6 +1898,26 @@ impl Coordinator {
                 SystemVars::max_replicas_per_cluster,
                 "cluster replica",
                 MAX_REPLICAS_PER_CLUSTER.name(),
+            )?;
+
+            let credits_per_replica = self
+                .catalog()
+                .cluster_replica_sizes()
+                .0
+                .get(new_size)
+                .expect("new replica size was validated")
+                .credits_per_hour;
+            let baseline_credits = credits_per_replica * Numeric::from(*new_replication_factor);
+            self.validate_resource_limit_numeric(
+                self.current_credit_consumption_rate(Some(cluster_id)),
+                baseline_credits,
+                |system_vars| {
+                    self.license_key
+                        .max_credit_consumption_rate()
+                        .map_or_else(|| system_vars.max_credit_consumption_rate(), Numeric::from)
+                },
+                "cluster replica",
+                MAX_CREDIT_CONSUMPTION_RATE.name(),
             )?;
         }
 
