@@ -146,7 +146,6 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     # within the short poll loops below.
     mz.environmentd.sql(
         """
-        ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
         ALTER SYSTEM SET cluster_controller_tick_interval = '5ms';
         """,
         port="internal",
