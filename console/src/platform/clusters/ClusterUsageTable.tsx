@@ -8,7 +8,11 @@
 // by the Apache License, Version 2.0.
 
 import { HStack, Text, Tooltip, VStack } from "@chakra-ui/react";
-import { ColumnFiltersState, createColumnHelper } from "@tanstack/react-table";
+import {
+  ColumnFiltersState,
+  createColumnHelper,
+  SortingFn,
+} from "@tanstack/react-table";
 import React from "react";
 import { useLocation } from "react-router-dom";
 
@@ -22,6 +26,7 @@ import useLatestOfflineReplica, {
 } from "~/api/materialize/cluster/useLatestOfflineReplica";
 import { OVERFLOW_BUTTON_WIDTH } from "~/components/OverflowMenu";
 import PercentBar from "~/components/PercentBar";
+import StatusPill from "~/components/StatusPill";
 import { sortingFunctions } from "~/components/Table/tableColumnBuilders";
 import { TablePagination } from "~/components/Table/TablePagination";
 import { TableSearch } from "~/components/Table/TableSearch";
@@ -36,6 +41,14 @@ import {
   EmptyListHeaderContents,
   EmptyListWrapper,
 } from "~/layouts/listPageComponents";
+import { MultiSelectFilterPanel } from "~/platform/maintained-objects/filterPanels";
+import {
+  bucketForHydration,
+  HYDRATION_BUCKETS,
+  HYDRATION_LABELS,
+  HydrationBucket,
+  STATUS_COLOR_SCHEMES,
+} from "~/platform/maintained-objects/filters";
 import WarningIcon from "~/svg/WarningIcon";
 import { truncateMaxWidth } from "~/theme/components/Table";
 import {
@@ -43,13 +56,23 @@ import {
   FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
 } from "~/utils/dateFormat";
 
+import { ClusterFilterChips } from "./ClusterFilterChips";
 import {
   ClusterActionsCell,
   ClusterNameCell,
   ClusterTableMeta,
 } from "./clusterTableCells";
-import { useReplicaUtilization } from "./queries";
-import { UtilizationFilterChips } from "./UtilizationFilterChips";
+import {
+  HYDRATION_COLUMN_ID,
+  HYDRATION_URL_KEY,
+  hydrationFilterFn,
+  hydrationFilterFromUrl,
+} from "./hydrationFilters";
+import {
+  ReplicaHydrationCounts,
+  useReplicaHydration,
+  useReplicaUtilization,
+} from "./queries";
 import { UtilizationFilterPanel } from "./UtilizationFilterPanel";
 import {
   utilizationFilterFn,
@@ -82,11 +105,16 @@ const NO_UTILIZATION: ReplicaUtilizationValues = {
  * `replica` is null for a cluster that currently has no replicas. Such a
  * cluster still gets a row, so the list stays a complete inventory of clusters
  * rather than silently hiding the ones with nothing running.
+ *
+ * `hydration` is null when the replica has no counted objects, which is not the
+ * same as nothing being hydrated. See `buildReplicaHydrationQuery` for what the
+ * counts cover.
  */
 type ClusterReplicaRow = {
   cluster: ClusterWithOwnership;
   replica: Replica | null;
   utilization: ReplicaUtilizationValues;
+  hydration: ReplicaHydrationCounts | null;
 };
 
 const ReplicaPercentCell = ({ value }: { value: number | null }) => {
@@ -96,6 +124,50 @@ const ReplicaPercentCell = ({ value }: { value: number | null }) => {
     return <>-</>;
   }
   return <PercentBar fraction={value} />;
+};
+
+/**
+ * A replica's hydration, or a dash when the counts say nothing about it. A
+ * cluster with no replicas and a replica with no counted objects both land
+ * here, so the dash reads as "not reported" rather than as "nothing hydrated".
+ */
+const ReplicaHydrationCell = ({
+  bucket,
+}: {
+  bucket: HydrationBucket | undefined;
+}) => {
+  if (bucket === undefined) {
+    return <>-</>;
+  }
+  return (
+    <StatusPill
+      status={bucket}
+      label={HYDRATION_LABELS[bucket]}
+      colorScheme={STATUS_COLOR_SCHEMES[bucket]}
+    />
+  );
+};
+
+/** How far a replica's hydration has progressed, or null when unknown. */
+const hydrationFraction = (counts: ReplicaHydrationCounts | null) =>
+  counts && counts.totalObjects > 0
+    ? counts.hydratedObjects / counts.totalObjects
+    : null;
+
+/**
+ * Orders by hydration progress, unknown last. Sorting on the bucket the cell
+ * shows would collapse every replica into three ties, so this reaches past it
+ * to the counts behind it.
+ */
+const hydrationSortingFn: SortingFn<ClusterReplicaRow> = (rowA, rowB) => {
+  const a = hydrationFraction(rowA.original.hydration);
+  const b = hydrationFraction(rowB.original.hydration);
+
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+
+  return a - b;
 };
 
 /** Formats a status-change timestamp for display, or "-" when there is none. */
@@ -191,13 +263,23 @@ const UTILIZATION_COLUMNS: UtilizationColumn[] = [
   },
 ];
 
-/** The utilization filters a URL asks for, skipping any it cannot parse. */
-const utilizationFiltersFromSearch = (search: string): ColumnFiltersState => {
+/** The column filters a URL asks for, skipping any it cannot parse. */
+const columnFiltersFromSearch = (search: string): ColumnFiltersState => {
   const params = new URLSearchParams(search);
-  return UTILIZATION_COLUMNS.flatMap(({ id, urlKey }) => {
-    const value = utilizationFilterFromUrl(params.get(urlKey));
-    return value ? [{ id, value }] : [];
-  });
+
+  const filters: ColumnFiltersState = UTILIZATION_COLUMNS.flatMap(
+    ({ id, urlKey }) => {
+      const value = utilizationFilterFromUrl(params.get(urlKey));
+      return value ? [{ id, value }] : [];
+    },
+  );
+
+  const buckets = hydrationFilterFromUrl(params.getAll(HYDRATION_URL_KEY));
+  if (buckets) {
+    filters.push({ id: HYDRATION_COLUMN_ID, value: buckets });
+  }
+
+  return filters;
 };
 
 /** A utilization column, read from the row's readings by `read`. */
@@ -244,6 +326,35 @@ const columns = [
     cell: (info) => info.getValue() ?? "-",
   }),
   ...UTILIZATION_COLUMNS.map(percentColumn),
+  columnHelper.accessor(
+    (row) =>
+      row.hydration
+        ? bucketForHydration(
+            row.hydration.hydratedObjects,
+            row.hydration.totalObjects,
+          )
+        : undefined,
+    {
+      id: HYDRATION_COLUMN_ID,
+      header: "Hydration",
+      sortingFn: hydrationSortingFn,
+      sortDescFirst: false,
+      filterFn: hydrationFilterFn,
+      enableGlobalFilter: false,
+      cell: (info) => <ReplicaHydrationCell bucket={info.getValue()} />,
+      meta: {
+        tooltip:
+          "Whether the objects on this replica have finished reading their history.",
+        renderFilter: (column) => (
+          <MultiSelectFilterPanel<HydrationBucket, ClusterReplicaRow>
+            column={column}
+            items={HYDRATION_BUCKETS}
+            getLabel={(bucket) => HYDRATION_LABELS[bucket]}
+          />
+        ),
+      },
+    },
+  ),
   columnHelper.accessor((row) => latestReplicaStatusAt(row.replica), {
     // NOTE: deliberately not the cluster's own `latestStatusUpdate`. That comes
     // from the replica status *history*, so it counts replicas that have since
@@ -289,6 +400,7 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
   const { data: offlineReplicaMap, error: offlineReplicaError } =
     useLatestOfflineReplica();
   const { data: replicaUtilization } = useReplicaUtilization();
+  const { data: replicaHydration } = useReplicaHydration();
   const location = useLocation();
 
   const meta: ClusterTableMeta = { offlineReplicaMap };
@@ -299,7 +411,7 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
     getInitialTableState(location.search),
   );
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>(
-    () => utilizationFiltersFromSearch(location.search),
+    () => columnFiltersFromSearch(location.search),
   );
 
   // TanStack recomputes its row models whenever `data` changes identity, so the
@@ -308,15 +420,23 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
     () =>
       clusters.flatMap((cluster): ClusterReplicaRow[] =>
         cluster.replicas.length === 0
-          ? [{ cluster, replica: null, utilization: NO_UTILIZATION }]
+          ? [
+              {
+                cluster,
+                replica: null,
+                utilization: NO_UTILIZATION,
+                hydration: null,
+              },
+            ]
           : cluster.replicas.map((replica) => ({
               cluster,
               replica,
               utilization:
                 replicaUtilization?.get(replica.id) ?? NO_UTILIZATION,
+              hydration: replicaHydration?.get(replica.id) ?? null,
             })),
       ),
-    [clusters, replicaUtilization],
+    [clusters, replicaHydration, replicaUtilization],
   );
 
   const table = useUniversalTable({
@@ -357,6 +477,12 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
         params[urlKey] = utilizationFilterToUrl(filter.value as number);
       }
     }
+    const hydrationFilter = tableState.columnFilters.find(
+      (filter) => filter.id === HYDRATION_COLUMN_ID,
+    );
+    if (hydrationFilter) {
+      params[HYDRATION_URL_KEY] = hydrationFilter.value;
+    }
     if (tableState.globalFilter) {
       params.q = tableState.globalFilter;
     }
@@ -395,7 +521,10 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
        * panels, with it. Removing a chip is then the only way back from a
        * filter that matched nothing.
        */}
-      <UtilizationFilterChips table={table} columns={UTILIZATION_COLUMNS} />
+      <ClusterFilterChips
+        table={table}
+        utilizationColumns={UTILIZATION_COLUMNS}
+      />
       {noMatches ? (
         <EmptyListWrapper>
           <EmptyListHeader>

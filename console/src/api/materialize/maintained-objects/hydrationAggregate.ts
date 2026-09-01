@@ -10,6 +10,7 @@
 import { sql } from "kysely";
 
 import { queryBuilder } from "~/api/materialize";
+import { buildHydrationStatusesTable } from "~/api/materialize/expressionBuilders";
 
 export interface HydrationAggregateRow {
   object_id: string;
@@ -43,17 +44,8 @@ export interface HydrationAggregateRow {
  * they multiply the feed's cardinality several times over.
  */
 export function buildHydrationAggregateQuery() {
-  // Subsources have hydration rows of their own (they run on their parent's
-  // cluster), so both sides of the FULL JOIN need the exclusion.
   const hydration = queryBuilder
-    .selectFrom("mz_hydration_statuses as hs")
-    .leftJoin("mz_sources as s", "s.id", "hs.object_id")
-    .where((eb) =>
-      eb.or([
-        eb("s.type", "is", null),
-        eb("s.type", "not in", ["subsource", "progress"]),
-      ]),
-    )
+    .selectFrom(buildHydrationStatusesTable().as("hs"))
     .select((eb) => [
       "hs.object_id",
       sql<bigint>`count(*) FILTER (WHERE ${eb.ref("hs.hydrated")})`.as(
@@ -63,6 +55,8 @@ export function buildHydrationAggregateQuery() {
     ])
     .groupBy("hs.object_id");
 
+  // The other side of the FULL JOIN needs the same exclusion, against a
+  // relation `buildHydrationStatusesTable` does not read.
   const statuses = queryBuilder
     .selectFrom("mz_source_statuses")
     .where("type", "not in", ["subsource", "progress"])

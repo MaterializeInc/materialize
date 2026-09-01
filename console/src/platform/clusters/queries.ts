@@ -58,6 +58,7 @@ import {
   MaterializationLagParams,
 } from "~/api/materialize/cluster/materializationLag";
 import fetchMaxReplicasPerCluster from "~/api/materialize/cluster/maxReplicasPerCluster";
+import { fetchReplicaHydration } from "~/api/materialize/cluster/replicaHydration";
 import {
   ClusterReplicasParams,
   fetchClusterReplicas,
@@ -191,6 +192,8 @@ export const clusterQueryKeys = {
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("replicaUtilization"),
     ] as const,
+  replicaHydration: () =>
+    [...clusterQueryKeys.all(), buildQueryKeyPart("replicaHydration")] as const,
   maintainedObjectNames: (objectIds: string[]) =>
     [
       ...clusterQueryKeys.all(),
@@ -224,6 +227,52 @@ export function useReplicaUtilization() {
     queryFn: ({ queryKey, signal }) =>
       fetchReplicaUtilization({ queryKey, requestOptions: { signal } }),
     select: toUtilizationMap,
+  });
+}
+
+/** Hydrated and total counted objects for one replica. */
+export interface ReplicaHydrationCounts {
+  hydratedObjects: number;
+  totalObjects: number;
+}
+
+export type ReplicaHydrationMap = Map<string, ReplicaHydrationCounts>;
+
+const toHydrationMap = ({
+  rows,
+}: Awaited<ReturnType<typeof fetchReplicaHydration>>): ReplicaHydrationMap => {
+  const map: ReplicaHydrationMap = new Map();
+  for (const row of rows) {
+    // The query already drops rows naming no replica. Narrowing here as well
+    // keeps `replica_id` nullable all the way through, so the guarantee is one
+    // the compiler checks rather than one a cast asserts.
+    if (row.replicaId === null) continue;
+
+    map.set(row.replicaId, {
+      // Aggregates arrive as bigints, which throw when mixed with the numbers
+      // the column sorts and divides by.
+      hydratedObjects: Number(row.hydratedObjects),
+      totalObjects: Number(row.totalObjects),
+    });
+  }
+  return map;
+};
+
+/**
+ * Hydration counts per replica, keyed by replica id. A replica with no counted
+ * objects is absent from the map rather than present with zeroes.
+ *
+ * Polled on the same cadence as utilization rather than riding along with
+ * `useClusters`, whose five-second interval would scan the
+ * `mz_hydration_statuses` arrangement far more often than hydration changes.
+ */
+export function useReplicaHydration() {
+  return useQuery({
+    refetchInterval: 30_000,
+    queryKey: clusterQueryKeys.replicaHydration(),
+    queryFn: ({ queryKey, signal }) =>
+      fetchReplicaHydration({ queryKey, requestOptions: { signal } }),
+    select: toHydrationMap,
   });
 }
 
