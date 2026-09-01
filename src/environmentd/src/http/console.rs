@@ -17,7 +17,7 @@ use axum::Json;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::response::{IntoResponse, Response};
-use http::header::{CONTENT_TYPE, COOKIE, HOST, LOCATION, SET_COOKIE};
+use http::header::{CONTENT_TYPE, COOKIE, HOST, LOCATION, ORIGIN, SET_COOKIE};
 use http::{HeaderMap, HeaderValue, Method};
 use hyper::Uri;
 use hyper_tls::HttpsConnector;
@@ -202,11 +202,12 @@ pub(crate) async fn handle_internal_console(
 /// Handles the `?preview_build=<label>` selection parameter. A GET with a
 /// label renders a confirmation page whose form POSTs the selection back; the
 /// POST stores it in a cookie and redirects to the same path without the
-/// parameter. Requiring the POST means a cross-site navigation cannot change
-/// the served build, since `SameSite=Lax` session cookies accompany top-level
-/// GETs but not cross-site POSTs. Clearing (an empty label) is allowed on GET:
-/// it only ever restores the default build and is the recovery path for a
-/// broken selection. Returns `None` when the parameter is absent.
+/// parameter. The POST must additionally be same-origin (see
+/// [`is_same_origin`]), so a cross-site navigation cannot change the served
+/// build even if the fronting proxy's session cookie policy were to allow
+/// cross-site POSTs. Clearing (an empty label) is allowed on GET: it only
+/// ever restores the default build and is the recovery path for a broken
+/// selection. Returns `None` when the parameter is absent.
 fn preview_build_selection_response(
     console_config: &ConsoleProxyConfig,
     req: &Request<Body>,
@@ -224,6 +225,9 @@ fn preview_build_selection_response(
         }
     }
     let is_post = *req.method() == Method::POST;
+    if is_post && !is_same_origin(req) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let Some(label) = selection else {
         // The proxied upstream serves only static assets, so only selection
         // POSTs are accepted.
@@ -268,6 +272,32 @@ fn preview_build_selection_response(
         .body(Body::empty())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Some(response))
+}
+
+/// True unless the request was initiated by another site. Browser-set
+/// `Sec-Fetch-Site` cannot be forged by page scripts; `Origin` is the
+/// fallback for browsers predating it. The fronting proxy's `SameSite=Lax`
+/// session cookie also keeps a cross-site POST unauthenticated today, but
+/// that is its configuration, not this code's, so the check here is the
+/// layer this proxy owns.
+fn is_same_origin(req: &Request<Body>) -> bool {
+    if let Some(site) = req
+        .headers()
+        .get("sec-fetch-site")
+        .and_then(|v| v.to_str().ok())
+    {
+        return site == "same-origin" || site == "none";
+    }
+    let (Some(origin), Some(host)) = (req.headers().get(ORIGIN), req.headers().get(HOST)) else {
+        // No `Origin` on a POST means it was not a cross-site form submission.
+        return true;
+    };
+    let (Ok(origin), Ok(host)) = (origin.to_str(), host.to_str()) else {
+        return false;
+    };
+    origin
+        .split_once("://")
+        .is_some_and(|(_, authority)| authority == host)
 }
 
 /// Confirmation page for a preview build selection. All interpolated values

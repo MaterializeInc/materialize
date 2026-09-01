@@ -61,7 +61,7 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka_sys::RDKafkaErrorCode;
 use regex::Regex;
 use reqwest::blocking::Client;
-use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE, COOKIE, LOCATION, SET_COOKIE};
+use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE, COOKIE, LOCATION, ORIGIN, SET_COOKIE};
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
@@ -2281,6 +2281,29 @@ fn test_internal_console_proxy_preview_build() {
     let cookie = res.headers().get(SET_COOKIE).unwrap().to_str().unwrap();
     assert_contains!(cookie, "mz_console_preview_build=console-git-foo");
     assert_contains!(cookie, "Path=/internal-console");
+
+    // A cross-site POST is rejected on its own provenance, independent of the
+    // fronting proxy's session cookie policy.
+    for (header, value) in [
+        ("sec-fetch-site", "cross-site"),
+        (ORIGIN.as_str(), "https://attacker.example"),
+    ] {
+        let res = client
+            .post(Url::parse(&format!("{base}?preview_build=console-git-foo")).unwrap())
+            .header(header, value)
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        assert_eq!(res.headers().get(SET_COOKIE), None);
+    }
+
+    // A same-origin POST declaring its provenance still succeeds.
+    let res = client
+        .post(Url::parse(&format!("{base}?preview_build=console-git-foo")).unwrap())
+        .header("sec-fetch-site", "same-origin")
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
 
     // An invalid label and a label without the console-git- prefix are
     // rejected outright.
