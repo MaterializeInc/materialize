@@ -1668,6 +1668,30 @@ impl<'a> NameResolver<'a> {
             version,
         }
     }
+
+    /// Resolves an item name in a `DOC ON` position (`DOC ON TYPE x`,
+    /// `DOC ON COLUMN x.c`), where the name may denote a type or a relation. Also used for `COMMENT
+    /// ON COLUMN`.
+    fn resolve_doc_on_name(&mut self, name: RawItemName) -> ResolvedItemName {
+        let mut name = self.resolve_item_name(
+            name,
+            // The name can refer to either a type or a relation.
+            //
+            // It's possible this will get simpler once database-issues#7142 is
+            // fixed. See the comment on `ItemResolutionConfig` for details.
+            ItemResolutionConfig {
+                functions: false,
+                types: true,
+                relations: true,
+            },
+        );
+        if let ResolvedItemName::Item { print_id, .. } = &mut name {
+            // These references persist in a sink's `create_sql`, so the resolved name must print
+            // its id, otherwise it can't recover it when recreating
+            *print_id = true;
+        }
+        name
+    }
 }
 
 impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
@@ -1798,14 +1822,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
     }
 
     fn fold_column_name(&mut self, column_name: ast::ColumnName<Raw>) -> ast::ColumnName<Aug> {
-        let item_name = self.resolve_item_name(
-            column_name.relation,
-            ItemResolutionConfig {
-                functions: false,
-                types: true,
-                relations: true,
-            },
-        );
+        let item_name = self.resolve_doc_on_name(column_name.relation);
 
         match &item_name {
             ResolvedItemName::Item {
@@ -2302,19 +2319,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
     fn fold_doc_on_identifier(&mut self, node: DocOnIdentifier<Raw>) -> DocOnIdentifier<Aug> {
         match node {
             DocOnIdentifier::Column(name) => DocOnIdentifier::Column(self.fold_column_name(name)),
-            DocOnIdentifier::Type(name) => DocOnIdentifier::Type(self.resolve_item_name(
-                name,
-                // In `DOC ON TYPE ...`, the type can refer to either a type or
-                // a relation.
-                //
-                // It's possible this will get simpler once database-issues#7142 is fixed. See
-                // the comment on `ItemResolutionConfig` for details.
-                ItemResolutionConfig {
-                    functions: false,
-                    types: true,
-                    relations: true,
-                },
-            )),
+            DocOnIdentifier::Type(name) => DocOnIdentifier::Type(self.resolve_doc_on_name(name)),
         }
     }
 
