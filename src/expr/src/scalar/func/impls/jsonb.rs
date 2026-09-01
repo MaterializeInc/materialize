@@ -815,9 +815,7 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
     Ok(jsonb)
 }
 
-/// Extracts the catalog item references from a catalog `create_sql` string.
-///
-/// Returns a JSONB object whose fields mirror `ItemReferences`.
+/// Extracts the catalog item references from a catalog `create_sql` string as a JSONB object.
 ///
 /// - `ids`: array of catalog id strings from `[<id> AS <name>]` references.
 /// - `named_funcs`: array of function references such as "pg_catalog"."max".
@@ -843,6 +841,12 @@ fn parse_catalog_item_references<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
         };
 
         let refs = collect_item_references(&stmt);
+        mz_ore::soft_assert_or_log!(
+            refs.named_array_elements.is_empty(),
+            "persisted create_sql should never carry an array type T[] \
+            and resolve its array type in `ids`: {:?}",
+            refs.named_array_elements
+        );
         Ok(json!({
             "ids": refs.ids.iter().collect::<Vec<_>>(),
             "named_funcs": refs.named_funcs.iter().map(qualified).collect::<Vec<_>>(),
