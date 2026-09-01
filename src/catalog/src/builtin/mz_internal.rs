@@ -1318,7 +1318,7 @@ pub static MZ_SOURCE_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| 
         ),
         (
             "status",
-            "The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `failed`, or `dropped`.",
+            "The status of the source: one of `starting`, `running`, `paused`, `stalled`, or `dropped`.",
         ),
         (
             "error",
@@ -2169,7 +2169,7 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
         ),
         (
             "status",
-            "The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `failed`, or `dropped`.",
+            "The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.",
         ),
         (
             "error",
@@ -2368,7 +2368,7 @@ pub static MZ_SINK_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| Bu
         ),
         (
             "status",
-            "The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.",
+            "The status of the sink: one of `starting`, `running`, `paused`, `stalled`, or `dropped`.",
         ),
         (
             "error",
@@ -2451,7 +2451,7 @@ pub static MZ_SINK_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVie
         ),
         (
             "status",
-            "The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.",
+            "The status of the sink: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.",
         ),
         (
             "error",
