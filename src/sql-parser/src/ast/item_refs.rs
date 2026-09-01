@@ -92,13 +92,19 @@ impl<'ast> Visit<'ast, Raw> for ReferenceCollector {
     }
 
     fn visit_function(&mut self, node: &'ast Function<Raw>) {
-        self.record(&node.name, Position::Func);
-        // Visit everything `visit::visit_function` visits
-        self.visit_function_args(&node.args);
-        if let Some(filter) = &node.filter {
+        let Function {
+            name,
+            args,
+            filter,
+            over,
+            distinct: _,
+        } = node;
+        self.record(name, Position::Func);
+        self.visit_function_args(args);
+        if let Some(filter) = filter {
             self.visit_expr(filter);
         }
-        if let Some(over) = &node.over {
+        if let Some(over) = over {
             self.visit_window_spec(over);
         }
     }
@@ -144,10 +150,18 @@ impl<'ast> Visit<'ast, Raw> for ReferenceCollector {
     }
 
     fn visit_query(&mut self, node: &'ast Query<Raw>) {
+        let Query {
+            ctes,
+            body,
+            order_by,
+            limit,
+            offset,
+        } = node;
+
+        let scope_depth = self.cte_names.len();
         // Keep track of CTEs such that we don't record them
         // in `named_relations`
-        let scope_depth = self.cte_names.len();
-        match &node.ctes {
+        match ctes {
             CteBlock::Simple(ctes) => {
                 for cte in ctes {
                     self.visit_cte(cte);
@@ -161,15 +175,14 @@ impl<'ast> Visit<'ast, Raw> for ReferenceCollector {
                 self.visit_mut_rec_block(block);
             }
         }
-        // The remaining fields of `visit::visit_query`
-        self.visit_set_expr(&node.body);
-        for order_by in &node.order_by {
+        self.visit_set_expr(body);
+        for order_by in order_by {
             self.visit_order_by_expr(order_by);
         }
-        if let Some(limit) = &node.limit {
+        if let Some(limit) = limit {
             self.visit_limit(limit);
         }
-        if let Some(offset) = &node.offset {
+        if let Some(offset) = offset {
             self.visit_expr(offset);
         }
         // Pop CTEs once visited.
