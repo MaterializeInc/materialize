@@ -1,0 +1,121 @@
+{{- /*
+  Renders /llms.txt, an index of every docs page for LLM and agent consumers.
+  Format per https://llmstxt.org/: an H1, a `>` summary blockquote, a short
+  orienting note, then one H2 per top-level docs section listing
+  "- [Title](url): description" entries.
+
+  Links point at each page's Markdown rendition rather than its HTML page, so a
+  consumer fetches prose instead of site chrome.
+
+  Only the HTML pass renders this file. config.skill.toml resets outputs.home to
+  ["skill"], and the rightmost --config file wins, so the Markdown pass emits
+  markdown-docs/index.md instead of a second copy of this index.
+
+  The output must be byte-stable: no dates, no build metadata, and no ranging
+  over maps. Every collection below is explicitly ordered.
+*/ -}}
+{{- $basePath := (urls.Parse site.BaseURL).Path -}}
+{{- /*
+  Only the main docs build produces the markdown-docs tree these links resolve
+  against; self-managed-docs/* branches build HTML alone. Emit nothing there
+  rather than publish an index of dead links.
+*/ -}}
+{{- if not (in $basePath "self-managed") -}}
+{{- $eligible := slice -}}
+{{- range site.Pages -}}
+  {{- $keep := true -}}
+  {{- /* The home page is this file. */ -}}
+  {{- if .IsHome -}}{{- $keep = false -}}{{- end -}}
+  {{- /* build.render=never leaves a page with no permalink to link to. */ -}}
+  {{- if not .RelPermalink -}}{{- $keep = false -}}{{- end -}}
+  {{- if .Params.headless -}}{{- $keep = false -}}{{- end -}}
+  {{- /*
+    Per-version release notes, filtered by path rather than permalink: the
+    older ones predate the render:never convention and still render, so the
+    permalink check above catches only part of the set. The /releases/ landing
+    page stays.
+  */ -}}
+  {{- if strings.HasPrefix .Path "/releases/v" -}}{{- $keep = false -}}{{- end -}}
+  {{- with .Params.robots -}}
+    {{- if in (lower .) "noindex" -}}{{- $keep = false -}}{{- end -}}
+  {{- end -}}
+  {{- if $keep -}}{{- $eligible = $eligible | append . -}}{{- end -}}
+{{- end -}}
+{{- /*
+  Group order follows the sidebar. A top-level menu entry names a group only
+  when it canonically stands for a top-level content section: either its page IS
+  that section's index page, or its identifier resolves to one. The first test
+  has to compare paths, not just .Section, because a nested page can register a
+  top-level nav entry (content/integrations/mcp-server/_index.md does, at weight
+  48) and would otherwise claim the whole integrations group at the wrong
+  position. The identifier test covers the header-only entries declared in
+  config.toml, which have no page at all.
+
+  A header whose children are root-level pages maps to the empty section, which
+  is how faqs/support/license reach the index.
+*/ -}}
+{{- $keys := slice -}}
+{{- $groups := slice -}}
+{{- range site.Menus.main.ByWeight -}}
+  {{- $key := "" -}}
+  {{- $found := false -}}
+  {{- with .Page -}}
+    {{- if eq .Path (printf "/%s" .Section) -}}
+      {{- $key = .Section -}}{{- $found = true -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if not $found -}}
+    {{- with site.GetPage (printf "/%s" .Identifier) -}}
+      {{- if eq .Path (printf "/%s" .Section) -}}
+        {{- $key = .Section -}}{{- $found = true -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if and (not $found) (not .Page) .HasChildren -}}
+    {{- range .Children.ByWeight -}}
+      {{- if not $found -}}
+        {{- with .Page -}}{{- $key = .Section -}}{{- $found = true -}}{{- end -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if and $found (not (in $keys $key)) -}}
+    {{- $keys = $keys | append $key -}}
+    {{- $groups = $groups | append (dict "key" $key "title" .Name) -}}
+  {{- end -}}
+{{- end -}}
+{{- /*
+  Sections the nav never mentions, so nothing is dropped silently: two sections
+  spell the front matter key `menus:` and register no entry, concepts sits under
+  the Get started header, and administration has no entry at all.
+*/ -}}
+{{- range site.Home.Sections -}}
+  {{- if not (in $keys .Section) -}}
+    {{- $keys = $keys | append .Section -}}
+    {{- $groups = $groups | append (dict "key" .Section "title" .LinkTitle) -}}
+  {{- end -}}
+{{- end -}}
+{{- if not (in $keys "") -}}
+  {{- $groups = $groups | append (dict "key" "" "title" "Other") -}}
+{{- end -}}
+{{- /*
+  The summary is the same intro the docs home page and "What is Materialize?"
+  render, so the positioning here cannot drift from the site's own wording.
+*/ -}}
+{{- $intro := "" -}}
+{{- with site.GetPage "/headless/materialize-intro/intro" -}}
+  {{- $intro = trim (replaceRE `\s+` " " .RawContent) " " -}}
+{{- end -}}
+# {{ site.Title }}
+
+> {{ $intro }}
+
+Every link below points at the Markdown source of a documentation page. For the
+HTML page instead, drop `markdown-docs/` from the URL and drop the trailing
+`index.md`. Per-version release notes are not listed individually; see the
+Releases section.
+{{ range $groups }}{{ $items := sort (where $eligible "Section" .key) "RelPermalink" }}{{ if $items }}
+## {{ .title }}
+
+{{ range $items }}- [{{ .Title }}]({{ partial "markdown-url.html" (dict "page" . "absolute" true) }}){{ with .Description }}{{ $d := trim (replaceRE `\s+` " " .) " " }}{{ if $d }}: {{ $d }}{{ end }}{{ end }}
+{{ end }}{{ end }}{{ end -}}
+{{- end -}}
