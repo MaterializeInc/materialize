@@ -1940,12 +1940,16 @@ where
     }
 
     fn complete_portal(&mut self, name: &str) {
-        let portal = self
+        // A `CLOSE` can name the very portal that carries it, and sequencing
+        // has then already removed it. Marking the state is bookkeeping for a
+        // portal nobody will read again, so its absence is not an error.
+        if let Some(portal) = self
             .adapter_client
             .session()
             .get_portal_unverified_mut(name)
-            .expect("portal should exist");
-        *portal.state = PortalState::Completed(None);
+        {
+            *portal.state = PortalState::Completed(None);
+        }
     }
 
     async fn fetch(
