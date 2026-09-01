@@ -69,6 +69,21 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.se
 $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.seed}-key
 {"type":"record","name":"row","doc":"key doc on t","fields":[{"name":"c2","type":"string","doc":"key doc on t.c2"}]}
 
+# The sink's DOC ON references record dependency edges on the commented type
+# and on the sinked table. The type reference persists by id, so reference
+# extraction (mz_object_dependencies) recovers the edge; a bare name would
+# silently drop out. The guard names the first release that prints ids in
+# DOC ON positions
+>[version>=2604100] SELECT count(*) FROM mz_internal.mz_object_dependencies
+  WHERE object_id = (SELECT id FROM mz_sinks WHERE name = 'sink1')
+    AND referenced_object_id = (SELECT id FROM mz_types WHERE name = 'point');
+1
+
+> SELECT count(*) FROM mz_internal.mz_object_dependencies
+  WHERE object_id = (SELECT id FROM mz_sinks WHERE name = 'sink1')
+    AND referenced_object_id = (SELECT id FROM mz_tables WHERE name = 't');
+1
+
 > CREATE CLUSTER sink2_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK sink2
   IN CLUSTER sink2_cluster
