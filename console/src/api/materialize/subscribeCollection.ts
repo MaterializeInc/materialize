@@ -213,13 +213,14 @@ export function createSubscribeCollection<T extends object>(options: {
   };
 
   const applySnapshot = (state: SubscribeState<T>) => {
-    // Hold the current (possibly cache-seeded) state through a fresh manager's
-    // empty pre-snapshot instead of clearing it back to a loading state. Keyed
-    // on our own `desired` map, which is seeded before sync materializes — not on
-    // collection.size, which lags.
+    // An empty pre-snapshot carries no information: ignore it entirely, so it
+    // neither clears cache-seeded state nor counts as live data. Marking it
+    // live would block a later hydrate (the scope resolves asynchronously, so
+    // hydrate always runs after the first empty push) and leave the cache
+    // permanently unread.
     const isEmptyPreload =
       !state.snapshotComplete && state.data.length === 0 && !state.error;
-    if (isEmptyPreload && desired.size > 0) return;
+    if (isEmptyPreload) return;
 
     liveSnapshotApplied = true;
     desired = new Map(state.data.map((row) => [getKey(row), row]));
