@@ -379,10 +379,7 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
                 id: *object_id,
                 qualifiers: item.name().qualifiers.clone(),
                 full_name: catalog.resolve_full_name(item.name()),
-                print_id: !matches!(
-                    item.item_type(),
-                    CatalogItemType::Func | CatalogItemType::Type
-                ),
+                print_id: !matches!(item.item_type(), CatalogItemType::Func),
                 version: RelationVersionSelector::Latest,
             };
 
@@ -573,8 +570,9 @@ async fn purify_create_sink(
                     let env_id = &catalog.config().environment_id;
                     if matches!(env_id.cloud_provider(), CloudProvider::Aws) {
                         let env_region = env_id.cloud_provider_region();
-                        // Later on we default to "us-east-1" if the region is not set on the S3 Tables
-                        // connection, so we need to do the same check here.
+                        // Later on we default to "us-east-1" if the region is not set on the S3
+                        // Tables connection, so we need to do the same
+                        // check here.
                         let s3_tables_region = s3tables
                             .aws_connection
                             .connection
@@ -594,8 +592,9 @@ async fn purify_create_sink(
             // Validate the sink's (optional) AWS connection even though we never use it.
             // TODO(kynan): If we do start using the sink's creds, check again that this validation
             //   accurately reflects what we need.
-            //   Consider rolling the storage creds validation into the catalog connection's "connect" fn,
-            //   which already validates the catalog creds (currently also used for the storage layer).
+            //   Consider rolling the storage creds validation into the catalog connection's
+            // "connect" fn,   which already validates the catalog creds (currently also
+            // used for the storage layer).
             if let Some(aws_connection) = aws_connection {
                 let aws_conn_id = aws_connection.item_id();
                 let aws_connection = {
@@ -687,7 +686,6 @@ async fn purify_create_sink(
 ///
 /// The function is provided with a `DocOnSchema` that indicates whether the
 /// format is for the key, value, or both.
-///
 // TODO(benesch): rename `DocOnSchema` to the more general `FormatRestriction`.
 fn for_each_format<'a, F>(format: &'a mut Option<FormatSpecifier<Aug>>, mut f: F)
 where
@@ -969,8 +967,8 @@ async fn purify_create_source(
             // point-in-time-recovery that will put the source into an error state.
             let timeline_id = mz_postgres_util::get_timeline_id(&client).await?;
 
-            // Record whether the upstream server is a physical replica, which changes how we can determine
-            // the latest LSN.
+            // Record whether the upstream server is a physical replica, which changes how we can
+            // determine the latest LSN.
             let is_physical_replica = Some(mz_postgres_util::get_is_in_recovery(&client).await?);
 
             // Remove any old detail references
@@ -1814,9 +1812,9 @@ async fn purify_create_table_from_source(
         sql_bail!("DETAILS option cannot be explicitly set");
     }
 
-    // Our text column values are unqualified (just column names), but the purification methods below
-    // expect to match the fully-qualified names against the full set of tables in upstream, so we
-    // need to qualify them using the external reference first.
+    // Our text column values are unqualified (just column names), but the purification methods
+    // below expect to match the fully-qualified names against the full set of tables in
+    // upstream, so we need to qualify them using the external reference first.
     let qualified_text_columns = text_columns
         .iter()
         .map(|col| {
