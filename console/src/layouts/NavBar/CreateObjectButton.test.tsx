@@ -10,7 +10,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
-import { Route, Routes, useLocation } from "react-router-dom";
+import { Route, Routes } from "react-router-dom";
 
 import { CAN_CREATE_CLUSTERS_QUERY_KEY } from "~/api/materialize/cluster/useCanCreateCluster";
 import { USE_CAN_CREATE_OBJECTS_QUERY_KEY } from "~/api/materialize/useCanCreateObjects";
@@ -35,22 +35,9 @@ const renderComponent = () => {
           path="/regions/:region/clusters/new"
           element={<div>New cluster form</div>}
         />
-        <Route
-          path="/access/app-passwords"
-          element={
-            <div>
-              App passwords page <RouterState />
-            </div>
-          }
-        />
       </Routes>
     </Wrapper>,
   );
-};
-
-const RouterState = () => {
-  const location = useLocation();
-  return <div>{JSON.stringify(location.state)}</div>;
 };
 
 describe("CreateObjectButton", () => {
@@ -82,9 +69,6 @@ describe("CreateObjectButton", () => {
     await user.click(button);
     expect(await screen.findByRole("link", { name: "Cluster" })).toBeVisible();
     expect(await screen.findByRole("link", { name: "Source" })).toBeVisible();
-    expect(
-      await screen.findByRole("link", { name: "App Password" }),
-    ).toBeVisible();
   });
 
   it("Clicking cluster shows the new cluster form", async () => {
@@ -93,16 +77,5 @@ describe("CreateObjectButton", () => {
     await user.click(await screen.findByRole("button", { name: "Create New" }));
     await user.click(await screen.findByRole("link", { name: "Cluster" }));
     expect(await screen.findByText("New cluster form")).toBeVisible();
-  });
-
-  it("Clicking app password shows the app password form", async () => {
-    renderComponent();
-    const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "Create New" }));
-    await user.click(await screen.findByRole("link", { name: "App Password" }));
-    expect(await screen.findByText("App passwords page")).toBeVisible();
-    // Since this form doesn't have a dedicated url, we can only test that the state was
-    // passed correctly.
-    expect(await screen.findByText(`{"new":true}`)).toBeVisible();
   });
 });

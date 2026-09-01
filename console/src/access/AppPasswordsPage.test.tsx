@@ -14,8 +14,15 @@ import React from "react";
 
 import { UserApiToken } from "~/api/frontegg/types";
 import server from "~/api/mocks/server";
+import { CloudAppConfig } from "~/config/AppConfig";
+import { appConfigAtom } from "~/config/store";
 import { dummyValidUser } from "~/external-library-wrappers/__mocks__/frontegg";
-import { renderComponent } from "~/test/utils";
+import {
+  defaultRegionId,
+  healthyEnvironment,
+  renderComponent,
+  setFakeEnvironment,
+} from "~/test/utils";
 
 import AppPasswordsPage from "./AppPasswordsPage";
 
@@ -76,6 +83,23 @@ const renderPage = (openNewModal = false) =>
       ? [{ pathname: "/", state: { new: true } }]
       : ["/"],
   });
+
+const renderImpersonatedPage = () => {
+  // Flipping the flag after construction leaves the config's impersonation
+  // derived URLs alone, which keeps the mocked Frontegg endpoints matching.
+  const appConfig = new CloudAppConfig();
+  appConfig.isImpersonating = true;
+
+  return renderComponent(<AppPasswordsPage user={dummyValidUser} />, {
+    initialRouterEntries: ["/"],
+    initializeState: async ({ set }) => {
+      set(appConfigAtom, appConfig);
+      await setFakeEnvironment(set, defaultRegionId, healthyEnvironment);
+    },
+  });
+};
+
+const CREATE_BUTTON = "Create New App Password";
 
 const findRow = (description: string) =>
   screen.findByRole("row", { name: description });
@@ -164,6 +188,36 @@ describe("AppPasswordsPage", () => {
 
     await waitFor(() => expect(created.personal).toBeDefined());
     expect(created.personal).not.toHaveProperty("expiresInMinutes");
+  });
+
+  it("opens the new password modal from the page's create button", async () => {
+    mockFrontegg([]);
+    await renderPage();
+    const user = userEvent.setup();
+
+    expect(
+      screen.queryByRole("dialog", { name: "New app password" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      await screen.findByRole("button", { name: CREATE_BUTTON }),
+    );
+
+    expect(
+      await screen.findByRole("dialog", { name: "New app password" }),
+    ).toBeVisible();
+  });
+
+  it("hides the create button while impersonating", async () => {
+    mockFrontegg([buildToken({ description: "Personal laptop" })]);
+    await renderImpersonatedPage();
+
+    // Wait for the page itself, so the assertion can't pass on an unrendered
+    // page.
+    await findRow("Personal laptop");
+    expect(
+      screen.queryByRole("button", { name: CREATE_BUTTON }),
+    ).not.toBeInTheDocument();
   });
 
   it("sends the expiration on the service password endpoint too", async () => {
