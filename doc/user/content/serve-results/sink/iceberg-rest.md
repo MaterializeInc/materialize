@@ -66,6 +66,10 @@ PrivateLink](/sql/create-connection/#aws-privatelink) or [SSH
 bastion hosts](/sql/create-connection/#ssh-tunnel), so a catalog that is only
 reachable inside a private network cannot be used.
 
+If any of those endpoints sits behind a firewall, allow traffic from the [static
+egress IP addresses](/ingest-data/network-security/static-ips/) associated with
+your Materialize region.
+
 ### OAuth2 client credentials
 
 Materialize authenticates to the catalog with the OAuth2 client credentials

@@ -30,6 +30,16 @@ are not yet covered.
 
 ## Prerequisites
 
+### Network access from Materialize
+
+Materialize reaches Unity Catalog and the storage behind it over the public
+internet. Iceberg catalog connections do not support tunneling through [AWS
+PrivateLink](/sql/create-connection/#aws-privatelink) or [SSH bastion
+hosts](/sql/create-connection/#ssh-tunnel). If your workspace restricts access
+by IP, allow traffic from the [static egress IP
+addresses](/ingest-data/network-security/static-ips/) associated with your
+Materialize region.
+
 ### A Unity Catalog metastore with external data access enabled
 
 Your Databricks workspace must be attached to a Unity Catalog metastore, and
@@ -105,7 +115,7 @@ principal](https://docs.databricks.com/aws/en/admin/users-groups/service-princip
 
     | Privilege | Why Materialize needs it |
     | --- | --- |
-    | `USE CATALOG`, `USE SCHEMA` | Reach the catalog and schema at all. |
+    | `USE CATALOG`, `USE SCHEMA` | Allows access to the catalog and schema. |
     | `EXTERNAL USE SCHEMA` | Read and write the schema's tables from an Iceberg REST client. Without it, every catalog request is rejected. |
     | `CREATE TABLE` | Create the Iceberg table the first time the sink runs. |
     | `MODIFY` | Commit new snapshots as data changes. |
@@ -118,45 +128,35 @@ principal](https://docs.databricks.com/aws/en/admin/users-groups/service-princip
 
 ## Create the Iceberg catalog connection in Materialize
 
-### Step 1. Store the service principal credentials
-
-Store the client ID and client secret as a single value, separated by a colon:
-
-```mzsql
-CREATE SECRET databricks_oauth AS '<client_id>:<client_secret>';
-```
-
-### Step 2. Create the Iceberg catalog connection
-
 {{% include-example file="examples/create_connection"
 example="example-iceberg-catalog-databricks-connection" %}}
 
-Fill in the options as follows:
+Fill in the syntax elements as follows:
 
-| Option | Value for Unity Catalog |
+| Syntax element | Value for Unity Catalog |
 | --- | --- |
 | `URL` | `https://<workspace>.cloud.databricks.com/api/2.1/unity-catalog/iceberg-rest` |
 | `WAREHOUSE` | The name of the Unity Catalog catalog holding your tables. Unlike other catalogs, this is not a storage location. |
-| `CREDENTIAL` | The secret created in [Step 1](#step-1-store-the-service-principal-credentials). |
+| `CREDENTIAL` | A secret holding the service principal's `<client_id>:<client_secret>`. |
 | `OAUTH2 SERVER URL` | `https://<workspace>.cloud.databricks.com/oidc/v1/token` |
 | `SCOPE` | `all-apis` |
 | `ACCESS DELEGATION` | `'vended-credentials'` |
 
-The last three options are optional in the [Iceberg REST catalog
-specification](https://iceberg.apache.org/spec/), but Unity Catalog requires all
-three. It serves its token endpoint on a path unrelated to the catalog URL, does
-not grant the specification's `catalog` scope, and manages the storage behind its
-tables without handing out long-lived credentials for it. See [Storage access
+`OAUTH2 SERVER URL`, `SCOPE`, and `ACCESS DELEGATION` are all required for Unity
+Catalog. It serves its token endpoint on a path unrelated to the catalog URL,
+does not grant the specification's `catalog` scope, and manages the storage
+behind its tables without handing out long-lived credentials for it. See
+[Storage access
 delegation](/sql/create-connection/#iceberg-catalog-access-delegation) for what
 `ACCESS DELEGATION` changes.
 
-For the full option reference, see [`CREATE CONNECTION`: Iceberg
+For the full syntax reference, see [`CREATE CONNECTION`: Iceberg
 catalog](/sql/create-connection/#iceberg-catalog).
 
 ## Create the Iceberg sink in Materialize
 
-Set the sink's `NAMESPACE` option to the Unity Catalog schema you granted
-privileges on.
+Set the sink's `NAMESPACE` to the Unity Catalog schema you granted privileges
+on.
 
 {{% include-example file="examples/create_sink_iceberg" example="tutorial-create-sink-intro" %}}
 
@@ -202,7 +202,7 @@ ALTER SECRET databricks_oauth AS '<client_id>:<new_client_secret>';
 ### Limitations
 
 - Materialize does not create schemas. The Unity Catalog schema named by the
-  sink's `NAMESPACE` option must already exist.
+  sink's `NAMESPACE` must already exist.
 
 - Materialize can only sink into *managed* Iceberg tables. Foreign Iceberg
   tables and Delta tables are read-only through the Iceberg REST catalog.

@@ -928,7 +928,7 @@ CREATE CONNECTION sqlserver_connection TO SQL SERVER (
 An Iceberg catalog connection establishes a link to an [Apache Iceberg](https://iceberg.apache.org/)
 catalog. You can use Iceberg catalog connections to create [Iceberg sinks](/sql/create-sink/iceberg).
 
-Materialize supports two catalog types:
+Materialize supports the following catalog type and destination combinations:
 
 | Catalog type | Destination | Authentication |
 | --- | --- | --- |
@@ -1002,10 +1002,15 @@ The `ACCESS DELEGATION` option asks the catalog to vend credentials:
 | **Default** | Unset, meaning Materialize does not request delegation. |
 | **Valid with** | `CATALOG TYPE = 'rest'` using `CREDENTIAL`. Not supported for `CATALOG TYPE = 's3tablesrest'`, which authenticates to storage through an [AWS connection](#aws), or for REST catalogs using `GCP CONNECTION`. |
 
-When set, Materialize writes to the table's storage using only the credentials
-the catalog vends, and refreshes them as they expire. When unset, Materialize
-writes using whatever storage credentials the catalog returns in its
-configuration, or the credentials of the associated AWS or GCP connection.
+Exactly one source of storage credentials is used, determined by how the
+connection is configured. There is no fallback between them:
+
+| Connection | Storage credentials used |
+| --- | --- |
+| `CATALOG TYPE = 'rest'` with `CREDENTIAL` and `ACCESS DELEGATION` | Only the table-scoped credentials the catalog vends, refreshed as they expire. Any storage credentials the catalog returns in its configuration are ignored. |
+| `CATALOG TYPE = 'rest'` with `CREDENTIAL` and no `ACCESS DELEGATION` | Only the storage credentials the catalog returns in its configuration. |
+| `CATALOG TYPE = 'rest'` with `GCP CONNECTION` | Only the GCP connection's service account. |
+| `CATALOG TYPE = 's3tablesrest'` | Only the AWS connection's credentials, for both the catalog and its storage. |
 
 Delegation is opt-in rather than always requested, because a catalog that gates
 it behind privileges the principal does not hold rejects the whole request

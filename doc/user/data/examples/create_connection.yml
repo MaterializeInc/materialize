@@ -801,7 +801,7 @@
         under. Consult your catalog's documentation for the exact URL.
     - name: "`WAREHOUSE`"
       description: |
-        *Value:* `text`. Optional.
+        *Value:* `text`.
 
         The warehouse to operate in. What this names is catalog-specific: some
         catalogs expect a storage location, others the name of a catalog or
@@ -814,7 +814,7 @@
         no colon is sent as the client secret alone.
     - name: "`OAUTH2 SERVER URL`"
       description: |
-        *Value:* `text`. Optional.
+        *Value:* `text`.
 
         The token endpoint to exchange `CREDENTIAL` at. Defaults to
         `<url>/v1/oauth/tokens`, the endpoint the Iceberg REST specification
@@ -824,13 +824,13 @@
         behind an auth gateway that will not serve an unauthenticated exchange.
     - name: "`SCOPE`"
       description: |
-        *Value:* `text`. Optional.
+        *Value:* `text`.
 
         The OAuth2 scope to request. Defaults to `catalog`, the scope the
         Iceberg REST specification defines.
     - name: "`ACCESS DELEGATION`"
       description: |
-        *Value:* `'vended-credentials'`. Optional.
+        *Value:* `'vended-credentials'`.
 
         Requests temporary, table-scoped storage credentials from the catalog.
         Required for catalogs that manage their own storage and vend credentials
