@@ -1,10 +1,10 @@
 ---
-title: "Databricks Unity Catalog on AWS"
+title: "Databricks on AWS"
 description: "How to export results from Materialize to Apache Iceberg tables registered in Databricks Unity Catalog on AWS."
 menu:
   main:
     parent: sink-iceberg
-    name: "Databricks Unity Catalog"
+    name: "Databricks on AWS"
     weight: 30
 ---
 

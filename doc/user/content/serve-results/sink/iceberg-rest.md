@@ -1,11 +1,12 @@
 ---
 title: "Iceberg REST catalog with S3-compatible storage"
 description: "How to export results from Materialize to Apache Iceberg tables in a catalog implementing the Iceberg REST specification, backed by S3-compatible object storage."
-menu:
-  main:
-    parent: sink-iceberg
-    name: "REST catalog"
-    weight: 40
+draft: true
+#menu:
+  #main:
+    #parent: sink-iceberg
+    #name: "REST catalog"
+    #weight: 40
 ---
 
 {{< public-preview />}}
