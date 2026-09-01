@@ -422,7 +422,7 @@ fn object_collection_sql(cluster_id: ClusterId, replica_id: ReplicaId, cutoff: &
 /// guard suppresses the episode rather than misrecording it.
 ///
 /// Collection also waits until every configured replica process has reported
-/// resource usage.
+/// resource usage. The query itself narrates how each step works.
 fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
     let ReplicaTarget {
         cluster_id,
@@ -433,6 +433,9 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
     // catalog-internal and the cutoff is an RFC 3339 timestamp we formatted.
     format!(
         "WITH
+        -- One hydration interval per compute export: earliest install and
+        -- latest finish across its workers. Hydrated only once every worker
+        -- visible at this timestamp has finished.
         objects AS (
             SELECT
                 t.export_id AS object_id,
@@ -443,7 +446,9 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
             WHERE t.export_id NOT LIKE 't%'
             GROUP BY t.export_id
         ),
-        running AS (
+        -- Completed intervals in install order, each with the coverage
+        -- horizon: the latest finish among this and all earlier intervals.
+        covered AS (
             SELECT
                 object_id,
                 installed_at,
@@ -451,40 +456,37 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
                 max(hydrated_at) OVER (
                     ORDER BY installed_at, object_id
                     ROWS UNBOUNDED PRECEDING
-                ) AS finished_through
+                ) AS covered_through
             FROM objects
             WHERE hydrated
         ),
-        ordered AS (
+        -- An interval starts a new episode when the horizon just before it
+        -- does not reach its install: for a moment, nothing was hydrating.
+        flagged AS (
             SELECT
                 object_id,
                 installed_at,
                 hydrated_at,
-                lag(finished_through) OVER (
+                lag(covered_through) OVER (
                     ORDER BY installed_at, object_id
-                ) AS prior_finished_at
-            FROM running
+                ) IS NULL
+                    OR lag(covered_through) OVER (
+                        ORDER BY installed_at, object_id
+                    ) < installed_at AS starts_episode
+            FROM covered
         ),
-        marked AS (
-            SELECT
-                object_id,
-                installed_at,
-                hydrated_at,
-                prior_finished_at IS NULL
-                    OR prior_finished_at < installed_at AS starts_episode
-            FROM ordered
-        ),
+        -- Each interval belongs to the latest episode start at or before it.
         labeled AS (
             SELECT
-                object_id,
                 installed_at,
                 hydrated_at,
                 max(CASE WHEN starts_episode THEN installed_at END) OVER (
                     ORDER BY installed_at, object_id
                     ROWS UNBOUNDED PRECEDING
                 ) AS episode_started_at
-            FROM marked
+            FROM flagged
         ),
+        -- One row per completed episode.
         episodes AS (
             SELECT
                 episode_started_at AS started_at,
@@ -493,17 +495,25 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
             FROM labeled
             GROUP BY episode_started_at
         ),
+        -- The earliest install of an export that has not hydrated yet.
+        open_min AS (
+            SELECT min(installed_at) AS v FROM objects WHERE NOT hydrated
+        ),
+        -- The episode to record: the latest one that finished before any
+        -- unhydrated export was installed. An episode finishing at or after
+        -- open_min contains that open interval and is still in progress.
+        -- Comparing against this one scalar, instead of joining episodes
+        -- with open intervals, avoids a cross product that is quadratic when
+        -- many episodes coexist with many still-hydrating exports.
         episode AS (
             SELECT e.started_at, e.finished_at, e.object_count
-            FROM episodes AS e
-            WHERE NOT EXISTS (
-                SELECT 1
-                FROM objects AS o
-                WHERE NOT o.hydrated AND o.installed_at <= e.finished_at
-            )
+            FROM episodes AS e, open_min AS o
+            WHERE o.v IS NULL OR e.finished_at < o.v
             ORDER BY e.started_at DESC
             LIMIT 1
         ),
+        -- Process-lifetime resource high-water marks, and how many processes
+        -- have reported them.
         resources AS (
             SELECT
                 count(DISTINCT process_id) AS process_count,
@@ -520,6 +530,9 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
                 ) AS peak_disk_bytes
             FROM mz_introspection.mz_cluster_replica_resource_usage
         ),
+        -- The history row to write, held back until every configured process
+        -- has reported resource usage and dropped once the episode has aged
+        -- past the retention cutoff.
         candidate AS (
             SELECT
                 '{replica_id}'::text AS replica_id,
@@ -535,6 +548,9 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
             WHERE r.process_count = {process_count}::uint8
               AND e.finished_at >= TIMESTAMPTZ '{cutoff}'
         )
+        -- Skip episodes the history already covers: a recorded row finishing
+        -- at or after this start is this episode, or overlaps it under
+        -- cross-process clock skew.
         SELECT c.*
         FROM candidate AS c
         WHERE NOT EXISTS (
@@ -934,11 +950,12 @@ mod tests {
         );
     }
 
-    /// Replica episodes are connected components of object hydration intervals.
-    /// An unhydrated export blocks only components its open interval touches, so
-    /// an earlier disconnected completed episode is still recorded. The query
-    /// must also wait for every replica process before it snapshots
-    /// process-local high-water marks.
+    /// Replica episodes are connected components of object hydration intervals,
+    /// enumerated gaps-and-islands style. An episode still connected to an open
+    /// interval is skipped via a scalar comparison against the earliest open
+    /// install, and the latest remaining episode is recorded. The query must
+    /// also wait for every replica process before it snapshots process-local
+    /// high-water marks.
     #[mz_ore::test]
     fn replica_collection_uses_latest_completed_interval_island() {
         let sql = replica_collection_sql(
@@ -951,19 +968,29 @@ mod tests {
         );
         let normalized_sql = sql.split_whitespace().collect::<Vec<_>>().join(" ");
 
+        // The gaps-and-islands scaffolding: running coverage horizon, gap
+        // detection against the previous row's horizon, episode labels, and
+        // per-episode aggregation.
         assert!(sql.contains("ROWS UNBOUNDED PRECEDING"), "{sql}");
-        assert!(sql.contains("lag(finished_through)"), "{sql}");
-        assert!(sql.contains("prior_finished_at < installed_at"), "{sql}");
+        assert!(sql.contains("lag(covered_through)"), "{sql}");
+        assert!(
+            sql.contains("CASE WHEN starts_episode THEN installed_at END"),
+            "{sql}"
+        );
         assert!(sql.contains("GROUP BY episode_started_at"), "{sql}");
         // The unfinished-export guard applies per episode. A replica-wide
         // all-hydrated gate would lose a completed episode for good: once the
         // in-progress one finishes, it is the latest and the earlier one is
         // never recorded.
         assert!(!sql.contains("bool_and(hydrated)"), "{sql}");
+        // The guard compares each episode against the earliest open install,
+        // one scalar row. A join against all open intervals is quadratic when
+        // many episodes coexist with many still-hydrating exports.
         assert!(
-            normalized_sql.contains("WHERE NOT o.hydrated AND o.installed_at <= e.finished_at"),
+            normalized_sql.contains("WHERE o.v IS NULL OR e.finished_at < o.v"),
             "{sql}"
         );
+        assert!(!sql.contains("o.installed_at <= e.finished_at"), "{sql}");
         assert!(
             normalized_sql.contains("ORDER BY e.started_at DESC LIMIT 1"),
             "{sql}"
