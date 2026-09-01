@@ -13,6 +13,15 @@ mode cockroach
 
 reset-server
 
+# All user objects live in a scratch schema owned by the test role, so the
+# cascade at the end of the file can clean up everything in one statement.
+# The public schema is owned by mz_system, so it cannot play that role.
+statement ok
+CREATE SCHEMA deps
+
+statement ok
+SET search_path = deps
+
 statement ok
 CREATE TABLE t (a int, b text NOT NULL)
 
@@ -104,6 +113,73 @@ WHERE object_id = (SELECT id FROM mz_views WHERE name = 'tv')
 ----
 0
 
+# --- materialized view edges -----------------------------------------------------
+
+statement ok
+CREATE MATERIALIZED VIEW umv AS SELECT a + 1 AS a1 FROM t
+
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_dependencies
+WHERE object_id = (SELECT id FROM mz_materialized_views WHERE name = 'umv')
+  AND referenced_object_id = (SELECT id FROM mz_tables WHERE name = 't')
+----
+1
+
+# --- index edges -------------------------------------------------------------------
+
+statement ok
+CREATE INDEX fidx ON t (abs(a))
+
+# The index depends on the relation it indexes and on the function its key
+# calls.
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_dependencies
+WHERE object_id = (SELECT id FROM mz_indexes WHERE name = 'fidx')
+  AND referenced_object_id = (SELECT id FROM mz_tables WHERE name = 't')
+----
+1
+
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_dependencies
+WHERE object_id = (SELECT id FROM mz_indexes WHERE name = 'fidx')
+  AND referenced_object_id IN (SELECT id FROM mz_functions WHERE name = 'abs')
+----
+1
+
+# --- custom types ------------------------------------------------------------------
+
+statement ok
+CREATE TYPE custom_list AS LIST (ELEMENT TYPE = int4)
+
+# A custom type depends on its element type: a type -> type edge.
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_dependencies
+WHERE object_id = (SELECT id FROM mz_types WHERE name = 'custom_list')
+  AND referenced_object_id = (SELECT id FROM mz_types WHERE name = 'int4')
+----
+1
+
+# --- tables from sources -------------------------------------------------------------
+
+statement ok
+CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
+
+statement ok
+CREATE TABLE lg_tbl FROM SOURCE lg (REFERENCE counter)
+
+# The table's create_sql references its source by id outside any query.
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_dependencies
+WHERE object_id = (SELECT id FROM mz_tables WHERE name = 'lg_tbl')
+  AND referenced_object_id = (SELECT id FROM mz_sources WHERE name = 'lg')
+----
+1
+
 # --- builtin edges ---------------------------------------------------------------
 
 # mz_catalog.mz_indexes is itself a materialized view over mz_catalog_raw.
@@ -189,6 +265,21 @@ WHERE os.name = 'mz_internal' AND o.name = 'mz_object_dependencies'
 ----
 1
 
+# --- dropped items leave no edges --------------------------------------------------
+
+statement ok
+CREATE VIEW dropme AS SELECT a FROM t
+
+query T
+SELECT count(*) > 0
+FROM mz_internal.mz_object_dependencies
+WHERE object_id = (SELECT id FROM mz_views WHERE name = 'dropme')
+----
+true
+
+statement ok
+DROP VIEW dropme
+
 # --- structural invariants -------------------------------------------------------
 
 # No duplicate edges: ResolvedIds was a map, so the packed table never
@@ -206,5 +297,17 @@ SELECT count(*) FROM (
 # No self-edges.
 query T
 SELECT count(*) FROM mz_internal.mz_object_dependencies WHERE object_id = referenced_object_id
+----
+0
+
+# No edge outlives its object: cascading away the whole scratch schema drops
+# every user object created above, so any user edge still present is a leak.
+statement ok
+DROP SCHEMA deps CASCADE
+
+query T
+SELECT count(*)
+FROM mz_internal.mz_object_dependencies
+WHERE object_id LIKE 'u%' OR referenced_object_id LIKE 'u%'
 ----
 0
