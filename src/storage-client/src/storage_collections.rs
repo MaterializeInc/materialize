@@ -2140,15 +2140,20 @@ impl StorageCollections for StorageCollectionsImpl {
         );
 
         match schema_result {
-            CaESchema::Ok(id) => id,
-            // TODO(alter_table): If we get an expected mismatch we should retry.
+            // id unused: the desc is re-derived below.
+            CaESchema::Ok(_id) => {}
+            // Not retried by design. compare_and_evolve_schema now absorbs a
+            // committed-but-lost CaS, so an ExpectedMismatch here is a genuine
+            // divergence (current matches neither the request nor `expected`)
+            // that must surface rather than retry.
             CaESchema::ExpectedMismatch {
                 schema_id,
                 key,
                 val,
             } => {
                 mz_ore::soft_panic_or_log!(
-                    "schema expectation mismatch {schema_id:?}, {key:?}, {val:?}"
+                    "schema expectation mismatch, expected {expected_schema:?} \
+                     but found {schema_id:?}, {key:?}, {val:?}"
                 );
                 return Err(StorageError::Generic(anyhow::anyhow!(
                     "schema expected mismatch, {existing_collection:?}",
