@@ -16,7 +16,8 @@ import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import { CodeBlock } from "~/components/copyableComponents";
 import ErrorBox from "~/components/ErrorBox";
 import { LoadingContainer } from "~/components/LoadingContainer";
-import { useFlags } from "~/hooks/useFlags";
+import { UiPreviewToggle } from "~/components/UiPreviewToggle";
+import { useUiPreview } from "~/hooks/useUiPreview";
 import { ClustersIcon } from "~/icons";
 import {
   MainContentContainer,
@@ -52,7 +53,7 @@ const ClustersListContent = ({
 }) => {
   const { data: clusters, snapshotComplete, isError } = useAllClusters();
   const { isOwner } = useOwners();
-  const flags = useFlags();
+  const usageMetricsPreview = useUiPreview("clusterListUsageMetrics");
 
   const orderedClusters = React.useMemo(() => {
     const visibleClusters = clusters
@@ -111,9 +112,9 @@ const ClustersListContent = ({
 
   // The two tables report on different subjects: one row per cluster summarizing
   // its replicas, versus a row per replica carrying its own utilization. Their
-  // column sets and row models have nothing in common, so the flag picks a whole
-  // table rather than switching columns within one.
-  if (flags["usage-metrics-in-cluster-list-CNS121"]) {
+  // column sets and row models have nothing in common, so the preview picks a
+  // whole table rather than switching columns within one.
+  if (usageMetricsPreview.isEnabled) {
     return <ClusterUsageTable clusters={orderedClusters} />;
   }
   return <ClusterTable clusters={orderedClusters} />;
@@ -127,6 +128,10 @@ const ClustersListPage = () => {
       <PageHeader>
         <PageHeading>Clusters</PageHeading>
         <HStack spacing={10}>
+          <UiPreviewToggle
+            previewKey="clusterListUsageMetrics"
+            label="Try the new cluster list experience"
+          />
           <HStack spacing={2}>
             <FormLabel
               htmlFor="show-system-objects"

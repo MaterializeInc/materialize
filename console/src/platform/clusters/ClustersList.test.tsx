@@ -14,6 +14,7 @@ import { useLocation } from "react-router-dom";
 
 import { Cluster, Replica } from "~/api/materialize/cluster/clusterList";
 import { ReplicaUtilization } from "~/api/materialize/cluster/replicaUtilization";
+import { uiPreviewOptInStorageKey } from "~/hooks/useUiPreview";
 import { getStore } from "~/jotai";
 import { allClusters } from "~/store/allClusters";
 import { mockSubscribeState } from "~/test/mockSubscribe";
@@ -26,7 +27,8 @@ import {
 import ClustersListPage from "./ClustersList";
 import { ReplicaHydrationCounts } from "./queries";
 
-// The per-replica table is gated on this flag. The global useFlags mock in
+// The per-replica table is a UI preview: its flag must be on AND the user
+// opted in (seeded into localStorage below). The global useFlags mock in
 // vitest.setup.ts returns no flags at all, so without this override the list
 // renders the one-row-per-cluster table and none of these tests reach the code.
 vi.mock("~/hooks/useFlags", () => ({
@@ -57,6 +59,10 @@ vi.mock("~/api/materialize/cluster/useLatestOfflineReplica", async () => {
 beforeEach(() => {
   offlineReplicas.clear();
   replicaHydration.clear();
+  localStorage.setItem(
+    uiPreviewOptInStorageKey("clusterListUsageMetrics"),
+    "true",
+  );
 });
 
 // A row's actions menu renders only for clusters the user owns, and `useOwners`
@@ -348,6 +354,24 @@ const chipLabels = () =>
   screen
     .queryAllByRole("button", { name: /^Remove / })
     .map((button) => button.getAttribute("aria-label")?.replace("Remove ", ""));
+
+describe("ClustersList preview gating", () => {
+  it("renders the classic table when the flag is on but the user hasn't opted in", async () => {
+    localStorage.removeItem(
+      uiPreviewOptInStorageKey("clusterListUsageMetrics"),
+    );
+    await renderClustersList([buildCluster()]);
+
+    // The classic table summarizes replicas per cluster; the per-replica
+    // usage table is the one with utilization columns.
+    expect(
+      screen.getByRole("columnheader", { name: "Replicas" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("columnheader", { name: "CPU" }),
+    ).not.toBeInTheDocument();
+  });
+});
 
 describe("ClustersList replica rows", () => {
   it("renders one row per replica, naming the cluster on each", async () => {
@@ -1025,8 +1049,19 @@ describe("ClustersList keyboard navigation", () => {
     const user = userEvent.setup();
     await renderClustersList([singleReplicaCluster()]);
 
-    // The header's system-objects switch and the table's toolbar precede the
-    // rows in document order.
+    // The header's preview pill (showing the way back, since these tests opt
+    // in) and its collapse button, the system-objects switch, and the table's
+    // toolbar precede the rows in document order.
+    await user.tab();
+    expect(
+      screen.getByRole("button", { name: /Switch to classic UI/ }),
+    ).toHaveFocus();
+
+    await user.tab();
+    expect(
+      screen.getByRole("button", { name: "Collapse preview" }),
+    ).toHaveFocus();
+
     await user.tab();
     expect(screen.getByLabelText("Show system clusters")).toHaveFocus();
 
