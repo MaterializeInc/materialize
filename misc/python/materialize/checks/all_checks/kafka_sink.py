@@ -791,6 +791,80 @@ class KafkaSinkComments(Check):
             """))
 
 
+class KafkaSinkCommentsOnType(Check):
+    """An Avro sink over a relation with a commented custom-type column
+    records a dependency edge on the type. Purification injects a
+    `DOC ON TYPE` reference for every commented type the sinked relation
+    uses, and the persisted reference must keep resolving across restarts
+    and upgrades and stay visible to `mz_object_dependencies`."""
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > CREATE TYPE sink_comments_point AS (x integer, y integer)
+                > COMMENT ON TYPE sink_comments_point IS 'comment on type sink_comments_point'
+                > CREATE TABLE sink_comments_type_tbl (a int)
+                > INSERT INTO sink_comments_type_tbl VALUES (1)
+                > CREATE MATERIALIZED VIEW sink_comments_type_view AS
+                  SELECT ROW(a, a)::sink_comments_point AS p, a FROM sink_comments_type_tbl
+
+                > CREATE SINK sink_comments_type1 FROM sink_comments_type_view
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-comments-type1')
+                  KEY (a) NOT ENFORCED
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE UPSERT
+                """))
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                GRANT SELECT ON sink_comments_type_view TO materialize
+                GRANT USAGE ON CONNECTION kafka_conn TO materialize
+                GRANT USAGE ON CONNECTION csr_conn TO materialize
+
+                > CREATE SINK sink_comments_type2 FROM sink_comments_type_view
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-comments-type2')
+                  KEY (a) NOT ENFORCED
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE UPSERT
+                """,
+                """
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                GRANT SELECT ON sink_comments_type_view TO materialize
+                GRANT USAGE ON CONNECTION kafka_conn TO materialize
+                GRANT USAGE ON CONNECTION csr_conn TO materialize
+
+                > CREATE SINK sink_comments_type3 FROM sink_comments_type_view
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-comments-type3')
+                  KEY (a) NOT ENFORCED
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE UPSERT
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(dedent("""
+                # Every sink depends on the commented type its injected DOC ON
+                # reference names, including sinks whose create_sql predates
+                # types printing ids in DOC ON positions.
+                #
+                # NOTE: the version guard must name the first release that
+                # prints ids in DOC ON positions.
+                >[version>=2604100] SELECT s.name
+                  FROM mz_internal.mz_object_dependencies d
+                  JOIN mz_sinks s ON s.id = d.object_id
+                  WHERE d.referenced_object_id IN
+                      (SELECT id FROM mz_types WHERE name = 'sink_comments_point')
+                  ORDER BY 1
+                sink_comments_type1
+                sink_comments_type2
+                sink_comments_type3
+                """))
+
+
 @externally_idempotent(False)
 class KafkaSinkAutoCreatedTopicConfig(Check):
     """Check on a sink with auto-created topic configuration"""
