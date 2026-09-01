@@ -1,6 +1,6 @@
 ---
 title: "CREATE INDEX"
-description: "`CREATE INDEX` creates an in-memory index on a source, view, or materialized view."
+description: "`CREATE INDEX` creates an in-memory index on a table, source, view, or materialized view."
 menu:
   # This should also have a "non-content entry" under Reference, which is
   # configured in doc/user/config.toml
@@ -8,7 +8,7 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE INDEX` creates an in-memory [index](/concepts/indexes/) on a source, view, or materialized view.
+`CREATE INDEX` creates an in-memory [index](/concepts/indexes/) on a table, source, view, or materialized view.
 
 In Materialize, indexes store query results in memory within a specific [cluster](/concepts/clusters/), and keep these results **incrementally updated** as new data arrives. This ensures that indexed data remains [fresh](/concepts/reaction-time), reflecting the latest changes with minimal latency.
 
@@ -124,7 +124,7 @@ join keys are the key columns in an index.
 CREATE MATERIALIZED VIEW active_customers AS
     SELECT guid, geo_id, last_active_on
     FROM customer_source
-    WHERE last_active_on > now() - INTERVAL '30' DAYS;
+    WHERE mz_now() < last_active_on + INTERVAL '30' DAYS;
 
 CREATE INDEX active_customers_geo_idx ON active_customers (geo_id);
 
@@ -154,8 +154,7 @@ If you commonly filter by a certain column being equal to a literal value, you c
 ```mzsql
 CREATE MATERIALIZED VIEW active_customers AS
     SELECT guid, geo_id, last_active_on
-    FROM customer_source
-    GROUP BY geo_id;
+    FROM customer_source;
 
 CREATE INDEX active_customers_idx ON active_customers (guid);
 
@@ -175,7 +174,7 @@ Create an index with an expression to improve query performance over a frequentl
 avoid building downstream views to apply the function like the one used in the example: `upper()`.
 Take into account that aggregations like `count()` cannot be used as indexed expressions.
 
-For more details on using indexes to optimize queries, see [Optimization](../../ops/optimization/).
+For more details on using indexes to optimize queries, see [Optimization](/transform-data/optimization/).
 
 ## Privileges
 

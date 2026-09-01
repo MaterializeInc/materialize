@@ -195,23 +195,27 @@ CREATE INDEX ON foo (x, y);
 EXPLAIN SELECT * FROM foo WHERE x = 42 AND y = 50;
 ```
 
-In the [`EXPLAIN`](/sql/explain-plan/) output, check for `lookup_value` after
+In the [`EXPLAIN`](/sql/explain-plan/) output, check for a `Lookup values:` line after
 the index name to confirm that Materialize will use a point lookup; i.e., that
 Materialize will only read the matching records from the index instead of
 scanning the entire index:
 
 ```
- Explained Query (fast path):
-   Project (#0{x}, #1{y})
-     ReadIndex on=materialize.public.foo foo_x_y_idx=[lookup value=(42, 50)]
+Explained Query (fast path):
+  →Map/Filter/Project
+    Project: #0, #1
+    →Index Lookup on materialize.public.foo (using materialize.public.foo_x_y_idx)
+      Lookup values: (42, 50)
 
- Used Indexes:
-   - materialize.public.foo_x_y_idx (lookup)
+Used Indexes:
+  - materialize.public.foo_x_y_idx (lookup)
+
+Target cluster: quickstart
 ```
 
 ### `JOIN`
 
-In general, you can [improve the performance of your joins](https://materialize.com/blog/maintaining-joins-using-few-resources) by creating indexes on the columns occurring in join keys. (When a relation is joined with different relations on different keys, then separate indexes should be created for these keys.) This comes at the cost of additional memory usage. Materialize's in-memory [arrangements](/overview/arrangements) (the internal data structure of indexes) allow the system to share indexes across queries: **for multiple queries, an index is a fixed upfront cost with memory savings for each new query that uses it.**
+In general, you can [improve the performance of your joins](https://materialize.com/blog/maintaining-joins-using-few-resources) by creating indexes on the columns occurring in join keys. (When a relation is joined with different relations on different keys, then separate indexes should be created for these keys.) This comes at the cost of additional memory usage. Materialize's in-memory [arrangements](/get-started/arrangements/#arrangements) (the internal data structure of indexes) allow the system to share indexes across queries: **for multiple queries, an index is a fixed upfront cost with memory savings for each new query that uses it.**
 
 Let's create a few tables to work through examples.
 
@@ -301,27 +305,28 @@ CREATE INDEX sections_fk_courses ON sections (course_id);
 ```
 
 ```mzsql
-EXPLAIN SELECT * FROM course_schedule;
+EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM course_schedule;
 ```
 
 ```
-Optimized Plan
 Explained Query:
-  Project (#1, #5, #7)
-    Filter (#0) IS NOT NULL AND (#4) IS NOT NULL
-      Join on=(#0 = #3 AND #4 = #6) type=delta                 <---------- Delta join
-        ArrangeBy keys=[[#0]]
-          ReadIndex on=teachers pk_teachers=[delta join 1st input (full scan)]
-        ArrangeBy keys=[[#1], [#2]]
-          ReadIndex on=sections sections_fk_teachers=[delta join lookup] sections_fk_courses=[delta join lookup]
-        ArrangeBy keys=[[#0]]
-          ReadIndex on=courses pk_courses=[delta join lookup]
+  Project (#1{name}, #5{schedule}, #7{name}) // { arity: 3 }
+    Filter (#0{id}) IS NOT NULL AND (#4{course_id}) IS NOT NULL // { arity: 8 }
+      Join on=(#0{id} = #3{teacher_id} AND #4{course_id} = #6{id}) type=delta // { arity: 8 }   <---------- Delta join
+        ArrangeBy keys=[[#0{id}]] // { arity: 2 }
+          ReadIndex on=teachers pk_teachers=[delta join 1st input (full scan)] // { arity: 2 }
+        ArrangeBy keys=[[#1{teacher_id}], [#2{course_id}]] // { arity: 4 }
+          ReadIndex on=sections sections_fk_teachers=[delta join lookup] sections_fk_courses=[delta join lookup] // { arity: 4 }
+        ArrangeBy keys=[[#0{id}]] // { arity: 2 }
+          ReadIndex on=courses pk_courses=[delta join lookup] // { arity: 2 }
 
 Used Indexes:
   - materialize.public.pk_teachers (delta join 1st input (full scan))
   - materialize.public.sections_fk_teachers (delta join lookup)
   - materialize.public.pk_courses (delta join lookup)
   - materialize.public.sections_fk_courses (delta join lookup)
+
+Target cluster: quickstart
 ```
 
 For [ad hoc `SELECT` queries](/sql/select/#ad-hoc-queries) with a delta join, place the smallest input (taking into account predicates that filter from it) first in the `FROM` clause. (This is only relevant for joins with more than two inputs, because two-input joins are always Differential joins.)
@@ -404,7 +409,7 @@ CREATE INDEX sections_fk_teachers ON sections (teacher_id);
 CREATE INDEX pk_courses ON courses (id);
 CREATE INDEX sections_fk_courses ON sections (course_id);
 
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
   SELECT
       t.name AS teacher_name,
       s.schedule,
@@ -416,35 +421,38 @@ EXPLAIN
 ```
 
 ```
-                                                  Optimized Plan
-------------------------------------------------------------------------------------------------------------------
- Explained Query:                                                                                                +
-   Project (#1, #6, #8)                                                                                          +
-     Filter (#0) IS NOT NULL AND (#5) IS NOT NULL                                                                +
-       Join on=(#0 = #4 AND #5 = #7) type=delta                                                                  +
-         ArrangeBy keys=[[#0]]                                                                                   +
-           ReadIndex on=materialize.public.teachers teachers_name=[lookup value=("Escalante")]                   +
-         ArrangeBy keys=[[#1], [#2]]                                                                             +
-           ReadIndex on=sections sections_fk_teachers=[delta join lookup] sections_fk_courses=[delta join lookup]+
-         ArrangeBy keys=[[#0]]                                                                                   +
-           ReadIndex on=courses pk_courses=[delta join lookup]                                                   +
-                                                                                                                 +
- Used Indexes:                                                                                                   +
-   - materialize.public.teachers_name (lookup)                                                                   +
-   - materialize.public.sections_fk_teachers (delta join lookup)                                                 +
-   - materialize.public.pk_courses (delta join lookup)                                                           +
-   - materialize.public.sections_fk_courses (delta join lookup)                                                  +
+Explained Query:
+  Project (#1{name}, #6{schedule}, #8{name}) // { arity: 3 }
+    Filter (#0{id}) IS NOT NULL AND (#5{course_id}) IS NOT NULL // { arity: 9 }
+      Join on=(#0{id} = #4{teacher_id} AND #5{course_id} = #7{id}) type=delta // { arity: 9 }
+        ArrangeBy keys=[[#0{id}]] // { arity: 3 }
+          ReadIndex on=materialize.public.teachers teachers_name=[lookup value=("Escalante")] // { arity: 3 }
+        ArrangeBy keys=[[#1{teacher_id}], [#2{course_id}]] // { arity: 4 }
+          ReadIndex on=sections sections_fk_teachers=[delta join lookup] sections_fk_courses=[delta join lookup] // { arity: 4 }
+        ArrangeBy keys=[[#0{id}]] // { arity: 2 }
+          ReadIndex on=courses pk_courses=[delta join lookup] // { arity: 2 }
+
+Used Indexes:
+  - materialize.public.teachers_name (lookup)
+  - materialize.public.sections_fk_teachers (delta join lookup)
+  - materialize.public.pk_courses (delta join lookup)
+  - materialize.public.sections_fk_courses (delta join lookup)
+
+Target cluster: quickstart
 ```
 
 You can see in the above `EXPLAIN` printout that the system will use `teachers_name` for a point lookup, and use three other indexes for the execution of the delta join. Note that the `pk_teachers` index is not used, as explained [above](#joins-with-filters).
 
-The following are the possible index usage types:
+The most common index usage types are:
 - `*** full scan ***`: Materialize will read the entire index.
 - `lookup`: Materialize will look up only specific keys in the index.
 - `differential join`: Materialize will use the index to perform a _differential join_. For a differential join between two relations, the amount of memory required is proportional to the sum of the sizes of each of the input relations that are **not** indexed. In other words, if an input is already indexed, then the size of that input won't affect the memory usage of a differential join between two relations. For a join between more than two relations, we recommend aiming for a delta join instead of a differential join, as explained [above](#optimize-multi-way-joins-with-delta-joins). A differential join between more than two relations will perform a series of binary differential joins on top of each other, and each of these binary joins (except the first one) will use memory proportional to the size of the intermediate data that is fed into the join.
 - `delta join 1st input (full scan)`: Materialize will use the index for the first input of a [delta join](#optimize-multi-way-joins-with-delta-joins). Note that the first input of a delta join is always fully scanned. However, executing the join won't require additional memory if the input is indexed.
 - `delta join lookup`: Materialize will use the index for a non-first input of a [delta join](#optimize-multi-way-joins-with-delta-joins). This means that, in an ad hoc query, the join will perform only lookups into the index.
 - `fast path limit`: When a [fast path](/sql/explain-plan/#fast-path-queries) query has a `LIMIT` clause but no `ORDER BY` clause, then Materialize will read from the index only as many records as required to satisfy the `LIMIT` (plus `OFFSET`) clause.
+- `plan root (no new arrangement)`: The query's result is already arranged as needed, so Materialize reads the existing arrangement instead of building a new one.
+- `sink export`: The index is read to feed a sink, for example a `SUBSCRIBE`.
+- `index export`: The index is read to build another index.
 
 ### Limitations
 
@@ -632,7 +640,7 @@ WHERE mz_now() <= floor(extract(epoch FROM event_ts)) * 1000 + 86400000
 [arrangements]: /get-started/arrangements/#arrangements
 [`MIN`]: /sql/functions/#min
 [`MAX`]: /sql/functions/#max
-[Top K]: /transform-data/patterns/top-k
+[Top K]: /transform-data/idiomatic-materialize-sql/top-k/
 [`mz_introspection.mz_expected_group_size_advice`]: /reference/system-catalog/mz_introspection/#mz_expected_group_size_advice
 [dataflows]: /get-started/arrangements/#dataflows
 [`SELECT` syntax]: /sql/select/#syntax

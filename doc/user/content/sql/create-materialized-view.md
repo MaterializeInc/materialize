@@ -160,9 +160,6 @@ non-indexed, and so on."
 
 {{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
 
-{{% include-from-yaml file="examples/create_materialized_view"
-name="replacement-view-syntax-details" %}}
-
 {{% include-example file="examples/create_materialized_view"
 example="example-create-replacement-materialized-view" %}}
 

@@ -13,4 +13,6 @@ As such, indexes in Materialize currently do not provide optimizations for:
   quantity > 10`,  `price >= 10 AND price <= 50`, and `WHERE quantity
   BETWEEN 10 AND 20`).
 
-- `GROUP BY`, `ORDER BY` and `LIMIT` clauses.
+- `GROUP BY` and `ORDER BY` clauses. (A `LIMIT` without an `ORDER BY` is an
+  exception: see the `fast path limit` index usage type in
+  [Optimization](/transform-data/optimization/#use-explain-to-verify-index-usage).)
