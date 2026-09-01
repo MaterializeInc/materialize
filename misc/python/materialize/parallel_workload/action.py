@@ -1761,7 +1761,7 @@ class DropIndexAction(Action):
             # a non-owner tries this drop) will raise an error and
             # we'll retry the DropIndexAction.
             exe.execute(f"DROP INDEX IF EXISTS {index}", http=Http.RANDOM)
-            #  Use discard, not remove: a concurrent
+            # Use discard, not remove: a concurrent
             # CASCADE drop's untrack_objects_in_schemas may have already
             # removed it, and remove would raise KeyError.
             exe.db.indexes.discard(index)
