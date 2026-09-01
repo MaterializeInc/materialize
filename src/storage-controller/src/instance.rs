@@ -47,11 +47,10 @@ use crate::history::CommandHistory;
 ///
 /// Encapsulates communication with replicas in this instance, and their rehydration.
 ///
-/// Note that storage objects (sources and sinks) don't currently support replication (database-issues#5051).
-/// An instance can have multiple replicas connected, but only if it has no storage objects
-/// installed. Attempting to install storage objects on multi-replica instances, or attempting to
-/// add more than one replica to instances that have storage objects installed, is illegal and will
-/// lead to panics.
+/// An instance can have any number of replicas. Objects that must run on one replica (ingestions
+/// whose connection reports `SourceConnection::prefers_single_replica`, such as OLTP sources, and
+/// all sinks) are scheduled on the replica with the lowest `ReplicaId` and move only when that
+/// replica goes away; all other objects run on every replica. See `update_scheduling`.
 #[derive(Debug)]
 pub(crate) struct Instance {
     /// The workload class of this instance.
@@ -156,8 +155,7 @@ impl Instance {
 
     /// Adds a new replica to this storage instance.
     pub fn add_replica(&mut self, id: ReplicaId, config: ReplicaConfig) {
-        // Reduce the history to limit the amount of commands sent to the new replica, and to
-        // enable the `objects_installed` assert below.
+        // Reduce the history to limit the amount of commands sent to the new replica.
         self.history.reduce();
 
         let metrics = self.metrics.for_replica(id);
