@@ -9478,6 +9478,7 @@ impl<'a> Parser<'a> {
             match self.parse_one_of_keywords(&[TEXT, JSON, DOT]) {
                 Some(TEXT) => Some(ExplainFormat::Text),
                 Some(JSON) => Some(ExplainFormat::Json),
+                Some(DOT) => Some(ExplainFormat::Dot),
                 None => return Err(ParserError::new(self.index, "expected a format")),
                 _ => unreachable!(),
             }
