@@ -24,12 +24,14 @@ the catalog hosting them:
   AWS connection.
 - [GCP BigLake](/serve-results/sink/iceberg-gcp/)[^3] {{< private-preview-inline />}},
   which authenticates through a GCP connection.
-- [Iceberg REST catalog](/serve-results/sink/iceberg-rest/) {{< private-preview-inline />}},
-  for any catalog implementing the [Iceberg REST catalog
-  specification](https://iceberg.apache.org/spec/) with OAuth2 credentials, such as
-  [Databricks Unity
-  Catalog](https://docs.databricks.com/aws/en/external-access/iceberg) and [Apache
-  Polaris](https://polaris.apache.org/)
+- [Databricks Unity Catalog](/serve-results/sink/iceberg-databricks/)[^4] on
+  AWS, which authenticates with the OAuth2 credentials of a Databricks service
+  principal.
+
+Materialize can also reach other catalogs implementing the [Iceberg REST catalog
+specification](https://iceberg.apache.org/spec/) with OAuth2 credentials. See
+[`CREATE CONNECTION`: Iceberg
+catalog](/sql/create-connection/#iceberg-catalog).
 
 [^1]:
     [Apache Iceberg](https://iceberg.apache.org/) is an open table format for
@@ -45,3 +47,9 @@ the catalog hosting them:
     [Google Cloud
     BigLake](https://cloud.google.com/biglake) provides a managed Apache Iceberg
     REST catalog over Google Cloud Storage.
+
+[^4]:
+    [Databricks Unity
+    Catalog](https://docs.databricks.com/aws/en/external-access/iceberg) exposes
+    its tables to Apache Iceberg clients through an Iceberg REST catalog
+    endpoint.

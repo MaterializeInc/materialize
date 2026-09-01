@@ -934,7 +934,7 @@ Materialize supports two catalog types:
 | --- | --- | --- |
 | `'s3tablesrest'` | [AWS S3 Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html) | [AWS connection](#aws) |
 | `'rest'` | [Google Cloud BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog) {{< private-preview-inline />}} | [GCP connection](#gcp) |
-| `'rest'` | Any [Iceberg REST catalog](/serve-results/sink/iceberg-rest/), including [Databricks Unity Catalog](https://docs.databricks.com/aws/en/external-access/iceberg) {{< private-preview-inline />}} | OAuth2 credentials in a secret |
+| `'rest'` | Any Iceberg REST catalog, including [Databricks Unity Catalog](/serve-results/sink/iceberg-databricks/) | OAuth2 credentials in a secret |
 
 #### Syntax {#iceberg-catalog-syntax}
 
@@ -953,7 +953,7 @@ Materialize supports two catalog types:
 {{< /tab >}}
 {{< tab "Iceberg REST catalog" >}}
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 {{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog-rest" %}}
 
@@ -979,7 +979,7 @@ example="example-iceberg-catalog-gcp-connection" %}}
 {{< /tab >}}
 {{< tab "Iceberg REST catalog" >}}
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 {{% include-example file="examples/create_connection"
 example="example-iceberg-catalog-databricks-connection" %}}
@@ -1013,7 +1013,7 @@ rather than falling back. Requesting it unconditionally would break connections
 that work today.
 
 Some catalogs, including [Databricks Unity
-Catalog](/serve-results/sink/iceberg-rest/#databricks-unity-catalog), vend
+Catalog](/serve-results/sink/iceberg-databricks/), vend
 credentials as the only
 way to reach their storage, so `ACCESS DELEGATION` is required there rather than
 optional.
