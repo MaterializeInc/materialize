@@ -146,8 +146,9 @@ Spend comments on the non-obvious: concurrency and async hazards (races,
 lease/handle expiry, values that must not be held across an await point),
 ordering constraints ("X must happen before Y, else Z"), invariants whose
 violation panics or corrupts data, restart/recovery semantics, the origin of
-magic constants, and why the obvious alternative was not taken. Idiomatic code
-(match arms, iterator chains, getters, logging) needs none.
+magic constants, and why the alternative a reader would otherwise assume was
+not taken. Idiomatic code (match arms, iterator chains, getters, logging) needs
+none.
 
 A doc comment is the caller's contract: a one-sentence summary, then only the
 invariants and semantics a caller must know. A self-evident public item needs
@@ -175,6 +176,26 @@ imply it. No ASCII section-divider banners (`// ----- helpers -----`); item
 placement carries the structure. Performance claims in comments should state
 a constraint or a measured number, not unverifiable color ("the compiler can
 autovectorize this").
+
+Before keeping a sentence, ask whether a maintainer would get something wrong
+without it. If deleting it changes nothing they would do or believe, delete it,
+however true it is. Prefer deleting a sentence to rewording it: shortening the
+words while keeping every fact is not editing.
+
+A comment that asserts a constraint ("X is not possible, because Y") has to be
+checked when it is written, by a compile probe, a test, or a pointer to what
+enforces it. An unchecked constraint outlives its truth. It reads as fact,
+nobody retests it, and later work gets designed around a limit that is no
+longer there. Where the constraint cannot be checked, write what was observed
+instead of what is impossible.
+
+Avoid "X rather than Y" unless Y is what a reader would otherwise assume. Where
+Y is not a live prior it is unconstrained and unfalsifiable, and it rots
+silently, since the code can move to Y with the sentence still reading
+correctly. Where Y is a real trap, assert the failure instead of the contrast
+("awaiting here deadlocks, because the caller is a `Drop`"), which gives the
+claim truth conditions. A failure mode that cannot be named means the comment
+records a preference and not a reason.
 
 The same economy applies to tests: a test whose name and assert messages
 state the property needs no doc comment. Keep test docs for non-obvious
