@@ -877,6 +877,24 @@
     );
   testable: false
 
+- name: "example-iceberg-catalog-rest-connection"
+  description: |
+    The following example creates an [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) for an [Apache Polaris](https://polaris.apache.org/) catalog backed by S3-compatible storage:
+  code: |
+    -- Store the OAuth2 client credentials as `<client_id>:<client_secret>`.
+    CREATE SECRET rest_catalog_oauth
+      AS '<client_id>:<client_secret>';
+
+    -- Create the Iceberg catalog connection pointing to the catalog's REST endpoint.
+    CREATE CONNECTION iceberg_catalog_connection TO ICEBERG CATALOG (
+        CATALOG TYPE = 'rest',
+        URL = 'https://<polaris_host>/api/catalog',
+        WAREHOUSE = '<catalog_name>',
+        CREDENTIAL = SECRET rest_catalog_oauth,
+        SCOPE = 'PRINCIPAL_ROLE:ALL'
+    );
+  testable: false
+
 - name: "example-iceberg-catalog-databricks-connection"
   description: |
     The following example creates an [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) for Databricks Unity Catalog:

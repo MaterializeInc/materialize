@@ -27,11 +27,10 @@ the catalog hosting them:
 - [Databricks Unity Catalog](/serve-results/sink/iceberg-databricks/)[^4] on
   AWS, which authenticates with the OAuth2 credentials of a Databricks service
   principal.
-
-Materialize can also reach other catalogs implementing the [Iceberg REST catalog
-specification](https://iceberg.apache.org/spec/) with OAuth2 credentials. See
-[`CREATE CONNECTION`: Iceberg
-catalog](/sql/create-connection/#iceberg-catalog).
+- [Any Iceberg REST catalog](/serve-results/sink/iceberg-rest/) whose tables are
+  stored in Amazon S3 or an S3-compatible object store, such as [Apache
+  Polaris](https://polaris.apache.org/), which authenticates with OAuth2 client
+  credentials.
 
 [^1]:
     [Apache Iceberg](https://iceberg.apache.org/) is an open table format for
