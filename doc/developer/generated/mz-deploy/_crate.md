@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/lib.rs
-revision: a647094cc4
+revision: d50441fcbe
 ---
 
 # mz-deploy
@@ -25,6 +25,7 @@ Four major layers:
 * `log` — Verbose logging and the `verbose!` macro.
 * `lsp` — Language Server Protocol server for IDE integration: completion, hover, go-to-definition, references, diagnostics, code lens, document symbols, and workspace symbols.
 * `secret_resolver` — Secret resolution from AWS Secrets Manager, environment variables, and JSON field extraction.
+* `suggest` — Fuzzy name matching (`did_you_mean`) and related constants shared by the LSP code-action layer and the source-reference validation checks.
 
 ## Key dependencies
 
