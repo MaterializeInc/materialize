@@ -295,16 +295,20 @@ WITH
             gm.data->'key'->>'object_name' = isi.data->'key'->>'name'
         WHERE isi.data->>'kind' = 'ClusterIntrospectionSourceIndex'
     )
+-- UNION rather than UNION ALL: the branches are disjoint for the most part, but a
+-- reference can appear both by id and by name in one statement (a table function
+-- spelled `FROM [sNN AS pg_catalog.generate_series](...)` next to a plain call to
+-- the same function, which resolves by name)
 SELECT object_id, referenced_object_id FROM user_id_edges
-UNION ALL
+UNION
 SELECT object_id, referenced_object_id FROM user_func_edges
-UNION ALL
+UNION
 SELECT object_id, referenced_object_id FROM user_type_edges
-UNION ALL
+UNION
 SELECT object_id, referenced_object_id FROM user_relation_edges
-UNION ALL
+UNION
 SELECT object_id, referenced_object_id FROM builtin_edges
-UNION ALL
+UNION
 SELECT object_id, referenced_object_id FROM introspection_source_index_edges
 "
     )
@@ -369,6 +373,7 @@ pub(super) fn make_mz_object_dependencies_raw(builtins: &[Builtin<NameReference>
         desc: RelationDesc::builder()
             .with_column("object_id", SqlScalarType::String.nullable(true))
             .with_column("referenced_object_id", SqlScalarType::String.nullable(true))
+            .with_key(vec![0, 1])
             .finish(),
         column_comments: BTreeMap::from_iter([
             (
@@ -397,6 +402,7 @@ pub static MZ_OBJECT_DEPENDENCIES: LazyLock<BuiltinMaterializedView> =
                 "referenced_object_id",
                 SqlScalarType::String.nullable(false),
             )
+            .with_key(vec![0, 1])
             .finish(),
         column_comments: BTreeMap::from_iter([
             (

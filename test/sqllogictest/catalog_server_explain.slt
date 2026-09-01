@@ -5832,89 +5832,90 @@ mz_internal.mz_object_dependencies:
         Map: (#1 ->> "object_name"), (#1 ->> "schema_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id"))
           →Read mz_internal.mz_catalog_raw
   →Return
-    →Union
-      →Fused with Child Map/Filter/Project
-        Project: #0, #2
-          →Table Function jsonb_array_elements_text((#1{refs} -> "ids"))
-            →Stream l0
-      →Differential Join %1:l1[#2{object_name}, #1{schema_name}] » %0[(#1{func} ->> "name"), (#1{func} ->> "schema")]
-        →Arrange ((#1{func} ->> "name"), (#1{func} ->> "schema"))
-          →Fused with Child Map/Filter/Project
-            Project: #0, #2
-            Filter: ((#2{func} ->> "name")) IS NOT NULL AND ((#2{func} ->> "schema")) IS NOT NULL
-              →Table Function jsonb_array_elements((#1{refs} -> "named_funcs"))
-                →Stream l0
-        →Arrange (#2{object_name}, #1{schema_name})
-          →Fused with Child Map/Filter/Project
-            Project: #4, #3, #2
-            Filter: ("GidMapping" = (#0{data} ->> "kind")) AND ("8" = (#1 ->> "object_type")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL
-              →Read l1
-      →Differential Join %1:l1[#2{object_name}, #1{schema_name}] » %0[(#1{typ} ->> "name"), (#1{typ} ->> "schema")]
-        →Arrange ((#1{typ} ->> "name"), (#1{typ} ->> "schema"))
-          →Fused with Child Map/Filter/Project
-            Project: #0, #2
-            Filter: ((#2{typ} ->> "name")) IS NOT NULL AND ((#2{typ} ->> "schema")) IS NOT NULL
-              →Table Function jsonb_array_elements((#1{refs} -> "named_types"))
-                →Stream l0
-        →Arrange (#2{object_name}, #1{schema_name})
-          →Fused with Child Map/Filter/Project
-            Project: #4, #3, #2
-            Filter: ("GidMapping" = (#0{data} ->> "kind")) AND ("7" = (#1 ->> "object_type")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL
-              →Read l1
-      →Differential Join %1:mz_catalog_raw[#2{object_name}, #1{schema_name}] » %0[(#1{rel} ->> "name"), (#1{rel} ->> "schema")]
-        →Arrange ((#1{rel} ->> "name"), (#1{rel} ->> "schema"))
-          →Fused with Child Map/Filter/Project
-            Project: #0, #2
-            Filter: ((#2{rel} ->> "name")) IS NOT NULL AND ((#2{rel} ->> "schema")) IS NOT NULL
-              →Table Function jsonb_array_elements((#1{refs} -> "named_relations"))
-                →Stream l0
-        →Arrange (#2{object_name}, #1{schema_name})
-          →Fused with Child Map/Filter/Project
-            Project: #5, #4, #3
-            Filter: ("GidMapping" = (#0{data} ->> "kind")) AND (#2 != "7") AND (#2 != "8") AND (#3) IS NOT NULL AND (#4) IS NOT NULL
-            Map: (#1 ->> "object_type"), (#1 ->> "object_name"), (#1 ->> "schema_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id"))
-              →Read mz_internal.mz_catalog_raw
-      →Delta Join [%0[#0{object_schema}..=#2{object_type}] » %1:mz_catalog_raw[#1{schema_name}..=#3{object_type}] » %2:mz_catalog_raw[#1{schema_name}, #2{object_name}]] [%1:mz_catalog_raw[#1{schema_name}..=#3{object_type}] » %0[#0{object_schema}..=#2{object_type}] » %2:mz_catalog_raw[#1{schema_name}, #2{object_name}]] [%2:mz_catalog_raw[#1{schema_name}, #2{object_name}] » %0[#3{ref_schema}, #4{ref_name}] » %1:mz_catalog_raw[#1{schema_name}..=#3{object_type}]]
-        path %0:
-          after %2:
+    →Distinct GroupAggregate
+      →Union
+        →Fused with Child Map/Filter/Project
+          Project: #0, #2
+            →Table Function jsonb_array_elements_text((#1{refs} -> "ids"))
+              →Stream l0
+        →Differential Join %1:l1[#2{object_name}, #1{schema_name}] » %0[(#1{func} ->> "name"), (#1{func} ->> "schema")]
+          →Arrange ((#1{func} ->> "name"), (#1{func} ->> "schema"))
+            →Fused with Child Map/Filter/Project
+              Project: #0, #2
+              Filter: ((#2{func} ->> "name")) IS NOT NULL AND ((#2{func} ->> "schema")) IS NOT NULL
+                →Table Function jsonb_array_elements((#1{refs} -> "named_funcs"))
+                  →Stream l0
+          →Arrange (#2{object_name}, #1{schema_name})
+            →Fused with Child Map/Filter/Project
+              Project: #4, #3, #2
+              Filter: ("GidMapping" = (#0{data} ->> "kind")) AND ("8" = (#1 ->> "object_type")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL
+                →Read l1
+        →Differential Join %1:l1[#2{object_name}, #1{schema_name}] » %0[(#1{typ} ->> "name"), (#1{typ} ->> "schema")]
+          →Arrange ((#1{typ} ->> "name"), (#1{typ} ->> "schema"))
+            →Fused with Child Map/Filter/Project
+              Project: #0, #2
+              Filter: ((#2{typ} ->> "name")) IS NOT NULL AND ((#2{typ} ->> "schema")) IS NOT NULL
+                →Table Function jsonb_array_elements((#1{refs} -> "named_types"))
+                  →Stream l0
+          →Arrange (#2{object_name}, #1{schema_name})
+            →Fused with Child Map/Filter/Project
+              Project: #4, #3, #2
+              Filter: ("GidMapping" = (#0{data} ->> "kind")) AND ("7" = (#1 ->> "object_type")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL
+                →Read l1
+        →Differential Join %1:mz_catalog_raw[#2{object_name}, #1{schema_name}] » %0[(#1{rel} ->> "name"), (#1{rel} ->> "schema")]
+          →Arrange ((#1{rel} ->> "name"), (#1{rel} ->> "schema"))
+            →Fused with Child Map/Filter/Project
+              Project: #0, #2
+              Filter: ((#2{rel} ->> "name")) IS NOT NULL AND ((#2{rel} ->> "schema")) IS NOT NULL
+                →Table Function jsonb_array_elements((#1{refs} -> "named_relations"))
+                  →Stream l0
+          →Arrange (#2{object_name}, #1{schema_name})
+            →Fused with Child Map/Filter/Project
+              Project: #5, #4, #3
+              Filter: ("GidMapping" = (#0{data} ->> "kind")) AND (#2 != "7") AND (#2 != "8") AND (#3) IS NOT NULL AND (#4) IS NOT NULL
+              Map: (#1 ->> "object_type"), (#1 ->> "object_name"), (#1 ->> "schema_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id"))
+                →Read mz_internal.mz_catalog_raw
+        →Delta Join [%0[#0{object_schema}..=#2{object_type}] » %1:mz_catalog_raw[#1{schema_name}..=#3{object_type}] » %2:mz_catalog_raw[#1{schema_name}, #2{object_name}]] [%1:mz_catalog_raw[#1{schema_name}..=#3{object_type}] » %0[#0{object_schema}..=#2{object_type}] » %2:mz_catalog_raw[#1{schema_name}, #2{object_name}]] [%2:mz_catalog_raw[#1{schema_name}, #2{object_name}] » %0[#3{ref_schema}, #4{ref_name}] » %1:mz_catalog_raw[#1{schema_name}..=#3{object_type}]]
+          path %0:
+            after %2:
+              Project: #3, #4
+              Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
+          path %1:
+            after %2:
+              Project: #3, #4
+              Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
+          path %2:
+            after %0:
+              Project: #4..=#6, #2
+              Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
+          →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
+            →Constant (1024 rows)
+          →Arrange (#1{schema_name}..=#3{object_type})
+            →Fused with Child Map/Filter/Project
+              Project: #5, #4, #2, #3
+              Filter: ("GidMapping" = (#0{data} ->> "kind")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL
+              Map: (#1 ->> "object_name"), (#1 ->> "object_type"), (#1 ->> "schema_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id"))
+                →Read mz_internal.mz_catalog_raw
+          →Arrange (#1{schema_name}, #2{object_name})
+            →Fused with Child Map/Filter/Project
+              Project: #4, #3, #2, #5
+              Filter: ("GidMapping" = (#0{data} ->> "kind")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL
+              Map: (#1 ->> "object_name"), (#1 ->> "schema_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id")), (#1 ->> "object_type")
+                →Read mz_internal.mz_catalog_raw
+        →Differential Join %0:mz_catalog_raw[((#0{data} -> "key") ->> "name")] » %1:mz_catalog_raw[((#0{data} -> "key") ->> "object_name")]
+          after %1:
             Project: #3, #4
-            Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
-        path %1:
-          after %2:
-            Project: #3, #4
-            Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
-        path %2:
-          after %0:
-            Project: #4..=#6, #2
-            Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
-        →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-          →Constant (1024 rows)
-        →Arrange (#1{schema_name}..=#3{object_type})
-          →Fused with Child Map/Filter/Project
-            Project: #5, #4, #2, #3
-            Filter: ("GidMapping" = (#0{data} ->> "kind")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL
-            Map: (#1 ->> "object_name"), (#1 ->> "object_type"), (#1 ->> "schema_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id"))
-              →Read mz_internal.mz_catalog_raw
-        →Arrange (#1{schema_name}, #2{object_name})
-          →Fused with Child Map/Filter/Project
-            Project: #4, #3, #2, #5
-            Filter: ("GidMapping" = (#0{data} ->> "kind")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL
-            Map: (#1 ->> "object_name"), (#1 ->> "schema_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id")), (#1 ->> "object_type")
-              →Read mz_internal.mz_catalog_raw
-      →Differential Join %0:mz_catalog_raw[((#0{data} -> "key") ->> "name")] » %1:mz_catalog_raw[((#0{data} -> "key") ->> "object_name")]
-        after %1:
-          Project: #3, #4
-          Map: ("si" || ((#1{data} -> "value") ->> "catalog_id")), ("s" || ((#2{data} -> "value") ->> "catalog_id"))
-        →Arrange (((#0{data} -> "key") ->> "name"))
-          →Fused with Child Map/Filter/Project
-            Project: #0
-            Filter: ("ClusterIntrospectionSourceIndex" = (#0{data} ->> "kind")) AND ((#1 ->> "name")) IS NOT NULL
-              →Read mz_internal.mz_catalog_raw
-        →Arrange (((#0{data} -> "key") ->> "object_name"))
-          →Fused with Child Map/Filter/Project
-            Project: #0
-            Filter: ("GidMapping" = (#0{data} ->> "kind")) AND ("2" = (#1 ->> "object_type")) AND ("mz_introspection" = (#1 ->> "schema_name")) AND ((#1 ->> "object_name")) IS NOT NULL
-              →Read mz_internal.mz_catalog_raw
+            Map: ("si" || ((#1{data} -> "value") ->> "catalog_id")), ("s" || ((#2{data} -> "value") ->> "catalog_id"))
+          →Arrange (((#0{data} -> "key") ->> "name"))
+            →Fused with Child Map/Filter/Project
+              Project: #0
+              Filter: ("ClusterIntrospectionSourceIndex" = (#0{data} ->> "kind")) AND ((#1 ->> "name")) IS NOT NULL
+                →Read mz_internal.mz_catalog_raw
+          →Arrange (((#0{data} -> "key") ->> "object_name"))
+            →Fused with Child Map/Filter/Project
+              Project: #0
+              Filter: ("GidMapping" = (#0{data} ->> "kind")) AND ("2" = (#1 ->> "object_type")) AND ("mz_introspection" = (#1 ->> "schema_name")) AND ((#1 ->> "object_name")) IS NOT NULL
+                →Read mz_internal.mz_catalog_raw
 
 Source mz_internal.mz_catalog_raw
   project=(#0, #1)
@@ -10234,81 +10235,82 @@ Explained Query:
         Map: (#1 ->> "object_name"), (#1 ->> "schema_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id"))
           →Read mz_internal.mz_catalog_raw
   →Return
-    →Union
-      →Fused with Child Map/Filter/Project
-        Project: #0, #2
-          →Table Function jsonb_array_elements_text((#1{refs} -> "ids"))
-            →Stream l0
-      →Differential Join %1:l1[#2{object_name}, #1{schema_name}] » %0[(#1{func} ->> "name"), (#1{func} ->> "schema")]
-        →Arrange ((#1{func} ->> "name"), (#1{func} ->> "schema"))
-          →Fused with Child Map/Filter/Project
-            Project: #0, #2
-            Filter: ((#2{func} ->> "name")) IS NOT NULL AND ((#2{func} ->> "schema")) IS NOT NULL
-              →Table Function jsonb_array_elements((#1{refs} -> "named_funcs"))
-                →Stream l0
-        →Arrange (#2{object_name}, #1{schema_name})
-          →Fused with Child Map/Filter/Project
-            Project: #4, #3, #2
-            Filter: ("GidMapping" = (#0{data} ->> "kind")) AND ("8" = (#1 ->> "object_type")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL
-              →Read l1
-      →Differential Join %1:l1[#2{object_name}, #1{schema_name}] » %0[(#1{typ} ->> "name"), (#1{typ} ->> "schema")]
-        →Arrange ((#1{typ} ->> "name"), (#1{typ} ->> "schema"))
-          →Fused with Child Map/Filter/Project
-            Project: #0, #2
-            Filter: ((#2{typ} ->> "name")) IS NOT NULL AND ((#2{typ} ->> "schema")) IS NOT NULL
-              →Table Function jsonb_array_elements((#1{refs} -> "named_types"))
-                →Stream l0
-        →Arrange (#2{object_name}, #1{schema_name})
-          →Fused with Child Map/Filter/Project
-            Project: #4, #3, #2
-            Filter: ("GidMapping" = (#0{data} ->> "kind")) AND ("7" = (#1 ->> "object_type")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL
-              →Read l1
-      →Differential Join %1:mz_catalog_raw[#2{object_name}, #1{schema_name}] » %0[(#1{rel} ->> "name"), (#1{rel} ->> "schema")]
-        →Arrange ((#1{rel} ->> "name"), (#1{rel} ->> "schema"))
-          →Fused with Child Map/Filter/Project
-            Project: #0, #2
-            Filter: ((#2{rel} ->> "name")) IS NOT NULL AND ((#2{rel} ->> "schema")) IS NOT NULL
-              →Table Function jsonb_array_elements((#1{refs} -> "named_relations"))
-                →Stream l0
-        →Arrange (#2{object_name}, #1{schema_name})
-          →Fused with Child Map/Filter/Project
-            Project: #5, #4, #3
-            Filter: ("GidMapping" = (#0{data} ->> "kind")) AND (#2 != "7") AND (#2 != "8") AND (#3) IS NOT NULL AND (#4) IS NOT NULL
-            Map: (#1 ->> "object_type"), (#1 ->> "object_name"), (#1 ->> "schema_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id"))
-              →Read mz_internal.mz_catalog_raw
-      →One-Shot Delta Join [%0 » %1:mz_catalog_raw[#1{schema_name}..=#3{object_type}] » %2:mz_catalog_raw[#1{schema_name}, #2{object_name}]]
-        path %0:
-          after %2:
+    →Distinct GroupAggregate
+      →Union
+        →Fused with Child Map/Filter/Project
+          Project: #0, #2
+            →Table Function jsonb_array_elements_text((#1{refs} -> "ids"))
+              →Stream l0
+        →Differential Join %1:l1[#2{object_name}, #1{schema_name}] » %0[(#1{func} ->> "name"), (#1{func} ->> "schema")]
+          →Arrange ((#1{func} ->> "name"), (#1{func} ->> "schema"))
+            →Fused with Child Map/Filter/Project
+              Project: #0, #2
+              Filter: ((#2{func} ->> "name")) IS NOT NULL AND ((#2{func} ->> "schema")) IS NOT NULL
+                →Table Function jsonb_array_elements((#1{refs} -> "named_funcs"))
+                  →Stream l0
+          →Arrange (#2{object_name}, #1{schema_name})
+            →Fused with Child Map/Filter/Project
+              Project: #4, #3, #2
+              Filter: ("GidMapping" = (#0{data} ->> "kind")) AND ("8" = (#1 ->> "object_type")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL
+                →Read l1
+        →Differential Join %1:l1[#2{object_name}, #1{schema_name}] » %0[(#1{typ} ->> "name"), (#1{typ} ->> "schema")]
+          →Arrange ((#1{typ} ->> "name"), (#1{typ} ->> "schema"))
+            →Fused with Child Map/Filter/Project
+              Project: #0, #2
+              Filter: ((#2{typ} ->> "name")) IS NOT NULL AND ((#2{typ} ->> "schema")) IS NOT NULL
+                →Table Function jsonb_array_elements((#1{refs} -> "named_types"))
+                  →Stream l0
+          →Arrange (#2{object_name}, #1{schema_name})
+            →Fused with Child Map/Filter/Project
+              Project: #4, #3, #2
+              Filter: ("GidMapping" = (#0{data} ->> "kind")) AND ("7" = (#1 ->> "object_type")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL
+                →Read l1
+        →Differential Join %1:mz_catalog_raw[#2{object_name}, #1{schema_name}] » %0[(#1{rel} ->> "name"), (#1{rel} ->> "schema")]
+          →Arrange ((#1{rel} ->> "name"), (#1{rel} ->> "schema"))
+            →Fused with Child Map/Filter/Project
+              Project: #0, #2
+              Filter: ((#2{rel} ->> "name")) IS NOT NULL AND ((#2{rel} ->> "schema")) IS NOT NULL
+                →Table Function jsonb_array_elements((#1{refs} -> "named_relations"))
+                  →Stream l0
+          →Arrange (#2{object_name}, #1{schema_name})
+            →Fused with Child Map/Filter/Project
+              Project: #5, #4, #3
+              Filter: ("GidMapping" = (#0{data} ->> "kind")) AND (#2 != "7") AND (#2 != "8") AND (#3) IS NOT NULL AND (#4) IS NOT NULL
+              Map: (#1 ->> "object_type"), (#1 ->> "object_name"), (#1 ->> "schema_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id"))
+                →Read mz_internal.mz_catalog_raw
+        →One-Shot Delta Join [%0 » %1:mz_catalog_raw[#1{schema_name}..=#3{object_type}] » %2:mz_catalog_raw[#1{schema_name}, #2{object_name}]]
+          path %0:
+            after %2:
+              Project: #3, #4
+              Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
+          →Unarranged Raw Stream
+            →Constant (1024 rows)
+          →Arrange (#1{schema_name}..=#3{object_type})
+            →Fused with Child Map/Filter/Project
+              Project: #5, #4, #2, #3
+              Filter: ("GidMapping" = (#0{data} ->> "kind")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL
+              Map: (#1 ->> "object_name"), (#1 ->> "object_type"), (#1 ->> "schema_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id"))
+                →Read mz_internal.mz_catalog_raw
+          →Arrange (#1{schema_name}, #2{object_name})
+            →Fused with Child Map/Filter/Project
+              Project: #4, #3, #2, #5
+              Filter: ("GidMapping" = (#0{data} ->> "kind")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL
+              Map: (#1 ->> "object_name"), (#1 ->> "schema_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id")), (#1 ->> "object_type")
+                →Read mz_internal.mz_catalog_raw
+        →Differential Join %0:mz_catalog_raw[((#0{data} -> "key") ->> "name")] » %1:mz_catalog_raw[((#0{data} -> "key") ->> "object_name")]
+          after %1:
             Project: #3, #4
-            Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
-        →Unarranged Raw Stream
-          →Constant (1024 rows)
-        →Arrange (#1{schema_name}..=#3{object_type})
-          →Fused with Child Map/Filter/Project
-            Project: #5, #4, #2, #3
-            Filter: ("GidMapping" = (#0{data} ->> "kind")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL
-            Map: (#1 ->> "object_name"), (#1 ->> "object_type"), (#1 ->> "schema_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id"))
-              →Read mz_internal.mz_catalog_raw
-        →Arrange (#1{schema_name}, #2{object_name})
-          →Fused with Child Map/Filter/Project
-            Project: #4, #3, #2, #5
-            Filter: ("GidMapping" = (#0{data} ->> "kind")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL
-            Map: (#1 ->> "object_name"), (#1 ->> "schema_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id")), (#1 ->> "object_type")
-              →Read mz_internal.mz_catalog_raw
-      →Differential Join %0:mz_catalog_raw[((#0{data} -> "key") ->> "name")] » %1:mz_catalog_raw[((#0{data} -> "key") ->> "object_name")]
-        after %1:
-          Project: #3, #4
-          Map: ("si" || ((#1{data} -> "value") ->> "catalog_id")), ("s" || ((#2{data} -> "value") ->> "catalog_id"))
-        →Arrange (((#0{data} -> "key") ->> "name"))
-          →Fused with Child Map/Filter/Project
-            Project: #0
-            Filter: ("ClusterIntrospectionSourceIndex" = (#0{data} ->> "kind")) AND ((#1 ->> "name")) IS NOT NULL
-              →Read mz_internal.mz_catalog_raw
-        →Arrange (((#0{data} -> "key") ->> "object_name"))
-          →Fused with Child Map/Filter/Project
-            Project: #0
-            Filter: ("GidMapping" = (#0{data} ->> "kind")) AND ("2" = (#1 ->> "object_type")) AND ("mz_introspection" = (#1 ->> "schema_name")) AND ((#1 ->> "object_name")) IS NOT NULL
-              →Read mz_internal.mz_catalog_raw
+            Map: ("si" || ((#1{data} -> "value") ->> "catalog_id")), ("s" || ((#2{data} -> "value") ->> "catalog_id"))
+          →Arrange (((#0{data} -> "key") ->> "name"))
+            →Fused with Child Map/Filter/Project
+              Project: #0
+              Filter: ("ClusterIntrospectionSourceIndex" = (#0{data} ->> "kind")) AND ((#1 ->> "name")) IS NOT NULL
+                →Read mz_internal.mz_catalog_raw
+          →Arrange (((#0{data} -> "key") ->> "object_name"))
+            →Fused with Child Map/Filter/Project
+              Project: #0
+              Filter: ("GidMapping" = (#0{data} ->> "kind")) AND ("2" = (#1 ->> "object_type")) AND ("mz_introspection" = (#1 ->> "schema_name")) AND ((#1 ->> "object_name")) IS NOT NULL
+                →Read mz_internal.mz_catalog_raw
 
 Source mz_internal.mz_catalog_raw
   project=(#0, #1)
