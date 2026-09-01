@@ -10,6 +10,13 @@ menu:
 
 {{< public-preview />}}
 
+{{< warning >}}
+Sinks into Unity Catalog must use **`MODE APPEND`**. Upsert mode is not
+supported, because it writes Iceberg equality delete files that Unity Catalog
+managed tables do not accept. See [Append-only
+sinks](#append-only-sinks) below.
+{{< /warning >}}
+
 This guide walks you through the steps required to set up Iceberg sinks in
 Materialize Cloud against [Databricks Unity
 Catalog](https://docs.databricks.com/aws/en/external-access/iceberg) on AWS.
@@ -26,12 +33,15 @@ are not yet covered.
 ### A Unity Catalog metastore with external data access enabled
 
 Your Databricks workspace must be attached to a Unity Catalog metastore, and
-that metastore must have **external data access** enabled. Unity Catalog
-rejects every Iceberg REST request until it is, including the ones Materialize
-makes to discover the table.
+that metastore must have **External data access** enabled. Unity Catalog rejects
+every Iceberg REST request until it is, including the ones Materialize makes to
+discover the table.
 
-Enabling it requires a metastore admin. See [Databricks: Enable external data
-access to Unity Catalog](https://docs.databricks.com/aws/en/external-access/admin).
+The toggle is in **Catalog Explorer** on the metastore's **Details** tab, listed
+as **External data access**. Editing metastore details requires an account
+administrator, who can also set it from the account console. See [Databricks:
+Enable external data access to Unity
+Catalog](https://docs.databricks.com/aws/en/external-access/admin).
 
 ### A catalog and a schema to write into
 
@@ -68,8 +78,23 @@ principal](https://docs.databricks.com/aws/en/admin/users-groups/service-princip
    client ID (its application ID) and a client secret. Record the secret when it
    is shown; Databricks does not display it again.
 
-3. Grant the service principal the privileges Materialize needs. In a Databricks
-   SQL editor, using the service principal's application ID as the grantee:
+3. Grant the service principal these privileges **on the metastore**. In
+   **Catalog Explorer**, open the metastore, go to its **Permissions** tab, and
+   grant, under **Data Administration**:
+
+    | Privilege | Why Materialize needs it |
+    | --- | --- |
+    | `USE METASTORE REMOTELY` | Reach the metastore from outside a Databricks compute resource, which is what an Iceberg REST client is. |
+    | `READ METADATA` | Read the table metadata the sink commits against. |
+    | `CREATE STORAGE CREDENTIAL` | Receive the temporary storage credentials Unity Catalog vends for the table's storage. |
+
+    These are metastore-level grants, separate from the catalog and schema grants
+    below. Granting only the catalog and schema privileges leaves the connection
+    failing on every request.
+
+4. Grant the service principal the privileges Materialize needs **on the catalog
+   and schema**. In a Databricks SQL editor, using the service principal's
+   application ID as the grantee:
 
     ```sql
     GRANT USE CATALOG ON CATALOG <catalog_name> TO `<application_id>`;
@@ -135,11 +160,14 @@ privileges on.
 
 {{% include-example file="examples/create_sink_iceberg" example="tutorial-create-sink-intro" %}}
 
-### Upsert mode
+### Append-only sinks {#append-only-sinks}
 
-{{% include-example file="examples/create_sink_iceberg" example="tutorial-create-sink-upsert-mode" %}}
-
-### Append mode
+Unity Catalog tables accept only `MODE APPEND`, so the sink appends a row per
+change rather than updating rows in place: `_mz_diff` is `+1` for an insertion
+and `-1` for a deletion, and an update arrives as both. To recover the current
+contents of the relation, group by the data columns and keep the groups whose
+`_mz_diff` sums above zero. See [Append
+mode](/sql/create-sink/iceberg/#append-mode) for the full change encoding.
 
 {{% include-example file="examples/create_sink_iceberg" example="tutorial-create-sink-append-mode" %}}
 
@@ -179,6 +207,10 @@ ALTER SECRET databricks_oauth AS '<client_id>:<new_client_secret>';
 - Materialize can only sink into *managed* Iceberg tables. Foreign Iceberg
   tables and Delta tables are read-only through the Iceberg REST catalog.
 
+- Only `MODE APPEND` sinks are supported. `MODE UPSERT` expresses retractions as
+  Iceberg equality delete files, which Unity Catalog managed tables do not
+  accept.
+
 {{% include-headless "/headless/iceberg-sinks/limitations-list" %}}
 
 ## Troubleshooting
@@ -192,9 +224,9 @@ SELECT name, error FROM mz_internal.mz_sink_statuses WHERE name = '<sink_name>';
 | Error | Cause |
 | --- | --- |
 | Token exchange failures | `OAUTH2 SERVER URL` or `SCOPE` does not match what the workspace expects, the service principal is not assigned to the workspace, or its OAuth secret has been rotated or revoked. |
-| Authentication failures on every catalog request | External data access is not enabled on the metastore, or the service principal does not hold `EXTERNAL USE SCHEMA` on the schema. |
+| Authentication failures on every catalog request | External data access is not enabled on the metastore, or the service principal is missing a metastore grant (`USE METASTORE REMOTELY`, `READ METADATA`) or `EXTERNAL USE SCHEMA` on the schema. |
 | A namespace-not-found error when the sink starts | The schema named by `NAMESPACE` does not exist, or the service principal cannot see it. |
-| Storage errors once the sink is running | `ACCESS DELEGATION = 'vended-credentials'` is not set on the connection. Unity Catalog vends credentials as the only way to reach its storage. |
+| Storage errors once the sink is running | `ACCESS DELEGATION = 'vended-credentials'` is not set on the connection, or the service principal lacks `CREATE STORAGE CREDENTIAL` on the metastore. Unity Catalog vends credentials as the only way to reach its storage. |
 
 {{% include-headless "/headless/iceberg-sinks/troubleshooting" %}}
 
