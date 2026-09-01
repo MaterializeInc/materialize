@@ -1522,10 +1522,18 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
             time.sleep(0.5)
         assert replica_before, "replica hydration history timed out before restart"
 
-        # Discover which MV's persist-sink worker is off worker 0 instead of
+        # Discover an MV whose persist-sink worker is off worker 0 instead of
         # predicting it from user-ID allocation and hashing. Enough input data
-        # separates compute completion from the active worker's durable write.
-        deadline = time.time() + 120
+        # separates compute completion from the active worker's durable write,
+        # but a single MV is not a reliable trial: its sink can land on worker
+        # 0, and a fast snapshot write can collapse both workers' stamps into
+        # one logging batch. Either way the separation is unobservable on that
+        # MV, so once a trial is fully hydrated and disqualified, create
+        # another MV: a fresh id rolls the sink worker and a fresh snapshot
+        # write rolls the timing.
+        deadline = time.time() + 240
+        mv_names = ["hydration_history_mv_a", "hydration_history_mv_b"]
+        max_mvs = 8
         candidates = []
         worker_rows = []
         with c.sql_cursor(reuse_connection=True) as cursor:
@@ -1533,7 +1541,8 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
                 cursor.execute("SET cluster = hydration_history")
                 cursor.execute("SET cluster_replica = r1")
                 while time.time() < deadline:
-                    cursor.execute("""
+                    name_list = ", ".join(f"'{name}'" for name in mv_names)
+                    cursor.execute(f"""
                         SELECT
                             mv.name,
                             max(h.hydrated_at)::text,
@@ -1543,15 +1552,12 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
                         JOIN mz_internal.mz_object_global_ids AS g
                           ON g.global_id = h.export_id
                         JOIN mz_catalog.mz_materialized_views AS mv ON mv.id = g.id
-                        WHERE mv.name IN (
-                            'hydration_history_mv_a',
-                            'hydration_history_mv_b'
-                        )
+                        WHERE mv.name IN ({name_list})
                         GROUP BY mv.name
                         HAVING count(*) = 2
                            AND count(*) = count(h.hydrated_at)
                         ORDER BY mv.name
-                        """)
+                        """.encode())
                     worker_rows = cursor.fetchall()
                     candidates = [
                         row
@@ -1560,13 +1566,22 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
                     ]
                     if candidates:
                         break
+                    if len(worker_rows) == len(mv_names) and len(mv_names) < max_mvs:
+                        name = f"hydration_history_mv_{chr(ord('a') + len(mv_names))}"
+                        cursor.execute(f"""
+                            CREATE MATERIALIZED VIEW {name}
+                                IN CLUSTER hydration_history
+                                AS SELECT a + {len(mv_names) + 1} AS a
+                                FROM hydration_history_t
+                            """.encode())
+                        mv_names.append(name)
                     time.sleep(0.5)
             finally:
                 cursor.execute("RESET cluster_replica")
                 cursor.execute("RESET cluster")
         assert candidates, (
-            "test fixture did not produce an MV with its persist-sink worker "
-            f"off worker 0: {worker_rows}"
+            "no MV produced an observable off-worker-0 persist-sink finish, "
+            f"tried {len(mv_names)}: {worker_rows}"
         )
         mv_name, latest_worker_finish, worker_zero_finish = candidates[0]
 
