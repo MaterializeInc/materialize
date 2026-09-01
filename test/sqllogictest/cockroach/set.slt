@@ -410,8 +410,10 @@ onlyif cockroach
 statement ok
 SET application_name = current_timestamp()::string
 
-# Commented out: Materialize's statement_timeout is currently broken, see
-# https://github.com/MaterializeInc/database-issues/issues/9947
+# TODO(database-issues#9947): Uncomment when statement_timeout works for plain
+# SELECTs. For peeks it currently only bounds the optimization phase (see
+# src/adapter/src/frontend_peek.rs), so the 1 ms timeout sometimes fails to
+# fire and the record then fails with UnexpectedPlanSuccess.
 ## Test statement_timeout on a long-running query.
 #statement ok
 #SET statement_timeout = 1
