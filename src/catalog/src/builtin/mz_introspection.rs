@@ -1215,7 +1215,7 @@ pub static MZ_RECORDS_PER_DATAFLOW_OPERATOR: LazyLock<BuiltinView> =
                 "The ID of the dataflow. Corresponds to `mz_dataflows.id`.",
             ),
             ("records", "The number of records in the operator."),
-            ("batches", "The number of batches in the dataflow."),
+            ("batches", "The number of batches in the operator."),
             ("size", "The utilized size in bytes of the arrangement."),
             (
                 "capacity",
@@ -2243,7 +2243,7 @@ pub static MZ_ARRANGEMENT_SHARING: LazyLock<BuiltinView> = LazyLock::new(|| Buil
         ),
         (
             "count",
-            "The number of operators that share the arrangement.",
+            "The number of live trace handles on the arrangement.",
         ),
     ]),
     sql: "

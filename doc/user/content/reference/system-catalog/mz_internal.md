@@ -200,7 +200,7 @@ an autoscaling action is running.
 
 ## `mz_cluster_replica_metrics`
 
-The `mz_cluster_replica_metrics` view gives the last known CPU and RAM utilization statistics
+The `mz_cluster_replica_metrics` view gives the last known CPU, RAM, disk, and heap utilization statistics
 for all processes of all extant cluster replicas.
 
 At this time, we do not make any guarantees about the exactness or freshness of these numbers.
@@ -219,7 +219,7 @@ usage.
 | `process_id`        | [`uint8`]    | The ID of a process within the replica.
 | `cpu_nano_cores`    | [`uint8`]    | Approximate CPU usage, in billionths of a vCPU core.
 | `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.
-| `disk_bytes`        | [`uint8`]    | Approximate disk usage, in bytes.
+| `disk_bytes`        | [`uint8`]    | Approximate disk usage, in bytes. On replicas whose disk is provided as swap, this includes swap usage.
 | `heap_bytes`        | [`uint8`]    | Approximate heap (RAM + swap) usage, in bytes.
 | `heap_limit`        | [`uint8`]    | Available heap (RAM + swap) space, in bytes.
 
@@ -242,8 +242,8 @@ history is retained across restarts.
 | `replica_id`     | [`text`]  | The ID of a cluster replica.
 | `process_id`     | [`uint8`] | The ID of a process within the replica.
 | `cpu_nano_cores` | [`uint8`] | Approximate CPU usage, in billionths of a vCPU core.
-| `memory_bytes`   | [`uint8`] | Approximate memory usage, in bytes.
-| `disk_bytes`     | [`uint8`] | Approximate disk usage, in bytes.
+| `memory_bytes`   | [`uint8`] | Approximate RAM usage, in bytes.
+| `disk_bytes`     | [`uint8`] | Approximate disk usage, in bytes. On replicas whose disk is provided as swap, this includes swap usage.
 | `occurred_at`    | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
 | `heap_bytes`     | [`uint8`] | Approximate heap (RAM + swap) usage, in bytes.
 | `heap_limit`     | [`uint8`] | Available heap (RAM + swap) space, in bytes.
@@ -279,7 +279,7 @@ for all processes of all extant cluster replicas.
 
 ## `mz_cluster_replica_utilization`
 
-The `mz_cluster_replica_utilization` view gives the last known CPU and RAM utilization statistics
+The `mz_cluster_replica_utilization` view gives the last known CPU, RAM, disk, and heap utilization statistics
 for all processes of all extant cluster replicas, as a percentage of the total resource allocation.
 
 At this time, we do not make any guarantees about the exactness or freshness of these numbers.
@@ -291,7 +291,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `process_id`     | [`uint8`]            | The ID of a process within the replica.
 | `cpu_percent`    | [`double precision`] | Approximate CPU usage, in percent of the total allocation.
 | `memory_percent` | [`double precision`] | Approximate RAM usage, in percent of the total allocation.
-| `disk_percent`   | [`double precision`] | Approximate disk usage, in percent of the total allocation.
+| `disk_percent`   | [`double precision`] | Approximate disk usage, in percent of the total allocation. On replicas whose disk is provided as swap, this includes swap usage.
 | `heap_percent`   | [`double precision`] | Approximate heap (RAM + swap) usage, in percent of the total allocation.
 
 ## `mz_cluster_replica_utilization_history`
@@ -309,7 +309,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `process_id`     | [`uint8`]            | The ID of a process within the replica.
 | `cpu_percent`    | [`double precision`] | Approximate CPU usage, in percent of the total allocation.
 | `memory_percent` | [`double precision`] | Approximate RAM usage, in percent of the total allocation.
-| `disk_percent`   | [`double precision`] | Approximate disk usage, in percent of the total allocation.
+| `disk_percent`   | [`double precision`] | Approximate disk usage, in percent of the total allocation. On replicas whose disk is provided as swap, this includes swap usage.
 | `heap_percent`   | [`double precision`] | Approximate heap (RAM + swap) usage, in percent of the total allocation.
 | `occurred_at`    | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
 
@@ -459,7 +459,7 @@ inputs.
 <!-- RELATION_SPEC mz_internal.mz_hydration_statuses -->
 | Field        | Type        | Meaning  |
 | -----------  | ----------- | -------- |
-| `object_id`  | [`text`]    | The ID of a dataflow-powered object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_internal.mz_subscriptions`](#mz_subscriptions), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks). |
+| `object_id`  | [`text`]    | The ID of a dataflow-powered object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks). |
 | `replica_id` | [`text`]    | The ID of a cluster replica. |
 | `hydrated`   | [`boolean`] | Whether the object is hydrated on the replica. |
 
@@ -536,7 +536,7 @@ SQL objects that don't exist in the dataflow layer (such as views) are omitted.
 <!-- RELATION_SPEC mz_internal.mz_materialization_dependencies -->
 | Field       | Type     | Meaning                                                                                                                                                                                                                                                                                            |
 | ----------- | -------- | --------                                                                                                                                                                                                                                                                                           |
-| `object_id`     | [`text`] | The ID of a materialization. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_catalog.mz_sinks.id`](#mz_subscriptions).                                                           |
+| `object_id`     | [`text`] | The ID of a materialization. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks).                                                           |
 | `dependency_id` | [`text`] | The ID of a dataflow dependency. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
 
 ## `mz_materialization_lag`
@@ -1309,7 +1309,7 @@ The `mz_source_statistics` view contains statistics about each source.
 <!-- RELATION_SPEC mz_internal.mz_source_statistics -->
 | Field                     | Type         | Meaning |
 | --------------------------|--------------|---------|
-| `id`                      | [`text`]     | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources). |
+| `id`                      | [`text`]     | The ID of the source or table for which statistics are reported. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources) or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
 | `replica_id`              | [`text`]     | The ID of a replica running the source. Corresponds to [`mz_catalog.mz_cluster_replicas.id`](../mz_catalog#mz_cluster_replicas). |
 | `messages_received`       | [`uint8`]    | The number of messages the source has received from the external system. Messages are counted in a source type-specific manner. Messages do not correspond directly to updates: some messages produce multiple updates, while other messages may be coalesced into a single update. |
 | `bytes_received`          | [`uint8`]    | The number of bytes the source has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead. |
@@ -1485,7 +1485,7 @@ Wallclock lag measures how far behind real-world wall-clock time each
 | Field         | Type         | Meaning
 | --------------| -------------| --------
 | `object_id`   | [`text`]     | The ID of the table, source, materialized view, index, or sink. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).
-| `lag`         | [`interval`] | The amount of time the object's write frontier lags behind wallclock time.
+| `lag`         | [`interval`] | The smallest wallclock lag observed for the object across its replicas during the most recent minute.
 
 ## `mz_wallclock_lag_history`
 
@@ -1497,7 +1497,7 @@ i.e., the [freshness](/concepts/reaction-time/#freshness), for each table, sourc
 | --------------| -------------| --------
 | `object_id`   | [`text`]     | The ID of the table, source, materialized view, index, or sink. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).
 | `replica_id`  | [`text`]     | The ID of a replica computing the object, or `NULL` for persistent objects. Corresponds to [`mz_cluster_replicas.id`](../mz_catalog/#mz_cluster_replicas).
-| `lag`         | [`interval`] | The amount of time the object's write frontier lags behind wallclock time.
+| `lag`         | [`interval`] | The maximum time the object's write frontier lagged behind wallclock time during the recording interval (60 seconds by default), rounded down to whole seconds.
 | `occurred_at` | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
 
 ## `mz_wallclock_global_lag_history`

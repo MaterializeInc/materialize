@@ -76,8 +76,8 @@ size  text  The␠human-readable␠replica␠size.
 processes  uint8  The␠number␠of␠processes␠in␠the␠replica.
 workers  uint8  The␠number␠of␠Timely␠Dataflow␠workers␠per␠process.
 cpu_nano_cores  uint8  The␠CPU␠allocation␠per␠process,␠in␠billionths␠of␠a␠vCPU␠core.
-memory_bytes  uint8  The␠RAM␠allocation␠per␠process,␠in␠billionths␠of␠a␠vCPU␠core.
-disk_bytes  uint8  The␠disk␠allocation␠per␠process.
+memory_bytes  uint8  The␠RAM␠allocation␠per␠process,␠in␠bytes.
+disk_bytes  uint8  The␠disk␠allocation␠per␠process,␠in␠bytes.␠On␠sizes␠that␠use␠swap,␠this␠is␠the␠swap␠allowance␠rather␠than␠a␠filesystem␠disk.
 credits_per_hour  numeric  The␠number␠of␠compute␠credits␠consumed␠per␠hour.
 
 query TTT
@@ -101,7 +101,7 @@ privileges  mz_aclitem[]  The␠privileges␠belonging␠to␠the␠cluster.
 managed  boolean  Whether␠the␠cluster␠is␠a␠managed␠cluster␠with␠automatically␠managed␠replicas.
 size  text  If␠the␠cluster␠is␠managed,␠the␠desired␠size␠of␠the␠cluster's␠replicas.␠`NULL`␠for␠unmanaged␠clusters.
 replication_factor  uint4  If␠the␠cluster␠is␠managed,␠the␠desired␠number␠of␠replicas␠of␠the␠cluster.␠`NULL`␠for␠unmanaged␠clusters.
-disk  boolean  **Unstable**␠If␠the␠cluster␠is␠managed,␠`true`␠if␠the␠replicas␠have␠the␠`DISK`␠option␠.␠`NULL`␠for␠unmanaged␠clusters.
+disk  boolean  **Unstable**␠If␠the␠cluster␠is␠managed,␠`true`␠if␠the␠replicas␠use␠a␠local␠disk␠rather␠than␠swap.␠`NULL`␠for␠unmanaged␠clusters.
 availability_zones  list  **Unstable**␠If␠the␠cluster␠is␠managed,␠the␠list␠of␠availability␠zones␠specified␠in␠`AVAILABILITY␠ZONES`.␠`NULL`␠for␠unmanaged␠clusters.
 introspection_debugging  boolean  Whether␠introspection␠of␠the␠gathering␠of␠the␠introspection␠data␠is␠enabled.
 introspection_interval  interval  The␠interval␠at␠which␠to␠collect␠introspection␠data.

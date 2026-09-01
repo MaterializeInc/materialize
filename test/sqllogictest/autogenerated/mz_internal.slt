@@ -146,7 +146,7 @@ replica_id  text  The␠ID␠of␠a␠cluster␠replica.
 process_id  uint8  The␠ID␠of␠a␠process␠within␠the␠replica.
 cpu_nano_cores  uint8  Approximate␠CPU␠usage,␠in␠billionths␠of␠a␠vCPU␠core.
 memory_bytes  uint8  Approximate␠RAM␠usage,␠in␠bytes.
-disk_bytes  uint8  Approximate␠disk␠usage,␠in␠bytes.
+disk_bytes  uint8  Approximate␠disk␠usage,␠in␠bytes.␠On␠replicas␠whose␠disk␠is␠provided␠as␠swap,␠this␠includes␠swap␠usage.
 heap_bytes  uint8  Approximate␠heap␠(RAM␠+␠swap)␠usage,␠in␠bytes.
 heap_limit  uint8  Available␠heap␠(RAM␠+␠swap)␠space,␠in␠bytes.
 
@@ -156,8 +156,8 @@ SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object 
 replica_id  text  The␠ID␠of␠a␠cluster␠replica.
 process_id  uint8  The␠ID␠of␠a␠process␠within␠the␠replica.
 cpu_nano_cores  uint8  Approximate␠CPU␠usage,␠in␠billionths␠of␠a␠vCPU␠core.
-memory_bytes  uint8  Approximate␠memory␠usage,␠in␠bytes.
-disk_bytes  uint8  Approximate␠disk␠usage,␠in␠bytes.
+memory_bytes  uint8  Approximate␠RAM␠usage,␠in␠bytes.
+disk_bytes  uint8  Approximate␠disk␠usage,␠in␠bytes.␠On␠replicas␠whose␠disk␠is␠provided␠as␠swap,␠this␠includes␠swap␠usage.
 occurred_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠at␠which␠the␠event␠occurred.
 heap_bytes  uint8  Approximate␠heap␠(RAM␠+␠swap)␠usage,␠in␠bytes.
 heap_limit  uint8  Available␠heap␠(RAM␠+␠swap)␠space,␠in␠bytes.
@@ -187,7 +187,7 @@ replica_id  text  The␠ID␠of␠a␠cluster␠replica.
 process_id  uint8  The␠ID␠of␠a␠process␠within␠the␠replica.
 cpu_percent  double␠precision  Approximate␠CPU␠usage,␠in␠percent␠of␠the␠total␠allocation.
 memory_percent  double␠precision  Approximate␠RAM␠usage,␠in␠percent␠of␠the␠total␠allocation.
-disk_percent  double␠precision  Approximate␠disk␠usage,␠in␠percent␠of␠the␠total␠allocation.
+disk_percent  double␠precision  Approximate␠disk␠usage,␠in␠percent␠of␠the␠total␠allocation.␠On␠replicas␠whose␠disk␠is␠provided␠as␠swap,␠this␠includes␠swap␠usage.
 heap_percent  double␠precision  Approximate␠heap␠(RAM␠+␠swap)␠usage,␠in␠percent␠of␠the␠total␠allocation.
 
 query TTT
@@ -197,7 +197,7 @@ replica_id  text  The␠ID␠of␠a␠cluster␠replica.
 process_id  uint8  The␠ID␠of␠a␠process␠within␠the␠replica.
 cpu_percent  double␠precision  Approximate␠CPU␠usage,␠in␠percent␠of␠the␠total␠allocation.
 memory_percent  double␠precision  Approximate␠RAM␠usage,␠in␠percent␠of␠the␠total␠allocation.
-disk_percent  double␠precision  Approximate␠disk␠usage,␠in␠percent␠of␠the␠total␠allocation.
+disk_percent  double␠precision  Approximate␠disk␠usage,␠in␠percent␠of␠the␠total␠allocation.␠On␠replicas␠whose␠disk␠is␠provided␠as␠swap,␠this␠includes␠swap␠usage.
 heap_percent  double␠precision  Approximate␠heap␠(RAM␠+␠swap)␠usage,␠in␠percent␠of␠the␠total␠allocation.
 occurred_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠at␠which␠the␠event␠occurred.
 
@@ -278,7 +278,7 @@ value  jsonb  The␠value␠of␠the␠strategy.␠For␠`FOR`,␠is␠a␠numbe
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_hydration_statuses' ORDER BY position
 ----
-object_id  text  The␠ID␠of␠a␠dataflow-powered␠object.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠`mz_internal.mz_subscriptions`,␠`mz_catalog.mz_sources.id`,␠or␠`mz_catalog.mz_sinks.id`.
+object_id  text  The␠ID␠of␠a␠dataflow-powered␠object.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠`mz_catalog.mz_sources.id`,␠or␠`mz_catalog.mz_sinks.id`.
 replica_id  text  The␠ID␠of␠a␠cluster␠replica.
 hydrated  boolean  Whether␠the␠object␠is␠hydrated␠on␠the␠replica.
 
@@ -700,7 +700,7 @@ replica_id  text  The␠ID␠of␠the␠replica␠that␠an␠instance␠of␠a�
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statistics' ORDER BY position
 ----
-id  text  The␠ID␠of␠the␠source.␠Corresponds␠to␠`mz_catalog.mz_sources.id`.
+id  text  The␠ID␠of␠the␠source␠or␠table␠for␠which␠statistics␠are␠reported.␠Corresponds␠to␠`mz_catalog.mz_sources.id`␠or␠`mz_catalog.mz_tables.id`.
 replica_id  text  The␠ID␠of␠a␠replica␠running␠the␠source.␠Corresponds␠to␠`mz_catalog.mz_cluster_replicas.id`.
 messages_received  uint8  The␠number␠of␠messages␠the␠source␠has␠received␠from␠the␠external␠system.␠Messages␠are␠counted␠in␠a␠source␠type-specific␠manner.␠Messages␠do␠not␠correspond␠directly␠to␠updates:␠some␠messages␠produce␠multiple␠updates,␠while␠other␠messages␠may␠be␠coalesced␠into␠a␠single␠update.
 bytes_received  uint8  The␠number␠of␠bytes␠the␠source␠has␠read␠from␠the␠external␠system.␠Bytes␠are␠counted␠in␠a␠source␠type-specific␠manner␠and␠may␠or␠may␠not␠include␠protocol␠overhead.
@@ -756,14 +756,14 @@ query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_wallclock_global_lag' ORDER BY position
 ----
 object_id  text  The␠ID␠of␠the␠table,␠source,␠materialized␠view,␠index,␠or␠sink.␠Corresponds␠to␠`mz_objects.id`.
-lag  interval  The␠amount␠of␠time␠the␠object's␠write␠frontier␠lags␠behind␠wallclock␠time.
+lag  interval  The␠smallest␠wallclock␠lag␠observed␠for␠the␠object␠across␠its␠replicas␠during␠the␠most␠recent␠minute.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_wallclock_lag_history' ORDER BY position
 ----
 object_id  text  The␠ID␠of␠the␠table,␠source,␠materialized␠view,␠index,␠or␠sink.␠Corresponds␠to␠`mz_objects.id`.
 replica_id  text  The␠ID␠of␠a␠replica␠computing␠the␠object,␠or␠`NULL`␠for␠persistent␠objects.␠Corresponds␠to␠`mz_cluster_replicas.id`.
-lag  interval  The␠amount␠of␠time␠the␠object's␠write␠frontier␠lags␠behind␠wallclock␠time.
+lag  interval  The␠maximum␠time␠the␠object's␠write␠frontier␠lagged␠behind␠wallclock␠time␠during␠the␠recording␠interval␠(60␠seconds␠by␠default),␠rounded␠down␠to␠whole␠seconds.
 occurred_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠at␠which␠the␠event␠occurred.
 
 query TTT

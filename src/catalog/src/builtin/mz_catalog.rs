@@ -2468,7 +2468,7 @@ pub static MZ_CLUSTERS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
             ),
             (
                 "disk",
-                "**Unstable** If the cluster is managed, `true` if the replicas have the `DISK` option . `NULL` for unmanaged clusters.",
+                "**Unstable** If the cluster is managed, `true` if the replicas use a local disk rather than swap. `NULL` for unmanaged clusters.",
             ),
             (
                 "availability_zones",
@@ -2816,11 +2816,11 @@ pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| B
             "cpu_nano_cores",
             "The CPU allocation per process, in billionths of a vCPU core.",
         ),
+        ("memory_bytes", "The RAM allocation per process, in bytes."),
         (
-            "memory_bytes",
-            "The RAM allocation per process, in billionths of a vCPU core.",
+            "disk_bytes",
+            "The disk allocation per process, in bytes. On sizes that use swap, this is the swap allowance rather than a filesystem disk.",
         ),
-        ("disk_bytes", "The disk allocation per process."),
         (
             "credits_per_hour",
             "The number of compute credits consumed per hour.",
