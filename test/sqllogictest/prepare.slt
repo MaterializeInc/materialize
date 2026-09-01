@@ -120,3 +120,24 @@ SELECT $1 || $1, $1 + $1::bigint;
 
 query error there are contradicting constraints for the type of parameter \$1: should be both text and integer
 PREPARE p AS SELECT repeat($1, $1);
+
+# A quoted name is stored and looked up without its quotes, so SQL and an
+# extended-protocol `Parse` can name the same statement.
+statement error prepared statement "Nope" does not exist
+DEALLOCATE "Nope"
+
+statement ok
+PREPARE "Mixed" AS SELECT 1;
+
+query I
+EXECUTE "Mixed";
+----
+1
+
+# The lexer folds the unquoted spelling, which therefore names a different
+# statement, exactly as in Postgres.
+statement error prepared statement "mixed" does not exist
+DEALLOCATE mixed
+
+statement ok
+DEALLOCATE "Mixed";
