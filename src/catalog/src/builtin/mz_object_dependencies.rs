@@ -321,9 +321,11 @@ SELECT object_id, referenced_object_id FROM introspection_source_index_edges
 /// The view unions these edge sources:
 ///
 /// - User items: references extracted from stored `create_sql` via `parse_catalog_item_references`.
-///   Id references are used directly. Function references print as plain qualified names in stored
-///   SQL, so they are recovered by joining `(schema, name)` against `GidMapping` rows. Temporary
-///   items are excluded.
+///   Id references are used directly. Function references are recovered by joining
+///   `(schema, name)` against `GidMapping` rows, which is sound by construction: name resolution
+///   never prints an id for a function (`print_id` is false for `Func`) and a function's
+///   `full_name` always carries its schema, so a function reference persists as exactly
+///   `"schema"."name"`. Temporary items are excluded.
 /// - Builtin items: name references joined to `GidMapping` at query time.
 /// - Introspection source indexes: `si<id> -> s<log id>` edges from
 ///   `ClusterIntrospectionSourceIndex` entries.
