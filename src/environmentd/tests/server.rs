@@ -14,7 +14,7 @@
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -61,7 +61,7 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka_sys::RDKafkaErrorCode;
 use regex::Regex;
 use reqwest::blocking::Client;
-use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE};
+use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE, COOKIE, LOCATION, ORIGIN, SET_COOKIE};
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
@@ -2207,6 +2207,156 @@ fn test_internal_console_proxy() {
         res.headers().get(CONTENT_TYPE).unwrap().to_str().unwrap(),
         "text/html"
     );
+}
+
+/// Serves a canned HTTP response on a local port, counting requests. Stands in
+/// for the upstream console deployment in proxy tests.
+fn spawn_mock_console_upstream(body: &'static str) -> (String, Arc<AtomicUsize>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let hits_clone = Arc::clone(&hits);
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else {
+                continue;
+            };
+            hits_clone.fetch_add(1, Ordering::SeqCst);
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+    (format!("http://{}", addr), hits)
+}
+
+#[mz_ore::test]
+fn test_internal_console_proxy_preview_build() {
+    let (upstream_url, upstream_hits) = spawn_mock_console_upstream("default-build");
+    let server = test_util::TestHarness::default()
+        .with_internal_console_redirect_url(Some(upstream_url))
+        .start_blocking();
+
+    let client = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let base = format!(
+        "http://{}/internal-console/",
+        server.internal_http_local_addr()
+    );
+
+    // Without a selection, the default upstream serves the request.
+    let res = client.get(Url::parse(&base).unwrap()).send().unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.text().unwrap(), "default-build");
+
+    // A GET with a preview build label only renders the confirmation page.
+    let res = client
+        .get(Url::parse(&format!("{base}?preview_build=console-git-foo&x=1")).unwrap())
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers().get(SET_COOKIE), None);
+    let body = res.text().unwrap();
+    assert_contains!(body.as_str(), "console-git-foo.127.0.0.1");
+    assert_contains!(body.as_str(), "<form method=\"post\"");
+
+    // POSTing the selection sets the cookie and redirects back to the same
+    // path, preserving unrelated query parameters.
+    let res = client
+        .post(Url::parse(&format!("{base}?preview_build=console-git-foo&x=1")).unwrap())
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        res.headers().get(LOCATION).unwrap().to_str().unwrap(),
+        "/internal-console/?x=1"
+    );
+    let cookie = res.headers().get(SET_COOKIE).unwrap().to_str().unwrap();
+    assert_contains!(cookie, "mz_console_preview_build=console-git-foo");
+    assert_contains!(cookie, "Path=/internal-console");
+
+    // A cross-site POST is rejected on its own provenance, independent of the
+    // fronting proxy's session cookie policy.
+    for (header, value) in [
+        ("sec-fetch-site", "cross-site"),
+        (ORIGIN.as_str(), "https://attacker.example"),
+    ] {
+        let res = client
+            .post(Url::parse(&format!("{base}?preview_build=console-git-foo")).unwrap())
+            .header(header, value)
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        assert_eq!(res.headers().get(SET_COOKIE), None);
+    }
+
+    // A same-origin POST declaring its provenance still succeeds.
+    let res = client
+        .post(Url::parse(&format!("{base}?preview_build=console-git-foo")).unwrap())
+        .header("sec-fetch-site", "same-origin")
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+    // An invalid label and a label without the console-git- prefix are
+    // rejected outright.
+    for label in ["Bad_Label", "other-subdomain"] {
+        let res = client
+            .get(Url::parse(&format!("{base}?preview_build={label}")).unwrap())
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // A POST without a selection is not proxied.
+    let res = client.post(Url::parse(&base).unwrap()).send().unwrap();
+    assert_eq!(res.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+    // A selection cookie routes the request to the preview host instead of
+    // the default upstream. `https://console-git-foo.127.0.0.1` is
+    // unreachable, so the proxy serves the recovery page rather than falling
+    // back.
+    let hits_before = upstream_hits.load(Ordering::SeqCst);
+    let res = client
+        .get(Url::parse(&base).unwrap())
+        .header(COOKIE, "mz_console_preview_build=console-git-foo")
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    assert_contains!(res.text().unwrap(), "?preview_build=");
+    assert_eq!(upstream_hits.load(Ordering::SeqCst), hits_before);
+
+    // Invalid or non-prefixed cookie values are ignored, serving the default
+    // build.
+    for cookie in [
+        "mz_console_preview_build=NOT!VALID",
+        "mz_console_preview_build=other-subdomain",
+    ] {
+        let res = client
+            .get(Url::parse(&base).unwrap())
+            .header(COOKIE, cookie)
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.text().unwrap(), "default-build");
+    }
+
+    // An empty selection clears the cookie.
+    let res = client
+        .get(Url::parse(&format!("{base}?preview_build=")).unwrap())
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let cookie = res.headers().get(SET_COOKIE).unwrap().to_str().unwrap();
+    assert_contains!(cookie, "mz_console_preview_build=;");
+    assert_contains!(cookie, "Max-Age=0");
 }
 
 #[mz_ore::test]
