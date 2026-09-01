@@ -36,7 +36,8 @@ fn object_type_code(object_type: ProtoCatalogItemType) -> String {
     serde_json::to_string(&object_type).expect("CatalogItemType is serializable")
 }
 
-/// Row of a builtin
+/// One builtin dependency edge, inlined as a `VALUES` row of
+/// `mz_object_dependencies_raw`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct BuiltinEdgeRow {
     object_schema: String,
