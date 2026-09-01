@@ -1452,6 +1452,7 @@ impl Coordinator {
                     | Statement::CreateConnection(_)
                     | Statement::CreateDatabase(_)
                     | Statement::CreateIndex(_)
+                    | Statement::CreateForeignKey(_)
                     | Statement::CreateMaterializedView(_)
                     | Statement::CreateRole(_)
                     | Statement::CreateSchema(_)

@@ -714,6 +714,32 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
+        // Declaring a foreign key publishes an assertion about what two
+        // relations' data means, and agents act on it. Requiring ownership of
+        // both ends is stronger than `CREATE INDEX`, which only requires
+        // ownership of the relation it indexes.
+        Plan::CreateForeignKey(plan::CreateForeignKeyPlan {
+            name,
+            foreign_key,
+            if_not_exists: _,
+        }) => {
+            let referencing = catalog.resolve_item_id(&foreign_key.referencing);
+            let referenced = catalog.resolve_item_id(&foreign_key.referenced);
+            let mut ownership = vec![ObjectId::Item(referencing)];
+            if referenced != referencing {
+                ownership.push(ObjectId::Item(referenced));
+            }
+            RbacRequirements {
+                ownership,
+                privileges: vec![(
+                    SystemObjectId::Object(name.qualifiers.clone().into()),
+                    AclMode::CREATE,
+                    role_id,
+                )],
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
         Plan::CreateIndex(plan::CreateIndexPlan {
             name,
             index,
@@ -1821,6 +1847,7 @@ fn generate_read_privileges_inner(
                 CatalogItemType::Sink
                 | CatalogItemType::MetricSink
                 | CatalogItemType::Index
+                | CatalogItemType::ForeignKey
                 | CatalogItemType::Func => {}
             }
         }
@@ -1937,6 +1964,7 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Sink) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::MetricSink) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Index) => EMPTY_ACL_MODE,
+        SystemObjectType::Object(ObjectType::ForeignKey) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Type) => AclMode::USAGE,
         SystemObjectType::Object(ObjectType::Role) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Cluster) => USAGE_CREATE_ACL_MODE,
@@ -1969,6 +1997,7 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         ObjectType::Sink
         | ObjectType::MetricSink
         | ObjectType::Index
+        | ObjectType::ForeignKey
         | ObjectType::Role
         | ObjectType::Cluster
         | ObjectType::ClusterReplica

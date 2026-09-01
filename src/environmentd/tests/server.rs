@@ -6186,10 +6186,17 @@ fn test_mcp_agent_with_data_product() {
         let row = row.as_array().expect("each row should be an array");
         assert_eq!(
             row.len(),
-            5,
-            "each details row should have 5 cells (object_name, cluster, description, schema, hydration), got: {:?}",
+            6,
+            "each details row should have 6 cells (object_name, cluster, description, schema, hydration, foreign_keys), got: {:?}",
             row,
         );
+        let foreign_keys = &row[5];
+        for key in ["references", "referenced_by"] {
+            assert!(
+                foreign_keys.get(key).is_some_and(|v| v.is_array()),
+                "foreign_keys.{key} should always be present as an array, got: {foreign_keys}",
+            );
+        }
         let hydration = &row[4];
         assert!(
             hydration.is_object(),
@@ -6252,8 +6259,13 @@ fn test_mcp_agent_with_data_product() {
     assert!(!rows.is_empty());
     for row in rows {
         let row = row.as_array().expect("each row should be an array");
-        assert_eq!(row.len(), 5, "row should include hydration cell: {row:?}");
+        assert_eq!(
+            row.len(),
+            6,
+            "row should include hydration and foreign_keys cells: {row:?}"
+        );
         assert!(row[4].is_object(), "hydration cell should be an object");
+        assert!(row[5].is_object(), "foreign_keys cell should be an object");
     }
 
     // read_data_product should return the row from the view.

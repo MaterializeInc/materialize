@@ -21,12 +21,13 @@ use mz_repr::{ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateMetricSinkStatement, CreateSecretStatement, CreateSinkStatement, CreateSourceStatement,
-    CreateSubsourceStatement, CreateTableFromSourceStatement, CreateTableStatement,
-    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CteBlock, Function,
-    FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement, TableFactor,
-    TableFromSourceColumns, UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
+    CreateConnectionStatement, CreateForeignKeyStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateMetricSinkStatement, CreateSecretStatement,
+    CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
+    CreateTableFromSourceStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement,
+    CreateWebhookSourceStatement, CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior,
+    MutRecBlock, Op, Query, Statement, TableFactor, TableFromSourceColumns, UnresolvedItemName,
+    UnresolvedSchemaName, Value, ViewDefinition,
 };
 
 use crate::names::{Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier};
@@ -450,6 +451,20 @@ pub fn create_statement(
                     }
                 }
             }
+            *if_not_exists = false;
+        }
+
+        // The name is a bare `Ident` whose schema is implied by `on_name`, and
+        // both relation names are already resolved, so only `IF NOT EXISTS`
+        // needs clearing. The column lists are column names, not object names.
+        Statement::CreateForeignKey(CreateForeignKeyStatement {
+            name: _,
+            if_not_exists,
+            on_name: _,
+            columns: _,
+            references: _,
+            referenced_columns: _,
+        }) => {
             *if_not_exists = false;
         }
 

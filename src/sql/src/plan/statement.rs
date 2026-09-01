@@ -148,6 +148,7 @@ pub fn describe(
         Statement::CreateConnection(stmt) => ddl::describe_create_connection(&scx, stmt)?,
         Statement::CreateDatabase(stmt) => ddl::describe_create_database(&scx, stmt)?,
         Statement::CreateIndex(stmt) => ddl::describe_create_index(&scx, stmt)?,
+        Statement::CreateForeignKey(stmt) => ddl::describe_create_foreign_key(&scx, stmt)?,
         Statement::CreateRole(stmt) => ddl::describe_create_role(&scx, stmt)?,
         Statement::CreateSchema(stmt) => ddl::describe_create_schema(&scx, stmt)?,
         Statement::CreateSecret(stmt) => ddl::describe_create_secret(&scx, stmt)?,
@@ -192,6 +193,9 @@ pub fn describe(
         }
         Statement::Show(ShowStatement::ShowCreateIndex(stmt)) => {
             show::describe_show_create_index(&scx, stmt)?
+        }
+        Statement::Show(ShowStatement::ShowCreateForeignKey(stmt)) => {
+            show::describe_show_create_foreign_key(&scx, stmt)?
         }
         Statement::Show(ShowStatement::ShowCreateSink(stmt)) => {
             show::describe_show_create_sink(&scx, stmt)?
@@ -357,6 +361,7 @@ pub fn plan(
         Statement::CreateConnection(stmt) => ddl::plan_create_connection(scx, stmt),
         Statement::CreateDatabase(stmt) => ddl::plan_create_database(scx, stmt),
         Statement::CreateIndex(stmt) => ddl::plan_create_index(scx, stmt),
+        Statement::CreateForeignKey(stmt) => ddl::plan_create_foreign_key(scx, stmt),
         Statement::CreateRole(stmt) => ddl::plan_create_role(scx, stmt),
         Statement::CreateSchema(stmt) => ddl::plan_create_schema(scx, stmt),
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
@@ -411,6 +416,9 @@ pub fn plan(
         }
         Statement::Show(ShowStatement::ShowCreateIndex(stmt)) => {
             show::plan_show_create_index(scx, stmt).map(Plan::ShowCreate)
+        }
+        Statement::Show(ShowStatement::ShowCreateForeignKey(stmt)) => {
+            show::plan_show_create_foreign_key(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateSink(stmt)) => {
             show::plan_show_create_sink(scx, stmt).map(Plan::ShowCreate)
@@ -1085,6 +1093,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::CreateConnection(_) => DDL,
             Statement::CreateDatabase(_) => DDL,
             Statement::CreateIndex(_) => DDL,
+            Statement::CreateForeignKey(_) => DDL,
             Statement::CreateRole(_) => DDL,
             Statement::CreateSchema(_) => DDL,
             Statement::CreateSecret(_) => DDL,
@@ -1130,6 +1139,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Show(ShowStatement::ShowCreateConnection(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateCluster(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateIndex(_)) => Show,
+            Statement::Show(ShowStatement::ShowCreateForeignKey(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateSink(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateMetricSink(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateSource(_)) => Show,

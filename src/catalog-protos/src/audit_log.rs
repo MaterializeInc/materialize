@@ -88,6 +88,9 @@ impl RustType<crate::objects::audit_log_event_v1::ObjectType> for mz_audit_log::
             mz_audit_log::ObjectType::Connection => {
                 crate::objects::audit_log_event_v1::ObjectType::Connection
             }
+            mz_audit_log::ObjectType::ForeignKey => {
+                crate::objects::audit_log_event_v1::ObjectType::ForeignKey
+            }
             mz_audit_log::ObjectType::ContinualTask => {
                 crate::objects::audit_log_event_v1::ObjectType::ContinualTask
             }
@@ -138,6 +141,9 @@ impl RustType<crate::objects::audit_log_event_v1::ObjectType> for mz_audit_log::
             }
             crate::objects::audit_log_event_v1::ObjectType::ClusterReplica => {
                 Ok(mz_audit_log::ObjectType::ClusterReplica)
+            }
+            crate::objects::audit_log_event_v1::ObjectType::ForeignKey => {
+                Ok(mz_audit_log::ObjectType::ForeignKey)
             }
             crate::objects::audit_log_event_v1::ObjectType::Connection => {
                 Ok(mz_audit_log::ObjectType::Connection)

@@ -735,6 +735,29 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                 info.insert("on_id", json!(on_id));
                 "index"
             }
+            // The column lists ride along as an ordered array of pairs rather
+            // than two parallel arrays, so `mz_foreign_key_columns` can unnest
+            // it with ordinality and cannot mis-zip the two sides.
+            CreateForeignKey(stmt) => {
+                info.insert("referencing_id", json!(get_item_id(stmt.on_name)?));
+                info.insert("referenced_id", json!(get_item_id(stmt.references)?));
+                if stmt.columns.len() != stmt.referenced_columns.len() {
+                    return Err("foreign key column lists differ in length".into());
+                }
+                let columns: Vec<_> = stmt
+                    .columns
+                    .into_iter()
+                    .zip(stmt.referenced_columns)
+                    .map(|(referencing, referenced)| {
+                        json!({
+                            "referencing": referencing.into_string(),
+                            "referenced": referenced.into_string(),
+                        })
+                    })
+                    .collect();
+                info.insert("columns", json!(columns));
+                "foreign-key"
+            }
             CreateType(_) => "type",
             // NOTE: every statement that creates a catalog item needs an arm above. These
             // catalog views run this over every item row before their type filter drops the
@@ -2091,6 +2114,31 @@ mod tests {
         );
     }
 
+    /// The `mz_foreign_keys` / `mz_foreign_key_columns` views read these fields,
+    /// so the shape is a contract: two relation ids, and column pairs in the
+    /// order the statement declared them.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn foreign_key_arm_reports_both_sides_and_ordered_column_pairs() {
+        let sql = "CREATE FOREIGN KEY \"fk\" \
+                   ON [u1 AS \"materialize\".\"public\".\"o\"] (\"cid\", \"region\") \
+                   REFERENCES [u2 AS \"materialize\".\"public\".\"c\"] (\"id\", \"region\") \
+                   NOT ENFORCED";
+        let out = super::parse_catalog_create_sql(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "type": "foreign-key",
+                "referencing_id": "u1",
+                "referenced_id": "u2",
+                "columns": [
+                    { "referencing": "cid", "referenced": "id" },
+                    { "referencing": "region", "referenced": "region" },
+                ],
+            })
+        );
+    }
+
     // --- parse_catalog_create_sql --------------------------------------------
 
     /// `type` for a `create_sql`, or the error message if parsing failed.
@@ -2188,6 +2236,12 @@ mod tests {
                 "CREATE INDEX \"i\" IN CLUSTER [u1] \
                  ON [u1 AS \"materialize\".\"public\".\"t\"] (\"a\")",
                 "index",
+            ),
+            (
+                "CREATE FOREIGN KEY \"fk\" \
+                 ON [u1 AS \"materialize\".\"public\".\"o\"] (\"cid\") \
+                 REFERENCES [u2 AS \"materialize\".\"public\".\"c\"] (\"id\") NOT ENFORCED",
+                "foreign-key",
             ),
             (
                 "CREATE TYPE \"materialize\".\"public\".\"ty\" AS LIST (ELEMENT TYPE = int4)",

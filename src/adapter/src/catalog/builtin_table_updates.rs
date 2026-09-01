@@ -198,6 +198,7 @@ impl CatalogState {
             | CatalogItem::View(_)
             | CatalogItem::Log(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::ForeignKey(_)
             | CatalogItem::MetricSink(_) => vec![],
             // Connection details (mz_kafka_connections, mz_ssh_tunnel_connections,
             // mz_aws_connections, mz_aws_privatelink_connections) are now derived

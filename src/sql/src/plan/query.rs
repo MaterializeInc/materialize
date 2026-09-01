@@ -2058,6 +2058,10 @@ fn plan_set_expr(
                     show::plan_show_create_cluster(qcx.scx, stmt.clone())?,
                     show::describe_show_create_cluster(qcx.scx, stmt)?,
                 ),
+                ShowStatement::ShowCreateForeignKey(stmt) => to_hirscope(
+                    show::plan_show_create_foreign_key(qcx.scx, stmt.clone())?,
+                    show::describe_show_create_foreign_key(qcx.scx, stmt)?,
+                ),
                 ShowStatement::ShowCreateIndex(stmt) => to_hirscope(
                     show::plan_show_create_index(qcx.scx, stmt.clone())?,
                     show::describe_show_create_index(qcx.scx, stmt)?,

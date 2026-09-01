@@ -707,6 +707,8 @@ pub enum ExecuteResponse {
     CreatedClusterReplica,
     /// The requested index was created.
     CreatedIndex,
+    /// The requested foreign key was created.
+    CreatedForeignKey,
     /// The requested metric sink was created.
     CreatedMetricSink,
     /// The requested introspection subscribe was created.
@@ -886,6 +888,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
                 Ok(ExecuteResponse::CreatedClusterReplica)
             }
             ExecuteResponseKind::CreatedIndex => Ok(ExecuteResponse::CreatedIndex),
+            ExecuteResponseKind::CreatedForeignKey => Ok(ExecuteResponse::CreatedForeignKey),
             ExecuteResponseKind::CreatedMetricSink => Ok(ExecuteResponse::CreatedMetricSink),
             ExecuteResponseKind::CreatedSecret => Ok(ExecuteResponse::CreatedSecret),
             ExecuteResponseKind::CreatedSink => Ok(ExecuteResponse::CreatedSink),
@@ -951,6 +954,7 @@ impl ExecuteResponse {
             CreatedCluster { .. } => Some("CREATE CLUSTER".into()),
             CreatedClusterReplica { .. } => Some("CREATE CLUSTER REPLICA".into()),
             CreatedIndex { .. } => Some("CREATE INDEX".into()),
+            CreatedForeignKey { .. } => Some("CREATE FOREIGN KEY".into()),
             CreatedMetricSink { .. } => Some("CREATE METRIC SINK".into()),
             CreatedSecret { .. } => Some("CREATE SECRET".into()),
             CreatedSink { .. } => Some("CREATE SINK".into()),
@@ -1051,6 +1055,7 @@ impl ExecuteResponse {
             CreateView => &[CreatedView],
             CreateMaterializedView => &[CreatedMaterializedView],
             CreateIndex => &[CreatedIndex],
+            CreateForeignKey => &[CreatedForeignKey],
             CreateMetricSink => &[CreatedMetricSink],
             CreateType => &[CreatedType],
             PlanKind::Deallocate => &[ExecuteResponseKind::Deallocate],

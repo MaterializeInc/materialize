@@ -1644,6 +1644,7 @@ impl Coordinator {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
+                    | CatalogItem::ForeignKey(_)
                     | CatalogItem::MetricSink(_) => {
                         // Other item types don't have connection dependencies
                         // that need updating.
@@ -1868,6 +1869,7 @@ impl CatalogImplication {
                     );
                 }
                 CatalogItem::Log(_) => {}
+                CatalogItem::ForeignKey(_) => {}
                 CatalogItem::Type(_) => {}
                 CatalogItem::Func(_) => {}
             },

@@ -59,6 +59,7 @@ pub enum Statement<T: AstInfo> {
     CreateTable(CreateTableStatement<T>),
     CreateTableFromSource(CreateTableFromSourceStatement<T>),
     CreateIndex(CreateIndexStatement<T>),
+    CreateForeignKey(CreateForeignKeyStatement<T>),
     CreateType(CreateTypeStatement<T>),
     CreateRole(CreateRoleStatement),
     CreateCluster(CreateClusterStatement<T>),
@@ -139,6 +140,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateTable(stmt) => f.write_node(stmt),
             Statement::CreateTableFromSource(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
+            Statement::CreateForeignKey(stmt) => f.write_node(stmt),
             Statement::CreateRole(stmt) => f.write_node(stmt),
             Statement::CreateSecret(stmt) => f.write_node(stmt),
             Statement::CreateType(stmt) => f.write_node(stmt),
@@ -247,6 +249,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateTable => "create_table",
         StatementKind::CreateTableFromSource => "create_table_from_source",
         StatementKind::CreateIndex => "create_index",
+        StatementKind::CreateForeignKey => "create_foreign_key",
         StatementKind::CreateType => "create_type",
         StatementKind::CreateRole => "create_role",
         StatementKind::CreateCluster => "create_cluster",
@@ -1987,6 +1990,56 @@ impl<T: AstInfo> AstDisplay for CreateIndexStatement<T> {
 }
 impl_display_t!(CreateIndexStatement);
 
+/// `CREATE FOREIGN KEY`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateForeignKeyStatement<T: AstInfo> {
+    /// Optional constraint name. Inferred from the referencing relation and
+    /// columns when absent.
+    pub name: Option<Ident>,
+    pub if_not_exists: bool,
+    /// `ON`: the relation holding the foreign key.
+    pub on_name: T::ItemName,
+    /// The columns of `on_name` that make up the key.
+    pub columns: Vec<Ident>,
+    /// `REFERENCES`: the relation pointed at.
+    pub references: T::ItemName,
+    /// The columns of `references` that `columns` correspond to, positionally.
+    pub referenced_columns: Vec<Ident>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateForeignKeyStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE FOREIGN KEY ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
+        if let Some(name) = &self.name {
+            // A bare `on` constraint name re-lexes as the start of the `ON`
+            // clause below, so force it quoted. Compare the `in` case in
+            // `CreateIndexStatement`: this is local to the optional-name plus
+            // following-keyword ambiguity, not a `can_be_printed_bare` case.
+            if name.as_str().eq_ignore_ascii_case("on") {
+                f.write_str("\"");
+                f.write_str(name.as_str());
+                f.write_str("\"");
+            } else {
+                f.write_node(name);
+            }
+            f.write_str(" ");
+        }
+        f.write_str("ON ");
+        f.write_node(&self.on_name);
+        f.write_str(" (");
+        f.write_node(&display::comma_separated(&self.columns));
+        f.write_str(") REFERENCES ");
+        f.write_node(&self.references);
+        f.write_str(" (");
+        f.write_node(&display::comma_separated(&self.referenced_columns));
+        f.write_str(") NOT ENFORCED");
+    }
+}
+impl_display_t!(CreateForeignKeyStatement);
+
 /// An option in a `CREATE CLUSTER` statement.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IndexOptionName {
@@ -3581,6 +3634,9 @@ pub enum ShowObjectType<T: AstInfo> {
         in_cluster: Option<T::ClusterName>,
         on_object: Option<T::ItemName>,
     },
+    ForeignKey {
+        on_object: Option<T::ItemName>,
+    },
     Table {
         on_source: Option<T::ItemName>,
     },
@@ -3656,6 +3712,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Connection => "CONNECTIONS",
             ShowObjectType::MaterializedView { .. } => "MATERIALIZED VIEWS",
             ShowObjectType::Index { .. } => "INDEXES",
+            ShowObjectType::ForeignKey { .. } => "FOREIGN KEYS",
             ShowObjectType::Database => "DATABASES",
             ShowObjectType::Schema { .. } => "SCHEMAS",
             ShowObjectType::Subsource { .. } => "SUBSOURCES",
@@ -3665,7 +3722,9 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::NetworkPolicy => "NETWORK POLICIES",
         });
 
-        if let ShowObjectType::Index { on_object, .. } = &self.object_type {
+        if let ShowObjectType::Index { on_object, .. } | ShowObjectType::ForeignKey { on_object } =
+            &self.object_type
+        {
             if let Some(on_object) = on_object {
                 f.write_str(" ON ");
                 f.write_node(on_object);
@@ -3907,6 +3966,25 @@ impl<T: AstInfo> AstDisplay for ShowCreateIndexStatement<T> {
     }
 }
 impl_display_t!(ShowCreateIndexStatement);
+
+/// `SHOW [REDACTED] CREATE FOREIGN KEY <foreign_key>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ShowCreateForeignKeyStatement<T: AstInfo> {
+    pub foreign_key_name: T::ItemName,
+    pub redacted: bool,
+}
+
+impl<T: AstInfo> AstDisplay for ShowCreateForeignKeyStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW ");
+        if self.redacted {
+            f.write_str("REDACTED ");
+        }
+        f.write_str("CREATE FOREIGN KEY ");
+        f.write_node(&self.foreign_key_name);
+    }
+}
+impl_display_t!(ShowCreateForeignKeyStatement);
 
 /// `SHOW [REDACTED] CREATE CONNECTION <connection>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -4455,6 +4533,7 @@ pub enum ObjectType {
     Sink,
     MetricSink,
     Index,
+    ForeignKey,
     Type,
     Role,
     Cluster,
@@ -4478,6 +4557,7 @@ impl ObjectType {
             | ObjectType::Sink
             | ObjectType::MetricSink
             | ObjectType::Index
+            | ObjectType::ForeignKey
             | ObjectType::Type
             | ObjectType::Secret
             | ObjectType::Connection
@@ -4503,6 +4583,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Sink => "SINK",
             ObjectType::MetricSink => "METRIC SINK",
             ObjectType::Index => "INDEX",
+            ObjectType::ForeignKey => "FOREIGN KEY",
             ObjectType::Type => "TYPE",
             ObjectType::Role => "ROLE",
             ObjectType::Cluster => "CLUSTER",
@@ -5547,6 +5628,7 @@ pub enum ShowStatement<T: AstInfo> {
     ShowCreateSink(ShowCreateSinkStatement<T>),
     ShowCreateMetricSink(ShowCreateMetricSinkStatement<T>),
     ShowCreateIndex(ShowCreateIndexStatement<T>),
+    ShowCreateForeignKey(ShowCreateForeignKeyStatement<T>),
     ShowCreateConnection(ShowCreateConnectionStatement<T>),
     ShowCreateCluster(ShowCreateClusterStatement<T>),
     ShowCreateType(ShowCreateTypeStatement<T>),
@@ -5566,6 +5648,7 @@ impl<T: AstInfo> AstDisplay for ShowStatement<T> {
             ShowStatement::ShowCreateSink(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateMetricSink(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateIndex(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateForeignKey(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateConnection(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateCluster(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateType(stmt) => f.write_node(stmt),
@@ -6021,6 +6104,7 @@ pub enum CommentObjectType<T: AstInfo> {
     Source { name: T::ItemName },
     Sink { name: T::ItemName },
     Index { name: T::ItemName },
+    ForeignKey { name: T::ItemName },
     Func { name: T::ItemName },
     Connection { name: T::ItemName },
     Type { ty: T::DataType },
@@ -6064,6 +6148,10 @@ impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
             }
             Index { name } => {
                 f.write_str("INDEX ");
+                f.write_node(name);
+            }
+            ForeignKey { name } => {
+                f.write_str("FOREIGN KEY ");
                 f.write_node(name);
             }
             Func { name } => {

@@ -869,6 +869,7 @@ impl<'a> Transaction<'a> {
                 | CommentObjectId::Sink(item_id)
                 | CommentObjectId::MetricSink(item_id)
                 | CommentObjectId::Index(item_id)
+                | CommentObjectId::ForeignKey(item_id)
                 | CommentObjectId::Func(item_id)
                 | CommentObjectId::Connection(item_id)
                 | CommentObjectId::Type(item_id)

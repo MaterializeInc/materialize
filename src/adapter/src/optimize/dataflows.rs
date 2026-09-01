@@ -373,6 +373,7 @@ impl<'a> DataflowBuilder<'a> {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
+                    | CatalogItem::ForeignKey(_)
                     | CatalogItem::Connection(_) => {
                         // Non-importable thing; can't get here.
                         unreachable!()
@@ -548,6 +549,7 @@ impl<'a> DataflowBuilder<'a> {
                     self.monotonic_object_inner(*on, memo, features)
                 }
                 CatalogItem::Secret(_)
+                | CatalogItem::ForeignKey(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Connection(_)
                 | CatalogItem::Log(_)

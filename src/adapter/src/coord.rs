@@ -2928,7 +2928,8 @@ impl Coordinator {
                 CatalogItem::Log(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
-                | CatalogItem::Secret(_) => {}
+                | CatalogItem::Secret(_)
+                | CatalogItem::ForeignKey(_) => {}
             }
         }
 
@@ -3506,6 +3507,7 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
+                | CatalogItem::ForeignKey(_)
                 | CatalogItem::Connection(_)
                 // Nothing to bootstrap: a metric sink has no storage collection, it publishes
                 // into the replica's metrics registry.
@@ -4015,6 +4017,7 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
+                | CatalogItem::ForeignKey(_)
                 | CatalogItem::Connection(_) => (),
             }
         }
@@ -4048,6 +4051,7 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
+                | CatalogItem::ForeignKey(_)
                 | CatalogItem::Connection(_) => continue,
             };
             if let Some(plan) = self.catalog.try_get_physical_plan(&gid) {

@@ -31,9 +31,9 @@ use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
-    Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView, MetricSink,
-    NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences, Table,
-    TableDataSource, Type, View,
+    Connection, DataSourceDesc, Database, DefaultPrivileges, ForeignKey, Index, MaterializedView,
+    MetricSink, NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences,
+    Table, TableDataSource, Type, View,
 };
 use mz_controller::clusters::{
     ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation, UnmanagedReplicaLocation,
@@ -74,9 +74,9 @@ use mz_sql::names::{
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{
-    CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateMetricSinkPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, Params, Plan, PlanContext,
+    CreateConnectionPlan, CreateForeignKeyPlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateMetricSinkPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -613,7 +613,8 @@ impl CatalogState {
                 | CatalogItem::Source(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
-                | CatalogItem::Secret(_) => (),
+                | CatalogItem::Secret(_)
+                | CatalogItem::ForeignKey(_) => (),
             }
         }
 
@@ -1686,6 +1687,16 @@ impl CatalogState {
                 physical_plan: None,
                 dataflow_metainfo: None,
             }),
+            Plan::CreateForeignKey(CreateForeignKeyPlan { foreign_key, .. }) => {
+                CatalogItem::ForeignKey(ForeignKey {
+                    create_sql: foreign_key.create_sql,
+                    global_id,
+                    referencing: foreign_key.referencing,
+                    referenced: foreign_key.referenced,
+                    columns: foreign_key.columns,
+                    resolved_ids,
+                })
+            }
             Plan::CreateMetricSink(CreateMetricSinkPlan { metric_sink, .. }) => {
                 CatalogItem::MetricSink(MetricSink {
                     create_sql: metric_sink.create_sql,
@@ -2083,6 +2094,7 @@ impl CatalogState {
             | CatalogItemType::View
             | CatalogItemType::MaterializedView
             | CatalogItemType::Index
+            | CatalogItemType::ForeignKey
             | CatalogItemType::Secret
             | CatalogItemType::Connection => schema.items[builtin.name()],
         }
@@ -2909,6 +2921,7 @@ impl CatalogState {
             | CommentObjectId::Sink(id)
             | CommentObjectId::MetricSink(id)
             | CommentObjectId::Index(id)
+            | CommentObjectId::ForeignKey(id)
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
@@ -2939,6 +2952,7 @@ impl CatalogState {
             | CommentObjectId::Sink(id)
             | CommentObjectId::MetricSink(id)
             | CommentObjectId::Index(id)
+            | CommentObjectId::ForeignKey(id)
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)

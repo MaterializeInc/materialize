@@ -292,6 +292,12 @@ impl Coordinator {
                 Plan::CreateIndex(plan) => {
                     self.sequence_create_index(ctx, plan, resolved_ids).await;
                 }
+                Plan::CreateForeignKey(plan) => {
+                    let result = self
+                        .sequence_create_foreign_key(ctx.session(), plan, resolved_ids)
+                        .await;
+                    ctx.retire(result);
+                }
                 Plan::CreateMetricSink(plan) => {
                     self.sequence_create_metric_sink(ctx, plan, resolved_ids)
                         .await;

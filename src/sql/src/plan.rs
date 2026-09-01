@@ -147,6 +147,7 @@ pub enum Plan {
     CreateMaterializedView(CreateMaterializedViewPlan),
     CreateNetworkPolicy(CreateNetworkPolicyPlan),
     CreateIndex(CreateIndexPlan),
+    CreateForeignKey(CreateForeignKeyPlan),
     CreateMetricSink(CreateMetricSinkPlan),
     CreateType(CreateTypePlan),
     Comment(CommentPlan),
@@ -275,6 +276,7 @@ impl Plan {
             StatementKind::CreateConnection => &[PlanKind::CreateConnection],
             StatementKind::CreateDatabase => &[PlanKind::CreateDatabase],
             StatementKind::CreateIndex => &[PlanKind::CreateIndex],
+            StatementKind::CreateForeignKey => &[PlanKind::CreateForeignKey],
             StatementKind::CreateNetworkPolicy => &[PlanKind::CreateNetworkPolicy],
             StatementKind::CreateMaterializedView => &[PlanKind::CreateMaterializedView],
             StatementKind::CreateRole => &[PlanKind::CreateRole],
@@ -351,6 +353,7 @@ impl Plan {
             Plan::CreateView(_) => "create view",
             Plan::CreateMaterializedView(_) => "create materialized view",
             Plan::CreateIndex(_) => "create index",
+            Plan::CreateForeignKey(_) => "create foreign key",
             Plan::CreateMetricSink(_) => "create metric sink",
             Plan::CreateType(_) => "create type",
             Plan::CreateNetworkPolicy(_) => "create network policy",
@@ -365,6 +368,7 @@ impl Plan {
                 ObjectType::Sink => "drop sink",
                 ObjectType::MetricSink => "drop metric sink",
                 ObjectType::Index => "drop index",
+                ObjectType::ForeignKey => "drop foreign key",
                 ObjectType::Type => "drop type",
                 ObjectType::Role => "drop roles",
                 ObjectType::Cluster => "drop clusters",
@@ -406,6 +410,7 @@ impl Plan {
                 ObjectType::Sink => "alter sink",
                 ObjectType::MetricSink => "alter metric sink",
                 ObjectType::Index => "alter index",
+                ObjectType::ForeignKey => "alter foreign key",
                 ObjectType::Type => "alter type",
                 ObjectType::Role => "alter role",
                 ObjectType::Cluster => "alter cluster",
@@ -442,6 +447,7 @@ impl Plan {
                 ObjectType::Sink => "alter sink owner",
                 ObjectType::MetricSink => "alter metric sink owner",
                 ObjectType::Index => "alter index owner",
+                ObjectType::ForeignKey => "alter foreign key owner",
                 ObjectType::Type => "alter type owner",
                 ObjectType::Role => "alter role owner",
                 ObjectType::Cluster => "alter cluster owner",
@@ -813,6 +819,13 @@ pub struct AlterNetworkPolicyPlan {
 pub struct CreateIndexPlan {
     pub name: QualifiedItemName,
     pub index: Index,
+    pub if_not_exists: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateForeignKeyPlan {
+    pub name: QualifiedItemName,
+    pub foreign_key: ForeignKey,
     pub if_not_exists: bool,
 }
 
@@ -1990,6 +2003,24 @@ pub struct Index {
     pub keys: Vec<mz_expr::MirScalarExpr>,
     pub compaction_window: Option<CompactionWindow>,
     pub cluster_id: ClusterId,
+}
+
+/// A non-enforced foreign key: catalog metadata asserting that `columns` on
+/// `referencing` correspond to `referenced_columns` on `referenced`.
+///
+/// Nothing validates that the correspondence holds, so this must not be used to
+/// justify any transformation whose correctness depends on it.
+#[derive(Debug, Clone)]
+pub struct ForeignKey {
+    /// Parse-able SQL that is stored durably and defines this foreign key.
+    pub create_sql: String,
+    /// The relation holding the key.
+    pub referencing: GlobalId,
+    /// The relation pointed at.
+    pub referenced: GlobalId,
+    /// Column pairs, in the order the statement declared them. Both sides of
+    /// every pair are positions into their own relation's `RelationDesc`.
+    pub columns: Vec<(usize, usize)>,
 }
 
 #[derive(Clone, Debug)]

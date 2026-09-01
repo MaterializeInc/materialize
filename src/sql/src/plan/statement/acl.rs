@@ -671,6 +671,7 @@ pub fn plan_alter_default_privileges(
         ),
         ObjectType::Sink
         | ObjectType::MetricSink
+        | ObjectType::ForeignKey
         | ObjectType::ClusterReplica
         | ObjectType::Role
         | ObjectType::Func => {

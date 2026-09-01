@@ -2228,6 +2228,14 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_foreign_key,
+        desc: "CREATE FOREIGN KEY",
+        default: false,
+        // Boot re-parses every item's `create_sql`, so turning this off would leave any
+        // already-created foreign key unparseable and take the whole catalog down with it.
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_metric_sink,
         desc: "CREATE METRIC SINK",
         default: false,

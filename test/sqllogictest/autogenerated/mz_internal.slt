@@ -345,6 +345,7 @@ cluster  text  Cluster␠hosting␠the␠object's␠index␠or␠compute.␠Read
 description  text  Index␠comment␠if␠available,␠otherwise␠object␠comment.␠Used␠as␠data␠product␠description.
 schema  jsonb  JSON␠Schema␠describing␠the␠object's␠columns␠and␠types.
 hydration  jsonb  Readiness␠summary␠as␠a␠JSON␠object␠with␠`hydrated`␠(bool),␠`replica_count`␠(int),␠and␠`hydrated_replica_count`␠(int).␠`hydrated`␠is␠true␠only␠when␠the␠cluster␠has␠at␠least␠one␠replica␠and␠the␠dataflow␠is␠hydrated␠on␠every␠replica.␠Reads␠against␠a␠non-hydrated␠data␠product␠block␠until␠the␠dataflow␠catches␠up␠(they␠never␠return␠partial␠data).␠Check␠this␠before␠reading:␠if␠`hydrated`␠is␠false␠and␠`replica_count␠>␠0`,␠wait␠and␠retry;␠if␠`replica_count`␠is␠0,␠the␠cluster␠has␠no␠replicas␠and␠that␠needs␠operator␠action,␠not␠a␠retry.
+foreign_keys  jsonb  Declared␠join␠paths␠to␠other␠data␠products,␠as␠a␠JSON␠object␠with␠`references`␠(this␠data␠product␠points␠at␠the␠other)␠and␠`referenced_by`␠(the␠other␠points␠at␠this␠one).␠Both␠keys␠are␠always␠present,␠empty␠when␠there␠are␠none.␠Each␠edge␠has␠`relation`,␠`columns`␠(pairs␠of␠`local`,␠a␠column␠of␠this␠data␠product,␠and␠`remote`,␠the␠column␠it␠corresponds␠to␠on␠`relation`),␠and␠an␠optional␠`description`.␠An␠edge␠appears␠only␠if␠both␠relations␠are␠data␠products␠you␠can␠read,␠so␠every␠edge␠is␠one␠you␠can␠actually␠follow.␠Nothing␠enforces␠these:␠they␠record␠what␠the␠author␠says␠the␠data␠means,␠so␠they␠tell␠you␠how␠to␠join,␠not␠that␠every␠value␠matches.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_dependencies' ORDER BY position
@@ -824,6 +825,8 @@ mz_compute_operator_hydration_statuses
 mz_console_cluster_utilization_overview
 mz_console_cluster_utilization_overview_24h
 mz_console_cluster_utilization_overview_3h
+mz_foreign_key_columns
+mz_foreign_keys
 mz_frontiers
 mz_global_frontiers
 mz_history_retention_strategies
@@ -886,6 +889,7 @@ mz_show_connections
 mz_show_database_privileges
 mz_show_databases
 mz_show_default_privileges
+mz_show_foreign_keys
 mz_show_indexes
 mz_show_materialized_views
 mz_show_my_cluster_privileges

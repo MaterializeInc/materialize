@@ -2870,7 +2870,7 @@ pub static MZ_AUDIT_EVENTS: LazyLock<BuiltinMaterializedView> = LazyLock::new(||
             ),
             (
                 "object_type",
-                "The type of the affected object: `cluster`, `cluster-replica`, `connection`, `continual-task`, `database`, `func`, `index`, `materialized-view`, `metric-sink`, `network-policy`, `role`, `schema`, `secret`, `sink`, `source`, `system`, `table`, `type`, or `view`.",
+                "The type of the affected object: `cluster`, `cluster-replica`, `connection`, `continual-task`, `database`, `foreign-key`, `func`, `index`, `materialized-view`, `metric-sink`, `network-policy`, `role`, `schema`, `secret`, `sink`, `source`, `system`, `table`, `type`, or `view`.",
             ),
             (
                 "details",
@@ -2950,6 +2950,7 @@ SELECT
         WHEN '17' THEN 'continual-task'
         WHEN '18' THEN 'network-policy'
         WHEN '19' THEN 'metric-sink'
+        WHEN '20' THEN 'foreign-key'
     END                                                                     AS object_type,
     mz_internal.parse_catalog_audit_log_details(e->'details')               AS details,
     e->'user'->>'inner'                                                     AS \"user\",
@@ -3456,7 +3457,7 @@ pub static MZ_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
             ("oid", "A PostgreSQL-compatible OID for the object."),
             ("schema_id", "The ID of the schema to which the object belongs. Corresponds to `mz_schemas.id`."),
             ("name", "The name of the object."),
-            ("type", "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `metric-sink`, `index`, `connection`, `secret`, `type`, or `function`."),
+            ("type", "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `metric-sink`, `index`, `foreign-key`, `connection`, `secret`, `type`, or `function`."),
             ("owner_id", "The role ID of the owner of the object. Corresponds to `mz_roles.id`."),
             ("cluster_id", "The ID of the cluster maintaining the source, materialized view, index, or sink. Corresponds to `mz_clusters.id`. `NULL` for other object types."),
             ("privileges", "The privileges belonging to the object."),
@@ -3471,6 +3472,8 @@ UNION ALL
     SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index', mz_indexes.owner_id, mz_indexes.cluster_id, NULL::mz_catalog.mz_aclitem[]
     FROM mz_catalog.mz_indexes
     JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
+UNION ALL
+    SELECT id, oid, schema_id, name, 'foreign-key', owner_id, NULL::text, NULL::mz_catalog.mz_aclitem[] FROM mz_internal.mz_foreign_keys
 UNION ALL
     SELECT id, oid, schema_id, name, 'connection', owner_id, NULL::text, privileges FROM mz_catalog.mz_connections
 UNION ALL
@@ -3812,13 +3815,15 @@ mod tests {
     fn object_type_case_matches_proto_display() {
         // `None` means the variant never shows up in a stored `DefaultPrivilege`
         // key, so the CASE deliberately has no arm for it: `Unknown` is the
-        // zero-value sentinel, and `ON METRIC SINKS` is rejected by
-        // `plan_alter_default_privileges` before a key ever gets built. Match is
+        // zero-value sentinel, and `ON METRIC SINKS` and `ON FOREIGN KEYS` are
+        // rejected by `plan_alter_default_privileges` before a key ever gets
+        // built. Match is
         // exhaustive: a new variant forces an update.
         fn expected_for(proto: ProtoObjectType) -> Option<SqlObjectType> {
             match proto {
                 ProtoObjectType::Unknown => None,
                 ProtoObjectType::MetricSink => None,
+                ProtoObjectType::ForeignKey => None,
                 ProtoObjectType::Table => Some(SqlObjectType::Table),
                 ProtoObjectType::View => Some(SqlObjectType::View),
                 ProtoObjectType::MaterializedView => Some(SqlObjectType::MaterializedView),
@@ -3844,6 +3849,7 @@ mod tests {
         // which is the actual drift defense.
         let variants: &[ProtoObjectType] = &[
             ProtoObjectType::Unknown,
+            ProtoObjectType::ForeignKey,
             ProtoObjectType::Table,
             ProtoObjectType::View,
             ProtoObjectType::MaterializedView,

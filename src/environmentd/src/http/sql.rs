@@ -1732,6 +1732,7 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedClusterReplica { .. }
         | ExecuteResponse::CreatedTable { .. }
         | ExecuteResponse::CreatedIndex { .. }
+        | ExecuteResponse::CreatedForeignKey { .. }
         | ExecuteResponse::CreatedMetricSink { .. }
         | ExecuteResponse::CreatedIntrospectionSubscribe
         | ExecuteResponse::CreatedSecret { .. }

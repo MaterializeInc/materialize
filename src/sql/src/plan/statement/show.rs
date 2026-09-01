@@ -31,9 +31,10 @@ use query::QueryContext;
 use crate::ast::display::escaped_string_literal;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
-    SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateMetricSinkStatement,
-    ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
-    ShowCreateViewStatement, ShowObjectsStatement, ShowStatementFilter, Statement, Value,
+    SelectStatement, ShowColumnsStatement, ShowCreateForeignKeyStatement, ShowCreateIndexStatement,
+    ShowCreateMetricSinkStatement, ShowCreateSinkStatement, ShowCreateSourceStatement,
+    ShowCreateTableStatement, ShowCreateViewStatement, ShowObjectsStatement, ShowStatementFilter,
+    Statement, Value,
 };
 use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::names::{
@@ -47,7 +48,7 @@ use crate::plan::statement::{StatementContext, StatementDesc, dml};
 use crate::plan::{
     HirRelationExpr, Params, Plan, PlanError, ShowColumnsPlan, ShowCreatePlan, query, transform_ast,
 };
-use crate::session::vars::ENABLE_METRIC_SINK;
+use crate::session::vars::{ENABLE_FOREIGN_KEY, ENABLE_METRIC_SINK};
 
 pub fn describe_show_create_view(
     _: &StatementContext,
@@ -243,6 +244,34 @@ pub fn plan_show_create_index(
     }: ShowCreateIndexStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
     plan_show_create_item(scx, &index_name, CatalogItemType::Index, redacted)
+}
+
+pub fn describe_show_create_foreign_key(
+    _: &StatementContext,
+    _: ShowCreateForeignKeyStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::builder()
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
+            .finish(),
+    )))
+}
+
+pub fn plan_show_create_foreign_key(
+    scx: &StatementContext,
+    ShowCreateForeignKeyStatement {
+        foreign_key_name,
+        redacted,
+    }: ShowCreateForeignKeyStatement<Aug>,
+) -> Result<ShowCreatePlan, PlanError> {
+    scx.require_feature_flag(&ENABLE_FOREIGN_KEY)?;
+    plan_show_create_item(
+        scx,
+        &foreign_key_name,
+        CatalogItemType::ForeignKey,
+        redacted,
+    )
 }
 
 pub fn describe_show_create_connection(
@@ -441,6 +470,7 @@ pub fn show_objects<'a>(
             in_cluster,
             on_object,
         } => show_indexes(scx, from, on_object, in_cluster, filter),
+        ShowObjectType::ForeignKey { on_object } => show_foreign_keys(scx, from, on_object, filter),
         ShowObjectType::Database => {
             ensure_no_from(from)?;
             show_databases(scx, filter)
@@ -782,6 +812,65 @@ pub fn show_indexes<'a>(
     )
 }
 
+/// Plans `SHOW FOREIGN KEYS`.
+///
+/// `ON <relation>` matches a foreign key on either side, because a relation's
+/// foreign keys are as much the ones pointing at it as the ones it declares.
+pub fn show_foreign_keys<'a>(
+    scx: &'a StatementContext<'a>,
+    from_schema: Option<ResolvedSchemaName>,
+    on_object: Option<ResolvedItemName>,
+    filter: Option<ShowStatementFilter<Aug>>,
+) -> Result<ShowSelect<'a>, PlanError> {
+    scx.require_feature_flag(&ENABLE_FOREIGN_KEY)?;
+
+    let mut query_filter = Vec::new();
+
+    if on_object.is_none() && from_schema.is_none() {
+        let schema_spec = scx.resolve_active_schema().map(|spec| spec.clone())?;
+        query_filter.push(format!("schema_id = '{schema_spec}'"));
+    }
+
+    if let Some(on_object) = &on_object {
+        let on_item = scx.get_item_by_resolved_name(on_object)?;
+        if on_item.item_type() != CatalogItemType::View
+            && on_item.item_type() != CatalogItemType::MaterializedView
+            && on_item.item_type() != CatalogItemType::Source
+            && on_item.item_type() != CatalogItemType::Table
+        {
+            sql_bail!(
+                "cannot show foreign keys on {} because it is a {}",
+                on_object.full_name_str(),
+                on_item.item_type(),
+            );
+        }
+        query_filter.push(format!(
+            "(on_id = '{id}' OR references_id = '{id}')",
+            id = on_item.id()
+        ));
+    }
+
+    if let Some(schema) = from_schema {
+        let schema_spec = schema.schema_spec();
+        query_filter.push(format!("schema_id = '{schema_spec}'"));
+    }
+
+    let query = format!(
+        "SELECT name, on, references, key, comment
+        FROM mz_internal.mz_show_foreign_keys
+        WHERE {}",
+        itertools::join(query_filter.iter(), " AND ")
+    );
+
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&["name", "on", "references", "key", "comment"]),
+    )
+}
+
 pub fn show_columns<'a>(
     scx: &'a StatementContext<'a>,
     ShowColumnsStatement { table_name, filter }: ShowColumnsStatement<Aug>,
@@ -796,6 +885,7 @@ pub fn show_columns<'a>(
         | CatalogItemType::MaterializedView => (),
         ty @ CatalogItemType::Connection
         | ty @ CatalogItemType::Index
+        | ty @ CatalogItemType::ForeignKey
         | ty @ CatalogItemType::Func
         | ty @ CatalogItemType::Secret
         | ty @ CatalogItemType::Type

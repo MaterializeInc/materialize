@@ -405,6 +405,14 @@ mz_console_cluster_utilization_overview_3h
 VIEW
 materialize
 mz_internal
+mz_foreign_key_columns
+MATERIALIZED VIEW
+materialize
+mz_internal
+mz_foreign_keys
+MATERIALIZED VIEW
+materialize
+mz_internal
 mz_frontiers
 SOURCE
 materialize
@@ -650,6 +658,10 @@ VIEW
 materialize
 mz_internal
 mz_show_default_privileges
+VIEW
+materialize
+mz_internal
+mz_show_foreign_keys
 VIEW
 materialize
 mz_internal

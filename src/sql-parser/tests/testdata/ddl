@@ -3868,3 +3868,52 @@ CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC CONFIG = "map")
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC CONFIG = map)
 =>
 CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: TopicConfig, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("map")]))) }], key: None, headers: None }, format: None, envelope: None, mode: None, with_options: [] })
+
+parse-statement
+CREATE FOREIGN KEY ON orders (customer_id) REFERENCES customers (id) NOT ENFORCED
+----
+CREATE FOREIGN KEY ON orders (customer_id) REFERENCES customers (id) NOT ENFORCED
+=>
+CreateForeignKey(CreateForeignKeyStatement { name: None, if_not_exists: false, on_name: Name(UnresolvedItemName([Ident("orders")])), columns: [Ident("customer_id")], references: Name(UnresolvedItemName([Ident("customers")])), referenced_columns: [Ident("id")] })
+
+parse-statement
+CREATE FOREIGN KEY fk_orders ON s.orders (a, b) REFERENCES s.customers (c, d) NOT ENFORCED
+----
+CREATE FOREIGN KEY fk_orders ON s.orders (a, b) REFERENCES s.customers (c, d) NOT ENFORCED
+=>
+CreateForeignKey(CreateForeignKeyStatement { name: Some(Ident("fk_orders")), if_not_exists: false, on_name: Name(UnresolvedItemName([Ident("s"), Ident("orders")])), columns: [Ident("a"), Ident("b")], references: Name(UnresolvedItemName([Ident("s"), Ident("customers")])), referenced_columns: [Ident("c"), Ident("d")] })
+
+parse-statement
+CREATE FOREIGN KEY IF NOT EXISTS fk ON t (a) REFERENCES p (b) NOT ENFORCED
+----
+CREATE FOREIGN KEY IF NOT EXISTS fk ON t (a) REFERENCES p (b) NOT ENFORCED
+=>
+CreateForeignKey(CreateForeignKeyStatement { name: Some(Ident("fk")), if_not_exists: true, on_name: Name(UnresolvedItemName([Ident("t")])), columns: [Ident("a")], references: Name(UnresolvedItemName([Ident("p")])), referenced_columns: [Ident("b")] })
+
+parse-statement
+CREATE FOREIGN KEY "on" ON t (a) REFERENCES p (b) NOT ENFORCED
+----
+CREATE FOREIGN KEY "on" ON t (a) REFERENCES p (b) NOT ENFORCED
+=>
+CreateForeignKey(CreateForeignKeyStatement { name: Some(Ident("on")), if_not_exists: false, on_name: Name(UnresolvedItemName([Ident("t")])), columns: [Ident("a")], references: Name(UnresolvedItemName([Ident("p")])), referenced_columns: [Ident("b")] })
+
+parse-statement
+CREATE FOREIGN KEY ON t (a) REFERENCES p (b)
+----
+error: Expected NOT, found EOF
+CREATE FOREIGN KEY ON t (a) REFERENCES p (b)
+                                            ^
+
+parse-statement
+CREATE FOREIGN KEY IF NOT EXISTS ON t (a) REFERENCES p (b) NOT ENFORCED
+----
+error: Expected foreign key name, found ON
+CREATE FOREIGN KEY IF NOT EXISTS ON t (a) REFERENCES p (b) NOT ENFORCED
+                                 ^
+
+parse-statement
+COMMENT ON FOREIGN KEY fk IS 'joins orders to customers'
+----
+COMMENT ON FOREIGN KEY fk IS 'joins orders to customers'
+=>
+Comment(CommentStatement { object: ForeignKey { name: Name(UnresolvedItemName([Ident("fk")])) }, comment: Some("joins orders to customers") })

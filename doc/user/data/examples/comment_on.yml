@@ -11,6 +11,7 @@
         - `COLUMN`
         - `CONNECTION`
         - `DATABASE`
+        - `FOREIGN KEY`
         - `FUNCTION`
         - `INDEX`
         - `MATERIALIZED VIEW`

@@ -27,7 +27,7 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
-    CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
+    CatalogItem, Connection, DataSourceDesc, ForeignKey, Sink, Source, Table, TableDataSource, Type,
 };
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -1259,6 +1259,54 @@ impl Coordinator {
     }
 
     #[instrument]
+    /// Sequences `CREATE FOREIGN KEY`.
+    ///
+    /// Writes a catalog item and nothing else. A foreign key has no collection,
+    /// no cluster, and no dataflow, so there is nothing to optimize or ship. It
+    /// survives restart because `create_sql` is re-parsed on boot.
+    #[instrument]
+    pub(super) async fn sequence_create_foreign_key(
+        &mut self,
+        session: &Session,
+        plan: plan::CreateForeignKeyPlan,
+        resolved_ids: ResolvedIds,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan::CreateForeignKeyPlan {
+            name,
+            foreign_key,
+            if_not_exists,
+        } = plan;
+
+        let (item_id, global_id) = self.allocate_user_id().await?;
+        let op = catalog::Op::CreateItem {
+            id: item_id,
+            name: name.clone(),
+            item: CatalogItem::ForeignKey(ForeignKey {
+                create_sql: foreign_key.create_sql,
+                global_id,
+                referencing: foreign_key.referencing,
+                referenced: foreign_key.referenced,
+                columns: foreign_key.columns,
+                resolved_ids,
+            }),
+            owner_id: *session.current_role_id(),
+        };
+
+        match self.catalog_transact(Some(session), vec![op]).await {
+            Ok(()) => Ok(ExecuteResponse::CreatedForeignKey),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+            })) if if_not_exists => {
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name: name.item,
+                    ty: "foreign key",
+                });
+                Ok(ExecuteResponse::CreatedForeignKey)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     pub(super) async fn sequence_create_type(
         &mut self,
         session: &Session,

@@ -30,6 +30,7 @@ fn comment_object_type_name(obj: &CommentObjectType<Raw>) -> &'static str {
         CommentObjectType::Database { .. } => "DATABASE",
         CommentObjectType::Column { .. } => "COLUMN",
         CommentObjectType::Index { .. } => "INDEX",
+        CommentObjectType::ForeignKey { .. } => "FOREIGN KEY",
         CommentObjectType::Func { .. } => "FUNCTION",
         CommentObjectType::Type { .. } => "TYPE",
         CommentObjectType::Role { .. } => "ROLE",

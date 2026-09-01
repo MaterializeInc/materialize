@@ -963,6 +963,8 @@ pub enum CatalogItemType {
     MaterializedView,
     /// An index.
     Index,
+    /// A non-enforced foreign key.
+    ForeignKey,
     /// A type.
     Type,
     /// A func.
@@ -1001,6 +1003,9 @@ impl CatalogItemType {
             CatalogItemType::View => true,
             CatalogItemType::MaterializedView => true,
             CatalogItemType::Index => true,
+            // A foreign key gets no `pg_class` entry, so unlike an index it does not
+            // collide with a type of the same name.
+            CatalogItemType::ForeignKey => false,
             CatalogItemType::Type => true,
             CatalogItemType::Sink => false,
             CatalogItemType::Func => false,
@@ -1020,6 +1025,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::View => f.write_str("view"),
             CatalogItemType::MaterializedView => f.write_str("materialized view"),
             CatalogItemType::Index => f.write_str("index"),
+            CatalogItemType::ForeignKey => f.write_str("foreign key"),
             CatalogItemType::Type => f.write_str("type"),
             CatalogItemType::Func => f.write_str("func"),
             CatalogItemType::Secret => f.write_str("secret"),
@@ -1038,6 +1044,7 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::View => ObjectType::View,
             CatalogItemType::MaterializedView => ObjectType::MaterializedView,
             CatalogItemType::Index => ObjectType::Index,
+            CatalogItemType::ForeignKey => ObjectType::ForeignKey,
             CatalogItemType::Type => ObjectType::Type,
             CatalogItemType::Func => ObjectType::Func,
             CatalogItemType::Secret => ObjectType::Secret,
@@ -1055,6 +1062,7 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
             CatalogItemType::View => mz_audit_log::ObjectType::View,
             CatalogItemType::MaterializedView => mz_audit_log::ObjectType::MaterializedView,
             CatalogItemType::Index => mz_audit_log::ObjectType::Index,
+            CatalogItemType::ForeignKey => mz_audit_log::ObjectType::ForeignKey,
             CatalogItemType::Type => mz_audit_log::ObjectType::Type,
             CatalogItemType::Sink => mz_audit_log::ObjectType::Sink,
             CatalogItemType::Func => mz_audit_log::ObjectType::Func,
@@ -1582,6 +1590,7 @@ pub enum ObjectType {
     Sink,
     MetricSink,
     Index,
+    ForeignKey,
     Type,
     Role,
     Cluster,
@@ -1605,6 +1614,7 @@ impl ObjectType {
             ObjectType::Sink
             | ObjectType::MetricSink
             | ObjectType::Index
+            | ObjectType::ForeignKey
             | ObjectType::Type
             | ObjectType::Secret
             | ObjectType::Connection
@@ -1630,6 +1640,7 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Sink => ObjectType::Sink,
             mz_sql_parser::ast::ObjectType::MetricSink => ObjectType::MetricSink,
             mz_sql_parser::ast::ObjectType::Index => ObjectType::Index,
+            mz_sql_parser::ast::ObjectType::ForeignKey => ObjectType::ForeignKey,
             mz_sql_parser::ast::ObjectType::Type => ObjectType::Type,
             mz_sql_parser::ast::ObjectType::Role => ObjectType::Role,
             mz_sql_parser::ast::ObjectType::Cluster => ObjectType::Cluster,
@@ -1654,6 +1665,7 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::Sink(_) => ObjectType::Sink,
             CommentObjectId::MetricSink(_) => ObjectType::MetricSink,
             CommentObjectId::Index(_) => ObjectType::Index,
+            CommentObjectId::ForeignKey(_) => ObjectType::ForeignKey,
             CommentObjectId::Func(_) => ObjectType::Func,
             CommentObjectId::Connection(_) => ObjectType::Connection,
             CommentObjectId::Type(_) => ObjectType::Type,
@@ -1678,6 +1690,7 @@ impl Display for ObjectType {
             ObjectType::Sink => "SINK",
             ObjectType::MetricSink => "METRIC SINK",
             ObjectType::Index => "INDEX",
+            ObjectType::ForeignKey => "FOREIGN KEY",
             ObjectType::Type => "TYPE",
             ObjectType::Role => "ROLE",
             ObjectType::Cluster => "CLUSTER",
