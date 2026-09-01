@@ -26,7 +26,9 @@ pub struct ItemReferences {
     /// Catalog IDs from `RawItemName::Id` references
     pub ids: BTreeSet<String>,
     /// Named relations that don't carry an ID. Most commonly seen in builtin statements since they
-    /// are not normalized. CTE names are excluded.
+    /// are not normalized. CTE names are excluded: a name bound by a WITH clause refers to the
+    /// query-local binding rather than a catalog item, so recording it would fabricate an edge to
+    /// any catalog object that happens to share the name.
     pub named_relations: BTreeSet<UnresolvedItemName>,
     pub named_funcs: BTreeSet<UnresolvedItemName>,
     pub named_types: BTreeSet<UnresolvedItemName>,
