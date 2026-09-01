@@ -10,38 +10,29 @@ aliases:
   - /overview/arrangements/
 ---
 
-The mechanisms that maintain materialized views for Materialize dataflows are
-called **arrangements**. Understanding arrangements better can help you make
-decisions that will reduce memory usage while maintaining performance.
+Materialize keeps the state that its dataflows need in memory as
+**arrangements**, an indexed representation of a collection. Arrangements are
+typically the largest part of a busy cluster's memory, so knowing where they
+come from and which of them are shared lets you trade memory for speed
+deliberately.
 
 ## Materialized views
 
-Before we talk about the arrangements that maintain materialized views, let's
-review what materialized views are, how they work in traditional databases, and
-how they work in Materialize.
+A view is a query saved under a name; the query runs each time the view is
+referenced. A materialized view instead keeps the query's *results* up to date
+as its inputs change.
 
-A view is simply a query saved under a name for convenience; the query is
-executed each time the view is referenced, without any savings in performance
-or speed. But some databases also support something more powerful: materialized
-views, which save the *results* of the query for quicker access.
+Traditional databases support materialized views only in limited ways: the
+view refreshes at set intervals rather than in real time, only a limited subset
+of SQL is supported, or every refresh recomputes the view from scratch. These
+limitations stem from engines that are optimized for queries that run once and
+then wind down, not for maintaining long-running incremental queries.
 
-Traditional databases typically only have limited support for materialized views
-in two ways: first, the updates to the views generally occur at set intervals,
-so views are not updated in real time, and second, only a limited subset of SQL
-syntax is supported. In cases where a traditional database *does* support
-refreshes for each data update, it tends to be very slow. These limitations
-stem from limited support for incremental updates; most databases are not
-designed to maintain long-running incremental queries, but instead are
-optimized for queries that are executed once and then wound down. This means
-that when the data changes, the materialized view must be recomputed from
-scratch in all but a few simple cases.
-
-Our mission at Materialize is to manage materialized views better than this.
-Materialize supports incrementally updating a much broader set of views than is
-common in traditional databases (e.g. views over multi-way joins with complex
-aggregations), and can do incremental updates in the presence of arbitrary
-inserts, updates, and deletes in the input streams while maintaining
-correctness.
+Materialize is built to maintain long-running incremental queries. It
+incrementally updates a much broader class of views than is common in
+traditional databases, for example views over multi-way joins with complex
+aggregations, and does so in the presence of arbitrary inserts, updates, and
+deletes in the inputs while maintaining correctness.
 
 ## Dataflows
 
@@ -50,11 +41,11 @@ incremental data-parallel compute engine, [Differential Dataflow](https://timely
 which in turn is built on a distributed processing framework called
 [Timely Dataflow](https://timelydataflow.github.io/timely-dataflow/).
 
-When you create a materialized view and issue a query, Materialize creates
-a **dataflow**. A dataflow consists of instructions on how to respond to data
-input and to changes to that data. Once executed, the dataflow computes the
-result of the SQL query, polls the source for updates, and then incrementally
-updates the query results when new data arrives.
+An index, a materialized view, a `SUBSCRIBE`, and a `SELECT` that cannot be
+answered from an existing index each run as a **dataflow**: a graph of
+operators that computes the query's result once and then updates it
+incrementally as its inputs change. A dataflow reads its inputs from storage,
+or from an index's arrangement when the cluster has one.
 
 ### Collections
 
@@ -70,73 +61,106 @@ Term | Definition
 
 ## Arrangements
 
-A collection provides a data stream of updates as they happen. To provide fast
-access to the changes to individual records, the collection can be represented
-in an alternate form, indexed on `data` to present the sequence of changes
-(`time, diff`) the collection has undergone. This indexed representation is
-called an **arrangement**.
+A collection is a stream of updates. To give operators fast access to the
+current state of a collection, and to the changes of individual records,
+Materialize also keeps collections in an indexed form: an **arrangement**
+stores a collection's updates organized by a key, ready to look up every
+`(data, time, diff)` entry for that key. The key is chosen by whatever builds
+the arrangement: the columns an index is created on, or the columns a join
+matches on.
 
-Materialize builds and maintains indexes on both the input and output
-collections as well as for many intermediate collections created when
-processing a query. Because queries can overlap, Materialize might need to
-build the exact same indexes for multiple queries. Instead of performing
-redundant work, Materialize builds the index once and maintains it in memory,
-sharing the required resources across all queries that use the indexed data.
-The index is then effectively a sunk cost, and the cost of each query is
-determined only by the new work it introduces.
+### Where arrangements come from
+
+Arrangements appear in two places:
+
+- An index. `CREATE INDEX` builds an arrangement of the whole indexed
+  collection by the index key and keeps it up to date.
+- Inside a dataflow, wherever an operator needs random access to its input or
+  has to keep state. Every input of a join is arranged by the columns the join
+  matches on; an aggregation (`GROUP BY`, `DISTINCT`) keeps its input and its
+  results arranged by the group key; `TopK` and `MIN`/`MAX` keep a hierarchy
+  of arrangements. The [operator reference](/sql/explain-plan/#reference-plan-operators)
+  of `EXPLAIN PLAN` lists which operators arrange, and `EXPLAIN PHYSICAL PLAN`
+  shows the arrangements a query will build.
+
+### What is shared
+
+Only an index shares its arrangement: `CREATE INDEX` builds a collection's
+arrangement once, and every dataflow on that cluster that can use it imports
+it instead of building its own. Every other arrangement is private to the
+dataflow that built it. A materialized view writes its output to storage
+rather than keeping it arranged, so a query over a materialized view arranges
+what it needs itself. A plain view is compiled into each dataflow that uses
+it: a view used twice within one dataflow is computed once there, but five
+dataflows over one view compute and arrange it five times unless the view is
+indexed.
 
 You can find a more detailed analysis of the arrangements built for different
-types of queries in our blog post on [Joins in Materialize](https://materialize.com/joins-in-materialize).
+types of queries in our blog post on [Joins in Materialize](https://materialize.com/blog/joins-in-materialize/).
 
 ### Arrangement size
 
-The size of an arrangement, or amount of memory it requires, is roughly
-proportional to its number of distinct `(data, time)` pairs, which can be small
-even if the number of records is large. As an illustration, consider a
-histogram of taxi rides grouped by the number of riders and the fare amount.
-The number of distinct `(rider, fare)` pairs will be much smaller than the
-number of total rides that take place.
+An arrangement holds one update per distinct `(data, time)` pair it has seen.
+Background compaction advances the times that no reader needs any more and
+merges the updates, so a settled arrangement holds one record per distinct row
+currently present, and its size is roughly that record count times the bytes
+per record. Right after a large change, until the merge finishes, it
+transiently holds both the old and the new batches.
 
-The amount of memory that the arrangement requires is then further reduced by
-background compaction of historical data.
+The record count can be small even when the number of input rows is large. As
+an illustration, consider a histogram of taxi rides grouped by the number of
+riders and the fare amount. The number of distinct `(riders, fare)` groups is
+much smaller than the number of rides, and the arrangement holds one record
+per group.
+
+Memory use peaks while a dataflow [hydrates](/concepts/hydration/) and builds
+its arrangements from scratch.
 
 ## Analyzing arrangements
 
-Materialize provides various tools that allow you to analyze arrangements,
-although they are post-hoc tools best used for debugging, rather than planning
-tools to be used before creating indexes or views. See [Diagnosing Using SQL](/ops/troubleshooting/)
-and [`EXPLAIN PLAN`](/sql/explain-plan/) for more details.
+Materialize provides tools to analyze arrangements. `EXPLAIN PHYSICAL PLAN`
+shows the arrangements a query will build and the indexes it will use, before
+you create it. [`EXPLAIN ANALYZE`](/sql/explain-analyze/) attributes the memory
+of a running index or materialized view to its operators.
+[`mz_introspection.mz_dataflow_arrangement_sizes`](/reference/system-catalog/mz_introspection/#mz_dataflow_arrangement_sizes)
+reports the records and bytes of every dataflow's arrangements. See
+[Troubleshooting dataflows](/transform-data/dataflow-troubleshooting/) for how
+to use them.
 
 ## Reducing memory usage
 
-### Creating indexes manually
+For join ordering, group size hints, and other query-level levers, see
+[Optimization](/transform-data/optimization/). The two levers below are about
+arrangements themselves.
 
-When creating an arrangement for a join where the key is not clear, Materialize
-attempts to choose a key that will ensure that data is well distributed. If
-there is a primary key, that will be used; if there are source fields not
-required by the query, they are not included. Often Materialize can pull
-primary key info from a Confluent schema.
+### Choosing index keys
 
-If Materialize cannot detect a primary key, the default key is the full set of
-columns, in order to ensure good data distribution. Creating an unmaterialized
-view and then specifying a custom index makes the key smaller.
+An index is a full copy of its collection arranged by the index key, so every
+index costs memory proportional to the collection's size. A dataflow uses an
+index only when its key is exactly the expression the dataflow needs for that
+input: the columns it joins on, or the columns a point lookup filters on. Index
+the columns your queries join and look up by, and index a view that several
+dataflows share so that it is computed and arranged once instead of once per
+consumer.
 
-For more information on when and how to create indexes, see
-[Optimization](../../ops/optimization/).
-For more in-depth details on joins, see [Joins in Materialize](https://materialize.com/joins-in-materialize/).
+Without explicit key columns, `CREATE INDEX` uses a unique key of the
+collection if Materialize knows one, for example a key declared for a source
+or the grouping columns of a `GROUP BY`, and otherwise all columns; see
+[`CREATE INDEX`](/sql/create-index/#indexed-expressions-vs-stored-columns).
 
 ### Type casting
 
-Currently, Materialize handles implicit casts inserted in join constraints in a very memory-intensive way.
-Until this issue
-is resolved, you can reduce memory usage by building an index on the view with
-the type changed for any queries that include implicit casts, for example,
-when you combine 32-bit and 64-bit numbers.
+A join condition that needs an implicit cast, for example comparing a 32-bit
+and a 64-bit integer, keys the arrangement on the cast expression. An index on
+the plain column is then read as a full scan and the dataflow builds a second
+arrangement of that input. Index the cast expression
+(`CREATE INDEX ON t (a::bigint)`) or align the column types.
 
 ## Related pages
 
-* [Optimization](../../ops/optimization/)
-* [Joins in Materialize](https://materialize.com/joins-in-materialize/)
-* [Diagnosing Using SQL](/ops/troubleshooting/)
-* [Deployment](/ops/optimization/)
+* [Indexes](/concepts/indexes/)
+* [Optimization](/transform-data/optimization/)
+* [Troubleshooting dataflows](/transform-data/dataflow-troubleshooting/)
+* [`EXPLAIN PLAN`](/sql/explain-plan/) and [`EXPLAIN ANALYZE`](/sql/explain-analyze/)
+* [Joins in Materialize](https://materialize.com/blog/joins-in-materialize/)
 * [Differential Dataflow](https://timelydataflow.github.io/differential-dataflow/)
