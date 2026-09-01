@@ -410,12 +410,14 @@ onlyif cockroach
 statement ok
 SET application_name = current_timestamp()::string
 
-# Test statement_timeout on a long-running query.
-statement ok
-SET statement_timeout = 1
-
-statement error canceling statement due to statement timeout
-SELECT * FROM generate_series(1,1000000)
+# Commented out: Materialize's statement_timeout is currently broken, see
+# https://github.com/MaterializeInc/database-issues/issues/9947
+## Test statement_timeout on a long-running query.
+#statement ok
+#SET statement_timeout = 1
+#
+#statement error canceling statement due to statement timeout
+#SELECT * FROM generate_series(1,1000000)
 
 # Test that statement_timeout can be set with an interval string.
 statement ok
