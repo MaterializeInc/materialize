@@ -10,13 +10,6 @@ menu:
 
 {{< public-preview />}}
 
-{{< warning >}}
-Sinks into Unity Catalog must use **`MODE APPEND`**. Upsert mode is not
-supported, because it writes Iceberg equality delete files that Unity Catalog
-managed tables do not accept. See [Append-only
-sinks](#append-only-sinks) below.
-{{< /warning >}}
-
 This guide walks you through the steps required to set up Iceberg sinks in
 Materialize Cloud against [Databricks Unity
 Catalog](https://docs.databricks.com/aws/en/external-access/iceberg) on AWS.
