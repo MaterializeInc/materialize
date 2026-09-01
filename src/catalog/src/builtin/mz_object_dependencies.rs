@@ -350,7 +350,8 @@ pub(super) fn make_mz_object_dependencies_raw(builtins: &[Builtin<NameReference>
         collector.collect(b.schema(), b.name(), object_type, &create_sql);
     }
 
-    // We include `mz_object_dependencies` own edges into `mz_object_dependencies`.
+    // Append `mz_object_dependencies_raw`'s own outgoing edges to its VALUES
+    // rows.
     let self_edges = |sql: &str| {
         let mut collector = BuiltinEdgeCollector::new(builtins);
         collector.collect(
