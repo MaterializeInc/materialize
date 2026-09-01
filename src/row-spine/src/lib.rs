@@ -13,7 +13,7 @@
 //! allocations, as well as a `dictionary` encoding wrapper that is able to rewrite
 //! the byte slices to use spare tags in each column to reference common values.
 
-pub use self::arc_batch::{ArcBatch, ArcBuilder};
+pub use self::arc_batch::{ArcBatch, ArcBuilder, ArcMerger};
 pub use self::dictionary::DatumContainer;
 pub use self::dictionary::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
