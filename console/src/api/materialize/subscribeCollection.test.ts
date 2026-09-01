@@ -104,6 +104,33 @@ describe("createSubscribeCollection", () => {
     expect(localStorage.getItem(keyA)).not.toBeNull();
   });
 
+  it("hydrates from cache after an empty pre-snapshot was applied", async () => {
+    // The mount effect pushes the atom's empty initial state before the async
+    // auth/region scope resolves, so hydrate always runs after it. The empty
+    // placeholder must not count as live data, or the cache is never read.
+    const name = "late-hydrate";
+    const scope = "org1|region1";
+    localStorage.setItem(
+      syncEngineCacheKey(name, scope),
+      JSON.stringify([{ id: "1", name: "a" }]),
+    );
+
+    const { collection, statusAtom, applySnapshot, hydrate } =
+      freshCollection(name);
+    applySnapshot(state([], false));
+    hydrate(scope);
+    await flush();
+
+    expect(collection.size).toBe(1);
+    expect(getStore().get(statusAtom).snapshotComplete).toBe(true);
+
+    // The live snapshot still replaces the cached rows once it arrives.
+    applySnapshot(state([{ id: "2", name: "b" }]));
+    await flush();
+    expect(collection.has("1")).toBe(false);
+    expect(collection.get("2")?.name).toBe("b");
+  });
+
   it("holds the current rows through an empty pre-snapshot", async () => {
     const { collection, applySnapshot } = freshCollection();
     applySnapshot(state([{ id: "1", name: "a" }]));
