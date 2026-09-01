@@ -457,7 +457,7 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
         // NOTE above: this version must stay at the workspace's current dev
         // version until the change ships.
         MigrationStep::replacement(
-            "26.40.0-dev.0",
+            "26.41.0-dev.0",
             CatalogItemType::MaterializedView,
             MZ_INTERNAL_SCHEMA,
             "mz_object_dependencies",
