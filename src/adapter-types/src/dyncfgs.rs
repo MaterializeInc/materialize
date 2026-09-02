@@ -466,6 +466,35 @@ pub const CLUSTER_CONTROLLER_TICK_INTERVAL: Config<Duration> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether a replica must be caught up, not merely hydrated, before a graceful
+/// reconfiguration cuts over to it.
+///
+/// Break-glass: with this off the cut-over gate is hydration alone, which is the
+/// behavior from before the lag term existed.
+pub const ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE: Config<bool> = Config::new(
+    "enable_cluster_reconfiguration_lag_gate",
+    true,
+    "Whether a graceful reconfiguration requires its target replicas to be within \
+    cluster_reconfiguration_allowed_lag of the replicas they replace, on top of being hydrated.",
+    ParameterScope::Environment,
+);
+
+/// How far behind a graceful reconfiguration's target replicas may be and still
+/// be cut over to.
+///
+/// Measured per collection against the furthest output frontier any replica of
+/// the cluster reports for it, which while the outgoing replicas are still
+/// present is theirs. The duration is applied as that many milliseconds of the
+/// collection's timestamp domain, which is exact on the epoch-milliseconds
+/// timeline and a raw tick count on any other.
+pub const CLUSTER_RECONFIGURATION_ALLOWED_LAG: Config<Duration> = Config::new(
+    "cluster_reconfiguration_allowed_lag",
+    Duration::from_secs(60),
+    "Maximum allowed lag when determining whether a graceful reconfiguration's target replicas \
+    have caught up with the replicas they replace.",
+    ParameterScope::Environment,
+);
+
 /// Whether a config-shape `ALTER CLUSTER` returns immediately, with the
 /// controller converging in the background, or blocks the session on a
 /// wait-shim until the reconfiguration completes or its deadline passes.
@@ -527,6 +556,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ALLOW_USER_SESSIONS)
         .add(&CLUSTER_CONTROLLER_TICK_INTERVAL)
+        .add(&ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE)
+        .add(&CLUSTER_RECONFIGURATION_ALLOWED_LAG)
         .add(&ENABLE_BACKGROUND_ALTER_CLUSTER)
         .add(&DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT)
         .add(&ENABLE_HYDRATION_BURST)

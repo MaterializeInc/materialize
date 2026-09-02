@@ -29,7 +29,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use mz_adapter_types::dyncfgs::CLUSTER_CONTROLLER_TICK_INTERVAL;
+use mz_adapter_types::dyncfgs::{
+    CLUSTER_CONTROLLER_TICK_INTERVAL, CLUSTER_RECONFIGURATION_ALLOWED_LAG,
+    ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE,
+};
 use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant};
 use mz_cluster_controller::ClusterController;
 use mz_cluster_controller::ctx::{
@@ -38,6 +41,7 @@ use mz_cluster_controller::ctx::{
     ReconfigurationTarget, RefreshMvInfo, RefreshWindowClusterInputs, RefreshWindowInputsBatch,
     ReplicaShape, StateWrite,
 };
+use mz_cluster_controller::strategy::duration_to_ts;
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::ClusterStatus;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -56,7 +60,8 @@ use crate::error::AdapterError;
 /// `ManagedClusterIds` and `ClusterStates` are the per-tick batched reads. The
 /// `ClusterStates` reply also carries `now`. Refresh-window catalog inputs are
 /// pulled one cluster at a time, followed by one shared oracle read.
-/// `HydratedReplicas` is a per-cluster live signal a strategy pulls on demand.
+/// `HydratedReplicas` and `ReadyReplicas` are per-cluster live signals a strategy
+/// pulls on demand.
 #[derive(Debug)]
 pub enum ClusterControllerRequest {
     /// The ids of all managed clusters the controller owns this tick.
@@ -70,6 +75,18 @@ pub enum ClusterControllerRequest {
     /// Of `replicas` on `cluster`, which are online and have all current
     /// collections hydrated.
     HydratedReplicas {
+        cluster_id: ClusterId,
+        replicas: Vec<ReplicaId>,
+        tx: oneshot::Sender<BTreeSet<ReplicaId>>,
+    },
+    /// Of `replicas` on `cluster`, which are online, have all current
+    /// collections hydrated, *and* are within the configured cut-over lag of
+    /// the replicas they would replace.
+    ///
+    /// The stronger form of [`Self::HydratedReplicas`], for callers deciding
+    /// whether to cut over to a replica rather than merely observing that its
+    /// dataflows have started producing output.
+    ReadyReplicas {
         cluster_id: ClusterId,
         replicas: Vec<ReplicaId>,
         tx: oneshot::Sender<BTreeSet<ReplicaId>>,
@@ -99,9 +116,9 @@ pub enum ClusterControllerRequest {
     TickInterval { tx: oneshot::Sender<Duration> },
 }
 
-struct ReplicaHydrationCheck {
+struct ReplicaReadinessCheck {
     replica_id: ReplicaId,
-    compute_hydrated: oneshot::Receiver<bool>,
+    compute_ready: oneshot::Receiver<bool>,
 }
 
 /// The controller-task side of the boundary: a [`ClusterControllerCtx`] that
@@ -166,6 +183,21 @@ impl ClusterControllerCtx for CoordCtx {
     ) -> BTreeSet<ReplicaId> {
         let replicas = replicas.to_vec();
         self.request(|tx| ClusterControllerRequest::HydratedReplicas {
+            cluster_id,
+            replicas,
+            tx,
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    async fn ready_replicas(
+        &mut self,
+        cluster_id: ClusterId,
+        replicas: &[ReplicaId],
+    ) -> BTreeSet<ReplicaId> {
+        let replicas = replicas.to_vec();
+        self.request(|tx| ClusterControllerRequest::ReadyReplicas {
             cluster_id,
             replicas,
             tx,
@@ -323,19 +355,23 @@ impl Coordinator {
                 replicas,
                 tx,
             } => {
-                let checks = self.start_hydration_checks(cluster_id, replicas);
-                // Start the controller calls on the coordinator loop, then wait
-                // for compute's replies off-loop. The compute check can wait on
-                // the compute instance task.
-                spawn(|| "cluster_controller_hydration_probe", async move {
-                    let mut hydrated = BTreeSet::new();
-                    for check in checks {
-                        if check.compute_hydrated.await.unwrap_or(false) {
-                            hydrated.insert(check.replica_id);
-                        }
-                    }
-                    let _ = tx.send(hydrated);
-                });
+                // Hydration only: this signal drives the burst strategy's
+                // linger, whose durable `steady_hydrated_at` stamp means exactly
+                // "hydration was observed". The cut-over gate is `ReadyReplicas`.
+                let checks = self.start_readiness_checks(cluster_id, replicas, None);
+                Self::finish_readiness_checks(checks, tx);
+            }
+            ClusterControllerRequest::ReadyReplicas {
+                cluster_id,
+                replicas,
+                tx,
+            } => {
+                let checks = self.start_readiness_checks(
+                    cluster_id,
+                    replicas,
+                    self.reconfiguration_allowed_lag(),
+                );
+                Self::finish_readiness_checks(checks, tx);
             }
             ClusterControllerRequest::HasHydratableObjects { cluster_id, tx } => {
                 let _ = tx.send(self.cluster_has_hydratable_objects(cluster_id));
@@ -424,16 +460,55 @@ impl Coordinator {
             .any(|id| self.catalog().get_entry(id).item().is_hydratable())
     }
 
-    /// Starts per-replica hydration checks for `cluster_id`.
+    /// The cut-over lag allowance, or `None` when the lag gate is disabled.
+    ///
+    /// Read per probe rather than latched per tick, so a runtime change takes
+    /// effect without a restart, matching `cluster_controller_tick_interval`.
+    pub(crate) fn reconfiguration_allowed_lag(&self) -> Option<Timestamp> {
+        let dyncfgs = self.catalog().system_config().dyncfgs();
+        ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE
+            .get(dyncfgs)
+            // A lag beyond the timestamp domain means "any lag is fine", which
+            // is what `duration_to_ts` saturating at `MAX` expresses.
+            .then(|| duration_to_ts(CLUSTER_RECONFIGURATION_ALLOWED_LAG.get(dyncfgs)))
+    }
+
+    /// Await the started checks off the coordinator loop and reply with the
+    /// replicas that passed. The compute check can wait on the compute instance
+    /// task, so it must not block the loop.
+    fn finish_readiness_checks(
+        checks: Vec<ReplicaReadinessCheck>,
+        tx: oneshot::Sender<BTreeSet<ReplicaId>>,
+    ) {
+        spawn(|| "cluster_controller_readiness_probe", async move {
+            let mut ready = BTreeSet::new();
+            for check in checks {
+                if check.compute_ready.await.unwrap_or(false) {
+                    ready.insert(check.replica_id);
+                }
+            }
+            let _ = tx.send(ready);
+        });
+    }
+
+    /// Starts per-replica readiness checks for `cluster_id`: hydration, plus
+    /// the lag gate when `allowed_lag` is `Some`.
     ///
     /// Returns only checks for replicas whose processes are all online, that
     /// are already storage-hydrated, and that are known to the compute
     /// controller. The compute receiver completes off the coordinator loop.
-    fn start_hydration_checks(
+    ///
+    /// The storage-side check is hydration only. Storage hydration has its own
+    /// definition (see `StorageController::collections_hydrated_on_replicas`),
+    /// and no lag term is applied to it here; a pending replica hosting an
+    /// ingestion can pass this gate with the source's snapshot complete but its
+    /// replay still in progress.
+    fn start_readiness_checks(
         &self,
         cluster_id: ClusterId,
         replicas: Vec<ReplicaId>,
-    ) -> Vec<ReplicaHydrationCheck> {
+        allowed_lag: Option<Timestamp>,
+    ) -> Vec<ReplicaReadinessCheck> {
         use mz_catalog::memory::objects::CatalogItem;
 
         // Materialized views pinned to a replica (via `IN CLUSTER ... REPLICA`)
@@ -475,14 +550,15 @@ impl Coordinator {
                 .filter(|(target, _)| *target != replica_id)
                 .map(|(_, id)| *id)
                 .collect();
-            let compute_fut = match self.controller.compute.collections_hydrated_for_replicas(
+            let compute_fut = match self.controller.compute.collections_ready_for_replicas(
                 cluster_id,
                 vec![replica_id],
                 exclude.clone(),
+                allowed_lag,
             ) {
                 Ok(fut) => fut,
                 // The replica is not known to the compute controller. Treat it
-                // as not hydrated.
+                // as not ready.
                 Err(_) => continue,
             };
             let storage_hydrated = match self.controller.storage.collections_hydrated_on_replicas(
@@ -494,9 +570,9 @@ impl Coordinator {
                 Err(_) => continue,
             };
             if storage_hydrated {
-                checks.push(ReplicaHydrationCheck {
+                checks.push(ReplicaReadinessCheck {
                     replica_id,
-                    compute_hydrated: compute_fut,
+                    compute_ready: compute_fut,
                 });
             }
         }

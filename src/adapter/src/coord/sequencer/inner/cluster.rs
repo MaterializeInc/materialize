@@ -1152,11 +1152,28 @@ impl Coordinator {
                 }
             }
         }
-        let compute_hydrated_fut = self
+        // The same gate the cluster controller's reconcile tick applies: a
+        // pending replica is ready only once it is hydrated *and* caught up
+        // with the replicas it is replacing. See
+        // `Coordinator::start_readiness_checks`.
+        //
+        // Unlike the tick, this shim asks about all pending replicas as one set
+        // ("every collection ready on some pending replica") and excludes
+        // nothing, so with `replication_factor > 1` one caught-up pending replica
+        // satisfies it, and a collection pinned to an outgoing replica can never
+        // satisfy it. Both predate the lag gate.
+        let allowed_lag = self.reconfiguration_allowed_lag();
+
+        let compute_ready_fut = self
             .controller
             .compute
-            .collections_hydrated_for_replicas(cluster.id, pending_replicas.clone(), [].into())
-            .map_err(|e| AdapterError::internal("Failed to check hydration", e))?;
+            .collections_ready_for_replicas(
+                cluster.id,
+                pending_replicas.clone(),
+                [].into(),
+                allowed_lag,
+            )
+            .map_err(|e| AdapterError::internal("Failed to check readiness", e))?;
 
         let storage_hydrated = self
             .controller
@@ -1182,11 +1199,11 @@ impl Coordinator {
         Ok(StageResult::Handle(mz_ore::task::spawn(
             || "Alter Cluster: wait for hydrated",
             async move {
-                let compute_hydrated = compute_hydrated_fut
+                let compute_ready = compute_ready_fut
                     .await
-                    .map_err(|e| AdapterError::internal("Failed to check hydration", e))?;
+                    .map_err(|e| AdapterError::internal("Failed to check readiness", e))?;
 
-                if compute_hydrated && storage_hydrated && replicas_online {
+                if compute_ready && storage_hydrated && replicas_online {
                     // We're done
                     Ok(Box::new(ClusterStage::Finalize(AlterClusterFinalize {
                         validity,

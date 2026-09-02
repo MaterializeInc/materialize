@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
+use differential_dataflow::lattice::Lattice;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::WallclockLagFn;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
@@ -36,7 +37,7 @@ use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_persist_types::PersistLocation;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, Timestamp, frontier_within_lag};
 use mz_storage_client::controller::{IntrospectionType, WallclockLag, WallclockLagHistogramPeriod};
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
@@ -722,12 +723,7 @@ impl Instance {
             return Ok(true);
         }
         for replica_state in hosting_replicas {
-            let collection_state = replica_state
-                .collections
-                .get(&collection_id)
-                .expect("hosting replica must have per-replica collection state");
-
-            if collection_state.hydrated() {
+            if replica_state.expect_collection(collection_id).hydrated() {
                 return Ok(true);
             }
         }
@@ -735,16 +731,46 @@ impl Instance {
         Ok(false)
     }
 
-    /// Returns `true` if each non-transient, non-excluded collection is hydrated on at
-    /// least one replica.
+    /// Returns `true` if each non-transient, non-excluded collection is *ready* on at
+    /// least one of the target replicas.
+    ///
+    /// A collection is ready on a replica when both hold:
+    ///
+    ///  1. The replica reports it hydrated, i.e. the dataflow has produced output
+    ///     past the as-of it was installed with.
+    ///  2. When `allowed_lag` is `Some`, the replica's output frontier for the
+    ///     collection is at most that far behind the furthest output frontier any
+    ///     replica of this instance reports for it.
+    ///
+    /// Condition 1 alone is not a readiness signal for a cut-over. The as-of is
+    /// pinned when the replica is added and never moves, so a dataflow that spends
+    /// a long time on its initial snapshot reports hydrated the moment that
+    /// snapshot lands, with everything since the as-of still to replay. Condition 2
+    /// is what says the replica has caught up with the replicas it is replacing:
+    /// while the outgoing replicas are still present, the furthest output frontier
+    /// is theirs.
+    ///
+    /// Both sides of condition 2 are *output* frontiers, not write frontiers. For a
+    /// materialized view the replica-reported write frontier is the persist shard's
+    /// upper, which every replica writing the shard shares, and for a `REFRESH`
+    /// materialized view it jumps to the next refresh time. The output frontier is
+    /// the meet of the write frontier and the dataflow's compute probe, so it is
+    /// the replica's own progress in both cases. For an index the two coincide.
+    /// See [`ReplicaCollectionState::hydrated`], which is defined over the output
+    /// frontier for the same reason.
+    ///
+    /// Passing `None` for `allowed_lag` checks condition 1 only, which is the
+    /// break-glass behavior for callers whose config disables the lag gate, and
+    /// what callers that genuinely only want to observe hydration pass.
     ///
     /// This also returns `true` in case this cluster does not have any
     /// replicas.
     #[mz_ore::instrument(level = "debug")]
-    pub fn collections_hydrated_on_replicas(
+    pub fn collections_ready_on_replicas(
         &self,
         target_replica_ids: Option<Vec<ReplicaId>>,
         exclude_collections: &BTreeSet<GlobalId>,
+        allowed_lag: Option<Timestamp>,
     ) -> Result<bool, HydrationCheckBadTarget> {
         if self.replicas.is_empty() {
             return Ok(true);
@@ -765,49 +791,59 @@ impl Instance {
         }
 
         let mut unhydrated = BTreeSet::new();
+        let mut lagging = BTreeSet::new();
         for (id, _collection) in self.collections_iter() {
             if id.is_transient() || exclude_collections.contains(&id) {
                 continue;
             }
 
-            let mut collection_hydrated = false;
-            // `replicas_hosting` cannot fail here because `collections_iter`
-            // only yields collections that exist.
-            for replica_state in self.replicas_hosting(id).expect("collection must exist") {
-                if !target_replicas.contains(&replica_state.id) {
-                    continue;
-                }
-                let collection_state = replica_state
-                    .collections
-                    .get(&id)
-                    .expect("hosting replica must have per-replica collection state");
+            // Every replica hosting the collection, target or not: the
+            // classifier derives the lag reference from all of them and the
+            // verdict from the targets. `replicas_hosting` cannot fail here
+            // because `collections_iter` only yields collections that exist.
+            let replicas = self
+                .replicas_hosting(id)
+                .expect("collection must exist")
+                .map(|replica| {
+                    let state = replica.expect_collection(id);
+                    ReplicaCollectionView {
+                        target: target_replicas.contains(&replica.id),
+                        hydrated: state.hydrated(),
+                        output_frontier: &state.output_frontier,
+                    }
+                });
 
-                if collection_state.hydrated() {
-                    collection_hydrated = true;
-                    break;
+            match classify_collection_readiness(replicas, allowed_lag) {
+                CollectionReadiness::Ready => {}
+                // We collect all not-ready collections instead of breaking out
+                // early, so that the log below names every collection the caller
+                // is waiting on, and why.
+                CollectionReadiness::Lagging => {
+                    lagging.insert(id);
                 }
-            }
-
-            if !collection_hydrated {
-                // We collect all non-hydrated collections instead of breaking
-                // out early, so that the log below names every collection the
-                // caller is waiting on.
-                unhydrated.insert(id);
+                CollectionReadiness::Unhydrated => {
+                    unhydrated.insert(id);
+                }
             }
         }
 
-        if !unhydrated.is_empty() {
+        if !unhydrated.is_empty() || !lagging.is_empty() {
             // Callers poll this on the cluster controller's reconcile tick,
             // which tests turn down to milliseconds, so this is deliberately
-            // one line per call rather than one per collection.
+            // one line per call rather than one per collection. The two reasons
+            // are reported separately: "hydrated but still behind" is the state
+            // a cut-over must not fire in, and it is indistinguishable from
+            // "ready" in the logs otherwise.
             tracing::info!(
                 replicas = ?target_replicas,
-                collections = ?unhydrated,
-                "collections are not hydrated on any target replica",
+                unhydrated = ?unhydrated,
+                lagging = ?lagging,
+                ?allowed_lag,
+                "collections are not ready on any target replica",
             );
         }
 
-        Ok(unhydrated.is_empty())
+        Ok(unhydrated.is_empty() && lagging.is_empty())
     }
 
     /// Clean up collection state that is not needed anymore.
@@ -3172,6 +3208,18 @@ impl ReplicaState {
         self.collections.remove(&id)
     }
 
+    /// Returns the per-replica state of a collection this replica hosts.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the replica does not host the collection. Callers obtain the
+    /// replica from [`Instance::replicas_hosting`], which guarantees it does.
+    fn expect_collection(&self, id: GlobalId) -> &ReplicaCollectionState {
+        self.collections
+            .get(&id)
+            .expect("hosting replica must have per-replica collection state")
+    }
+
     /// Returns whether all replica frontiers of the given collection are empty.
     fn collection_frontiers_empty(&self, id: GlobalId) -> bool {
         self.collections.get(&id).map_or(true, |c| {
@@ -3429,6 +3477,88 @@ impl Drop for ReplicaCollectionIntrospection {
     }
 }
 
+/// The readiness of one collection across the replicas a caller is asking about.
+///
+/// See [`classify_collection_readiness`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CollectionReadiness {
+    /// At least one target replica has the collection hydrated and, if a lag
+    /// gate was given, within the allowance of the reference frontier.
+    Ready,
+    /// At least one target replica has the collection hydrated, but none of
+    /// those is within the allowance. This is the state a cut-over must not
+    /// fire in.
+    Lagging,
+    /// No target replica has the collection hydrated.
+    Unhydrated,
+}
+
+/// One replica's view of one collection, as [`classify_collection_readiness`]
+/// needs it.
+#[derive(Debug, Clone, Copy)]
+struct ReplicaCollectionView<'a> {
+    /// Whether the caller is asking about this replica. Non-target replicas
+    /// contribute to the lag reference but not to the verdict.
+    target: bool,
+    /// Whether the replica reports the collection hydrated.
+    hydrated: bool,
+    /// The replica's output frontier for the collection.
+    output_frontier: &'a Antichain<Timestamp>,
+}
+
+/// Classifies one collection's readiness over `replicas`, every replica hosting
+/// the collection, target or not.
+///
+/// The lag reference is the join of `output_frontier` over all of `replicas`:
+/// the furthest any of them has progressed, which while the outgoing replicas of
+/// a reconfiguration are still present is theirs. A target replica is ready when
+/// it is hydrated and, if `allowed_lag` is `Some`, its output frontier is within
+/// that allowance of the reference. `None` checks hydration only. An empty
+/// reference means some replica reports the collection complete, so there is
+/// nothing to be behind and the allowance is not applied.
+///
+/// This is the whole decision, kept free of `Instance` so it can be tested over
+/// plain frontiers. [`Instance::collections_ready_on_replicas`] supplies the
+/// per-replica views.
+fn classify_collection_readiness<'a>(
+    replicas: impl IntoIterator<Item = ReplicaCollectionView<'a>>,
+    allowed_lag: Option<Timestamp>,
+) -> CollectionReadiness {
+    let replicas: Vec<_> = replicas.into_iter().collect();
+
+    let lag = allowed_lag.and_then(|allowed_lag| {
+        let mut reference = Antichain::from_elem(Timestamp::MIN);
+        for replica in &replicas {
+            reference.join_assign(replica.output_frontier);
+        }
+        (!reference.is_empty()).then_some((reference, allowed_lag))
+    });
+
+    let mut any_hydrated = false;
+    for replica in replicas.iter().filter(|r| r.target) {
+        if !replica.hydrated {
+            continue;
+        }
+        any_hydrated = true;
+
+        let within_lag = match &lag {
+            Some((reference, allowed_lag)) => {
+                frontier_within_lag(replica.output_frontier, reference, *allowed_lag)
+            }
+            None => true,
+        };
+        if within_lag {
+            return CollectionReadiness::Ready;
+        }
+    }
+
+    if any_hydrated {
+        CollectionReadiness::Lagging
+    } else {
+        CollectionReadiness::Unhydrated
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -3436,10 +3566,189 @@ mod tests {
     use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_MZ_JOIN_CORE};
     use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
     use mz_persist_types::PersistLocation;
+    use mz_repr::Timestamp;
+    use timely::progress::Antichain;
 
     use crate::protocol::command::{ComputeCommand, InstanceConfig};
 
-    use super::{Instance, ReplicaId};
+    use super::{
+        CollectionReadiness, Instance, ReplicaCollectionView, ReplicaId,
+        classify_collection_readiness,
+    };
+
+    fn ac(ts: u64) -> Antichain<Timestamp> {
+        Antichain::from_elem(Timestamp::new(ts))
+    }
+
+    /// An outgoing replica: not a target, hydrated, at `output_frontier`.
+    fn outgoing(output_frontier: &Antichain<Timestamp>) -> ReplicaCollectionView<'_> {
+        ReplicaCollectionView {
+            target: false,
+            hydrated: true,
+            output_frontier,
+        }
+    }
+
+    /// A pending (target) replica.
+    fn pending(
+        hydrated: bool,
+        output_frontier: &Antichain<Timestamp>,
+    ) -> ReplicaCollectionView<'_> {
+        ReplicaCollectionView {
+            target: true,
+            hydrated,
+            output_frontier,
+        }
+    }
+
+    const LAG: Option<Timestamp> = Some(Timestamp::new(60));
+
+    /// The regression the lag gate exists for: a pending replica whose dataflow
+    /// has produced its first output past the as-of, and so reports hydrated,
+    /// while its output frontier is still far behind the outgoing replica.
+    #[mz_ore::test]
+    fn hydrated_but_lagging_is_not_ready() {
+        let live = ac(10_000);
+        // Hydrated, four hours behind.
+        let behind = ac(1_000);
+        assert_eq!(
+            classify_collection_readiness([outgoing(&live), pending(true, &behind)], LAG),
+            CollectionReadiness::Lagging,
+        );
+        // Hydrated, within the allowance.
+        let close = ac(9_950);
+        assert_eq!(
+            classify_collection_readiness([outgoing(&live), pending(true, &close)], LAG),
+            CollectionReadiness::Ready,
+        );
+        // Not hydrated at all, however close.
+        assert_eq!(
+            classify_collection_readiness([outgoing(&live), pending(false, &close)], LAG),
+            CollectionReadiness::Unhydrated,
+        );
+    }
+
+    #[mz_ore::test]
+    fn reference_is_the_furthest_replica() {
+        // The reference is a join over every hosting replica. A freshly added
+        // target sitting at its as-of cannot drag it down, and a second outgoing
+        // replica further ahead raises it.
+        let ahead = ac(10_000);
+        let trailing = ac(9_000);
+        let fresh = ac(1_000);
+        let close_to_trailing = ac(8_990);
+        // Against `trailing` alone the pending replica would be within 60.
+        assert_eq!(
+            classify_collection_readiness(
+                [outgoing(&trailing), pending(true, &close_to_trailing)],
+                LAG
+            ),
+            CollectionReadiness::Ready,
+        );
+        // With `ahead` also hosting, the reference moves up and it is not.
+        assert_eq!(
+            classify_collection_readiness(
+                [
+                    outgoing(&trailing),
+                    outgoing(&ahead),
+                    pending(true, &close_to_trailing),
+                    pending(false, &fresh),
+                ],
+                LAG
+            ),
+            CollectionReadiness::Lagging,
+        );
+    }
+
+    #[mz_ore::test]
+    fn one_ready_target_suffices() {
+        let live = ac(10_000);
+        let behind = ac(1_000);
+        let close = ac(9_990);
+        assert_eq!(
+            classify_collection_readiness(
+                [
+                    outgoing(&live),
+                    pending(true, &behind),
+                    pending(false, &close),
+                    pending(true, &close),
+                ],
+                LAG
+            ),
+            CollectionReadiness::Ready,
+        );
+        // Lagging beats unhydrated when reporting why nothing is ready.
+        assert_eq!(
+            classify_collection_readiness(
+                [
+                    outgoing(&live),
+                    pending(false, &close),
+                    pending(true, &behind)
+                ],
+                LAG
+            ),
+            CollectionReadiness::Lagging,
+        );
+    }
+
+    #[mz_ore::test]
+    fn no_lag_gate_is_hydration_only() {
+        // `None` must be a true no-op on top of hydration: the same frontiers that
+        // read `Lagging` under a gate read `Ready` without one. This is the
+        // break-glass path and the burst strategy's path.
+        let live = ac(10_000);
+        let behind = ac(1_000);
+        assert_eq!(
+            classify_collection_readiness([outgoing(&live), pending(true, &behind)], None),
+            CollectionReadiness::Ready,
+        );
+        assert_eq!(
+            classify_collection_readiness([outgoing(&live), pending(false, &behind)], None),
+            CollectionReadiness::Unhydrated,
+        );
+    }
+
+    #[mz_ore::test]
+    fn complete_collection_has_nothing_to_lag_behind() {
+        // One replica reporting the collection complete (empty output frontier)
+        // makes the join empty. The allowance does not apply; a hydrated target
+        // at any frontier is ready.
+        let complete = Antichain::new();
+        let behind = ac(1_000);
+        assert_eq!(
+            classify_collection_readiness(
+                [outgoing(&complete), pending(true, &behind)],
+                Some(Timestamp::new(0))
+            ),
+            CollectionReadiness::Ready,
+        );
+    }
+
+    #[mz_ore::test]
+    fn sole_replica_is_its_own_reference() {
+        // After the outgoing replicas are gone, or on a brand-new cluster, the
+        // target is the furthest replica, so it is within any allowance of
+        // itself, including zero. The gate cannot wedge in steady state.
+        let alone = ac(5_000);
+        assert_eq!(
+            classify_collection_readiness([pending(true, &alone)], Some(Timestamp::new(0))),
+            CollectionReadiness::Ready,
+        );
+    }
+
+    #[mz_ore::test]
+    fn no_targets_is_unhydrated() {
+        // Nothing to judge: none of the asked-about replicas hosts the
+        // collection (e.g. it is pinned to an outgoing replica). Reported as
+        // unhydrated so a caller waiting on it keeps waiting rather than cutting
+        // over on a vacuous truth. This is why callers exclude replica-pinned
+        // collections they know the targets can never host.
+        let live = ac(10_000);
+        assert_eq!(
+            classify_collection_readiness([outgoing(&live)], LAG),
+            CollectionReadiness::Unhydrated,
+        );
+    }
 
     fn create_instance_command() -> ComputeCommand {
         ComputeCommand::CreateInstance(Box::new(InstanceConfig {

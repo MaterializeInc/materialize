@@ -620,3 +620,89 @@ impl TryFrom<Numeric> for Timestamp {
 impl columnation::Columnation for Timestamp {
     type InnerRegion = columnation::CopyRegion<Timestamp>;
 }
+
+/// Returns whether `frontier` is at most `allowed_lag` behind `reference`.
+///
+/// The predicate is `reference <= frontier + allowed_lag`, evaluated on
+/// antichains. Timestamps that would overflow when advanced by `allowed_lag`
+/// saturate at [`Timestamp::MAX`] rather than panicking, so a frontier close to
+/// the end of the timestamp domain reads as far ahead rather than aborting the
+/// caller.
+///
+/// Note the two degenerate cases, which callers usually want to handle
+/// themselves rather than inherit:
+///
+///  * An empty `reference` is the maximum antichain, so the result is `true`
+///    only when `frontier` is empty too. A caller that reads an empty reference
+///    as "this collection is complete, nothing can be behind it" must say so at
+///    its own call site.
+///  * An empty `frontier` is likewise the maximum, so the result is `true` for
+///    every `reference`.
+pub fn frontier_within_lag(
+    frontier: &timely::progress::Antichain<Timestamp>,
+    reference: &timely::progress::Antichain<Timestamp>,
+    allowed_lag: Timestamp,
+) -> bool {
+    // We cannot subtract frontiers, so bump `frontier` forward by the allowance
+    // and compare that against `reference`.
+    let bumped = timely::progress::Antichain::from_iter(frontier.iter().map(|t| {
+        t.try_step_forward_by(&allowed_lag)
+            .unwrap_or(Timestamp::MAX)
+    }));
+    timely::order::PartialOrder::less_equal(reference, &bumped)
+}
+
+#[cfg(test)]
+mod frontier_within_lag_tests {
+    use timely::progress::Antichain;
+
+    use super::{Timestamp, frontier_within_lag};
+
+    fn ac(ts: u64) -> Antichain<Timestamp> {
+        Antichain::from_elem(Timestamp::new(ts))
+    }
+
+    #[mz_ore::test]
+    fn within_and_beyond_the_allowance() {
+        // Exactly at the allowance is within it; one past it is not.
+        assert!(frontier_within_lag(&ac(100), &ac(110), Timestamp::new(10)));
+        assert!(!frontier_within_lag(&ac(100), &ac(111), Timestamp::new(10)));
+        // A frontier ahead of the reference is trivially within any allowance.
+        assert!(frontier_within_lag(&ac(200), &ac(110), Timestamp::new(0)));
+    }
+
+    #[mz_ore::test]
+    fn monotone_in_the_allowance() {
+        // Widening the allowance never turns a `true` into a `false`.
+        for lag in 0..40u64 {
+            let narrow = frontier_within_lag(&ac(100), &ac(120), Timestamp::new(lag));
+            let wide = frontier_within_lag(&ac(100), &ac(120), Timestamp::new(lag + 1));
+            assert!(wide || !narrow, "narrow={narrow} wide={wide} lag={lag}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn empty_frontiers_are_the_maximum() {
+        let empty = Antichain::new();
+        // An empty frontier is ahead of everything.
+        assert!(frontier_within_lag(
+            &empty,
+            &ac(u64::MAX),
+            Timestamp::new(0)
+        ));
+        // An empty reference is only matched by an empty frontier.
+        assert!(!frontier_within_lag(&ac(100), &empty, Timestamp::new(10)));
+        assert!(frontier_within_lag(&empty, &empty, Timestamp::new(10)));
+    }
+
+    #[mz_ore::test]
+    fn saturates_instead_of_panicking_on_overflow() {
+        // `step_forward_by` would panic here; the saturating form reads as
+        // "arbitrarily far ahead" instead.
+        assert!(frontier_within_lag(
+            &ac(u64::MAX - 1),
+            &ac(u64::MAX),
+            Timestamp::new(u64::MAX),
+        ));
+    }
+}

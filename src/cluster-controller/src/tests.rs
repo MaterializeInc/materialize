@@ -149,11 +149,18 @@ struct FakeCtx {
     /// `schedule` field of the witness.
     concurrent_schedule_alter: BTreeMap<ClusterId, ClusterSchedule>,
     /// Replicas the fake reports as hydrated when the controller probes. A
-    /// graceful test sets this to drive cut-over.
+    /// burst test sets this to drive the linger.
     hydrated: BTreeSet<ReplicaId>,
+    /// Replicas the fake reports as ready (hydrated *and* caught up) when the
+    /// controller probes. A graceful test sets this to drive cut-over. Held
+    /// separately from `hydrated` rather than derived from it, so a test can
+    /// pose the state this gate exists for: hydrated but still behind.
+    ready: BTreeSet<ReplicaId>,
     /// How many times the controller probed hydration, for asserting that an
     /// object-less cluster is never probed.
     hydration_probes: usize,
+    /// How many times the controller probed readiness.
+    readiness_probes: usize,
     /// What the fake answers when the controller pulls the object-existence
     /// signal; an absent entry reads `false` (no objects). Held beside the
     /// states (like `hydrated`) rather than read from them, and
@@ -180,7 +187,9 @@ impl FakeCtx {
             concurrent_policy_alter: BTreeMap::new(),
             concurrent_schedule_alter: BTreeMap::new(),
             hydrated: BTreeSet::new(),
+            ready: BTreeSet::new(),
             hydration_probes: 0,
+            readiness_probes: 0,
             has_hydratable_objects: BTreeMap::new(),
             refresh_window: None,
             refresh_window_probes: Vec::new(),
@@ -258,6 +267,19 @@ impl ClusterControllerCtx for FakeCtx {
             .iter()
             .copied()
             .filter(|r| self.hydrated.contains(r))
+            .collect()
+    }
+
+    async fn ready_replicas(
+        &mut self,
+        _cluster_id: ClusterId,
+        replicas: &[ReplicaId],
+    ) -> BTreeSet<ReplicaId> {
+        self.readiness_probes += 1;
+        replicas
+            .iter()
+            .copied()
+            .filter(|r| self.ready.contains(r))
             .collect()
     }
 
@@ -1267,14 +1289,19 @@ fn record_on_timeout(
 }
 
 /// Convenience: a `ClusterState` with an in-flight reconfiguration, plus the
-/// [`LiveSignals`] carrying an explicit hydrated-replica set.
+/// [`LiveSignals`] carrying an explicit ready-replica set.
+///
+/// `ready` populates `LiveSignals::ready_replicas`, the signal the graceful
+/// cut-over gate reads. `hydrated_replicas` is deliberately left empty: a
+/// replica that is hydrated but not ready must not cut over, and a helper that
+/// set both would hide a gate reading the wrong one.
 fn reconfiguring_state(
     cluster_id: ClusterId,
     size: &str,
     rf: u32,
     replicas: Vec<ObservedReplica>,
     rec: ReconfigurationRecord,
-    hydrated: BTreeSet<ReplicaId>,
+    ready: BTreeSet<ReplicaId>,
 ) -> (ClusterState, LiveSignals) {
     let state = ClusterState {
         cluster_id,
@@ -1290,7 +1317,7 @@ fn reconfiguring_state(
         replicas,
     };
     let signals = LiveSignals {
-        hydrated_replicas: hydrated,
+        ready_replicas: ready,
         ..Default::default()
     };
     (state, signals)
@@ -1347,8 +1374,84 @@ fn graceful_desires_target_while_in_flight() {
 }
 
 #[mz_ore::test]
-fn graceful_cuts_over_when_target_hydrated() {
-    // Both target replicas present and hydrated -> cut over, even before deadline.
+fn graceful_holds_when_target_is_hydrated_but_lagging() {
+    // The regression this gate exists for. Both target replicas are present and
+    // report hydrated, but neither is caught up with the replicas it replaces,
+    // so `ready_replicas` is empty. Cutting over here would drop the two
+    // caught-up 100cc replicas and freeze the cluster's frontiers until the
+    // 200cc pair drained its backlog.
+    let c = cluster(1);
+    let (state, mut signals) = reconfiguring_state(
+        c,
+        "100cc",
+        2,
+        vec![
+            observed(replica(1), "r0", "100cc"),
+            observed(replica(2), "r1", "100cc"),
+            observed(replica(3), "r2", "200cc"),
+            observed(replica(4), "r3", "200cc"),
+        ],
+        record("200cc", 2, 5000),
+        BTreeSet::new(),
+    );
+    // Hydrated but not ready: exactly the state a hydration-only gate cut over in.
+    signals.hydrated_replicas = BTreeSet::from([replica(3), replica(4)]);
+    let now = Timestamp::from(1000u64);
+
+    let g = GracefulReconfigurationStrategy;
+    assert!(
+        g.update_state(&state, &signals, &config(), now).is_empty(),
+        "a hydrated but lagging target must not cut over",
+    );
+    // The target replicas stay desired while we wait for them to catch up.
+    let desired = g.desired_replicas(&state, &signals, &config(), now);
+    assert_eq!(desired.len(), 2);
+    assert!(desired.iter().all(|d| d.shape.size == "200cc"));
+
+    // Once they catch up, the same state cuts over.
+    signals.ready_replicas = BTreeSet::from([replica(3), replica(4)]);
+    let write = g.update_state(&state, &signals, &config(), now);
+    assert_eq!(write.new_size.as_deref(), Some("200cc"));
+    assert_eq!(
+        written_reconfiguration_audit(&write),
+        Some(ReconfigurationAudit::Finalized { forced: false }),
+        "a cut-over on a caught-up target is not forced",
+    );
+}
+
+#[mz_ore::test]
+fn graceful_commit_on_timeout_cuts_over_lagging_target() {
+    // The lag gate strengthens the success condition, not the timeout action:
+    // past the deadline under `Commit`, a hydrated-but-lagging target is still
+    // cut over to, and the finalize is recorded as forced.
+    let c = cluster(1);
+    let (state, mut signals) = reconfiguring_state(
+        c,
+        "100cc",
+        1,
+        vec![
+            observed(replica(1), "r0", "100cc"),
+            observed(replica(2), "r1", "200cc"),
+        ],
+        record_on_timeout("200cc", 1, 5000, OnTimeout::Commit),
+        BTreeSet::new(),
+    );
+    signals.hydrated_replicas = BTreeSet::from([replica(2)]);
+    let past_deadline = Timestamp::from(9999u64);
+
+    let g = GracefulReconfigurationStrategy;
+    let write = g.update_state(&state, &signals, &config(), past_deadline);
+    assert_eq!(write.new_size.as_deref(), Some("200cc"));
+    assert_eq!(
+        written_reconfiguration_audit(&write),
+        Some(ReconfigurationAudit::Finalized { forced: true }),
+        "a deadline cut-over on a lagging target is forced",
+    );
+}
+
+#[mz_ore::test]
+fn graceful_cuts_over_when_target_ready() {
+    // Both target replicas present and ready -> cut over, even before deadline.
     let c = cluster(1);
     let (state, signals) = reconfiguring_state(
         c,
@@ -1412,7 +1515,7 @@ fn graceful_partial_hydration_does_not_cut_over() {
 #[mz_ore::test]
 fn graceful_rf_zero_target_cuts_over_on_first_tick() {
     // A target with replication_factor 0 has no replicas to hydrate, so
-    // `target_hydrated` is vacuously true and `update_state` finalizes on the
+    // `target_ready` is vacuously true and `update_state` finalizes on the
     // first tick, well before the deadline. The audit declares an unforced
     // (hydrated) finalize.
     let c = cluster(1);
@@ -1769,9 +1872,9 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
             .matches(state.replicas[0].shape.as_ref().unwrap())
     );
 
-    // Mark the realized replica hydrated: it is NOT a target replica (wrong AZ),
+    // Mark the realized replica ready: it is NOT a target replica (wrong AZ),
     // so this must not trigger a cut-over.
-    signals.hydrated_replicas.insert(replica(1));
+    signals.ready_replicas.insert(replica(1));
     assert!(g.update_state(&state, &signals, &config(), now).is_empty());
 }
 
@@ -1808,7 +1911,7 @@ async fn graceful_full_flow_overlap_then_cutover() {
     assert_eq!(ctx.states[&c].size, "100cc", "realized config unchanged");
     assert_eq!(ctx.states[&c].replicas.len(), 4);
 
-    // The target replicas are the two 200cc ones. Mark them hydrated.
+    // The target replicas are the two 200cc ones. Mark them ready.
     let target_ids: BTreeSet<_> = ctx.states[&c]
         .replicas
         .iter()
@@ -1816,7 +1919,7 @@ async fn graceful_full_flow_overlap_then_cutover() {
         .map(|r| r.replica_id)
         .collect();
     assert_eq!(target_ids.len(), 2);
-    ctx.hydrated = target_ids.clone();
+    ctx.ready = target_ids.clone();
 
     // Tick 2: cut over (phase 1) then drop the old 100cc replicas (phase 2).
     let before = ctx.applied.len();
@@ -1846,6 +1949,18 @@ async fn graceful_full_flow_overlap_then_cutover() {
         .any(|d| matches!(d, Decision::DropReplica { .. }));
     assert!(dropped, "a drop happened");
 
+    // The graceful strategy pulled the readiness signal, and only that one: a
+    // reconfiguration with no burst policy must never consult bare hydration,
+    // which is the signal that cut over early in production.
+    assert_eq!(
+        ctx.readiness_probes, 2,
+        "one readiness probe per tick while the record is in progress"
+    );
+    assert_eq!(
+        ctx.hydration_probes, 0,
+        "the graceful path does not consult bare hydration"
+    );
+
     // Tick 3: converged, no further decisions.
     let before = ctx.applied.len();
     controller.reconcile(&mut ctx).await;
@@ -1872,9 +1987,9 @@ async fn graceful_alter_back_finalizes_without_churn() {
         BTreeSet::new(),
     );
     let mut ctx = FakeCtx::new(vec![state]);
-    // The controller probes hydration through the ctx. The existing replica is
-    // already hydrated.
-    ctx.hydrated = BTreeSet::from([replica(1)]);
+    // The controller probes readiness through the ctx. The existing replica is
+    // already ready.
+    ctx.ready = BTreeSet::from([replica(1)]);
     let controller = controller();
 
     controller.reconcile(&mut ctx).await;
