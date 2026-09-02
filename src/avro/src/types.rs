@@ -166,7 +166,7 @@ pub enum Value {
     Uuid(uuid::Uuid),
 }
 
-/// Any structure implementing the [ToAvro](trait.ToAvro.html) trait will be usable
+/// Any structure implementing the [ToAvro] trait will be usable
 /// from a [Writer](../writer/struct.Writer.html).
 pub trait ToAvro {
     /// Transforms this value into an Avro-compatible [`Value`].
