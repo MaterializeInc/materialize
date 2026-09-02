@@ -10,6 +10,8 @@ menu:
 
 {{< public-preview />}}
 
+*Available starting in v26.40*
+
 This guide walks you through the steps required to set up Iceberg sinks in
 Materialize Cloud against [Databricks Unity
 Catalog](https://docs.databricks.com/aws/en/data-governance/unity-catalog/) on AWS.
@@ -23,7 +25,7 @@ are not yet covered.
 
 ## Prerequisites
 
-### Network access from Materialize
+### Allow network access from Materialize
 
 Materialize reaches Unity Catalog and the storage behind it over the public
 internet. Iceberg catalog connections do not support tunneling through [AWS
