@@ -388,7 +388,7 @@ impl<'de> Deserialize<'de> for CpuLimit {
         // Note -- we just round off any precision beyond 0.001 here.
         let float = f64::deserialize(deserializer)?;
         let millicpus = (float * 1000.).round();
-        if millicpus < 0. || millicpus > (std::usize::MAX as f64) {
+        if millicpus < 0. || millicpus > (usize::MAX as f64) {
             use serde::de::Error;
             Err(D::Error::invalid_value(
                 Unexpected::Float(float),
