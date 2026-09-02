@@ -145,7 +145,7 @@ pub trait MzData:
 impl<T> MzData for T
 where
     T: columnation::Columnation,
-    T: for<'a> columnar::Columnar<Container: Clone + Send>,
+    T: columnar::Columnar<Container: Clone + Send>,
     for<'a> Ref<'a, T>: Copy + Ord,
 {
 }

@@ -9539,7 +9539,7 @@ impl<'a> Parser<'a> {
             let err = parser_err!(
                 self,
                 self.peek_prev_pos(),
-                format!("WITH HOLD is unsupported for cursors")
+                "WITH HOLD is unsupported for cursors"
             )
             .map_parser_err(StatementKind::Declare);
             self.expect_keyword(HOLD)
@@ -10255,7 +10255,7 @@ impl<'a> Parser<'a> {
             return parser_err!(
                 self,
                 self.peek_prev_pos(),
-                format!("For object type MATERIALIZED VIEWS, you must specify 'TABLES'")
+                "For object type MATERIALIZED VIEWS, you must specify 'TABLES'"
             );
         }
 
@@ -10298,7 +10298,7 @@ impl<'a> Parser<'a> {
             return parser_err!(
                 self,
                 self.peek_prev_pos(),
-                format!("For object type MATERIALIZED VIEWS, you must specify 'TABLES'")
+                "For object type MATERIALIZED VIEWS, you must specify 'TABLES'"
             );
         }
 

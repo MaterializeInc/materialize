@@ -1400,7 +1400,7 @@ async fn read_migration_shard<P>(
     predicate: P,
 ) -> Option<Vec<(migration_shard::Key, ShardId)>>
 where
-    P: for<'a> Fn(&migration_shard::Key) -> bool,
+    P: Fn(&migration_shard::Key) -> bool,
 {
     let as_of = Antichain::from_elem(read_ts);
     let updates = persist_read.snapshot_and_fetch(as_of).await.ok()?;
