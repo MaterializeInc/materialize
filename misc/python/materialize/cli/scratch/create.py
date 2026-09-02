@@ -156,8 +156,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
         "--instance-profile",
         type=str,
         default=DEFAULT_INSTANCE_PROFILE_NAME,
-        help="EC2 instance profile / IAM role. Defaults to `%s`."
-        % DEFAULT_INSTANCE_PROFILE_NAME,
+        help=f"EC2 instance profile / IAM role. Defaults to `{DEFAULT_INSTANCE_PROFILE_NAME}`.",
     )
     parser.add_argument("--output-format", choices=["table", "csv"], default="table")
     parser.add_argument(

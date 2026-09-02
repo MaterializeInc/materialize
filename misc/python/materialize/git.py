@@ -124,7 +124,7 @@ def expand_globs(root: Path, *specs: Path | str) -> set[str]:
     return set(f for f in (diff_files + ls_files).split("\0") if f.strip() != "")
 
 
-def get_version_tags(
+def get_version_tags[VERSION_TYPE: TypedVersionBase](
     *,
     version_type: type[VERSION_TYPE],
     newest_first: bool = True,
@@ -157,7 +157,7 @@ def get_version_tags(
     return sorted(tags, reverse=newest_first)
 
 
-def get_latest_version(
+def get_latest_version[VERSION_TYPE: TypedVersionBase](
     version_type: type[VERSION_TYPE],
     excluded_versions: set[VERSION_TYPE] | None = None,
     current_version: VERSION_TYPE | None = None,
@@ -377,7 +377,9 @@ def contains_commit(
     return is_ancestor(commit_sha, target)
 
 
-def get_tagged_release_version(version_type: type[VERSION_TYPE]) -> VERSION_TYPE | None:
+def get_tagged_release_version[VERSION_TYPE: TypedVersionBase](
+    version_type: type[VERSION_TYPE],
+) -> VERSION_TYPE | None:
     """
     This returns the release version if exactly this commit is tagged.
     If multiple release versions are present, the highest one will be returned.

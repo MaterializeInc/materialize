@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Generic, TypeVar
+from typing import TypeVar
 
 from materialize.output_consistency.data_value.source_column_identifier import (
     SourceColumnIdentifier,
@@ -16,7 +16,7 @@ from materialize.output_consistency.data_value.source_column_identifier import (
 T = TypeVar("T")
 
 
-class SelectionByKey(Generic[T]):
+class SelectionByKey[T]:
     def __init__(self, keys: set[T] | None = None):
         self.keys = keys
 
