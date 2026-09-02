@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 
 class TimeGuard:
@@ -16,7 +16,7 @@ class TimeGuard:
         max_runtime_in_sec: int,
     ):
         self.max_runtime_in_sec = max_runtime_in_sec
-        self.start_time = datetime.now()
+        self.start_time = datetime.now(UTC)
         self.end_time: datetime | None = (
             self.start_time + timedelta(seconds=max_runtime_in_sec)
             if max_runtime_in_sec > 0
@@ -28,7 +28,7 @@ class TimeGuard:
         if self.end_time is None:
             return False
 
-        if datetime.now() >= self.end_time:
+        if datetime.now(UTC) >= self.end_time:
             self.replied_abort_yes = True
             return True
 

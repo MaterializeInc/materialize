@@ -110,7 +110,7 @@ def delete_after(tags: dict[str, str]) -> datetime.datetime | None:
     if not unix:
         return None
     unix = int(float(unix))
-    return datetime.datetime.fromtimestamp(unix)
+    return datetime.datetime.fromtimestamp(unix, datetime.UTC)
 
 
 def instance_host(instance: Instance, user: str | None = None) -> str:
@@ -142,7 +142,7 @@ def _format_expires(dt: datetime.datetime | None) -> str:
     """Render a delete-after time as a compact relative duration."""
     if dt is None:
         return "-"
-    secs = (dt - datetime.datetime.now()).total_seconds()
+    secs = (dt - datetime.datetime.now(datetime.UTC)).total_seconds()
     if secs <= 0:
         return "expired"
     if secs >= 86400:

@@ -16,7 +16,7 @@ complex, but we can't verify correctness or performance.
 import json
 import random
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from threading import Lock, Thread
 from typing import Any
 
@@ -312,10 +312,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"--- [SQLsmith] {key['type']} {key['sqlstate']}: {key['message']}{occurrences}"
             )
         if len(errors) > 1:
-            from_time = datetime.fromtimestamp(errors[0]["timestamp"]).strftime(
+            from_time = datetime.fromtimestamp(errors[0]["timestamp"], UTC).strftime(
                 "%H:%M:%S"
             )
-            to_time = datetime.fromtimestamp(errors[-1]["timestamp"]).strftime(
+            to_time = datetime.fromtimestamp(errors[-1]["timestamp"], UTC).strftime(
                 "%H:%M:%S"
             )
             print(f"From {from_time} until {to_time}")

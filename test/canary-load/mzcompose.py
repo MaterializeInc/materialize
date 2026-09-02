@@ -304,7 +304,7 @@ def http_sql_query(
         assert "error" in results[0].keys()
         error = results[0]["error"]
 
-        details = f"Occurred at {datetime.datetime.now()}."
+        details = f"Occurred at {datetime.datetime.now(datetime.UTC)}."
         if "notices" in results[0].keys():
             notices = results[0]["notices"]
             if not (type(notices) == list and len(notices) == 0):
