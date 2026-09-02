@@ -27,10 +27,10 @@ Blank lines and `#` comments are ignored.
 
 The stacks differ in exactly one way, which is how the fleet is selected, so
 that is the only thing `--stack` changes. Staging joins against the
-release-candidate version, which also drops the development environments
-sharing the stack. Production pins the canary namespaces by name, because they
-run the plain released version alongside customer environments for part of the
-week and a version filter loses them.
+release-candidate version over the sample window, which also drops the
+development environments sharing the stack. Production pins the canary
+namespaces by name, because they run the plain released version alongside
+customer environments for part of the week and a version filter loses them.
 
     $ build-range-query.py --stack staging roster.txt
     $ build-range-query.py --stack prod --namespaces environment-aaa-0,environment-bbb-0 roster.txt
@@ -39,9 +39,12 @@ week and a version filter loses them.
 import argparse
 import sys
 
+# The join must span the sample window, not the evaluation instant. A single
+# missing scrape of the status metric would otherwise drop a whole namespace
+# from the aggregate, and the sample reads as a healthy fall rather than a gap.
 RC_JOIN = (
     "and on(namespace) group by (namespace) "
-    '(v2_mz_compute_cluster_status{{mz_version=~".*-rc[.].*"}})'
+    '(max_over_time(v2_mz_compute_cluster_status{{mz_version=~".*-rc[.].*"}}[{window}]))'
 )
 
 
@@ -79,7 +82,7 @@ def aggregate(kind, metric, selector, window, stack, namespaces):
     )
     if stack == "prod":
         return f"sum({fn})"
-    return f"sum({fn} {RC_JOIN.format()})"
+    return f"sum({fn} {RC_JOIN.format(window=window)})"
 
 
 def main():
