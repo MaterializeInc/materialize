@@ -103,6 +103,51 @@ When provisioning replicas,
 
 See also [Hydration considerations](#hydration-considerations).
 
+## Lifecycle of a cluster
+
+Whenever a cluster starts running a workload (after you create it, resize it,
+or one of its replicas restarts), its replicas move through a sequence of states
+before results are fully up to date. Knowing which state a cluster is in tells
+you whether it is making progress or is stuck.
+
+- **Provisioning.** Replicas are scheduled and brought online. A cluster with a
+  [replication factor](#cluster-replicas) of `0` has no compute and never leaves
+  this state. To monitor progress, check that replicas report `online` in
+  [`mz_cluster_replica_statuses`](/reference/system-catalog/mz_internal/#mz_cluster_replica_statuses),
+  and confirm the cluster has replicas via
+  [`mz_clusters`](/reference/system-catalog/mz_catalog/#mz_clusters).
+
+- **Hydrating.** Each replica reconstructs its in-memory state by reading from
+  Materialize's storage layer (see [hydration](/concepts/hydration/)). While an
+  object is hydrating, its lag is reported as `NULL`. To monitor progress, check
+  the `hydrated` flag per object in
+  [`mz_hydration_statuses`](/reference/system-catalog/mz_internal/#mz_hydration_statuses).
+  For indexes and materialized views,
+  [`mz_compute_hydration_statuses`](/reference/system-catalog/mz_internal/#mz_compute_hydration_statuses)
+  also reports how long hydration took.
+
+- **Catching up.** Once hydrated, the cluster processes the backlog of input
+  updates that accumulated while it was unavailable, so its total lag starts high
+  and comes down. To monitor progress, watch `lag` decrease in
+  [`mz_wallclock_global_lag_recent_history`](/reference/system-catalog/mz_internal/#mz_wallclock_global_lag_recent_history),
+  or break the lag down by input with
+  [`mz_materialization_lag`](/reference/system-catalog/mz_internal/#mz_materialization_lag).
+
+- **Steady state.** The cluster has caught up and its lag holds low and roughly
+  constant, typically a few seconds. To confirm it stays healthy, keep watching
+  the same
+  [`mz_wallclock_global_lag_recent_history`](/reference/system-catalog/mz_internal/#mz_wallclock_global_lag_recent_history)
+  lag. A lag that climbs steadily, at about one minute per minute, means the
+  cluster has stopped making progress.
+
+{{< note >}}
+Sources go through an additional
+[snapshotting](/concepts/snapshotting/) step the first time they run, reading the
+initial state of the upstream system before the states above apply. See
+[Troubleshooting](/transform-data/freshness-troubleshooting/) for how to
+diagnose a cluster that is not progressing through these states.
+{{< /note >}}
+
 <a name="sizing-your-clusters"></a>
 
 ## Cluster sizing
