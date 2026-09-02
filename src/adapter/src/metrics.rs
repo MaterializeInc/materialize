@@ -174,7 +174,11 @@ impl Metrics {
                 name: "mz_time_to_first_row_seconds",
                 help: "Latency of an execute for a successful query from pgwire's perspective",
                 var_labels: ["instance_id", "isolation_level", "strategy", "application_name"],
-                buckets: histogram_seconds_buckets(0.000_128, 32.0)
+                // A full client round trip never completes faster than a few hundred
+                // microseconds, so buckets below 512us record nothing. The `instance_id` label is
+                // unbounded, one value per cluster ever seen by this process, which multiplies
+                // every bucket kept here.
+                buckets: histogram_seconds_buckets(0.000_512, 32.0)
             }),
             statement_logging_records: registry.register(metric! {
                 name: "mz_statement_logging_record_count",
