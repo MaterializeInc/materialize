@@ -1599,6 +1599,11 @@ impl Coordinator {
                     if billed_as.is_some() && !internal {
                         coord_bail!("must specify INTERNAL when specifying BILLED AS");
                     }
+                    // Concretizing the location validates `SIZE` only, see
+                    // `ensure_valid_billed_as_size`.
+                    if let Some(billed_as) = &billed_as {
+                        self.ensure_valid_billed_as_size(billed_as)?;
+                    }
 
                     let location = mz_catalog::durable::ReplicaLocation::Managed {
                         // The user-pinned `AVAILABILITY ZONE`, if any, as a zero-
@@ -1777,6 +1782,20 @@ impl Coordinator {
         }
     }
 
+    /// Rejects a `BILLED AS` size that is not in the replica size map.
+    ///
+    /// Billing only reads the size's credit rate, so unlike `SIZE` the value
+    /// may be a disabled size and need not be in the role's allowed sizes.
+    /// The check lives here rather than in `concretize_replica_location`,
+    /// which catalog open also runs for every durable replica.
+    fn ensure_valid_billed_as_size(&self, size: &str) -> Result<(), AdapterError> {
+        if self.catalog().cluster_replica_sizes().0.contains_key(size) {
+            Ok(())
+        } else {
+            coord_bail!("unknown cluster replica size {size} in BILLED AS")
+        }
+    }
+
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn sequence_create_cluster_replica(
         &mut self,
@@ -1874,6 +1893,11 @@ impl Coordinator {
             // BILLED AS implies the INTERNAL flag.
             if billed_as.is_some() && !*internal {
                 coord_bail!("must specify INTERNAL when specifying BILLED AS");
+            }
+            // Concretizing the location validated `SIZE` only, see
+            // `ensure_valid_billed_as_size`.
+            if let Some(billed_as) = billed_as {
+                self.ensure_valid_billed_as_size(billed_as)?;
             }
         }
 

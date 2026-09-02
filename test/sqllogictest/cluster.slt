@@ -1194,3 +1194,24 @@ DROP CLUSTER inem
 
 statement ok
 DROP CLUSTER iner
+
+# BILLED AS must name a configured size; an unknown one is an error rather
+# than a coordinator panic. A disabled size is accepted, which the
+# `t1.free` case above covers. These sit at the end of the file because a
+# failing CREATE CLUSTER still consumes a cluster id, which would shift the
+# hardcoded ids in the queries above.
+statement ok
+CREATE CLUSTER billed (SIZE 'scale=1,workers=1', REPLICATION FACTOR 0)
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA billed.typo SIZE 'scale=1,workers=1', INTERNAL, BILLED AS 'no-such-size'
+----
+db error: ERROR: unknown cluster replica size no-such-size in BILLED AS
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER typo REPLICAS (r1 (SIZE 'scale=1,workers=1', INTERNAL, BILLED AS 'no-such-size'))
+----
+db error: ERROR: unknown cluster replica size no-such-size in BILLED AS
+
+statement ok
+DROP CLUSTER billed

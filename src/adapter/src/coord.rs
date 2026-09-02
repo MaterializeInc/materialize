@@ -118,7 +118,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::LirRelationExpr;
 use mz_controller::clusters::{
-    ClusterConfig, ClusterEvent, ClusterStatus, ProcessId, ReplicaLocation,
+    ClusterConfig, ClusterEvent, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaLocation,
 };
 use mz_controller::{ControllerConfig, Readiness};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
@@ -4849,18 +4849,31 @@ impl Coordinator {
             .user_cluster_replicas()
             .filter(|replica| Some(replica.cluster_id) != exclude_cluster)
             .filter_map(|replica| match &replica.config.location {
-                ReplicaLocation::Managed(location) => Some(location.size_for_billing()),
+                ReplicaLocation::Managed(location) => Some(self.replica_credits_per_hour(location)),
                 ReplicaLocation::Unmanaged(_) => None,
             })
-            .map(|size| {
-                self.catalog()
-                    .cluster_replica_sizes()
-                    .0
-                    .get(size)
-                    .expect("location size is validated against the cluster replica sizes")
-                    .credits_per_hour
-            })
             .sum()
+    }
+
+    /// The credit rate of a managed replica, read from the size map by its billing size.
+    ///
+    /// An unknown billing size counts as free. DDL validates `SIZE` and `BILLED AS` against
+    /// the map at replica creation, but the map is external configuration and can lose a
+    /// size later. That case is a soft panic rather than a hard one, so that in production
+    /// such a replica can still be dropped from SQL.
+    fn replica_credits_per_hour(&self, location: &ManagedReplicaLocation) -> Numeric {
+        let size = location.size_for_billing();
+        match self.catalog().cluster_replica_sizes().0.get(size) {
+            Some(allocation) => allocation.credits_per_hour,
+            None => {
+                soft_panic_or_log!(
+                    "replica of size {:?} bills as unknown replica size {:?}, counting it as free",
+                    location.size,
+                    size,
+                );
+                Numeric::zero()
+            }
+        }
     }
 }
 
