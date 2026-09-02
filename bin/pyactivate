@@ -14,6 +14,7 @@
 import logging
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import venv
@@ -103,18 +104,19 @@ def activate_venv(py_dir: Path) -> Path:
             logger.info("python probe error: %s", e)
         print(f"==> Initializing virtualenv in {venv_dir}", file=sys.stderr)
         try:
+            # Clear the path first. Reaching this point means the virtualenv is
+            # absent or unusable, so whatever occupies it should go, and removing
+            # it here rather than asking `uv` to keeps the behavior the same on
+            # every `uv` version. The flags that would express this, `--clear` and
+            # `--force`, disagree about a path that is not a virtualenv, and
+            # `--force` does not exist before uv 0.11.17.
+            shutil.rmtree(venv_dir, ignore_errors=True)
             # Build from the interpreter running this script, the one the version
             # check above validated. Left to itself, `uv` resolves an interpreter
             # by its own preference order, which favors uv-managed installs and so
             # can pick a Python older than the system one and older than the check
-            # accepts. `--clear --force` matches the `venv.create` call below:
-            # reaching this point means the virtualenv is absent or unusable, so
-            # whatever occupies the path should go. `--clear` alone refuses a
-            # directory that is not a virtualenv, which is exactly the
-            # half-finished state the comment above describes.
-            subprocess.check_call(
-                ["uv", "venv", "--python", sys.executable, "--clear", "--force", venv_dir]
-            )
+            # accepts.
+            subprocess.check_call(["uv", "venv", "--python", sys.executable, venv_dir])
         except FileNotFoundError:
             # Install Python into the virtualenv via a symlink rather than copying,
             # except on Windows. This matches the behavior of the `python -m venv`
