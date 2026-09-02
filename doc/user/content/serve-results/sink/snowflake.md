@@ -18,6 +18,14 @@ document that approach."
 
 This guide walks you through the steps required to bulk-export results from
 Materialize to Snowflake using Amazon S3 as the intermediate object store.
+Bulk exports are one-shot: you run the export each time you want to refresh the
+data in Snowflake.
+
+{{< tip >}}
+To keep Snowflake continuously up to date instead, sink to an Iceberg table on
+Amazon S3 Tables and query it from Snowflake through a catalog integration. See
+[Snowflake on AWS S3 Tables](/serve-results/sink/iceberg-aws-snowflake/).
+{{< /tip >}}
 
 ## Before you begin
 
