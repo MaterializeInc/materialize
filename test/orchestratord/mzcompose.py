@@ -479,7 +479,7 @@ def port_forward_environmentd(
 
 def retry(fn: Callable, timeout: int) -> None:
     end_time = (
-        datetime.datetime.now() + datetime.timedelta(seconds=timeout)
+        datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=timeout)
     ).timestamp()
     while time.time() < end_time:
         try:
@@ -4476,7 +4476,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     if args.runtime:
         end_time = (
-            datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
+            datetime.datetime.now(datetime.UTC)
+            + datetime.timedelta(seconds=args.runtime)
         ).timestamp()
 
     action = Action(args.action)
@@ -4484,7 +4485,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     mod_source = make_mod_source(properties, mod_classes, rng)
 
     end_time = (
-        datetime.datetime.now() + datetime.timedelta(seconds=args.runtime or 1800)
+        datetime.datetime.now(datetime.UTC)
+        + datetime.timedelta(seconds=args.runtime or 1800)
     ).timestamp()
     versions = get_all_self_managed_versions()
 

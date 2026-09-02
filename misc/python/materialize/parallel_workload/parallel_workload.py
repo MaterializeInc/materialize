@@ -115,7 +115,7 @@ def run(
     initialize_logging()
 
     end_time = (
-        datetime.datetime.now() + datetime.timedelta(seconds=runtime)
+        datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=runtime)
     ).timestamp()
 
     database = Database(
@@ -430,7 +430,7 @@ def run(
             worker.end_time = time.time()
 
     stopping_time = (
-        datetime.datetime.now() + datetime.timedelta(seconds=300)
+        datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=300)
     ).timestamp()
     while time.time() < stopping_time:
         for thread in threads:
@@ -573,8 +573,10 @@ def run(
         # Make sure all unreachable connections are closed too
         gc.collect()
 
-        stopping_time = datetime.datetime.now() + datetime.timedelta(seconds=30)
-        while datetime.datetime.now() < stopping_time:
+        stopping_time = datetime.datetime.now(datetime.UTC) + datetime.timedelta(
+            seconds=30
+        )
+        while datetime.datetime.now(datetime.UTC) < stopping_time:
             cur.execute(
                 "SELECT * FROM mz_internal.mz_sessions WHERE connection_id <> pg_backend_pid()"
             )

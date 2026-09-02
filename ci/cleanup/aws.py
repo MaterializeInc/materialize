@@ -102,7 +102,7 @@ def clean_up_iam() -> None:
         print("No testdrive IAM roles found")
         return
 
-    now = datetime.utcnow().timestamp()
+    now = datetime.now(UTC).timestamp()
 
     print(f"Found {len(roles)} candidate IAM roles for deletion")
     for role in roles:

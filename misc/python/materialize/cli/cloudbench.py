@@ -287,7 +287,8 @@ sudo systemctl start confluent-schema-registry
                 "MZ_CB_GIT_REV": rev,
                 "MZ_CB_S3_ROOT": ns.s3_root,
             },
-            delete_after=datetime.datetime.utcnow() + datetime.timedelta(days=1),
+            delete_after=datetime.datetime.now(datetime.UTC)
+            + datetime.timedelta(days=1),
             git_rev=rev,
         )
 
