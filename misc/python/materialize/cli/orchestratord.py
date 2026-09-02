@@ -477,7 +477,7 @@ def kubectl(*args: str, cluster: str, **subprocess_args):
 T = TypeVar("T")
 
 
-def retry(
+def retry[T](
     f: Callable[[], T],
     max_attempts: int = 60,
     sleep_secs: int = 1,

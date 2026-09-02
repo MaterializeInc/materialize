@@ -61,7 +61,7 @@ pytest-split==0.11.0
 pyyaml==6.0.3
 requests==2.34.2
 ruamel.yaml==0.18.17
-ruff==0.0.292
+ruff==0.16.5
 # NOTE scipy 1.15 is required for Python 3.10 compatibility
 scipy==1.15.3; python_version < "3.11"
 scipy==1.17.1; python_version >= "3.11"
