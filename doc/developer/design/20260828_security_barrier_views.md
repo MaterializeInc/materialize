@@ -534,10 +534,52 @@ view-based row filtering is not a pattern we intend to support. It conflicts
 with what the RBAC documentation currently implies, so if we choose it we should
 say so explicitly rather than by omission.
 
-**Reject fallible expressions in predicates over any view.** Blocks the error
-channel without any optimizer changes, but it breaks a large amount of
-legitimate SQL (`::int` casts, division) and still leaves the ordering problem
-for any future non-error channel.
+**Remove the offending value from error messages.** The most frequently
+proposed fix, and the most intuitive: the message literally contains the SSN, so
+stop printing it. It does not work, because the channel is the error's
+*existence*, not its content.
+
+A predicate that fails conditionally turns any comparison into a one-bit oracle,
+and the message carries no data at all:
+
+```sql
+-- error means some hidden row matches
+SELECT * FROM my_orders
+WHERE CASE WHEN secret LIKE '123%' THEN 1/0 ELSE 1 END = 1;
+ERROR:  Evaluation error: division by zero
+
+-- a prefix that matches nothing returns normally
+SELECT * FROM my_orders
+WHERE CASE WHEN secret LIKE '555%' THEN 1/0 ELSE 1 END = 1;
+ secret | tenant
+--------+--------
+ 42     | alice
+```
+
+Prefix-search that and any hidden value comes out bit by bit, whatever its type,
+whether or not the type ever embeds its input in a message. Exclusion composes
+with it: adding `secret NOT IN (<values already recovered>)` moves the probe to
+the next hidden row, so the attack enumerates rather than samples.
+
+So sanitizing messages changes the cost of extraction from one query per value
+to a logarithmic number of queries per value. That is worth something
+operationally, since a drain becomes visible to rate limiting and to audit logs
+in a way a single query is not, and it is worth doing on its own merits. It is
+not a fix, and it carries a real cost of its own: an error that names the value
+that failed is genuinely useful for debugging, and PostgreSQL prints it for the
+same reason.
+
+The general form of the argument is why this design constrains ordering rather
+than output. Any fallible expression is an oracle over whatever rows it is
+allowed to observe, so the only place to intervene is which rows it observes.
+
+**Reject fallible expressions in predicates over any view.** The sound version
+of the previous entry: if an oracle needs a fallible expression, refuse the
+expression. It needs no optimizer changes and it does close the channel. It also
+breaks a large amount of ordinary SQL, since `::int` casts and division appear in
+predicates constantly, and it would reject them over every view rather than only
+the ones acting as an access boundary. It also leaves the ordering problem intact
+for any future channel that is not an error.
 
 ## Open questions
 
