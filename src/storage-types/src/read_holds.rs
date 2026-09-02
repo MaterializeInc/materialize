@@ -161,8 +161,26 @@ impl ReadHold {
         self.since = frontier;
 
         if !changes.is_empty() {
-            // If the other side already hung up, that's ok.
-            let _ = (self.change_tx)(self.id, changes);
+            // A change that never arrives is the class of event that leaves a since permanently
+            // wrong with no signal, so report the failure rather than swallowing it. Only for a
+            // downgrade to a non-empty frontier though, whose caller means to keep holding and to
+            // observe the since advance. Releasing a hold whose issuer has already hung up is
+            // routine: the issuer disappears when its instance is dropped, and again at process
+            // shutdown, when the tokio runtime drops tasks in arbitrary order, while `Drop`
+            // releases every hold that outlives it.
+            //
+            // Not a `soft_panic_or_log!` for the same reason: with the channel-backed `ChangeTx`,
+            // a send failure means the receiving task is gone, which is a state a caller can
+            // legitimately race into rather than a broken invariant.
+            if let Err(e) = (self.change_tx)(self.id, changes) {
+                if !self.since.is_empty() {
+                    tracing::warn!(
+                        id = %self.id,
+                        since = ?self.since,
+                        "dropping read hold downgrade, issuer has hung up: {e}"
+                    );
+                }
+            }
         }
 
         Ok(())

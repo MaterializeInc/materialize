@@ -527,6 +527,17 @@ def get_variable_system_parameters(
             if version >= MzVersion.parse_mz("v26.40.0-dev")
             else []
         ),
+        *(
+            [
+                VariableSystemParameter(
+                    "enable_compute_read_hold_invariant_checks",
+                    "true",
+                    ["true", "false"],
+                )
+            ]
+            if version >= MzVersion.parse_mz("v26.41.0-dev")
+            else []
+        ),
         VariableSystemParameter(
             "persist_validate_part_bounds_on_read", "false", ["true", "false"]
         ),

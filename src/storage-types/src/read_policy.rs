@@ -101,3 +101,6 @@ impl ReadPolicy {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
