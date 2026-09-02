@@ -31,8 +31,12 @@ ALTER SYSTEM SET hydration_history_collection_interval = '1s';
 # Pin retention too: CI randomizes it, and a short period would prune the
 # episodes asserted below before the assertions run.
 ALTER SYSTEM SET hydration_history_retention_period = '30d';
+# Keep both publications of the process resource observations fresh enough to
+# compare within the test's retry budget.
+ALTER SYSTEM SET mz_metrics_usage_refresh_interval = '1s';
+ALTER SYSTEM SET compute_prometheus_introspection_scrape_interval = '1s';
 
-> CREATE CLUSTER test REPLICAS (hydrated_test_1 (SIZE 'scale=1,workers=1'))
+> CREATE CLUSTER test REPLICAS (hydrated_test_1 (SIZE 'scale=2,workers=2'))
 > SET cluster = test
 
 # Test that on an empty cluster only the introspection indexes show up.
@@ -56,6 +60,23 @@ si true
   FROM mz_internal.mz_compute_operator_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   WHERE r.name LIKE 'hydrated_test%';
+
+# A system-only replica hydration episode covers every visible non-transient
+# export. Its existence also proves the collector excludes its own transient
+# subscribe, whose intervals would otherwise show up as spurious episodes in
+# later snapshots.
+> SELECT h.status,
+         h.object_count = (
+             SELECT count(DISTINCT export_id)::uint8
+             FROM mz_introspection.mz_compute_hydration_times_per_worker
+             WHERE export_id NOT LIKE 't%'
+         )
+  FROM mz_internal.mz_replica_hydration_history AS h
+  JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
+  WHERE r.name = 'hydrated_test_1'
+  ORDER BY h.started_at DESC
+  LIMIT 1;
+hydrated true
 
 # Test adding new compute dataflows.
 
@@ -87,11 +108,11 @@ mv_const hydrated_test_1 true false
 # turn cannot be recorded, rather than a special case. `idx` and `mv` keep their
 # dataflows installed, so they are stable.
 #
-# The recorded interval must be ordered. The stamps are aggregated over a replica's
-# workers, so on a multi-process replica the ends can come from different process
-# clocks and the interval carries their skew. These replicas are single-process, so
-# the ordering is exact here. The coalesce covers a NULL start, which the replica no
-# longer produces but the column still permits.
+# The recorded interval must be ordered. The stamps are aggregated over a
+# replica's workers, so the ends can come from different process clocks and the
+# duration carries their skew. Taking the earliest installation and latest
+# hydration preserves ordering. The coalesce covers a NULL start, which the
+# replica no longer produces but the column still permits.
 > SELECT o.name, r.name, h.status,
          h.installed_at <= h.hydrated_at,
          coalesce(h.installed_at <= h.started_at AND h.started_at <= h.hydrated_at, true)
@@ -103,6 +124,133 @@ mv_const hydrated_test_1 true false
   ORDER BY o.name, r.name;
 idx hydrated_test_1 hydrated true true
 mv  hydrated_test_1 hydrated true true
+
+# Replica history rolls overlapping object intervals into one episode and waits
+# for every configured process to publish resource observations. The exact
+# number of initial episodes depends on whether these sequential DDL statements
+# overlapped, so assert the stable properties here.
+> SELECT count(*) > 0,
+         bool_and(h.status = 'hydrated' AND h.started_at <= h.finished_at),
+         bool_and(h.object_count > 0)
+  FROM mz_internal.mz_replica_hydration_history AS h
+  JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
+  WHERE r.name = 'hydrated_test_1';
+true true true
+
+# Installing an object after the replica is fully hydrated starts a new replica
+# episode. Its boundaries match the same per-object aggregates used by object
+# history.
+> SET cluster_replica = hydrated_test_1
+
+> SELECT count(*) > 0
+  FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metrics_resource_usage';
+true
+
+$ set-from-sql var=memory-peak-before
+SELECT coalesce(max(value)::text, '-1')
+FROM mz_introspection.mz_cluster_replica_resource_usage
+WHERE source = 'cgroup'
+  AND metric = 'memory_peak'
+
+$ set-from-sql var=disk-peak-before
+SELECT coalesce(coalesce(
+    max(value) FILTER (
+        WHERE source = 'statvfs'
+          AND metric = 'fs_used_peak'
+    ),
+    max(value) FILTER (
+        WHERE source = 'cgroup'
+          AND metric = 'swap_peak'
+    )
+)::text, '-1')
+FROM mz_introspection.mz_cluster_replica_resource_usage
+
+> RESET cluster_replica
+
+> CREATE INDEX replica_episode_idx ON t (a + 1)
+
+# This timeout bounds the complete production path: installing the targeted
+# subscribe, evaluating the connected-component query, and committing through
+# OCC. It is intentionally generous for debug builds but far below the
+# collector's five-minute mutation timeout. Test configurations with a larger
+# default can raise this bound for sanitizer overhead.
+$ set-sql-timeout duration=20s
+
+> SELECT rh.status, rh.object_count,
+         rh.started_at = oh.installed_at,
+         rh.finished_at = oh.hydrated_at
+  FROM mz_internal.mz_replica_hydration_history AS rh
+  JOIN mz_internal.mz_object_hydration_history AS oh
+    ON oh.replica_id = rh.replica_id
+   AND oh.installed_at = rh.started_at
+  JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = oh.object_id
+  JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+  WHERE o.name = 'replica_episode_idx';
+hydrated 1 true true
+
+# The Prometheus registry and resource-usage log publish the same process
+# sampler independently. A Prometheus scrape after collection can observe a
+# higher process-lifetime peak, so the value is bracketed by the maximum across
+# process resource logs before collection and the maximum across Prometheus
+# series after it rather than required to equal the later scrape. Metric
+# availability must agree.
+> SET cluster_replica = hydrated_test_1
+
+> WITH recorded AS (
+      SELECT rh.peak_memory_bytes, rh.peak_disk_bytes
+      FROM mz_internal.mz_replica_hydration_history AS rh
+      JOIN mz_internal.mz_object_hydration_history AS oh
+        ON oh.replica_id = rh.replica_id
+       AND oh.installed_at = rh.started_at
+      JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = oh.object_id
+      JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+      WHERE o.name = 'replica_episode_idx'
+  ), prometheus AS (
+      SELECT
+          count(DISTINCT process_id) AS process_count,
+          max(value) FILTER (
+              WHERE labels -> 'source' = 'cgroup'
+                AND labels -> 'metric' = 'memory_peak'
+          ) AS peak_memory_bytes,
+          coalesce(
+              max(value) FILTER (
+                  WHERE labels -> 'source' = 'statvfs'
+                    AND labels -> 'metric' = 'fs_used_peak'
+              ),
+              max(value) FILTER (
+                  WHERE labels -> 'source' = 'cgroup'
+                    AND labels -> 'metric' = 'swap_peak'
+              )
+          ) AS peak_disk_bytes
+      FROM mz_introspection.mz_cluster_prometheus_metrics
+      WHERE metric_name = 'mz_metrics_resource_usage'
+  )
+  SELECT
+      p.process_count = 2,
+      CASE WHEN p.peak_memory_bytes IS NULL THEN
+          r.peak_memory_bytes IS NULL AND ${memory-peak-before}::double precision = -1
+      ELSE
+          r.peak_memory_bytes IS NOT NULL
+          AND ${memory-peak-before}::double precision <= r.peak_memory_bytes::double precision
+          AND r.peak_memory_bytes::double precision <= p.peak_memory_bytes
+      END,
+      CASE WHEN p.peak_disk_bytes IS NULL THEN
+          r.peak_disk_bytes IS NULL AND ${disk-peak-before}::double precision = -1
+      ELSE
+          r.peak_disk_bytes IS NOT NULL
+          AND ${disk-peak-before}::double precision <= r.peak_disk_bytes::double precision
+          AND r.peak_disk_bytes::double precision <= p.peak_disk_bytes
+      END
+  FROM recorded AS r
+  CROSS JOIN prometheus AS p;
+true true true
+
+> RESET cluster_replica
+
+$ set-sql-timeout duration=default
+
+> DROP INDEX replica_episode_idx
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
@@ -409,6 +557,9 @@ ALTER SYSTEM SET hydration_history_retention_period = '0s';
 > SELECT count(*) FROM mz_internal.mz_object_hydration_history;
 0
 
+> SELECT count(*) FROM mz_internal.mz_replica_hydration_history;
+0
+
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
@@ -480,6 +631,121 @@ mv_wmr_stuck hydrated_test_4 false
 > DROP MATERIALIZED VIEW mv_wmr
 > DROP MATERIALIZED VIEW mv_wmr_const
 > DROP MATERIALIZED VIEW mv_wmr_stuck
+
+# An in-progress replica episode must not block recording an earlier,
+# disconnected completed episode. A gate that waits for every live export to
+# hydrate is lossy, not just late: once the in-progress episode completes it is
+# the latest, and the earlier episode is never recorded. Retention is still 0s
+# here, so the history stays empty while the fixture is arranged and the
+# assertion below sees exactly the episodes created now.
+
+> CREATE CLUSTER episodes REPLICAS (episodes_r1 (SIZE 'scale=1,workers=1'))
+> SET cluster = episodes
+
+> CREATE INDEX episode_a_idx ON t (a)
+
+# Wait until every non-transient export on the replica has hydrated before
+# installing the stuck view. A's interval can sit inside the introspection log
+# indexes' interval (they hydrate concurrently), so only a fully hydrated
+# replica guarantees that the stuck view's interval starts a new episode
+# instead of connecting to the one containing A.
+> SET cluster_replica = episodes_r1
+
+> SELECT count(*) > 0 AND count(*) = count(h.hydrated_at),
+         count(*) FILTER (WHERE o.name = 'episode_a_idx') = 1
+  FROM mz_introspection.mz_compute_hydration_times_per_worker AS h
+  LEFT JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.export_id
+  LEFT JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+  WHERE h.export_id NOT LIKE 't%';
+true true
+
+# The finish of the episode containing A: the latest hydration on the fully
+# hydrated replica. Stamps are immutable, and nothing else is installed before
+# the stuck view, so this is the finish the collector must record.
+$ set-from-sql var=episode-finished-at
+SELECT max(hydrated_at)::text
+FROM mz_introspection.mz_compute_hydration_times_per_worker
+WHERE export_id NOT LIKE 't%'
+
+> RESET cluster_replica
+
+# Whether this view is stuck or merely slow is not observable from the
+# hydration log, so its open interval is an in-progress episode, not an error.
+> CREATE MATERIALIZED VIEW episode_stuck AS
+  WITH MUTUALLY RECURSIVE
+      x (a int) AS (
+          VALUES (1)
+          UNION ALL
+          SELECT a + 1 FROM x
+      )
+  SELECT * FROM x;
+
+> SET cluster_replica = episodes_r1
+
+> SELECT count(*) > 0 AND count(h.hydrated_at) = 0
+  FROM mz_introspection.mz_compute_hydration_times_per_worker AS h
+  JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.export_id
+  JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+  WHERE o.name = 'episode_stuck';
+true
+
+> RESET cluster_replica
+
+> CREATE INDEX episode_b_idx ON t (a + 1)
+
+# B hydrates while the stuck view's interval is open, which connects B to the
+# in-progress episode: the episode containing A finished before the stuck view
+# was installed, B after.
+> SET cluster_replica = episodes_r1
+
+> WITH
+      u AS (
+          SELECT min(h.installed_at) AS installed_at
+          FROM mz_introspection.mz_compute_hydration_times_per_worker AS h
+          JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.export_id
+          JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+          WHERE o.name = 'episode_stuck'
+      ),
+      b AS (
+          SELECT max(h.hydrated_at) AS finished_at,
+                 count(*) > 0 AND count(*) = count(h.hydrated_at) AS hydrated
+          FROM mz_introspection.mz_compute_hydration_times_per_worker AS h
+          JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.export_id
+          JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+          WHERE o.name = 'episode_b_idx'
+      )
+  SELECT TIMESTAMPTZ '${episode-finished-at}' < u.installed_at,
+         u.installed_at <= b.finished_at,
+         b.hydrated
+  FROM u, b;
+true true true
+
+$ set-from-sql var=stuck-installed-at
+SELECT min(h.installed_at)::text
+FROM mz_introspection.mz_compute_hydration_times_per_worker AS h
+JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.export_id
+JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+WHERE o.name = 'episode_stuck'
+
+> RESET cluster_replica
+
+# Re-enabling retention lets episodes be recorded again. Exactly A's episode
+# lands: it is the latest completed episode disconnected from the in-progress
+# one, which is not recorded (it never completes here) and carries B with it.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET hydration_history_retention_period = '30d';
+
+> SELECT count(*),
+         bool_and(h.status = 'hydrated'),
+         bool_and(h.finished_at = TIMESTAMPTZ '${episode-finished-at}'),
+         bool_and(h.finished_at < TIMESTAMPTZ '${stuck-installed-at}')
+  FROM mz_internal.mz_replica_hydration_history AS h
+  JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
+  WHERE r.name = 'episodes_r1';
+1 true true true
+
+> DROP CLUSTER episodes CASCADE
+> SET cluster = test
 
 # Test that incorrectly configured sinks do _not_ show as hydrated.
 
