@@ -12,18 +12,19 @@ menu:
 {{< public-preview />}}
 
 Iceberg sinks provide exactly once delivery of updates from Materialize into
-[Apache Iceberg](https://iceberg.apache.org/)[^1] tables hosted on either
-[Amazon S3
-Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html)[^2]
-or [Google Cloud BigLake](https://cloud.google.com/biglake)[^3]. As data
-changes in Materialize, the corresponding Iceberg tables are automatically
-kept up to date. You can sink data from a materialized view, a source, or a
-table.
+[Apache Iceberg](https://iceberg.apache.org/)[^1] tables hosted on [Amazon S3
+Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html)[^2],
+[Google Cloud BigLake](https://cloud.google.com/biglake)[^3], or a
+self-managed Iceberg REST catalog backed by S3-compatible object storage. As
+data changes in Materialize, the corresponding Iceberg tables are
+automatically kept up to date. You can sink data from a materialized view, a
+source, or a table.
 
 Follow the guide for the platform hosting your Iceberg tables:
 
 - [AWS S3 Tables](/serve-results/sink/iceberg-aws/)
 - [GCP BigLake](/serve-results/sink/iceberg-gcp/) {{< private-preview-inline />}}
+- [Self-managed (REST catalog)](/serve-results/sink/iceberg-rest/) {{< private-preview-inline />}}
 
 [^1]: [Apache Iceberg](https://iceberg.apache.org/) is an open table format for
 large-scale analytics datasets.

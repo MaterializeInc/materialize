@@ -928,12 +928,13 @@ CREATE CONNECTION sqlserver_connection TO SQL SERVER (
 An Iceberg catalog connection establishes a link to an [Apache Iceberg](https://iceberg.apache.org/)
 catalog. You can use Iceberg catalog connections to create [Iceberg sinks](/sql/create-sink/iceberg).
 
-Materialize supports two catalog types:
+Materialize supports the following catalog configurations:
 
 | Catalog type | Destination | Authentication |
 | --- | --- | --- |
 | `'s3tablesrest'` | [AWS S3 Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html) | [AWS connection](#aws) |
 | `'rest'` | [Google Cloud BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog) {{< private-preview-inline />}} | [GCP connection](#gcp) |
+| `'rest'` | [Self-managed Iceberg REST catalog](/serve-results/sink/iceberg-rest/) {{< private-preview-inline />}} | OAuth2 client credentials (`CREDENTIAL`) |
 
 #### Syntax {#iceberg-catalog-syntax}
 
@@ -948,6 +949,13 @@ Materialize supports two catalog types:
 {{< private-preview />}}
 
 {{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog-biglake" %}}
+
+{{< /tab >}}
+{{< tab "Self-managed" >}}
+
+{{< private-preview />}}
+
+{{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog-rest" %}}
 
 {{< /tab >}}
 {{< /tabs >}}
@@ -967,6 +975,14 @@ example="example-iceberg-catalog-connection" %}}
 
 {{% include-example file="examples/create_connection"
 example="example-iceberg-catalog-gcp-connection" %}}
+
+{{< /tab >}}
+{{< tab "Self-managed" >}}
+
+{{< private-preview />}}
+
+{{% include-example file="examples/create_connection"
+example="example-iceberg-catalog-rest-connection" %}}
 
 {{< /tab >}}
 {{< /tabs >}}
