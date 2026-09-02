@@ -165,17 +165,18 @@ WHERE l1.la IN (
 Explained Query:
   With
     cte l0 =
-      Project (#0{la}) // { arity: 1 }
-        ReadStorage materialize.public.l // { arity: 2 }
-    cte l1 =
-      CrossJoin type=differential // { arity: 2 }
+      CrossJoin type=differential // { arity: 3 }
         implementation
-          %0[×] » %1:l0[×]
+          %0[×] » %1:l[×]
         ArrangeBy keys=[[]] // { arity: 1 }
           Distinct project=[#0{la}] // { arity: 1 }
-            Get l0 // { arity: 1 }
-        ArrangeBy keys=[[]] // { arity: 1 }
-          Get l0 // { arity: 1 }
+            Project (#0{la}) // { arity: 1 }
+              ReadStorage materialize.public.l // { arity: 2 }
+        ArrangeBy keys=[[]] // { arity: 2 }
+          ReadStorage materialize.public.l // { arity: 2 }
+    cte l1 =
+      Distinct project=[#0{la}..=#2{lb}] // { arity: 3 }
+        Get l0 // { arity: 3 }
   Return // { arity: 2 }
     Project (#0{la}, #1{lb}) // { arity: 2 }
       Join on=(#0{la} = #2{la}) type=differential // { arity: 3 }
@@ -186,24 +187,28 @@ Explained Query:
         ArrangeBy keys=[[#0{la}]] // { arity: 1 }
           Distinct project=[#0{la}] // { arity: 1 }
             Project (#0{la}) // { arity: 1 }
-              Join on=(#1{la} = #2{la} = #3) type=delta // { arity: 4 }
-                implementation
-                  %0:l1 » %1[#0]UKA » %2[#0]UKA
-                  %1 » %2[#0]UKA » %0:l1[#1]Kf
-                  %2 » %1[#0]UKA » %0:l1[#1]Kf
-                ArrangeBy keys=[[#1{la}]] // { arity: 2 }
-                  Filter (#0{la} = (#1{la} + 1)) // { arity: 2 }
-                    Get l1 // { arity: 2 }
-                ArrangeBy keys=[[#0{la}]] // { arity: 1 }
-                  Distinct project=[#0{la}] // { arity: 1 }
-                    Project (#1{la}) // { arity: 1 }
-                      Filter (#1{la}) IS NOT NULL // { arity: 2 }
-                        Get l1 // { arity: 2 }
-                ArrangeBy keys=[[#0]] // { arity: 1 }
-                  Distinct project=[(#0{la} + 1)] // { arity: 1 }
-                    Project (#0{la}) // { arity: 1 }
-                      Filter (#0{la}) IS NOT NULL // { arity: 2 }
-                        ReadStorage materialize.public.l // { arity: 2 }
+              Filter (#0{la} = (#1{la} + 1)) // { arity: 8 }
+                Join on=(#0{la} = #3{la} AND #1{la} = #4{la} = #6{la} = #7 AND #2{lb} = #5{lb}) type=delta // { arity: 8 }
+                  implementation
+                    %0:l0 » %1:l1[#0..=#2]UKKKAf » %2[#0]UKA » %3[#0]UKA
+                    %1:l1 » %2[#0]UKA » %3[#0]UKA » %0:l0[#0{la}..=#2]KKKf
+                    %2 » %3[#0]UKA » %0:l0[#1]Kf » %1:l1[#0..=#2]UKKKAf
+                    %3 » %2[#0]UKA » %0:l0[#1]Kf » %1:l1[#0..=#2]UKKKAf
+                  ArrangeBy keys=[[#0{la}..=#2{lb}], [#1{la}]] // { arity: 3 }
+                    Filter (#0{la} = (#1{la} + 1)) // { arity: 3 }
+                      Get l0 // { arity: 3 }
+                  ArrangeBy keys=[[#0{la}..=#2{lb}]] // { arity: 3 }
+                    Get l1 // { arity: 3 }
+                  ArrangeBy keys=[[#0{la}]] // { arity: 1 }
+                    Distinct project=[#0{la}] // { arity: 1 }
+                      Project (#1{la}) // { arity: 1 }
+                        Filter (#1{la}) IS NOT NULL // { arity: 3 }
+                          Get l1 // { arity: 3 }
+                  ArrangeBy keys=[[#0]] // { arity: 1 }
+                    Distinct project=[(#0{la} + 1)] // { arity: 1 }
+                      Project (#0{la}) // { arity: 1 }
+                        Filter (#0{la}) IS NOT NULL // { arity: 2 }
+                          ReadStorage materialize.public.l // { arity: 2 }
 
 Source materialize.public.l
 
@@ -556,7 +561,7 @@ Explained Query:
     Project (#0{name}, #1{id}) // { arity: 2 }
       Join on=(#0{name} = #2{name}) type=differential // { arity: 3 }
         implementation
-          %0:t4362[#0{name}]K » %1[#0]K
+          %0:t4362[#0]K » %1[#0]K
         ArrangeBy keys=[[#0{name}]] // { arity: 2 }
           ReadStorage materialize.public.t4362 // { arity: 2 }
         ArrangeBy keys=[[#0{name}]] // { arity: 1 }

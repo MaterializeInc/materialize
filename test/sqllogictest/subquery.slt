@@ -276,9 +276,9 @@ Explained Query:
   Project (#0{a}, #0{a}, #2{b}) // { arity: 3 }
     Join on=(#0{a} = #1{a}) type=delta // { arity: 3 }
       implementation
-        %0:t1 » %2[×]UA » %1:t3[#0{a}]K
-        %1:t3 » %2[×]UA » %0:t1[#0{a}]K
-        %2 » %0:t1[×] » %1:t3[#0{a}]K
+        %0:t1 » %2[×]UA » %1:t3[#0]K
+        %1:t3 » %2[×]UA » %0:t1[#0]K
+        %2 » %0:t1[×] » %1:t3[#0]K
       ArrangeBy keys=[[], [#0{a}]] // { arity: 1 }
         ReadStorage materialize.public.t1 // { arity: 1 }
       ArrangeBy keys=[[#0{a}]] // { arity: 2 }
@@ -303,9 +303,9 @@ Explained Query:
   Project (#0{a}, #0{a}, #2{b}) // { arity: 3 }
     Join on=(#0{a} = #1{a} AND #2{b} = #3{b}) type=delta // { arity: 4 }
       implementation
-        %0:t1 » %1:t3[#0{a}]K » %2[#0]UKA
-        %1:t3 » %2[#0]UKA » %0:t1[#0{a}]K
-        %2 » %1:t3[#1]K » %0:t1[#0{a}]K
+        %0:t1 » %1:t3[#0]K » %2[#0]UKA
+        %1:t3 » %2[#0]UKA » %0:t1[#0]K
+        %2 » %1:t3[#1]K » %0:t1[#0]K
       ArrangeBy keys=[[#0{a}]] // { arity: 1 }
         ReadStorage materialize.public.t1 // { arity: 1 }
       ArrangeBy keys=[[#0{a}], [#1{b}]] // { arity: 2 }
