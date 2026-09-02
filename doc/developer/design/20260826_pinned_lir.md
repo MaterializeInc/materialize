@@ -113,7 +113,7 @@ Pros:
 
   + All of the positives of `plan-pinning-v1`.
   + Defaulting to pinned helps keep operational workloads operational.
-  + Clean factoring of mechanism ("LIR is durable") from tools for its management (`COPY CLUSTER`, `EXPLAIN REPLAN ...`).
+  + Clean factoring of mechanism ("LIR is durable") from tools for its management (`CLONE OBJECTS`, `EXPLAIN REPLAN ...`).
 
 Cons:
 
@@ -162,7 +162,7 @@ The balance tips further in **`plan-pinning`**'s favor when we consider that pin
 During broader conversations about the "cluster lifecycle", it became clear that it's much easier to simply treat _all_ plans as durable.
 This obviates questions about freezing/unfreezing clusters and what to do when dependent objects change---we can reuse existing logic around `ALTER`, `DROP`, and `CREATE`.
 During a business logic change blue/green swap, old definitions will be dropped and new plans will be written---but storing LIR plans by default means unchanged objects will keep their plans.
-Treating `COPY CLUSTER` and `EXPLAIN REPLAN` as orthogonal but complementary features makes the design more compelling.
+Treating `CLONE OBJECTS` and `EXPLAIN REPLAN` as orthogonal but complementary features makes the design more compelling.
 
 ## Minimal Viable Prototype
 
@@ -190,16 +190,130 @@ Whenever a planned object (materialized view; index) changes, it must generally 
 Here, dropping loses the old pinned plan; recreating the object stores a new one.
 There is a challenge, however: what if only a few objects need to change, but other plans should stay the same?
 
-The proposed solution is a `COPY CLUSTER foo TO bar` command that creates a cluster `bar` that is identical to `foo`, i.e., it has the same plans.
-One can then alter objects on `bar`, dropping and recreating only what's needed.
-When `bar` is satisfactory, a blue/green swap deploys the new configuration.
-Such an interactive usage should be permissible, but will not be best practice: one should really use a tool like mzdeploy to do a "slim deployment".
+The proposed approach is _cloning_ objects, in contrast to _copying_ data.
+> _Cloning_ an object is exactly as though we ran the source object's original `CREATE` statement in some new target schema and cluster, with references to other cloned objects in the same statement rewritten to their clones---but rather than invoking the optimizer, we use the pinned `LIR` (substituting `GlobalId`s appropriately).
+Other than the pinned plan, cloned objects will be fresh: global ids, persist shards, dataflow operators, and ownership are all as though a fresh `CREATE` were run.
+The `AS OF`/read holds will be selected as though a fresh `CREATE` were run.
+Existing `COMMENT`s and `GRANT`s will be copied.
+We will clone view definitions into the schema, but they are not planned objects and so there is no LIR to use.
+We do not clone other non-planned objects, like sources, tables, sinks, types, secrets, or connections.
+If we clone an object that depends on a source, the clone will also depend on that source.
+This should not add load to upstream sources, as the clone will simply read from persist.
+If we clone an object that a sink reads from, the sink remains unchanged until an `ALTER` command changes it.
 
-We will need to adapt mzdeploy to use `COPY CLUSTER` for slim deployments.
+We propose a new `CLONE OBJECTS` DDL statement, which creates a copy of objects in a new schema and cluster (but with the same LIR plan).
+This new DDL will allow users to keep LIR plans for objects which don't change, while experimenting with (and maybe blue/green deploying) changes to some definitions.
+It will come in two forms:
+
+```
+-- mz-deploy power tool, explicit mapping
+CLONE OBJECTS (clone_object_clause, ...)
+
+clone_object_clause ::= planned_object [src_db.][src_schema.]object INTO SCHEMA [tgt_database.]tgt_schema IN CLUSTER tgt_cluster
+                      | VIEW [src_db.][src_schema.]view INTO SCHEMA [tgt_database.]tgt_schema
+planned_object      ::= INDEX | MATERIALIZED VIEW
+
+-- development use, all objects in cluster
+CLONE OBJECTS FROM CLUSTER src_cluster INTO SCHEMA [tgt_database.]tgt_schema IN CLUSTER tgt_cluster
+```
+
+We propose this bulk DDL as opposed to a single-object `CLONE OBJECT` command because cloning one object at a time raises subtle questions about the mapping of global ids that a bulk clone makes clear.
+Also, we can make the bulk `CLONE OBJECTS` atomic.
+
+The mz-deploy workflow with `CLONE OBJECTS` will look like the following, when cloning objects `o_1` through `o_n` but defining new objects `o_n+1` through `o_m`:
+
+```
+-- create new target schema and cluster, but do not start hydration
+CREATE SCHEMA s;
+CREATE CLUSTER c WITH (REPLICATION FACTOR = 0);
+
+-- clone upstream and unrelated objects
+CLONE OBJECTS (INDEX o_1 INTO SCHEMA s IN CLUSTER c, ..., VIEW o_i INTO SCHEMA s, MATERIALIZED VIEW o_n INTO SCHEMA s IN CLUSTER c);
+
+SET SCHEMA = s;
+SET CLUSTER = c;
+
+-- create new objects with fresh plans (due to, e.g., new business logic or attempts at optimization)
+CREATE INDEX o_n+1 ...;
+...
+CREATE MATERIALIZED VIEW o_m ...;
+
+-- start hydration
+ALTER CLUSTER c SET (REPLICATION FACTOR = 1);
+
+-- after everything is satisfactory, blue/green
+ALTER SCHEMA ... SWAP WITH s;
+ALTER CLUSTER ... SWAP WITH c;
+```
+
+Note that the mz-deploy mapping should only include objects with unchanged definitions whose upstream dependencies are also unchanged.
+If object `o_n+1` and `o_n+2` are changing in business logic, and objects `o_n+3` through `o_m` depend on those, then _all_ of `o_n+1` through `o_m` must be manually created.
+
+It is possible using this general mapping to, e.g., clone objects from multiple transform clusters into one cluster (or vice versa).
+It is _not_ possible to alter object names---an `ALTER ... RENAME` should be used for that.
+We do not need heavy syntactic sugar for the explicit mapping case, which is meant to be used by mz-deploy.
+
+An interactive workflow with `CLONE OBJECTS` will look like the following, when cloning all objects on some source cluster but modifying objects `o_n+1` through `o_m` (the downstream dependents of some business logic change):
+
+```
+-- create new target schema and cluster, but do not start hydration
+CREATE SCHEMA s;
+CREATE CLUSTER c WITH (REPLICATION FACTOR = 0);
+
+CLONE OBJECTS FROM CLUSTER ... INTO SCHEMA s IN CLUSTER c;
+
+SET SCHEMA = s;
+SET CLUSTER = c;
+
+-- drop old definitions (with pinned LIR plans)
+DROP INDEX o_n+1 CASCADE;
+...
+DROP MATERIALIZED VIEW o_m CASCADE;
+
+-- create new objects with fresh plans (due to, e.g., new business logic or attempts at optimization)
+CREATE INDEX o_n+1 ...;
+...
+CREATE MATERIALIZED VIEW o_m ...;
+
+-- start hydration
+ALTER CLUSTER c SET (REPLICATION FACTOR = 1);
+
+-- after everything is satisfactory... they should update their mz-deploy and let it do a blue/green
+DROP SCHEMA s CASCDE;
+DROP CLUSTER c;
+
+```
+
+In this development case, all views referenced in any cluster object are automatically cloned into the new schema.
+There is a tiny footgun here: if used for a blue/green deploy, the `ALTER SCHEMA ... SWAP` could lose views in that schema that were not referenced by any object in the cluster.
+
+The replication factor 'dance' lets us ensure that we start hydrating all objects at once, which allows us to better simulate a hydration spike.
+It may not be necessary to do so for mz-deploy, which will quickly create any new objects; development workflows may have a longer gap between `CLONE OBJECTS` and any `CREATE` DDL---and replicas may be slow to cancel.
+If the best practice is to start with a cluster with no replicas, it is important that we create some replicas rather quickly---otherwise the read holds/`AS OF` we select will hold back compaction.
+In that vein, development development may prefer to start with a non-zero replication factor.
+(Alternatively, if `CLONE OBJECTS` and the changes after it can always run quickly, there is no need to mess with the replication factor.)
+
+We will need to adapt mzdeploy to use `CLONE OBJECTS` for slim deployments.
 We may want to do the same for DBT.
-In either case, we will likely want `COPY CLUSTER` to create a cluster with _no_ replicas.
-This way, the user can arrange objects the way they like and _then_ create replicas---simulating a full hydration, giving them confidence that their definitions fit in the cluster.
-There is some footgun risk here, and we propose that bare uses of `COPY CLUSTER` create replicas, but that slim deployments should run `COPY CLUSTER ... WITH (REPLICATION FACTOR = 0)`, i.e., carefully ensure that no dataflows will actually be created at first, and later running `ALTER CLUSTER` to set a larger replication factor.
+
+There are several constraints on `CLONE OBJECTS`:
+
+ - The user needs `CREATE` privileges on the target schema and cluster, as well as whatever the original `CREATE` would have needed.
+   + We will need to decide what to do about `GRANT`s that the user themselves could not have made.
+ - The target cluster must already exist.
+ - The target schema must already exist.
+ - None of the named objects may already exist in the target schema.
+ - In the "explicit mapping" `CLONE OBJECTS` usage:
+   + Objects must land in the same cluster as any cloned indexes they import.
+     An object cannot reference an index that is not in the mapping;
+     it _may_ reference any non-index object that is not in the mapping.
+   + Downstream objects not in the mapping are not cloned.
+ - In the "development, cluster-based cloning" `CLONE OBJECTS` usage:
+   + Downstream objects in other clusters are not automatically cloned.
+   + If the source cluster has objects from more than one schema, they must be uniquely named.
+
+There is also a new corner case: a cloned index might now be in a different schema than the object it indexes.
+This breaks an existing invariant, but it is not clear if it is important or not---if not, we should relax it; if so, we should require that we clone upstream objects as well.
 
 ### How do users get improvements?
 
@@ -232,7 +346,7 @@ Splitting up the LIR in this way means that (a) the catalog doesn't scale (as mu
 
 ### Where does LIR live in the catalog?
 
-It in `CatalogState` (alongside the `CatalogItem`'s entry), or as a sidecar in `Catalog` itself (like the `ExpressionCacheHandle`).
+It lives in `CatalogState` (alongside the `CatalogItem`'s entry), or as a sidecar in `Catalog` itself (like the `ExpressionCacheHandle`).
 This part of the catalog seems to be in flux, but `CatalogState` seems right---pinned plans should be stored with their associated IDs.
 
 Storing a pointer to a persist shard holding the JSON-serialized LIR plan instead of putting the full plan in the catalog itself offers several benefits.
