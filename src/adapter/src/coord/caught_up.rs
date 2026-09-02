@@ -46,8 +46,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::OfflineReason;
 use mz_ore::channel::trigger::Trigger;
 use mz_ore::now::EpochMillis;
-use mz_repr::{GlobalId, Timestamp};
-use timely::PartialOrder;
+use mz_repr::{GlobalId, Timestamp, frontier_within_lag};
 use timely::progress::{Antichain, Timestamp as _};
 
 use crate::coord::{ClusterReplicaStatuses, Coordinator};
@@ -649,14 +648,10 @@ impl Coordinator {
                     // NOTE: there is deliberately no `cutoff` escape hatch here. A frontier frozen
                     // at the minimum is exactly what this gate must catch, so a collection stuck
                     // here blocks promotion until `with_0dt_deployment_max_wait` elapses.
-                    let write_frontier_plus_allowed_lag = Antichain::from_iter(
-                        write_frontier
-                            .iter()
-                            .map(|t| t.step_forward_by(&allowed_lag)),
-                    );
-                    let within_lag = PartialOrder::less_equal(
+                    let within_lag = frontier_within_lag(
+                        &write_frontier,
                         &Antichain::from_elem(now),
-                        &write_frontier_plus_allowed_lag,
+                        allowed_lag,
                     );
 
                     tracing::info!(
@@ -713,17 +708,7 @@ impl Coordinator {
                 continue;
             }
 
-            // We can't do easy comparisons and subtractions, so we bump up the
-            // write frontier by the allowed lag, and then compare that against
-            // the write frontier.
-            let write_frontier_plus_allowed_lag = write_frontier
-                .iter()
-                .map(|t| t.step_forward_by(&allowed_lag));
-            let bumped_write_plus_allowed_lag =
-                Antichain::from_iter(write_frontier_plus_allowed_lag);
-
-            let within_lag =
-                PartialOrder::less_equal(live_write_frontier, &bumped_write_plus_allowed_lag);
+            let within_lag = frontier_within_lag(&write_frontier, live_write_frontier, allowed_lag);
 
             // This call is on the expensive side, because we have to do a call
             // across a task/channel boundary, and our work competes with other
