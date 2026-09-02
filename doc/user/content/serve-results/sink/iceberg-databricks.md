@@ -119,6 +119,21 @@ principal](https://docs.databricks.com/aws/en/admin/users-groups/service-princip
     [Databricks: Access Databricks tables from Apache Iceberg
     clients](https://docs.databricks.com/aws/en/external-access/iceberg).
 
+5. If the catalog or schema stores its managed tables in an [external
+   location](https://docs.databricks.com/aws/en/connect/unity-catalog/cloud-storage/external-locations),
+   grant the service principal `EXTERNAL USE LOCATION` on that location as well:
+
+    ```sql
+    GRANT EXTERNAL USE LOCATION ON EXTERNAL LOCATION <location_name>
+      TO `<application_id>`;
+    ```
+
+    Without it, Unity Catalog refuses to vend storage credentials for the
+    table's data files, and the sink fails even though every catalog request
+    succeeds. Catalogs using the metastore's own managed storage need no such
+    grant. Like `EXTERNAL USE SCHEMA`, this grant is restricted to the location
+    owner and metastore admins.
+
 ## Create the Iceberg catalog connection in Materialize
 
 {{% include-example file="examples/create_connection"
