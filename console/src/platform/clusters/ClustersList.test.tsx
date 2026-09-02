@@ -173,16 +173,64 @@ const buildCluster = ({
   ...overrides,
 });
 
-const renderClustersList = async (clusters: Cluster[]) => {
+/**
+ * A URL turning the replica count filter off, so a test can see the rows the
+ * default minimum of one replica hides, or read the chips of the filter it is
+ * actually about. An absent parameter means the default, so saying "no
+ * minimum" takes an explicit `0`.
+ */
+const REPLICAS_UNFILTERED = "/?replicas=0";
+
+const renderClustersList = async (clusters: Cluster[], url = "/") => {
   getStore().set(allClusters, mockSubscribeState({ data: clusters }));
   const rendered = renderComponent(
     <RenderWithPathname>
       <ClustersListPage />
     </RenderWithPathname>,
+    { initialRouterEntries: [url] },
   );
   await screen.findByRole("table");
   return rendered;
 };
+
+/**
+ * Renders the router's query string, so what the table writes to the URL is
+ * assertable. Only the URL tests mount this: the rendered text would otherwise
+ * be one more place `getByText` could match a cluster or replica name.
+ */
+const RenderWithSearch = ({ children }: { children: React.ReactNode }) => {
+  const { search } = useLocation();
+  return (
+    <>
+      {children}
+      <div data-testid="search">{search}</div>
+    </>
+  );
+};
+
+/**
+ * Renders the list at `url`, so a bookmarked query string can be replayed.
+ * Settles on the table, or on the empty state when the URL's filters match
+ * nothing and there is no table to wait for.
+ */
+const renderAt = async (clusters: Cluster[], url = "/") => {
+  getStore().set(allClusters, mockSubscribeState({ data: clusters }));
+  const rendered = renderComponent(
+    <RenderWithSearch>
+      <ClustersListPage />
+    </RenderWithSearch>,
+    { initialRouterEntries: [url] },
+  );
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("table") ?? screen.queryByText(NO_MATCHES_MESSAGE),
+    ).not.toBeNull(),
+  );
+  return rendered;
+};
+
+const currentSearch = () =>
+  new URLSearchParams(screen.getByTestId("search").textContent ?? "");
 
 /**
  * Position of each visible column, so assertions name what they read instead of
@@ -245,6 +293,7 @@ const rowOrderAfter = async (
  * the column id, so a test reaching for one has to know both.
  */
 const FILTER_COLUMN_IDS: Record<string, string> = {
+  Replica: "replica",
   CPU: "cpuPercent",
   Memory: "memoryPercent",
   Disk: "diskPercent",
@@ -425,7 +474,10 @@ describe("ClustersList replica rows", () => {
   });
 
   it("keeps a cluster with no replicas in the list", async () => {
-    await renderClustersList([buildCluster({ replicas: [] })]);
+    await renderClustersList(
+      [buildCluster({ replicas: [] })],
+      REPLICAS_UNFILTERED,
+    );
 
     // Dropping the row would hide the cluster from the clusters list entirely.
     const cells = cellsForRow("compute");
@@ -748,14 +800,19 @@ describe("ClustersList CPU sorting", () => {
 
   it("sorts a cluster with no replicas after the sampled ones", async () => {
     const user = userEvent.setup();
-    await renderClustersList([
-      buildCluster({ id: "u1", name: "alpha-empty", replicas: [] }),
-      buildCluster({
-        id: "u2",
-        name: "bravo-sampled",
-        replicas: [buildReplica({ id: "u20", name: "b-1", cpuPercent: 0.03 })],
-      }),
-    ]);
+    await renderClustersList(
+      [
+        buildCluster({ id: "u1", name: "alpha-empty", replicas: [] }),
+        buildCluster({
+          id: "u2",
+          name: "bravo-sampled",
+          replicas: [
+            buildReplica({ id: "u20", name: "b-1", cpuPercent: 0.03 }),
+          ],
+        }),
+      ],
+      REPLICAS_UNFILTERED,
+    );
 
     expect(await rowOrderAfter(sortByCpuAscending, user)).toEqual(["b-1", "-"]);
   });
@@ -1068,8 +1125,22 @@ describe("ClustersList keyboard navigation", () => {
     await user.tab();
     expect(screen.getByLabelText("Search clusters...")).toHaveFocus();
 
+    // The replica count filter is on by default, so its chip sits between the
+    // toolbar and the headers.
+    await user.tab();
+    expect(
+      screen.getByRole("button", { name: "Remove Replicas ≥ 1" }),
+    ).toHaveFocus();
+
     // One control per filterable column, in the order the table shows them.
-    for (const label of ["CPU", "Memory", "Disk", "Heap", "Hydration"]) {
+    for (const label of [
+      "Replica",
+      "CPU",
+      "Memory",
+      "Disk",
+      "Heap",
+      "Hydration",
+    ]) {
       await user.tab();
       expect(filterTrigger(label)).toHaveFocus();
     }
@@ -1540,21 +1611,6 @@ describe("ClustersList utilization filters", () => {
   });
 });
 
-/**
- * Renders the router's query string, so what the table writes to the URL is
- * assertable. Only the URL tests mount this: the rendered text would otherwise
- * be one more place `getByText` could match a cluster or replica name.
- */
-const RenderWithSearch = ({ children }: { children: React.ReactNode }) => {
-  const { search } = useLocation();
-  return (
-    <>
-      {children}
-      <div data-testid="search">{search}</div>
-    </>
-  );
-};
-
 describe("ClustersList filter URL state", () => {
   const twoClusters = () => [
     buildCluster({
@@ -1588,30 +1644,6 @@ describe("ClustersList filter URL state", () => {
       ],
     }),
   ];
-
-  /**
-   * Renders the list at `url`, so a bookmarked query string can be replayed.
-   * Settles on the table, or on the empty state when the URL's filters match
-   * nothing and there is no table to wait for.
-   */
-  const renderAt = async (clusters: Cluster[], url = "/") => {
-    getStore().set(allClusters, mockSubscribeState({ data: clusters }));
-    const rendered = renderComponent(
-      <RenderWithSearch>
-        <ClustersListPage />
-      </RenderWithSearch>,
-      { initialRouterEntries: [url] },
-    );
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("table") ?? screen.queryByText(NO_MATCHES_MESSAGE),
-      ).not.toBeNull(),
-    );
-    return rendered;
-  };
-
-  const currentSearch = () =>
-    new URLSearchParams(screen.getByTestId("search").textContent ?? "");
 
   it("writes an applied filter to the URL", async () => {
     const user = userEvent.setup();
@@ -1880,7 +1912,7 @@ describe("ClustersList filter URL state", () => {
     it("restores every status a bookmark names", async () => {
       await renderAt(
         twoClusters(),
-        "/?hydration[]=hydrated&hydration[]=hydrating",
+        "/?hydration[]=hydrated&hydration[]=hydrating&replicas=0",
       );
 
       expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
@@ -1892,7 +1924,7 @@ describe("ClustersList filter URL state", () => {
 
     describe("when the URL names a status that does not exist", () => {
       it("ignores it and leaves the table unfiltered", async () => {
-        await renderAt(twoClusters(), "/?hydration[]=lukewarm");
+        await renderAt(twoClusters(), "/?hydration[]=lukewarm&replicas=0");
 
         expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
         expect(chipLabels()).toEqual([]);
@@ -1933,6 +1965,11 @@ describe("ClustersList filter chips", () => {
     }),
   ];
 
+  /*
+   * These render with the replica count filter off. Its chip is otherwise on
+   * screen from the first paint and would lead every expectation below, which
+   * is the subject of the replica count filter's own tests.
+   */
   const chips = () =>
     screen
       .queryAllByRole("button", { name: /^Remove / })
@@ -1941,14 +1978,14 @@ describe("ClustersList filter chips", () => {
       );
 
   it("shows no chip until a filter is applied", async () => {
-    await renderClustersList(twoClusters());
+    await renderClustersList(twoClusters(), REPLICAS_UNFILTERED);
 
     expect(chips()).toEqual([]);
   });
 
   it("states the applied condition on a chip", async () => {
     const user = userEvent.setup();
-    await renderClustersList(twoClusters());
+    await renderClustersList(twoClusters(), REPLICAS_UNFILTERED);
 
     await applyFilter(user, "CPU", "40");
 
@@ -1959,7 +1996,7 @@ describe("ClustersList filter chips", () => {
 
   it("carries one chip per filtered column, in column order", async () => {
     const user = userEvent.setup();
-    await renderClustersList(twoClusters());
+    await renderClustersList(twoClusters(), REPLICAS_UNFILTERED);
 
     await applyFilter(user, "Memory", "80");
     await applyFilter(user, "CPU", "40");
@@ -1971,7 +2008,7 @@ describe("ClustersList filter chips", () => {
 
   it("clears the filter when its chip is removed", async () => {
     const user = userEvent.setup();
-    await renderClustersList(twoClusters());
+    await renderClustersList(twoClusters(), REPLICAS_UNFILTERED);
 
     await applyFilter(user, "CPU", "40");
     expect(rowOrder()).toEqual(["busy", "hot-cpu"]);
@@ -1984,7 +2021,7 @@ describe("ClustersList filter chips", () => {
 
   it("removes one column's filter and leaves the rest", async () => {
     const user = userEvent.setup();
-    await renderClustersList(twoClusters());
+    await renderClustersList(twoClusters(), REPLICAS_UNFILTERED);
 
     await applyFilter(user, "CPU", "40");
     await applyFilter(user, "Memory", "80");
@@ -1996,7 +2033,7 @@ describe("ClustersList filter chips", () => {
 
   it("empties the panel of a filter removed by its chip", async () => {
     const user = userEvent.setup();
-    await renderClustersList(twoClusters());
+    await renderClustersList(twoClusters(), REPLICAS_UNFILTERED);
 
     await applyFilter(user, "CPU", "40");
     await user.click(screen.getByRole("button", { name: "Remove CPU ≥ 40%" }));
@@ -2010,7 +2047,7 @@ describe("ClustersList filter chips", () => {
   it("offers a chip for a filter restored from the URL", async () => {
     getStore().set(allClusters, mockSubscribeState({ data: twoClusters() }));
     renderComponent(<ClustersListPage />, {
-      initialRouterEntries: ["/?cpu=40"],
+      initialRouterEntries: ["/?cpu=40&replicas=0"],
     });
     await screen.findByRole("table");
 
@@ -2019,7 +2056,7 @@ describe("ClustersList filter chips", () => {
 
   it("keeps its chip when the filter empties the table", async () => {
     const user = userEvent.setup();
-    await renderClustersList(twoClusters());
+    await renderClustersList(twoClusters(), REPLICAS_UNFILTERED);
 
     await applyFilter(user, "CPU", "99");
 
@@ -2032,6 +2069,199 @@ describe("ClustersList filter chips", () => {
     await user.click(screen.getByRole("button", { name: "Remove CPU ≥ 99%" }));
 
     expect(rowOrder()).toEqual(["idle", "busy", "hot-cpu"]);
+  });
+});
+
+describe("ClustersList replica count filter", () => {
+  /**
+   * One cluster running two replicas, one running a single replica, and one
+   * running none, so a minimum of 0, 1, and 2 each cut the list differently.
+   *
+   * The default sort is by cluster name, which puts `empty`'s replica-less row
+   * first in every unfiltered assertion below.
+   */
+  const clustersByReplicaCount = () => [
+    buildCluster({
+      id: "u1",
+      name: "pair",
+      replicas: [
+        buildReplica({ id: "u10", name: "pair-1" }),
+        buildReplica({ id: "u11", name: "pair-2" }),
+      ],
+    }),
+    buildCluster({
+      id: "u2",
+      name: "single",
+      replicas: [buildReplica({ id: "u20", name: "single-1" })],
+    }),
+    buildCluster({ id: "u3", name: "empty", replicas: [] }),
+  ];
+
+  /** Sets `minimum` in the Replica panel and applies it, closing the panel. */
+  const applyMinimum = async (
+    user: ReturnType<typeof userEvent.setup>,
+    minimum: string,
+  ) => {
+    const apply = await openFilter(user, "Replica");
+    await user.clear(screen.getByLabelText("Minimum replica count"));
+    // `type` rejects an empty string, and an empty box is a real case: it is
+    // how the panel says "no minimum".
+    if (minimum !== "") {
+      await user.type(screen.getByLabelText("Minimum replica count"), minimum);
+    }
+    await user.click(apply);
+    const trigger = queryFilterTrigger("Replica");
+    if (trigger) await user.click(trigger);
+  };
+
+  it("hides the clusters running no replicas on a first visit", async () => {
+    await renderClustersList(clustersByReplicaCount());
+
+    expect(rowOrder()).toEqual(["pair-1", "pair-2", "single-1"]);
+  });
+
+  it("names the default minimum on a chip", async () => {
+    await renderClustersList(clustersByReplicaCount());
+
+    // Rows are missing from the first paint, so the reason has to be on screen
+    // rather than only inside a panel the reader has no cause to open.
+    expect(chipLabels()).toEqual(["Replicas ≥ 1"]);
+  });
+
+  it("shows every row at a minimum of 0", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(clustersByReplicaCount());
+
+    await applyMinimum(user, "0");
+
+    expect(rowOrder()).toEqual(["-", "pair-1", "pair-2", "single-1"]);
+    expect(chipLabels()).toEqual([]);
+  });
+
+  it("counts the row's cluster's replicas, not the row itself", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(clustersByReplicaCount());
+
+    await applyMinimum(user, "2");
+
+    // Every row carrying a replica counts as one on its own, so a minimum of
+    // two matching anything at all means the count is the cluster's.
+    expect(rowOrder()).toEqual(["pair-1", "pair-2"]);
+    expect(chipLabels()).toEqual(["Replicas ≥ 2"]);
+  });
+
+  it("restores the replica-less clusters when the chip is removed", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(clustersByReplicaCount());
+
+    await user.click(
+      screen.getByRole("button", { name: "Remove Replicas ≥ 1" }),
+    );
+
+    expect(rowOrder()).toEqual(["-", "pair-1", "pair-2", "single-1"]);
+  });
+
+  it("empties the panel of a minimum removed by its chip", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(clustersByReplicaCount());
+
+    await user.click(
+      screen.getByRole("button", { name: "Remove Replicas ≥ 1" }),
+    );
+    await openFilter(user, "Replica");
+
+    expect(screen.getByLabelText("Minimum replica count")).toHaveValue("");
+  });
+
+  it("narrows the search results rather than replacing them", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(clustersByReplicaCount());
+
+    await applyMinimum(user, "2");
+    await user.type(screen.getByLabelText("Search clusters..."), "single");
+
+    // "single" names a cluster the minimum excludes, so the two conditions
+    // together leave nothing.
+    await waitFor(() =>
+      expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument(),
+    );
+  });
+
+  it("stays recoverable when the minimum empties the table", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(clustersByReplicaCount());
+
+    await applyMinimum(user, "3");
+
+    // The message replaces the table and takes the headers, and so the panel,
+    // with it. The chip is the only way back.
+    expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
+    expect(chipLabels()).toEqual(["Replicas ≥ 3"]);
+
+    await user.click(
+      screen.getByRole("button", { name: "Remove Replicas ≥ 3" }),
+    );
+
+    expect(rowOrder()).toEqual(["-", "pair-1", "pair-2", "single-1"]);
+  });
+
+  describe("URL state", () => {
+    it("leaves the default minimum out of the URL", async () => {
+      await renderAt(clustersByReplicaCount());
+
+      // A plain visit filters by the default, so writing it would put a
+      // parameter in the bar of every reader who never touched the filter.
+      await waitFor(() => expect(currentSearch().has("replicas")).toBe(false));
+    });
+
+    it("writes an applied minimum to the URL", async () => {
+      const user = userEvent.setup();
+      await renderAt(clustersByReplicaCount());
+
+      await applyMinimum(user, "2");
+
+      await waitFor(() => expect(currentSearch().get("replicas")).toBe("2"));
+    });
+
+    it("records a removed minimum as 0", async () => {
+      const user = userEvent.setup();
+      await renderAt(clustersByReplicaCount());
+
+      await user.click(
+        screen.getByRole("button", { name: "Remove Replicas ≥ 1" }),
+      );
+
+      // An absent parameter is the default, so a reader who asked for every
+      // cluster has to be given a URL that says so, or a reload would hide the
+      // rows again.
+      await waitFor(() => expect(currentSearch().get("replicas")).toBe("0"));
+    });
+
+    it("restores a bookmarked minimum, in the rows and in the panel", async () => {
+      const user = userEvent.setup();
+      await renderAt(clustersByReplicaCount(), "/?replicas=2");
+
+      expect(rowOrder()).toEqual(["pair-1", "pair-2"]);
+
+      await openFilter(user, "Replica");
+      expect(screen.getByLabelText("Minimum replica count")).toHaveValue("2");
+    });
+
+    it("leaves the table unfiltered for an explicit 0", async () => {
+      await renderAt(clustersByReplicaCount(), REPLICAS_UNFILTERED);
+
+      expect(rowOrder()).toEqual(["-", "pair-1", "pair-2", "single-1"]);
+      expect(chipLabels()).toEqual([]);
+    });
+
+    it("falls back to the default when the parameter is malformed", async () => {
+      // A hand-edited or stale link must not install a minimum the panel
+      // cannot show, and the default is the state the panel opens on.
+      await renderAt(clustersByReplicaCount(), "/?replicas=two");
+
+      expect(rowOrder()).toEqual(["pair-1", "pair-2", "single-1"]);
+      expect(chipLabels()).toEqual(["Replicas ≥ 1"]);
+    });
   });
 });
 
@@ -2097,9 +2327,10 @@ describe("ClustersList hydration", () => {
   });
 
   it("renders a dash for a cluster with no replicas", async () => {
-    await renderClustersList([
-      buildCluster({ id: "u1", name: "empty", replicas: [] }),
-    ]);
+    await renderClustersList(
+      [buildCluster({ id: "u1", name: "empty", replicas: [] })],
+      REPLICAS_UNFILTERED,
+    );
 
     expect(hydrationFor("empty")).toBe("-");
   });
@@ -2217,7 +2448,7 @@ describe("ClustersList hydration", () => {
 
     it("states each selected status on its own chip", async () => {
       const user = userEvent.setup();
-      await renderClustersList(mixedHydration());
+      await renderClustersList(mixedHydration(), REPLICAS_UNFILTERED);
 
       await toggleHydration(user, "Hydrating", "Not Hydrated");
 
@@ -2229,7 +2460,7 @@ describe("ClustersList hydration", () => {
 
     it("drops one status from its chip and keeps the rest", async () => {
       const user = userEvent.setup();
-      await renderClustersList(mixedHydration());
+      await renderClustersList(mixedHydration(), REPLICAS_UNFILTERED);
 
       await toggleHydration(user, "Hydrating", "Not Hydrated");
       await user.click(
@@ -2242,19 +2473,22 @@ describe("ClustersList hydration", () => {
 
     it("stays recoverable when the selection empties the table", async () => {
       const user = userEvent.setup();
-      await renderClustersList([
-        buildCluster({
-          id: "u1",
-          name: "compute",
-          replicas: [
-            buildReplica({
-              id: "u10",
-              name: "ready",
-              hydration: { hydratedObjects: 4, totalObjects: 4 },
-            }),
-          ],
-        }),
-      ]);
+      await renderClustersList(
+        [
+          buildCluster({
+            id: "u1",
+            name: "compute",
+            replicas: [
+              buildReplica({
+                id: "u10",
+                name: "ready",
+                hydration: { hydratedObjects: 4, totalObjects: 4 },
+              }),
+            ],
+          }),
+        ],
+        REPLICAS_UNFILTERED,
+      );
 
       await toggleHydration(user, "Not Hydrated");
 

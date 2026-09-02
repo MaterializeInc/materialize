@@ -73,6 +73,14 @@ import {
   useReplicaHydration,
   useReplicaUtilization,
 } from "./queries";
+import { ReplicaCountFilterPanel } from "./ReplicaCountFilterPanel";
+import {
+  REPLICA_COLUMN_ID,
+  REPLICA_COUNT_URL_KEY,
+  replicaCountFilterFn,
+  replicaCountFilterFromUrl,
+  replicaCountFilterToUrl,
+} from "./replicaCountFilters";
 import { UtilizationFilterPanel } from "./UtilizationFilterPanel";
 import {
   utilizationFilterFn,
@@ -279,6 +287,13 @@ const columnFiltersFromSearch = (search: string): ColumnFiltersState => {
     filters.push({ id: HYDRATION_COLUMN_ID, value: buckets });
   }
 
+  const minimumReplicas = replicaCountFilterFromUrl(
+    params.get(REPLICA_COUNT_URL_KEY),
+  );
+  if (minimumReplicas !== undefined) {
+    filters.push({ id: REPLICA_COLUMN_ID, value: minimumReplicas });
+  }
+
   return filters;
 };
 
@@ -310,12 +325,16 @@ const columns = [
     },
   }),
   columnHelper.accessor((row) => row.replica?.name ?? null, {
-    id: "replica",
+    id: REPLICA_COLUMN_ID,
     header: "Replica",
     sortingFn: sortingFunctions.nullsLast,
     cell: (info) => info.getValue() ?? "-",
+    // The filter counts the row's cluster's replicas, so it hides the rows of
+    // whole clusters rather than individual replicas.
+    filterFn: replicaCountFilterFn,
     meta: {
       cellProps: truncateMaxWidth,
+      renderFilter: (column) => <ReplicaCountFilterPanel column={column} />,
     },
   }),
   columnHelper.accessor((row) => row.replica?.size ?? null, {
@@ -482,6 +501,15 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
     );
     if (hydrationFilter) {
       params[HYDRATION_URL_KEY] = hydrationFilter.value;
+    }
+    const replicaCountFilter = tableState.columnFilters.find(
+      (filter) => filter.id === REPLICA_COLUMN_ID,
+    );
+    const minimumReplicas = replicaCountFilterToUrl(
+      replicaCountFilter?.value as number | undefined,
+    );
+    if (minimumReplicas !== undefined) {
+      params[REPLICA_COUNT_URL_KEY] = minimumReplicas;
     }
     if (tableState.globalFilter) {
       params.q = tableState.globalFilter;
