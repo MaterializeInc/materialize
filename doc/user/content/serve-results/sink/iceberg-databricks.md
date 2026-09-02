@@ -12,7 +12,7 @@ menu:
 
 This guide walks you through the steps required to set up Iceberg sinks in
 Materialize Cloud against [Databricks Unity
-Catalog](https://docs.databricks.com/aws/en/external-access/iceberg) on AWS.
+Catalog](https://docs.databricks.com/aws/en/data-governance/unity-catalog/) on AWS.
 Materialize reaches Unity Catalog through its [Iceberg REST catalog
 endpoint](https://docs.databricks.com/aws/en/external-access/iceberg),
 authenticating with the OAuth2 credentials of a Databricks service principal.
@@ -54,6 +54,7 @@ the catalog or the schema containing it. Both must exist first.
 In a Databricks SQL editor or notebook:
 
 ```sql
+CREATE CATALOG <catalog_name> MANAGED LOCATION '<s3 bucket URI plus optional path>';
 CREATE SCHEMA <catalog_name>.<schema_name>;
 ```
 
@@ -66,6 +67,8 @@ The two names map onto the Materialize objects you create below:
 Materialize can only sink into Unity Catalog **managed** tables, so use a
 standard catalog with managed storage. Foreign catalogs and Delta tables are
 read-only through the Iceberg REST catalog.
+
+Additionally, Materialize currently only supports sinking to Unity Catalog catalogs/schemas using external storage locations rather than Databricks default storage.
 
 ### A service principal with credentials and privileges
 
