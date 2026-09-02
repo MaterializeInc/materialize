@@ -140,10 +140,12 @@ environment. Most of this should be taken care of by the `bin/pyactivate`
 script, which constructs a local virtual environment and keeps necessary
 dependencies up to date.
 
-We support, as a minimum version, the default Python provided in the [most
-recent Ubuntu LTS release](https://wiki.ubuntu.com/Releases). As of January 2026
-this is Python 3.12, provided in Ubuntu 24.04 "Noble Numbat". Earlier versions may
-work but are not supported. Our recommended installation methods are:
+We support Python 3.13 as a minimum version, which is what our CI builder image
+provides and therefore the oldest version anything is tested against. It is also
+no newer than the default Python in the [most recent Ubuntu LTS
+release](https://wiki.ubuntu.com/Releases), which ships 3.14 as of Ubuntu 26.04
+"Resolute Raccoon", so a current LTS satisfies it. Earlier versions may work but
+are not supported. Our recommended installation methods are:
 
 - macOS: [Homebrew](https://brew.sh) + [uv](https://docs.astral.sh/uv/)
   1. `brew install uv`
