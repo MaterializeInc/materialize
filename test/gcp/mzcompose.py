@@ -28,7 +28,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import fastavro
@@ -257,7 +257,7 @@ def _sweep_stale_biglake_namespaces(token: str, project: str, prefix: str) -> No
     in the namespace name to age out anything older than STALE_NAMESPACE_AGE
     without an extra metadata round-trip per namespace.
     """
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     for ns in _list_biglake_namespaces(token, project, prefix):
         match = NAMESPACE_RE.match(ns)
         if not match:
@@ -287,7 +287,7 @@ def workflow_default(c: Composition) -> None:
     # bucket don't collide on table state. The embedded date lets the pre-test
     # sweep age out namespaces left behind by killed runs.
     seed = random.getrandbits(32)
-    today = datetime.now(timezone.utc).strftime(NAMESPACE_DATE_FORMAT)
+    today = datetime.now(UTC).strftime(NAMESPACE_DATE_FORMAT)
     namespace = f"{NAMESPACE_PREFIX}_{today}_{seed:08x}"
     table = "demo_table"
     # The .td inserts these three rows; verification asserts the table's live
