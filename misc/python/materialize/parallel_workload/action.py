@@ -5865,7 +5865,7 @@ class HttpPostAction(Action):
 
             headers = {
                 header: (
-                    f"{datetime.datetime.now()}"
+                    f"{datetime.datetime.now(datetime.UTC)}"
                     if header == "timestamp"
                     else f'"{Text.random_value(self.rng)}"'.encode()
                 )

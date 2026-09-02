@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
@@ -86,7 +86,7 @@ class BuildkiteDataSource:
                 web_url=build["web_url"],
                 created_at=datetime.strptime(
                     build["created_at"], "%Y-%m-%dT%H:%M:%S.%fZ"
-                ).replace(microsecond=0),
+                ).replace(microsecond=0, tzinfo=UTC),
             )
             builds.append(build)
 

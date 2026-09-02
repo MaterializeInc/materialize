@@ -17,7 +17,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from materialize import buildkite
 from materialize.terminal import (
@@ -64,7 +64,7 @@ class TaskThread(threading.Thread):
             self._command = resolved
 
     def run(self) -> None:
-        start = datetime.now()
+        start = datetime.now(UTC)
         try:
             if self._fn is not None:
                 self.success, self.output = self._fn()
@@ -81,7 +81,7 @@ class TaskThread(threading.Thread):
         except Exception as e:
             self.output = str(e)
             self.success = False
-        self.duration = datetime.now() - start
+        self.duration = datetime.now(UTC) - start
         if self._done_queue is not None:
             self._done_queue.put(self)
 

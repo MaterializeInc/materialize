@@ -132,7 +132,7 @@ def log_in_automation(msg: str) -> None:
     """Log to a file, if we're running in automation"""
     if env_is_truthy("MZ_IN_AUTOMATION"):
         with open("/tmp/mzcompose.log", "a") as fh:
-            now = datetime.datetime.now().isoformat()
+            now = datetime.datetime.now(datetime.UTC).isoformat()
             print(f"[{now}] {msg}", file=fh)
 
 

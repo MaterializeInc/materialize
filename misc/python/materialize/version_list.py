@@ -635,7 +635,7 @@ class VersionsFromDocs:
             if only_publish_helm_chart and not metadata.get("publish_helm_chart", True):
                 continue
             date: datetime.date = metadata["date"]
-            if respect_date and date > datetime.date.today():
+            if respect_date and date > datetime.datetime.now(datetime.UTC).date():
                 continue
 
             current_patch = metadata.get("patch", 0)

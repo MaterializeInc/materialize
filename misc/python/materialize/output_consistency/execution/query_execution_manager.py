@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from datetime import datetime
+from datetime import UTC, datetime
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -159,12 +159,12 @@ class QueryExecutionManager:
                 self.config.query_output_mode,
             )
 
-            start_time = datetime.now()
+            start_time = datetime.now(UTC)
 
             try:
                 self.executors.get_executor(strategy).before_query_execution()
 
-                start_time = datetime.now()
+                start_time = datetime.now(UTC)
                 data = self.executors.get_executor(strategy).query(sql_query_string)
                 duration = self._get_duration_in_ms(start_time)
 
@@ -201,7 +201,7 @@ class QueryExecutionManager:
         return [validation_outcome]
 
     def _get_duration_in_ms(self, start_time: datetime) -> float:
-        end_time = datetime.now()
+        end_time = datetime.now(UTC)
         duration = end_time - start_time
         return duration.total_seconds()
 

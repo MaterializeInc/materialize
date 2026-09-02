@@ -10,7 +10,7 @@
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 
@@ -59,7 +59,7 @@ def exists_file_with_recent_data(
 
     modification_date = get_last_modification_date(file_path)
 
-    max_modification_date = datetime.now() - timedelta(
+    max_modification_date = datetime.now(UTC) - timedelta(
         hours=max_allowed_cache_age_in_hours
     )
 
@@ -72,4 +72,4 @@ def exists_file(file_path: FilePath) -> bool:
 
 def get_last_modification_date(file_path: FilePath) -> datetime:
     modification_date_as_sec_since_epoch = os.path.getmtime(file_path.get())
-    return datetime.utcfromtimestamp(modification_date_as_sec_since_epoch)
+    return datetime.fromtimestamp(modification_date_as_sec_since_epoch, UTC)
