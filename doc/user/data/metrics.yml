@@ -4086,6 +4086,25 @@ metrics:
   - worker_id
   source: src/compute/src/metrics.rs
   visibility: internal
+- name: mz_timestamp_difference_for_bounded_staleness_ms_bucket
+  help: How much older bounded-staleness timestamps are compared to serializable, in milliseconds. Measures the actual staleness incurred.
+  labels:
+  - compute_instance
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_timestamp_difference_for_bounded_staleness_ms_count
+  help: How much older bounded-staleness timestamps are compared to serializable, in milliseconds. Measures the actual staleness incurred.
+  labels:
+  - compute_instance
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_timestamp_difference_for_bounded_staleness_ms_sum
+  help: How much older bounded-staleness timestamps are compared to serializable, in milliseconds. Measures the actual staleness incurred.
+  labels:
+  - compute_instance
+  source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_tokio_blocking_queue_depth
   help: The number of tasks currently scheduled in the blocking thread pool, spawned using spawn_blocking.
   labels:
