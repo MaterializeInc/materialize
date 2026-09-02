@@ -8,16 +8,18 @@
 # by the Apache License, Version 2.0.
 
 [tool.black]
-target_version = ["py310"]
+target_version = ["py313"]
 # DEFAULT_EXCLUDES from https://github.com/psf/black/blob/main/src/black/const.py but without "build" directory since we use it in our source code. Instead exclude target and target-xcompile
 exclude = "(\\.direnv|\\.eggs|\\.git|\\.hg|\\.ipynb_checkpoints|\\.mypy_cache|\\.nox|\\.pytest_cache|\\.ruff_cache|\\.tox|\\.svn|\\.venv|\\.vscode|__pypackages__|_build|buck-out|dist|venv|target|target-xcompile|\\.terraform)"
 
 [tool.ruff]
-target-version = "py310"
+# The pinned ruff predates Python 3.13 and rejects `py313`, so this trails the
+# minimum version enforced by `bin/pyactivate`. Raise it once ruff is upgraded.
+target-version = "py312"
 select = [
     "F",
     "I",
-    "UP", # e.g. PEP585 (Python 3.10+) type annotations
+    "UP", # e.g. PEP585 built-in generic type annotations
     "E711", # comparisons to none
 ]
 extend-exclude = [
