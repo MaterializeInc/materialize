@@ -58,10 +58,10 @@ from materialize.scalability.result.scalability_result import BenchmarkResult
 from materialize.scalability.schema.schema import Schema, TransactionIsolation
 from materialize.scalability.workload.workload import Workload
 from materialize.scalability.workload.workload_markers import WorkloadMarker
-from materialize.scalability.workload.workloads.connection_workloads import *  # noqa: F401 F403
-from materialize.scalability.workload.workloads.ddl_workloads import *  # noqa: F401 F403
-from materialize.scalability.workload.workloads.dml_dql_workloads import *  # noqa: F401 F403
-from materialize.scalability.workload.workloads.self_test_workloads import *  # noqa: F401 F403
+from materialize.scalability.workload.workloads.connection_workloads import *  # noqa: F403
+from materialize.scalability.workload.workloads.ddl_workloads import *  # noqa: F403
+from materialize.scalability.workload.workloads.dml_dql_workloads import *  # noqa: F403
+from materialize.scalability.workload.workloads.self_test_workloads import *  # noqa: F403
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config,
 )

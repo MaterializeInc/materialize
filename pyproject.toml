@@ -27,6 +27,7 @@ select = [
     "I",
     "UP", # e.g. PEP585 built-in generic type annotations
     "E711", # comparisons to none
+    "RUF100", # `noqa` that suppresses nothing, including for unselected rules
 ]
 
 [tool.ruff.lint.isort]
