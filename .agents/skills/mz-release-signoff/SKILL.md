@@ -90,14 +90,16 @@ The canary organizations are `Materialize Production Sandbox` and `Materialize P
 
 The canonical canary list lives in `MaterializeInc/release`, in `templates/issue.md`, as the `--environment` arguments to `bin/deploy upgrade production`. The `storage-overview` sign-off panel points instead at `MaterializeInc/cloud/.github/ISSUE_TEMPLATE/03-release.md`, which no longer exists.
 
-In staging every environment runs a release candidate, so a version join both selects the right set and excludes development environments:
+In staging every environment runs a release candidate, so a version join both selects the right set and excludes development environments. The join has to span the sample window rather than the evaluation instant, which is what `max_over_time` is doing here:
 
 ```promql
 sum(rate(<metric>[6h]) * on(namespace) group_left()
-    group by (namespace) (v2_mz_compute_cluster_status{mz_version=~".*-rc[.].*"}))
+    group by (namespace) (max_over_time(v2_mz_compute_cluster_status{mz_version=~".*-rc[.].*"}[6h])))
 ```
 
 Escaping note: write `-rc[.]` rather than `-rc\\.` so the expression survives JSON encoding unchanged.
+
+**An instantaneous join silently drops whole namespaces.** `v2_mz_compute_cluster_status` comes from the promsql exporter, so one missed scrape leaves a namespace with no series at that timestamp, and the join removes every one of its pods from the aggregate. The result is a fleet total that fell, which is exactly what a sign-off is looking for. On the v26.40.0-rc.3 run the staging working-set sum read 161 GB instead of 229 GB and swap read 0 instead of 57 GB at one bucket, because a single customer environment had no status sample at that instant. Matching the join window to the sample window closes it. Development environments are not a rounding error either, at roughly a quarter of staging clusterd CPU, so dropping the join instead is not an option.
 
 ## Step 3: Choose the time window
 
