@@ -20,8 +20,8 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.40.0
-*Released to Materialize Cloud: 2026-09-03* <br>
-*Released to Materialize Self-Managed: 2026-09-04* <br>
+*Released to Materialize Cloud: 2026-09-02* <br>
+*Released to Materialize Self-Managed: 2026-09-03* <br>
 
 ### Query History for Self-Managed {#v26.40-query-history-for-self-managed}
 Self-Managed deployments can now use the Console's Query History view, which was previously reachable only on Materialize Cloud. The Materialize operator Helm chart no longer hard-disables statement logging: `operator.args.statementLoggingMaxSampleRate` defaults to `0.99`, matching Materialize Cloud, and `operator.args.statementLoggingTargetDataRate` bounds how much statement logging writes. When an operator sets the sample rate to `0`, Query History says sampling is off rather than showing an empty filter result.
