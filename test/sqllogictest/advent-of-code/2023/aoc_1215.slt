@@ -205,32 +205,25 @@ Explained Query:
           FlatMap generate_series(1, array_length(regexp_split_to_array[",", case_insensitive=false](#0{input}), 1), 1) // { arity: 2 }
             ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
+      Reduce group_by=[#1] aggregates=[max(#0{r})] // { arity: 2 }
+        Project (#0, #3) // { arity: 2 }
+          Filter (#3) IS NOT NULL AND (0 = case when #2 then 0 else text_to_integer(substr(#1{string}, char_length(#1{string}))) end) // { arity: 4 }
+            Map (("-" = substr(#1{string}, char_length(#1{string}))), case when #2 then substr(#1{string}, 1, (char_length(#1{string}) - 1)) else substr(#1{string}, 1, (char_length(#1{string}) - 2)) end) // { arity: 4 }
+              Get l0 // { arity: 2 }
+    cte l2 =
       Distinct project=[#0] // { arity: 1 }
         Project (#2) // { arity: 1 }
           Map (case when ("-" = substr(#1{string}, char_length(#1{string}))) then substr(#1{string}, 1, (char_length(#1{string}) - 1)) else substr(#1{string}, 1, (char_length(#1{string}) - 2)) end) // { arity: 3 }
             Get l0 // { arity: 2 }
-    cte l2 =
-      Reduce group_by=[#0] aggregates=[max(#1{r})] // { arity: 2 }
-        Project (#0, #1) // { arity: 2 }
-          Join on=(#0{symb} = #2{symb}) type=differential // { arity: 3 }
-            implementation
-              %0:l1[#0{symb}]UKA » %1:l0[#1{symb}]Kef
-            ArrangeBy keys=[[#0{symb}]] // { arity: 1 }
-              Get l1 // { arity: 1 }
-            ArrangeBy keys=[[#1{symb}]] // { arity: 2 }
-              Project (#0, #3) // { arity: 2 }
-                Filter (#3) IS NOT NULL AND (0 = case when #2 then 0 else text_to_integer(substr(#1{string}, char_length(#1{string}))) end) // { arity: 4 }
-                  Map (("-" = substr(#1{string}, char_length(#1{string}))), case when #2 then substr(#1{string}, 1, (char_length(#1{string}) - 1)) else substr(#1{string}, 1, (char_length(#1{string}) - 2)) end) // { arity: 4 }
-                    Get l0 // { arity: 2 }
     cte l3 =
       Union // { arity: 2 }
-        Get l2 // { arity: 2 }
+        Get l1 // { arity: 2 }
         Map (null) // { arity: 2 }
           Union // { arity: 1 }
             Negate // { arity: 1 }
               Project (#0) // { arity: 1 }
-                Get l2 // { arity: 2 }
-            Get l1 // { arity: 1 }
+                Get l1 // { arity: 2 }
+            Get l2 // { arity: 1 }
     cte l4 =
       Project (#0..=#2) // { arity: 3 }
         Filter (#0{r} > coalesce(#4{max}, 0)) // { arity: 5 }
@@ -249,32 +242,25 @@ Explained Query:
                     Negate // { arity: 1 }
                       Project (#0) // { arity: 1 }
                         Get l3 // { arity: 2 }
-                    Get l1 // { arity: 1 }
+                    Get l2 // { arity: 1 }
     cte l5 =
+      Reduce group_by=[#1] aggregates=[min(#0{r})] // { arity: 2 }
+        Project (#0, #1) // { arity: 2 }
+          Filter (#1{symb}) IS NOT NULL // { arity: 3 }
+            Get l4 // { arity: 3 }
+    cte l6 =
       Distinct project=[#0] // { arity: 1 }
         Project (#1) // { arity: 1 }
           Get l4 // { arity: 3 }
-    cte l6 =
-      Reduce group_by=[#0] aggregates=[min(#1{r})] // { arity: 2 }
-        Project (#0, #1) // { arity: 2 }
-          Join on=(#0{symb} = #2{symb}) type=differential // { arity: 3 }
-            implementation
-              %0:l5[#0{symb}]UKA » %1:l4[#1{symb}]K
-            ArrangeBy keys=[[#0{symb}]] // { arity: 1 }
-              Get l5 // { arity: 1 }
-            ArrangeBy keys=[[#1{symb}]] // { arity: 2 }
-              Project (#0, #1) // { arity: 2 }
-                Filter (#1{symb}) IS NOT NULL // { arity: 3 }
-                  Get l4 // { arity: 3 }
     cte l7 =
       Union // { arity: 2 }
-        Get l6 // { arity: 2 }
+        Get l5 // { arity: 2 }
         Map (null) // { arity: 2 }
           Union // { arity: 1 }
             Negate // { arity: 1 }
               Project (#0) // { arity: 1 }
-                Get l6 // { arity: 2 }
-            Get l5 // { arity: 1 }
+                Get l5 // { arity: 2 }
+            Get l6 // { arity: 1 }
     cte l8 =
       Project (#1..=#4) // { arity: 4 }
         TopK group_by=[#1] order_by=[#0 desc nulls_first, #2 asc nulls_last] limit=1 // { arity: 5 }
@@ -293,7 +279,7 @@ Explained Query:
                         Negate // { arity: 1 }
                           Project (#0) // { arity: 1 }
                             Get l7 // { arity: 2 }
-                        Get l5 // { arity: 1 }
+                        Get l6 // { arity: 1 }
   Return // { arity: 2 }
     With Mutually Recursive
       cte [recursion_limit=10, return_at_limit] l9 =
