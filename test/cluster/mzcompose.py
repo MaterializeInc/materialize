@@ -4883,12 +4883,15 @@ def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
         metrics = c.exec(
             "materialized", "curl", "localhost:6878/metrics", capture=True
         ).stdout
-        values = {
-            line.split()[0]: int(float(line.split()[1]))
-            for line in metrics.splitlines()
-            if line.startswith((f"{metric}_count ", f"{metric}_sum "))
-        }
-        return values[f"{metric}_count"], values[f"{metric}_sum"]
+        values = {}
+        for suffix in ["count", "sum"]:
+            prefix = f'{metric}_{suffix}{{caller="session"}} '
+            values[suffix] = next(
+                int(float(line.split()[1]))
+                for line in metrics.splitlines()
+                if line.startswith(prefix)
+            )
+        return values["count"], values["sum"]
 
     def guard_rows(cur: Cursor, key: int) -> int:
         """Rows of `guard` for `key`, which is what the UPDATE's selection reads."""
@@ -5117,7 +5120,9 @@ def workflow_test_occ_sealed_input_write_stands_alone(c: Composition) -> None:
             "materialized", "curl", "localhost:6878/metrics", capture=True
         ).stdout
         assert any(
-            line.startswith("mz_occ_read_then_write_retry_count_count ")
+            line.startswith(
+                'mz_occ_read_then_write_retry_count_count{caller="session"} '
+            )
             and float(line.split()[1]) > 0
             for line in metrics.splitlines()
         ), "no read-then-write went through the OCC path"

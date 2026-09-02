@@ -16,6 +16,9 @@ use mz_sql_parser::ast::statement_kind_label_value;
 use prometheus::core::{AtomicU64, GenericCounter};
 use prometheus::{Histogram, HistogramVec, IntCounter, IntCounterVec, IntGaugeVec};
 
+pub(crate) const OCC_CALLER_SESSION: &str = "session";
+pub(crate) const OCC_CALLER_BACKGROUND: &str = "background";
+
 #[derive(Debug, Clone)]
 pub struct Metrics {
     pub query_total: IntCounterVec,
@@ -63,12 +66,12 @@ pub struct Metrics {
     pub catalog_transact_phase_seconds: HistogramVec,
     pub apply_catalog_implications_seconds: Histogram,
     pub group_commit_catalog_upper_seconds: Histogram,
-    pub occ_retry_count: Histogram,
+    pub occ_retry_count: HistogramVec,
 }
 
 impl Metrics {
     pub(crate) fn register_into(registry: &MetricsRegistry) -> Self {
-        Self {
+        let metrics = Self {
             query_total: registry.register(metric!(
                 name: "mz_query_total",
                 help: "The total number of queries issued of the given type since process start.",
@@ -315,11 +318,16 @@ impl Metrics {
             occ_retry_count: registry.register(metric!(
                 name: "mz_occ_read_then_write_retry_count",
                 help: "Number of OCC retries per read-then-write operation.",
+                var_labels: ["caller"],
                 buckets: vec![
                     0., 1., 2., 3., 5., 10., 25., 50., 100., 200., 300., 500., 750., 1000.,
                 ],
             )),
+        };
+        for caller in [OCC_CALLER_SESSION, OCC_CALLER_BACKGROUND] {
+            let _ = metrics.occ_retry_count.with_label_values(&[caller]);
         }
+        metrics
     }
 
     pub(crate) fn row_set_finishing_seconds(&self) -> Histogram {

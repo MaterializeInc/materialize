@@ -104,8 +104,8 @@ SERVICES = [
 # different values.
 OCC_FLAG = "enable_adapter_frontend_occ_read_then_write"
 
-# Observed once per read-then-write that the OCC path sequenced, so the
-# histogram's sample count identifies which path a process took.
+# Observed once per read-then-write that the OCC path sequenced. The `session`
+# caller's sample count identifies which path a process used for user DML.
 OCC_METRIC = "mz_occ_read_then_write_retry_count_count"
 
 
@@ -329,12 +329,12 @@ class Increment(Enum):
 
 
 def occ_sequenced_writes(c: Composition, service: str) -> int:
-    """How many read-then-writes `service` has sequenced through the OCC path."""
+    """How many session read-then-writes `service` sequenced through OCC."""
     metrics = c.exec(
         service, "curl", "--silent", "localhost:6878/metrics", capture=True
     ).stdout
     for line in metrics.splitlines():
-        if line.startswith(f"{OCC_METRIC} "):
+        if line.startswith(f'{OCC_METRIC}{{caller="session"}} '):
             return int(float(line.split()[1]))
     # The histogram is registered unconditionally, so a missing line means the
     # scrape itself did not land.
