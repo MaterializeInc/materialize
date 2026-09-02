@@ -23,7 +23,7 @@ pub async fn run_execute(
     let conn = state
         .mysql_clients
         .get_mut(&name)
-        .ok_or_else(|| anyhow!("MySQL connection '{}' not found", &name))?;
+        .ok_or_else(|| anyhow!("MySQL connection '{}' not found", name))?;
 
     for query in cmd.input {
         println!(">> {}", query);

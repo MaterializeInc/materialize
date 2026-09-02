@@ -1,0 +1,172 @@
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on July 6, 2026 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/grant_on_all_tables_in_schema
+#
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE USER testuser2
+
+statement ok
+CREATE SCHEMA s;
+CREATE SCHEMA s2;
+
+# Not supported by Materialize.
+onlyif cockroach
+# Granting in a schema with no tables should be okay.
+statement ok
+GRANT SELECT ON ALL TABLES IN SCHEMA s TO testuser
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTTB colnames
+SHOW GRANTS FOR testuser
+----
+database_name  schema_name  relation_name  grantee  privilege_type  is_grantable
+
+statement ok
+CREATE TABLE s.t();
+CREATE TABLE s2.t();
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+GRANT SELECT ON ALL TABLES IN SCHEMA s TO testuser
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTTB colnames
+SHOW GRANTS FOR testuser
+----
+database_name  schema_name  relation_name  grantee   privilege_type  is_grantable
+test           s            t              testuser  SELECT          false
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+GRANT SELECT ON ALL TABLES IN SCHEMA s, s2 TO testuser, testuser2
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTTB colnames
+SHOW GRANTS FOR testuser, testuser2
+----
+database_name  schema_name  relation_name  grantee    privilege_type  is_grantable
+test           s            t              testuser   SELECT          false
+test           s            t              testuser2  SELECT          false
+test           s2           t              testuser   SELECT          false
+test           s2           t              testuser2  SELECT          false
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+GRANT ALL ON ALL TABLES IN SCHEMA s, s2 TO testuser, testuser2
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTTB colnames
+SHOW GRANTS FOR testuser, testuser2
+----
+database_name  schema_name  relation_name  grantee    privilege_type  is_grantable
+test           s            t              testuser   ALL             false
+test           s            t              testuser2  ALL             false
+test           s2           t              testuser   ALL             false
+test           s2           t              testuser2  ALL             false
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+REVOKE SELECT ON ALL TABLES IN SCHEMA s, s2 FROM testuser, testuser2
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTTB colnames
+SHOW GRANTS FOR testuser, testuser2
+----
+database_name  schema_name  relation_name  grantee    privilege_type  is_grantable
+test           s            t              testuser   BACKUP          false
+test           s            t              testuser   CHANGEFEED      false
+test           s            t              testuser   CREATE          false
+test           s            t              testuser   DELETE          false
+test           s            t              testuser   DROP            false
+test           s            t              testuser   INSERT          false
+test           s            t              testuser   UPDATE          false
+test           s            t              testuser   ZONECONFIG      false
+test           s            t              testuser2  BACKUP          false
+test           s            t              testuser2  CHANGEFEED      false
+test           s            t              testuser2  CREATE          false
+test           s            t              testuser2  DELETE          false
+test           s            t              testuser2  DROP            false
+test           s            t              testuser2  INSERT          false
+test           s            t              testuser2  UPDATE          false
+test           s            t              testuser2  ZONECONFIG      false
+test           s2           t              testuser   BACKUP          false
+test           s2           t              testuser   CHANGEFEED      false
+test           s2           t              testuser   CREATE          false
+test           s2           t              testuser   DELETE          false
+test           s2           t              testuser   DROP            false
+test           s2           t              testuser   INSERT          false
+test           s2           t              testuser   UPDATE          false
+test           s2           t              testuser   ZONECONFIG      false
+test           s2           t              testuser2  BACKUP          false
+test           s2           t              testuser2  CHANGEFEED      false
+test           s2           t              testuser2  CREATE          false
+test           s2           t              testuser2  DELETE          false
+test           s2           t              testuser2  DROP            false
+test           s2           t              testuser2  INSERT          false
+test           s2           t              testuser2  UPDATE          false
+test           s2           t              testuser2  ZONECONFIG      false
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+REVOKE ALL ON ALL TABLES IN SCHEMA s, s2 FROM testuser, testuser2
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTTB colnames
+SHOW GRANTS FOR testuser, testuser2
+----
+database_name  schema_name  relation_name  grantee  privilege_type  is_grantable
+
+# Verify that the database name is resolved correctly if specified.
+statement ok
+CREATE DATABASE otherdb
+
+statement ok
+CREATE TABLE otherdb.public.tbl (a int)
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+GRANT SELECT ON ALL TABLES IN SCHEMA otherdb.public TO testuser
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTTB colnames
+SHOW GRANTS ON TABLE otherdb.public.tbl
+----
+database_name  schema_name  table_name  grantee   privilege_type  is_grantable
+otherdb        public       tbl         admin     ALL             true
+otherdb        public       tbl         root      ALL             true
+otherdb        public       tbl         testuser  SELECT          false

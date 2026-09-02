@@ -1,0 +1,7 @@
+{
+  "host": "materialized",
+  "user": "materialize",
+  "app_password": "ignored",
+  "dbname": "test",
+  "cluster": "name with space"
+}

@@ -133,27 +133,6 @@ pub(crate) static USAGE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
         per_replica: false,
     },
     PrometheusSqlQuery {
-        metric_name: "mz_clusters_count",
-        help: "Number of active clusters in the instance.",
-        query: "select
-                count(id) as clusters
-            from mz_clusters
-            where id like 'u%'",
-        value_column_name: "clusters",
-        per_replica: false,
-    },
-    PrometheusSqlQuery {
-        metric_name: "mz_cluster_reps_count",
-        help: "Number of active cluster replicas in the instance, by replica size.",
-        query: "select size
-                , count(id) as replicas
-            from mz_cluster_replicas
-            where cluster_id like 'u%'
-            group by size",
-        value_column_name: "replicas",
-        per_replica: false,
-    },
-    PrometheusSqlQuery {
         metric_name: "mz_indexes_count",
         help: "Number of active indexes in the instance, by the type of relation on which the index is built.",
         query: "select
@@ -173,7 +152,7 @@ pub(crate) static USAGE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
         query: "SELECT
                 type,
                 COALESCE(envelope_type, '<none>') AS envelope_type,
-                mz_cluster_replicas.size AS size,
+                COALESCE(mz_cluster_replicas.size, '') AS size,
                 count(mz_sources.id) AS sources
             FROM
                 mz_sources, mz_cluster_replicas
@@ -186,33 +165,12 @@ pub(crate) static USAGE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
         per_replica: false,
     },
     PrometheusSqlQuery {
-        metric_name: "mz_views_count",
-        help: "Number of active views in the instance.",
-        query: "select count(id) as views from mz_views where id like 'u%'",
-        value_column_name: "views",
-        per_replica: false,
-    },
-    PrometheusSqlQuery {
-        metric_name: "mz_mzd_views_count",
-        help: "Number of active materialized views in the instance.",
-        query: "select count(id) as mzd_views from mz_materialized_views where id like 'u%'",
-        value_column_name: "mzd_views",
-        per_replica: false,
-    },
-    PrometheusSqlQuery {
-        metric_name: "mz_secrets_count",
-        help: "Number of active secrets in the instance.",
-        query: "select count(id) as secrets from mz_secrets where id like 'u%'",
-        value_column_name: "secrets",
-        per_replica: false,
-    },
-    PrometheusSqlQuery {
         metric_name: "mz_sinks_count",
         help: "Number of active sinks in the instance, by type, envelope type, and size.",
         query: "SELECT
                 type,
                 COALESCE(envelope_type, '<none>') AS envelope_type,
-                mz_cluster_replicas.size AS size,
+                COALESCE(mz_cluster_replicas.size, '') AS size,
                 count(mz_sinks.id) AS sinks
             FROM
                 mz_sinks, mz_cluster_replicas
@@ -232,40 +190,6 @@ pub(crate) static USAGE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
             where id like 'u%'
             group by type",
         value_column_name: "connections",
-        per_replica: false,
-    },
-    PrometheusSqlQuery {
-        metric_name: "mz_tables_count",
-        help: "Number of active tables in the instance.",
-        query: "select count(id) as tables from mz_tables where id like 'u%'",
-        value_column_name: "tables",
-        per_replica: false,
-    },
-    PrometheusSqlQuery {
-        metric_name: "mz_catalog_items",
-        help: "Mapping internal id for catalog item.",
-        query: "SELECT
-                concat(d.name, '.', s.name, '.', o.name) AS label,
-                0 AS value
-            FROM mz_objects o
-            JOIN mz_schemas s ON (o.schema_id = s.id)
-            JOIN mz_databases d ON (s.database_id = d.id)
-            WHERE o.id LIKE 'u%'",
-        value_column_name: "value",
-        per_replica: false,
-    },
-    PrometheusSqlQuery {
-        metric_name: "mz_object_id",
-        help: "Mapping external name for catalog item.",
-        query: "SELECT
-                o.id AS label1,
-                concat(d.name, '.', s.name, '.', o.name) AS label2,
-                0 AS value
-            FROM mz_objects o
-            JOIN mz_schemas s ON (o.schema_id = s.id)
-            JOIN mz_databases d ON (s.database_id = d.id)
-            WHERE o.id LIKE 'u%'",
-        value_column_name: "value",
         per_replica: false,
     },
 ];

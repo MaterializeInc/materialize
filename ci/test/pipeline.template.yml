@@ -203,8 +203,7 @@ steps:
 
       - id: lint-macos
         label: ":rust: macOS Clippy"
-        # Running on a manually installed macOS agent, so make sure we don't go out of disk
-        command: "cargo clippy --all-targets -- -D warnings; if [ $(du -sg target | cut -f1) -gt 50 ]; then rm -rf target; fi"
+        command: ci/test/lint-macos.sh
         env:
           CARGO_INCREMENTAL: "0"
           RUSTUP_TOOLCHAIN: $RUST_VERSION
@@ -246,7 +245,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 40
         agents:
-          queue: hetzner-x86-64-dedi-32cpu-128gb-cargo-test
+          queue: hetzner-x86-64-dedi-48cpu-192gb
         coverage: skip
         sanitizer: skip
 
@@ -265,6 +264,7 @@ steps:
 
 
   - id: cargo-test
+    topics: [kafka, mysql, postgres]
     label: ":rust: Cargo test"
     timeout_in_minutes: 60
     inputs:
@@ -277,7 +277,6 @@ steps:
       - "**/*.proto"
       - "**/testdata/**"
     depends_on: []
-    parallelism: 2
     env:
       AWS_DEFAULT_REGION: "us-east-1"
       # cargo-test's coverage is handled separately by cargo-llvm-cov
@@ -289,14 +288,15 @@ steps:
           composition: cargo-test
           ci-builder: stable
     agents:
-      queue: hetzner-x86-64-dedi-32cpu-128gb-cargo-test
+      queue: hetzner-x86-64-dedi-48cpu-192gb
 
   - id: testdrive
+    topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
     label: "Testdrive"
     depends_on: build-aarch64
     timeout_in_minutes: 40
     inputs: [test/testdrive]
-    parallelism: 20
+    parallelism: 8
     plugins:
       - ./ci/plugins/mzcompose:
           composition: testdrive
@@ -304,11 +304,12 @@ steps:
       queue: hetzner-aarch64-8cpu-16gb
 
   - id: cluster-tests
+    topics: [kafka, kafka-sink, postgres]
     label: Cluster
     depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/cluster]
-    parallelism: 16
+    parallelism: 5
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster
@@ -330,6 +331,7 @@ steps:
       queue: hetzner-aarch64-16cpu-32gb
 
   - id: restarts
+    topics: [kafka, kafka-sink]
     label: Restart
     depends_on: build-aarch64
     timeout_in_minutes: 30
@@ -344,6 +346,7 @@ steps:
     key: mysql-tests
     steps:
       - id: mysql-cdc
+        topics: [mysql]
         label: MySQL CDC
         parallelism: 5
         depends_on: build-aarch64
@@ -356,6 +359,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: mysql-rtr
+        topics: [mysql]
         label: MySQL RTR
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -370,6 +374,7 @@ steps:
     key: postgres-tests
     steps:
       - id: pg-cdc
+        topics: [postgres]
         label: Postgres CDC
         parallelism: 6
         depends_on: build-aarch64
@@ -383,6 +388,7 @@ steps:
         # the mzbuild postgres version will be used, which depends on the Dockerfile specification
 
       - id: pg-rtr
+        topics: [postgres]
         label: Postgres RTR
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -393,10 +399,23 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
+      - id: pg-cdc-standby
+        topics: [postgres]
+        label: Postgres CDC against a physical standby
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/pg-cdc-standby]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc-standby
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
   - group: Connection
     key: connection-tests
     steps:
       - id: ssh-connection
+        topics: [kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: SSH connection
         depends_on: build-x86_64
         timeout_in_minutes: 40
@@ -408,10 +427,22 @@ steps:
         agents:
           queue: hetzner-x86-64-8cpu-16gb
 
+      - id: fivetran-destination-tests
+        label: Fivetran Destination
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/fivetran-destination]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: fivetran-destination
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
   - group: Kafka
     key: kafka-tests
     steps:
       - id: kafka-auth
+        topics: [kafka, kafka-sink, ssh-tunnel]
         label: Kafka auth
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -422,9 +453,9 @@ steps:
               composition: kafka-auth
         agents:
           queue: hetzner-aarch64-8cpu-16gb
-        skip: "https://linear.app/materializeinc/issue/SS-115"
 
       - id: kafka-exactly-once
+        topics: [kafka, kafka-sink]
         label: Kafka exactly-once
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -435,6 +466,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: kafka-rtr
+        topics: [kafka]
         label: Kafka RTR
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -446,6 +478,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: kafka-low-watermark
+        topics: [kafka]
         label: Kafka low watermark
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -456,7 +489,20 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
+      - id: aws-glue-schema-registry
+        topics: [kafka]
+        label: AWS Glue Schema Registry (Moto)
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: aws-glue-schema-registry
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
   - id: zippy-kafka-sources-short
+    topics: [cockroach, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
     label: "Short Zippy"
     depends_on: build-aarch64
     inputs: [misc/python/materialize/zippy]
@@ -469,11 +515,12 @@ steps:
           args: [--scenario=KafkaSources, --actions=60]
 
   - id: checks-no-restart-no-upgrade
+    topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
     label: Checks parallel
     depends_on: build-x86_64
     inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 45
-    parallelism: 8
+    parallelism: 2
     agents:
       # Uses SQL Server, which is not yet available for ARM
       queue: hetzner-x86-64-8cpu-16gb
@@ -490,6 +537,7 @@ steps:
           ]
 
   - id: upgrade-smoke-test
+    topics: [0dt-migration, debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel, upgrade]
     label: "0dt Upgrade Smoke Test"
     depends_on: build-x86_64
     timeout_in_minutes: 30
@@ -505,6 +553,7 @@ steps:
       queue: hetzner-x86-64-4cpu-8gb
 
   - id: source-sink-errors
+    topics: [kafka, kafka-sink, postgres]
     label: "S&S error reporting"
     depends_on: build-aarch64
     parallelism: 3
@@ -518,6 +567,7 @@ steps:
   # Fast tests closer to the end, doesn't matter as much if they have to wait
   # for an agent
   - id: persistence
+    topics: [kafka, kafka-sink]
     label: Persistence
     depends_on: build-aarch64
     timeout_in_minutes: 30
@@ -528,6 +578,7 @@ steps:
       queue: hetzner-aarch64-8cpu-16gb
 
   - id: cluster-isolation
+    topics: [kafka, kafka-sink]
     label: Cluster isolation
     depends_on: build-aarch64
     timeout_in_minutes: 20
@@ -538,21 +589,11 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
-  - id: dbt-materialize
-    label: dbt-materialize
-    depends_on: build-aarch64
-    timeout_in_minutes: 30
-    parallelism: 2
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: dbt-materialize
-    agents:
-      queue: hetzner-aarch64-8cpu-16gb
-
   - group: Debezium
     key: debezium-tests
     steps:
       - id: debezium-postgres
+        topics: [debezium, kafka, mysql, postgres, sql-server]
         label: Debezium Postgres
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -565,6 +606,7 @@ steps:
           queue: hetzner-aarch64-8cpu-16gb
 
       - id: debezium-sql-server
+        topics: [debezium, kafka, mysql, postgres, sql-server]
         label: Debezium SQL Server
         depends_on: build-x86_64
         timeout_in_minutes: 30
@@ -578,6 +620,7 @@ steps:
           queue: hetzner-x86-64-4cpu-8gb
 
       - id: debezium-mysql
+        topics: [debezium, kafka, mysql, postgres, sql-server]
         label: Debezium MySQL
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -589,40 +632,8 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
-  - id: storage-usage
-    label: Storage usage table
-    depends_on: build-aarch64
-    timeout_in_minutes: 30
-    agents:
-      queue: hetzner-aarch64-4cpu-8gb
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: storage-usage
-
-  - id: tracing
-    label: Tracing fast path
-    depends_on: build-aarch64
-    timeout_in_minutes: 30
-    inputs: [test/tracing]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: tracing
-    agents:
-      # Requires BUILDKITE_SENTRY_DSN
-      queue: linux-aarch64-small
-
-  - id: rtr-combined
-    label: RTR with all sources
-    depends_on: build-aarch64
-    timeout_in_minutes: 30
-    inputs: [test/rtr-combined]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: rtr-combined
-    agents:
-      queue: hetzner-aarch64-16cpu-32gb
-
   - id: mz-debug
+    topics: [self-managed]
     label: "mz-debug tool"
     depends_on: build-aarch64
     timeout_in_minutes: 45
@@ -632,29 +643,10 @@ steps:
           composition: mz-debug
     agents:
       queue: hetzner-aarch64-4cpu-8gb
-
-  - id: dyncfg
-    label: "Dyncfg"
-    depends_on: build-aarch64
-    timeout_in_minutes: 45
-    inputs: [test/dyncfg]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: dyncfg
-    agents:
-      queue: hetzner-aarch64-4cpu-8gb
-
-  - id: secrets-logging
-    label: "Secrets Logging"
-    depends_on: build-aarch64
-    timeout_in_minutes: 45
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: secrets-logging
-    agents:
-      queue: hetzner-aarch64-4cpu-8gb
+    sanitizer: skip
 
   - id: copy
+    topics: [copy-to-s3]
     label: Copy
     depends_on: build-aarch64
     timeout_in_minutes: 30
@@ -686,52 +678,6 @@ steps:
           composition: mcp
     agents:
       queue: hetzner-aarch64-4cpu-8gb
-
-  - id: chbench-demo
-    label: chbench smoke
-    depends_on: build-aarch64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: chbench
-          run: no-load
-          args: [--run-seconds=10, --wait]
-    timeout_in_minutes: 30
-    agents:
-      queue: hetzner-aarch64-4cpu-8gb
-
-  - id: metabase-demo
-    label: Metabase
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: metabase
-    agents:
-      # too slow to run emulated on aarch64, Metabase'ss docker image is not yet available for aarch64 natively yet: https://github.com/metabase/metabase/issues/13119
-      queue: hetzner-x86-64-4cpu-8gb
-
-  - id: fdb
-    label: "FoundationDB"
-    depends_on: build-aarch64
-    timeout_in_minutes: 40
-    inputs: [test/foundationdb]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: foundationdb
-    agents:
-      queue: hetzner-aarch64-4cpu-8gb
-
-  - id: mz-deploy
-    label: "mz-deploy"
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [src/mz-deploy, test/mz-deploy]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: mz-deploy
-          ci-builder: stable
-    agents:
-      queue: hetzner-x86-64-4cpu-8gb
 
   - group: Docs
     key: docs-tests
@@ -777,6 +723,7 @@ steps:
         sanitizer: skip
 
       - id: doc-examples
+        topics: [kafka, mysql, postgres, sql-server, ssh-tunnel]
         label: Documentation Examples Code
         inputs:
           - doc/user/data/examples
@@ -807,6 +754,7 @@ steps:
         sanitizer: skip
 
       - id: console-sql-test
+        topics: [kafka, mysql, postgres, sql-server]
         label: "Console SQL"
         depends_on: build-x86_64
         timeout_in_minutes: 30
@@ -818,8 +766,8 @@ steps:
               composition: console
               run: sql-tests
         agents:
-          # SQL Server doesn't support ARM
-          queue: hetzner-x86-64-4cpu-8gb
+          # SQL Server doesn't support ARM: https://github.com/microsoft/mssql-docker/issues/944
+          queue: hetzner-x86-64-16cpu-32gb
         coverage: skip
         sanitizer: skip
 
@@ -839,6 +787,9 @@ steps:
           queue: linux-x86_64
         env:
           CI: "true"
+          # The kind cluster setup hands repository paths to the host Docker
+          # daemon. See CI_BUILDER_FIXED_WORKDIR in bin/ci-builder.
+          CI_BUILDER_FIXED_WORKDIR: "0"
         coverage: skip
         sanitizer: skip
         ci_glue_exempt: true
@@ -877,6 +828,20 @@ steps:
         sanitizer: skip
         ci_glue_exempt: true
 
+      - id: console-vercel-preview-impersonation
+        label: ":vercel: Console Vercel preview (impersonation)"
+        command: bin/ci-builder run stable ci/test/console/vercel-preview-impersonation.sh
+        inputs:
+          - console/**
+        depends_on: []
+        timeout_in_minutes: 15
+        if: "build.pull_request.id != null"
+        agents:
+          queue: linux-x86_64
+        coverage: skip
+        sanitizer: skip
+        ci_glue_exempt: true
+
       - id: dataflow-visualizer
         label: Dataflow visualizer
         depends_on: build-x86_64
@@ -888,6 +853,7 @@ steps:
         agents:
           # Playwright Docker image is x86_64 only
           queue: hetzner-x86-64-4cpu-8gb
+        sanitizer: skip
 
   - id: deploy-website
     label: Deploy website
@@ -917,8 +883,8 @@ steps:
     coverage: skip
     sanitizer: skip
 
-  - id: nightly-if-release
-    label: Nightly for releases
+  - id: nightly
+    label: Nightly
     depends_on: devel-docker-tags
     trigger: nightly
     async: true

@@ -50,6 +50,11 @@ following fields:
 The following example Kubernetes manifest includes configuration for
 SASL/SCRAM-SHA-256 authentication:
 
+{{< tabs >}}
+{{< tab "v1alpha1" >}}
+
+{{< self-managed/crd-version-note "v1alpha1" >}}
+
 ```hc {hl_lines="15 25"}
 apiVersion: v1
 kind: Namespace
@@ -73,10 +78,47 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v26.12.1
+  environmentdImageRef: materialize/environmentd:{{< self-managed/versions/get-latest-version >}}
+  backendSecretName: materialize-backend
+  authenticatorKind: Sasl
+  requestRollout: 00000000-0000-0000-0000-000000000003 # Enabling auth on an existing instance requires a rollout
+```
+
+{{< /tab >}}
+{{< tab "v1" >}}
+
+{{< self-managed/crd-version-note "v1" >}}
+
+```hc {hl_lines="15 25"}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: materialize-environment
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: materialize-backend
+  namespace: materialize-environment
+stringData:
+  metadata_backend_url: "..."
+  persist_backend_url: "..."
+  license_key: "..."
+  external_login_password_mz_system: "enter_mz_system_password"
+---
+apiVersion: materialize.cloud/v1
+kind: Materialize
+metadata:
+  name: 12345678-1234-1234-1234-123456789012
+  namespace: materialize-environment
+spec:
+  environmentdImageRef: materialize/environmentd:{{< self-managed/versions/get-latest-version >}}
   backendSecretName: materialize-backend
   authenticatorKind: Sasl
 ```
+
+{{< /tab >}}
+{{< /tabs >}}
 
 {{% include-headless
 "/headless/self-managed-deployments/enabled-auth-setting-warning" %}}
@@ -97,6 +139,11 @@ To configure Self-Managed Materialize for password authentication, update the fo
 The following example Kubernetes manifest includes configuration for password
 authentication:
 
+{{< tabs >}}
+{{< tab "v1alpha1" >}}
+
+{{< self-managed/crd-version-note "v1alpha1" >}}
+
 ```hc {hl_lines="15 25"}
 apiVersion: v1
 kind: Namespace
@@ -120,10 +167,47 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v26.12.1
+  environmentdImageRef: materialize/environmentd:{{< self-managed/versions/get-latest-version >}}
+  backendSecretName: materialize-backend
+  authenticatorKind: Password
+  requestRollout: 00000000-0000-0000-0000-000000000003 # Enabling auth on an existing instance requires a rollout
+```
+
+{{< /tab >}}
+{{< tab "v1" >}}
+
+{{< self-managed/crd-version-note "v1" >}}
+
+```hc {hl_lines="15 25"}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: materialize-environment
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: materialize-backend
+  namespace: materialize-environment
+stringData:
+  metadata_backend_url: "..."
+  persist_backend_url: "..."
+  license_key: "..."
+  external_login_password_mz_system: "enter_mz_system_password"
+---
+apiVersion: materialize.cloud/v1
+kind: Materialize
+metadata:
+  name: 12345678-1234-1234-1234-123456789012
+  namespace: materialize-environment
+spec:
+  environmentdImageRef: materialize/environmentd:{{< self-managed/versions/get-latest-version >}}
   backendSecretName: materialize-backend
   authenticatorKind: Password
 ```
+
+{{< /tab >}}
+{{< /tabs >}}
 
 {{% include-headless
 "/headless/self-managed-deployments/enabled-auth-setting-warning" %}}

@@ -14,10 +14,8 @@ Use `ALTER SECRET` to:
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "Change value" >}}
-
-### Change value
 
 To change the value of a secret:
 
@@ -26,16 +24,12 @@ To change the value of a secret:
 {{< /tab >}}
 {{< tab "Rename" >}}
 
-### Rename
-
 To rename a secret:
 
 {{% include-syntax file="examples/alter_secret" example="syntax-rename" %}}
 
 {{< /tab >}}
 {{< tab "Change owner" >}}
-
-### Change owner
 
 To change the owner of a secret:
 

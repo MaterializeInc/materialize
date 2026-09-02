@@ -79,8 +79,11 @@ export const useAutomaticallyConnectSocket = <T extends object, R>({
     if (!subscribe || !request) return;
     if (previousRequest === request) return;
     subscribe.setRequest(request);
-    // The manager owns the initial connect; only force a reconnect on changes.
-    if (previousRequest === undefined) return;
+    // The manager owns the initial connect, so a request appearing on a
+    // pristine connection needs no reconnect. If a query already ran on this
+    // connection (the request was cleared and set again), reconnect to
+    // replace it, since a connection runs at most one subscribe.
+    if (previousRequest === undefined && !subscribe.hasActiveQuery()) return;
     managerRef.current?.reconnect();
   }, [subscribe, request, previousRequest]);
 

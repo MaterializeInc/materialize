@@ -202,7 +202,7 @@ def main() -> int:
     parser.add_argument(
         "--listeners-config-path",
         help="Path to json file with environmentd listeners configuration.",
-        default=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json",
+        default=f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/no_auth.json",
     )
     args = parser.parse_intermixed_args()
 
@@ -324,9 +324,15 @@ def main() -> int:
                     update_sqlite_repo()
                     break
 
+            # Local sqllogictest points its embedded environmentd at
+            # `args.postgres`, which defaults to a local CockroachDB. Keep
+            # `persist_pg_consensus_read_committed` off, as it requires a
+            # Postgres consensus backend.
             formatted_params = [
                 f"{key}={value}"
-                for key, value in get_default_system_parameters().items()
+                for key, value in get_default_system_parameters(
+                    metadata_store="cockroach"
+                ).items()
             ]
 
             system_parameter_default = ";".join(formatted_params)

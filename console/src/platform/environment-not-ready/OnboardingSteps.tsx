@@ -25,6 +25,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useSegment } from "~/analytics/segment";
 import { MaterializeLogo } from "~/components/MaterializeLogo";
 import { User } from "~/external-library-wrappers/frontegg";
+import { SUPPORT_CHAT_URL } from "~/externalUrls";
 import SlackIcon from "~/img/slack.png";
 import docUrls from "~/mz-doc-urls.json";
 import { regionPath } from "~/platform/routeHelpers";
@@ -124,11 +125,11 @@ export const OnboardingSteps = ({ user }: { user: User }) => {
                   variant="card"
                   size="lg"
                   maxWidth="200px"
-                  href="https://materialize.com/s/chat"
+                  href={SUPPORT_CHAT_URL}
                   onClick={() => {
                     track("Link Click", {
                       label: "Community Slack",
-                      href: "https://materialize.com/s/chat",
+                      href: SUPPORT_CHAT_URL,
                     });
                   }}
                 >

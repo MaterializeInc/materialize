@@ -1,6 +1,6 @@
 ---
 source: src/interchange/src/bin/avro-decode.rs
-revision: f23bdd4c1d
+revision: ae8f529217
 ---
 
 # interchange::bin::avro-decode

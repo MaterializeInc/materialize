@@ -1,6 +1,6 @@
 ---
 source: src/storage-operators/src/oneshot_source/http_source.rs
-revision: bbcb48c753
+revision: a23b5e40d2
 ---
 
 # storage-operators::oneshot_source::http_source

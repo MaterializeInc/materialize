@@ -96,15 +96,18 @@ impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
                 otel_ctx: OpenTelemetryContext::obtain(),
             })
         {
-            self.internal_cmd_tx
-                .send(Message::Command(
-                    OpenTelemetryContext::obtain(),
-                    Command::Terminate {
-                        conn_id: res.session.conn_id().clone(),
-                        tx: None,
-                    },
-                ))
-                .expect("coordinator unexpectedly gone");
+            // If the coordinator is gone too, the process is shutting down and there is no
+            // session state left to clean up, so a failed send is fine.
+            let send_res = self.internal_cmd_tx.send(Message::Command(
+                OpenTelemetryContext::obtain(),
+                Command::Terminate {
+                    conn_id: res.session.conn_id().clone(),
+                    tx: None,
+                },
+            ));
+            if send_res.is_err() {
+                tracing::warn!("coordinator gone, could not clean up session");
+            }
         }
     }
 
@@ -146,7 +149,9 @@ impl Transmittable for () {
     }
 }
 
-/// `ClientTransmitter` with a response to send.
+/// A pending write result and the context needed to deliver it.
+///
+/// Dropping it uses the [`ExecuteContext`] retirement backstop.
 #[derive(Debug)]
 pub struct CompletedClientTransmitter {
     ctx: ExecuteContext,
@@ -314,11 +319,13 @@ impl ShouldTerminateGracefully for DurableCatalogError {
     fn should_terminate_gracefully(&self) -> bool {
         match self {
             DurableCatalogError::Fence(err) => err.should_terminate_gracefully(),
+            DurableCatalogError::CatalogOutOfSync { .. } => true,
             DurableCatalogError::IncompatibleDataVersion { .. }
             | DurableCatalogError::IncompatiblePersistVersion { .. }
             | DurableCatalogError::Proto(_)
             | DurableCatalogError::Uninitialized
             | DurableCatalogError::NotWritable(_)
+            | DurableCatalogError::DryRunTransaction
             | DurableCatalogError::DuplicateKey
             | DurableCatalogError::UniquenessViolation
             | DurableCatalogError::Storage(_)

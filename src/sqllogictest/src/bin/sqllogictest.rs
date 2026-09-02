@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![recursion_limit = "256"]
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
@@ -18,6 +20,7 @@ use std::process::ExitCode;
 
 use chrono::Utc;
 use clap::ArgAction;
+use mz_adapter_types::dyncfgs::ENABLE_BACKGROUND_ALTER_CLUSTER;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::metrics::MetricsRegistry;
@@ -114,6 +117,14 @@ struct Args {
 async fn main() -> ExitCode {
     mz_ore::panic::install_enhanced_handler();
 
+    // Pin the rustls crypto provider to aws-lc-rs. The LaunchDarkly SDK uses
+    // hyper-rustls, so building its client resolves the process-default rustls
+    // provider. The workspace also links rustls' `ring` feature (pulled by
+    // other hyper-rustls chains), and with both provider features enabled
+    // rustls cannot choose a default on its own and panics. The call is
+    // idempotent, so ignore the result.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let args: Args = cli::parse_args(CliConfig {
         env_prefix: Some("MZ_"),
         enable_version_flag: false,
@@ -166,6 +177,14 @@ async fn main() -> ExitCode {
             }
         }
     }
+
+    // Pin background ALTER CLUSTER on for the suite so a config-shape
+    // `ALTER CLUSTER` returns immediately rather than blocking on the
+    // wait-shim. This is a dyncfg (set by name), and a caller-provided value
+    // wins.
+    system_parameter_defaults
+        .entry(ENABLE_BACKGROUND_ALTER_CLUSTER.name().to_string())
+        .or_insert_with(|| "true".to_string());
 
     let config = RunConfig {
         stdout: &OutputStream::new(io::stdout(), args.timestamps),

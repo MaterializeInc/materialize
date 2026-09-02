@@ -4,7 +4,7 @@ description: "Connecting Materialize to a PostgreSQL database for Change Data Ca
 pagerank: 40
 menu:
   main:
-    parent: 'create-source'
+    parent: 'create-source-legacy'
     identifier: cs_postgres
     name: PostgreSQL (Legacy Syntax)
     weight: 21
@@ -17,7 +17,8 @@ other_ref="[new reference page](/sql/create-source/postgres-v2)"
 include_blurb=true >}}
 
 {{% create-source/intro %}}
-Materialize supports PostgreSQL (11+) as a data source. To connect to a
+Materialize supports PostgreSQL (11+) as a data source. PostgreSQL 16+ is
+required for connecting Materialize to a physical replica. To connect to a
 PostgreSQL instance, you first need to [create a connection](#creating-a-connection)
 that specifies access and authentication parameters.
 Once created, a connection is **reusable** across multiple `CREATE SOURCE`
@@ -35,7 +36,7 @@ your PostgreSQL service: [AlloyDB](/ingest-data/postgres-alloydb/),
 [Self-hosted](/ingest-data/postgres-self-hosted/).
 {{< /warning >}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 ## Syntax
 
@@ -139,6 +140,11 @@ CREATE SOURCE mz_source
   FOR TABLES (schema1.table_1 AS s1_table_1, schema2_table_1 AS s2_table_1);
 ```
 
+### Reading from a physical standby
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-physical-standby" %}}
+
 ### Monitoring source progress
 
 By default, PostgreSQL sources expose progress metadata as a subsource that you
@@ -165,20 +171,6 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 ## Known limitations
 
-### Schema changes
-
-Materialize supports schema changes in the upstream database as follows:
-
-#### Compatible schema changes (Legacy syntax)
-
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-compatible-schema-changes-legacy" %}}
-
-#### Incompatible schema changes
-
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-incompatible-schema-changes-legacy" %}}
-
 ### Publication membership
 
 {{% include-from-yaml data="postgres_source_details"
@@ -195,11 +187,6 @@ name="postgres-supported-types" %}}
 {{% include-from-yaml data="postgres_source_details"
 name="postgres-unsupported-types" %}}
 
-### Truncation
-
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-truncation-restriction" %}}
-
 ### Inherited tables
 
 {{% include-from-yaml data="postgres_source_details"
@@ -207,6 +194,10 @@ name="postgres-inherited-tables" %}}
 
 {{% include-from-yaml data="postgres_source_details"
 name="postgres-inherited-tables-action-legacy" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="postgres" %}}
 
 ## Examples
 
@@ -250,7 +241,7 @@ through an AWS PrivateLink service (Materialize Cloud) or an SSH bastion host.
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 ```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
@@ -348,7 +339,7 @@ CREATE SOURCE mz_source
 
 {{% include-headless "/headless/schema-changes-in-progress" %}}
 
-To handle upstream [schema changes](#schema-changes) or errored subsources, use
+To handle upstream [schema changes](#handling-upstream-operations) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
 subsource, and then [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to add
 the subsource back to the source.

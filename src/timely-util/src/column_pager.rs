@@ -400,10 +400,10 @@ impl ColumnPager {
                 // bodies are already fitting (or refcounted), so move them
                 // through unchanged.
                 let resident = if matches!(col, Column::Typed(_)) {
-                    debug_assert_eq!(len_bytes % 8, 0);
+                    mz_ore::soft_assert_eq_no_log!(len_bytes % 8, 0);
                     let mut buf = Vec::with_capacity(len_bytes);
                     col.into_bytes(&mut buf);
-                    debug_assert_eq!(buf.len() % 8, 0);
+                    mz_ore::soft_assert_eq_no_log!(buf.len() % 8, 0);
                     col.clear();
                     Column::Align(bytemuck::allocation::pod_collect_to_vec::<u8, u64>(&buf))
                 } else {
@@ -420,7 +420,7 @@ impl ColumnPager {
                 // Raw path: the body must end up as u64-aligned bytes for the
                 // pager. `Column::Align` already is; other variants are
                 // serialized and copied.
-                debug_assert_eq!(len_bytes % 8, 0);
+                mz_ore::soft_assert_eq_no_log!(len_bytes % 8, 0);
                 let body: Vec<u64> = match std::mem::take(col) {
                     // Move the aligned buffer straight into the pager: the
                     // allocation transfers with no copy. `take` already left
@@ -429,7 +429,7 @@ impl ColumnPager {
                     mut other => {
                         let mut buf = Vec::with_capacity(len_bytes);
                         other.into_bytes(&mut buf);
-                        debug_assert_eq!(buf.len() % 8, 0);
+                        mz_ore::soft_assert_eq_no_log!(buf.len() % 8, 0);
                         // `into_bytes` only borrowed `other`; clear it in place
                         // and hand it back so the caller keeps the `Typed`
                         // allocation instead of us dropping a reusable buffer.
@@ -512,7 +512,7 @@ impl ColumnPager {
             PagedColumn::Paged { handle, meta } => {
                 let mut body: Vec<u64> = Vec::with_capacity(handle.len());
                 pager::take(handle, &mut body);
-                debug_assert_eq!(body.len() * 8, meta.len_bytes);
+                mz_ore::soft_assert_eq_no_log!(body.len() * 8, meta.len_bytes);
                 metrics::observe_pagein(meta.len_bytes);
                 self.policy.record(PageEvent::PagedIn {
                     bytes: meta.len_bytes,
@@ -536,7 +536,7 @@ impl ColumnPager {
                             .expect("lz4 decode from pager");
                     }
                 }
-                debug_assert_eq!(decoded.len(), meta.len_bytes);
+                mz_ore::soft_assert_eq_no_log!(decoded.len(), meta.len_bytes);
                 metrics::observe_pagein(decoded.len());
                 self.policy.record(PageEvent::PagedIn {
                     bytes: decoded.len(),
@@ -557,7 +557,7 @@ fn pad_u8_to_u64(mut bytes: Vec<u8>) -> Vec<u64> {
     if pad != 0 {
         bytes.resize(bytes.len() + pad, 0);
     }
-    debug_assert_eq!(bytes.len() % 8, 0);
+    mz_ore::soft_assert_eq_no_log!(bytes.len() % 8, 0);
     // `Vec<u8>` and `Vec<u64>` have different layouts (size + align), so we
     // can't transmute the allocation. Copy into a fresh, properly aligned
     // `Vec<u64>`. The cost is one `len_bytes/8`-word memcpy per pageout.

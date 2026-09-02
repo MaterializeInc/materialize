@@ -115,6 +115,9 @@ class ServiceConfig(TypedDict, total=False):
     init: bool
     """Whether to run an init process in the container."""
 
+    ipc: str
+    """The IPC isolation mode for the container, e.g. `host`."""
+
     ports: Sequence[int | str]
     """Service ports to expose to the host."""
 

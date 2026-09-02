@@ -10,7 +10,6 @@
 use std::fmt;
 
 use mz_expr_derive::sqlfunc;
-use mz_lowertest::MzReflect;
 use mz_repr::adt::range::Range;
 use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
@@ -27,8 +26,7 @@ use crate::{Eval, EvalError};
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastRangeToString {
     pub ty: SqlScalarType,
@@ -86,6 +84,15 @@ impl fmt::Display for CastRangeToString {
     }
 }
 
+// The monotone claim survives this function mapping empty and
+// unbounded-lower ranges to NULL, which the interpreter's endpoint box
+// cannot represent, only because those inputs form a downward-closed
+// prefix of the range ordering (`None` inner sorts below `Some`, and a
+// `None` lower bound sorts below every finite one): a range whose
+// endpoints both yield values contains no NULL-yielding interior. Any
+// change to range ordering or to this function's NULL cases must revisit
+// the claim; see `try_parse_monotonic_iso8601_timestamp` for the
+// SpecialUnary alternative.
 #[sqlfunc(sqlname = "rangelower", is_monotone = true)]
 fn range_lower<T>(a: Range<T>) -> Option<T> {
     a.inner.map(|inner| inner.lower.bound).flatten()

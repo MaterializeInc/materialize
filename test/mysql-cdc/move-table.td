@@ -9,10 +9,6 @@
 
 $ set-sql-timeout duration=1s
 
-# TODO: Reenable when database-issues#8127 is fixed
-$ skip-if
-SELECT true
-
 #
 # Test move table
 #

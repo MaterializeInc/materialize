@@ -19,9 +19,6 @@ class Environmentd(Service):
         self,
         name: str = "environmentd",
         mzbuild: str = "environmentd",
-        https_resolver_template: str | None = None,
-        frontegg_resolver_template: str | None = None,
-        static_resolver_addr: str | None = None,
     ) -> None:
         config: ServiceConfig = {
             "mzbuild": mzbuild,

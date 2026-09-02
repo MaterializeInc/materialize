@@ -1,0 +1,212 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_catalog.mz_sinks, mz_catalog.mz_kafka_sinks
+# and mz_catalog.mz_iceberg_sinks. All three are materialized views over
+# mz_internal.mz_catalog_raw and get every sink detail out of the
+# persisted create_sql, in the CreateSink arm of parse_catalog_create_sql
+# (src/expr/src/scalar/func/impls/jsonb.rs).
+#
+# Note we can't create a sink here at all: purification always talks to
+# the broker or the iceberg catalog, and there is no VALIDATE = false to
+# skip it. So the views stay empty and what we pin is the column shape,
+# the item type, the non-sink exclusion, and the JSON keys the view SQL
+# expects back from the helper. Real sinks are covered in
+# test/testdrive/mz-sinks.td, the kafka-*-sinks.td files and
+# test/iceberg/mode-append.td.
+
+mode cockroach
+
+reset-server
+
+# --auto-index-selects wraps the parse_catalog_create_sql calls below in
+# indexed views, and that helper counts as an unstable dependency.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
+----
+COMPLETE 0
+
+# --- Schema -------------------------------------------------------------------
+
+# 15 columns, canonical order, types and nullability. `size` is deprecated
+# and always NULL, but it still has to be here.
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_sinks' AND s.name = 'mz_catalog'
+ORDER BY c.position
+----
+id  text  false
+oid  oid  false
+schema_id  text  false
+name  text  false
+type  text  false
+connection_id  text  true
+size  text  true
+envelope_type  text  true
+format  text  true
+key_format  text  true
+value_format  text  true
+cluster_id  text  false
+owner_id  text  false
+create_sql  text  false
+redacted_create_sql  text  false
+
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_kafka_sinks' AND s.name = 'mz_catalog'
+ORDER BY c.position
+----
+id  text  false
+topic  text  false
+
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_iceberg_sinks' AND s.name = 'mz_catalog'
+ORDER BY c.position
+----
+id  text  false
+namespace  text  false
+table  text  false
+
+# All three are materialized views, not tables.
+query TT
+SELECT o.name, o.type
+FROM mz_catalog.mz_objects o
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE s.name = 'mz_catalog'
+  AND o.name IN ('mz_sinks', 'mz_kafka_sinks', 'mz_iceberg_sinks')
+ORDER BY o.name
+----
+mz_iceberg_sinks  materialized-view
+mz_kafka_sinks  materialized-view
+mz_sinks  materialized-view
+
+# The retained-metrics index over mz_sinks survives the conversion.
+query I
+SELECT count(*) FROM mz_catalog.mz_indexes WHERE name = 'mz_sinks_ind'
+----
+1
+
+# --- Invariants ---------------------------------------------------------------
+
+# id and oid are both declared keys.
+query I
+SELECT count(*) - count(DISTINCT id) + count(*) - count(DISTINCT oid)
+FROM mz_catalog.mz_sinks
+----
+0
+
+# `size` is deprecated and hardcoded NULL.
+query I
+SELECT count(*) FROM mz_catalog.mz_sinks WHERE size IS NOT NULL
+----
+0
+
+# The detail views partition mz_sinks by type, and every detail row joins back.
+query I
+SELECT
+  (SELECT count(*) FROM mz_catalog.mz_kafka_sinks)
+  - (SELECT count(*) FROM mz_catalog.mz_sinks WHERE type = 'kafka')
++ (SELECT count(*) FROM mz_catalog.mz_iceberg_sinks)
+  - (SELECT count(*) FROM mz_catalog.mz_sinks WHERE type = 'iceberg')
+----
+0
+
+query I
+SELECT count(*) FROM mz_catalog.mz_kafka_sinks ks
+LEFT JOIN mz_catalog.mz_sinks s ON ks.id = s.id
+WHERE s.id IS NULL
+----
+0
+
+# --- Non-sink items are excluded ----------------------------------------------
+
+statement ok
+CREATE TABLE t (a int)
+
+statement ok
+CREATE VIEW v AS SELECT * FROM t
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
+
+statement ok
+CREATE SOURCE lg_src IN CLUSTER quickstart FROM LOAD GENERATOR COUNTER
+
+# No sinks are possible here, so all three stay empty even with other
+# item types around.
+query III
+SELECT
+  (SELECT count(*) FROM mz_catalog.mz_sinks),
+  (SELECT count(*) FROM mz_catalog.mz_kafka_sinks),
+  (SELECT count(*) FROM mz_catalog.mz_iceberg_sinks)
+----
+0  0  0
+
+statement ok
+DROP SOURCE lg_src
+
+# --- The JSON keys the view SQL reads -----------------------------------------
+
+# The views read `parsed->>'<key>'`, so renaming a key on the helper side
+# NULLs out a column instead of failing anything. These two calls pin the
+# key names, against create_sql in the shape we actually persist.
+
+query TTTTTTTTT
+SELECT
+  parsed->>'type',
+  parsed->>'sink_type',
+  parsed->>'cluster_id',
+  parsed->>'connection_id',
+  parsed->>'topic',
+  parsed->>'envelope_type',
+  parsed->>'format',
+  parsed->>'key_format',
+  parsed->>'value_format'
+FROM (
+  SELECT mz_internal.parse_catalog_create_sql(
+    'CREATE SINK "materialize"."public"."snk" IN CLUSTER [u5] '
+    || 'FROM [u1 AS "materialize"."public"."t"] '
+    || 'INTO KAFKA CONNECTION [u2 AS "materialize"."public"."kc"] (TOPIC ''topic-x'') '
+    || 'KEY (a) FORMAT JSON ENVELOPE UPSERT'
+  ) AS parsed
+)
+----
+sink  kafka  u5  u2  topic-x  upsert  json  json  json
+
+query TTTTTTTTT
+SELECT
+  parsed->>'type',
+  parsed->>'sink_type',
+  parsed->>'cluster_id',
+  parsed->>'connection_id',
+  parsed->>'namespace',
+  parsed->>'table',
+  parsed->>'envelope_type',
+  parsed->>'format',
+  parsed->>'value_format'
+FROM (
+  SELECT mz_internal.parse_catalog_create_sql(
+    'CREATE SINK "materialize"."public"."ice" IN CLUSTER [u5] '
+    || 'FROM [u1 AS "materialize"."public"."t"] '
+    || 'INTO ICEBERG CATALOG CONNECTION [u3 AS "materialize"."public"."cc"] '
+    || '(NAMESPACE ''ns'', TABLE ''tbl'') MODE APPEND'
+  ) AS parsed
+)
+----
+sink  iceberg  u5  u3  ns  tbl  append  NULL  NULL

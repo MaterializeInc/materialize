@@ -10,7 +10,7 @@
 # Build the dbbench Go binary from https://github.com/MaterializeInc/dbbench
 # We use the standard Materialize mzbuild base image.
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
 WORKDIR /workdir
 

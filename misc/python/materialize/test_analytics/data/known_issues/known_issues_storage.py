@@ -43,4 +43,6 @@ class KnownIssuesStorage(BaseDataStorage):
             """,
         ]
 
-        self.database_connector.add_update_statements(sql_statements)
+        # The issue_id guard makes the INSERT safe to replay, and the UPDATE
+        # assigns fixed values.
+        self.database_connector.add_update_statements(sql_statements, idempotent=True)

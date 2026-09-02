@@ -21,7 +21,7 @@ use hyper_util::rt::TokioIo;
 use mz_build_info::{BuildInfo, build_info};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_cluster_client::client::TimelyConfig;
-use mz_compute::server::ComputeInstanceContext;
+use mz_compute::server::{ComputeInstanceContext, ComputeRuntimeRole};
 use mz_http_util::DynamicFilterTarget;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
@@ -174,8 +174,47 @@ struct Args {
     enable_storage_introspection_logs: bool,
 }
 
+/// The process ordinal for a StatefulSet pod, taken from the trailing
+/// `-`-delimited segment of its hostname (e.g.
+/// "mz5ncn-cluster-s1-replica-s1-gen-1-0" → "0"). This mirrors how
+/// orchestrator-kubernetes recovers the process id from pod names.
+///
+/// Returns `None` when the trailing segment is not a non-negative integer, so
+/// an unexpected hostname leaves `CLUSTERD_PROCESS` unset rather than set to a
+/// value that fails to parse as the process index.
+fn process_ordinal_from_hostname(hostname: &str) -> Option<&str> {
+    let ordinal = hostname.rsplit('-').next()?;
+    ordinal.parse::<usize>().ok().map(|_| ordinal)
+}
+
 pub fn main() {
     mz_ore::panic::install_enhanced_handler();
+
+    // Pin the rustls crypto provider to aws-lc-rs. The LaunchDarkly SDK uses
+    // hyper-rustls, so building its client resolves the process-default rustls
+    // provider. The workspace also links rustls' `ring` feature (pulled by
+    // other hyper-rustls chains), and with both provider features enabled
+    // rustls cannot choose a default on its own and panics. The call is
+    // idempotent, so ignore the result.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    // Derive `CLUSTERD_PROCESS` (the process ordinal) from the pod hostname
+    // when running under Kubernetes and it was not set explicitly. The
+    // distroless image has no shell entrypoint to do this, so clusterd does it
+    // itself.
+    if std::env::var("KUBERNETES_SERVICE_HOST").is_ok()
+        && std::env::var("CLUSTERD_PROCESS").is_err()
+    {
+        if let Ok(hostname) = std::env::var("HOSTNAME") {
+            if let Some(ordinal) = process_ordinal_from_hostname(&hostname) {
+                // SAFETY: `set_var` is called before any threads are spawned.
+                // `install_enhanced_handler` above only registers a panic hook.
+                // That hook spawns a thread only on panic, which cannot happen
+                // before this call.
+                unsafe { std::env::set_var("CLUSTERD_PROCESS", ordinal) };
+            }
+        }
+    }
 
     let args = cli::parse_args(CliConfig {
         env_prefix: Some("CLUSTERD_"),
@@ -229,7 +268,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     emit_boot_diagnostics!(&BUILD_INFO);
 
     mz_alloc::register_metrics_into(&metrics_registry).await;
-    mz_metrics::register_metrics_into(&metrics_registry, mz_dyncfgs::all_dyncfgs()).await;
+    mz_metrics::register_metrics_into(
+        &metrics_registry,
+        mz_dyncfgs::all_dyncfgs(),
+        args.scratch_directory.clone(),
+    )
+    .await;
 
     if let Some(heap_limit) = args.heap_limit {
         mz_compute::memory_limiter::start_limiter(heap_limit, &metrics_registry);
@@ -407,7 +451,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         Arc::clone(&tracing_handle),
         SYSTEM_TIME.clone(),
         connection_context.clone(),
-        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit)?,
+        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit),
         storage_log_writers,
     )
     .await?;
@@ -431,6 +475,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     // Start compute server.
     let compute_client_builder = mz_compute::server::serve(
         compute_timely_config,
+        ComputeRuntimeRole::Solo,
         &metrics_registry,
         persist_clients,
         txns_ctx,
@@ -476,4 +521,32 @@ fn is_connection_error(e: &std::io::Error) -> bool {
             | std::io::ErrorKind::ConnectionAborted
             | std::io::ErrorKind::ConnectionReset
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_process_ordinal_from_hostname() {
+        // A StatefulSet pod name ends in the process ordinal.
+        assert_eq!(
+            process_ordinal_from_hostname("mz5ncn-cluster-s1-replica-s1-gen-1-0"),
+            Some("0")
+        );
+        assert_eq!(
+            process_ordinal_from_hostname("mz5ncn-cluster-s1-replica-s1-gen-1-11"),
+            Some("11")
+        );
+        // A bare numeric hostname is its own ordinal.
+        assert_eq!(process_ordinal_from_hostname("7"), Some("7"));
+
+        // A trailing segment that is not a non-negative integer yields `None`,
+        // so `CLUSTERD_PROCESS` stays unset rather than being set to a value
+        // that fails to parse as the process index.
+        assert_eq!(process_ordinal_from_hostname("clusterd"), None);
+        assert_eq!(process_ordinal_from_hostname("replica-abc"), None);
+        assert_eq!(process_ordinal_from_hostname("replica-"), None);
+        assert_eq!(process_ordinal_from_hostname(""), None);
+    }
 }

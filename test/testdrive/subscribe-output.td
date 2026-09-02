@@ -14,8 +14,6 @@ ALTER SYSTEM SET compute_subscribe_snapshot_optimization = true;
 
 $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY a, mz_diff
 > FETCH 1 c

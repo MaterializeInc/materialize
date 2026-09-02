@@ -1,6 +1,6 @@
 ---
 source: src/persist/src/lib.rs
-revision: 0dc856f2b7
+revision: db15d3b2dc
 ---
 
 # persist
@@ -18,6 +18,7 @@ revision: 0dc856f2b7
 * `s3` — Amazon S3 backend.
 * `postgres` — Postgres/CockroachDB consensus backend.
 * `foundationdb` *(feature-gated)* — FoundationDB consensus backend.
+* `hedge` — `HedgedBlob`, a `Blob` decorator that races a hedge request on a connection-pool-isolated sibling to absorb dead-connection stalls.
 * `turmoil` *(feature-gated)* — network-simulation backends for chaos testing.
 * `metrics` — Prometheus metrics structs for backends.
 * `retry` — exponential backoff with jitter.

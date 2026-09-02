@@ -157,3 +157,18 @@ simple conn=mz_system,user=mz_system
 DROP SCHEMA mz_temp
 ----
 db error: ERROR: cannot drop schema mz_temp because it is a temporary schema
+
+# Regression: DROP SCHEMA without CASCADE must be rejected when the schema
+# contains only a type. Types live in a separate map from items, which the
+# emptiness check used to ignore, so the drop silently succeeded.
+statement ok
+CREATE SCHEMA type_only
+
+statement ok
+CREATE TYPE type_only.lt AS LIST (ELEMENT TYPE = int4)
+
+statement error cannot be dropped without CASCADE while it contains objects
+DROP SCHEMA type_only
+
+statement ok
+DROP SCHEMA type_only CASCADE

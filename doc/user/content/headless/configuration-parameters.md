@@ -9,7 +9,7 @@ Name                                        | Default value             |  Descr
 `cluster_replica`                           |                           | The target cluster replica for `SELECT` queries.                      | Yes
 `database`                                  | `materialize`             | The current database.                                                 | Yes
 `search_path`                               | `public`                  | The schema search order for names that are not schema-qualified.      | Yes
-`transaction_isolation`                     | `strict serializable`     | The transaction isolation level. For more information, see [Isolation level](/reference/isolation-level/). <br/><br/> Accepts values: `serializable`, `strict serializable`. | Yes
+`transaction_isolation`                     | `strict serializable`     | The transaction isolation level. For more information, see [Isolation level](/reference/isolation-level/). <br/><br/> Accepts values: `serializable`, `strict serializable`{{< if-released "v26.29" >}}, `bounded staleness <duration>` (for example, `bounded staleness 5s`){{< /if-released >}}. | Yes
 
 ### Other configuration parameters
 
@@ -27,7 +27,7 @@ Name                                        | Default value             |  Descr
 `emit_trace_id_notice`                      | `false`                   | Boolean flag indicating whether to send a `notice` specifying the trace ID, when available.                                                                            | Yes
 `enable_rbac_checks`                        | `true`                    | Boolean flag indicating whether to apply RBAC checks before executing statements.                                                                                      | Yes
 `enable_session_rbac_checks`                | `false`                   | Boolean flag indicating whether RBAC is enabled for the current session.                                                                                               | No
-`extra_float_digits`                        | `3`                       | Boolean flag indicating whether to adjust the number of digits displayed for floating-point values.                                                                    | Yes
+`extra_float_digits`                        | `1`                       | Adjusts the number of digits displayed for floating-point values.                                                                                                      | Yes
 `failpoints`                                |                           | Allows failpoints to be dynamically activated.                                                                                                                         | No
 `idle_in_transaction_session_timeout`       | `120s`                    | The maximum allowed duration that a session can sit idle in a transaction before being terminated. If this value is specified without units, it is taken as milliseconds (`ms`). A value of zero disables the timeout. | Yes
 `integer_datetimes`                         | `true`                    | Boolean flag indicating whether the server uses 64-bit-integer dates and times.                                                                                        | No

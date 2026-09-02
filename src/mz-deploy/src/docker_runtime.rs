@@ -37,8 +37,8 @@ pub(crate) enum DockerStatus {
     NotInstalled,
 }
 
-/// Name of the persistent Docker container.
-const CONTAINER_NAME: &str = "mz-deploy-typecheck";
+/// Name of the persistent Docker container used by `test` and `explain`.
+const CONTAINER_NAME: &str = "mz-deploy-sandbox";
 
 /// Host port to bind for the persistent container.
 const CONTAINER_PORT: u16 = 16875;
@@ -100,7 +100,7 @@ impl DockerRuntime {
 
     fn make_profile() -> Profile {
         Profile {
-            name: "docker-typecheck".to_string(),
+            name: "docker-sandbox".to_string(),
             host: Some("localhost".to_string()),
             port: CONTAINER_PORT,
             username: "materialize".to_string(),

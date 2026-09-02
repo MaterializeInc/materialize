@@ -24,20 +24,18 @@ use std::ops::Sub;
 use std::sync::LazyLock;
 
 use ::chrono::{
-    DateTime, Datelike, Days, Duration, Months, NaiveDate, NaiveDateTime, NaiveTime, Utc,
+    DateTime, Datelike, Days, Duration, FixedOffset, Months, NaiveDate, NaiveDateTime, NaiveTime,
+    Utc,
 };
 use chrono::Timelike;
-use mz_lowertest::MzReflect;
 use mz_ore::cast::{self, CastFrom};
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::chrono::ProtoNaiveDateTime;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_proto::{RustType, TryFromProtoError};
 #[cfg(any(test, feature = "proptest"))]
 use proptest::arbitrary::Arbitrary;
 #[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::{BoxedStrategy, Strategy};
-#[cfg(any(test, feature = "proptest"))]
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
 
@@ -78,16 +76,24 @@ pub const MAX_PRECISION: u8 = 6;
     PartialOrd,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
-#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct TimestampPrecision(pub(crate) u8);
 
 impl TimestampPrecision {
     /// Consumes the newtype wrapper, returning the inner `u8`.
     pub fn into_u8(self) -> u8 {
         self.0
+    }
+}
+
+#[cfg(any(test, feature = "proptest"))]
+impl Arbitrary for TimestampPrecision {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<TimestampPrecision>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        (0..=MAX_PRECISION).prop_map(TimestampPrecision).boxed()
     }
 }
 
@@ -111,8 +117,16 @@ impl RustType<ProtoTimestampPrecision> for TimestampPrecision {
         }
     }
 
+    // NOTE: `from_proto` is a trust boundary for durable and protocol state, so it
+    // enforces the same domain as `TryFrom<i64>`. Consumers rely on the invariant:
+    // a precision above `MAX_PRECISION` panics `round_to_precision`.
     fn from_proto(proto: ProtoTimestampPrecision) -> Result<Self, TryFromProtoError> {
-        Ok(TimestampPrecision(proto.value.into_rust()?))
+        TimestampPrecision::try_from(i64::from(proto.value)).map_err(|e| {
+            TryFromProtoError::InvalidFieldError(format!(
+                "ProtoTimestampPrecision::value {}: {e}",
+                proto.value
+            ))
+        })
     }
 }
 
@@ -182,6 +196,14 @@ pub trait DateLike: chrono::Datelike {
             .and_hms_opt(0, 0, 0)
             .unwrap();
         naive_date.and_utc().timestamp()
+    }
+
+    /// The year in SQL's numbering, where 1 BC is year -1 and there is no
+    /// year 0. Chrono's `year` uses astronomical numbering, where 1 BC is
+    /// year 0.
+    fn extract_year(&self) -> i32 {
+        let year = self.year();
+        if year <= 0 { year - 1 } else { year }
     }
 
     fn millennium(&self) -> i32 {
@@ -258,25 +280,22 @@ pub trait TimestampLike:
     }
 
     fn truncate_microseconds(&self) -> Self {
-        let time = NaiveTime::from_hms_micro_opt(
-            self.hour(),
-            self.minute(),
-            self.second(),
-            self.nanosecond() / 1_000,
-        )
-        .unwrap();
+        // Use `with_nanosecond` rather than `from_hms_micro_opt`: the latter only
+        // accepts a leap-second sub-second (>= 1s) when `sec == 59`, so a value
+        // carrying chrono's leap representation at any other second (reachable
+        // from a parsed `:60` literal) would be `None` and panic. `with_nanosecond`
+        // accepts the whole [0, 2s) range, preserving the value.
+        let time = NaiveTime::from_hms_opt(self.hour(), self.minute(), self.second())
+            .and_then(|t| t.with_nanosecond((self.nanosecond() / 1_000) * 1_000))
+            .expect("hour/minute/second/nanosecond came from a valid time");
 
         Self::new(self.date(), time)
     }
 
     fn truncate_milliseconds(&self) -> Self {
-        let time = NaiveTime::from_hms_milli_opt(
-            self.hour(),
-            self.minute(),
-            self.second(),
-            self.nanosecond() / 1_000_000,
-        )
-        .unwrap();
+        let time = NaiveTime::from_hms_opt(self.hour(), self.minute(), self.second())
+            .and_then(|t| t.with_nanosecond((self.nanosecond() / 1_000_000) * 1_000_000))
+            .expect("hour/minute/second/nanosecond came from a valid time");
 
         Self::new(self.date(), time)
     }
@@ -784,6 +803,10 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
     }
 
     /// Rounds the timestamp to the specified number of digits of precision.
+    ///
+    /// Returns [`TimestampError::OutOfRange`] when rounding up would leave
+    /// chrono's representable range, which the last microsecond of
+    /// [`HIGH_DATE`] does for every precision.
     pub fn round_to_precision(
         &self,
         precision: Option<TimestampPrecision>,
@@ -806,7 +829,11 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
         let seventh_digit = (nanoseconds % 1_000) / 100;
         assert!(seventh_digit < 10);
         if seventh_digit >= 5 {
-            original = original + Duration::microseconds(1);
+            // Checked, not `+`: on the last microsecond of `HIGH_DATE` this
+            // nudge leaves chrono's range, and chrono's `Add` panics there.
+            original = original
+                .checked_add_signed(Duration::microseconds(1))
+                .ok_or(TimestampError::OutOfRange)?;
         }
         // this is copied from [`chrono::round::duration_round`]
         // but using microseconds instead of nanoseconds precision
@@ -821,11 +848,14 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
                 } else {
                     (round_to_micros - delta_down, delta_down)
                 };
+                // Both directions are checked for the same reason as the
+                // seventh-digit nudge above.
                 if delta_up <= delta_down {
-                    original + Duration::microseconds(delta_up)
+                    original.checked_add_signed(Duration::microseconds(delta_up))
                 } else {
-                    original - Duration::microseconds(delta_down)
+                    original.checked_sub_signed(Duration::microseconds(delta_down))
                 }
+                .ok_or(TimestampError::OutOfRange)?
             }
         };
 
@@ -901,9 +931,11 @@ impl RustType<ProtoNaiveDateTime> for CheckedTimestamp<NaiveDateTime> {
     }
 
     fn from_proto(proto: ProtoNaiveDateTime) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            t: NaiveDateTime::from_proto(proto)?,
-        })
+        // Go through `from_timestamplike` so out-of-range values are
+        // rejected here. Pushing them into a `Row` succeeds, but
+        // `read_datum` would panic when reconstructing the timestamp.
+        CheckedTimestamp::from_timestamplike(NaiveDateTime::from_proto(proto)?)
+            .map_err(|err| TryFromProtoError::InvalidFieldError(err.to_string()))
     }
 }
 
@@ -913,9 +945,8 @@ impl RustType<ProtoNaiveDateTime> for CheckedTimestamp<DateTime<Utc>> {
     }
 
     fn from_proto(proto: ProtoNaiveDateTime) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            t: DateTime::<Utc>::from_proto(proto)?,
-        })
+        CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_proto(proto)?)
+            .map_err(|err| TryFromProtoError::InvalidFieldError(err.to_string()))
     }
 }
 
@@ -1036,11 +1067,58 @@ impl FixedSizeCodec<NaiveDateTime> for PackedNaiveDateTime {
     }
 }
 
+/// Adds a fixed offset to `lhs`, returning `None` on overflow.
+///
+/// chrono's own `NaiveDateTime + FixedOffset` panics on overflow, so this is the
+/// only safe way to shift a timestamp that may sit at the edge of chrono's
+/// range. Beyond the overflow check it also normalizes a leap second that the
+/// shift moves off `:59`, see the note in the body.
+pub fn checked_add_with_leapsecond(
+    lhs: &NaiveDateTime,
+    rhs: &FixedOffset,
+) -> Option<NaiveDateTime> {
+    checked_offset_with_leapsecond(lhs, rhs.local_minus_utc())
+}
+
+/// Subtracts a fixed offset from `lhs`, returning `None` on overflow.
+///
+/// The mirror of [`checked_add_with_leapsecond`], with the same guarantees.
+pub fn checked_sub_with_leapsecond(
+    lhs: &NaiveDateTime,
+    rhs: &FixedOffset,
+) -> Option<NaiveDateTime> {
+    checked_offset_with_leapsecond(lhs, rhs.local_minus_utc().checked_neg()?)
+}
+
+/// Shifts `lhs` by `seconds`, keeping a leap second representable.
+fn checked_offset_with_leapsecond(lhs: &NaiveDateTime, seconds: i32) -> Option<NaiveDateTime> {
+    // The fractional part is set aside so that the shift operates on whole
+    // seconds only, then recovered below.
+    let nanos = lhs.nanosecond();
+    let whole = lhs.with_nanosecond(0).expect("0 is a valid nanosecond");
+    let dt = whole.checked_add_signed(Duration::try_seconds(i64::from(seconds))?)?;
+    // chrono represents a leap second as `nanos >= 1_000_000_000`, but only on a
+    // second-of-minute of 59. If the shift moved us off `:59`, we can't keep the
+    // leap-second representation: the resulting `NaiveTime` would be
+    // unconstructable via `from_num_seconds_from_midnight_opt` and would panic
+    // when round-tripped through `Row` encoding. In that case, fold the leap
+    // second into the next regular second, which is also what PostgreSQL does
+    // with a `:60` literal.
+    if nanos >= 1_000_000_000 && dt.second() != 59 {
+        dt.checked_add_signed(Duration::nanoseconds(i64::from(nanos)))
+    } else {
+        Some(
+            dt.with_nanosecond(nanos)
+                .expect("nanos came from a NaiveTime"),
+        )
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
     use itertools::Itertools;
-    use mz_ore::assert_err;
+    use mz_ore::{assert_err, assert_ok};
     use proptest::prelude::*;
 
     #[mz_ore::test]
@@ -1115,6 +1193,107 @@ mod test {
         assert_round_to_precision(high, 4, 8210266790400123500);
         assert_round_to_precision(high, 5, 8210266790400123460);
         assert_round_to_precision(high, 6, 8210266790400123457);
+    }
+
+    #[mz_ore::test]
+    fn test_round_to_precision_leap_second_off_minute() {
+        // Regression: parsing a `:60` literal can leave chrono's leap-second
+        // representation (sub-second >= 1s) on a second other than `:59` (after
+        // time-zone math). Rounding such a value, as the string->timestamp cast
+        // does, must not panic. `truncate_microseconds`/`truncate_milliseconds`
+        // previously rebuilt the time with `from_hms_{micro,milli}_opt`, whose
+        // leap sub-second range is only valid at `:59`, and unwrapped the `None`.
+        let leap = NaiveDate::from_ymd_opt(3, 3, 17)
+            .unwrap()
+            .and_hms_opt(12, 30, 56)
+            .unwrap()
+            .with_nanosecond(1_000_000_000)
+            .unwrap();
+        let ts = CheckedTimestamp::try_from(leap).unwrap();
+        for precision in [None, Some(0), Some(3), Some(6)] {
+            ts.round_to_precision(precision.map(TimestampPrecision))
+                .unwrap();
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_checked_offset_with_leapsecond_branches() {
+        // Leap-second values reach these shifts from persisted data and from
+        // the frozen storage source casts, so both branches need coverage
+        // built directly from the leap representation. A SQL `:60` literal
+        // rolls over at parse and cannot reach them.
+        let leap = NaiveDate::from_ymd_opt(2024, 6, 30)
+            .unwrap()
+            .and_hms_nano_opt(23, 59, 59, 1_500_000_000)
+            .unwrap();
+        let second = FixedOffset::east_opt(1).unwrap();
+        let minute = FixedOffset::east_opt(60).unwrap();
+
+        // A shift off `:59` cannot keep the leap representation, so the leap
+        // nanos fold into the following regular second.
+        assert_eq!(
+            checked_add_with_leapsecond(&leap, &second).unwrap(),
+            NaiveDate::from_ymd_opt(2024, 7, 1)
+                .unwrap()
+                .and_hms_nano_opt(0, 0, 1, 500_000_000)
+                .unwrap()
+        );
+        assert_eq!(
+            checked_sub_with_leapsecond(&leap, &second).unwrap(),
+            NaiveDate::from_ymd_opt(2024, 6, 30)
+                .unwrap()
+                .and_hms_nano_opt(23, 59, 59, 500_000_000)
+                .unwrap()
+        );
+
+        // A shift that lands on `:59` keeps the leap representation.
+        assert_eq!(
+            checked_add_with_leapsecond(&leap, &minute).unwrap(),
+            NaiveDate::from_ymd_opt(2024, 7, 1)
+                .unwrap()
+                .and_hms_nano_opt(0, 0, 59, 1_500_000_000)
+                .unwrap()
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_round_to_precision_high_date_overflow() {
+        // `HIGH_DATE` is exactly `NaiveDate::MAX`, so rounding *up* from the last
+        // fraction of that day leaves chrono's range. Both the seventh-digit
+        // nudge and the rounding branch used unchecked `+`, which panics in
+        // chrono rather than returning an error.
+        //
+        // A precision below 6 reaches this with far fewer fractional digits than
+        // the microsecond default: at precision 0 a single `.5` rounds up a whole
+        // second. Every precision is covered because each has its own quantum.
+        for (nanos, precision) in [
+            (999_999_500, None),
+            (500_000_000, Some(0)),
+            (950_000_000, Some(1)),
+            (995_000_000, Some(2)),
+            (999_500_000, Some(3)),
+            (999_950_000, Some(4)),
+            (999_995_000, Some(5)),
+            (999_999_500, Some(6)),
+        ] {
+            let ts =
+                CheckedTimestamp::try_from(HIGH_DATE.and_hms_nano_opt(23, 59, 59, nanos).unwrap())
+                    .unwrap();
+            assert!(
+                matches!(
+                    ts.round_to_precision(precision.map(TimestampPrecision)),
+                    Err(TimestampError::OutOfRange)
+                ),
+                "rounding {nanos}ns to {precision:?} should report out of range"
+            );
+        }
+
+        // The mirror case: rounding *down* stays in range, so it must still
+        // succeed rather than being caught by an over-broad check.
+        let ts =
+            CheckedTimestamp::try_from(HIGH_DATE.and_hms_nano_opt(23, 59, 59, 400_000).unwrap())
+                .unwrap();
+        assert_ok!(ts.round_to_precision(Some(TimestampPrecision(3))));
     }
 
     #[mz_ore::test]
@@ -1195,6 +1374,7 @@ mod test {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn proptest_packed_naive_date_time_sort_order() {
         let strat = proptest::collection::vec(arb_naive_date_time(), 0..128);
         proptest!(|(mut times in strat)| {

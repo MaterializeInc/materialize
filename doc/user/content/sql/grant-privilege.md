@@ -29,8 +29,6 @@ clear every privilege previously granted through the same shorthand.
 
 {{< tabs >}}
 
-<!-- ============ CLUSTER syntax ==============  -->
-
 {{< tab "Cluster" >}}
 
 For specific cluster(s):
@@ -49,8 +47,6 @@ ON ALL CLUSTERS
 TO <role_name> [, ... ];
 ```
 {{</ tab >}}
-
-<!-- ================== Connection syntax ======================  -->
 
 {{< tab "Connection">}}
 
@@ -73,8 +69,6 @@ TO <role_name> [, ... ];
 
 {{</ tab >}}
 
-<!-- ================== Database syntax =====================  -->
-
 {{< tab "Database">}}
 
 For specific database(s):
@@ -94,8 +88,6 @@ TO <role_name> [, ... ];
 ```
 
 {{</ tab >}}
-
-<!-- =============== Materialized view syntax ===================  -->
 
 {{< tab "Materialized view/view/source">}}
 
@@ -125,7 +117,27 @@ TO <role_name> [, ... ];
 
 {{</ tab >}}
 
-<!-- ==================== Schema syntax =====================  -->
+
+{{< tab "Network policy">}}
+
+For specific network policies:
+
+```mzsql
+GRANT <USAGE | ALL [PRIVILEGES]>
+ON NETWORK POLICY <name> [, ...]
+TO <role_name> [, ... ];
+```
+
+For all network policies:
+
+```mzsql
+GRANT <USAGE | ALL [PRIVILEGES]>
+ON ALL POLICIES
+TO <role_name> [, ... ];
+```
+
+{{</ tab >}}
+
 
 {{< tab "Schema">}}
 
@@ -147,7 +159,6 @@ TO <role_name> [, ... ];
 
 {{</ tab >}}
 
-<!-- ==================== Secret syntax =====================  -->
 
 {{< tab "Secret">}}
 
@@ -169,8 +180,6 @@ TO <role_name> [, ... ];
 
 {{</ tab >}}
 
-<!-- ==================== System syntax =====================  -->
-
 {{< tab "System">}}
 
 ```mzsql
@@ -180,8 +189,6 @@ TO <role_name> [, ... ];
 ```
 
 {{</ tab >}}
-
-<!-- ==================== Type syntax =======================  -->
 
 {{< tab "Type">}}
 
@@ -203,8 +210,6 @@ TO <role_name> [, ... ];
 ```
 
 {{</ tab >}}
-
-<!-- ======================= Table syntax =====================  -->
 
 {{< tab "Table">}}
 

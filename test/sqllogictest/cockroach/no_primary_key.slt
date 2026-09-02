@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,21 +9,18 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/no_primary_key
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/no_primary_key
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
 mode cockroach
-
-# we don't support rowid
-# query error duplicate column name: "rowid"
-# CREATE TABLE t (
-#   rowid INT
-#)
 
 statement ok
 CREATE TABLE t (
@@ -47,6 +44,8 @@ SELECT a, b FROM t
 1 2
 3 4
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT count(rowid) FROM t
 ----
@@ -54,12 +53,18 @@ SELECT count(rowid) FROM t
 
 # Make sure column order for insertion is not affected by the rowid column.
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE t ADD c STRING
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO t VALUES (5, 6, '7')
 
+# Not supported by Materialize.
+onlyif cockroach
 query IIT rowsort
 select * from t
 ----
@@ -68,24 +73,32 @@ select * from t
 3 4 NULL
 5 6 7
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT a, b, c, rowid FROM t
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO t (a, rowid) VALUES (10, 11)
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT rowid FROM t WHERE a = 10
 ----
 11
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTBTTTB
 SHOW COLUMNS FROM t
 ----
-a      INT8    true   NULL            ·  {}         false
-b      INT8    true   NULL            ·  {}         false
-rowid  INT8    false  unique_rowid()  ·  {primary}  true
-c      STRING  true   NULL            ·  {}         false
+a      INT8    true   NULL            ·  {t_pkey}  false
+b      INT8    true   NULL            ·  {t_pkey}  false
+rowid  INT8    false  unique_rowid()  ·  {t_pkey}  true
+c      STRING  true   NULL            ·  {t_pkey}  false
 
 statement ok
 CREATE INDEX a_idx ON t (a)
@@ -93,5 +106,5 @@ CREATE INDEX a_idx ON t (a)
 statement ok
 INSERT INTO t DEFAULT VALUES
 
-statement error syntax error
+statement error INSERT has more target columns than expressions
 INSERT INTO t (a, b) DEFAULT VALUES

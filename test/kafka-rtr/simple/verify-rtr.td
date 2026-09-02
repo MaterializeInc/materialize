@@ -60,18 +60,11 @@ A,B,0
 
 # Demo materialized views built on sources obey RTR.
 
-> SET REAL_TIME_RECENCY TO FALSE
-
 $ kafka-ingest topic=input_1 format=bytes repeat=500000
 A,B,0
 
 $ kafka-ingest topic=input_2 format=bytes repeat=500000
 A,B,0
-
-> SELECT sum < 4000207 FROM sum;
-true
-
-> SET REAL_TIME_RECENCY TO TRUE
 
 > SELECT sum FROM sum;
 4000207

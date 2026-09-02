@@ -379,6 +379,8 @@ In many relational databases, indexes don't replicate the entire collection of d
     INNER JOIN courses c ON s_c.course_id = c.id;
     ```
 
+Check out the blog post [Delta Joins and Late Materialization](https://materialize.com/blog/delta-joins/) to go deeper on join optimization in Materialize.
+
 ### Default index
 
 Create a default index when there is no particular `WHERE` or `JOIN` clause that would fit the above cases. This can still speed up your query by reading the input from memory.
@@ -520,9 +522,111 @@ ORDER BY dataflow_name, region_name;
 
 The column `hint` provides the estimated value to be provided to the `AGGREGATE INPUT GROUP SIZE` in the case of a `MIN` or `MAX` aggregation or to the `DISTINCT ON INPUT GROUP SIZE` or `LIMIT INPUT GROUP SIZE` in the case of a Top K pattern.
 
-## Learn more
+## Improve performance when using temporal filters
 
-Check out the blog post [Delta Joins and Late Materialization](https://materialize.com/blog/delta-joins/) to go deeper on join optimization in Materialize.
+[Temporal filters](/transform-data/patterns/temporal-filters/) bound a
+query's results using [`mz_now()`](/sql/functions/now_and_mz_now), e.g.:
+
+```mzsql
+WHERE mz_now() <= event_ts + INTERVAL '24 hours'
+```
+
+Input data originally appears at a timestamp precision of one second, so rows
+typically arrive in batches that share a single timestamp. They don't age out
+of the window that way: the temporal filter retracts each row at the
+millisecond-precision timestamp derived from that row's own `event_ts`, so
+data changes at a much finer granularity while aging out than it did when it
+arrived. Materialize computes a result update for each of those distinct
+timestamps, which, for a computation that is expensive to maintain
+incrementally, means a disproportionate amount of work, hurting CPU usage and
+freshness.
+
+**Rounding** the timestamp expression that `mz_now()` is compared against,
+e.g. with [`date_bin`](/sql/functions/date-bin), collapses many of these
+distinct timestamps together. Rows that would otherwise expire at slightly
+different times now expire in the same batch, so Materialize can consolidate
+the overlapping intermediate state into a single update instead of tracking
+each one separately.
+
+### When it helps
+
+Rounding is most effective for temporal filters with **high input update
+rates** where consecutive updates touch **heavily overlapping data**, and
+where the underlying computation is expensive to recompute per update (for
+example, a filter feeding into joins, aggregations, or window functions that
+can't be maintained cheaply per row). In this situation, coarsening the
+timestamp granularity can meaningfully reduce CPU usage and improve freshness
+(lower wallclock lag), since Materialize processes fewer, larger batches
+instead of many nearly-identical small ones.
+
+It's not helpful, or not applicable, when:
+
+- The filter already needs fine-grained (sub-interval) precision, e.g., a
+  sliding window that must expire records to the millisecond.
+- The comparison against `mz_now()` isn't an inequality, e.g., an equality
+  check, since then there is no bound to round.
+- The query is already cheap to maintain incrementally, in which case
+  rounding adds complexity for negligible benefit.
+
+### Example
+
+Before: a materialized view with a temporal filter that admits rows for
+exactly 24 hours, using the raw, millisecond-precision `event_ts`:
+
+```mzsql
+CREATE MATERIALIZED VIEW recent_events AS
+SELECT *
+FROM events
+WHERE mz_now() <= event_ts + INTERVAL '24 hours';
+```
+
+After: round the timestamp expression down to the nearest 10 seconds with
+`date_bin`, so all rows whose `event_ts` falls in the same 10-second bucket
+expire together:
+
+```mzsql
+CREATE MATERIALIZED VIEW recent_events AS
+SELECT *
+FROM events
+WHERE mz_now() <= date_bin('10 seconds', event_ts, TIMESTAMP '1970-01-01') + INTERVAL '24 hours';
+```
+
+The same idea applies to indexes with a temporal filter in their underlying
+view, and to filters expressed with epoch arithmetic rather than `date_bin`.
+For example, the filter:
+
+```mzsql
+WHERE mz_now() <= extract(epoch FROM event_ts) * 1000 + 86400000
+```
+
+can be rounded to whole seconds by flooring the timestamp expression:
+
+```mzsql
+WHERE mz_now() <= floor(extract(epoch FROM event_ts)) * 1000 + 86400000
+```
+
+### Tradeoffs
+
+- **This trades timing precision for performance.** Rows now become valid or
+  invalid only at the rounding interval's boundary, which adds up to one
+  interval's worth of imprecision to the filter's effective bound.
+- **Round in the direction that preserves your query's guarantee.**
+  `date_bin` always rounds *down*, and flooring an epoch expression does the
+  same. Which direction is the conservative one depends on the semantics you
+  need: if a record must never be retained for more than 24 hours, rounding
+  an upper bound down is safe, because rows can then only expire up to one
+  interval early; if a record must always be retained for at least 24 hours,
+  you need to round *up* instead. Don't round blindly; check which direction
+  preserves the guarantee your query depends on.
+- **Choosing the interval matters.** Too fine an interval loses most of the
+  consolidation benefit, while too coarse an interval measurably hurts
+  freshness precision (you're adding up to that much latency). Since input
+  data appears at a one-second timestamp precision to begin with, rounding to intervals
+  larger than one second has diminishing returns, and going beyond roughly 10
+  seconds is unlikely to help any further.
+- **This is a manual, per-query rewrite**, not an optimization Materialize
+  applies automatically. You need to identify which temporal filters are
+  costly to maintain and rewrite each one.
 
 [query hints]: /sql/select/#query-hints
 [arrangements]: /get-started/arrangements/#arrangements

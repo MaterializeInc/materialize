@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/http/catalog.rs
-revision: 0b6718c2a4
+revision: dbd2c3fc06
 ---
 
 # environmentd::http::catalog

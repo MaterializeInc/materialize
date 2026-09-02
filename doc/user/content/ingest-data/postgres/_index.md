@@ -9,6 +9,8 @@ menu:
     identifier: 'postgresql'
 aliases:
   - /self-managed/v25.1/ingest-data/postgres/
+  - /self-managed/v25.2/ingest-data/postgres/
+  - /self-managed/v25.2/ingest-data/postgres/amazon-aurora/
 ---
 
 ## Change Data Capture (CDC)
@@ -35,6 +37,11 @@ Materialize gives you the following benefits:
     Materialize as a read-replica to build views on top of your PostgreSQL data
     that are efficiently maintained and always up-to-date.
 
+When a source is created, Materialize parallelizes the initial snapshot
+across the cluster's workers and, on PostgreSQL 14 and later, splits each
+table's read across workers. See [Snapshot
+parallelism](/concepts/snapshotting/#parallelism).
+
 ## Supported versions and services
 
 The PostgreSQL source requires **PostgreSQL 11+** and is compatible with most
@@ -44,9 +51,13 @@ common PostgreSQL hosted services.
 
 To help you get started, the following integration guides are available:
 
-{{% include-md file="shared-content/postgresql-ingest-data-guides.md" %}}
+{{% include-headless "/headless/postgresql-ingest-data-guides" %}}
 
 ## Considerations
 
 {{% include-from-yaml data="postgres_source_details"
-name="postgres-considerations" %}}
+name="postgres-considerations-body" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="postgres" %}}

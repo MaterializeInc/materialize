@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/column_pager.rs
-revision: 7615b242e2
+revision: f0cdedca04
 ---
 
 # timely-util::column_pager

@@ -6,10 +6,12 @@ aliases:
   - /integrations/amazon-msk/
   - /connect-sources/amazon-msk/
   - /ingest-data/amazon-msk/
+  - /self-managed/v25.2/ingest-data/kafka/amazon-msk/
 menu:
   main:
     parent: "kafka"
     name: "Amazon MSK"
+    weight: 10
 ---
 
 [//]: # "TODO(morsapaes) The Kafka guides need to be rewritten for consistency
@@ -83,8 +85,7 @@ and [self-managed Kafka clusters](https://github.com/MaterializeInc/terraform-aw
 
 {{< tab "Public cluster">}}
 
-{{< include-md file="shared-content/kafka-amazon-msk-public-cluster-section.md"
->}}
+{{% include-headless "/headless/kafka-amazon-msk-public-cluster-section" %}}
 
 {{< /tab >}}
 {{< /tabs >}}
@@ -115,8 +116,7 @@ Configure your Kafka network to allow Materialize to connect:
 
 {{< tab "Public cluster">}}
 
-{{< include-md file="shared-content/kafka-amazon-msk-public-cluster-section.md"
->}}
+{{% include-headless "/headless/kafka-amazon-msk-public-cluster-section" %}}
 
 {{< /tab >}}
 {{< /tabs >}}
@@ -131,14 +131,12 @@ multiple [`CREATE SOURCE`](/sql/create-source/kafka/) statements. By default,
 the source will be created in the active cluster; to use a different cluster,
 use the `IN CLUSTER` clause.
 
-```mzsql
-CREATE SOURCE json_source
-  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT JSON;
-```
+{{< include-headless-with file="/headless/kafka-create-source-syntax"
+source="json_source" connection="kafka_connection" topic="test_topic"
+table="json_table" format="FORMAT JSON" >}}
 
-If the command executes without an error and outputs _CREATE SOURCE_, it means
-that you have successfully connected Materialize to your cluster.
+If the command executes without an error, it means that you have successfully
+connected Materialize to your cluster.
 
 ## Related pages
 

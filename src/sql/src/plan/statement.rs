@@ -152,6 +152,7 @@ pub fn describe(
         Statement::CreateSchema(stmt) => ddl::describe_create_schema(&scx, stmt)?,
         Statement::CreateSecret(stmt) => ddl::describe_create_secret(&scx, stmt)?,
         Statement::CreateSink(stmt) => ddl::describe_create_sink(&scx, stmt)?,
+        Statement::CreateMetricSink(stmt) => ddl::describe_create_metric_sink(&scx, stmt)?,
         Statement::CreateWebhookSource(stmt) => ddl::describe_create_webhook_source(&scx, stmt)?,
         Statement::CreateSource(stmt) => ddl::describe_create_source(&scx, stmt)?,
         Statement::CreateSubsource(stmt) => ddl::describe_create_subsource(&scx, stmt)?,
@@ -194,6 +195,9 @@ pub fn describe(
         }
         Statement::Show(ShowStatement::ShowCreateSink(stmt)) => {
             show::describe_show_create_sink(&scx, stmt)?
+        }
+        Statement::Show(ShowStatement::ShowCreateMetricSink(stmt)) => {
+            show::describe_show_create_metric_sink(&scx, stmt)?
         }
         Statement::Show(ShowStatement::ShowCreateSource(stmt)) => {
             show::describe_show_create_source(&scx, stmt)?
@@ -357,6 +361,7 @@ pub fn plan(
         Statement::CreateSchema(stmt) => ddl::plan_create_schema(scx, stmt),
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
         Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
+        Statement::CreateMetricSink(stmt) => ddl::plan_create_metric_sink(scx, stmt),
         Statement::CreateWebhookSource(stmt) => ddl::plan_create_webhook_source(scx, stmt),
         Statement::CreateSource(stmt) => ddl::plan_create_source(scx, stmt),
         Statement::CreateSubsource(stmt) => ddl::plan_create_subsource(scx, stmt),
@@ -409,6 +414,9 @@ pub fn plan(
         }
         Statement::Show(ShowStatement::ShowCreateSink(stmt)) => {
             show::plan_show_create_sink(scx, stmt).map(Plan::ShowCreate)
+        }
+        Statement::Show(ShowStatement::ShowCreateMetricSink(stmt)) => {
+            show::plan_show_create_metric_sink(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateSource(stmt)) => {
             show::plan_show_create_source(scx, stmt).map(Plan::ShowCreate)
@@ -502,6 +510,7 @@ impl PartialEq<ObjectType> for CatalogItemType {
             (CatalogItemType::Source, ObjectType::Source)
             | (CatalogItemType::Table, ObjectType::Table)
             | (CatalogItemType::Sink, ObjectType::Sink)
+            | (CatalogItemType::MetricSink, ObjectType::MetricSink)
             | (CatalogItemType::View, ObjectType::View)
             | (CatalogItemType::MaterializedView, ObjectType::MaterializedView)
             | (CatalogItemType::Index, ObjectType::Index)
@@ -1080,6 +1089,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::CreateSchema(_) => DDL,
             Statement::CreateSecret(_) => DDL,
             Statement::CreateSink(_) => DDL,
+            Statement::CreateMetricSink(_) => DDL,
             Statement::CreateWebhookSource(_) => DDL,
             Statement::CreateSource(_) => DDL,
             Statement::CreateSubsource(_) => DDL,
@@ -1121,6 +1131,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Show(ShowStatement::ShowCreateCluster(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateIndex(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateSink(_)) => Show,
+            Statement::Show(ShowStatement::ShowCreateMetricSink(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateSource(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateTable(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateView(_)) => Show,

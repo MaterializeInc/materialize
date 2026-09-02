@@ -104,7 +104,7 @@ export const UserList = ({ users }: { users: User[] }) => {
 
 This is the most common bug when working with TanStack Table. **Don't put dynamic data in the `columns` `useMemo` dependency array.** Doing so causes the entire table to remount on every change, which breaks tooltips, popovers, and other interactive elements inside cells.
 
-
+```tsx
 // columns are static. Read dynamic data inside the cell renderer.
 const columns = React.useMemo(
   () => [
@@ -250,6 +250,52 @@ columnHelper.accessor("lastLoginAt", {
 
 > **Note:** TanStack inverts the comparison for descending sort, so nulls move to the top in descending order. Either way, nulls stay grouped together.
 
+## Group rows
+
+Pass `getSubRows` to render hierarchical data as expandable groups: parent rows
+get a caret and toggle their children on click (or Enter/Space), child rows are
+indented in the first column, and pagination counts only top-level rows so a
+group never splits across pages.
+
+```tsx
+const table = useUniversalTable({
+  data: accounts,
+  columns,
+  getSubRows: (account) => account.clusters,
+  initialExpanded: true, // optional; groups default to collapsed
+});
+return <UniversalTable table={table} onRowClick={goToCluster} />;
+```
+
+Group rows render with `heading-xs` cells. `onRowClick` only fires for leaf
+rows, group rows always toggle. Global search matches child rows too
+(`filterFromLeafRows` defaults to `true` when `getSubRows` is set): a matching
+child keeps its parent group visible, and non-matching siblings are hidden. A
+group row that matches directly stays visible but only shows children that
+also match.
+
+## Footer rows
+
+Define `footer` on a column to render a `<tfoot>` row, e.g. for totals. The
+footer is omitted entirely when no column defines one, and hidden while
+`isLoading`. Footer cells receive the column's `meta.cellProps`, so alignment
+matches the body cells.
+
+```tsx
+columnHelper.accessor("cost", {
+  header: "Cost",
+  footer: ({ table }) =>
+    table.getRowModel().rows.reduce((sum, row) => sum + row.original.cost, 0),
+});
+```
+
+`table.getRowModel()` reflects the current page. To total across every
+filtered row regardless of pagination, use `table.getFilteredRowModel()`.
+
+Style the footer row with `footerSx` and target it in tests with
+`footerTestId`. Right-align a column everywhere (header, body cells, and
+footer cell) with `meta: { isNumeric: true }`.
+
 ## Sorting functions
 
 Use TanStack's built-ins whenever possible:
@@ -287,6 +333,7 @@ Wraps TanStack's `useReactTable` with the core, sorted, filtered, and paginated 
 | `columns` | Array of column definitions. Required. |
 | `initialSorting` | Shorthand for `initialState.sorting`. |
 | `pageSize` | Shorthand for `initialState.pagination.pageSize`. Defaults to `25`. |
+| `initialExpanded` | Shorthand for `initialState.expanded`; `true` expands every group. Only meaningful with `getSubRows`. |
 
 Returns a TanStack `Table` instance. Use its native API — `table.getState()`, `table.setGlobalFilter("foo")`, `table.previousPage()`, etc. See the [TanStack docs](https://tanstack.com/table/v8/docs/api/core/table).
 
@@ -296,9 +343,12 @@ Returns a TanStack `Table` instance. Use its native API — `table.getState()`, 
 | --- | --- |
 | `table` | The instance returned by `useUniversalTable`. Required. |
 | `variant` | Chakra table variant. Defaults to `"linkable"`. See [Variants](#variants). |
-| `onRowClick` | Callback receiving the row's data when clicked. |
+| `onRowClick` | Callback receiving the row's data when clicked. Leaf rows only, group rows toggle expansion instead. |
 | `isLoading` | When `true`, renders skeleton rows in place of data. |
 | `skeletonRowCount` | Number of skeleton rows. Defaults to `5`. |
+| `rowTestId` | Returns a per-row `data-testid` for each body `<Tr>`. Receives the TanStack `Row`. |
+| `footerSx` | Chakra `sx` merged onto the footer `<Tr>`. |
+| `footerTestId` | `data-testid` for the footer `<Tr>`. |
 | `data-testid` | Forwarded to the root `<Table>` element. |
 
 ```tsx
@@ -329,6 +379,10 @@ A debounced global search input. The component is **uncontrolled** — `initialV
 ```
 
 The default `globalTextFilter` matches across every cell's stringified value. Override by passing `globalFilterFn` to `useUniversalTable`.
+
+Changing the global filter or any column filter resets the table to the first
+page, so filtering never strands the user on a page past the end of the
+filtered results.
 
 ### `<TablePagination />`
 

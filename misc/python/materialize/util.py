@@ -117,7 +117,7 @@ def sha256_of_utf8_string(value: str) -> str:
 
 def stable_int_hash(*values: str) -> int:
     if len(values) == 1:
-        return xxhash.xxh64(values[0], seed=0).intdigest()
+        return xxhash.xxh64(values[0].encode("utf-8"), seed=0).intdigest()
 
     return stable_int_hash(",".join([str(stable_int_hash(entry)) for entry in values]))
 

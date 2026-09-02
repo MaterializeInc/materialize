@@ -73,14 +73,16 @@ Built-in functions require two separate handling strategies because they have tw
 
 Fix: `StatementContext` carries a shared `Arc<Mutex<ResolvedIds>>` accumulator. When `sql_impl` or `sql_impl_table_func_inner` resolves a function body, the resulting IDs are merged into this accumulator. At the end of `plan()`, accumulated IDs are merged into the caller's `resolved_ids`, which flows to `check_plan` -> `check_usage` where the restriction catches them. This follows the same pattern as `ShowSelect::new_from_bare_query`, which already captures and propagates resolved IDs from re-parsed SQL.
 
-**Unmaterializable functions** (`mz_version()`, `mz_role_oid_memberships()`, `mz_environment_id()`, `pg_backend_pid()`, etc.) are evaluated at runtime directly from coordinator/session state. They never reference catalog items by ID, so resolved ID propagation cannot catch them.
+**Unmaterializable functions** (`mz_version()`, `mz_role_oid_memberships()`, `pg_backend_pid()`, etc.) are evaluated at runtime directly from coordinator/session state. They never reference catalog items by ID, so resolved ID propagation cannot catch them.
 
 Fix: `UnmaterializableFunc` has an `allowed_in_restricted_session()` method with an explicit match — no wildcard arm, so adding a new variant is a compile error until the developer classifies it. The check runs in `eval_unmaterializable_func()` during optimization.
 
 | Classification | Functions |
 |---|---|
 | **Allowed** (needed for query execution) | `current_database`, `current_schema`, `current_schemas`, `current_timestamp`, `current_user`, `session_user`, `mz_now`, `mz_session_id`, `mz_session_role_memberships`, `is_rbac_enabled`, `viewable_variables` |
-| **Excluded** (internal system information, not relevant to data product queries) | `mz_version`, `mz_version_num`, `version`, `mz_environment_id`, `mz_is_superuser`, `mz_role_oid_memberships`, `mz_uptime`, `pg_postmaster_start_time`, `pg_backend_pid` |
+| **Excluded** (internal system information, not relevant to data product queries) | `mz_version`, `mz_version_num`, `version`, `mz_is_superuser`, `mz_role_oid_memberships`, `mz_uptime`, `pg_postmaster_start_time`, `pg_backend_pid` |
+
+`mz_environment_id` is deliberately absent from both lists. It is no longer an unmaterializable function: it is a process-lifetime constant that folds to a string literal at planning time (see the Scalar registration in `src/sql/src/func.rs`). Because the folded value is baked into any stored view that references it, a restriction here could only ever be partial (blocking direct calls while leaking values already materialized into a view), so it is intentionally left unrestricted. The environment ID is not sensitive system state.
 
 ### MCP data product discovery
 

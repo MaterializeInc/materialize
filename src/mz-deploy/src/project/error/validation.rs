@@ -199,6 +199,12 @@ pub enum ValidationErrorKind {
     InvalidIdentifier { name: String, reason: String },
     /// Index missing required IN CLUSTER clause
     IndexMissingCluster { index_name: String },
+    /// Index defined on a storage object (table or source), which is unsupported.
+    IndexOnStorageObject {
+        object_type: String,
+        object_name: String,
+        index_name: String,
+    },
     /// Materialized view missing required IN CLUSTER clause
     MaterializedViewMissingCluster { view_name: String },
     /// Sink missing required IN CLUSTER clause
@@ -450,6 +456,16 @@ impl ValidationErrorKind {
                 format!(
                     "index '{}' is missing required IN CLUSTER clause",
                     index_name
+                )
+            }
+            Self::IndexOnStorageObject {
+                object_type,
+                object_name,
+                index_name,
+            } => {
+                format!(
+                    "index '{}' is not supported on {} '{}'",
+                    index_name, object_type, object_name
                 )
             }
             Self::MaterializedViewMissingCluster { view_name } => {
@@ -817,6 +833,9 @@ impl ValidationErrorKind {
             }
             Self::IndexMissingCluster { .. } => {
                 Some("add 'IN CLUSTER <cluster_name>' to your CREATE INDEX statement (e.g., CREATE INDEX idx ON table (col) IN CLUSTER quickstart)".to_string())
+            }
+            Self::IndexOnStorageObject { .. } => {
+                Some("indexes are only supported on views and materialized views; to index data from a source or table, create a view that selects from it and index the view".to_string())
             }
             Self::MaterializedViewMissingCluster { .. } => {
                 Some("add 'IN CLUSTER <cluster_name>' to your CREATE MATERIALIZED VIEW statement (e.g., CREATE MATERIALIZED VIEW mv IN CLUSTER quickstart AS SELECT ...)".to_string())

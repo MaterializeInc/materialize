@@ -34,11 +34,11 @@ use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, AwsPrivatelinkRule, CsrConnection,
-    CsrConnectionHttpAuth, GlueSchemaRegistryConnection, IcebergCatalogAuth,
-    IcebergCatalogConnection, IcebergCatalogImpl, IcebergCatalogType, KafkaConnection,
-    KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions, MySqlConnection, MySqlSslMode,
-    PostgresConnection, RestIcebergCatalog, S3TablesRestIcebergCatalog, SqlServerConnectionDetails,
-    SshConnection, SshTunnel, TlsIdentity, Tunnel,
+    CsrConnectionHttpAuth, GlueSchemaRegistryConnection, IcebergAccessDelegation,
+    IcebergCatalogAuth, IcebergCatalogConnection, IcebergCatalogImpl, IcebergCatalogType,
+    KafkaConnection, KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions, MySqlConnection,
+    MySqlSslMode, PostgresConnection, RestIcebergCatalog, S3TablesRestIcebergCatalog,
+    SqlServerConnectionDetails, SshConnection, SshTunnel, TlsIdentity, Tunnel,
 };
 
 use crate::names::Aug;
@@ -49,6 +49,7 @@ use crate::session::vars;
 
 generate_extracted_config!(
     ConnectionOption,
+    (AccessDelegation, IcebergAccessDelegation),
     (AccessKeyId, StringOrSecret),
     (AssumeRoleArn, String),
     (AssumeRoleSessionName, String),
@@ -62,6 +63,7 @@ generate_extracted_config!(
     (Endpoint, String),
     (GcpConnection, with_options::Object),
     (Host, String),
+    (Oauth2ServerUrl, String),
     (Password, with_options::Secret),
     (Port, u16),
     (ProgressTopic, String),
@@ -190,10 +192,12 @@ pub(super) fn validate_options_per_connection_type(
             User,
         ],
         CreateConnectionType::IcebergCatalog => &[
+            AccessDelegation,
             AwsConnection,
             CatalogType,
             Credential,
             GcpConnection,
+            Oauth2ServerUrl,
             Scope,
             Url,
             Warehouse,
@@ -416,8 +420,6 @@ impl ConnectionOptionExtracted {
                 })
             }
             CreateConnectionType::GlueSchemaRegistry => {
-                scx.require_feature_flag(&vars::ENABLE_GLUE_SCHEMA_REGISTRY)?;
-
                 let aws_connection = get_aws_connection_reference(scx, &self)?
                     .ok_or_else(|| sql_err!("AWS CONNECTION option is required"))?;
                 let registry_name = self
@@ -699,6 +701,16 @@ impl ConnectionOptionExtracted {
                                 "invalid CONNECTION: ICEBERG s3tablesrest connections do not support GCP CONNECTION"
                             );
                         }
+                        if self.oauth2_server_url.is_some() {
+                            sql_bail!(
+                                "invalid CONNECTION: ICEBERG s3tablesrest connections do not support OAUTH2 SERVER URL"
+                            );
+                        }
+                        if self.access_delegation.is_some() {
+                            sql_bail!(
+                                "invalid CONNECTION: ICEBERG s3tablesrest connections do not support ACCESS DELEGATION"
+                            );
+                        }
                         let Some(warehouse) = warehouse else {
                             sql_bail!(
                                 "invalid CONNECTION: ICEBERG s3tablesrest connections must specify WAREHOUSE"
@@ -728,8 +740,19 @@ impl ConnectionOptionExtracted {
                             (Some(credential), None) => IcebergCatalogAuth::OAuth {
                                 credential,
                                 scope: self.scope.clone(),
+                                server_url: self.oauth2_server_url.clone(),
                             },
                             (None, Some(gcp_connection)) => {
+                                if self.oauth2_server_url.is_some() {
+                                    sql_bail!(
+                                        "invalid CONNECTION: OAUTH2 SERVER URL applies to CREDENTIAL auth, not GCP CONNECTION"
+                                    );
+                                }
+                                if self.access_delegation.is_some() {
+                                    sql_bail!(
+                                        "invalid CONNECTION: ICEBERG GCP CONNECTION does not support ACCESS DELEGATION"
+                                    );
+                                }
                                 /// All BigLake Iceberg REST Catalogs use the same catalog URI.
                                 const BIGLAKE_CATALOG_URI: &str =
                                     "https://biglake.googleapis.com/iceberg/v1/restcatalog";
@@ -746,7 +769,11 @@ impl ConnectionOptionExtracted {
                             ),
                         };
 
-                        IcebergCatalogImpl::Rest(RestIcebergCatalog { auth, warehouse })
+                        IcebergCatalogImpl::Rest(RestIcebergCatalog {
+                            auth,
+                            warehouse,
+                            access_delegation: self.access_delegation,
+                        })
                     }
                 };
 

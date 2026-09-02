@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/instances.rs
-revision: 4267863081
+revision: d434a9e3de
 ---
 
 # storage-types::instances

@@ -12,6 +12,7 @@ Explicit deterministic tests for read-only mode and zero downtime deploys (same
 version, no upgrade).
 """
 
+import json
 import time
 from datetime import datetime, timedelta
 from textwrap import dedent
@@ -23,7 +24,7 @@ from psycopg.errors import OperationalError
 from psycopg.sql import SQL, Identifier
 
 from materialize import buildkite
-from materialize.mzcompose import get_default_system_parameters
+from materialize.mzcompose import get_default_system_parameters, sanitizer_enabled
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import (
@@ -43,6 +44,13 @@ from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import CommandFailureCausedUIError
 
 DEFAULT_TIMEOUT = "300s"
+
+# Sanitized builds run the whole read path several times slower, so the bounds
+# on "this SELECT is fast, hence the source is hydrated" have to move with them.
+# NOTE: that weakens those assertions under a sanitizer, where a read that is
+# slow because the source is only partly hydrated can still come in under the
+# scaled bound. The unscaled bound guards the non-sanitizer runs.
+HYDRATED_SELECT_FACTOR = 10 if sanitizer_enabled() else 1
 
 SYSTEM_PARAMETER_DEFAULTS = get_default_system_parameters()
 
@@ -1112,7 +1120,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         result = c.sql_query("SELECT count(*) FROM kafka_source_tbl", service="mz_new")
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            elapsed < 3
+            elapsed < 3 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
 
         start_time = time.time()
@@ -1226,7 +1234,7 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
         result = c.sql_query("SELECT count(*) FROM kafka_source_tbl", service="mz_new")
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            elapsed < 3
+            elapsed < 3 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
 
         start_time = time.time()
@@ -1346,7 +1354,7 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         print(f"final check took {elapsed} seconds")
         assert result[0][0] == total, f"Wrong result: {result}"
         assert (
-            elapsed < 4
+            elapsed < 4 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on Postgres source after 0dt upgrade, is it hydrated?"
 
         result = c.sql_query(
@@ -1469,7 +1477,7 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         print(f"final check took {elapsed} seconds")
         assert result[0][0] == total, f"Wrong result: {result}"
         assert (
-            elapsed < 4
+            elapsed < 4 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on MySQL source after 0dt upgrade, is it hydrated?"
 
         result = c.sql_query(
@@ -1599,7 +1607,7 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
         print(f"final check took {elapsed} seconds")
         assert result[0][0] == total, f"Wrong result: {result}"
         assert (
-            elapsed < 4
+            elapsed < 4 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on SQL Server source after 0dt upgrade, is it hydrated?"
 
         result = c.sql_query(
@@ -1779,7 +1787,7 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
     )
 
     mz_tables_gid = c.sql_query(
-        "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
+        "SELECT id FROM mz_materialized_views WHERE name = 'mz_tables'",
         service="mz_old",
     )[0][0]
     mv_gid = c.sql_query(
@@ -1805,11 +1813,30 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
     ):
         c.up("mz_new")
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+
+        # The new generation is ready to promote while still read-only, so its migrated builtin MVs
+        # must already be hydrated off their replacement shards. If they were excluded from the
+        # caught-up gate they would hydrate at cut-over instead, spiking catalog-server CPU. Reading
+        # them here from the read-only generation asserts the write-enable-while-read-only path
+        # actually filled those shards.
+        #
+        # NOTE: this covers hydration, not the caught-up gate's lag comparison.
+        # `force_migrations="replacement"` replaces `mz_cluster_replica_frontiers` too, and the gate
+        # reads the leader's "live" frontiers out of that collection, so here it compares this
+        # generation against itself.
+        for relation in ["mz_databases", "mz_clusters"]:
+            count = c.sql_query(
+                f"SELECT count(*) FROM mz_catalog.{relation}",
+                service="mz_new",
+                reuse_connection=False,
+            )[0][0]
+            assert count > 0, f"{relation} returned {count} on the read-only generation"
+
         c.promote_mz("mz_new")
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 
         new_mz_tables_gid = c.sql_query(
-            "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
+            "SELECT id FROM mz_materialized_views WHERE name = 'mz_tables'",
             service="mz_new",
             reuse_connection=False,
         )[0][0]
@@ -1862,7 +1889,7 @@ def workflow_builtin_schema_migrations_evolution(c: Composition) -> None:
     )
 
     mz_tables_gid = c.sql_query(
-        "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
+        "SELECT id FROM mz_materialized_views WHERE name = 'mz_tables'",
         service="mz_old",
     )[0][0]
     mv_gid = c.sql_query(
@@ -1893,7 +1920,7 @@ def workflow_builtin_schema_migrations_evolution(c: Composition) -> None:
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 
         new_mz_tables_gid = c.sql_query(
-            "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
+            "SELECT id FROM mz_materialized_views WHERE name = 'mz_tables'",
             service="mz_new",
             reuse_connection=False,
         )[0][0]
@@ -1997,6 +2024,190 @@ def workflow_materialized_view_correction_pruning(c: Composition) -> None:
     else:
         raise AssertionError(
             f"unexpected correction metrics: {insertions=}, {deletions=}"
+        )
+
+
+def workflow_materialized_view_read_only_correction_pruning(
+    c: Composition,
+) -> None:
+    """
+    Verify that a read-only replica's materialized-view sink consolidates its
+    correction buffer instead of retaining one record per write made during the
+    read-only window — the memory blow-up of CLU-131 (a factor in the INC-1095
+    OOM).
+
+    During a 0dt upgrade the new generation hydrates read-only while the old
+    generation keeps writing. A read-only sink mints no batches, so the
+    `WriteBatch` path that drives `consolidate_before` forward never runs, and the
+    `desired`/`persist` pairs for each forward write are never cancelled: the
+    correction buffer grows by roughly one record per written row and stays
+    resident for the whole read-only window. The fix re-arms the forced
+    consolidation in read-only mode, so the buffer is swept per batch and stays
+    near zero. The pre-existing single-INSERT `materialized_view_correction_pruning`
+    scenario only exercises the snapshot, which the one-shot consolidation already
+    handles, so it cannot catch this; the forward writes below are what expose it.
+
+    The replica is unorchestrated and runs inside the mz_new container.
+    environmentd's federated /metrics does not surface it, so we scrape the
+    replica's own clusterd internal HTTP socket.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+
+    c.sql(
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+
+    initial_rows = 1_000
+    batch_rows = 10_000
+    forward_rows = 300_000
+    payload_bytes = 1_024
+    memory_growth_bound_bytes = 384 * 1024**2
+
+    c.sql(
+        f"""
+         CREATE TABLE t (a int, payload text);
+         INSERT INTO t
+           SELECT g, repeat('x', {payload_bytes})
+           FROM generate_series(1, {initial_rows}) AS g;
+         CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+         SELECT * FROM mv LIMIT 1;
+         """,
+        service="mz_old",
+    )
+
+    # Boot the new generation read-only and hydrate the MV there. It is never
+    # promoted, so it stays read-only for the whole test.
+    c.up("mz_new")
+    c.sql("SELECT * FROM mv LIMIT 1", service="mz_new")
+
+    def replica_metrics_addr() -> str:
+        # The read-only replica is unorchestrated and runs inside the mz_new
+        # container; environmentd's federated /metrics does not surface it, so we
+        # hit the replica's own clusterd internal HTTP unix socket, whose path it
+        # logs at startup. Match any generation and take the latest.
+        logs = c.invoke("logs", "mz_new", capture=True).stdout
+        addr = None
+        for line in logs.splitlines():
+            if (
+                "cluster-u1-replica-u1-gen-" in line
+                and "mz_clusterd: serving internal HTTP server on" in line
+            ):
+                addr = line.split(" ")[-1]
+        if addr is None:
+            raise RuntimeError("no clusterd internal HTTP socket found in mz_new logs")
+        return addr
+
+    def anon_bytes() -> int:
+        # Anonymous (heap) memory of the mz_new container from the cgroup, where
+        # the correction buffer lives. cgroup v2 reports `anon`; v1 `total_rss`
+        # or `rss`.
+        return int(
+            c.exec(
+                "mz_new",
+                "sh",
+                "-lc",
+                r"""awk '$1=="anon" || $1=="total_rss" || $1=="rss" { print $2; exit }' \
+                    /sys/fs/cgroup/memory.stat 2>/dev/null || \
+                    awk '$1=="anon" || $1=="total_rss" || $1=="rss" { print $2; exit }' \
+                    /sys/fs/cgroup/memory/memory.stat""",
+                capture=True,
+            ).stdout
+        )
+
+    def mib(value: int) -> str:
+        return f"{value / 1024**2:.1f} MiB"
+
+    def correction_metrics() -> tuple[int, int]:
+        resp = c.exec(
+            "mz_new",
+            "curl",
+            "-s",
+            "--unix-socket",
+            replica_metrics_addr(),
+            "http:/prof/metrics",
+            capture=True,
+        ).stdout
+
+        insertions = deletions = 0
+        for line in resp.splitlines():
+            if line.startswith("#"):
+                continue
+            if line.startswith("mz_persist_sink_correction_insertions_total"):
+                insertions += int(float(line.rsplit(maxsplit=1)[-1]))
+            elif line.startswith("mz_persist_sink_correction_deletions_total"):
+                deletions += int(float(line.rsplit(maxsplit=1)[-1]))
+        return (insertions, deletions)
+
+    # Wait for the read-only generation to process and prune the initial snapshot
+    # before measuring the memory baseline. The snapshot is small enough not to
+    # matter for RSS, but this preserves the older test's signal.
+    insertions = deletions = 0
+    for _ in range(30):
+        insertions, deletions = correction_metrics()
+        if insertions >= initial_rows and insertions - deletions == 0:
+            break
+        time.sleep(1)
+    else:
+        raise AssertionError(
+            f"snapshot correction buffer did not consolidate: {insertions=}, "
+            f"{deletions=}, net={insertions - deletions}"
+        )
+
+    baseline_anon = anon_bytes()
+
+    # The old generation writes meaningful volume while mz_new stays read-only.
+    # Wide payloads make the retained correction buffer visible in anonymous RSS:
+    # on an unfixed build the desired and persist halves retain roughly
+    # `2 * forward_rows * payload_bytes`, while the fixed build keeps at most a
+    # small batch resident before forced consolidation drains it.
+    for lo in range(initial_rows + 1, initial_rows + forward_rows + 1, batch_rows):
+        hi = min(lo + batch_rows - 1, initial_rows + forward_rows)
+        c.sql(
+            f"""
+            INSERT INTO t
+              SELECT g, repeat('x', {payload_bytes})
+              FROM generate_series({lo}, {hi}) AS g;
+            """,
+            service="mz_old",
+        )
+        _wait_for_mz_count(c, "SELECT count(*) FROM mv", hi, "mz_old")
+        time.sleep(1)
+
+    # The read-only sink must consolidate the forward writes away rather than
+    # retain one record per written row. With the fix the buffer holds at most a
+    # batch or so in flight; before it, `insertions - deletions` stays near
+    # `forward_rows` (CLU-131) and the wide rows push mz_new's anonymous memory
+    # hundreds of MiB above baseline.
+    correction_bound = batch_rows * 4
+    memory_ceiling = baseline_anon + memory_growth_bound_bytes
+    for _ in range(150):
+        insertions, deletions = correction_metrics()
+        settled_anon = anon_bytes()
+        if (
+            insertions >= forward_rows
+            and insertions - deletions < correction_bound
+            and settled_anon <= memory_ceiling
+        ):
+            break
+        time.sleep(1)
+
+    net = insertions - deletions
+    memory_growth = settled_anon - baseline_anon
+    if (
+        insertions < forward_rows
+        or net >= correction_bound
+        or settled_anon > memory_ceiling
+    ):
+        raise AssertionError(
+            f"read-only correction buffer did not consolidate: {insertions=}, "
+            f"{deletions=}, net={net} (bound {correction_bound}, "
+            f"forward_rows {forward_rows}, memory_growth={mib(memory_growth)}, "
+            f"memory_bound={mib(memory_growth_bound_bytes)}); CLU-131"
         )
 
 
@@ -2686,6 +2897,148 @@ def workflow_stuck_collection(c: Composition) -> None:
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
 
 
+def workflow_caught_up_stability(c: Composition) -> None:
+    """Verify the 0dt caught-up stability gate end-to-end.
+
+    With a non-trivial stability period, a healthy deployment must still reach
+    ReadyToPromote (the gate does not deadlock healthy clusters) and can be
+    promoted to leader. The gate's reset-on-unhealthy behavior is hard to
+    reproduce deterministically here, so it is covered by adapter unit tests
+    that drive synthetic replica-health transitions directly.
+    """
+
+    c.down(destroy_volumes=True)
+
+    c.up("mz_old")
+
+    # Require clusters to stay caught-up and healthy for a while before we cut
+    # over. mz_new reads this from the shared catalog.
+    c.sql(
+        "ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '20s'",
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.sql(
+        """
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+        CREATE INDEX mv_idx ON mv (a);
+        INSERT INTO t VALUES (1), (2), (3);
+        """,
+        service="mz_old",
+    )
+
+    c.up("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    c.promote_mz("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+
+def _leader_status(c: Composition, mz_service: str) -> str:
+    """Reads the current leader-promotion status of *mz_service*."""
+    return json.loads(
+        c.exec(
+            mz_service,
+            "curl",
+            "-s",
+            "localhost:6878/api/leader/status",
+            capture=True,
+            silent=True,
+        ).stdout
+    )["status"]
+
+
+def workflow_caught_up_stability_crash_loop(c: Composition) -> None:
+    """Verify the stability gate blocks cutover while a replica crash-loops.
+
+    A cluster with two replicas hosts a materialized view. One of mz_new's
+    replicas is repeatedly killed while the other stays healthy, so the cluster
+    keeps hydrating and counts as caught-up. Because it is caught-up, a
+    point-in-time check would see it ready and cut over into the crashing
+    replica. The stability gate must refuse while any replica is unhealthy, and
+    report ready only once the killed replica recovers and stays healthy for the
+    stability period.
+    """
+
+    c.down(destroy_volumes=True)
+
+    c.up("mz_old")
+
+    c.sql(
+        "ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '15s'",
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.sql(
+        """
+        CREATE CLUSTER crashy SIZE 'scale=1,workers=1', REPLICATION FACTOR 2;
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv IN CLUSTER crashy AS SELECT * FROM t;
+        CREATE INDEX mv_idx IN CLUSTER crashy ON mv (a);
+        INSERT INTO t VALUES (1), (2), (3);
+        """,
+        service="mz_old",
+    )
+
+    # Target a single replica of `crashy` so the cluster stays caught-up on the
+    # other one. Replica IDs come from the shared catalog, so they match across
+    # generations. We kill the matching child process inside mz_new's container.
+    replica_id = c.sql_query(
+        "SELECT r.id FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id "
+        "WHERE c.name = 'crashy' ORDER BY r.name LIMIT 1",
+        service="mz_old",
+    )[0][0]
+
+    c.up("mz_new")
+
+    # SIGKILL the replica's clusterd repeatedly. The process orchestrator
+    # relaunches it ~5s later, producing Online/Offline flapping. SIGKILL is not
+    # classified as a crash, so it's safe with the default propagate_crashes.
+    crash_until = time.time() + 60
+
+    def crash_loop() -> None:
+        while time.time() < crash_until:
+            c.exec(
+                "mz_new",
+                "bash",
+                "-c",
+                f"ps aux | grep -v grep | grep -w 'replica_id={replica_id}' "
+                f"| awk '{{print $2}}' | xargs -r kill -9 || true",
+            )
+            time.sleep(3)
+
+    crasher = Thread(target=crash_loop)
+    crasher.start()
+    try:
+        # While a replica is crash-looping, mz_new must never report ready. The
+        # surviving replica hydrates the tiny view within seconds, so the cluster
+        # is caught-up almost immediately. Without the gate, mz_new would promote
+        # within a check interval. The status endpoint may not answer in the
+        # first moments after boot, so we only assert once we read a status.
+        deadline = time.time() + 45
+        while time.time() < deadline:
+            try:
+                status = _leader_status(c, "mz_new")
+            except Exception:
+                time.sleep(2)
+                continue
+            assert (
+                status == DeploymentStatus.INITIALIZING.value
+            ), f"mz_new reached status {status} while a replica was crash-looping"
+            time.sleep(2)
+    finally:
+        crasher.join()
+
+    # The replica recovers. After the stability period mz_new becomes ready.
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    c.promote_mz("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+
 def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
     """Verify that DDL detection works correctly with batch-allocated user IDs.
 
@@ -2778,3 +3131,119 @@ def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
             > SELECT * FROM pool_mv;
             1
             """))
+
+
+def workflow_ddl_detection_ephemeral_items(c: Composition) -> None:
+    """Verify that temporary items do not count as reactable DDL in preflight.
+
+    Temporary items are durable catalog items tagged with their owning
+    session's UUID and draw ids from the normal user-id allocator.
+    Ensure that creation of them during 0dt preflight does not halt the
+    read-only environment.
+    """
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+
+    PREFLIGHT_STARTED = "waiting for deployment to be caught up"
+
+    def count_preflight_starts() -> int:
+        """Count mz_new boots via the preflight start line in its log."""
+        logs = c.invoke("logs", "mz_new", capture=True).stdout
+        return sum(PREFLIGHT_STARTED in line for line in logs.splitlines())
+
+    def await_preflight_start() -> None:
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            if count_preflight_starts() >= 1:
+                return
+            time.sleep(0.5)
+        raise RuntimeError("timed out waiting for mz_new preflight to start")
+
+    # The DDL check defaults to every 5 minutes plus once right before
+    # ready-to-promote. Tighten it so the temporary items below sit through
+    # many checks. Read at mz_new's boot from the catalog.
+    c.sql(
+        """
+        ALTER SYSTEM SET with_0dt_deployment_ddl_check_interval = '1s';
+        ALTER SYSTEM SET cluster = quickstart;
+        """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+
+    # Start mz_new in read-only mode (deploy_generation=1) and wait for it
+    # to start the preflight process.
+    c.up("mz_new")
+    await_preflight_start()
+
+    # A session on the leader creates the temporary items. The connection
+    # stays open so the items stay durable.
+    conn = c.sql_connection(service="mz_old")
+    cur = conn.cursor()
+    cur.execute("CREATE TEMPORARY TABLE temp_t (a int)")
+    cur.execute("CREATE TEMPORARY VIEW temp_v AS SELECT * FROM temp_t")
+    cur.execute("INSERT INTO temp_t VALUES (1)")
+
+    # Prove the temporary items are durable catalog rows on the leader while
+    # mz_new's checks tick
+    ephemeral = c.sql_query(
+        """SELECT count(*) FROM mz_internal.mz_catalog_raw
+           WHERE data->>'kind' = 'Item'
+             AND data->'value'->>'ephemeral_owner_session' IS NOT NULL""",
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    assert ephemeral == [(2,)], f"temporary items are not durable: {ephemeral}"
+
+    # the temporary items must exist while mz_new is still checking for DDL
+    # i.e. before it announces ready. if we're caught up before we've created
+    # temporary items, fail loudly.
+    deadline = time.time() + 120
+    status = None
+    while time.time() < deadline:
+        try:
+            status = _leader_status(c, "mz_new")
+            break
+        except Exception:
+            time.sleep(1)
+    assert (
+        status == DeploymentStatus.INITIALIZING.value
+    ), f"mz_new reached status {status} before the temporary items were created"
+
+    # Sit through several 1s-interval DDL checks with the temporary items in
+    # the catalog, then let mz_new run the final check on its way to
+    # ready-to-promote. Assert we only see one preflight start throughout
+    # promotion which means we never halted.
+    time.sleep(5)
+    assert (
+        count_preflight_starts() == 1
+    ), "mz_new rebooted with only temporary items created"
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    assert (
+        count_preflight_starts() == 1
+    ), "mz_new rebooted on the final DDL check with only temporary items created"
+
+    c.promote_mz("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+    # The takeover opened the catalog with write intent, which fences the old
+    # leader (killing the session that owned the temporary items) and
+    # reclaims every ephemeral item. Only mz_catalog_raw shows whether the
+    # durable rows themselves are gone.
+    ephemeral = c.sql_query(
+        """SELECT count(*) FROM mz_internal.mz_catalog_raw
+           WHERE data->>'kind' = 'Item'
+             AND data->'value'->>'ephemeral_owner_session' IS NOT NULL""",
+        service="mz_new",
+        port=6877,
+        user="mz_system",
+    )
+    assert ephemeral == [(0,)], f"ephemeral items survived promotion: {ephemeral}"
+
+    # The old leader died with the session's socket; closing is bookkeeping.
+    try:
+        conn.close()
+    except Exception:
+        pass

@@ -9,7 +9,7 @@
 
 # Build and run SQLancer ported for Materialize
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
 WORKDIR /workdir
 
@@ -26,7 +26,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
 # ggevay: But in the meantime there have been more changes to our fork, see the `main` branch there.
 RUN git clone https://github.com/MaterializeInc/sqlancer \
     && cd sqlancer \
-    && git checkout 9dedc47f2daa7756a914b01eff329f905c0f8478 \
+    && git checkout 4e116a5bb6c57ac46c2df5f68dd35c3534fcc3f4 \
     && rm -rf .git \
     && mvn package -DskipTests
 # RUN git clone --depth=1 --single-branch https://github.com/sqlancer/sqlancer \

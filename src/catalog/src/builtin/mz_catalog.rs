@@ -194,149 +194,270 @@ pub const TYPE_MZ_ACL_ITEM_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
 
-pub static MZ_ICEBERG_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_iceberg_sinks",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_ICEBERG_SINKS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("namespace", SqlScalarType::String.nullable(false))
-        .with_column("table", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the sink."),
-        (
-            "namespace",
-            "The namespace of the Iceberg table into which the sink is writing.",
-        ),
-        ("table", "The Iceberg table into which the sink is writing."),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "iceberg_sink",
-        description: "Iceberg-specific sink configuration (namespace, table)",
-        links: &const {
-            [OntologyLink {
-                name: "details_of",
-                target: "sink",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
+pub static MZ_ICEBERG_SINKS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_iceberg_sinks",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_ICEBERG_SINKS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("namespace", SqlScalarType::String.nullable(false))
+            .with_column("table", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "The ID of the sink."),
+            (
+                "namespace",
+                "The namespace of the Iceberg table into which the sink is writing.",
+            ),
+            ("table", "The Iceberg table into which the sink is writing."),
+        ]),
+        // Planning requires `NAMESPACE` and `TABLE`, so both are always there.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL namespace,
+    ASSERT NOT NULL \"table\"
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    parsed->>'namespace' AS namespace,
+    parsed->>'table' AS \"table\"
+FROM
+    mz_internal.mz_catalog_raw
+    CROSS JOIN LATERAL (
+        SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS l(parsed)
+WHERE
+    data->>'kind' = 'Item' AND
+    parsed->>'sink_type' = 'iceberg'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "iceberg_sink",
+            description: "Iceberg-specific sink configuration (namespace, table)",
+            links: &const {
+                [OntologyLink {
+                    name: "details_of",
+                    target: "sink",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
 
-pub static MZ_KAFKA_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_kafka_sinks",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_KAFKA_SINKS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("topic", SqlScalarType::String.nullable(false))
-        .with_key(vec![0])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the sink."),
-        (
-            "topic",
-            "The name of the Kafka topic into which the sink is writing.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "kafka_sink",
-        description: "Kafka-specific sink configuration (topic)",
-        links: &const {
-            [OntologyLink {
-                name: "details_of",
-                target: "sink",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
+pub static MZ_KAFKA_SINKS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_kafka_sinks",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_KAFKA_SINKS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("topic", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "The ID of the sink."),
+            (
+                "topic",
+                "The name of the Kafka topic into which the sink is writing.",
+            ),
+        ]),
+        // Planning requires `TOPIC`, so it is always there.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL topic
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    parsed->>'topic' AS topic
+FROM
+    mz_internal.mz_catalog_raw
+    CROSS JOIN LATERAL (
+        SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS l(parsed)
+WHERE
+    data->>'kind' = 'Item' AND
+    parsed->>'sink_type' = 'kafka'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "kafka_sink",
+            description: "Kafka-specific sink configuration (topic)",
+            links: &const {
+                [OntologyLink {
+                    name: "details_of",
+                    target: "sink",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
-pub static MZ_KAFKA_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_kafka_connections",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_KAFKA_CONNECTIONS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column(
-            "brokers",
-            SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
-        )
-        .with_column("sink_progress_topic", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the connection."),
-        (
-            "brokers",
-            "The addresses of the Kafka brokers to connect to.",
-        ),
-        (
-            "sink_progress_topic",
-            "The name of the Kafka topic where any sinks associated with this connection will track their progress information and other metadata. The contents of this topic are unspecified.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "kafka_connection",
-        description: "Kafka-specific connection configuration (brokers, progress topic)",
-        links: &const {
-            [OntologyLink {
-                name: "details_of",
-                target: "connection",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
+// Reads Item rows from `mz_catalog_raw`, pulls the broker addresses and any
+// explicit progress topic out of the persisted `create_sql` via
+// `parse_connection_details`, and keeps only kafka connections (the connection
+// type is derived the same way `mz_connections` derives it). The default
+// progress topic is reconstructed here rather than in the helper because it
+// needs the environment id and the connection's own id.
+pub static MZ_KAFKA_CONNECTIONS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_kafka_connections",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_KAFKA_CONNECTIONS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "brokers",
+                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
+            )
+            .with_column("sink_progress_topic", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "The ID of the connection."),
+            (
+                "brokers",
+                "The addresses of the Kafka brokers to connect to.",
+            ),
+            (
+                "sink_progress_topic",
+                "The name of the Kafka topic where any sinks associated with this connection will track their progress information and other metadata. The contents of this topic are unspecified.",
+            ),
+        ]),
+        // The `sink_progress_topic` default must match
+        // `KafkaConnection::progress_topic` in
+        // src/storage-types/src/connections.rs. Keep the two in sync.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL brokers,
+    ASSERT NOT NULL sink_progress_topic
+) AS
+SELECT
+    mz_internal.parse_catalog_id(r.data->'key'->'gid') AS id,
+    ARRAY(
+        SELECT b.value
+        FROM jsonb_array_elements_text(details->'brokers')
+             WITH ORDINALITY AS b(value, ord)
+        ORDER BY b.ord
+    ) AS brokers,
+    COALESCE(
+        details->>'progress_topic',
+        '_materialize-progress-' || mz_environment_id() || '-'
+            || mz_internal.parse_catalog_id(r.data->'key'->'gid')
+    ) AS sink_progress_topic
+FROM
+    mz_internal.mz_catalog_raw r,
+    LATERAL (
+        SELECT mz_internal.parse_connection_details(
+            r.data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS d(details)
+WHERE
+    r.data->>'kind' = 'Item' AND
+    -- The connection_type filter selects the kind. A non-matching row yields a
+    -- NULL connection_type and is dropped here, so no `details IS NOT NULL` is
+    -- needed (parse_connection_details returns jsonb null, which passes it).
+    mz_internal.parse_catalog_create_sql(
+        r.data->'value'->'definition'->'V1'->>'create_sql')->>'connection_type' = 'kafka'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "kafka_connection",
+            description: "Kafka-specific connection configuration (brokers, progress topic)",
+            links: &const {
+                [OntologyLink {
+                    name: "details_of",
+                    target: "connection",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
-pub static MZ_KAFKA_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_kafka_sources",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_KAFKA_SOURCES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("group_id_prefix", SqlScalarType::String.nullable(false))
-        .with_column("topic", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "The ID of the Kafka source. Corresponds to `mz_catalog.mz_sources.id`.",
-        ),
-        (
-            "group_id_prefix",
-            "The value of the `GROUP ID PREFIX` connection option.",
-        ),
-        (
-            "topic",
-            "The name of the Kafka topic the source is reading from.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "kafka_source",
-        description: "Kafka-specific source configuration (topic, group ID)",
-        links: &const {
-            [OntologyLink {
-                name: "details_of",
-                target: "source",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
+pub static MZ_KAFKA_SOURCES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_kafka_sources",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_KAFKA_SOURCES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("group_id_prefix", SqlScalarType::String.nullable(false))
+            .with_column("topic", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The ID of the Kafka source. Corresponds to `mz_catalog.mz_sources.id`.",
+            ),
+            (
+                "group_id_prefix",
+                "The value of the `GROUP ID PREFIX` connection option.",
+            ),
+            (
+                "topic",
+                "The name of the Kafka topic the source is reading from.",
+            ),
+        ]),
+        // NOTE: the `group_id_prefix` column is misnamed. It holds the
+        // full computed `group.id` (see `KafkaSourceConnection::group_id`
+        // / `KafkaConnection::id_base`), not just the user-supplied
+        // prefix. The MV reproduces that behaviour verbatim.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL group_id_prefix,
+    ASSERT NOT NULL topic
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    COALESCE(details->>'group_id_prefix', '')
+        || 'materialize-' || mz_environment_id()
+        || '-' || (details->>'connection_id')
+        || '-' || mz_internal.parse_catalog_id(data->'value'->'global_id')
+        AS group_id_prefix,
+    details->>'topic' AS topic
+FROM
+    mz_internal.mz_catalog_raw,
+    LATERAL (
+        SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS l(parsed),
+    LATERAL (
+        SELECT mz_internal.parse_kafka_source_details(data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS d(details)
+WHERE
+    data->>'kind' = 'Item' AND
+    parsed->>'source_type' = 'kafka'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "kafka_source",
+            description: "Kafka-specific source configuration (topic, group ID)",
+            links: &const {
+                [OntologyLink {
+                    name: "details_of",
+                    target: "source",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
 
 pub static MZ_DATABASES: LazyLock<BuiltinMaterializedView> =
@@ -898,10 +1019,11 @@ pub static MZ_INDEX_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
         column_semantic_types: &[("index_id", SemanticType::CatalogItemId)],
     }),
 });
-pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_TABLES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
     name: "mz_tables",
     schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_TABLES_OID,
+    oid: oid::MV_MZ_TABLES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("oid", SqlScalarType::Oid.nullable(false))
@@ -941,6 +1063,68 @@ pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             "The ID of the source associated with the table, if any. Corresponds to `mz_sources.id`.",
         ),
     ]),
+    // Temporary tables live in a per-session temporary schema that has no
+    // durable schema record. Their rows keep the temporary schema sentinel
+    // "0" that the previous builtin-table implementation exposed.
+    sql: Box::leak(format!("
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges
+) AS
+WITH
+    user_tables AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            (data->'value'->>'oid')::oid AS oid,
+            CASE WHEN data->'value'->>'ephemeral_owner_session' IS NULL
+                THEN mz_internal.parse_catalog_id(data->'value'->'schema_id')
+                ELSE '0'
+            END AS schema_id,
+            data->'value'->>'name' AS name,
+            mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+            mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
+            data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
+            mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql,
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'source_id' AS source_id
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'Item' AND
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' = 'table'
+    ),
+    builtin_mappings AS (
+        SELECT
+            data->'key'->>'schema_name' AS schema_name,
+            data->'key'->>'object_name' AS name,
+            's' || (data->'value'->>'catalog_id') AS id
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'GidMapping' AND
+            data->'key'->>'object_type' = '1'
+    ),
+    builtin_tables AS (
+        SELECT
+            m.id,
+            t.oid,
+            s.id AS schema_id,
+            t.name,
+            '{MZ_SYSTEM_ROLE_ID}' AS owner_id,
+            t.privileges,
+            NULL::text AS create_sql,
+            NULL::text AS redacted_create_sql,
+            NULL::text AS source_id
+        FROM mz_internal.mz_builtin_tables t
+        JOIN builtin_mappings m USING (schema_name, name)
+        JOIN mz_schemas s ON s.name = t.schema_name
+        WHERE s.database_id IS NULL
+    )
+SELECT * FROM user_tables
+UNION ALL
+SELECT * FROM builtin_tables").into_boxed_str()),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
@@ -981,6 +1165,7 @@ pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             ]
         },
     }),
+}
 });
 
 pub static MZ_CONNECTIONS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
@@ -1079,48 +1264,82 @@ WHERE
     }
 });
 
-pub static MZ_SSH_TUNNEL_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_ssh_tunnel_connections",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_SSH_TUNNEL_CONNECTIONS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("public_key_1", SqlScalarType::String.nullable(false))
-        .with_column("public_key_2", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the connection."),
-        (
-            "public_key_1",
-            "The first public key associated with the SSH tunnel.",
-        ),
-        (
-            "public_key_2",
-            "The second public key associated with the SSH tunnel.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "ssh_tunnel_connection",
-        description: "SSH tunnel connection with public keys",
-        links: &const {
-            [OntologyLink {
-                name: "details_of",
-                target: "connection",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
-});
+// The two SSH public keys are stored verbatim in the persisted `create_sql`
+// (they are generated, not user-supplied, and explicitly not redacted), so the
+// view reads them straight out via `parse_connection_details` and keeps only
+// ssh-tunnel connections.
+pub static MZ_SSH_TUNNEL_CONNECTIONS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_ssh_tunnel_connections",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_SSH_TUNNEL_CONNECTIONS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("public_key_1", SqlScalarType::String.nullable(false))
+            .with_column("public_key_2", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "The ID of the connection."),
+            (
+                "public_key_1",
+                "The first public key associated with the SSH tunnel.",
+            ),
+            (
+                "public_key_2",
+                "The second public key associated with the SSH tunnel.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL public_key_1,
+    ASSERT NOT NULL public_key_2
+) AS
+SELECT
+    mz_internal.parse_catalog_id(r.data->'key'->'gid') AS id,
+    details->>'public_key_1' AS public_key_1,
+    details->>'public_key_2' AS public_key_2
+FROM
+    mz_internal.mz_catalog_raw r,
+    LATERAL (
+        SELECT mz_internal.parse_connection_details(
+            r.data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS d(details)
+WHERE
+    r.data->>'kind' = 'Item' AND
+    -- The connection_type filter selects the kind. A non-matching row yields a
+    -- NULL connection_type and is dropped here, so no `details IS NOT NULL` is
+    -- needed (parse_connection_details returns jsonb null, which passes it).
+    mz_internal.parse_catalog_create_sql(
+        r.data->'value'->'definition'->'V1'->>'create_sql')->>'connection_type' = 'ssh-tunnel'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "ssh_tunnel_connection",
+            description: "SSH tunnel connection with public keys",
+            links: &const {
+                [OntologyLink {
+                    name: "details_of",
+                    target: "connection",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    });
 // mz_sources is generated dynamically in BUILTINS_STATIC via builtin::make_mz_sources()
 // with builtin source/log entries inlined as VALUES. See builtin/builtin.rs.
-pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+/// Sink metadata, all of it derived from the persisted `create_sql`. The
+/// `CreateSink` arm of `parse_catalog_create_sql` does the parsing, including
+/// the deprecated `format` column and its avro/json-only collapse. `size` is
+/// deprecated and always NULL.
+pub static MZ_SINKS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
         name: "mz_sinks",
         schema: MZ_CATALOG_SCHEMA,
-        oid: oid::TABLE_MZ_SINKS_OID,
+        oid: oid::MV_MZ_SINKS_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
             .with_column("oid", SqlScalarType::Oid.nullable(false))
@@ -1186,6 +1405,43 @@ pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| {
                 "The redacted `CREATE` SQL statement for the sink.",
             ),
         ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL type,
+    ASSERT NOT NULL cluster_id,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL create_sql,
+    ASSERT NOT NULL redacted_create_sql
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    (data->'value'->>'oid')::oid AS oid,
+    mz_internal.parse_catalog_id(data->'value'->'schema_id') AS schema_id,
+    data->'value'->>'name' AS name,
+    parsed->>'sink_type' AS type,
+    parsed->>'connection_id' AS connection_id,
+    NULL::text AS size,
+    parsed->>'envelope_type' AS envelope_type,
+    parsed->>'format' AS format,
+    parsed->>'key_format' AS key_format,
+    parsed->>'value_format' AS value_format,
+    parsed->>'cluster_id' AS cluster_id,
+    mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+    data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
+    mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql
+FROM
+    mz_internal.mz_catalog_raw
+    CROSS JOIN LATERAL (
+        SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS l(parsed)
+WHERE
+    data->>'kind' = 'Item' AND
+    parsed->>'type' = 'sink'",
         is_retained_metrics_object: true,
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
@@ -1234,10 +1490,11 @@ pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| {
         }),
     }
 });
-pub static MZ_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_VIEWS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
     name: "mz_views",
     schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_VIEWS_OID,
+    oid: oid::MV_MZ_VIEWS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("oid", SqlScalarType::Oid.nullable(false))
@@ -1274,6 +1531,74 @@ pub static MZ_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             "The redacted `CREATE` SQL statement for the view.",
         ),
     ]),
+    // Temporary views live in a per-session temporary schema that has no
+    // durable schema record. Their rows keep the temporary schema sentinel
+    // "0" that the previous builtin-table implementation exposed.
+    //
+    // The generated `mz_builtin_*` views appear here with placeholder
+    // definition and create SQL. See `make_builtin_views`.
+    sql: Box::leak(format!("
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL definition,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges,
+    ASSERT NOT NULL create_sql,
+    ASSERT NOT NULL redacted_create_sql
+) AS
+WITH
+    user_views AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            (data->'value'->>'oid')::oid AS oid,
+            CASE WHEN data->'value'->>'ephemeral_owner_session' IS NULL
+                THEN mz_internal.parse_catalog_id(data->'value'->'schema_id')
+                ELSE '0'
+            END AS schema_id,
+            data->'value'->>'name' AS name,
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'definition' AS definition,
+            mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+            mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
+            data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
+            mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'Item' AND
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' = 'view'
+    ),
+    builtin_mappings AS (
+        SELECT
+            data->'key'->>'schema_name' AS schema_name,
+            data->'key'->>'object_name' AS name,
+            's' || (data->'value'->>'catalog_id') AS id
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'GidMapping' AND
+            data->'key'->>'object_type' = '4'
+    ),
+    builtin_views AS (
+        SELECT
+            m.id,
+            v.oid,
+            s.id AS schema_id,
+            v.name,
+            v.definition,
+            '{MZ_SYSTEM_ROLE_ID}' AS owner_id,
+            v.privileges,
+            v.create_sql,
+            mz_internal.redact_sql(v.create_sql) AS redacted_create_sql
+        FROM mz_internal.mz_builtin_views v
+        JOIN builtin_mappings m USING (schema_name, name)
+        JOIN mz_schemas s ON s.name = v.schema_name
+        WHERE s.database_id IS NULL
+    )
+SELECT * FROM user_views
+UNION ALL
+SELECT * FROM builtin_views").into_boxed_str()),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
@@ -1305,6 +1630,7 @@ pub static MZ_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             ]
         },
     }),
+}
 });
 
 pub static MZ_MATERIALIZED_VIEWS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
@@ -2361,7 +2687,7 @@ pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinMaterializedView> = LazyLock::ne
             ),
             (
                 "availability_zone",
-                "The availability zone in which the cluster is running.",
+                "The availability zones the replica is provisioned in, comma-separated. `NULL` if nothing constrains the replica's placement.",
             ),
             (
                 "owner_id",
@@ -2370,8 +2696,16 @@ pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinMaterializedView> = LazyLock::ne
             ("disk", "If the replica has a local disk."),
         ]),
         // `config.location` is a serde-tagged enum: `{"Unmanaged": {...}}` or
-        // `{"Managed": {...}}`. For unmanaged replicas all orchestrator-facing
-        // fields (size, availability_zone, disk) are NULL.
+        // `{"Managed": {...}}`. For replicas with an unmanaged location all
+        // orchestrator-facing fields (size, availability_zone, disk) are NULL.
+        //
+        // `availability_zone` surfaces the durable `Managed` location's
+        // `availability_zones` list as a comma-separated string in stored
+        // order. For a managed cluster that is the provisioned AVAILABILITY
+        // ZONES pool. For an unmanaged cluster it is the single AVAILABILITY
+        // ZONE pin. An empty list (nothing constrains placement) maps to NULL,
+        // matching the list-to-NULL normalization the `mz_clusters`
+        // `availability_zones` column uses.
         //
         // `disk` mirrors `cluster_replica_size_has_disk`, joining
         // `mz_cluster_replica_size_internal` for both `swap_enabled` and
@@ -2397,7 +2731,14 @@ SELECT
     data->'value'->>'name' AS name,
     mz_internal.parse_catalog_id(data->'value'->'cluster_id') AS cluster_id,
     data->'value'->'config'->'location'->'Managed'->>'size' AS size,
-    data->'value'->'config'->'location'->'Managed'->>'availability_zone' AS availability_zone,
+    CASE
+        WHEN jsonb_array_length(data->'value'->'config'->'location'->'Managed'->'availability_zones') > 0 THEN
+            (
+                SELECT pg_catalog.string_agg(az.value, ',' ORDER BY az.ord)
+                FROM jsonb_array_elements_text(data->'value'->'config'->'location'->'Managed'->'availability_zones')
+                     WITH ORDINALITY AS az(value, ord)
+            )
+    END AS availability_zone,
     mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
     CASE
         WHEN data->'value'->'config'->'location' ? 'Managed' THEN
@@ -2501,61 +2842,135 @@ pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| B
     }),
 });
 
-pub static MZ_AUDIT_EVENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_audit_events",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_AUDIT_EVENTS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::UInt64.nullable(false))
-        .with_column("event_type", SqlScalarType::String.nullable(false))
-        .with_column("object_type", SqlScalarType::String.nullable(false))
-        .with_column("details", SqlScalarType::Jsonb.nullable(false))
-        .with_column("user", SqlScalarType::String.nullable(true))
-        .with_column(
-            "occurred_at",
-            SqlScalarType::TimestampTz { precision: None }.nullable(false),
-        )
-        .with_key(vec![0])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "Materialize's unique, monotonically increasing ID for the event.",
-        ),
-        (
-            "event_type",
-            "The type of the event: `create`, `drop`, or `alter`.",
-        ),
-        (
-            "object_type",
-            "The type of the affected object: `cluster`, `cluster-replica`, `connection`, `database`, `function`, `index`, `materialized-view`, `role`, `schema`, `secret`, `sink`, `source`, `table`, `type`, or `view`.",
-        ),
-        (
-            "details",
-            "Additional details about the event. The shape of the details varies based on `event_type` and `object_type`.",
-        ),
-        (
-            "user",
-            "The user who triggered the event, or `NULL` if triggered by the system.",
-        ),
-        (
-            "occurred_at",
-            "The time at which the event occurred. Guaranteed to be in order of event creation. Events created in the same transaction will have identical values.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "audit_event",
-        description: "An audit log entry recording a DDL operation",
-        links: &const { [] },
-        column_semantic_types: &const {
-            [
-                ("object_type", SemanticType::ObjectType),
-                ("occurred_at", SemanticType::WallclockTimestamp),
-            ]
-        },
-    }),
+pub static MZ_AUDIT_EVENTS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_audit_events",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_AUDIT_EVENTS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::UInt64.nullable(false))
+            .with_column("event_type", SqlScalarType::String.nullable(false))
+            .with_column("object_type", SqlScalarType::String.nullable(false))
+            .with_column("details", SqlScalarType::Jsonb.nullable(false))
+            .with_column("user", SqlScalarType::String.nullable(true))
+            .with_column(
+                "occurred_at",
+                SqlScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "Materialize's unique, monotonically increasing ID for the event.",
+            ),
+            (
+                "event_type",
+                "The type of the event: `create`, `drop`, `alter`, `grant`, `revoke`, or `comment`.",
+            ),
+            (
+                "object_type",
+                "The type of the affected object: `cluster`, `cluster-replica`, `connection`, `continual-task`, `database`, `func`, `index`, `materialized-view`, `metric-sink`, `network-policy`, `role`, `schema`, `secret`, `sink`, `source`, `system`, `table`, `type`, or `view`.",
+            ),
+            (
+                "details",
+                "Additional details about the event. The shape of the details varies based on `event_type` and `object_type`.",
+            ),
+            (
+                "user",
+                "The user who triggered the event, or `NULL` if triggered by the system.",
+            ),
+            (
+                "occurred_at",
+                "The time at which the event occurred. Guaranteed to be in order of event creation. Events created in the same transaction will have identical values.",
+            ),
+        ]),
+        // `event_type` and `object_type` are stored in `mz_catalog_raw` as the
+        // numeric `Serialize_repr` of `proto::audit_log_event_v1::{EventType,
+        // ObjectType}`. The CASE expressions map them to the kebab strings
+        // that `audit_log::{EventType, ObjectType}`'s Display impls produce.
+        //
+        // `event` is `AuditLogEvent::V1(AuditLogEventV1)`, externally tagged,
+        // so we reach through `key.event.V1` for the inner struct.
+        //
+        // `user` is `Option<StringWrapper>`: JSON null when absent, otherwise
+        // `{"inner": "<name>"}`. `->'user'->>'inner'` collapses both to a
+        // PostgreSQL NULL or the text.
+        //
+        // `details` in `mz_catalog_raw` is the externally-tagged proto
+        // `Details` enum. `parse_catalog_audit_log_details` reshapes it into
+        // `audit_log::EventDetails::as_json`'s output, the format the prior
+        // BuiltinTable populator wrote. See that function's docstring and
+        // the round-trip test in `src/catalog/tests/audit_log_details.rs`.
+        //
+        // `occurred_at` is `EpochMillis` (u64). Dividing by 1000.0 and feeding
+        // to `to_timestamp` matches `mz_ore::now::to_datetime`'s round-trip
+        // through `chrono::DateTime::from_timestamp_millis`.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL event_type,
+    ASSERT NOT NULL object_type,
+    ASSERT NOT NULL details,
+    ASSERT NOT NULL occurred_at
+) AS
+WITH ev AS (
+    SELECT data->'key'->'event'->'V1' AS e
+    FROM mz_internal.mz_catalog_raw
+    WHERE data->>'kind' = 'AuditLog'
+)
+SELECT
+    (e->>'id')::uint8                                                       AS id,
+    CASE (e->>'event_type')
+        WHEN '1' THEN 'create'
+        WHEN '2' THEN 'drop'
+        WHEN '3' THEN 'alter'
+        WHEN '4' THEN 'grant'
+        WHEN '5' THEN 'revoke'
+        WHEN '6' THEN 'comment'
+    END                                                                     AS event_type,
+    CASE (e->>'object_type')
+        WHEN '1'  THEN 'cluster'
+        WHEN '2'  THEN 'cluster-replica'
+        WHEN '3'  THEN 'connection'
+        WHEN '4'  THEN 'database'
+        WHEN '5'  THEN 'func'
+        WHEN '6'  THEN 'index'
+        WHEN '7'  THEN 'materialized-view'
+        WHEN '8'  THEN 'role'
+        WHEN '9'  THEN 'secret'
+        WHEN '10' THEN 'schema'
+        WHEN '11' THEN 'sink'
+        WHEN '12' THEN 'source'
+        WHEN '13' THEN 'table'
+        WHEN '14' THEN 'type'
+        WHEN '15' THEN 'view'
+        WHEN '16' THEN 'system'
+        WHEN '17' THEN 'continual-task'
+        WHEN '18' THEN 'network-policy'
+        WHEN '19' THEN 'metric-sink'
+    END                                                                     AS object_type,
+    mz_internal.parse_catalog_audit_log_details(e->'details')               AS details,
+    e->'user'->>'inner'                                                     AS \"user\",
+    -- `occurred_at` is serialized by `proto::EpochMillis` as
+    -- `{\"millis\": <u64>}`; reach through `'millis'` to get the integer.
+    to_timestamp(((e->'occurred_at'->>'millis')::float8) / 1000.0)          AS occurred_at
+FROM ev",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "audit_event",
+            description: "An audit log entry recording a DDL operation",
+            links: &const { [] },
+            column_semantic_types: &const {
+                [
+                    ("object_type", SemanticType::ObjectType),
+                    ("occurred_at", SemanticType::WallclockTimestamp),
+                ]
+            },
+        }),
+    }
 });
 
 pub static MZ_EGRESS_IPS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -2585,36 +3000,68 @@ pub static MZ_EGRESS_IPS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
     }),
 });
 
-pub static MZ_AWS_PRIVATELINK_CONNECTIONS: LazyLock<BuiltinTable> =
-    LazyLock::new(|| BuiltinTable {
-        name: "mz_aws_privatelink_connections",
-        schema: MZ_CATALOG_SCHEMA,
-        oid: oid::TABLE_MZ_AWS_PRIVATELINK_CONNECTIONS_OID,
-        desc: RelationDesc::builder()
-            .with_column("id", SqlScalarType::String.nullable(false))
-            .with_column("principal", SqlScalarType::String.nullable(false))
-            .finish(),
-        column_comments: BTreeMap::from_iter([
-            ("id", "The ID of the connection."),
-            (
-                "principal",
-                "The AWS Principal that Materialize will use to connect to the VPC endpoint.",
-            ),
-        ]),
-        is_retained_metrics_object: false,
-        access: vec![PUBLIC_SELECT],
-        ontology: Some(Ontology {
-            entity_name: "aws_privatelink_connection",
-            description: "AWS PrivateLink connection configuration",
-            links: &const {
-                [OntologyLink {
-                    name: "details_of",
-                    target: "connection",
-                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-                }]
-            },
-            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-        }),
+// The privatelink principal is entirely context-derived (there is nothing to
+// parse out of create_sql), so this view selects the aws-privatelink
+// connections and reconstructs the principal ARN from the plan-time AWS context
+// functions. `principal` is NOT NULL and the removed packer emitted no row when
+// the AWS principal context was absent. A view cannot skip a row, but the
+// context functions fold to NULL without the context, so `WHERE principal IS
+// NOT NULL` reproduces that skip (zero rows on envs without the context).
+pub static MZ_AWS_PRIVATELINK_CONNECTIONS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| {
+        BuiltinMaterializedView {
+            name: "mz_aws_privatelink_connections",
+            schema: MZ_CATALOG_SCHEMA,
+            oid: oid::MV_MZ_AWS_PRIVATELINK_CONNECTIONS_OID,
+            desc: RelationDesc::builder()
+                .with_column("id", SqlScalarType::String.nullable(false))
+                .with_column("principal", SqlScalarType::String.nullable(false))
+                .with_key(vec![0])
+                .finish(),
+            column_comments: BTreeMap::from_iter([
+                ("id", "The ID of the connection."),
+                (
+                    "principal",
+                    "The AWS Principal that Materialize will use to connect to the VPC endpoint.",
+                ),
+            ]),
+            // `principal` reproduces `AwsPrincipalContext::to_principal_string` in
+            // src/catalog/src/config.rs. Keep the two in sync.
+            sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL principal
+) AS
+SELECT id, principal FROM (
+    SELECT
+        mz_internal.parse_catalog_id(r.data->'key'->'gid') AS id,
+        'arn:aws:iam::' || mz_aws_account_id() || ':role/mz_'
+            || mz_aws_external_id_prefix() || '_'
+            || mz_internal.parse_catalog_id(r.data->'key'->'gid') AS principal
+    FROM mz_internal.mz_catalog_raw r
+    WHERE
+        r.data->>'kind' = 'Item' AND
+        mz_internal.parse_catalog_create_sql(
+            r.data->'value'->'definition'->'V1'->>'create_sql')->>'connection_type'
+                = 'aws-privatelink'
+)
+WHERE principal IS NOT NULL",
+            is_retained_metrics_object: false,
+            access: vec![PUBLIC_SELECT],
+            ontology: Some(Ontology {
+                entity_name: "aws_privatelink_connection",
+                description: "AWS PrivateLink connection configuration",
+                links: &const {
+                    [OntologyLink {
+                        name: "details_of",
+                        target: "connection",
+                        properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                    }]
+                },
+                column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+            }),
+        }
     });
 
 pub static MZ_CLUSTER_REPLICA_FRONTIERS: LazyLock<BuiltinSource> =
@@ -2653,109 +3100,177 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS_IND: LazyLock<BuiltinIndex> =
         is_retained_metrics_object: false,
     });
 
-pub static MZ_DEFAULT_PRIVILEGES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_default_privileges",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_DEFAULT_PRIVILEGES_OID,
-    desc: RelationDesc::builder()
-        .with_column("role_id", SqlScalarType::String.nullable(false))
-        .with_column("database_id", SqlScalarType::String.nullable(true))
-        .with_column("schema_id", SqlScalarType::String.nullable(true))
-        .with_column("object_type", SqlScalarType::String.nullable(false))
-        .with_column("grantee", SqlScalarType::String.nullable(false))
-        .with_column("privileges", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "role_id",
-            "Privileges described in this row will be granted on objects created by `role_id`. The role ID `p` stands for the `PUBLIC` pseudo-role and applies to all roles.",
-        ),
-        (
-            "database_id",
-            "Privileges described in this row will be granted only on objects in the database identified by `database_id` if non-null.",
-        ),
-        (
-            "schema_id",
-            "Privileges described in this row will be granted only on objects in the schema identified by `schema_id` if non-null.",
-        ),
-        (
-            "object_type",
-            "Privileges described in this row will be granted only on objects of type `object_type`.",
-        ),
-        (
-            "grantee",
-            "Privileges described in this row will be granted to `grantee`. The role ID `p` stands for the `PUBLIC` pseudo-role and applies to all roles.",
-        ),
-        ("privileges", "The set of privileges that will be granted."),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "default_privilege",
-        description: "A default privilege rule applied to newly created objects",
-        links: &const {
-            [
-                OntologyLink {
-                    name: "default_priv_for_role",
-                    target: "role",
-                    properties: LinkProperties::fk("role_id", "id", Cardinality::ManyToOne),
-                },
-                OntologyLink {
-                    name: "default_priv_in_database",
-                    target: "database",
-                    properties: LinkProperties::fk_nullable(
-                        "database_id",
-                        "id",
-                        Cardinality::ManyToOne,
-                    ),
-                },
-                OntologyLink {
-                    name: "default_priv_in_schema",
-                    target: "schema",
-                    properties: LinkProperties::fk_nullable(
-                        "schema_id",
-                        "id",
-                        Cardinality::ManyToOne,
-                    ),
-                },
-                OntologyLink {
-                    name: "default_priv_granted_to",
-                    target: "role",
-                    properties: LinkProperties::fk("grantee", "id", Cardinality::ManyToOne),
-                },
-            ]
-        },
-        column_semantic_types: &const {
-            [
-                ("role_id", SemanticType::RoleId),
-                ("database_id", SemanticType::DatabaseId),
-                ("schema_id", SemanticType::SchemaId),
-                ("object_type", SemanticType::ObjectType),
-                ("grantee", SemanticType::RoleId),
-            ]
-        },
-    }),
+pub static MZ_DEFAULT_PRIVILEGES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_default_privileges",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_DEFAULT_PRIVILEGES_OID,
+        desc: RelationDesc::builder()
+            .with_column("role_id", SqlScalarType::String.nullable(false))
+            .with_column("database_id", SqlScalarType::String.nullable(true))
+            .with_column("schema_id", SqlScalarType::String.nullable(true))
+            .with_column("object_type", SqlScalarType::String.nullable(false))
+            .with_column("grantee", SqlScalarType::String.nullable(false))
+            .with_column("privileges", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "role_id",
+                "Privileges described in this row will be granted on objects created by `role_id`. The role ID `p` stands for the `PUBLIC` pseudo-role and applies to all roles.",
+            ),
+            (
+                "database_id",
+                "Privileges described in this row will be granted only on objects in the database identified by `database_id` if non-null.",
+            ),
+            (
+                "schema_id",
+                "Privileges described in this row will be granted only on objects in the schema identified by `schema_id` if non-null.",
+            ),
+            (
+                "object_type",
+                "Privileges described in this row will be granted only on objects of type `object_type`.",
+            ),
+            (
+                "grantee",
+                "Privileges described in this row will be granted to `grantee`. The role ID `p` stands for the `PUBLIC` pseudo-role and applies to all roles.",
+            ),
+            ("privileges", "The set of privileges that will be granted."),
+        ]),
+        // `object_type` in `mz_catalog_raw` is the numeric `Serialize_repr` form
+        // of `mz_catalog_protos::ObjectType`. The CASE mirrors
+        // `mz_sql::catalog::ObjectType`'s `Display` impl, lowercased, matching
+        // the prior `pack_default_privileges_update` populator. Variant `16` is
+        // reserved/unused; any new proto variant must add a branch here. The
+        // `object_type_case_matches_proto_display` test in this crate checks
+        // the mapping.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL role_id,
+    ASSERT NOT NULL object_type,
+    ASSERT NOT NULL grantee,
+    ASSERT NOT NULL privileges
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'role_id') AS role_id,
+    CASE WHEN data->'key'->'database_id' != 'null'::jsonb
+         THEN mz_internal.parse_catalog_id(data->'key'->'database_id') END AS database_id,
+    CASE WHEN data->'key'->'schema_id' != 'null'::jsonb
+         THEN mz_internal.parse_catalog_id(data->'key'->'schema_id') END AS schema_id,
+    CASE data->'key'->>'object_type'
+        WHEN '1'  THEN 'table'
+        WHEN '2'  THEN 'view'
+        WHEN '3'  THEN 'materialized view'
+        WHEN '4'  THEN 'source'
+        WHEN '5'  THEN 'sink'
+        WHEN '6'  THEN 'index'
+        WHEN '7'  THEN 'type'
+        WHEN '8'  THEN 'role'
+        WHEN '9'  THEN 'cluster'
+        WHEN '10' THEN 'cluster replica'
+        WHEN '11' THEN 'secret'
+        WHEN '12' THEN 'connection'
+        WHEN '13' THEN 'database'
+        WHEN '14' THEN 'schema'
+        WHEN '15' THEN 'function'
+        -- variant 16 reserved/unused in mz_catalog_protos::ObjectType.
+        WHEN '17' THEN 'network policy'
+    END AS object_type,
+    mz_internal.parse_catalog_id(data->'key'->'grantee') AS grantee,
+    mz_internal.parse_catalog_acl_mode(data->'value'->'privileges') AS privileges
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'DefaultPrivileges'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "default_privilege",
+            description: "A default privilege rule applied to newly created objects",
+            links: &const {
+                [
+                    OntologyLink {
+                        name: "default_priv_for_role",
+                        target: "role",
+                        properties: LinkProperties::fk("role_id", "id", Cardinality::ManyToOne),
+                    },
+                    OntologyLink {
+                        name: "default_priv_in_database",
+                        target: "database",
+                        properties: LinkProperties::fk_nullable(
+                            "database_id",
+                            "id",
+                            Cardinality::ManyToOne,
+                        ),
+                    },
+                    OntologyLink {
+                        name: "default_priv_in_schema",
+                        target: "schema",
+                        properties: LinkProperties::fk_nullable(
+                            "schema_id",
+                            "id",
+                            Cardinality::ManyToOne,
+                        ),
+                    },
+                    OntologyLink {
+                        name: "default_priv_granted_to",
+                        target: "role",
+                        properties: LinkProperties::fk("grantee", "id", Cardinality::ManyToOne),
+                    },
+                ]
+            },
+            column_semantic_types: &const {
+                [
+                    ("role_id", SemanticType::RoleId),
+                    ("database_id", SemanticType::DatabaseId),
+                    ("schema_id", SemanticType::SchemaId),
+                    ("object_type", SemanticType::ObjectType),
+                    ("grantee", SemanticType::RoleId),
+                ]
+            },
+        }),
+    }
 });
 
-pub static MZ_SYSTEM_PRIVILEGES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_system_privileges",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_SYSTEM_PRIVILEGES_OID,
-    desc: RelationDesc::builder()
-        .with_column("privileges", SqlScalarType::MzAclItem.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([(
-        "privileges",
-        "The privileges belonging to the system.",
-    )]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "system_privilege",
-        description: "A system-level privilege grant",
-        links: &const { [] },
-        column_semantic_types: &[],
-    }),
+pub static MZ_SYSTEM_PRIVILEGES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_system_privileges",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_SYSTEM_PRIVILEGES_OID,
+        desc: RelationDesc::builder()
+            .with_column("privileges", SqlScalarType::MzAclItem.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([(
+            "privileges",
+            "The privileges belonging to the system.",
+        )]),
+        // The durable row holds `(grantee, grantor, acl_mode)`; we rebuild the
+        // single-element JSON shape that `parse_catalog_privileges` expects and
+        // unnest it to recover the `mz_aclitem`.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL privileges
+) AS
+SELECT
+    unnest(mz_internal.parse_catalog_privileges(
+        jsonb_build_array(
+            jsonb_build_object(
+                'grantee',  data->'key'->'grantee',
+                'grantor',  data->'key'->'grantor',
+                'acl_mode', data->'value'->'acl_mode'
+            )
+        )
+    )) AS privileges
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'SystemPrivileges'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "system_privilege",
+            description: "A system-level privilege grant",
+            links: &const { [] },
+            column_semantic_types: &[],
+        }),
+    }
 });
 
 pub static MZ_STORAGE_USAGE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -2941,7 +3456,7 @@ pub static MZ_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
             ("oid", "A PostgreSQL-compatible OID for the object."),
             ("schema_id", "The ID of the schema to which the object belongs. Corresponds to `mz_schemas.id`."),
             ("name", "The name of the object."),
-            ("type", "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`."),
+            ("type", "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `metric-sink`, `index`, `connection`, `secret`, `type`, or `function`."),
             ("owner_id", "The role ID of the owner of the object. Corresponds to `mz_roles.id`."),
             ("cluster_id", "The ID of the cluster maintaining the source, materialized view, index, or sink. Corresponds to `mz_clusters.id`. `NULL` for other object types."),
             ("privileges", "The privileges belonging to the object."),
@@ -2950,6 +3465,8 @@ pub static MZ_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
         "SELECT id, oid, schema_id, name, type, owner_id, cluster_id, privileges FROM mz_catalog.mz_relations
 UNION ALL
     SELECT id, oid, schema_id, name, 'sink', owner_id, cluster_id, NULL::mz_catalog.mz_aclitem[] FROM mz_catalog.mz_sinks
+UNION ALL
+    SELECT id, oid, schema_id, name, 'metric-sink', owner_id, cluster_id, NULL::mz_catalog.mz_aclitem[] FROM mz_internal.mz_metric_sinks
 UNION ALL
     SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index', mz_indexes.owner_id, mz_indexes.cluster_id, NULL::mz_catalog.mz_aclitem[]
     FROM mz_catalog.mz_indexes
@@ -3276,3 +3793,106 @@ pub const MZ_KAFKA_SOURCES_IND: BuiltinIndex = BuiltinIndex {
 ON mz_catalog.mz_kafka_sources (id)",
     is_retained_metrics_object: true,
 };
+
+#[cfg(test)]
+mod tests {
+    use mz_catalog_protos::objects::ObjectType as ProtoObjectType;
+    use mz_sql::catalog::ObjectType as SqlObjectType;
+
+    use crate::builtin::mz_catalog::MZ_DEFAULT_PRIVILEGES;
+
+    /// Checks the `object_type` CASE in `MZ_DEFAULT_PRIVILEGES` against the
+    /// proto enum and the SQL Display impl it's meant to mirror.
+    ///
+    /// The CASE maps `mz_catalog_protos::ObjectType`'s numeric `Serialize_repr`
+    /// to `mz_sql::catalog::ObjectType`'s `Display`, lowercased. The match in
+    /// `expected_for` is exhaustive, so a new proto variant won't compile until
+    /// it's handled. A wrong string in the CASE fails the substring assertion.
+    #[mz_ore::test]
+    fn object_type_case_matches_proto_display() {
+        // `None` means the variant never shows up in a stored `DefaultPrivilege`
+        // key, so the CASE deliberately has no arm for it: `Unknown` is the
+        // zero-value sentinel, and `ON METRIC SINKS` is rejected by
+        // `plan_alter_default_privileges` before a key ever gets built. Match is
+        // exhaustive: a new variant forces an update.
+        fn expected_for(proto: ProtoObjectType) -> Option<SqlObjectType> {
+            match proto {
+                ProtoObjectType::Unknown => None,
+                ProtoObjectType::MetricSink => None,
+                ProtoObjectType::Table => Some(SqlObjectType::Table),
+                ProtoObjectType::View => Some(SqlObjectType::View),
+                ProtoObjectType::MaterializedView => Some(SqlObjectType::MaterializedView),
+                ProtoObjectType::Source => Some(SqlObjectType::Source),
+                ProtoObjectType::Sink => Some(SqlObjectType::Sink),
+                ProtoObjectType::Index => Some(SqlObjectType::Index),
+                ProtoObjectType::Type => Some(SqlObjectType::Type),
+                ProtoObjectType::Role => Some(SqlObjectType::Role),
+                ProtoObjectType::Cluster => Some(SqlObjectType::Cluster),
+                ProtoObjectType::ClusterReplica => Some(SqlObjectType::ClusterReplica),
+                ProtoObjectType::Secret => Some(SqlObjectType::Secret),
+                ProtoObjectType::Connection => Some(SqlObjectType::Connection),
+                ProtoObjectType::Database => Some(SqlObjectType::Database),
+                ProtoObjectType::Schema => Some(SqlObjectType::Schema),
+                ProtoObjectType::Func => Some(SqlObjectType::Func),
+                ProtoObjectType::NetworkPolicy => Some(SqlObjectType::NetworkPolicy),
+            }
+        }
+
+        // The proto enum has no `IntoEnumIterator`, so list every variant by
+        // hand. A missed entry here just goes unchecked, but the exhaustive
+        // match in `expected_for` won't compile when a new proto variant lands,
+        // which is the actual drift defense.
+        let variants: &[ProtoObjectType] = &[
+            ProtoObjectType::Unknown,
+            ProtoObjectType::Table,
+            ProtoObjectType::View,
+            ProtoObjectType::MaterializedView,
+            ProtoObjectType::Source,
+            ProtoObjectType::Sink,
+            ProtoObjectType::Index,
+            ProtoObjectType::Type,
+            ProtoObjectType::Role,
+            ProtoObjectType::Cluster,
+            ProtoObjectType::ClusterReplica,
+            ProtoObjectType::Secret,
+            ProtoObjectType::Connection,
+            ProtoObjectType::Database,
+            ProtoObjectType::Schema,
+            ProtoObjectType::Func,
+            ProtoObjectType::NetworkPolicy,
+            ProtoObjectType::MetricSink,
+        ];
+
+        let sql = MZ_DEFAULT_PRIVILEGES.sql;
+        for &proto in variants {
+            // `ObjectType` is `#[repr(u8)]`; the discriminant matches the
+            // `Serialize_repr` JSON value the SQL CASE arms compare against.
+            #[allow(clippy::as_conversions)]
+            let repr = proto as u8;
+            match expected_for(proto) {
+                Some(sql_ty) => {
+                    let display = sql_ty.to_string().to_lowercase();
+                    // The arms use variable whitespace between `WHEN '..'` and
+                    // `THEN` to align columns; verify the WHEN and THEN strings
+                    // appear together with at most one or two spaces between.
+                    let one_space = format!("WHEN '{repr}' THEN '{display}'");
+                    let two_spaces = format!("WHEN '{repr}'  THEN '{display}'");
+                    assert!(
+                        sql.contains(&one_space) || sql.contains(&two_spaces),
+                        "missing CASE arm for `{proto:?}`: expected \
+                         `WHEN '{repr}' THEN '{display}'` (or with double space) \
+                         in MZ_DEFAULT_PRIVILEGES.sql",
+                    );
+                }
+                None => {
+                    let pattern = format!("WHEN '{repr}'");
+                    assert!(
+                        !sql.contains(&pattern),
+                        "unexpected CASE arm for sentinel `{proto:?}`: \
+                         found `{pattern}` in MZ_DEFAULT_PRIVILEGES.sql",
+                    );
+                }
+            }
+        }
+    }
+}

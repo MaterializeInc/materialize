@@ -22,3 +22,6 @@ class SchemaRegistryClient:
     def register_schema(
         self, subject_name: str, schema: Schema, **kwargs: Any
     ) -> int: ...
+    def set_compatibility(
+        self, subject_name: str | None = None, level: str | None = None
+    ) -> str: ...

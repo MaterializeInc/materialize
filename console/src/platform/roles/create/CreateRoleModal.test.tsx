@@ -211,6 +211,16 @@ describe("CreateRoleModal", () => {
     await waitFor(() => {
       expect(submitButton).toBeDisabled();
     });
+
+    // Wait for the in-flight mutation to settle before the test ends.
+    // Otherwise the delayed response resolves after jsdom teardown, and the
+    // resulting React state update throws "window is not defined".
+    await waitFor(
+      () => {
+        expect(screen.getByText("Roles List")).toBeVisible();
+      },
+      { timeout: 2000 },
+    );
   });
 
   it("handles partial failures: role created but grants fail", async () => {

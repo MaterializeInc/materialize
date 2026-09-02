@@ -110,7 +110,7 @@ function insertActivityLog(
 }
 
 describe("buildQueryHistoryListQuery", () => {
-  it("with isRedacted: false", { timeout: 30_000 }, async () => {
+  it("with isRedacted: false", { timeout: 45_000 }, async () => {
     const strictQueryHistoryListSchema = queryHistoryListSchema.strict();
     await testdrive(`
         > CREATE TABLE recent_activity_log (

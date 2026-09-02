@@ -48,7 +48,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > CREATE TABLE t1 (a int);
 > INSERT INTO t1 VALUES (201), (202), (203);
 
-# TODO: Reenable when database-issues#8619 is fixed
+# TODO: Reenable when https://linear.app/materializeinc/issue/SQL-406 is fixed
 $ skip-if
 SELECT true
 

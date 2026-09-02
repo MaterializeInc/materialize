@@ -1,6 +1,6 @@
 ---
 source: src/timestamp-oracle/src/foundationdb_oracle.rs
-revision: cd582663b1
+revision: afeabae567
 ---
 
 # mz-timestamp-oracle::foundationdb_oracle

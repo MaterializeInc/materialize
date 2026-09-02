@@ -1,0 +1,48 @@
+# Fuzz crate for mz-interchange: decode untrusted source bytes (Kafka message
+# payloads, webhook bodies) into Materialize `Row`s. These decoders are the
+# first thing to touch external data, so a panic reachable from the wire is a
+# real availability bug for source ingestion.
+#
+# Excluded from the main workspace because libFuzzer requires nightly Rust.
+
+[package]
+workspace = "../../../test/cargo-fuzz"
+name = "mz-interchange-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+chrono = "0.4.39"
+libfuzzer-sys = "0.4"
+mz-interchange = { path = ".." }
+mz-repr = { path = "../../repr" }
+prost = "0.14.3"
+prost-types = "0.14.3"
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["rt"] }
+uuid = "1.19.0"
+
+[[bin]]
+name = "avro_decode_fuzzed_schema"
+path = "fuzz_targets/avro_decode_fuzzed_schema.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "json_encode"
+path = "fuzz_targets/json_encode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "protobuf_decode_fuzzed_schema"
+path = "fuzz_targets/protobuf_decode_fuzzed_schema.rs"
+test = false
+doc = false
+bench = false

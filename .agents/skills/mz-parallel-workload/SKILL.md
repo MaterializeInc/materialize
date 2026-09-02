@@ -148,12 +148,17 @@ def run(self, exe: Executor) -> bool:
 
 ### Scenario-Specific Actions
 
-Some actions only run in specific scenarios:
+Some actions only run in specific scenarios. Override `applicable()` for
+this, do NOT gate on the scenario inside `run()`: the worker skips
+inapplicable actions without counting an attempt, which keeps the
+end-of-run action coverage check (an action that never succeeds over a
+whole run fails it) free of false positives.
 
 ```python
+def applicable(self, exe: Executor) -> bool:
+    return exe.db.scenario == Scenario.Rename
+
 def run(self, exe: Executor) -> bool:
-    if exe.db.scenario != Scenario.Rename:
-        return False
     ...
 ```
 
@@ -172,18 +177,14 @@ def run(self, exe: Executor) -> bool:
 
 ## Extending an Existing Action
 
-Often the simplest approach is to add new SQL variants to an existing action's `run()` method. For example, to test a new expression type, add it to `expression.py`. To test a new system flag, add it to `FlipFlagsAction.flags`.
+Often the simplest approach is to add new SQL variants to an existing action's `run()` method. For example, to test a new expression type, add it to `expression.py`. To test a new system flag, add it to `FlipFlagsAction.flags_with_values`.
 
 ### Adding a System Flag to FlipFlagsAction
 
-In the `FlipFlagsAction` class, add an entry to the `flags` dictionary:
+In `FlipFlagsAction.__init__`, add an entry to the `flags_with_values` dictionary:
 
 ```python
-flags: dict[str, list[str]] = {
-    ...
-    "my_new_flag": ["true", "false"],
-    ...
-}
+self.flags_with_values["my_new_flag"] = ["true", "false"]
 ```
 
 ## Running

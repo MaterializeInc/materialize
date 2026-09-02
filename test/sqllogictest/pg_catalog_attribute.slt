@@ -100,7 +100,7 @@ SELECT atttypid, attname, atttypmod FROM pg_attribute WHERE attrelid = (SELECT o
 1186  c_interval  -1
 1187  c__interval  -1
 1231  c__numeric  -1
-1700  c_numeric  2555947
+1700  c_numeric  -1
 2950  c_uuid  -1
 2951  c__uuid  -1
 3802  c_jsonb  -1

@@ -97,22 +97,39 @@ class Executor:
         if self.logging_exe is not None:
             self.logging_exe.log(query)
 
-        try:
-            (
-                cur.execute(query.encode())
-                if isinstance(cur, psycopg.Cursor)
-                else cur.execute(query)
-            )
-        except OperationalError:
-            # Can happen after Mz disruptions if we are running queries against Mz
-            print("Network error, retrying")
-            time.sleep(0.01)
-            self.reconnect()
-            with self.mz_conn.cursor() as cur:
-                self.execute(cur, query)
-        except Exception as e:
-            print(f"Query failed: {query} {e}")
-            raise QueryError(str(e), query)
+        # Bounded retries, endless retrying turns a permanent failure into a
+        # RecursionError/hang.
+        for _ in range(1000):
+            try:
+                (
+                    cur.execute(query.encode())
+                    if isinstance(cur, psycopg.Cursor)
+                    else cur.execute(query)
+                )
+                return
+            except OperationalError as e:
+                # Server-side operational errors (e.g. resource limits) carry
+                # a SQLSTATE and are permanent. Only connection-level failures
+                # (no SQLSTATE) are worth retrying, they happen after Mz
+                # disruptions.
+                if e.sqlstate is not None:
+                    print(f"Query failed: {query} {e}")
+                    raise QueryError(str(e), query)
+                # Only queries against Mz can be retried this way, an upstream
+                # connection must not be redirected to the Mz connection.
+                if (
+                    not isinstance(cur, psycopg.Cursor)
+                    or cur.connection is not self.mz_conn
+                ):
+                    raise
+                print("Network error, retrying")
+                time.sleep(0.01)
+                self.reconnect()
+                cur = self.mz_conn.cursor()
+            except Exception as e:
+                print(f"Query failed: {query} {e}")
+                raise QueryError(str(e), query)
+        raise QueryError("Persistent network errors", query)
 
     def execute_with_retry_on_error(
         self,
@@ -136,6 +153,12 @@ class Executor:
 
 
 class PrintExecutor(Executor):
+    def reconnect(self) -> None:
+        # Only prints transactions, needs no Materialize connection. The
+        # random service pick in the base implementation could also hit a
+        # service that is not running yet.
+        pass
+
     def create(self, logging_exe: Any | None = None) -> None:
         pass
 
@@ -146,6 +169,20 @@ class PrintExecutor(Executor):
 
 def delivery_report(err: "KafkaError | None", msg: Any) -> None:
     assert err is None, f"Delivery failed for User record {msg.key()}: {err}"
+
+
+# Avro base types that a narrower writer can be promoted *into* on read. An
+# `int` writer promotes to any of these, so it is a universal narrower writer
+# for a schema-evolution preamble.
+_PROMOTABLE_TO_WIDER = {"long", "float", "double"}
+
+
+def _avro_value_type(field: Field) -> Any:
+    # A nullable column is encoded as a `["null", T]` union rather than the bare
+    # type `T`, so decoding goes through union schema resolution (numeric
+    # promotion, default substitution, ...).
+    base = str(field.data_type.name(Backend.AVRO)).lower()
+    return ["null", base] if field.nullable else base
 
 
 class KafkaExecutor(Executor):
@@ -167,23 +204,30 @@ class KafkaExecutor(Executor):
         cluster: str | None = None,
         mz_service: str | None = None,
         composition: Composition | None = None,
+        evolve_schema: bool = False,
     ):
         super().__init__(
             ports, fields, database, schema, cluster, mz_service, composition
         )
 
+        self.num = num
         self.topic = f"data-ingest-{num}"
         self.table = f"kafka_table{num}"
+        # When set, write a few records under a narrower (promotable) writer
+        # schema *before* creating the source, so the source's fixed reader
+        # schema must promote them. See `_write_promotion_preamble`.
+        self.evolve_schema = evolve_schema
 
     def create(self, logging_exe: Any | None = None) -> None:
         self.logging_exe = logging_exe
+
         schema = {
             "type": "record",
             "name": "value",
             "fields": [
                 {
                     "name": field.name,
-                    "type": str(field.data_type.name(Backend.AVRO)).lower(),
+                    "type": _avro_value_type(field),
                 }
                 for field in self.fields
                 if not field.is_key
@@ -227,26 +271,10 @@ class KafkaExecutor(Executor):
         }
         registry = SchemaRegistryClient(schema_registry_conf)
 
-        self.avro_serializer = AvroSerializer(
-            registry,
-            schema_str=json.dumps(schema),
-            to_dict=lambda d, ctx: d,
-        )
-
         self.key_avro_serializer = AvroSerializer(
             registry,
             schema_str=json.dumps(key_schema),
             to_dict=lambda d, ctx: d,
-        )
-
-        if logging_exe is not None:
-            logging_exe.log(f"{topic}-value: {json.dumps(schema)}")
-            logging_exe.log(f"{topic}-key: {json.dumps(key_schema)}")
-        registry.register_schema(
-            f"{topic}-value", Schema(json.dumps(schema), schema_type="AVRO")
-        )
-        registry.register_schema(
-            f"{topic}-key", Schema(json.dumps(key_schema), schema_type="AVRO")
         )
 
         self.serialization_context = SerializationContext(
@@ -257,6 +285,36 @@ class KafkaExecutor(Executor):
         )
 
         self.producer = confluent_kafka.Producer(kafka_conf)
+
+        # Optionally seed the topic with records under a narrower, promotable
+        # writer schema *before* the source (and its fixed reader schema) is
+        # created, so the decode path must promote them. Must run before the
+        # wider schema is registered below, so the narrower one is an earlier
+        # version and the wider one stays latest.
+        if self.evolve_schema:
+            self._write_promotion_preamble(registry)
+
+        if logging_exe is not None:
+            logging_exe.log(f"{topic}-value: {json.dumps(schema)}")
+            logging_exe.log(f"{topic}-key: {json.dumps(key_schema)}")
+        # Register the (wider) value schema last so it is the latest version;
+        # the source adopts the latest as its fixed reader schema.
+        registry.register_schema(
+            f"{topic}-value", Schema(json.dumps(schema), schema_type="AVRO")
+        )
+        registry.register_schema(
+            f"{topic}-key", Schema(json.dumps(key_schema), schema_type="AVRO")
+        )
+
+        # Construct the value serializer only after the wider schema is the
+        # latest registered version, so a promotion preamble's narrower schema
+        # stays the earlier version (and the source's reader schema is the wider
+        # one) regardless of when the serializer registers its schema.
+        self.avro_serializer = AvroSerializer(
+            registry,
+            schema_str=json.dumps(schema),
+            to_dict=lambda d, ctx: d,
+        )
 
         with self.mz_conn.cursor() as cur:
             self.execute_with_retry_on_error(
@@ -270,6 +328,85 @@ class KafkaExecutor(Executor):
                 required_error_message_substrs=[
                     "Topic does not exist",
                 ],
+            )
+
+    def _write_promotion_preamble(self, registry: SchemaRegistryClient) -> None:
+        """Seed the topic with records written under a narrower writer schema.
+
+        For each nullable value column whose Avro type is a promotion target
+        (`long`/`float`/`double`), render it instead as `["null", "int"]` and
+        produce a few records with `int` values. These land in the topic before
+        the source is created, so the source -- which fixes its reader schema to
+        the latest (wider) registered version and reads the topic from the
+        beginning -- must promote the writer's `int` union variant into the
+        wider reader variant. This exercises union schema resolution with
+        numeric promotion, which a run with identical writer and reader schemas
+        never reaches.
+        """
+        value_fields = [f for f in self.fields if not f.is_key]
+        key_fields = [f for f in self.fields if f.is_key]
+        narrowable = {
+            f.name
+            for f in value_fields
+            if f.nullable
+            and str(f.data_type.name(Backend.AVRO)).lower() in _PROMOTABLE_TO_WIDER
+        }
+        if not narrowable:
+            return
+
+        # `int` promotes to long/float/double, so it is a valid narrower writer
+        # for every wider reader variant we might have generated.
+        narrow_schema = {
+            "type": "record",
+            "name": "value",
+            "fields": [
+                {
+                    "name": f.name,
+                    "type": (
+                        ["null", "int"] if f.name in narrowable else _avro_value_type(f)
+                    ),
+                }
+                for f in value_fields
+            ],
+        }
+        # Disable subject compatibility checks so the wider schema can be
+        # registered on top of this narrower one regardless of the registry's
+        # configured compatibility level.
+        try:
+            registry.set_compatibility(f"{self.topic}-value", level="NONE")
+        except Exception:
+            pass
+        registry.register_schema(
+            f"{self.topic}-value",
+            Schema(json.dumps(narrow_schema), schema_type="AVRO"),
+        )
+        narrow_serializer = AvroSerializer(
+            registry,
+            schema_str=json.dumps(narrow_schema),
+            to_dict=lambda d, ctx: d,
+        )
+
+        rng = random.Random(self.num)
+        for _ in range(3):
+            value = {
+                f.name: (
+                    rng.randint(-1000, 1000)
+                    if f.name in narrowable
+                    else f.data_type.random_value(rng)
+                )
+                for f in value_fields
+            }
+            key = {f.name: f.data_type.random_value(rng) for f in key_fields}
+            self.producer.produce(
+                topic=self.topic,
+                key=self.key_avro_serializer(key, self.key_serialization_context),
+                value=narrow_serializer(value, self.serialization_context),
+                on_delivery=delivery_report,
+            )
+        self.producer.flush()
+        if self.logging_exe is not None:
+            self.logging_exe.log(
+                f"{self.topic}-value (promotion preamble): {json.dumps(narrow_schema)}"
             )
 
     def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
@@ -409,7 +546,12 @@ class SqlServerExecutor(Executor):
             )
             self.execute(
                 cur,
-                f"""CREATE TABLE {identifier(self.table)}
+                # Qualified like the source above. Unqualified, the table lands
+                # in the connection's default schema (`public`) rather than
+                # `self.schema`, and a caller addressing it as
+                # `<database>.<schema>.<table>`, as parallel-workload does, never
+                # resolves it.
+                f"""CREATE TABLE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table)}
                     FROM SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
                     (REFERENCE {identifier(self.table)})""",
             )
@@ -487,7 +629,7 @@ class MySqlExecutor(Executor):
         self.source = f"mysql_source{num}"
         self.num = num
 
-    def create(self, logging_exe: Any | None = None) -> None:
+    def create(self, logging_exe: Any | None = None, prepopulate_rows: int = 0) -> None:
         self.logging_exe = logging_exe
         self.mysql_conn = pymysql.connect(
             host="127.0.0.1",
@@ -515,6 +657,27 @@ class MySqlExecutor(Executor):
                 cur,
                 f"CREATE TABLE `{self.table}` ({', '.join(values)} {primary_key});",
             )
+            # Rows inserted before CREATE SOURCE are read by the initial
+            # snapshot instead of arriving through replication. Every key
+            # column receives the row's NEGATIVE sequence number: workload
+            # generators only ever emit non-negative keys for plain INSERTs
+            # (Definition.numeric_value), so negative keys cannot collide
+            # with them and trigger duplicate-key errors. Callers must keep
+            # prepopulate_rows within the smallest key column type's range.
+            if prepopulate_rows and keys:
+                key_names = ", ".join(f"`{key}`" for key in keys)
+                batch_size = 5000
+                for start in range(1, prepopulate_rows + 1, batch_size):
+                    batch = ", ".join(
+                        "(" + ", ".join([str(-j)] * len(keys)) + ")"
+                        for j in range(
+                            start, min(start + batch_size, prepopulate_rows + 1)
+                        )
+                    )
+                    self.execute(
+                        cur,
+                        f"INSERT INTO `{self.table}` ({key_names}) VALUES {batch};",
+                    )
         self.mysql_conn.autocommit(False)
 
         with self.mz_conn.cursor() as cur:
@@ -538,7 +701,8 @@ class MySqlExecutor(Executor):
             )
             self.execute(
                 cur,
-                f"""CREATE TABLE {identifier(self.table)}
+                # Qualified like the source above, see SqlServerExecutor.create.
+                f"""CREATE TABLE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table)}
                     FROM SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
                     (REFERENCE mysql.{identifier(self.table)})""",
             )
@@ -668,7 +832,8 @@ class PgExecutor(Executor):
             )
             self.execute(
                 cur,
-                f"""CREATE TABLE {identifier(self.table)}
+                # Qualified like the source above, see SqlServerExecutor.create.
+                f"""CREATE TABLE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table)}
                     FROM SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
                     (REFERENCE {identifier(self.table)})""",
             )

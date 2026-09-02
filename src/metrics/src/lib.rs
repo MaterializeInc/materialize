@@ -17,6 +17,7 @@
 
 #![warn(missing_docs, missing_debug_implementations)]
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
@@ -28,6 +29,7 @@ pub use dyncfgs::all_dyncfgs;
 mod dyncfgs;
 pub mod lgalloc;
 pub mod rusage;
+pub mod usage;
 
 /// Handle to metrics defined in this crate.
 #[derive(Debug)]
@@ -36,6 +38,7 @@ pub struct Metrics {
     lgalloc: MetricsTask,
     lgalloc_map: MetricsTask,
     rusage: MetricsTask,
+    usage: MetricsTask,
 }
 
 static METRICS: std::sync::Mutex<Option<Metrics>> = std::sync::Mutex::new(None);
@@ -47,8 +50,15 @@ static METRICS: std::sync::Mutex<Option<Metrics>> = std::sync::Mutex::new(None);
 /// remove the shared static mutex and make this function return a handle to the metrics.
 ///
 /// This function is async, because it needs to be called from a tokio runtime context.
+///
+/// `disk_root` is a directory whose filesystem usage should be tracked, or `None` for processes
+/// that do not use disk.
 #[allow(clippy::unused_async)]
-pub async fn register_metrics_into(metrics_registry: &MetricsRegistry, config_set: ConfigSet) {
+pub async fn register_metrics_into(
+    metrics_registry: &MetricsRegistry,
+    config_set: ConfigSet,
+    disk_root: Option<PathBuf>,
+) {
     let update_duration_metric = metrics_registry.register(mz_ore::metric!(
         name: "mz_metrics_update_duration",
         help: "The time it took to update lgalloc stats",
@@ -75,16 +85,24 @@ pub async fn register_metrics_into(metrics_registry: &MetricsRegistry, config_se
         &update_duration_metric,
     );
 
+    let usage = Metrics::new_metrics_task(
+        metrics_registry,
+        |registry| usage::register_metrics_into(registry, disk_root),
+        dyncfgs::MZ_METRICS_USAGE_REFRESH_INTERVAL,
+        &update_duration_metric,
+    );
+
     *METRICS.lock().expect("lock poisoned") = Some(Metrics {
         lgalloc,
         lgalloc_map,
         rusage,
+        usage,
         config_set,
     });
 }
 
-/// Returns the `(name, help, source)` of every metric this crate registers
-/// through a `metric!`-wrapping macro (lgalloc and rusage).
+/// Returns the `(name, help, labels, source)` of every metric this crate
+/// registers through a `metric!`-wrapping macro (lgalloc and rusage).
 ///
 /// The metrics catalog (`mz-metrics-catalog`) builds the user-facing metrics
 /// docs by scraping `metric!` invocations out of the source with `syn`. These
@@ -92,11 +110,13 @@ pub async fn register_metrics_into(metrics_registry: &MetricsRegistry, config_se
 /// macro-expansion time, so the catalog
 /// imports them from here instead: it registers them into a throwaway registry
 /// and reads their descriptors back out.
-pub fn describe_metrics() -> Vec<(String, String, &'static str)> {
+pub fn describe_metrics() -> Vec<(String, String, Vec<String>, &'static str)> {
     let registry = MetricsRegistry::new();
 
-    let tag = |descs: Vec<(String, String)>, src: &'static str| {
-        descs.into_iter().map(move |(name, help)| (name, help, src))
+    let tag = |descs: Vec<(String, String, Vec<String>)>, src: &'static str| {
+        descs
+            .into_iter()
+            .map(move |(name, help, labels)| (name, help, labels, src))
     };
 
     let mut out = Vec::new();
@@ -115,6 +135,19 @@ pub fn describe_metrics() -> Vec<(String, String, &'static str)> {
     out
 }
 
+/// Extracts a metric's label keys from its Prometheus descriptor
+pub(crate) fn desc_labels(desc: &prometheus::core::Desc) -> Vec<String> {
+    let mut labels: Vec<String> = desc
+        .variable_labels
+        .iter()
+        .cloned()
+        .chain(desc.const_label_pairs.iter().map(|p| p.name().to_owned()))
+        .collect();
+    labels.sort();
+    labels.dedup();
+    labels
+}
+
 /// Update the configuration of the metrics.
 pub fn update_dyncfg(config_updates: &ConfigUpdates) {
     if let Some(metrics) = METRICS.lock().expect("lock poisoned").as_mut() {
@@ -131,6 +164,7 @@ impl Metrics {
         self.lgalloc.update_dyncfg(&self.config_set);
         self.lgalloc_map.update_dyncfg(&self.config_set);
         self.rusage.update_dyncfg(&self.config_set);
+        self.usage.update_dyncfg(&self.config_set);
     }
 
     fn new_metrics_task<T: MetricsUpdate>(

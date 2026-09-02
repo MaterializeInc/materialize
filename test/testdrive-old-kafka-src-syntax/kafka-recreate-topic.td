@@ -49,6 +49,13 @@ $ kafka-create-topic topic=topic1 partitions=4
 # deletion before the new topic was created.
 > ALTER CLUSTER to_recreate SET (REPLICATION FACTOR 0)
 
+# The controller drops the replica asynchronously and would otherwise coalesce a
+# 0->1 cycle into a no-op; wait for the spin-down to actually land so the source
+# is gone before the topic is deleted (otherwise it observes the deletion and
+# reports "topic was deleted" instead of "topic was recreated").
+> SELECT count(*) FROM mz_cluster_replicas cr JOIN mz_clusters c ON c.id = cr.cluster_id WHERE c.name = 'to_recreate'
+0
+
 # Recreate the topic with fewer partitions.
 
 $ kafka-delete-topic-flaky topic=topic1
@@ -86,6 +93,13 @@ $ kafka-ingest format=bytes topic=topic2
 # Spin down the cluster, to prevent the source from observing the topic
 # deletion before the new topic was created.
 > ALTER CLUSTER to_recreate SET (REPLICATION FACTOR 0)
+
+# The controller drops the replica asynchronously and would otherwise coalesce a
+# 0->1 cycle into a no-op; wait for the spin-down to actually land so the source
+# is gone before the topic is deleted (otherwise it observes the deletion and
+# reports "topic was deleted" instead of "topic was recreated").
+> SELECT count(*) FROM mz_cluster_replicas cr JOIN mz_clusters c ON c.id = cr.cluster_id WHERE c.name = 'to_recreate'
+0
 
 # Recreate the topic with the same number of partitions but a lower watermark.
 

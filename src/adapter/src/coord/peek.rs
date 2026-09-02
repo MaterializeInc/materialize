@@ -85,13 +85,9 @@ pub(crate) struct PendingPeek {
 #[derive(Debug)]
 pub enum PeekResponseUnary {
     Rows(Box<dyn RowIterator + Send + Sync>),
-    Error(String),
+    Error(AdapterError),
     Canceled,
     /// A dependency was dropped during execution.
-    ///
-    /// N.B. This is a bit of a workaround for the fact that our Error variant
-    /// is unstructured and right now we specifically care about this error and
-    /// need to render differently based on context.
     DependencyDropped(DroppedDependency),
 }
 
@@ -137,7 +133,7 @@ impl DroppedDependency {
 
 #[derive(Clone, Debug)]
 pub struct PeekDataflowPlan {
-    pub(crate) desc: DataflowDescription<mz_compute_types::plan::Plan, ()>,
+    pub(crate) desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
     pub(crate) id: GlobalId,
     key: Vec<MirScalarExpr>,
     permutation: Vec<usize>,
@@ -146,7 +142,7 @@ pub struct PeekDataflowPlan {
 
 impl PeekDataflowPlan {
     pub fn new(
-        desc: DataflowDescription<mz_compute_types::plan::Plan, ()>,
+        desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
         id: GlobalId,
         typ: &SqlRelationType,
     ) -> Self {
@@ -694,6 +690,15 @@ impl FastPathPlan {
 
 impl crate::coord::Coordinator {
     /// Implements a peek plan produced by `create_plan` above.
+    ///
+    /// On success this takes the contents of `ctx_extra`, the
+    /// statement-logging guard: a constant peek is retired immediately, and a
+    /// streaming peek moves them into `pending_peeks` for
+    /// `handle_peek_notification` to retire. On an error return the contents
+    /// are left intact and the caller must take ownership of them: `retire`
+    /// if the caller is the sole end-logger, `defuse` if something else logs
+    /// the error end. Dropping the guard armed emits a spurious `Aborted`,
+    /// double-ending the statement.
     #[mz_ore::instrument(level = "debug")]
     pub async fn implement_peek_plan(
         &mut self,
@@ -1040,7 +1045,7 @@ impl crate::coord::Coordinator {
             let rows = match result {
                 Ok(rows) => rows,
                 Err(e) => {
-                    yield PeekResponseUnary::Error(e.to_string());
+                    yield PeekResponseUnary::Error(AdapterError::Unstructured(anyhow::anyhow!(e)));
                     return;
                 }
             };
@@ -1055,7 +1060,11 @@ impl crate::coord::Coordinator {
                         &duration_histogram,
                     ) {
                         Ok((rows, _size_bytes)) => yield PeekResponseUnary::Rows(Box::new(rows)),
-                        Err(e) => yield PeekResponseUnary::Error(e),
+                        Err(e) => {
+                            yield PeekResponseUnary::Error(AdapterError::Unstructured(
+                                anyhow::Error::msg(e),
+                            ))
+                        }
                     }
                 }
                 PeekResponse::Stashed(response) => {
@@ -1212,7 +1221,11 @@ impl crate::coord::Coordinator {
 
                         match result_rows {
                             Ok(result_rows) => yield PeekResponseUnary::Rows(Box::new(result_rows)),
-                            Err(e) => yield PeekResponseUnary::Error(e),
+                            Err(e) => {
+                                yield PeekResponseUnary::Error(AdapterError::Unstructured(
+                                    anyhow::Error::msg(e),
+                                ))
+                            }
                         }
                     }
 
@@ -1227,7 +1240,7 @@ impl crate::coord::Coordinator {
                     yield PeekResponseUnary::Canceled;
                 }
                 PeekResponse::Error(e) => {
-                    yield PeekResponseUnary::Error(e);
+                    yield PeekResponseUnary::Error(e.into());
                 }
             }
         })
@@ -1374,20 +1387,29 @@ impl crate::coord::Coordinator {
             source_ids,
         };
 
-        // Call the old peek sequencing's implement_peek_plan for now.
         // TODO(peek-seq): After the old peek sequencing is completely removed, we should merge the
         // relevant parts of the old `implement_peek_plan` into this method, and remove the old
         // `implement_peek_plan`.
-        self.implement_peek_plan(
-            &mut ExecuteContextGuard::new(statement_logging_id, self.internal_cmd_tx.clone()),
-            planned_peek,
-            finishing,
-            compute_instance,
-            target_replica,
-            max_result_size,
-            max_query_result_size,
-        )
-        .await
+        let mut ctx_guard =
+            ExecuteContextGuard::new(statement_logging_id, self.internal_cmd_tx.clone());
+        let result = self
+            .implement_peek_plan(
+                &mut ctx_guard,
+                planned_peek,
+                finishing,
+                compute_instance,
+                target_replica,
+                max_result_size,
+                max_query_result_size,
+            )
+            .await;
+        // On error `implement_peek_plan` left the guard's contents intact (see
+        // its doc comment) and the frontend logs the error end, so we defuse
+        // rather than let the guard's `Drop` emit a spurious `Aborted`.
+        if result.is_err() {
+            let _ = ctx_guard.defuse();
+        }
+        result
     }
 
     /// Implements a `COPY TO` command by installing peek watch sets,
@@ -1404,7 +1426,7 @@ impl crate::coord::Coordinator {
     /// All errors (setup or execution) are sent through tx.
     pub(crate) async fn implement_copy_to(
         &mut self,
-        df_desc: DataflowDescription<mz_compute_types::plan::Plan>,
+        df_desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
         source_ids: BTreeSet<GlobalId>,
@@ -1446,10 +1468,7 @@ impl crate::coord::Coordinator {
         };
 
         // Add metadata for the new COPY TO. CopyTo returns a `ready` future, so it is safe to drop.
-        drop(
-            self.add_active_compute_sink(sink_id, ActiveComputeSink::CopyTo(active_copy_to))
-                .await,
-        );
+        drop(self.add_active_compute_sink(sink_id, ActiveComputeSink::CopyTo(active_copy_to)));
 
         // Try to ship the dataflow. We handle errors gracefully because dependencies might have
         // disappeared during sequencing.

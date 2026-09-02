@@ -72,6 +72,13 @@ from materialize.ui import (
 from materialize.util import filter_cmd
 
 
+def _split_complete_lines(buffered: str) -> tuple[str, str]:
+    split = max(buffered.rfind("\n"), buffered.rfind("\r"))
+    if split == -1:
+        return "", buffered
+    return buffered[: split + 1], buffered[split + 1 :]
+
+
 class Service:
     def __init__(self, name: str, idle: bool = False):
         self.name = name
@@ -362,7 +369,6 @@ class Composition:
         max_tries: int = 1,
         silent: bool = False,
         environment: dict[str, str] | None = None,
-        build: str | None = None,
         print_prefix: str | None = None,
     ) -> subprocess.CompletedProcess:
         """Invoke `docker compose` on the rendered composition.
@@ -449,6 +455,26 @@ class Composition:
                     os.set_blocking(p.stdout.fileno(), False)
                     os.set_blocking(p.stderr.fileno(), False)
                     running = True
+                    # Hold each stream's trailing partial line and print only
+                    # complete lines, so a line from one stream is never split
+                    # in the merged output by a chunk of the other stream. The
+                    # raw bytes are still captured in full below for the
+                    # returned CompletedProcess. Keyed by is_stdout.
+                    emit_partial = {True: "", False: ""}
+
+                    def emit(is_stdout: bool, text: str) -> None:
+                        file = sys.stdout if is_stdout else sys.stderr
+                        if print_prefix:
+                            for line in text.splitlines(keepends=True):
+                                print(
+                                    f"{print_prefix}{line}",
+                                    end="",
+                                    file=file,
+                                    flush=True,
+                                )
+                        else:
+                            print(text, end="", file=file, flush=True)
+
                     while running:
                         running = False
                         for key, val in sel.select():
@@ -464,38 +490,20 @@ class Composition:
                                 continue
                             # Keep running as long as stdout or stderr have any content
                             running = True
-                            if key.fileobj is p.stdout:
-                                if print_prefix:
-                                    for line in contents.splitlines(keepends=True):
-                                        print(
-                                            f"{print_prefix}{line}",
-                                            end="",
-                                            flush=True,
-                                        )
-                                else:
-                                    print(
-                                        contents,
-                                        end="",
-                                        flush=True,
-                                    )
+                            is_stdout = key.fileobj is p.stdout
+                            complete, emit_partial[is_stdout] = _split_complete_lines(
+                                emit_partial[is_stdout] + contents
+                            )
+                            if complete:
+                                emit(is_stdout, complete)
+                            if is_stdout:
                                 stdout_result.write(contents)
                             else:
-                                if print_prefix:
-                                    for line in contents.splitlines(keepends=True):
-                                        print(
-                                            f"{print_prefix}{line}",
-                                            end="",
-                                            file=sys.stderr,
-                                            flush=True,
-                                        )
-                                else:
-                                    print(
-                                        contents,
-                                        end="",
-                                        file=sys.stderr,
-                                        flush=True,
-                                    )
                                 stderr_result.write(contents)
+                    # Flush any trailing partial line left without a newline.
+                    for is_stdout, partial in emit_partial.items():
+                        if partial:
+                            emit(is_stdout, partial)
                     p.wait()
                     retcode = p.poll()
                     assert retcode is not None
@@ -520,8 +528,12 @@ class Composition:
                         check=check,
                         stdout=stdout,
                         stderr=stderr,
+                        # NOTE: isinstance against typing.IO is always False for
+                        # real file objects, so dispatch on str instead: strings
+                        # go through `input`, everything else (file objects,
+                        # subprocess.DEVNULL) is passed as the stdin stream.
                         input=stdin if isinstance(stdin, str) else None,
-                        stdin=stdin if isinstance(stdin, IO) else None,
+                        stdin=stdin if not isinstance(stdin, str) else None,
                         text=True,
                         bufsize=1,
                         env=environment,
@@ -534,34 +546,16 @@ class Composition:
 
                 if retry < max_tries:
                     print("Retrying ...")
-                    if build:
-                        for retry in range(max_tries):
-                            try:
-                                build_status = buildkite.get_build_status(build)
-                            except subprocess.CalledProcessError:
-                                time.sleep(3)
-                                break
-                            if build_status == "failed":
-                                print(
-                                    f"Build {build} has been marked as failed, exiting hard"
-                                )
-                                sys.exit(1)
-                            elif build_status == "success":
-                                break
-                            assert (
-                                build_status == "pending"
-                            ), f"Unknown build status {build_status}"
-                            time.sleep(1)
-                    else:
-                        # Back off exponentially rather than sleeping a flat
-                        # 3s each time. The only `invoke` callers that retry
-                        # (max_tries > 1) are image pulls (`up`, `pull`), and a
-                        # freshly-built mzbuild image can briefly fail to
-                        # resolve in the registry ("failed to resolve reference
-                        # ... not found") before it has propagated. With a flat
-                        # 3s sleep, `up`'s 5 tries exhausted in ~12s, which was
-                        # too short to ride out the propagation delay.
-                        time.sleep(min(3 * 2 ** (retry - 1), 30))
+                    # Back off exponentially rather than sleeping a flat
+                    # 3s each time. The only `invoke` callers that retry
+                    # (max_tries > 1) are image pulls (`up`, `pull`), and a
+                    # freshly-built mzbuild image can briefly fail to
+                    # resolve in the registry ("failed to resolve reference
+                    # ... not found") before it has propagated. With a flat
+                    # 3s sleep, `up`'s tries exhausted in seconds, which was
+                    # too short to ride out the propagation delay; the cap
+                    # plus `up`'s try count govern the total wait (see there).
+                    time.sleep(min(3 * 2 ** (retry - 1), 30))
                     continue
                 else:
                     raise CommandFailureCausedUIError(
@@ -912,6 +906,7 @@ class Composition:
         entrypoint: str | None = None,
         check: bool = True,
         silent: bool = False,
+        use_aliases: bool = False,
     ) -> subprocess.CompletedProcess:
         """Run a one-off command in a service.
 
@@ -928,6 +923,9 @@ class Composition:
             stdin: read STDIN from a string.
             env_extra: Additional environment variables to set in the container.
             rm: Remove container after run.
+            use_aliases: Connect the container to the network(s) using the
+                service's network aliases, so other services can reach it by
+                its service name (`docker compose run` omits aliases by default).
             capture: Capture the stdout of the `docker compose` invocation.
             capture_stderr: Capture the stderr of the `docker compose` invocation.
             capture_and_print: Print during execution and capture the
@@ -939,6 +937,7 @@ class Composition:
             *(f"-e{k}" for k in env_extra.keys()),
             *(["--detach"] if detach else []),
             *(["--rm"] if rm else []),
+            *(["--use-aliases"] if use_aliases else []),
             service,
             *args,
             capture=capture,
@@ -1207,7 +1206,7 @@ class Composition:
         *services: str | Service,
         detach: bool = True,
         wait: bool = True,
-        max_tries: int = 5,  # increased since quay.io returns 502 sometimes
+        max_tries: int = 14,
     ) -> None:
         """Build, (re)create, and start the named services.
 
@@ -1251,8 +1250,7 @@ class Composition:
                 *(["--wait"] if wait else []),
                 *(["--quiet-pull"] if ui.env_is_truthy("CI") else []),
                 *service_names,
-                max_tries=300 if os.getenv("CI_WAITING_FOR_BUILD") else max_tries,
-                build=os.getenv("CI_WAITING_FOR_BUILD"),
+                max_tries=max_tries,
             )
         finally:
             # Restore even on failure: otherwise the next test in the same
@@ -1374,6 +1372,19 @@ class Composition:
 
             self.kill("materialized")
             self.up("materialized")
+
+            # The SIGKILL above severed every SQL connection the workflow left
+            # cached (`sql`/`sql_query` reuse connections by default). Close and
+            # forget them so the checks below reconnect to the restarted
+            # `environmentd`. Reusing a dead socket would surface as a spurious
+            # "server closed the connection unexpectedly".
+            for conn in self.conns.values():
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self.conns.clear()
+
             self.sql("SELECT 1")
 
             NUM_RETRIES = 60
@@ -1897,9 +1908,14 @@ class Composition:
                 )
                 from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 
-                test_analytics_config = create_test_analytics_config(self)
-                test_analytics = TestAnalyticsDb(test_analytics_config)
-                test_analytics.database_connector.submit_update_statements()
+                try:
+                    test_analytics_config = create_test_analytics_config(self)
+                    test_analytics = TestAnalyticsDb(test_analytics_config)
+                    test_analytics.database_connector.submit_update_statements()
+                except Exception as e:
+                    # An analytics failure must not mask the actual test
+                    # result, which is raised below.
+                    print(f"Failed to submit test analytics data: {e}")
         if len(exceptions) > 1:
             print(f"Further exceptions were raised:\n{exceptions[1:]}")
         if exceptions:

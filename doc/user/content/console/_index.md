@@ -5,8 +5,12 @@ disable_list: true
 disable_toc: true
 menus:
   main:
-    weight: 5
+    parent: "get-started"
+    weight: 24
     identifier: 'console'
+aliases:
+  - /self-managed/v25.2/console/
+  - /self-managed/v25.2/console/integrations/
 ---
 
 The Materialize Console is a graphical user

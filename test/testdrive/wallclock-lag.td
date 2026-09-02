@@ -14,8 +14,6 @@
 
 $ set-sql-timeout duration=120s
 
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET wallclock_lag_recording_interval = '1s'
 

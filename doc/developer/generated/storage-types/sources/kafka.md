@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/sources/kafka.rs
-revision: 4267863081
+revision: 34813f0a3f
 ---
 
 # storage-types::sources::kafka

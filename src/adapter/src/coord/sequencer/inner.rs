@@ -18,13 +18,20 @@ use anyhow::anyhow;
 use futures::future::{BoxFuture, FutureExt};
 use futures::{Future, StreamExt, future};
 use itertools::Itertools;
+use maplit::btreemap;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::ENABLE_PASSWORD_AUTH;
+use mz_adapter_types::dyncfgs::{
+    ENABLE_EXPRESSION_CACHE, ENABLE_PASSWORD_AUTH, FRONTEND_READ_THEN_WRITE,
+    READ_THEN_WRITE_MAX_DEPENDENCIES,
+};
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
+use mz_compute_types::ComputeInstanceId;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::plan::LirRelationExpr;
 use mz_expr::{
     CollectionPlan, Eval, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
 };
@@ -36,12 +43,12 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{assert_none, instrument};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::ExprHumanizer;
 use mz_repr::explain::json::json_string;
+use mz_repr::explain::{ExprHumanizer, ExprHumanizerExt, TransientItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, Datum, Diff, GlobalId, RelationVersion, RelationVersionSelector, Row, RowArena,
-    RowIterator, Timestamp,
+    CatalogItemId, Datum, Diff, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
+    Row, RowArena, RowIterator, Timestamp,
 };
 use mz_secrets::SecretsReader;
 use mz_sql::ast::{
@@ -60,11 +67,12 @@ use mz_sql::names::{
     SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{
-    AlterMaterializedViewApplyReplacementPlan, ConnectionDetails, NetworkPolicyRule,
+    AlterMaterializedViewApplyReplacementPlan, ConnectionDetails, NetworkPolicyRule, PlanError,
     StatementContext,
 };
 use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
 use mz_storage_types::sinks::StorageSinkDesc;
+use mz_timestamp_oracle::TimestampOracle;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
     AlterConnectionAction, AlterConnectionPlan, CreateSourcePlanBundle, ExplainSinkSchemaPlan,
@@ -74,7 +82,7 @@ use mz_sql::plan::{
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
-    self, IsolationLevel, NETWORK_POLICY, OwnedVarInput, SCHEMA_ALIAS,
+    self, IsolationLevel, MAX_CONCURRENT_OCC_WRITES, NETWORK_POLICY, OwnedVarInput, SCHEMA_ALIAS,
     TRANSACTION_ISOLATION_VAR_NAME, Var, VarError, VarInput,
 };
 use mz_sql::{plan, rbac};
@@ -87,8 +95,10 @@ use mz_sql_parser::ast::{
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::ExportDescription;
 use mz_storage_types::AlterCompatible;
+use mz_storage_types::connections::AwsPrivatelinkConnection;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
+use mz_storage_types::sources::SourceConnection;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::{OptimizerNotice, RawOptimizerNotice};
 use smallvec::SmallVec;
@@ -96,12 +106,14 @@ use timely::progress::Antichain;
 use tokio::sync::{oneshot, watch};
 use tracing::{Instrument, Span, info, warn};
 
-use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
+use crate::catalog::{
+    self, Catalog, CatalogState, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant,
+};
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{
     BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn, UserWriteResponder,
 };
-use crate::coord::read_then_write::validate_read_then_write_dependencies;
+use crate::coord::read_then_write::{DependencyPolicy, validate_read_then_write_dependencies};
 use crate::coord::sequencer::emit_optimizer_notices;
 use crate::coord::{
     AlterConnectionValidationReady, AlterMaterializedViewReadyContext, AlterSinkReadyContext,
@@ -119,7 +131,7 @@ use crate::session::{
     WriteLocks, WriteOp,
 };
 use crate::util::{ClientTransmitter, ResultExt, viewable_variables};
-use crate::{PeekResponseUnary, ReadHolds};
+use crate::{CollectionIdBundle, PeekResponseUnary, ReadHolds};
 
 /// A future that resolves to a real-time recency timestamp.
 type RtrTimestampFuture = BoxFuture<'static, Result<Timestamp, StorageError>>;
@@ -128,6 +140,7 @@ mod cluster;
 mod copy_from;
 mod create_index;
 mod create_materialized_view;
+mod create_metric_sink;
 mod create_view;
 mod explain_timestamp;
 mod peek;
@@ -147,6 +160,42 @@ macro_rules! return_if_err {
 
 pub(super) use return_if_err;
 
+fn spawn_linearized_read_ts<S>(
+    oracle: Option<Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
+    name: &'static str,
+    build_stage: impl FnOnce(Option<Timestamp>) -> S + Send + 'static,
+) -> StageResult<Box<S>>
+where
+    S: Send + 'static,
+{
+    match oracle {
+        Some(oracle) => {
+            let span = Span::current();
+            StageResult::Handle(mz_ore::task::spawn(
+                move || name,
+                async move {
+                    let oracle_read_ts = oracle.read_ts().await;
+                    Ok(Box::new(build_stage(Some(oracle_read_ts))))
+                }
+                .instrument(span),
+            ))
+        }
+        None => StageResult::Immediate(Box::new(build_stage(None))),
+    }
+}
+
+/// Rejects connection options whose values cannot work, independent of any
+/// external system.
+fn check_connection_details(details: &ConnectionDetails) -> Result<(), PlanError> {
+    match details {
+        ConnectionDetails::AwsPrivatelink(privatelink) => {
+            AwsPrivatelinkConnection::check_service_name(&privatelink.service_name)
+                .map_err(PlanError::InvalidPrivatelinkServiceName)
+        }
+        _ => Ok(()),
+    }
+}
+
 struct DropOps {
     ops: Vec<catalog::Op>,
     dropped_active_db: bool,
@@ -157,7 +206,7 @@ struct DropOps {
 // A bundle of values returned from create_source_inner
 struct CreateSourceInner {
     ops: Vec<catalog::Op>,
-    sources: Vec<(CatalogItemId, Source)>,
+    sources: Vec<(CatalogItemId, QualifiedItemName, Source)>,
     if_not_exists_ids: BTreeMap<CatalogItemId, QualifiedItemName>,
 }
 
@@ -336,11 +385,11 @@ impl Coordinator {
             let source = Source::new(plan, global_id, resolved_ids, None, false);
             ops.push(catalog::Op::CreateItem {
                 id: item_id,
-                name,
+                name: name.clone(),
                 item: CatalogItem::Source(source.clone()),
                 owner_id: *session.current_role_id(),
             });
-            sources.push((item_id, source));
+            sources.push((item_id, name, source));
             // These operations must be executed after the source is added to the catalog.
             ops.extend(reference_ops);
         }
@@ -599,7 +648,7 @@ impl Coordinator {
             .await;
 
         // Check if any sources are webhook sources and report them as created.
-        for (item_id, source) in &sources {
+        for (item_id, _name, source) in &sources {
             if matches!(source.data_source, DataSourceDesc::Webhook { .. }) {
                 if let Some(url) = self.catalog().state().try_get_webhook_url(item_id) {
                     ctx.session()
@@ -609,7 +658,25 @@ impl Coordinator {
         }
 
         match transact_result {
-            Ok(()) => Ok(ExecuteResponse::CreatedSource),
+            Ok(()) => {
+                // Warn about any new source that runs on only one replica but
+                // landed on a cluster that has more than one. The source's
+                // name is passed along explicitly: in a DDL transaction the
+                // creation is only staged at this point, so the source is not
+                // yet visible in the catalog.
+                for (_item_id, name, source) in &sources {
+                    let cluster_id = match &source.data_source {
+                        DataSourceDesc::Ingestion { desc, cluster_id }
+                        | DataSourceDesc::OldSyntaxIngestion {
+                            desc, cluster_id, ..
+                        } if desc.connection.prefers_single_replica() => cluster_id,
+                        _ => continue,
+                    };
+                    let cluster = self.catalog().get_cluster(*cluster_id);
+                    self.notify_single_replica_sources(ctx.session(), cluster, Some(name));
+                }
+                Ok(ExecuteResponse::CreatedSource)
+            }
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(id, _)),
             })) if if_not_exists_ids.contains_key(&id) => {
@@ -666,6 +733,10 @@ impl Coordinator {
         plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) {
+        if let Err(err) = check_connection_details(&plan.connection.details) {
+            return ctx.retire(Err(AdapterError::PlanError(err)));
+        }
+
         let (connection_id, connection_gid) = match self.allocate_user_id().await {
             Ok(item_id) => item_id,
             Err(err) => return ctx.retire(Err(err)),
@@ -712,7 +783,7 @@ impl Coordinator {
 
         if plan.validate {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
-            let transient_revision = self.catalog().transient_revision();
+            let catalog = self.owned_catalog();
             let conn_id = ctx.session().conn_id().clone();
             let otel_ctx = OpenTelemetryContext::obtain();
             let role_metadata = ctx.session().role_metadata().clone();
@@ -749,7 +820,7 @@ impl Coordinator {
                         connection_id,
                         connection_gid,
                         plan_validity: PlanValidity::new(
-                            transient_revision,
+                            &catalog,
                             resolved_ids.items().copied().collect(),
                             None,
                             None,
@@ -1516,13 +1587,23 @@ impl Coordinator {
             }
         }
 
-        let privilege_revoke_ops = privilege_revokes.into_iter().map(|(object_id, privilege)| {
-            catalog::Op::UpdatePrivilege {
-                target_id: object_id,
-                privilege,
-                variant: UpdatePrivilegeVariant::Revoke,
-            }
-        });
+        // Group revokes by target so each object is rewritten once, not once per privilege.
+        let mut privilege_revokes_by_target: BTreeMap<SystemObjectId, Vec<MzAclItem>> =
+            BTreeMap::new();
+        for (object_id, privilege) in privilege_revokes {
+            privilege_revokes_by_target
+                .entry(object_id)
+                .or_default()
+                .push(privilege);
+        }
+        let privilege_revoke_ops =
+            privilege_revokes_by_target
+                .into_iter()
+                .map(|(target_id, privileges)| catalog::Op::UpdatePrivilege {
+                    target_id,
+                    privileges,
+                    variant: UpdatePrivilegeVariant::Revoke,
+                });
         let default_privilege_revoke_ops = plan.default_privilege_revokes.into_iter().map(
             |(privilege_object, privilege_acl_item)| catalog::Op::UpdateDefaultPrivilege {
                 privilege_object,
@@ -2181,7 +2262,8 @@ impl Coordinator {
         ctx: &mut ExecuteContext,
         action: EndTransactionAction,
     ) -> Result<(Option<TransactionOps>, Option<WriteLocks>), AdapterError> {
-        let txn = self.clear_transaction(ctx.session_mut()).await;
+        let (txn, retire_notify) = self.clear_transaction(ctx.session_mut()).await;
+        ctx.delay_response_until(retire_notify);
 
         if let EndTransactionAction::Commit = action {
             if let (Some(mut ops), write_lock_guards) = txn.into_ops_and_lock_guard() {
@@ -2274,10 +2356,12 @@ impl Coordinator {
     }
 
     /// Execute a side-effecting function from the frontend peek path.
-    /// This is separate from `sequence_side_effecting_func` because
-    /// - It doesn't have an ExecuteContext.
-    /// - It needs to do its own RBAC check, because the `rbac::check_plan` call in the frontend
-    ///   peek sequencing can't look at `active_conns`.
+    /// This is separate from `sequence_side_effecting_func` because it doesn't have an
+    /// ExecuteContext. RBAC is checked by the caller via `rbac::check_plan` before
+    /// sending `Command::ExecuteSideEffectingFunc`. The caller must hold the target
+    /// connection's `ConnectionId` handle from its RBAC check until this command
+    /// completes, so that the connection found in `active_conns` here (if any) is
+    /// the same one the check was performed against.
     ///
     /// TODO(peek-seq): Delete `sequence_side_effecting_func` after we delete the old peek
     /// sequencing.
@@ -2285,7 +2369,6 @@ impl Coordinator {
         &mut self,
         plan: SideEffectingFunc,
         conn_id: ConnectionId,
-        current_role: RoleId,
     ) -> Result<ExecuteResponse, AdapterError> {
         match plan {
             SideEffectingFunc::PgCancelBackend { connection_id } => {
@@ -2302,36 +2385,14 @@ impl Coordinator {
                     return Err(AdapterError::Canceled);
                 }
 
-                // Perform RBAC check: the current user must be a member of the role
-                // that owns the connection being cancelled.
-                if let Some((_id_handle, conn_meta)) =
+                // The caller verified role membership via rbac::check_plan and
+                // still holds the target's `ConnectionId` handle, so this entry
+                // (if present) is the same connection the check was performed
+                // against.
+                if let Some((id_handle, _conn_meta)) =
                     self.active_conns.get_key_value(&connection_id)
                 {
-                    let target_role = *conn_meta.authenticated_role_id();
-                    let role_membership = self
-                        .catalog()
-                        .state()
-                        .collect_role_membership(&current_role);
-                    if !role_membership.contains(&target_role) {
-                        let target_role_name = self
-                            .catalog()
-                            .try_get_role(&target_role)
-                            .map(|role| role.name().to_string())
-                            .unwrap_or_else(|| target_role.to_string());
-                        return Err(AdapterError::Unauthorized(
-                            rbac::UnauthorizedError::RoleMembership {
-                                role_names: vec![target_role_name],
-                            },
-                        ));
-                    }
-
-                    // RBAC check passed, proceed with cancellation.
-                    let id_handle = self
-                        .active_conns
-                        .get_key_value(&connection_id)
-                        .map(|(id, _)| id.clone())
-                        .expect("checked above");
-                    self.handle_privileged_cancel(id_handle).await;
+                    self.handle_privileged_cancel(id_handle.clone()).await;
                     Ok(Self::send_immediate_rows(Row::pack_slice(&[Datum::True])))
                 } else {
                     // Connection not found, return false.
@@ -2632,6 +2693,14 @@ impl Coordinator {
                 mz_ore::task::spawn(|| "coord::sequence_inner", async move {
                     let result =
                         Self::insert_constant(&catalog, ctx.session_mut(), plan.id, selection);
+
+                    // Test-only synchronization point: parks a blind INSERT once its rows are
+                    // packed against the table's current RelationDesc, but before retiring
+                    // triggers the implicit commit that stages them for group commit. Lets a
+                    // test land a concurrent ALTER TABLE ... ADD COLUMN in that window. Used by
+                    // test_insert_concurrent_alter_table.
+                    fail::fail_point!("insert_after_pack_before_commit");
+
                     ctx.retire(result);
                 });
             }
@@ -2697,6 +2766,17 @@ impl Coordinator {
             return;
         }
 
+        // The lock-based and OCC paths do not synchronize with each other, so
+        // reaching this path while frontend sequencing is enabled is a routing
+        // bug that could corrupt data.
+        if self.frontend_read_then_write_enabled {
+            ctx.retire(Err(AdapterError::Internal(
+                "coordinator read-then-write reached while frontend OCC sequencing is enabled"
+                    .into(),
+            )));
+            return;
+        }
+
         let mut source_ids: BTreeSet<_> = plan
             .selection
             .depends_on()
@@ -2728,13 +2808,16 @@ impl Coordinator {
                         ctx,
                         plan: Plan::ReadThenWrite(plan),
                         validity: PlanValidity::new(
-                            self.catalog.transient_revision(),
+                            &self.catalog,
                             source_ids.clone(),
                             None,
                             None,
                             role_metadata,
                         ),
                         requires_locks: source_ids,
+                        // Writes don't track resolved IDs.
+                        resolved_ids: ResolvedIds::empty(),
+                        sql_impl_resolved_ids: ResolvedIds::empty(),
                     };
                     return self.defer_op(acquire_future, DeferredOp::Plan(plan));
                 }
@@ -2785,17 +2868,25 @@ impl Coordinator {
         }
 
         // Ensure all objects `selection` depends on are valid for `ReadThenWrite` operations.
-        for gid in selection.depends_on() {
-            let item_id = self.catalog().resolve_item_id(&gid);
-            if let Err(err) = validate_read_then_write_dependencies(self.catalog(), &item_id) {
-                ctx.retire(Err(err));
-                return;
-            }
+        let dependency_ids = selection
+            .depends_on()
+            .into_iter()
+            .map(|gid| self.catalog().resolve_item_id(&gid));
+        let max_rw_dependencies =
+            READ_THEN_WRITE_MAX_DEPENDENCIES.get(self.catalog().system_config().dyncfgs());
+        if let Err(err) = validate_read_then_write_dependencies(
+            self.catalog(),
+            dependency_ids,
+            max_rw_dependencies,
+            DependencyPolicy::UserDml,
+        ) {
+            ctx.retire(Err(err));
+            return;
         }
 
         let (peek_tx, peek_rx) = oneshot::channel();
         let peek_client_tx = ClientTransmitter::new(peek_tx, self.internal_cmd_tx.clone());
-        let (tx, _, session, extra) = ctx.into_parts();
+        let (tx, _, session, extra, response_barriers) = ctx.into_parts();
         // We construct a new execute context for the peek, with a trivial (`Default::default()`)
         // execution context, because this peek does not directly correspond to an execute,
         // and so we don't need to take any action on its retirement.
@@ -2848,8 +2939,13 @@ impl Coordinator {
                     session,
                     otel_ctx,
                 }) => {
-                    let ctx =
-                        ExecuteContext::from_parts(tx, internal_cmd_tx.clone(), session, extra);
+                    let ctx = ExecuteContext::from_parts_with_response_barriers(
+                        tx,
+                        internal_cmd_tx.clone(),
+                        session,
+                        extra,
+                        response_barriers,
+                    );
                     otel_ctx.attach_as_parent();
                     ctx.retire(Err(e));
                     return;
@@ -2857,7 +2953,13 @@ impl Coordinator {
                 // It is not an error for these results to be ready after `peek_client_tx` has been dropped.
                 Err(e) => return warn!("internal_cmd_rx dropped before we could send: {:?}", e),
             };
-            let mut ctx = ExecuteContext::from_parts(tx, internal_cmd_tx.clone(), session, extra);
+            let mut ctx = ExecuteContext::from_parts_with_response_barriers(
+                tx,
+                internal_cmd_tx.clone(),
+                session,
+                extra,
+                response_barriers,
+            );
             let mut timeout_dur = *ctx.session().vars().statement_timeout();
 
             // Timeout of 0 is equivalent to "off", meaning we will wait "forever."
@@ -2951,9 +3053,7 @@ impl Coordinator {
                                     };
                                 }
                                 PeekResponseUnary::Canceled => break Err(AdapterError::Canceled),
-                                PeekResponseUnary::Error(e) => {
-                                    break Err(AdapterError::Unstructured(anyhow!(e)));
-                                }
+                                PeekResponseUnary::Error(e) => break Err(e),
                                 PeekResponseUnary::DependencyDropped(dep) => {
                                     break Err(dep.to_concurrent_dependency_drop());
                                 }
@@ -3361,7 +3461,7 @@ impl Coordinator {
         let from_item_id = self.catalog().resolve_item_id(&plan.sink.from);
 
         let plan_validity = PlanValidity::new(
-            self.catalog().transient_revision(),
+            self.catalog(),
             BTreeSet::from_iter([plan.item_id, from_item_id]),
             Some(plan.in_cluster),
             None,
@@ -3406,9 +3506,11 @@ impl Coordinator {
             sink: sink_plan,
             with_snapshot,
             in_cluster,
+            set_options,
+            reset_options,
         } = ctx.plan.clone();
 
-        // We avoid taking the DDL lock for `ALTER SINK SET FROM` commands, see
+        // We avoid taking the DDL lock for `ALTER SINK` commands, see
         // `Coordinator::must_serialize_ddl`. We therefore must assume that the world has
         // arbitrarily changed since we performed planning, and we must re-assert that it still
         // matches our requirements.
@@ -3472,18 +3574,23 @@ impl Coordinator {
         };
 
         // Update the sink version.
-        stmt.with_options
-            .retain(|o| o.name != CreateSinkOptionName::Version);
-        stmt.with_options.push(CreateSinkOption {
-            name: CreateSinkOptionName::Version,
-            value: Some(WithOptionValue::Value(mz_sql::ast::Value::Number(
-                sink_plan.version.to_string(),
-            ))),
-        });
+        plan::apply_sink_option_edits(
+            &mut stmt.with_options,
+            &[CreateSinkOption {
+                name: CreateSinkOptionName::Version,
+                value: Some(WithOptionValue::Value(mz_sql::ast::Value::Number(
+                    sink_plan.version.to_string(),
+                ))),
+            }],
+            &[],
+        );
 
         let conn_catalog = self.catalog().for_system_session();
         let (mut stmt, resolved_ids) =
             mz_sql::names::resolve(&conn_catalog, stmt).expect("resolvable create_sql");
+
+        // Re-apply the option edits requested by the `ALTER SINK`.
+        plan::apply_sink_option_edits(&mut stmt.with_options, &set_options, &reset_options);
 
         // Update the `from` relation.
         let from_entry = self.catalog().get_entry_by_global_id(&sink_plan.from);
@@ -3496,6 +3603,16 @@ impl Coordinator {
             version: from_entry.version,
         };
 
+        // `resolved_ids` was derived from the old `create_sql`, so it still
+        // references the old input. `create_sql` and `from` above already
+        // point at the new input, so sync the dependency set to match.
+        // Otherwise the in-memory catalog disagrees with `create_sql` until
+        // the next reload, and the temporary-dependency check in
+        // `Op::UpdateItem` (which reads `uses()`) would not see the new input.
+        let mut resolved_ids = resolved_ids;
+        resolved_ids.remove_item(&self.catalog().resolve_item_id(&old_sink.from));
+        resolved_ids.add_item(from_entry.id());
+
         let new_sink = Sink {
             create_sql: stmt.to_ast_string_stable(),
             global_id,
@@ -3504,7 +3621,7 @@ impl Coordinator {
             envelope: sink_plan.envelope,
             version: sink_plan.version,
             with_snapshot,
-            resolved_ids: resolved_ids.clone(),
+            resolved_ids,
             cluster_id: in_cluster,
             commit_interval: sink_plan.commit_interval,
         };
@@ -3676,6 +3793,28 @@ impl Coordinator {
             }
         };
 
+        // Replanning uses a system session and discovers retained dependencies
+        // that `check_plan` could not authorize. Check them before secret guards
+        // or validation can resolve a secret.
+        let usage_check = {
+            let catalog = self.catalog().for_session(ctx.session());
+            rbac::check_usage(
+                &catalog,
+                ctx.session(),
+                &conn.resolved_ids,
+                &rbac::CREATE_ITEM_USAGE,
+            )
+        };
+        if let Err(err) = usage_check {
+            return ctx.retire(Err(err.into()));
+        }
+
+        // `conn` is the whole re-planned connection, so this also rejects a
+        // stored value the statement did not touch.
+        if let Err(err) = check_connection_details(&conn.details) {
+            return ctx.retire(Err(AdapterError::InvalidAlter("CONNECTION", err)));
+        }
+
         // Inspect guarded secrets whether or not validation was requested,
         // before the altered connection is installed in the catalog.
         if let Err(err) = self
@@ -3692,7 +3831,7 @@ impl Coordinator {
                 .into_inline_connection(self.catalog().state());
 
             let internal_cmd_tx = self.internal_cmd_tx.clone();
-            let transient_revision = self.catalog().transient_revision();
+            let catalog = self.owned_catalog();
             let conn_id = ctx.session().conn_id().clone();
             let otel_ctx = OpenTelemetryContext::obtain();
             let role_metadata = ctx.session().role_metadata().clone();
@@ -3727,7 +3866,7 @@ impl Coordinator {
                             connection_id: id,
                             connection_gid,
                             plan_validity: PlanValidity::new(
-                                transient_revision,
+                                &catalog,
                                 dependency_ids.clone(),
                                 None,
                                 None,
@@ -4143,6 +4282,7 @@ impl Coordinator {
         };
         self.catalog_transact(Some(session), vec![op]).await?;
 
+        Self::notice_if_startup_only(session, &name);
         session.add_notice(AdapterNotice::VarDefaultUpdated {
             role: None,
             var_name: Some(name),
@@ -4159,6 +4299,7 @@ impl Coordinator {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
         let op = catalog::Op::ResetSystemConfiguration { name: name.clone() };
         self.catalog_transact(Some(session), vec![op]).await?;
+        Self::notice_if_startup_only(session, &name);
         session.add_notice(AdapterNotice::VarDefaultUpdated {
             role: None,
             var_name: Some(name),
@@ -4173,13 +4314,80 @@ impl Coordinator {
         _: plan::AlterSystemResetAllPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, None)?;
+        // Which parameters `RESET ALL` changes has to be read before the
+        // transaction applies it, afterwards they all read as their default.
+        let startup_only_changed = self.startup_only_vars_changed_by_reset_all();
         let op = catalog::Op::ResetAllSystemConfiguration;
         self.catalog_transact(Some(session), vec![op]).await?;
+        for name in startup_only_changed {
+            session.add_notice(AdapterNotice::StartupOnlyVarUpdated {
+                var_name: name.to_string(),
+            });
+        }
         session.add_notice(AdapterNotice::VarDefaultUpdated {
             role: None,
             var_name: None,
         });
         Ok(ExecuteResponse::AlteredSystemConfiguration)
+    }
+
+    /// System parameters whose value `environmentd` samples once at startup.
+    ///
+    /// `enable_adapter_frontend_occ_read_then_write` selects between the
+    /// lock-based and the OCC read-then-write path. Both are never live in one
+    /// process, so the choice is fixed at boot and every session inherits it.
+    /// `max_concurrent_occ_writes` sizes the OCC semaphore at boot.
+    /// `enable_expression_cache` decides whether catalog open builds the cache,
+    /// which has already happened by the time a session can ask.
+    ///
+    /// `ALTER SYSTEM` on one of these is allowed to go through. The catalog
+    /// value is what the next process start reads, and the running process
+    /// cannot observe it, so there is no window where two code paths are live at
+    /// once.
+    fn startup_only_vars() -> [&'static str; 3] {
+        [
+            FRONTEND_READ_THEN_WRITE.name(),
+            MAX_CONCURRENT_OCC_WRITES.name(),
+            ENABLE_EXPRESSION_CACHE.name(),
+        ]
+    }
+
+    /// Warns that `name` is only read at startup, so the running process keeps
+    /// the value it sampled at boot.
+    fn notice_if_startup_only(session: &Session, name: &str) {
+        if Self::startup_only_vars()
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case(name))
+        {
+            session.add_notice(AdapterNotice::StartupOnlyVarUpdated {
+                var_name: name.to_string(),
+            });
+        }
+    }
+
+    /// The startup-only parameters whose value `ALTER SYSTEM RESET ALL` would
+    /// change. Parameters already at their effective default are untouched, so
+    /// they are not reported.
+    fn startup_only_vars_changed_by_reset_all(&self) -> Vec<&'static str> {
+        // Value-based, unlike `notice_if_startup_only`, which warns whenever an
+        // operator names one of these parameters. `RESET ALL` names every
+        // parameter, so only a value that actually moves is worth a warning.
+        let config = self.catalog().system_config();
+        let defaults = config.defaults();
+        Self::startup_only_vars()
+            .into_iter()
+            .filter(|name| {
+                // These names are all registered system vars, a lookup failure
+                // would mean the definitions and this list have drifted apart.
+                let current = config
+                    .get(name)
+                    .expect("startup-only parameter is a registered system var")
+                    .value();
+                defaults
+                    .get(*name)
+                    .is_some_and(|default| default != &current)
+            })
+            .collect()
     }
 
     // TODO(jkosh44) Move this into rbac.rs once RBAC is always on.
@@ -4342,7 +4550,7 @@ impl Coordinator {
         grantees: Vec<RoleId>,
         variant: UpdatePrivilegeVariant,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let mut ops = Vec::with_capacity(update_privileges.len() * grantees.len());
+        let mut ops = Vec::with_capacity(update_privileges.len());
         let mut warnings = Vec::new();
         let catalog = self.catalog().for_session(session);
 
@@ -4386,6 +4594,9 @@ impl Coordinator {
                     "GRANTs/REVOKEs on an object type with no privileges",
                 ))?;
 
+            // Collect every grantee's change to this target into one op, so a bulk grant/revoke
+            // touching one object is a single durable write rather than one per grantee.
+            let mut target_privileges = Vec::with_capacity(grantees.len());
             for grantee in &grantees {
                 self.catalog().ensure_not_system_role(grantee)?;
                 self.catalog().ensure_not_predefined_role(grantee)?;
@@ -4394,39 +4605,30 @@ impl Coordinator {
                     .map(Cow::Borrowed)
                     .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(*grantee, grantor)));
 
-                match variant {
-                    UpdatePrivilegeVariant::Grant
-                        if !existing_privilege.acl_mode.contains(acl_mode) =>
-                    {
-                        ops.push(catalog::Op::UpdatePrivilege {
-                            target_id: target_id.clone(),
-                            privilege: MzAclItem {
-                                grantee: *grantee,
-                                grantor,
-                                acl_mode,
-                            },
-                            variant,
-                        });
+                // Skip grantees for which the grant/revoke would be a no-op.
+                let changes = match variant {
+                    UpdatePrivilegeVariant::Grant => {
+                        !existing_privilege.acl_mode.contains(acl_mode)
                     }
-                    UpdatePrivilegeVariant::Revoke
-                        if !existing_privilege
-                            .acl_mode
-                            .intersection(acl_mode)
-                            .is_empty() =>
-                    {
-                        ops.push(catalog::Op::UpdatePrivilege {
-                            target_id: target_id.clone(),
-                            privilege: MzAclItem {
-                                grantee: *grantee,
-                                grantor,
-                                acl_mode,
-                            },
-                            variant,
-                        });
-                    }
-                    // no-op
-                    _ => {}
+                    UpdatePrivilegeVariant::Revoke => !existing_privilege
+                        .acl_mode
+                        .intersection(acl_mode)
+                        .is_empty(),
+                };
+                if changes {
+                    target_privileges.push(MzAclItem {
+                        grantee: *grantee,
+                        grantor,
+                        acl_mode,
+                    });
                 }
+            }
+            if !target_privileges.is_empty() {
+                ops.push(catalog::Op::UpdatePrivilege {
+                    target_id: target_id.clone(),
+                    privileges: target_privileges,
+                    variant,
+                });
             }
         }
 
@@ -4758,7 +4960,7 @@ impl Coordinator {
         let AlterMaterializedViewApplyReplacementPlan { id, replacement_id } = plan.clone();
 
         let plan_validity = PlanValidity::new(
-            self.catalog().transient_revision(),
+            self.catalog(),
             BTreeSet::from_iter([id, replacement_id]),
             None,
             None,
@@ -4850,6 +5052,20 @@ impl Coordinator {
             "finishing materialized view replacement application",
         );
 
+        // The durable expression cache is keyed by GlobalId and relies on the
+        // invariant that the definition behind a GlobalId never changes.
+        // Applying a replacement violates that for the target's existing
+        // GlobalIds: the item retains them as prior versions while its
+        // definition becomes the replacement's. Invalidate their cached
+        // expressions, and await the invalidation before the catalog
+        // transaction commits, so no subsequent bootstrap can pair the new
+        // definition with a stale cached expression whose dependencies may
+        // since have been dropped.
+        let invalidate_ids = self.catalog().get_entry(&id).global_ids().collect();
+        self.catalog()
+            .update_expression_cache(Vec::new(), Vec::new(), invalidate_ids)
+            .await;
+
         let ops = vec![catalog::Op::AlterMaterializedViewApplyReplacement { id, replacement_id }];
         match self
             .catalog_transact(Some(ctx.ctx().session_mut()), ops)
@@ -4897,6 +5113,73 @@ impl Coordinator {
         emit_optimizer_notices(&*self.catalog, ctx.session(), notices);
     }
 
+    /// Renders `raw_df_meta`'s optimizer notices against a humanizer that resolves the
+    /// about-to-be-created item's own `global_id` to `name`, rather than to the bare transient id
+    /// a system-session humanizer would produce. `source_desc` supplies the column names the
+    /// notices humanize against, and is the desc of the relation the new item reads.
+    ///
+    /// Callers render before the catalog transaction that creates the item, so the persisted
+    /// notice text can already refer to the item by its intended name. The raw notices stay with
+    /// the caller: they go to the user session only once the transaction succeeds, so a failed
+    /// transaction does not tell the user about an item that was never created.
+    fn render_create_item_notices(
+        &self,
+        name: &QualifiedItemName,
+        global_id: GlobalId,
+        source_desc: &RelationDesc,
+        raw_df_meta: &DataflowMetainfo,
+    ) -> DataflowMetainfo<Arc<OptimizerNotice>> {
+        let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
+            .map(|(_item_id, notice_id)| notice_id)
+            .take(raw_df_meta.optimizer_notices.len())
+            .collect::<Vec<_>>();
+
+        let system_catalog = self.catalog().for_system_session();
+        let full_name = self.catalog().resolve_full_name(name, None);
+        let transient_items = btreemap! {
+            global_id => TransientItem::new(
+                Some(full_name.into_parts()),
+                Some(source_desc.iter_names().map(|c| c.to_string()).collect()),
+            )
+        };
+        let humanizer = ExprHumanizerExt::new(transient_items, &system_catalog);
+        CatalogState::render_notices_core(
+            &humanizer,
+            (self.catalog().config().now)(),
+            raw_df_meta,
+            notice_ids,
+            Some(global_id),
+        )
+    }
+
+    /// Sets `df_desc`'s as-of from a read hold on `id_bundle`, ships the dataflow, and drops the
+    /// hold once compute has taken its own (compute puts in its own read holds during
+    /// `create_dataflow`, so it is safe to release this one right after shipping).
+    ///
+    /// The read hold across shipping keeps the since of `id_bundle` from advancing underneath the
+    /// as-of just picked.
+    async fn ship_new_dataflow(
+        &mut self,
+        id_bundle: &CollectionIdBundle,
+        mut df_desc: DataflowDescription<LirRelationExpr>,
+        instance: ComputeInstanceId,
+        notice_builtin_updates_fut: Option<BuiltinTableAppendNotify>,
+    ) {
+        let read_holds = self.acquire_read_holds(id_bundle);
+        let since = read_holds.least_valid_read();
+        df_desc.set_as_of(since);
+
+        self.ship_dataflow_and_notice_builtin_table_updates(
+            df_desc,
+            instance,
+            notice_builtin_updates_fut,
+            None,
+        )
+        .await;
+
+        drop(read_holds);
+    }
+
     /// Persist already-rendered optimizer notices for a newly created
     /// non-transient dataflow.
     ///
@@ -4906,7 +5189,7 @@ impl Coordinator {
     ///   `set_dataflow_metainfo`,
     /// - and returns a future that resolves once the builtin-table append
     ///   has been observed, or `None` if nothing was appended.
-    async fn persist_dataflow_metainfo(
+    fn persist_dataflow_metainfo(
         &mut self,
         df_meta: DataflowMetainfo<Arc<OptimizerNotice>>,
         export_id: GlobalId,
@@ -4926,12 +5209,7 @@ impl Coordinator {
             // Save the metainfo.
             self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);
 
-            Some(
-                self.builtin_table_update()
-                    .execute(builtin_table_updates)
-                    .await
-                    .0,
-            )
+            Some(self.builtin_table_update().execute(builtin_table_updates))
         } else {
             // Save the metainfo.
             self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);

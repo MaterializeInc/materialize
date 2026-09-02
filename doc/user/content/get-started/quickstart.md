@@ -20,7 +20,7 @@ consistency guarantees](/reference/isolation-level/). In Materialize, both
 within a cluster") and [materialized views](/concepts/views/#materialized-views)
 **incrementally update** results when Materialize ingests new data; i.e., work
 is performed on writes. Because work is performed on writes, reads from these
-objects return up-to-date results while being computationally **free**.
+objects return the already up-to-date results.
 
 In this quickstart, you will continuously ingest a sample auction data set to
 build an operational use case around finding auction winners and auction
@@ -112,24 +112,42 @@ generator](/sql/create-source/load-generator/#auction) to create the source.
 
    For the [sample `Auction` load
    generator](/sql/create-source/load-generator/#auction), the quickstart uses
-   [`CREATE SOURCE`](/sql/create-source/) with the `FROM LOAD GENERATOR` clause
+   [`CREATE SOURCE` with the `FROM LOAD
+   GENERATOR` clause](/sql/create-source/load-generator/#creating-an-auction-load-generator)
    that works specifically with Materialize's sample data generators. The
    tutorial specifies that the generator should emit new data every 1s.
 
     ```mzsql
     CREATE SOURCE auction_house
     FROM LOAD GENERATOR AUCTION
-    (TICK INTERVAL '1s', AS OF 100000)
-    FOR ALL TABLES;
+    (TICK INTERVAL '1s', AS OF 100000);
     ```
 
-    `CREATE SOURCE` can create **multiple** tables (referred to as `subsources`
-    in Materialize) when ingesting data from multiple upstream tables. For each
-    upstream table that is selected for ingestion, Materialize creates a
-    subsource.
+    The source connects to the data generator but does not ingest its relations
+    yet. To start ingesting data, you create a table from the source for each
+    relation you want to ingest.
 
-1. Use the [`SHOW SOURCES`](/sql/show-sources/) command to see the results of
-   the previous step.
+1. Use [`CREATE TABLE ... FROM
+   SOURCE`](/sql/create-source/load-generator/#creating-an-auction-load-generator)
+   in a [DDL transaction block](/sql/begin/#ddl-only-transactions) to create
+   **read-only** tables for the `auctions` and `bids` relations, the two
+   relations this quickstart uses:
+
+    ```mzsql
+    BEGIN;
+    CREATE TABLE auctions FROM SOURCE auction_house (REFERENCE auctions);
+    CREATE TABLE bids FROM SOURCE auction_house (REFERENCE bids);
+    COMMIT;
+    ```
+
+    Tables created from a source are read-only; that is:
+
+    - Only the source can write to the table; in this case, the load
+      generator.
+
+    - Users can read from the table.
+
+1. Use the [`SHOW SOURCES`](/sql/show-sources/) command to see the new source:
 
     ```mzsql
     SHOW SOURCES;
@@ -138,24 +156,24 @@ generator](/sql/create-source/load-generator/#auction) to create the source.
     The output should resemble the following:
 
     ```nofmt
-    | name                   | type           | cluster    | comment |
-    | ---------------------- | -------------- | ---------- | ------- |
-    | accounts               | subsource      | quickstart |         |
-    | auction_house          | load-generator | quickstart |         |
-    | auction_house_progress | progress       | null       |         |
-    | auctions               | subsource      | quickstart |         |
-    | bids                   | subsource      | quickstart |         |
-    | organizations          | subsource      | quickstart |         |
-    | users                  | subsource      | quickstart |         |
+    | name          | type           | cluster    | comment |
+    | ------------- | -------------- | ---------- | ------- |
+    | auction_house | load-generator | quickstart |         |
     ```
 
-    A [`subsource`](/sql/show-subsources) is how Materialize refers to a table
-    that has the following properties:
+    Use the [`SHOW TABLES`](/sql/show-tables/) command to see the tables
+    created from the source:
 
-    - A subsource can only be written by the source; in this case, the
-      load-generator.
+    ```mzsql
+    SHOW TABLES;
+    ```
 
-    - Users can read from subsources.
+    ```nofmt
+    | name     | comment |
+    | -------- | ------- |
+    | auctions |         |
+    | bids     |         |
+    ```
 
 1. Use the [`SELECT`](/sql/select) statement to query `auctions` and `bids`.
 
@@ -275,8 +293,7 @@ get up-to-date results.
    Indexes provide always fresh view results in memory within a cluster by
    performing incremental updates as new data arrives. Queries can then read
    from the in-memory, already up-to-date results instead of re-running the
-   underlying statement, making queries **computationally free and more
-   performant**.
+   underlying statement, making queries more performant.
 
    In the next step, you will create an index on `winning_bids`.
 
@@ -304,7 +321,7 @@ point lookups and joins.
    and the view results are stored in memory within the cluster. As new data
    arrives, the index **incrementally updates** the view results in memory.
    Because incremental work is performed on writes, reads from indexes return
-   up-to-date results and are computationally **free**.
+   the already up-to-date results.
 
    This index can **also** help [optimize
    operations](/transform-data/optimization/) like point lookups and [delta
@@ -364,15 +381,36 @@ creates:
        AND datediff('days', w2.bid_time, w1.bid_time) < 8;
     ```
 
-    The `flip_activities` view can use the index created on `winning_bids` view
-    to provide up-to-date data.
-
     To view a sample row in `flip_activities`, run the following
     [`SELECT`](/sql/select) command:
 
     ```mzsql
     SELECT * FROM flip_activities LIMIT 10;
     ```
+
+    The query may take a while to return, even though it uses the
+    `wins_by_item` index. The `flip_activities` view self-joins `winning_bids`
+    on `item` and the corresponding `buyer` and `seller` columns (`w1.buyer =
+    w2.seller AND w1.item = w2.item`), but the `wins_by_item` index is keyed
+    on the `item` column only. As a result, the join must first form every
+    pair of rows with the same `item` (the part supported by the index) before
+    evaluating the buyer/seller predicates on each pair to find the actual
+    matches. Because the sample data contains only a small number of distinct
+    item values, as `winning_bids` grows, the number of pairs per item grows
+    quadratically.
+
+1. Create indexes on the `winning_bids` join keys used by `flip_activities`.
+
+    To avoid the aforementioned quadratic work, index the complete join keys so
+    that the join considers only rows that can actually match:
+
+    ```mzsql
+    CREATE INDEX wins_by_item_seller ON winning_bids (item, seller);
+    CREATE INDEX wins_by_item_buyer ON winning_bids (item, buyer);
+    ```
+
+    Rerun the previous query on `flip_activities`. The query should return
+    faster.
 
 1. Use [`CREATE TABLE`](/sql/create-table) to create a `known_flippers` table
    that you can manually populate with known flippers. That is, assume that
@@ -405,11 +443,14 @@ creates:
 
 {{< note >}}
 
-Both the `flip_activities` and `flippers` views can use the index created on
-`winning_bids` view to provide up-to-date data. Depending upon your query
-patterns and usage, an existing index may be sufficient, such as in this
-quickstart. In other use cases, creating an index only on the view(s) from which
-you will serve results may be preferred.
+Both the `flip_activities` and `flippers` views can use the indexes created on
+the `winning_bids` view to provide up-to-date results. Index keys matter: the
+`wins_by_item` index serves point lookups on `item`, while the
+`wins_by_item_seller` and `wins_by_item_buyer` indexes serve the
+`flip_activities` self-join on its join keys. Depending on your query patterns
+and usage, indexing the upstream views may be sufficient, such as indexing
+`winning_bids` in this quickstart. In other use cases, it may be preferable to
+index only the views from which applications directly read results.
 
 {{</ note >}}
 
@@ -529,8 +570,8 @@ data comes in, this step creates the following views for completed auctions:
 To clean up the quickstart environment:
 
 1. Use the [`DROP SOURCE ... CASCADE`](/sql/drop-source/) command to drop
-   `auction_house` source and its dependent objects, including views and indexes
-   created on the `auction_house` subsources.
+   `auction_house` source and its dependent objects, including the tables
+   created from the source and the views and indexes created on them.
 
    ```mzsql
    DROP SOURCE auction_house CASCADE;
@@ -549,7 +590,7 @@ In Materialize, [indexes](/concepts/indexes/) represent query results stored in
 memory within a cluster. When you create an index on a view, the index
 incrementally updates the view results (instead of recalculating the results
 from scratch) as Materialize ingests new data. These up-to-date results are then
-immediately available and computationally free for reads within the cluster.
+immediately available for reads within the cluster.
 
 ### General guidelines
 
@@ -601,11 +642,30 @@ creating indexes, see [Index Best Practices](/concepts/indexes/#best-practices).
 
 [//]: # "TODO(morsapaes) Extend to suggest third party tools. dbt, Census and Metabase could all fit here to do interesting things as a follow-up."
 
-To get started ingesting your own data from an external system like Kafka, MySQL
-or PostgreSQL, check the documentation for [sources](/sql/create-source/), and
-navigate to **Data** > **Sources** > **New source** in the [Materialize Console](/console/)
-to create your first source.
+- To get started ingesting your own data from an external system like Kafka,
+  MySQL or PostgreSQL, check the documentation for
+  [sources](/sql/create-source/), and navigate to **Data** > **Sources** > **New
+  source** in the [Materialize Console](/console/) to create your first source.
 
-For help getting started with your data or other questions about Materialize,
-you can schedule a [free guided
-trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+- To have your coding agent (such as Claude Code, Codex, or Cursor) write more
+  accurate Materialize SQL, install the [Materialize agent
+  skills](/integrations/coding-agent-skills/). The skills give your agent access
+  to Materialize documentation and reference material:
+
+  ```bash
+  npx skills add MaterializeInc/agent-skills
+  ```
+
+- To let your agent query your data and inspect your deployment, connect it to
+  Materialize's built-in [MCP servers](/integrations/mcp-server/):
+
+  - [MCP Server for agents](/integrations/mcp-server/mcp-agent/) to discover and
+    query your data products.
+
+  - [MCP Server for developers](/integrations/mcp-server/mcp-developer/) to
+    troubleshoot and observe your deployment through the `mz_*` system catalog
+    tables, and to run queries on your objects.
+
+- For help getting started with your data or other questions about Materialize,
+  you can schedule a [free guided
+  trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).

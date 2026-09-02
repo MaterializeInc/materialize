@@ -276,7 +276,7 @@ where
         sink_id,
         persist_api.clone(),
         as_of.clone(),
-        read_only_rx,
+        read_only_rx.clone(),
         desired,
     );
 
@@ -287,6 +287,7 @@ where
         desired,
         persist,
         descs.clone(),
+        read_only_rx,
         Rc::clone(&compute_state.worker_config),
     );
 
@@ -781,6 +782,7 @@ mod write {
         desired: DesiredStreams<'s>,
         persist: PersistStreams<'s>,
         descs: DescsStream<'s>,
+        mut read_only_rx: watch::Receiver<bool>,
         worker_config: Rc<ConfigSet>,
     ) -> (BatchesStream<'s>, PressOnDropButton) {
         let scope = desired.ok.scope();
@@ -832,6 +834,7 @@ mod write {
 
             let writer = persist_api.open_writer().await;
             let sink_metrics = persist_api.open_metrics().await;
+            let read_only = *read_only_rx.borrow_and_update();
             let mut state = State::new(
                 sink_id,
                 worker_id,
@@ -839,6 +842,7 @@ mod write {
                 sink_metrics,
                 channel_logging,
                 as_of,
+                read_only,
                 &worker_config,
             );
             let mut correction_logger = correction_logger;
@@ -913,6 +917,14 @@ mod write {
                             Event::Progress(_frontier) => None,
                         }
                     }
+                    // Track read-only mode so the forced consolidation stops re-arming once
+                    // writes are allowed and the batch-write path takes over.
+                    Ok(()) = read_only_rx.changed(), if state.read_only => {
+                        if !*read_only_rx.borrow_and_update() {
+                            state.set_read_only(false);
+                        }
+                        None
+                    }
                     // All inputs are exhausted, so we can shut down.
                     else => return,
                 };
@@ -953,9 +965,13 @@ mod write {
         ///
         /// Normally we force a consolidation whenever we write a batch, but there are periods
         /// (like read-only mode) when that doesn't happen, and we need to manually force
-        /// consolidation instead. Currently this is only used to ensure we quickly get rid of the
-        /// snapshot updates.
+        /// consolidation instead. In read-only mode this is re-armed after each firing so it
+        /// keeps sweeping forward as the frontiers advance (see `maybe_force_consolidation`).
         force_consolidation_after: Option<Antichain<Timestamp>>,
+        /// Whether the sink is in read-only mode. While read-only the `write` operator mints no
+        /// batches, so the batch-write path never sweeps `consolidate_before(upper)` forward; the
+        /// forced consolidation stands in for it and is re-armed as long as this holds.
+        read_only: bool,
     }
 
     impl State {
@@ -966,6 +982,7 @@ mod write {
             metrics: SinkMetrics,
             logging: Option<ChannelLogging>,
             as_of: Antichain<Timestamp>,
+            read_only: bool,
             worker_config: &ConfigSet,
         ) -> Self {
             let worker_metrics = metrics.for_worker(worker_id);
@@ -991,6 +1008,7 @@ mod write {
                 persist_frontiers: OkErr::new_frontiers(),
                 batch_description: None,
                 force_consolidation_after,
+                read_only,
             };
 
             // Immediately advance the persist frontier tracking to the `as_of`.
@@ -1080,9 +1098,26 @@ mod write {
                 self.corrections.ok.consolidate_at_since();
                 self.corrections.err.consolidate_at_since();
 
-                // Remove the consolidation request, now that we have fulfilled it.
-                self.force_consolidation_after = None;
+                // In read-only mode the sink mints no batches, so the batch-write path never
+                // sweeps `consolidate_before(upper)` forward and a single forced consolidation
+                // only covers the band below the `since` at the moment it fires, leaving the
+                // forward region uncancelled for the whole read-only window (CLU-131). Re-arm at
+                // the current persist frontier so the forced consolidation keeps sweeping forward
+                // as `desired`/`persist` advance. Once writes are allowed, the batch-write path
+                // takes over and we disarm.
+                self.force_consolidation_after = if self.read_only {
+                    Some(persist_frontier.to_owned())
+                } else {
+                    None
+                };
             }
+        }
+
+        /// Update read-only mode. While read-only the forced consolidation re-arms itself; once
+        /// writes are allowed the still-armed request fires one final time and then disarms, after
+        /// which the batch-write path drives consolidation.
+        fn set_read_only(&mut self, read_only: bool) {
+            self.read_only = read_only;
         }
 
         fn absorb_batch_description(&mut self, desc: BatchDescription, cap: Capability<Timestamp>) {

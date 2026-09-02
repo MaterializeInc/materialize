@@ -1418,7 +1418,7 @@ mod tests {
         let obj_id = ObjectId::new(
             db_name.to_string(),
             schema_name.to_string(),
-            typed_obj.stmt.ident().object.clone(),
+            typed_obj.stmt.ident().object.as_str().to_string(),
         );
         let db_obj = graph::DatabaseObject {
             id: obj_id,

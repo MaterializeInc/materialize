@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/tracing.rs
-revision: 8ef14a9866
+revision: b19c78fa51
 ---
 
 # mz-ore::tracing

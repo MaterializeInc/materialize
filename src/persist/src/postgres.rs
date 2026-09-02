@@ -18,16 +18,18 @@ use anyhow::anyhow;
 use async_stream::try_stream;
 use async_trait::async_trait;
 use bytes::Bytes;
+use deadpool_postgres::PoolError;
 use deadpool_postgres::tokio_postgres::Config;
 use deadpool_postgres::tokio_postgres::types::{FromSql, IsNull, ToSql, Type, to_sql_checked};
-use deadpool_postgres::{Object, PoolError};
 use futures_util::StreamExt;
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::url::SensitiveUrl;
 use mz_postgres_client::metrics::PostgresClientMetrics;
-use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
+use mz_postgres_client::{
+    Connection, IsolationLevel, PostgresClient, PostgresClientConfig, PostgresClientKnobs,
+};
 use postgres_protocol::escape::escape_identifier;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Row, Statement};
@@ -36,12 +38,27 @@ use tracing::{info, warn};
 use crate::error::Error;
 use crate::location::{CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData};
 
-/// Flag to use concensus queries that are tuned for vanilla Postgres.
-pub const USE_POSTGRES_TUNED_QUERIES: mz_dyncfg::Config<bool> = mz_dyncfg::Config::new(
-    "persist_use_postgres_tuned_queries",
+/// Flag to run PostgreSQL consensus connections under READ COMMITTED isolation instead of SERIALIZABLE.
+///
+/// The query family used on vanilla Postgres is designed to be linearizable under READ COMMITTED
+/// isolation, and therefore is also linearizable under SERIALIZABLE, so this flag can be flipped
+/// freely. The flag only exists to make the upgrade path from older versions safe since multiple
+/// query versions co-exist during a 0dt upgrade. See the note on the default value for more
+/// information.
+///
+/// This flag should stay off on CockroachDB. The system will refuse to issue consensus queries if
+/// the flag is enabled on CockroachDB.
+pub const PG_CONSENSUS_READ_COMMITTED: mz_dyncfg::Config<bool> = mz_dyncfg::Config::new(
+    "persist_pg_consensus_read_committed",
+    // NOTE: The default value of this flag *MUST* remain *false* for as long as there are users
+    // running Materialize versions <=v26.32. Environments running one of these versions will be
+    // issuing consensus queries that are only correct in SERIALIZABLE isolation. Therefore this
+    // flag must default to off so that during the 0dt deployment that takes an environment from
+    // <=v26.32 to >=v26.33 the consensus queries of both families linearize together.
     false,
-    "Use a set of queries for consensus that have specifically been tuned against
-    Postgres to ensure we acquire a minimal number of locks.",
+    "Run consensus connections under READ COMMITTED isolation instead of SERIALIZABLE when targetting
+    PostgreSQL backends. This flag must be off when targetting CockroachDB.",
+    mz_dyncfg::ParameterScope::Environment,
 );
 
 const SCHEMA: &str = "
@@ -71,13 +88,13 @@ const CRDB_CONFIGURE_ZONE: &str = "ALTER TABLE consensus CONFIGURE ZONE USING gc
 
 /// NOTE: `mz-persist` intentionally does not depend on `mz-postgres-util`.
 /// These helpers are the only direct driver-call boundary in this module.
-async fn pg_batch_execute(client: &Object, query: &str) -> Result<(), tokio_postgres::Error> {
+async fn pg_batch_execute(client: &Connection, query: &str) -> Result<(), tokio_postgres::Error> {
     #[allow(clippy::disallowed_methods)]
     client.batch_execute(query).await
 }
 
 async fn pg_query_prepared(
-    client: &Object,
+    client: &Connection,
     statement: &Statement,
     params: &[&(dyn ToSql + Sync)],
 ) -> Result<Vec<Row>, tokio_postgres::Error> {
@@ -86,7 +103,7 @@ async fn pg_query_prepared(
 }
 
 async fn pg_query_opt_prepared(
-    client: &Object,
+    client: &Connection,
     statement: &Statement,
     params: &[&(dyn ToSql + Sync)],
 ) -> Result<Option<Row>, tokio_postgres::Error> {
@@ -95,12 +112,30 @@ async fn pg_query_opt_prepared(
 }
 
 async fn pg_execute_prepared(
-    client: &Object,
+    client: &Connection,
     statement: &Statement,
     params: &[&(dyn ToSql + Sync)],
 ) -> Result<u64, tokio_postgres::Error> {
     #[allow(clippy::disallowed_methods)]
     client.execute(statement, params).await
+}
+
+async fn pg_txn_execute_prepared(
+    txn: &deadpool_postgres::Transaction<'_>,
+    statement: &Statement,
+    params: &[&(dyn ToSql + Sync)],
+) -> Result<u64, tokio_postgres::Error> {
+    #[allow(clippy::disallowed_methods)]
+    txn.execute(statement, params).await
+}
+
+async fn pg_txn_query_one_prepared(
+    txn: &deadpool_postgres::Transaction<'_>,
+    statement: &Statement,
+    params: &[&(dyn ToSql + Sync)],
+) -> Result<Row, tokio_postgres::Error> {
+    #[allow(clippy::disallowed_methods)]
+    txn.query_one(statement, params).await
 }
 
 impl ToSql for SeqNo {
@@ -146,12 +181,6 @@ pub struct PostgresConsensusConfig {
     knobs: Arc<dyn PostgresClientKnobs>,
     metrics: PostgresClientMetrics,
     dyncfg: Arc<ConfigSet>,
-}
-
-impl From<PostgresConsensusConfig> for PostgresClientConfig {
-    fn from(config: PostgresConsensusConfig) -> Self {
-        PostgresClientConfig::new(config.url, config.knobs, config.metrics)
-    }
 }
 
 impl PostgresConsensusConfig {
@@ -232,9 +261,13 @@ impl PostgresConsensusConfig {
             fn keepalives_retries(&self) -> u32 {
                 5
             }
+
+            fn statement_timeout(&self) -> Duration {
+                Duration::ZERO
+            }
         }
 
-        let dyncfg = ConfigSet::default().add(&USE_POSTGRES_TUNED_QUERIES);
+        let dyncfg = ConfigSet::default().add(&PG_CONSENSUS_READ_COMMITTED);
         let config = PostgresConsensusConfig::new(
             &url,
             Box::new(TestConsensusKnobs),
@@ -257,7 +290,6 @@ enum PostgresMode {
 /// Implementation of [Consensus] over a Postgres database.
 pub struct PostgresConsensus {
     postgres_client: PostgresClient,
-    dyncfg: Arc<ConfigSet>,
     mode: PostgresMode,
 }
 
@@ -280,7 +312,21 @@ impl PostgresConsensus {
         );
 
         let dyncfg = Arc::clone(&config.dyncfg);
-        let postgres_client = PostgresClient::open(config.into())?;
+
+        // The resolver runs per connection, so a flag change takes effect as the pool cycles
+        // connections. It unconditionally follows the flag: it does not know the backend. The
+        // backend-specific safety check lives in `get_connection`, which asserts that CockroachDB
+        // connections are SERIALIZABLE. The connection carries the level it was created with, so
+        // that assertion is exact rather than a guess about what the resolver returned.
+        let client_config = PostgresClientConfig::new(config.url, config.knobs, config.metrics)
+            .with_isolation(Arc::new(move || {
+                if PG_CONSENSUS_READ_COMMITTED.get(&dyncfg) {
+                    IsolationLevel::ReadCommitted
+                } else {
+                    IsolationLevel::Serializable
+                }
+            }));
+        let postgres_client = PostgresClient::open(client_config)?;
 
         let client = postgres_client.get_connection().await?;
 
@@ -315,13 +361,15 @@ impl PostgresConsensus {
             Err(e) => return Err(e.into()),
         };
 
-        if mode != PostgresMode::CockroachDB {
-            pg_batch_execute(&client, &format!("{}; {};", create_schema, SCHEMA)).await?;
+        match mode {
+            PostgresMode::CockroachDB => {}
+            PostgresMode::Postgres => {
+                pg_batch_execute(&client, &format!("{}; {};", create_schema, SCHEMA)).await?;
+            }
         }
 
         Ok(PostgresConsensus {
             postgres_client,
-            dyncfg,
             mode,
         })
     }
@@ -365,8 +413,23 @@ impl PostgresConsensus {
         Ok(())
     }
 
-    async fn get_connection(&self) -> Result<Object, PoolError> {
-        self.postgres_client.get_connection().await
+    async fn get_connection(&self) -> Result<Connection, PoolError> {
+        let conn = self.postgres_client.get_connection().await?;
+        // On CockroachDB we always run the lockless `CRDB_*` queries, which are only linearizable
+        // under SERIALIZABLE. The connection records the level it was created with, so we assert on
+        // that exact level rather than trusting the isolation flag to be off. The `POSTGRES_*`
+        // queries used on vanilla Postgres are correct under any isolation, so that backend needs
+        // no check.
+        if self.mode == PostgresMode::CockroachDB {
+            assert_eq!(
+                conn.isolation_level(),
+                IsolationLevel::Serializable,
+                "consensus on CockroachDB requires SERIALIZABLE isolation, refusing to run \
+                 CRDB_* queries under {:?}",
+                conn.isolation_level(),
+            );
+        }
+        Ok(conn)
     }
 }
 
@@ -418,71 +481,274 @@ impl Consensus for PostgresConsensus {
     ) -> Result<CaSResult, ExternalError> {
         let expected = new.seqno.previous();
 
-        let result = if let Some(expected) = expected {
-            /// This query has been written to execute within a single
-            /// network round-trip. The insert performance has been tuned
-            /// against CockroachDB, ensuring it goes through the fast-path
-            /// 1-phase commit of CRDB. Any changes to this query should
-            /// confirm an EXPLAIN ANALYZE (VERBOSE) query plan contains
-            /// `auto commit`
-            static CRDB_CAS_QUERY: &str = "
+        let result = match expected {
+            Some(expected) => {
+                /// This query has been written to execute within a single
+                /// network round-trip. The insert performance has been tuned
+                /// against CockroachDB, ensuring it goes through the fast-path
+                /// 1-phase commit of CRDB. Any changes to this query should
+                /// confirm an EXPLAIN ANALYZE (VERBOSE) query plan contains
+                /// `auto commit`
+                static CRDB_CAS_QUERY: &str = "
+                    INSERT INTO consensus (shard, sequence_number, data)
+                    SELECT $1, $2, $3
+                    WHERE (SELECT sequence_number FROM consensus
+                        WHERE shard = $1
+                        ORDER BY sequence_number DESC LIMIT 1) = $4;
+                ";
+
+                // ## Correctness argument
+                //
+                // The Postgres tuned queries are designed to be correct under READ COMMITTED
+                // isolation. In that mode each operation sees its own snapshot of the database and
+                // special care is needed to ensure that the observable behavior is linearizable.
+                //
+                // The whole argument rests on one invariant: the live sequence numbers `>= 0` form
+                // a contiguous range with no gaps, whose maximum is the head. Appends only ever
+                // extend the head by one and truncation only ever removes a prefix, preserving
+                // contiguity. (The `-1` sentinel written at init sits below all appends and never
+                // participates in any test here, so we ignore it.) The cases below rely on the
+                // following equivalence:
+                //
+                //        `seqno` is the head iff `seqno` is present and `seqno+1` is absent.
+                //
+                // A client performs CaS operations at a seqno one above the seqno it has already
+                // observed, unless it is initializing the shard for the first time, in which case it
+                // does a plain insert. The two scenarios are analyzed separately:
+                //
+                // 1. CaS for `expected_seqno+1` issued after `expected_seqno` was observed
+                //
+                // Because `expected_seqno` was observed, the consensus table must have contained a
+                // row with it at some point, the `expected_row`.
+                //
+                // The first operation of the CaS query is to find `expected_row` and lock it with
+                // a `FOR KEY SHARE` lock. The `expected_row` may or may not still exist, depending on
+                // how outdated the client is. If `expected_seqno` is the current head the row is
+                // guaranteed to exist, since truncation never deletes the head. This gives two cases:
+                //
+                // 1.1. `expected_row` exists
+                //
+                // The INSERT is the linearization point of this CaS, and it commits a row iff
+                // `expected_seqno` is the head at the instant the INSERT runs. The held lock keeps
+                // `expected_seqno` present at that instant (see 1.1.3). By contiguity it is then
+                // the head iff `expected_seqno+1` is absent. This is exactly what the PRIMARY KEY
+                // tests as the INSERT tries to write `expected_seqno+1` (`$2`). So the INSERT
+                // writes one row and the call returns Committed (advancing the head to
+                // `expected_seqno+1`, the range still contiguous) precisely when `expected_seqno`
+                // was the head; otherwise the PK raises `unique_violation` and the call returns
+                // ExpectationMismatch with the table unchanged. The remaining obligation is that
+                // operations interleaving between the lock and the INSERT cannot break this. There
+                // are three cases:
+                //
+                // 1.1.1 Another CaS has taken its own `expected_row_2` lock but not inserted yet.
+                //
+                // `FOR KEY SHARE` is shared, so the two locks neither block each other nor wait:
+                // locks never serialize appenders, the PRIMARY KEY does. Having only locked, the
+                // other CaS has not changed the table, so it does not affect what this INSERT
+                // observes. If it is racing for the same head (`expected_row_2 == expected_row`) both
+                // appenders attempt to INSERT the same `expected_seqno+1`, and the PK admits exactly
+                // one. Whichever INSERT commits first is linearized first and becomes the head; the
+                // other then finds `expected_seqno+1` present and is rejected — case 1.1.2 from its
+                // side.
+                //
+                // 1.1.2 Another CaS has performed its `expected_seqno+1` insertion.
+                //
+                // By contiguity an append always targets head+1, so the only insertion that can
+                // affect this one is `expected_seqno+1` itself: nothing above it can be added while
+                // `expected_seqno+1` is still absent. If such an insert commits first, then
+                // `expected_seqno` is no longer the head, and this INSERT now finds `expected_seqno+1`
+                // present and is rejected by the PK → ExpectationMismatch. That is correct: this CaS
+                // is linearized after the other appender, and at that point it must fail.
+                //
+                // 1.1.3 A truncation has happened.
+                //
+                // A truncation deletes a prefix `[0, cut)` and never the head. Its DELETE takes a
+                // `FOR UPDATE`-strength row lock on each row it removes, and that conflicts with the
+                // `FOR KEY SHARE` held on `expected_seqno`. So no committed truncation can have
+                // removed `expected_seqno` while that lock is held: any truncation that commits in
+                // this window has `cut <= expected_seqno` and deletes only rows strictly below
+                // `expected_seqno`. That leaves `expected_seqno` present and the presence/absence of
+                // `expected_seqno+1` untouched, so it does not change the INSERT's outcome, and
+                // removing a low prefix keeps the range contiguous. This is also why, once locked,
+                // `expected_row` is still present at INSERT time, closing the "lock found a row, then
+                // it was GC'd before the INSERT" hole.
+                //
+                // 1.2. `expected_row` does not exist
+                //
+                // The CTE is empty, the INSERT touches zero rows, and the call returns
+                // ExpectationMismatch without modifying the table. This is correct: `expected_seqno`
+                // was observed, so it was present once, and the only way a present seqno later
+                // becomes absent is truncation (inserts never delete). A truncation that removed
+                // `expected_seqno` advanced the head strictly above it (it removes a prefix and keeps
+                // the head), so `expected_seqno` is not the head and the CaS must fail. This operation
+                // linearizes at its locking SELECT, where `expected_seqno` is already gone.
+                //
+                // 2. CaS that initializes the shard, issued with `expected` = None
+                //
+                // The init path (see the `None` arm) inserts a `-1` sentinel and the first row at
+                // seqno 0, then commits only if `max(sequence_number)` is 0. It commits (head
+                // becomes 0) exactly when the shard was empty: a shard that still holds seqno 0
+                // fails the insert's PK, and a shard with a head above 0 either fails the PK (if
+                // seqno 0 is present) or, if seqno 0 was truncated away, inserts into the gap and
+                // is caught by the `max > 0` check and rolled back. This is correct because an
+                // initialized shard always retains a live row (truncation never removes the head).
+                // Concurrent first-time inits serialize on the seqno-0 PK lock, so exactly one wins.
+                static POSTGRES_CAS_QUERY: &str = "
+                WITH expected_row AS (
+                    SELECT sequence_number FROM consensus
+                    WHERE shard = $1 AND sequence_number = $4
+                    FOR KEY SHARE
+                )
                 INSERT INTO consensus (shard, sequence_number, data)
                 SELECT $1, $2, $3
-                WHERE (SELECT sequence_number FROM consensus
-                       WHERE shard = $1
-                       ORDER BY sequence_number DESC LIMIT 1) = $4;
-            ";
+                FROM expected_row;
+                ";
 
-            /// This query has been written to ensure we only get row level
-            /// locks on the `(shard, seq_no)` we're trying to update. The insert
-            /// performance has been tuned against Postgres 15 to ensure it
-            /// minimizes possible serialization conflicts.
-            static POSTGRES_CAS_QUERY: &str = "
-            WITH last_seq AS (
-                SELECT sequence_number FROM consensus
-                WHERE shard = $1
-                ORDER BY sequence_number DESC
-                LIMIT 1
-                FOR UPDATE
-            )
-            INSERT INTO consensus (shard, sequence_number, data)
-            SELECT $1, $2, $3
-            FROM last_seq
-            WHERE last_seq.sequence_number = $4;
-            ";
-
-            let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg)
-                && self.mode == PostgresMode::Postgres
-            {
-                POSTGRES_CAS_QUERY
-            } else {
-                CRDB_CAS_QUERY
-            };
-            let client = self.get_connection().await?;
-            let statement = client.prepare_cached(q).await?;
-            pg_execute_prepared(
-                &client,
-                &statement,
-                &[&key, &new.seqno, &new.data.as_ref(), &expected],
-            )
-            .await?
-        } else {
-            // Insert the new row as long as no other row exists for the same shard.
-            let q = "INSERT INTO consensus SELECT $1, $2, $3 WHERE
-                     NOT EXISTS (
-                         SELECT * FROM consensus WHERE shard = $1
-                     )
-                     ON CONFLICT DO NOTHING";
-            let client = self.get_connection().await?;
-            let statement = client.prepare_cached(q).await?;
-            pg_execute_prepared(&client, &statement, &[&key, &new.seqno, &new.data.as_ref()])
-                .await?
+                let q = match self.mode {
+                    PostgresMode::CockroachDB => CRDB_CAS_QUERY,
+                    PostgresMode::Postgres => POSTGRES_CAS_QUERY,
+                };
+                let client = self.get_connection().await?;
+                let statement = client.prepare_cached(q).await?;
+                pg_execute_prepared(
+                    &client,
+                    &statement,
+                    &[&key, &new.seqno, &new.data.as_ref(), &expected],
+                )
+                .await
+            }
+            None => {
+                match self.mode {
+                    PostgresMode::Postgres => {
+                        // SUBTLE: This query is designed to be linearizable with respect to:
+                        // * the other POSTGRES queries (cas/truncate) present in this file under
+                        //   READ COMMITTED isolation
+                        // * the CRDB and POSTGRES queries existed in Materialize versions <=v26.30
+                        //   that run under SERIALIZABLE isolation
+                        // * the POSTGRES queries that were introduced in
+                        //   d6dff42fd69d1a87edc4ae99e7ea1364201830dc, exist in versions v26.31 and
+                        //   v26.32, and run under READ COMMITTED isolation
+                        //
+                        // # Correctness with respect to current version
+                        //
+                        // The POSTGRES queries in the current version are designed to be
+                        // linearizable under READ COMMITTED, therefore the correctness argument is
+                        // identical under SERIALIZABLE which is a strictly stronger isolation
+                        // level.
+                        //
+                        // ## Concurrent initialization
+                        //
+                        // The first query to insert seqno 0 into the shard will take the primary
+                        // key lock for that row. Any concurrent clients that attempt to also
+                        // insert seqno 0 will have their INSERT statement block on the PK lock
+                        // until the first query commits, forcing them to seriale after the winning
+                        // query commits at which point they will receive a PK violation error and
+                        // only the first client will win.
+                        //
+                        // ## Stale initlization
+                        //
+                        // If stale client attempts to insert seqno 0 in an
+                        // already initialized shard then:
+                        // * if seqno 0 has not been truncated the insert fails with a PK violation
+                        // * if seqno 0 has been truncated the insert succeeds but the subsequent
+                        // read of the max seqno will return the current head and the tx will rollback.
+                        //
+                        // Note that the sentinel seqno of -1 does not participate and is not
+                        // needed for this correctness argument. It only exists to cover the
+                        // co-existence with v26.31 queries (see below).
+                        //
+                        // # Correctness with respect to v26.30 (CRDB/POSTGRES family,
+                        //   SERIALIZABLE) and v26.31/v26.32 (CRDB family, SERIALIZABLE)
+                        //
+                        // This query linearizes correctly with queries from v26.30 only in
+                        // SERIALIZABLE mode. This is why the `persist_pg_consensus_read_committed`
+                        // must default to off (see note in flag definition) so that during the
+                        // co-existence period of 0dt upgrades both systems participate in the
+                        // SERIALIZABLE conflict resolution.
+                        //
+                        // The correctness argument is that in the absence of concurrent mutations
+                        // (i.e in SERIALIZABLE) this query only succeeds if the shard is
+                        // uninitialized. Therefore only one client will succeed.
+                        //
+                        // # Correctness with respect to v26.31/v26.32 (POSTGRES family, READ COMMITTED)
+                        //
+                        // Versions v26.31 and v26.32 run in READ COMMITTED isolation and
+                        // initialize a shard by blindly inserting seqno -1 and seqno 0 into the
+                        // shard. By never truncating seqno -1 it ensures that stale initialiations
+                        // hit PK violations on seqno -1 even though seqno 0 has been removed.
+                        //
+                        // For this reason this version must also insert the sentinel seqno -1 in
+                        // as part of its initialization and avoid truncating it during truncation.
+                        // Without this treatment a stale shard initialization from a version
+                        // v26.31 client against a shard that had been initialized, written to, and
+                        // truncated by a v26.33 client would succeed, and the shard state would be
+                        // corrupted since the seqnos would not be contiguous anymore.
+                        //
+                        // When versions v26.31/v26.32 have become old enough that we believe no
+                        // one will run them again we can remove the sentinel seqno handling from
+                        // the initialization and truncation queries to simplify them.
+                        static POSTGRES_INIT_INSERT: &str =
+                            "INSERT INTO consensus (shard, sequence_number, data)
+                        VALUES ($1, -1, ''), ($1, $2, $3)";
+                        static POSTGRES_INIT_MAX: &str =
+                            "SELECT max(sequence_number) FROM consensus WHERE shard = $1";
+                        let mut client = self.get_connection().await?;
+                        let txn = client.transaction().await?;
+                        let insert = txn.prepare_cached(POSTGRES_INIT_INSERT).await?;
+                        match pg_txn_execute_prepared(
+                            &txn,
+                            &insert,
+                            &[&key, &new.seqno, &new.data.as_ref()],
+                        )
+                        .await
+                        {
+                            Ok(_) => {
+                                let max_stmt = txn.prepare_cached(POSTGRES_INIT_MAX).await?;
+                                let row =
+                                    pg_txn_query_one_prepared(&txn, &max_stmt, &[&key]).await?;
+                                let max: SeqNo = row.try_get(0)?;
+                                if max == SeqNo::minimum() {
+                                    txn.commit().await?;
+                                    Ok(1)
+                                } else {
+                                    txn.rollback().await?;
+                                    Ok(0)
+                                }
+                            }
+                            // The insert failed (e.g. `unique_violation` because seqno 0 already
+                            // exists). Roll back and let the caller map the error below.
+                            Err(e) => {
+                                let _ = txn.rollback().await;
+                                Err(e)
+                            }
+                        }
+                    }
+                    PostgresMode::CockroachDB => {
+                        static CRDB_INIT_QUERY: &str =
+                            "INSERT INTO consensus SELECT $1, $2, $3 WHERE
+                        NOT EXISTS (
+                            SELECT * FROM consensus WHERE shard = $1
+                        )";
+                        let client = self.get_connection().await?;
+                        let statement = client.prepare_cached(CRDB_INIT_QUERY).await?;
+                        pg_execute_prepared(
+                            &client,
+                            &statement,
+                            &[&key, &new.seqno, &new.data.as_ref()],
+                        )
+                        .await
+                    }
+                }
+            }
         };
 
-        if result == 1 {
-            Ok(CaSResult::Committed)
-        } else {
-            Ok(CaSResult::ExpectationMismatch)
+        match result {
+            Ok(n) if n >= 1 => Ok(CaSResult::Committed),
+            Ok(_) => Ok(CaSResult::ExpectationMismatch),
+            Err(e) if e.code() == Some(&SqlState::UNIQUE_VIOLATION) => {
+                Ok(CaSResult::ExpectationMismatch)
+            }
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -520,57 +786,22 @@ impl Consensus for PostgresConsensus {
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
-        static CRDB_TRUNCATE_QUERY: &str = "
+        // The `sequence_number >= 0` clause preserves the seqno `-1` sentinel that the
+        // initialization from v26.31/v26.32 clients writes. The sentinel is a truncation-proof
+        // "already initialized" marker (relied on by v26.31/v26.32 and preserved for it during a
+        // rolling deploy). The clause is a no-op for shards that have no sentinel, since all of
+        // their seqnos are already >= 0.
+        static TRUNCATE_QUERY: &str = "
         DELETE FROM consensus
-        WHERE shard = $1 AND sequence_number < $2 AND
+        WHERE shard = $1 AND sequence_number >= 0 AND sequence_number < $2 AND
         EXISTS (
             SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
         )
         ";
 
-        /// This query has been specifically tuned to ensure we get the minimal
-        /// number of __row__ locks possible, and that it doesn't conflict with
-        /// concurrently running compare and swap operations that are trying to
-        /// evolve the shard.
-        ///
-        /// It's performance has been benchmarked against Postgres 15.
-        ///
-        /// Note: The `ORDER BY` in the newer_exists CTE exists so we obtain a
-        /// row lock on the lowest possible sequence number. This ensures
-        /// minimal conflict between concurrently running truncate and append
-        /// operations.
-        static POSTGRES_TRUNCATE_QUERY: &str = "
-        WITH newer_exists AS (
-            SELECT * FROM consensus
-            WHERE shard = $1
-                AND sequence_number >= $2
-            ORDER BY sequence_number ASC
-            LIMIT 1
-            FOR UPDATE
-        ),
-        to_lock AS (
-            SELECT ctid FROM consensus
-            WHERE shard = $1
-            AND sequence_number < $2
-            AND EXISTS (SELECT * FROM newer_exists)
-            ORDER BY sequence_number DESC
-            FOR UPDATE
-        )
-        DELETE FROM consensus
-        USING to_lock
-        WHERE consensus.ctid = to_lock.ctid;
-        ";
-
-        let q = if USE_POSTGRES_TUNED_QUERIES.get(&self.dyncfg)
-            && self.mode == PostgresMode::Postgres
-        {
-            POSTGRES_TRUNCATE_QUERY
-        } else {
-            CRDB_TRUNCATE_QUERY
-        };
         let result = {
             let client = self.get_connection().await?;
-            let statement = client.prepare_cached(q).await?;
+            let statement = client.prepare_cached(TRUNCATE_QUERY).await?;
             pg_execute_prepared(&client, &statement, &[&key, &seqno]).await?
         };
         if result == 0 {
@@ -600,6 +831,7 @@ impl Consensus for PostgresConsensus {
 
 #[cfg(test)]
 mod tests {
+    use mz_dyncfg::ConfigUpdates;
     use mz_ore::assert_err;
     use tracing::info;
     use uuid::Uuid;
@@ -623,6 +855,24 @@ mod tests {
         };
 
         consensus_impl_test(|| PostgresConsensus::open(config.clone())).await?;
+
+        // On a Postgres backend the default run above already exercises the tuned queries under
+        // SERIALIZABLE. Re-run the contract with READ COMMITTED to also cover that isolation (on a
+        // CockroachDB backend the flag is a no-op and this just re-runs the default queries).
+        // `consensus_impl_test` asserts on `list_keys`, so it needs a clean table: the previous run
+        // leaves shards behind, so drop and recreate the table before running it again.
+        let read_committed_config =
+            PostgresConsensusConfig::new_for_test()?.expect("postgres url was set above");
+        {
+            let mut updates = ConfigUpdates::default();
+            updates.add(&PG_CONSENSUS_READ_COMMITTED, true);
+            updates.apply(&read_committed_config.dyncfg);
+        }
+        PostgresConsensus::open(read_committed_config.clone())
+            .await?
+            .drop_and_recreate()
+            .await?;
+        consensus_impl_test(|| PostgresConsensus::open(read_committed_config.clone())).await?;
 
         // and now verify the implementation-specific `drop_and_recreate` works as intended
         let consensus = PostgresConsensus::open(config.clone()).await?;

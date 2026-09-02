@@ -20,6 +20,18 @@
 //! compatibility. This is its own crate so that production and consumption can
 //! be in different processes and production is not allowed to specify private
 //! data structures unknown to the reader.
+//!
+//! `EventDetails::as_json` produces the JSON that
+//! `mz_catalog.mz_audit_events.details` exposes. The durable catalog stores
+//! the proto twin from `mz_catalog_protos::objects::audit_log_event_v1`,
+//! which `parse_catalog_audit_log_details` (in
+//! `src/expr/src/scalar/func/impls/jsonb.rs`) reshapes back into
+//! `as_json`'s output. Changes here that shift that output (new variants,
+//! renamed fields, added `skip_serializing_if`, field-name diffs against
+//! the proto) need matching updates there. The round-trip is covered by
+//! the property test in `src/catalog/tests/audit_log_details.rs`.
+
+use std::time::Duration;
 
 use mz_ore::now::EpochMillis;
 use proptest_derive::Arbitrary;
@@ -145,6 +157,7 @@ pub enum ObjectType {
     Func,
     Index,
     MaterializedView,
+    MetricSink,
     NetworkPolicy,
     Role,
     Secret,
@@ -168,6 +181,7 @@ impl ObjectType {
             ObjectType::Func => "Function",
             ObjectType::Index => "Index",
             ObjectType::MaterializedView => "Materialized View",
+            ObjectType::MetricSink => "Metric Sink",
             ObjectType::NetworkPolicy => "Network Policy",
             ObjectType::Role => "Role",
             ObjectType::Schema => "Schema",
@@ -225,6 +239,8 @@ pub enum EventDetails {
     IdFullNameV1(IdFullNameV1),
     RenameClusterV1(RenameClusterV1),
     RenameClusterReplicaV1(RenameClusterReplicaV1),
+    AlterClusterReconfigurationV1(AlterClusterReconfigurationV1),
+    ClusterHydrationBurstV1(ClusterHydrationBurstV1),
     RenameItemV1(RenameItemV1),
     IdNameV1(IdNameV1),
     SchemaV1(SchemaV1),
@@ -329,6 +345,114 @@ pub struct IdNameV1 {
     pub name: String,
 }
 
+/// A transition in the lifecycle of a background cluster reconfiguration (a
+/// `reconfiguration` record on a managed cluster), recorded so an operator can
+/// trace a background `ALTER CLUSTER` from start to its resolution.
+///
+/// The replica creates and drops the reconfiguration induces are recorded
+/// separately, carrying [`CreateOrDropClusterReplicaReasonV1::Reconfiguration`];
+/// this event family records the cluster-level transitions those replica
+/// lifecycle events hang off of.
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReconfigurationLifecycleV1 {
+    /// A reconfiguration record was written or re-targeted: the cluster is now
+    /// converging onto a new target shape.
+    Started,
+    /// The realized config cut over to the target and the record was marked
+    /// finalized: a hydrated success under either `ON TIMEOUT` action
+    /// (including one that hydrated after the deadline, since success takes
+    /// precedence) or a forced `ON TIMEOUT COMMIT` cut-over of a
+    /// not-yet-hydrated target past the deadline. Which of the two it was is
+    /// recorded in [`AlterClusterReconfigurationV1::forced`].
+    Finalized,
+    /// The deadline fired with the target not hydrated under `ON TIMEOUT
+    /// ROLLBACK`: the record was marked timed out with the realized config
+    /// untouched and the target replicas dropped, reverting to the
+    /// pre-reconfiguration set. Emitted exactly once per timeout. The status
+    /// transition is durable, so it cannot re-fire. This event is the timeout's
+    /// papertrail, alongside the retained record.
+    TimedOut,
+    /// An in-flight reconfiguration was cancelled by re-targeting the record
+    /// back to the cluster's still-realized shape (the ALTER-back cancel path);
+    /// the controller drops the in-flight target replicas.
+    Cancelled,
+    /// The controller could not create the target replicas within the resource
+    /// budget and aborted the reconfiguration: the record was marked resource
+    /// exhausted with the realized config untouched, reverting to the
+    /// pre-reconfiguration set (like a rollback, but triggered by the budget
+    /// rather than the deadline). The status transition is durable, so it
+    /// cannot re-fire.
+    ResourceExhausted,
+}
+
+/// A cluster-level transition in a background reconfiguration's lifecycle.
+///
+/// `deadline` is the reconfiguration's active deadline as a millisecond
+/// `mz_timestamp`, recorded on every transition so an operator can correlate
+/// the transition with the originating `ALTER`.
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+pub struct AlterClusterReconfigurationV1 {
+    pub cluster_id: String,
+    pub cluster_name: String,
+    pub transition: ReconfigurationLifecycleV1,
+    /// On a `finalized` transition: whether the cut-over was forced by `ON
+    /// TIMEOUT COMMIT` at the deadline rather than reached by hydration.
+    /// `None` on every other transition.
+    #[serde(default)]
+    pub forced: Option<bool>,
+    pub target_size: String,
+    pub target_replication_factor: u32,
+    pub target_availability_zones: Vec<String>,
+    pub target_logging: ClusterReplicaLoggingV1,
+    pub deadline: Option<u64>,
+}
+
+/// A managed cluster's introspection-logging config, recorded on a
+/// reconfiguration event so the papertrail captures an introspection-only
+/// `ALTER` (which otherwise leaves `target_size` and
+/// `target_replication_factor` unchanged from the realized shape). Mirrors the
+/// durable `ReplicaLogging`: `log_logging` is `INTROSPECTION DEBUGGING`,
+/// `interval` is `INTROSPECTION INTERVAL` (`None` disables introspection).
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+pub struct ClusterReplicaLoggingV1 {
+    pub log_logging: bool,
+    pub interval: Option<Duration>,
+}
+
 #[derive(
     Clone,
     Debug,
@@ -345,6 +469,83 @@ pub struct CreateRoleV1 {
     pub id: String,
     pub name: String,
     pub auto_provision_source: Option<String>,
+}
+
+/// A transition in the lifecycle of a hydration burst (a `burst` record on a
+/// managed cluster), recorded so an operator can trace a controller-initiated
+/// burst from start to teardown.
+///
+/// The burst replica's create and drop are recorded separately, carrying
+/// [`CreateOrDropClusterReplicaReasonV1::HydrationBurst`]; this event family
+/// records the cluster-level transitions those replica lifecycle events hang off.
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum HydrationBurstLifecycleV1 {
+    /// A `burst` record was written: the controller is now running a burst
+    /// replica to accelerate hydration.
+    Started,
+    /// The `burst` record was cleared: the burst replica is torn down. Why is
+    /// recorded in [`ClusterHydrationBurstV1::finish_cause`].
+    Finished,
+}
+
+/// Why a hydration burst finished, recorded on a `finished` transition.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum BurstFinishCauseV1 {
+    /// The steady replica set hydrated and the linger duration elapsed.
+    LingerElapsed,
+    /// The burst is no longer warranted by current config: the auto-scaling
+    /// policy was removed or its hydration size changed, the cluster was
+    /// turned off, or burst was disabled environment-wide.
+    NoLongerWarranted,
+}
+
+/// A cluster-level transition in a hydration burst's lifecycle.
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+pub struct ClusterHydrationBurstV1 {
+    pub cluster_id: String,
+    pub cluster_name: String,
+    pub transition: HydrationBurstLifecycleV1,
+    /// On a `finished` transition: why the burst tore down. `None` on `started`.
+    #[serde(default)]
+    pub finish_cause: Option<BurstFinishCauseV1>,
+    /// The size of the burst replica the record runs.
+    pub burst_size: String,
 }
 
 #[derive(
@@ -586,6 +787,19 @@ pub enum CreateOrDropClusterReplicaReasonV1 {
     Manual,
     Schedule,
     System,
+    /// The cluster controller's graceful-reconfiguration strategy created the
+    /// replica while converging a cluster onto an in-flight `reconfiguration`
+    /// target (a background `ALTER CLUSTER`).
+    Reconfiguration,
+    /// The cluster controller's hydration-burst strategy created the
+    /// transient burst replica it runs while a cluster's objects are not yet
+    /// hydrated.
+    HydrationBurst,
+    /// The cluster controller dropped the replica because the cluster's
+    /// configuration no longer calls for it. NOTE: a replication-factor
+    /// decrease drop reads `retired` even though the config change itself was
+    /// user-initiated.
+    Retired,
 }
 
 /// The reason for the automated cluster scheduling to turn a cluster On or Off. Each existing
@@ -1198,6 +1412,12 @@ impl EventDetails {
             EventDetails::IdFullNameV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::RenameClusterV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::RenameClusterReplicaV1(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
+            EventDetails::AlterClusterReconfigurationV1(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
+            EventDetails::ClusterHydrationBurstV1(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
             EventDetails::RenameItemV1(v) => serde_json::to_value(v).expect("must serialize"),

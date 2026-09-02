@@ -1,6 +1,6 @@
 ---
 source: src/orchestratord/src/controller/balancer.rs
-revision: 927cd62f6b
+revision: 8dad2dbf43
 ---
 
 # mz-orchestratord::controller::balancer

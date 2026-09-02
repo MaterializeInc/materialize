@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/char.rs
-revision: 61475c0097
+revision: 94ee2d5448
 ---
 
 # mz-expr::scalar::func::impls::char

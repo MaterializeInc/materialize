@@ -390,6 +390,20 @@ GRANT USAGE ON CONNECTION foo TO joe
 GrantPrivileges(GrantPrivilegesStatement { privileges: Privileges([USAGE]), target: Object { object_type: Connection, object_spec_inner: Objects { names: [Item(UnresolvedItemName([Ident("foo")]))] } }, roles: [Ident("joe")] })
 
 parse-statement
+GRANT USAGE ON NETWORK POLICY foo TO joe
+----
+GRANT USAGE ON NETWORK POLICY foo TO joe
+=>
+GrantPrivileges(GrantPrivilegesStatement { privileges: Privileges([USAGE]), target: Object { object_type: NetworkPolicy, object_spec_inner: Objects { names: [NetworkPolicy(Ident("foo"))] } }, roles: [Ident("joe")] })
+
+parse-statement
+REVOKE USAGE ON NETWORK POLICY foo FROM joe
+----
+REVOKE USAGE ON NETWORK POLICY foo FROM joe
+=>
+RevokePrivileges(RevokePrivilegesStatement { privileges: Privileges([USAGE]), target: Object { object_type: NetworkPolicy, object_spec_inner: Objects { names: [NetworkPolicy(Ident("foo"))] } }, roles: [Ident("joe")] })
+
+parse-statement
 GRANT SELECT ON VIEW foo TO joe
 ----
 error: For object type VIEW, you must specify 'TABLE' or omit the object type

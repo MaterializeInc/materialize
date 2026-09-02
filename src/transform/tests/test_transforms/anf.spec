@@ -20,7 +20,7 @@ Source defined as t0
 
 
 # Linear chains.
-apply pipeline=anf
+apply pipeline=ANF
 TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=3
   Reduce group_by=[#0] aggregates=[min(#1), max(#2)]
     ArrangeBy keys=[[#1], [#2, #3]]
@@ -62,7 +62,7 @@ Return
   Get l8
 
 # Joins.
-apply pipeline=anf
+apply pipeline=ANF
 Join on=(#0 = #2 = #4)
   Get t0
   Constant <empty> // { types: "(bigint, bigint)" }
@@ -82,7 +82,7 @@ Return
   Get l2
 
 # Union.
-apply pipeline=anf
+apply pipeline=ANF
 Union
   Get t0
   Constant <empty> // { types: "(bigint, bigint)" }
@@ -107,7 +107,7 @@ Return
 
 
 # Recursive queries.
-apply pipeline=anf
+apply pipeline=ANF
 With
   cte l0 =
     Union
@@ -227,7 +227,7 @@ Return
 
 # From a failing test
 # See https://github.com/MaterializeInc/materialize/pull/19287#issuecomment-1555923422.
-apply pipeline=anf
+apply pipeline=ANF
 Return
   Project (#1)
     Filter (#1 > 7)

@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/adt/interval.rs
-revision: c0559e3dbe
+revision: 34a619c51e
 ---
 
 # mz-repr::adt::interval

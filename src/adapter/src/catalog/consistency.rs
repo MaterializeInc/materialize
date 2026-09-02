@@ -269,6 +269,7 @@ impl CatalogState {
                 | CommentObjectId::MaterializedView(item_id)
                 | CommentObjectId::Source(item_id)
                 | CommentObjectId::Sink(item_id)
+                | CommentObjectId::MetricSink(item_id)
                 | CommentObjectId::Index(item_id)
                 | CommentObjectId::Func(item_id)
                 | CommentObjectId::Connection(item_id)
@@ -483,8 +484,16 @@ impl CatalogState {
                     });
                 }
 
-                // Make sure the items in the schema are consistent.
-                for (item_name, item_id) in &schema.items {
+                // Make sure the items in the schema are consistent. A schema
+                // holds items, types, and functions in separate maps, and the
+                // create_sql of all three must stay consistent, e.g. after a
+                // schema rename.
+                for (item_name, item_id) in schema
+                    .items
+                    .iter()
+                    .chain(schema.types.iter())
+                    .chain(schema.functions.iter())
+                {
                     let Some(entry) = self.entry_by_id.get(item_id) else {
                         item_inconsistencies.push(ItemInconsistency::NonExistentItem {
                             db_id: *db_id,

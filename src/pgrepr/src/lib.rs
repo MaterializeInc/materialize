@@ -23,14 +23,15 @@ mod types;
 mod value;
 
 pub mod oid;
+pub mod regproc;
 
 pub use types::{
     ANYCOMPATIBLELIST, ANYCOMPATIBLEMAP, LIST, MAP, Type, TypeConversionError, TypeFromOidError,
 };
-pub use value::error::IntoDatumError;
+pub use value::error::{IntoDatumError, NulCharacterError};
 pub use value::interval::Interval;
 pub use value::jsonb::Jsonb;
 pub use value::numeric::Numeric;
 pub use value::record::Record;
 pub use value::unsigned::{UInt2, UInt4, UInt8};
-pub use value::{Value, values_from_row};
+pub use value::{TextEncodeSettings, Value, values_from_row};

@@ -156,7 +156,6 @@ CREATE PUBLICATION another_publication FOR TABLE another_schema.another_table;
 # $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
 
 # Sneak in a test for pg_source_snapshot_statement_timeout, pg_source_wal_sender_timeout
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET pg_source_snapshot_statement_timeout = 1000;
 ALTER SYSTEM SET pg_source_wal_sender_timeout = 0;

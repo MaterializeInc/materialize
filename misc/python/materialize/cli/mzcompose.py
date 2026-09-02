@@ -163,10 +163,13 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     )
     shtab.add_argument_to(completion_parser, "shell", parent=parser)
 
-    # shtab can't handle Enum choices (indexes with [0]). Convert to strings.
+    # shtab can't handle Enum classes as choices (it indexes with [0]).
+    # Convert to a list of the members: shtab renders them via str(), and
+    # argparse still accepts the type-converted member, which converting to
+    # name strings would not (the member never compares equal to its name).
     for action in parser._actions:  # noqa: SLF001
         if isinstance(action.choices, type) and issubclass(action.choices, enum.Enum):
-            action.choices = [e.name for e in action.choices]
+            action.choices = list(action.choices)
 
     args = parser.parse_args(argv)
     if args.file:
@@ -538,6 +541,30 @@ class SqlCommand(Command):
                 ],
                 env={"PGCLIENTENCODING": "utf-8"},
             )
+        # Check the service name before the image: postgres-metadata uses the
+        # materialize/postgres image but listens on 26257 as root.
+        elif image == "cockroachdb/cockroach" or args.service == "postgres-metadata":
+            assert not args.mz_system
+            deps = composition.repo.resolve_dependencies(
+                [composition.repo.images["psql"]]
+            )
+            deps.acquire()
+            deps["psql"].run(
+                [
+                    "-h",
+                    service.get("hostname", args.service),
+                    "-p",
+                    "26257",
+                    "-U",
+                    "root",
+                    "root",
+                ],
+                docker_args=[
+                    "--interactive",
+                    f"--network={composition.project_name}_default",
+                ],
+                env={"PGCLIENTENCODING": "utf-8"},
+            )
         elif image == "materialize/postgres":
             assert not args.mz_system
             deps = composition.repo.resolve_dependencies(
@@ -557,27 +584,6 @@ class SqlCommand(Command):
                     f"--network={composition.project_name}_default",
                 ],
                 env={"PGPASSWORD": "postgres", "PGCLIENTENCODING": "utf-8"},
-            )
-        elif image == "cockroachdb/cockroach" or args.service == "postgres-metadata":
-            assert not args.mz_system
-            deps = composition.repo.resolve_dependencies(
-                [composition.repo.images["psql"]]
-            )
-            deps.acquire()
-            deps["psql"].run(
-                [
-                    "-h",
-                    service.get("hostname", args.service),
-                    "-p" "26257",
-                    "-U",
-                    "root",
-                    "root",
-                ],
-                docker_args=[
-                    "--interactive",
-                    f"--network={composition.project_name}_default",
-                ],
-                env={"PGCLIENTENCODING": "utf-8"},
             )
         elif image == "mysql":
             assert not args.mz_system
@@ -772,15 +778,20 @@ To see the available workflows, run:
         # `run` command while the latter asks for help on the named `workflow`.
 
         KNOWN_OPTIONS_WITH_ARGUMENT = [
-            "-d",
-            "--detach",
-            "--name",
+            "--cap-add",
+            "--cap-drop",
             "--entrypoint",
             "-e",
+            "--env",
+            "--env-from-file",
             "-l",
             "--label",
+            "--name",
             "-p",
             "--publish",
+            "--pull",
+            "-u",
+            "--user",
             "-v",
             "--volume",
             "-w",

@@ -40,7 +40,7 @@ use crate::http::cluster::{
 /// Aggregates environmentd's local metrics with every clusterd replica's
 /// `/metrics` output.
 pub(crate) async fn handle_public_metrics(
-    client: AuthedClient,
+    mut client: AuthedClient,
     Extension(config): Extension<Arc<ClusterProxyConfig>>,
     Extension(metrics_registry): Extension<MetricsRegistry>,
 ) -> Response {

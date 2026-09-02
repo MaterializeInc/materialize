@@ -1,0 +1,530 @@
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on July 6, 2026 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/udf_in_constraints
+#
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE FUNCTION f1(a INT) RETURNS INT LANGUAGE SQL AS $$ SELECT a + 1 $$;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE VIEW v_checks AS
+SELECT
+     id,
+     jsonb_pretty(
+       crdb_internal.pb_to_json(
+         'cockroach.sql.sqlbase.Descriptor',
+         descriptor,
+         false
+       )->'table'->'checks'
+     ) as checks
+FROM system.descriptor
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE FUNCTION get_checks(table_id INT) RETURNS STRING
+LANGUAGE SQL
+AS $$
+  SELECT checks
+  FROM v_checks
+  WHERE id = table_id
+$$;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE VIEW v_fn_depended_on_by AS
+SELECT
+     id,
+     jsonb_pretty(
+       crdb_internal.pb_to_json(
+         'cockroach.sql.sqlbase.Descriptor',
+         descriptor,
+         false
+       )->'function'->'dependedOnBy'
+     ) as depended_on_by
+FROM system.descriptor
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE FUNCTION get_fn_depended_on_by(function_id INT) RETURNS STRING
+LANGUAGE SQL
+AS $$
+  SELECT depended_on_by
+  FROM v_fn_depended_on_by
+  WHERE id = function_id
+$$;
+
+# Not supported by Materialize.
+onlyif cockroach
+# Make sure that check constraint expression is properly serialized and
+# deserialized.
+statement ok
+CREATE TABLE t1(
+  a INT PRIMARY KEY,
+  b INT CHECK (f1(b) > 1),
+  FAMILY fam_0 (a, b)
+);
+
+let $tbl_id
+SELECT id FROM system.namespace WHERE name = 't1';
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT get_checks($tbl_id);
+----
+[
+    {
+        "columnIds": [
+            2
+        ],
+        "constraintId": 2,
+        "expr": "[FUNCTION 100106](b) \u003e 1:::INT8",
+        "name": "check_b"
+    }
+]
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT create_statement FROM [SHOW CREATE TABLE t1];
+----
+CREATE TABLE public.t1 (
+  a INT8 NOT NULL,
+  b INT8 NULL,
+  CONSTRAINT t1_pkey PRIMARY KEY (a ASC),
+  FAMILY fam_0 (a, b),
+  CONSTRAINT check_b CHECK (public.f1(b) > 1:::INT8)
+)
+
+# Make sure back references are tracked properly.
+let $fn_id
+SELECT oid::int - 100000 FROM pg_catalog.pg_proc WHERE proname = 'f1';
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT get_fn_depended_on_by($fn_id)
+----
+[
+    {
+        "constraintIds": [
+            2
+        ],
+        "id": 111
+    }
+]
+
+# Not supported by Materialize.
+onlyif cockroach
+# Make sure ADD CONSTRAINT works as expected.
+statement ok
+ALTER TABLE t1 ADD CONSTRAINT cka CHECK (f1(a) > 1);
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT get_checks($tbl_id);
+----
+[
+    {
+        "columnIds": [
+            2
+        ],
+        "constraintId": 2,
+        "expr": "[FUNCTION 100106](b) \u003e 1:::INT8",
+        "name": "check_b"
+    },
+    {
+        "columnIds": [
+            1
+        ],
+        "constraintId": 3,
+        "expr": "[FUNCTION 100106](a) \u003e 1:::INT8",
+        "name": "cka"
+    }
+]
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT get_fn_depended_on_by($fn_id)
+----
+[
+    {
+        "constraintIds": [
+            2,
+            3
+        ],
+        "id": 111
+    }
+]
+
+# Not supported by Materialize.
+onlyif cockroach
+# Make sure references from different tables are tracked properly.
+statement ok
+CREATE TABLE t2(
+  a INT PRIMARY KEY,
+  b INT CHECK (f1(b) > 1),
+  CONSTRAINT cka CHECK (f1(a) > 1)
+);
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT get_fn_depended_on_by($fn_id)
+----
+[
+    {
+        "constraintIds": [
+            2,
+            3
+        ],
+        "id": 111
+    },
+    {
+        "constraintIds": [
+            2,
+            3
+        ],
+        "id": 112
+    }
+]
+
+# Not supported by Materialize.
+onlyif cockroach
+# Make sure DROP CONSTRAINT remove references properly.
+statement ok
+ALTER TABLE t2 DROP CONSTRAINT check_b;
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT get_fn_depended_on_by($fn_id)
+----
+[
+    {
+        "constraintIds": [
+            2,
+            3
+        ],
+        "id": 111
+    },
+    {
+        "constraintIds": [
+            2
+        ],
+        "id": 112
+    }
+]
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE t2 DROP CONSTRAINT cka;
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT get_fn_depended_on_by($fn_id)
+----
+[
+    {
+        "constraintIds": [
+            2,
+            3
+        ],
+        "id": 111
+    }
+]
+
+# Not supported by Materialize.
+onlyif cockroach
+# Make sure that DROP TABLE remove references properly.
+statement ok
+DROP TABLE t1;
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT get_fn_depended_on_by($fn_id)
+----
+NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+# Make sure function cannot be dropped if used in constraints
+statement ok
+CREATE TABLE t1(
+  a INT PRIMARY KEY,
+  b INT CHECK (f1(b) > 1),
+  FAMILY fam_0 (a, b)
+);
+
+statement error Unsupported DROP on FUNCTION
+DROP FUNCTION f1;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE t1 DROP CONSTRAINT check_b;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP FUNCTION f1;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP TABLE t1;
+
+# Not supported by Materialize.
+onlyif cockroach
+# Make sure that CREATE FUNCTION and CREATE TABLE works in one txn.
+statement ok
+BEGIN;
+CREATE FUNCTION f1(a INT) RETURNS INT LANGUAGE SQL AS $$ SELECT a + 1 $$;
+CREATE TABLE t1(
+  a INT PRIMARY KEY,
+  b INT CHECK (f1(b) > 1),
+  FAMILY fam_0 (a, b)
+);
+END;
+
+let $tbl_id
+SELECT id FROM system.namespace WHERE name = 't1';
+
+let $fn_id
+SELECT oid::int - 100000 FROM pg_catalog.pg_proc WHERE proname = 'f1';
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT get_checks($tbl_id);
+----
+[
+    {
+        "columnIds": [
+            2
+        ],
+        "constraintId": 2,
+        "expr": "[FUNCTION 100114](b) \u003e 1:::INT8",
+        "name": "check_b"
+    }
+]
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT get_fn_depended_on_by($fn_id);
+----
+[
+    {
+        "constraintIds": [
+            2
+        ],
+        "id": 115
+    }
+]
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+DROP TABLE t1;
+DROP FUNCTION f1;
+END;
+
+# Make sure that CREATE FUNCTION and ADD CONSTRAINT works in one txn.
+statement ok
+CREATE TABLE t1 (
+  a INT PRIMARY KEY,
+  b INT,
+  FAMILY fam_0 (a, b)
+);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+CREATE FUNCTION f1(a INT) RETURNS INT LANGUAGE SQL AS $$ SELECT a + 1 $$;
+ALTER TABLE t1 ADD CONSTRAINT check_b CHECK (f1(b) > 1);
+END;
+
+let $tbl_id
+SELECT id FROM system.namespace WHERE name = 't1';
+
+let $fn_id
+SELECT oid::int - 100000 FROM pg_catalog.pg_proc WHERE proname = 'f1';
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT get_checks($tbl_id);
+----
+[
+    {
+        "columnIds": [
+            2
+        ],
+        "constraintId": 2,
+        "expr": "[FUNCTION 100117](b) \u003e 1:::INT8",
+        "name": "check_b"
+    }
+]
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT get_fn_depended_on_by($fn_id);
+----
+[
+    {
+        "constraintIds": [
+            2
+        ],
+        "id": 116
+    }
+]
+
+skipif config local-legacy-schema-changer
+statement ok
+SET use_declarative_schema_changer = 'unsafe_always';
+
+# Record disabled, not supported by Materialize:
+# # In legacy schema changer, constraints are formally dropped in jobs.
+# # So by the point we do DROP FUNCTION, constraints are still there.
+# skipif config local-legacy-schema-changer
+# statement ok
+# BEGIN;
+# ALTER TABLE t1 DROP CONSTRAINT check_b;
+# DROP FUNCTION f1;
+# END;
+
+statement ok
+DROP TABLE t1;
+
+skipif config local-legacy-schema-changer
+statement ok
+SET use_declarative_schema_changer = 'on';
+
+# Make sure check constraint actually validates.
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE OR REPLACE FUNCTION f1(a INT) RETURNS INT LANGUAGE SQL AS $$ SELECT a + 1 $$;
+CREATE TABLE t1 (
+  a INT PRIMARY KEY,
+  b INT CHECK (f1(b) > 1),
+  FAMILY fam_0 (a, b)
+);
+
+statement error unknown catalog item 't1'
+INSERT INTO t1 VALUES (1,0);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+INSERT INTO t1 VALUES (1,1);
+
+statement error Expected COLUMN, found CONSTRAINT
+ALTER TABLE t1 ADD CONSTRAINT cka CHECK (f1(a) > 10);
+
+# Not supported by Materialize.
+onlyif cockroach
+# Make sure that constraint still works after a function is renamed.
+statement ok
+ALTER TABLE t1 ADD CONSTRAINT cka CHECK (f1(a) > 1);
+
+statement error unknown catalog item 't1'
+INSERT INTO t1 VALUES (2, -1);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER FUNCTION f1 RENAME to f2;
+
+statement error unknown catalog item 't1'
+INSERT INTO t1 VALUES (2, -1);
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT create_statement FROM [SHOW CREATE TABLE t1]
+----
+CREATE TABLE public.t1 (
+  a INT8 NOT NULL,
+  b INT8 NULL,
+  CONSTRAINT t1_pkey PRIMARY KEY (a ASC),
+  FAMILY fam_0 (a, b),
+  CONSTRAINT check_b CHECK (public.f2(b) > 1:::INT8),
+  CONSTRAINT cka CHECK (public.f2(a) > 1:::INT8)
+)
+
+# Make sure that schema prefix is preserved through serialization and
+# deserialization.
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE DATABASE db1;
+USE db1;
+CREATE SCHEMA sc1;
+CREATE FUNCTION sc1.f1(a INT) RETURNS INT LANGUAGE SQL AS $$ SELECT a + 1 $$;
+CREATE FUNCTION sc1.f1() RETURNS INT LANGUAGE SQL AS $$ SELECT 1 $$;
+CREATE TABLE t(
+  a INT PRIMARY KEY,
+  b INT CHECK (sc1.f1(b) > 1),
+  FAMILY fam_0_b_a (b, a)
+);
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT create_statement FROM [SHOW CREATE TABLE t]
+----
+CREATE TABLE public.t (
+  a INT8 NOT NULL,
+  b INT8 NULL,
+  CONSTRAINT t_pkey PRIMARY KEY (a ASC),
+  FAMILY fam_0_b_a (b, a),
+  CONSTRAINT check_b CHECK (sc1.f1(b) > 1:::INT8)
+)
+
+# Not supported by Materialize.
+onlyif cockroach
+# Make sure dependency circle is not allowed.
+statement ok
+CREATE TABLE t_circle(a INT PRIMARY KEY, b INT);
+CREATE FUNCTION f_circle() RETURNS INT LANGUAGE SQL AS $$ SELECT a FROM t_circle $$;
+
+statement error Expected COLUMN, found CONSTRAINT
+ALTER TABLE t_circle ADD CONSTRAINT ckb CHECK (b + f_circle() > 1);

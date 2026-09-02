@@ -29,7 +29,7 @@ Source defined as t1
 
 
 # Case: `Project`
-apply pipeline=projection_lifting
+apply pipeline=ProjectionLifting
 Project (#2, #3, #4)
   Project (#0, #1, #2, #0, #1, #2)
     Get t1
@@ -39,7 +39,7 @@ Project (#2, #0, #1)
 
 
 # Case: `Map`
-apply pipeline=projection_lifting
+apply pipeline=ProjectionLifting
 Map (#3 + 1, #1 + 3)
   Project (#0, #0, #2, #1)
     Get t1
@@ -50,7 +50,7 @@ Project (#0, #0, #2, #1, #3, #4)
 
 
 # Case: `FlatMap`
-apply pipeline=projection_lifting
+apply pipeline=ProjectionLifting
 FlatMap generate_series(#3 + 1, #2 + 3, #1)
   Project (#0, #2, #1, #2)
     Get t1
@@ -61,7 +61,7 @@ Project (#0, #2, #1..=#3)
 
 
 # Case: `Filter`
-apply pipeline=projection_lifting
+apply pipeline=ProjectionLifting
 Filter 5 * (#1 + #3) > #2
   Project (#0, #2, #1, #2)
     Get t1
@@ -72,7 +72,7 @@ Project (#0, #2, #1, #2)
 
 
 # Case: `Join`
-apply pipeline=projection_lifting
+apply pipeline=ProjectionLifting
 Join on=(#1 = #5 AND #2 = #6)
   Get t1
   Project (#0, #2, #1, #2)
@@ -85,7 +85,7 @@ Project (#0..=#3, #5, #4, #5)
 
 
 # Case: `Reduce`
-apply pipeline=projection_lifting
+apply pipeline=ProjectionLifting
 Reduce group_by=[#1, #2] aggregates=[sum(#3), max(#2 + #3)]
   Project (#0, #2, #1, #2)
     Get t1
@@ -95,7 +95,7 @@ Reduce group_by=[#2, #1] aggregates=[sum(#2), max((#1 + #2))]
 
 
 # Case: `TopK`
-apply pipeline=projection_lifting
+apply pipeline=ProjectionLifting
 TopK group_by=[#2, #1] order_by=[#1 asc nulls_last] limit=(#1 + 7) monotonic
   Project (#0, #2, #1, #2)
     Get t1
@@ -106,7 +106,7 @@ Project (#0, #2, #1, #2)
 
 
 # Case: `Negate`
-apply pipeline=projection_lifting
+apply pipeline=ProjectionLifting
 Union
   Map (true, "")
     Get t0
@@ -123,7 +123,7 @@ Union
 
 
 # Case: `Union`
-apply pipeline=projection_lifting
+apply pipeline=ProjectionLifting
 Union
   Project (#1, #1, #2, #0)
     Get t1
@@ -141,7 +141,7 @@ Project (#1, #1, #2, #0)
 
 
 # Three bindings, l0 and l2 are not recursive
-apply pipeline=projection_lifting
+apply pipeline=ProjectionLifting
 Return
   Join on=(#0 = #2)
     Get l2

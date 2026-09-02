@@ -49,8 +49,8 @@ Builds on branch `main` that have an annotation matching the regex pattern `cann
 bin/buildkite-annotation-search test --branch main --use-regex "cannot serve requested as_of AntiChain.*testdrive-materialized-1"
 ```
 
-Nightly builds that failed and have an annotation containing `kafka-verify-data`
+Nightly builds that failed and have an annotation containing `fivetran-destination action=describe`
 
 ```
-bin/buildkite-annotation-search nightly --only-failed-builds "kafka-verify-data"
+bin/buildkite-annotation-search nightly --only-failed-builds "fivetran-destination action=describe"
 ```

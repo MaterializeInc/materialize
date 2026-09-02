@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use mz_ore::metric;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{MetricTag, MetricVisibility, MetricsRegistry, UIntGauge};
 use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
@@ -21,6 +21,7 @@ pub struct Metrics {
     pub query_total: IntCounterVec,
     pub active_sessions: IntGaugeVec,
     pub active_subscribes: IntGaugeVec,
+    pub active_internal_subscribes: IntGaugeVec,
     pub active_copy_tos: IntGaugeVec,
     pub queue_busy_seconds: Histogram,
     pub determine_timestamp: IntCounterVec,
@@ -30,6 +31,10 @@ pub struct Metrics {
     pub storage_usage_collection_time_seconds: Histogram,
     pub arrangement_sizes_collection_time_seconds: Histogram,
     pub arrangement_sizes_rows_written: IntCounter,
+    pub hydration_history_mutations: IntCounterVec,
+    pub hydration_history_retention_batch_full: IntCounter,
+    pub hydration_history_rows_affected: IntCounterVec,
+    pub hydration_history_sweep_duration_seconds: Histogram,
     pub subscribe_outputs: IntCounterVec,
     pub canceled_peeks: IntCounter,
     pub linearize_message_seconds: HistogramVec,
@@ -43,8 +48,6 @@ pub struct Metrics {
     pub append_table_duration_seconds: Histogram,
     pub webhook_validation_reduce_failures: IntCounterVec,
     pub webhook_get_appender: IntCounter,
-    pub check_scheduling_policies_seconds: HistogramVec,
-    pub handle_scheduling_decisions_seconds: HistogramVec,
     pub row_set_finishing_seconds: Histogram,
     pub session_startup_table_writes_seconds: Histogram,
     pub parse_seconds: Histogram,
@@ -52,10 +55,15 @@ pub struct Metrics {
     pub result_rows_first_to_last_byte_seconds: HistogramVec,
     pub pgwire_ensure_transaction_seconds: HistogramVec,
     pub catalog_snapshot_seconds: HistogramVec,
+    pub catalog_snapshot_cache: IntCounterVec,
+    pub catalog_arc_strong_count: UIntGauge,
+    pub catalog_arc_weak_count: UIntGauge,
     pub pgwire_recv_scheduling_delay_ms: HistogramVec,
     pub catalog_transact_seconds: HistogramVec,
+    pub catalog_transact_phase_seconds: HistogramVec,
     pub apply_catalog_implications_seconds: Histogram,
     pub group_commit_catalog_upper_seconds: Histogram,
+    pub occ_retry_count: Histogram,
 }
 
 impl Metrics {
@@ -65,15 +73,26 @@ impl Metrics {
                 name: "mz_query_total",
                 help: "The total number of queries issued of the given type since process start.",
                 var_labels: ["session_type", "statement_type"],
+                visibility: MetricVisibility::Public,
+                tags: [MetricTag::Environment],
             )),
             active_sessions: registry.register(metric!(
                 name: "mz_active_sessions",
                 help: "The number of active coordinator sessions.",
                 var_labels: ["session_type"],
+                visibility: MetricVisibility::Public,
+                tags: [MetricTag::Environment],
             )),
             active_subscribes: registry.register(metric!(
                 name: "mz_active_subscribes",
                 help: "The number of active SUBSCRIBE queries.",
+                var_labels: ["session_type"],
+                visibility: MetricVisibility::Public,
+                tags: [MetricTag::Environment],
+            )),
+            active_internal_subscribes: registry.register(metric!(
+                name: "mz_active_internal_subscribes",
+                help: "The number of active internal subscribes used by read-then-write operations and background maintenance.",
                 var_labels: ["session_type"],
             )),
             active_copy_tos: registry.register(metric!(
@@ -107,6 +126,8 @@ impl Metrics {
                 name: "mz_adapter_commands",
                 help: "The total number of adapter commands issued of the given type since process start.",
                 var_labels: ["command_type", "status", "application_name"],
+                visibility: MetricVisibility::Public,
+                tags: [MetricTag::Environment],
             )),
             storage_usage_collection_time_seconds: registry.register(metric!(
                 name: "mz_storage_usage_collection_time_seconds",
@@ -115,12 +136,31 @@ impl Metrics {
             )),
             arrangement_sizes_collection_time_seconds: registry.register(metric!(
                 name: "mz_arrangement_sizes_collection_time_seconds",
-                help: "Seconds to read mz_object_arrangement_sizes and prepare history-table updates for one snapshot.",
+                help: "Seconds to read mz_object_arrangement_sizes and prepare history records for one snapshot.",
                 buckets: histogram_seconds_buckets(0.000_128, 8.0)
             )),
             arrangement_sizes_rows_written: registry.register(metric!(
                 name: "mz_arrangement_sizes_rows_written_total",
                 help: "Total rows appended to mz_object_arrangement_size_history since process start.",
+            )),
+            hydration_history_mutations: registry.register(metric!(
+                name: "mz_hydration_history_mutations_total",
+                help: "Total hydration-history collection and retention mutations since process start.",
+                var_labels: ["operation", "outcome"],
+            )),
+            hydration_history_retention_batch_full: registry.register(metric!(
+                name: "mz_hydration_history_retention_batch_full_total",
+                help: "Total hydration-history retention batches that were full. Repeated increments mean retention may not be keeping up with its schedule.",
+            )),
+            hydration_history_rows_affected: registry.register(metric!(
+                name: "mz_hydration_history_rows_affected_total",
+                help: "Total rows changed by hydration-history maintenance since process start.",
+                var_labels: ["action"],
+            )),
+            hydration_history_sweep_duration_seconds: registry.register(metric!(
+                name: "mz_hydration_history_sweep_duration_seconds",
+                help: "Wall time of a complete hydration-history collection and retention sweep.",
+                buckets: histogram_seconds_buckets(0.128, 1024.0),
             )),
             subscribe_outputs: registry.register(metric!(
                 name: "mz_subscribe_outputs",
@@ -186,18 +226,6 @@ impl Metrics {
                 name: "mz_webhook_get_appender_count",
                 help: "Count of getting a webhook appender from the Coordinator.",
             )),
-            check_scheduling_policies_seconds: registry.register(metric!(
-                name: "mz_check_scheduling_policies_seconds",
-                help: "The time each policy in `check_scheduling_policies` takes.",
-                var_labels: ["policy", "thread"],
-                buckets: histogram_seconds_buckets(0.000_128, 8.0),
-            )),
-            handle_scheduling_decisions_seconds: registry.register(metric!(
-                name: "mz_handle_scheduling_decisions_seconds",
-                help: "The time `handle_scheduling_decisions` takes.",
-                var_labels: ["altered_a_cluster"],
-                buckets: histogram_seconds_buckets(0.000_128, 8.0),
-            )),
             row_set_finishing_seconds: registry.register(metric!(
                 name: "mz_row_set_finishing_seconds",
                 help: "The time it takes to run RowSetFinishing::finish.",
@@ -233,9 +261,28 @@ impl Metrics {
             )),
             catalog_snapshot_seconds: registry.register(metric!(
                 name: "mz_catalog_snapshot_seconds",
-                help: "The time it takes to run `catalog_snapshot` when fetching the catalog.",
+                help: "The time it takes to fetch a catalog snapshot from the Coordinator. \
+                       Only observed on session snapshot cache misses.",
                 var_labels: ["context"],
                 buckets: histogram_seconds_buckets(0.001, 512.0),
+            )),
+            catalog_snapshot_cache: registry.register(metric!(
+                name: "mz_catalog_snapshot_cache",
+                help: "Hits and misses of the session-side catalog snapshot cache. A miss \
+                       costs a Coordinator round-trip.",
+                var_labels: ["context", "result"],
+            )),
+            catalog_arc_strong_count: registry.register(metric!(
+                name: "mz_catalog_arc_strong_count",
+                help: "The number of strong references to the current catalog snapshot: roughly, \
+                       in-flight users plus a small constant baseline.",
+            )),
+            catalog_arc_weak_count: registry.register(metric!(
+                name: "mz_catalog_arc_weak_count",
+                help: "The number of weak references to the current catalog snapshot: sessions \
+                       whose snapshot cache points at the current catalog version (older \
+                       versions are not counted). Drops on catalog changes and recovers as \
+                       session caches repopulate.",
             )),
             pgwire_recv_scheduling_delay_ms: registry.register(metric!(
                 name: "mz_pgwire_recv_scheduling_delay_ms",
@@ -249,6 +296,12 @@ impl Metrics {
                 var_labels: ["method"],
                 buckets: histogram_seconds_buckets(0.001, 32.0),
             )),
+            catalog_transact_phase_seconds: registry.register(metric!(
+                name: "mz_catalog_transact_phase_seconds",
+                help: "Wall time of the individual phases of a coordinator catalog transaction, to attribute where transact time is spent. Phases overlap and do not sum to mz_catalog_transact_seconds. The transact phase includes the durable catalog sync and commit.",
+                var_labels: ["phase"],
+                buckets: histogram_seconds_buckets(0.000_128, 32.0),
+            )),
             apply_catalog_implications_seconds: registry.register(metric!(
                 name: "mz_apply_catalog_implications_seconds",
                 help: "The time it takes to apply catalog implications.",
@@ -256,8 +309,15 @@ impl Metrics {
             )),
             group_commit_catalog_upper_seconds: registry.register(metric!(
                 name: "mz_group_commit_catalog_upper_seconds",
-                help: "The time it takes to advance the catalog shard upper during group commit.",
+                help: "The time it takes to advance the catalog shard upper for a txns-shard write (group commits and table register/forget).",
                 buckets: histogram_seconds_buckets(0.001, 32.0),
+            )),
+            occ_retry_count: registry.register(metric!(
+                name: "mz_occ_read_then_write_retry_count",
+                help: "Number of OCC retries per read-then-write operation.",
+                buckets: vec![
+                    0., 1., 2., 3., 5., 10., 25., 50., 100., 200., 300., 500., 750., 1000.,
+                ],
             )),
         }
     }
@@ -271,6 +331,7 @@ impl Metrics {
             row_set_finishing_seconds: self.row_set_finishing_seconds(),
             session_startup_table_writes_seconds: self.session_startup_table_writes_seconds.clone(),
             query_total: self.query_total.clone(),
+            subscribe_outputs: self.subscribe_outputs.clone(),
             determine_timestamp: self.determine_timestamp.clone(),
             timestamp_difference_for_strict_serializable_ms: self
                 .timestamp_difference_for_strict_serializable_ms
@@ -292,6 +353,7 @@ pub struct SessionMetrics {
     row_set_finishing_seconds: Histogram,
     session_startup_table_writes_seconds: Histogram,
     query_total: IntCounterVec,
+    subscribe_outputs: IntCounterVec,
     determine_timestamp: IntCounterVec,
     timestamp_difference_for_strict_serializable_ms: HistogramVec,
     timestamp_difference_for_bounded_staleness_ms: HistogramVec,
@@ -312,6 +374,10 @@ impl SessionMetrics {
 
     pub(crate) fn query_total(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
         self.query_total.with_label_values(label_values)
+    }
+
+    pub(crate) fn subscribe_outputs(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
+        self.subscribe_outputs.with_label_values(label_values)
     }
 
     pub(crate) fn determine_timestamp(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {

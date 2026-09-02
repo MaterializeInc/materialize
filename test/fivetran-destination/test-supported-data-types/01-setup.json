@@ -1,0 +1,31 @@
+{
+  "create_table": {
+    "test_data_types": {
+      "columns": {
+        "c1": "BOOLEAN",
+        "c2": "SHORT",
+        "c3": "INT",
+        "c4": "LONG",
+        "c5": "FLOAT",
+        "c6": "DOUBLE",
+        "c7": "NAIVE_DATE",
+        "c8": "NAIVE_DATETIME",
+        "c9": "UTC_DATETIME",
+        "c10": "DECIMAL",
+        "c11": "BINARY",
+        "c12": "STRING",
+        "c13": "JSON"
+      },
+      "primary_key": ["c12"]
+    }
+  },
+  "ops": [
+    {
+      "upsert": {
+        "test_data_types": [
+          {"c1": "false", "c2": "1", "c3": "2", "c4": "3", "c5": "4.5", "c6": "6.7", "c7": "2023-01-02", "c8": "2023-03-04T:05:06:07", "c9": "2023-03-04T:05:06:07", "c10": "8.9", "c11": "a", "c12": "b", "c13": "{\"x\":\"y\"}"}
+        ]
+      }
+    }
+  ]
+}

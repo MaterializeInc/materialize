@@ -18,7 +18,6 @@ use std::sync::LazyLock;
 use anyhow::anyhow;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::LocalId;
-use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
@@ -1233,6 +1232,7 @@ impl From<CommentObjectId> for ObjectId {
             | CommentObjectId::MaterializedView(item_id)
             | CommentObjectId::Source(item_id)
             | CommentObjectId::Sink(item_id)
+            | CommentObjectId::MetricSink(item_id)
             | CommentObjectId::Index(item_id)
             | CommentObjectId::Func(item_id)
             | CommentObjectId::Connection(item_id)
@@ -1280,6 +1280,12 @@ impl From<ObjectId> for SystemObjectId {
 /// well as the inner kind of object that is represented, e.g. [`CatalogItemId`] is used to
 /// identify both Tables and Views. No other kind of ID encapsulates all of this, hence this new
 /// "*Id" type.
+///
+/// New variants here also need to be added to the durable counterpart
+/// `mz_catalog_protos::objects::CommentObject` and to both CASE expressions in
+/// the `mz_internal.mz_comments` materialized view (`MZ_COMMENTS` in
+/// `mz-catalog::builtin::mz_internal`). The MV reads `CommentObject` out of
+/// `mz_catalog_raw` as serde JSON.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize)]
 pub enum CommentObjectId {
     Table(CatalogItemId),
@@ -1287,6 +1293,7 @@ pub enum CommentObjectId {
     MaterializedView(CatalogItemId),
     Source(CatalogItemId),
     Sink(CatalogItemId),
+    MetricSink(CatalogItemId),
     Index(CatalogItemId),
     Func(CatalogItemId),
     Connection(CatalogItemId),
@@ -1321,6 +1328,11 @@ struct ItemResolutionConfig {
 pub struct NameResolver<'a> {
     catalog: &'a dyn SessionCatalog,
     ctes: BTreeMap<String, LocalId>,
+    /// The next `LocalId` to allocate for a CTE. Never decremented, so every
+    /// CTE in the statement gets a unique id, even when CTE names shadow each
+    /// other. Later phases (e.g., HIR lowering's `CteMap`) key CTEs by
+    /// `LocalId` and rely on this uniqueness.
+    next_cte_id: u64,
     status: Result<(), PlanError>,
     ids: BTreeMap<CatalogItemId, BTreeSet<GlobalId>>,
 }
@@ -1330,9 +1342,16 @@ impl<'a> NameResolver<'a> {
         NameResolver {
             catalog,
             ctes: BTreeMap::new(),
+            next_cte_id: 0,
             status: Ok(()),
             ids: BTreeMap::new(),
         }
+    }
+
+    fn allocate_cte_id(&mut self) -> LocalId {
+        let id = LocalId::new(self.next_cte_id);
+        self.next_cte_id += 1;
+        id
     }
 
     fn resolve_data_type(&mut self, data_type: RawDataType) -> Result<ResolvedDataType, PlanError> {
@@ -1585,8 +1604,13 @@ impl<'a> NameResolver<'a> {
             // If there isn't a version specified, and this item supports versioning, track the
             // latest.
             None => match item.latest_version() {
-                // Only track the version of the referenced object, if the feature is enabled.
-                Some(v) if alter_table_enabled => RelationVersionSelector::Specific(v),
+                // Only pin a version for user items, and only with the feature on. Mirrors the
+                // by-name path in `fold_item_name`. Builtins are not user-versioned, so pinning
+                // one strands the reference if the builtin is ever converted to an item type
+                // without versions.
+                Some(v) if id.is_user() && alter_table_enabled => {
+                    RelationVersionSelector::Specific(v)
+                }
                 _ => RelationVersionSelector::Latest,
             },
             // Note: Return the specific version if one is specified, even if the feature is off.
@@ -1596,6 +1620,12 @@ impl<'a> NameResolver<'a> {
                     Some(latest) if latest >= specified_version => {
                         RelationVersionSelector::Specific(specified_version)
                     }
+                    // A version pin on a builtin is meaningless, since builtins are not
+                    // user-versioned. Such a pin can still sit in a persisted catalog, and if the
+                    // builtin has been converted to an item type without versions it no longer
+                    // validates. Resolve to latest instead of failing catalog open. User items
+                    // keep the strict check so real out-of-range versions still error.
+                    _ if !id.is_user() => RelationVersionSelector::Latest,
                     _ => {
                         if self.status.is_ok() {
                             self.status = Err(PlanError::InvalidVersion {
@@ -1659,11 +1689,9 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             CteBlock::Simple(ctes) => {
                 let mut result_ctes = Vec::<Cte<Aug>>::new();
 
-                let initial_id = self.ctes.len();
-
-                for (offset, cte) in ctes.into_iter().enumerate() {
+                for cte in ctes.into_iter() {
                     let cte_name = normalize::ident(cte.alias.name.clone());
-                    let local_id = LocalId::new(u64::cast_from(initial_id + offset));
+                    let local_id = self.allocate_cte_id();
 
                     result_ctes.push(Cte {
                         alias: cte.alias,
@@ -1679,19 +1707,18 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             CteBlock::MutuallyRecursive(MutRecBlock { options, ctes }) => {
                 let mut result_ctes = Vec::<CteMutRec<Aug>>::new();
 
-                let initial_id = self.ctes.len();
-
-                // The identifiers for each CTE will be `initial_id` plus their offset in `q.ctes`.
-                for (offset, cte) in ctes.iter().enumerate() {
+                // All bindings go into scope before any definition is walked,
+                // so that the definitions can refer to each other.
+                let mut local_ids = Vec::with_capacity(ctes.len());
+                for cte in ctes.iter() {
                     let cte_name = normalize::ident(cte.name.clone());
-                    let local_id = LocalId::new(u64::cast_from(initial_id + offset));
+                    let local_id = self.allocate_cte_id();
                     let shadowed_id = self.ctes.insert(cte_name.clone(), local_id);
                     shadowed_cte_ids.push((cte_name, shadowed_id));
+                    local_ids.push(local_id);
                 }
 
-                for (offset, cte) in ctes.into_iter().enumerate() {
-                    let local_id = LocalId::new(u64::cast_from(initial_id + offset));
-
+                for (cte, local_id) in ctes.into_iter().zip_eq(local_ids) {
                     let columns = cte
                         .columns
                         .into_iter()
@@ -2041,6 +2068,9 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             RetainHistoryFor(value) => RetainHistoryFor(self.fold_value(value)),
             Refresh(refresh) => Refresh(self.fold_refresh_option_value(refresh)),
             ClusterScheduleOptionValue(value) => ClusterScheduleOptionValue(value),
+            ClusterAutoScalingStrategyOptionValue(value) => {
+                ClusterAutoScalingStrategyOptionValue(value)
+            }
             ClusterAlterStrategy(value) => {
                 ClusterAlterStrategy(self.fold_cluster_alter_option_value(value))
             }
@@ -2076,7 +2106,11 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         &mut self,
         name: <Raw as AstInfo>::NetworkPolicyName,
     ) -> <Aug as AstInfo>::NetworkPolicyName {
-        match self.catalog.resolve_network_policy(&name.to_string()) {
+        let name_str = match &name {
+            RawNetworkPolicyName::Unresolved(ident) => ident.as_str(),
+            RawNetworkPolicyName::Resolved(s) => s.as_str(),
+        };
+        match self.catalog.resolve_network_policy(name_str) {
             Ok(policy) => ResolvedNetworkPolicyName {
                 id: policy.id(),
                 name: policy.name().to_string(),

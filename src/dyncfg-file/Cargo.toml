@@ -20,6 +20,7 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+mz-ore = { path = "../ore", features = ["test"] }
 tempfile.workspace = true
 
 [features]

@@ -12,17 +12,16 @@
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
-use itertools::Itertools;
 use mz_audit_log::VersionedEvent;
-use mz_controller_types::ClusterId;
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::PersistClient;
 use mz_persist_types::ShardId;
-use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, SqlScalarType};
+use mz_repr::{CatalogItemId, GlobalId, RelationDesc, SqlScalarType};
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use uuid::Uuid;
 
@@ -30,21 +29,20 @@ use crate::config::ClusterReplicaSizeMap;
 use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError, FenceError};
 pub use crate::durable::metrics::Metrics;
-use crate::durable::objects::AuditLog;
 pub use crate::durable::objects::Snapshot;
 pub use crate::durable::objects::state_update::StateUpdate;
-use crate::durable::objects::state_update::{StateUpdateKindJson, TryIntoStateUpdateKind};
 pub use crate::durable::objects::{
-    Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
-    Database, DefaultPrivilege, IntrospectionSourceIndex, Item, NetworkPolicy, ReplicaConfig,
-    ReplicaLocation, Role, RoleAuth, Schema, SourceReference, SourceReferences,
-    StorageCollectionMetadata, SystemConfiguration, SystemObjectDescription, SystemObjectMapping,
-    UnfinalizedShard,
+    BurstState, Cluster, ClusterConfig, ClusterReplica, ClusterSystemConfiguration, ClusterVariant,
+    ClusterVariantManaged, Comment, Database, DefaultPrivilege, IntrospectionSourceIndex, Item,
+    NetworkPolicy, ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget,
+    ReplicaConfig, ReplicaLocation, ReplicaSystemConfiguration, Role, RoleAuth, Schema,
+    SourceReference, SourceReferences, StorageCollectionMetadata, SystemConfiguration,
+    SystemObjectDescription, SystemObjectMapping, UnfinalizedShard, managed_cluster_replica_name,
 };
 pub use crate::durable::persist::shard_id;
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
-pub use crate::durable::transaction::Transaction;
 use crate::durable::transaction::TransactionBatch;
+pub use crate::durable::transaction::{DryRunTransaction, Transaction};
 pub use crate::durable::upgrade::CATALOG_VERSION;
 use crate::memory;
 
@@ -107,13 +105,11 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     ///   - Catalog migrations fail.
     ///
     /// `initial_ts` is used as the initial timestamp for new environments.
-    ///
-    /// Also returns a handle to a thread that is deserializing all of the audit logs.
     async fn open_savepoint(
         mut self: Box<Self>,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<(Box<dyn DurableCatalogState>, AuditLogIterator), CatalogError>;
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
     /// Opens the catalog in read only mode. All mutating methods
     /// will return an error.
@@ -130,13 +126,11 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// needed.
     ///
     /// `initial_ts` is used as the initial timestamp for new environments.
-    ///
-    /// Also returns a handle to a thread that is deserializing all of the audit logs.
     async fn open(
         mut self: Box<Self>,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<(Box<dyn DurableCatalogState>, AuditLogIterator), CatalogError>;
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
     /// Opens the catalog for manual editing of the underlying data. This is helpful for
     /// fixing a corrupt catalog.
@@ -280,6 +274,12 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
         target_upper: Timestamp,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
 
+    /// Checks for unapplied catalog content before `target_upper` without consuming it.
+    ///
+    /// Returns an error if this instance has been fenced out.
+    async fn ensure_not_out_of_sync(&mut self, target_upper: Timestamp)
+    -> Result<(), CatalogError>;
+
     /// Fetch the current upper of the catalog state.
     async fn current_upper(&mut self) -> Timestamp;
 }
@@ -297,18 +297,18 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// Marks the bootstrap process as complete.
     async fn mark_bootstrap_complete(&mut self);
 
-    /// Creates a new durable catalog state transaction.
+    /// Creates a transaction only if no durable catalog content is pending.
+    ///
+    /// Empty upper progress is accepted.
     async fn transaction(&mut self) -> Result<Transaction, CatalogError>;
 
-    /// Creates a new transaction initialized from the given [`Snapshot`]
-    /// instead of reading from durable storage. Used for incremental DDL
-    /// dry runs where the transaction state from a previous dry run has been
-    /// saved and needs to be restored so it stays in sync with the accumulated
-    /// `CatalogState`.
+    /// Creates a non-committable dry-run transaction from the given [`Snapshot`].
+    ///
+    /// The snapshot may include changes accumulated by earlier incremental dry runs.
     fn transaction_from_snapshot(
         &mut self,
         snapshot: Snapshot,
-    ) -> Result<Transaction, CatalogError>;
+    ) -> Result<DryRunTransaction, CatalogError>;
 
     /// Commits a durable catalog state transaction. The transaction will be committed at
     /// `commit_ts`.
@@ -323,34 +323,23 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         commit_ts: Timestamp,
     ) -> Result<Timestamp, CatalogError>;
 
-    /// Advances the upper of the catalog shard to `new_upper`.
+    /// Advances the catalog upper to at least `new_upper`.
     ///
-    /// This implicitly confirms leadership, as attempting to advance the catalog frontier will
-    /// fail if the writer has been fenced out.
+    /// A durable attempt observes fencing and reports concurrent non-fencing content as
+    /// [`DurableCatalogError::CatalogOutOfSync`]. A no-op only validates a fence already observed
+    /// by this handle.
     async fn advance_upper(&mut self, new_upper: Timestamp) -> Result<(), CatalogError>;
 
     /// Allocates and returns `amount` IDs of `id_type`.
     ///
-    /// See [`Self::commit_transaction`] for details on `commit_ts`.
-    #[mz_ore::instrument(level = "debug")]
+    /// Allocation rebases over empty upper progress. Fresh IDs do not require a catalog
+    /// staleness check.
     async fn allocate_id(
         &mut self,
         id_type: &str,
         amount: u64,
         commit_ts: Timestamp,
-    ) -> Result<Vec<u64>, CatalogError> {
-        let start = Instant::now();
-        if amount == 0 {
-            return Ok(Vec::new());
-        }
-        let mut txn = self.transaction().await?;
-        let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
-        txn.commit_internal(commit_ts).await?;
-        self.metrics()
-            .allocate_id_seconds
-            .observe(start.elapsed().as_secs_f64());
-        Ok(ids)
-    }
+    ) -> Result<Vec<u64>, CatalogError>;
 
     /// Allocates and returns `amount` many user [`CatalogItemId`] and [`GlobalId`].
     ///
@@ -396,65 +385,37 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         Ok(ClusterId::user(id).ok_or(SqlCatalogError::IdExhaustion)?)
     }
 
+    /// Allocates and returns `amount` many user [`ReplicaId`]s.
+    ///
+    /// See [`Self::commit_transaction`] for details on `commit_ts`.
+    async fn allocate_user_replica_ids(
+        &mut self,
+        amount: u64,
+        commit_ts: Timestamp,
+    ) -> Result<Vec<ReplicaId>, CatalogError> {
+        let ids = self
+            .allocate_id(USER_REPLICA_ID_ALLOC_KEY, amount, commit_ts)
+            .await?;
+        let ids = ids.into_iter().map(ReplicaId::User).collect();
+        Ok(ids)
+    }
+
+    /// Allocates and returns `amount` many system [`ReplicaId`]s.
+    ///
+    /// See [`Self::commit_transaction`] for details on `commit_ts`.
+    async fn allocate_system_replica_ids(
+        &mut self,
+        amount: u64,
+        commit_ts: Timestamp,
+    ) -> Result<Vec<ReplicaId>, CatalogError> {
+        let ids = self
+            .allocate_id(SYSTEM_REPLICA_ID_ALLOC_KEY, amount, commit_ts)
+            .await?;
+        let ids = ids.into_iter().map(ReplicaId::System).collect();
+        Ok(ids)
+    }
+
     fn shard_id(&self) -> ShardId;
-}
-
-trait AuditLogIteratorTrait: Iterator<Item = (AuditLog, Timestamp)> + Send + Sync + Debug {}
-impl<T: Iterator<Item = (AuditLog, Timestamp)> + Send + Sync + Debug> AuditLogIteratorTrait for T {}
-
-/// An iterator that returns audit log events in reverse ID order.
-#[derive(Debug)]
-pub struct AuditLogIterator {
-    // We store an interator instead of a sorted `Vec`, so we can lazily sort the contents on the
-    // first call to `next`, instead of sorting the contents on initialization.
-    audit_logs: Box<dyn AuditLogIteratorTrait>,
-}
-
-impl AuditLogIterator {
-    fn new(audit_logs: Vec<(StateUpdateKindJson, Timestamp, Diff)>) -> Self {
-        let audit_logs = audit_logs
-            .into_iter()
-            .map(|(kind, ts, diff)| {
-                assert_eq!(
-                    diff,
-                    Diff::ONE,
-                    "audit log is append only: ({kind:?}, {ts:?}, {diff:?})"
-                );
-                assert!(
-                    kind.is_audit_log(),
-                    "unexpected update kind: ({kind:?}, {ts:?}, {diff:?})"
-                );
-                let id = kind.audit_log_id();
-                (kind, ts, id)
-            })
-            .sorted_by_key(|(_, ts, id)| (*ts, *id))
-            .map(|(kind, ts, _id)| (kind, ts))
-            .rev()
-            .map(|(kind, ts)| {
-                // Each event will be deserialized lazily on a call to `next`.
-                let kind = TryIntoStateUpdateKind::try_into(kind).expect("kind decoding error");
-                let kind: Option<memory::objects::StateUpdateKind> = (&kind)
-                    .try_into()
-                    .expect("invalid persisted update: {update:#?}");
-                let kind = kind.expect("audit log always produces im-memory updates");
-                let audit_log = match kind {
-                    memory::objects::StateUpdateKind::AuditLog(audit_log) => audit_log,
-                    kind => unreachable!("invalid kind: {kind:?}"),
-                };
-                (audit_log, ts)
-            });
-        Self {
-            audit_logs: Box::new(audit_logs),
-        }
-    }
-}
-
-impl Iterator for AuditLogIterator {
-    type Item = (AuditLog, Timestamp);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.audit_logs.next()
-    }
 }
 
 /// Returns the schema of the `Row`s/`SourceData`s stored in the persist

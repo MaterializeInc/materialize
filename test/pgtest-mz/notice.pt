@@ -505,3 +505,36 @@ ReadyForQuery {"status":"I"}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"00000"},{"typ":"M","value":"drop cascades to 2 other objects"}]}
 CommandComplete {"tag":"DROP TABLE"}
 ReadyForQuery {"status":"I"}
+
+# Cluster case: `CREATE CLUSTER IF NOT EXISTS` for a name that is already taken
+# skips creation and reports success with an "already exists, skipping" notice.
+# `CREATE CLUSTER REPLICA IF NOT EXISTS` behaves the same for a replica name
+# already used on the target cluster.
+send
+Query {"query": "CREATE CLUSTER nc REPLICAS (r1 (SIZE = 'scale=1,workers=1'))"}
+Query {"query": "CREATE CLUSTER IF NOT EXISTS nc REPLICAS ()"}
+Query {"query": "CREATE CLUSTER REPLICA IF NOT EXISTS nc.r1 SIZE = 'scale=1,workers=1'"}
+Query {"query": "CREATE CLUSTER REPLICA IF NOT EXISTS nc.r2 SIZE = 'scale=1,workers=1'"}
+Query {"query": "DROP CLUSTER nc"}
+----
+
+until err_field_typs=SCM
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE CLUSTER"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42710"},{"typ":"M","value":"cluster \"nc\" already exists, skipping"}]}
+CommandComplete {"tag":"CREATE CLUSTER"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42710"},{"typ":"M","value":"cluster replica \"nc.r1\" already exists, skipping"}]}
+CommandComplete {"tag":"CREATE CLUSTER REPLICA"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE CLUSTER REPLICA"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"00000"},{"typ":"M","value":"drop cascades to 2 other objects"}]}
+CommandComplete {"tag":"DROP CLUSTER"}
+ReadyForQuery {"status":"I"}

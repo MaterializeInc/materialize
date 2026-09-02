@@ -27,6 +27,7 @@
 use crate::diagnostics::{Replacement, Suggestion, last_component, locate_replacement};
 use crate::project::compiler::cache::ProjectCache;
 use crate::project::compiler::typecheck::ObjectTypeCheckErrorKind;
+use crate::suggest::did_you_mean;
 use mz_sql::catalog::CatalogError;
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
@@ -245,36 +246,6 @@ pub(crate) fn harvest_candidates(cache: Option<&ProjectCache>) -> Candidates {
     }
 }
 
-/// Maximum number of suggestions returned by [`did_you_mean`].
-const MAX_DID_YOU_MEAN: usize = 3;
-
-/// Return up to [`MAX_DID_YOU_MEAN`] closest names from `candidates` to
-/// `needle`, sorted by Damerau-Levenshtein distance ascending. Names whose
-/// distance exceeds `max(2, needle.len() / 3)` are filtered out so unrelated
-/// matches don't surface as quick fixes.
-///
-/// Allocations only happen for surviving candidates, so passing a borrowed
-/// slice (e.g. `pool.iter()`) is cheap even when the pool has thousands of
-/// names.
-pub(crate) fn did_you_mean<I, S>(needle: &str, candidates: I) -> Vec<String>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<str>,
-{
-    let threshold = std::cmp::max(2, needle.len() / 3);
-    let mut scored: Vec<(usize, String)> = candidates
-        .into_iter()
-        .filter_map(|c| {
-            let s = c.as_ref();
-            let d = strsim::damerau_levenshtein(needle, s);
-            (d <= threshold).then(|| (d, s.to_string()))
-        })
-        .collect();
-    scored.sort_by_key(|(d, _)| *d);
-    scored.truncate(MAX_DID_YOU_MEAN);
-    scored.into_iter().map(|(_, s)| s).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,12 +258,14 @@ mod tests {
     };
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `llvm.aarch64.neon.uaddlv.i32.v16i8` on OS `linux`
     fn suggestions_to_data_empty_returns_none() {
         let rope = Rope::from_str("SELECT 1");
         assert!(suggestions_to_data(&[], &rope).is_none());
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `llvm.aarch64.neon.uaddlv.i32.v16i8` on OS `linux`
     fn suggestions_to_data_maps_byte_range_to_line_col() {
         let source = "SELECT custoser_name FROM users";
         let rope = Rope::from_str(source);
@@ -414,58 +387,6 @@ mod tests {
         assert!(build_code_actions(&params).is_empty());
     }
 
-    #[mz_ore::test]
-    fn did_you_mean_returns_empty_for_no_close_match() {
-        let candidates = ["customer_name", "customer_id", "shipping_address"];
-        let out = did_you_mean("xyz", candidates.iter().map(|s| s.to_string()));
-        assert!(out.is_empty(), "expected no matches, got {:?}", out);
-    }
-
-    #[mz_ore::test]
-    fn did_you_mean_returns_exact_match_first() {
-        let candidates = ["customer_name", "customer_id"];
-        let out = did_you_mean("customer_name", candidates.iter().map(|s| s.to_string()));
-        // "customer_name" (distance 0) and "customer_id" (distance 4) are both within
-        // threshold max(2, 13/3) = 4, so both are returned, sorted by distance.
-        assert_eq!(
-            out,
-            vec!["customer_name".to_string(), "customer_id".to_string()]
-        );
-    }
-
-    #[mz_ore::test]
-    fn did_you_mean_handles_transposition() {
-        // Damerau-Levenshtein treats one transposition as distance 1.
-        let candidates = ["customer_name"];
-        let out = did_you_mean("cusotmer_name", candidates.iter().map(|s| s.to_string()));
-        assert_eq!(out, vec!["customer_name".to_string()]);
-    }
-
-    #[mz_ore::test]
-    fn did_you_mean_respects_max_three_limit() {
-        // Provide many candidates that are all close enough to hit the limit.
-        // "custoser_name" (distance 1 to): customer_name, custumer_name, cust_name, etc.
-        let candidates = [
-            "customer_name",   // distance 1
-            "custumer_name",   // distance 1 (typo: transposition)
-            "custoser_name_x", // distance 2 (one extra char)
-            "customers",       // distance 6 (exceeds threshold, excluded)
-            "x_custoser_name", // distance 2 (one extra char prefix)
-        ];
-        let out = did_you_mean("custoser_name", candidates.iter().map(|s| s.to_string()));
-        // Should return at most 3, even though multiple candidates match.
-        assert!(out.len() <= 3, "should cap at 3, got {:?}", out);
-        // Best match (distance 1) comes first.
-        assert_eq!(out[0], "customer_name");
-    }
-
-    #[mz_ore::test]
-    fn did_you_mean_skips_empty_candidates() {
-        let candidates: Vec<String> = Vec::new();
-        let out = did_you_mean("anything", candidates);
-        assert!(out.is_empty());
-    }
-
     fn cands(
         items: &[&str],
         schemas: &[&str],
@@ -546,6 +467,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `llvm.aarch64.neon.uaddlv.i32.v16i8` on OS `linux`
     fn harvest_candidates_none_returns_default() {
         let c = harvest_candidates(None);
         assert!(c.items.is_empty());

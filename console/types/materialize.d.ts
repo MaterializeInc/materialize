@@ -1047,6 +1047,41 @@ export interface MzConsoleClusterUtilizationOverview {
   size: string | null;
 }
 
+export interface MzConsoleClusterUtilizationOverview24h {
+  bucket_end: Timestamp;
+  bucket_start: Timestamp;
+  cluster_id: string | null;
+  disk_percent: number | null;
+  heap_percent: number | null;
+  max_cpu_at: Timestamp;
+  max_cpu_percent: number | null;
+  max_disk_at: Timestamp;
+  max_heap_at: Timestamp;
+  max_memory_and_disk_at: Timestamp;
+  max_memory_and_disk_disk_percent: number | null;
+  max_memory_and_disk_memory_percent: number | null;
+  max_memory_at: Timestamp;
+  memory_and_disk_percent: number | null;
+  memory_percent: number | null;
+  name: string | null;
+  offline_events: Json | null;
+  replica_id: string;
+  size: string | null;
+}
+
+export interface MzConsoleClusterUtilizationOverview3h {
+  cluster_id: string | null;
+  cpu_percent: number | null;
+  disk_percent: number | null;
+  heap_percent: number | null;
+  memory_and_disk_percent: number | null;
+  memory_percent: number | null;
+  name: string | null;
+  occurred_at: Timestamp;
+  replica_id: string;
+  size: string;
+}
+
 export interface MzDatabases {
   /**
    * Materialize's unique ID for the database.
@@ -2074,6 +2109,21 @@ export interface MzNoticesRedacted {
    * The ID of the materialized view or index. Corresponds to `mz_objects.id`. For global notices, this column is `NULL`.
    */
   object_id: string | null;
+}
+
+export interface MzObjectArrangementSizes {
+  /**
+   * The ID of the compute object (index or materialized view). Corresponds to `mz_objects.id`.
+   */
+  object_id: string;
+  /**
+   * The ID of the cluster replica. Corresponds to `mz_cluster_replicas.id`.
+   */
+  replica_id: string;
+  /**
+   * The total arrangement heap and batcher size in bytes for this object on this replica, rounded to the nearest 10 MiB boundary to reduce per-byte churn in the differential collection. Objects with less than 5 MiB of arrangements report a size of 0.
+   */
+  size: Int8 | null;
 }
 
 export interface MzObjectDependencies {
@@ -3969,6 +4019,7 @@ export interface MzTypePgMetadata {
   id: Generated<string>;
   typinput: Generated<number>;
   typreceive: Generated<number>;
+  typsend: Generated<number>;
 }
 
 export interface MzTypes {
@@ -4210,6 +4261,7 @@ export interface PgTypeAllDatabases {
   typowner: number;
   typreceive: number;
   typrelid: number;
+  typsend: string;
   typtype: string;
   typtypmod: number;
 }
@@ -4280,6 +4332,8 @@ export interface DB {
   mz_compute_operator_hydration_statuses_per_worker: MzComputeOperatorHydrationStatusesPerWorker;
   mz_connections: MzConnections;
   mz_console_cluster_utilization_overview: MzConsoleClusterUtilizationOverview;
+  mz_console_cluster_utilization_overview_24h: MzConsoleClusterUtilizationOverview24h;
+  mz_console_cluster_utilization_overview_3h: MzConsoleClusterUtilizationOverview3h;
   mz_databases: MzDatabases;
   mz_dataflow_addresses: MzDataflowAddresses;
   mz_dataflow_addresses_per_worker: MzDataflowAddressesPerWorker;
@@ -4341,6 +4395,7 @@ export interface DB {
   mz_network_policy_rules: MzNetworkPolicyRules;
   mz_notices: MzNotices;
   mz_notices_redacted: MzNoticesRedacted;
+  mz_object_arrangement_sizes: MzObjectArrangementSizes;
   mz_object_dependencies: MzObjectDependencies;
   mz_object_fully_qualified_names: MzObjectFullyQualifiedNames;
   mz_object_history: MzObjectHistory;

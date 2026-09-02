@@ -189,6 +189,7 @@ impl ClusterReplicaSizeMap {
                             credits_per_hour: 1.into(),
                             cpu_exclusive: false,
                             is_cc: false,
+                            family: None,
                             swap_enabled: false,
                             disabled: false,
                             selectors: BTreeMap::default(),
@@ -212,6 +213,7 @@ impl ClusterReplicaSizeMap {
                     credits_per_hour: scale.into(),
                     cpu_exclusive: false,
                     is_cc: false,
+                    family: None,
                     swap_enabled: false,
                     disabled: false,
                     selectors: BTreeMap::default(),
@@ -230,6 +232,7 @@ impl ClusterReplicaSizeMap {
                     credits_per_hour: scale.into(),
                     cpu_exclusive: false,
                     is_cc: false,
+                    family: None,
                     swap_enabled: false,
                     disabled: false,
                     selectors: BTreeMap::default(),
@@ -248,6 +251,7 @@ impl ClusterReplicaSizeMap {
                     credits_per_hour: 1.into(),
                     cpu_exclusive: false,
                     is_cc: false,
+                    family: None,
                     swap_enabled: false,
                     disabled: false,
                     selectors: BTreeMap::default(),
@@ -267,6 +271,7 @@ impl ClusterReplicaSizeMap {
                 credits_per_hour: 2.into(),
                 cpu_exclusive: false,
                 is_cc: false,
+                family: None,
                 swap_enabled: false,
                 disabled: false,
                 selectors: BTreeMap::default(),
@@ -285,6 +290,7 @@ impl ClusterReplicaSizeMap {
                 credits_per_hour: 0.into(),
                 cpu_exclusive: false,
                 is_cc: true,
+                family: None,
                 swap_enabled: false,
                 disabled: true,
                 selectors: BTreeMap::default(),
@@ -306,6 +312,10 @@ pub struct AwsPrincipalContext {
 }
 
 impl AwsPrincipalContext {
+    // NOTE: the `mz_catalog.mz_aws_privatelink_connections` builtin materialized
+    // view reconstructs this ARN format in SQL from the mz_aws_account_id() and
+    // mz_aws_external_id_prefix() functions (see MZ_AWS_PRIVATELINK_CONNECTIONS
+    // in src/catalog/src/builtin/mz_catalog.rs). Keep the two in sync.
     pub fn to_principal_string(&self, aws_external_id_suffix: CatalogItemId) -> String {
         format!(
             "arn:aws:iam::{}:role/mz_{}_{}",

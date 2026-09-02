@@ -21,6 +21,7 @@
 //! catalog. It's okay if the info metrics are not exactly up to date and
 //! eventually consistent.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mz_adapter_types::dyncfgs::CATALOG_INFO_METRICS_RECONCILE_INTERVAL;
@@ -28,8 +29,11 @@ use mz_catalog::memory::objects::{
     CatalogItem, Cluster, ClusterReplica, ClusterVariant, DataSourceDesc,
 };
 use mz_controller::clusters::ReplicaLocation;
+use mz_ore::cast::CastFrom;
 use mz_ore::metric;
-use mz_ore::metrics::{DeleteOnDropGauge, Histogram, MetricsRegistry, UIntGaugeVec};
+use mz_ore::metrics::{
+    DeleteOnDropGauge, Histogram, MetricTag, MetricVisibility, MetricsRegistry, UIntGaugeVec,
+};
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -84,28 +88,38 @@ impl CatalogInfoMetrics {
                 help: "Maps catalog object IDs to the object's name, schema, database, and \
                        type. Constant 1.",
                 var_labels: ["object_id", "global_id", "name", "schema_name", "database_name", "type"],
+                visibility: MetricVisibility::Public,
+                tags: [MetricTag::Environment],
             )),
             cluster_info: registry.register(metric!(
                 name: "mz_cluster_info",
                 help: "Maps cluster IDs to the cluster's name and size. Constant 1.",
                 var_labels: ["cluster_id", "name", "size"],
+                visibility: MetricVisibility::Public,
+                tags: [MetricTag::Compute],
             )),
             replica_info: registry.register(metric!(
                 name: "mz_replica_info",
                 help: "Maps cluster replica IDs to the replica's name and size. Constant 1.",
                 var_labels: ["replica_id", "cluster_id", "name", "size"],
+                visibility: MetricVisibility::Public,
+                tags: [MetricTag::Compute],
             )),
             source_info: registry.register(metric!(
                 name: "mz_source_info",
                 help: "Maps user source IDs to the source's type, envelope type, and \
                        cluster. Constant 1.",
                 var_labels: ["source_id", "type", "envelope_type", "cluster_id"],
+                visibility: MetricVisibility::Public,
+                tags: [MetricTag::Source],
             )),
             sink_info: registry.register(metric!(
                 name: "mz_sink_info",
                 help: "Maps user sink IDs to the sink's type, envelope type, and \
                        cluster. Constant 1.",
                 var_labels: ["sink_id", "type", "envelope_type", "cluster_id"],
+                visibility: MetricVisibility::Public,
+                tags: [MetricTag::Sink],
             )),
             series: Vec::new(),
             last_revision: None,
@@ -265,6 +279,8 @@ impl Coordinator {
     pub(crate) fn spawn_catalog_info_metrics_task(&self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let mut metrics = CatalogInfoMetrics::new(&self.catalog_info_metrics_registry);
+        let catalog_arc_strong_count = self.metrics.catalog_arc_strong_count.clone();
+        let catalog_arc_weak_count = self.metrics.catalog_arc_weak_count.clone();
         task::spawn(|| "catalog_info_metrics", async move {
             loop {
                 let (tx, rx) = oneshot::channel();
@@ -279,6 +295,14 @@ impl Coordinator {
                 let Ok(CatalogSnapshot { catalog }) = rx.await else {
                     break;
                 };
+
+                // Sample the reference counts of the current catalog
+                // allocation. The strong count includes this task's own
+                // snapshot. The weak count is the number of session catalog
+                // caches pointing at the current allocation (sessions caching
+                // an older version are not counted).
+                catalog_arc_strong_count.set(u64::cast_from(Arc::strong_count(&catalog)));
+                catalog_arc_weak_count.set(u64::cast_from(Arc::weak_count(&catalog)));
 
                 // The reconcile cadence is a dyncfg; a zero interval disables
                 // reconciliation.
@@ -315,8 +339,7 @@ mod tests {
     };
     use mz_compute_types::config::ComputeReplicaConfig;
     use mz_controller::clusters::{
-        ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaAllocation, ReplicaConfig,
-        UnmanagedReplicaLocation,
+        ManagedReplicaLocation, ReplicaAllocation, ReplicaConfig, UnmanagedReplicaLocation,
     };
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_repr::adt::mz_acl_item::PrivilegeMap;
@@ -438,9 +461,13 @@ mod tests {
                 size: size.to_string(),
                 availability_zones: Vec::new(),
                 logging: Default::default(),
+                arrangement_compression: false,
                 replication_factor: 1,
                 optimizer_feature_overrides: Default::default(),
                 schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration: None,
+                burst: None,
             }),
             workload_class: None,
         }
@@ -472,6 +499,7 @@ mod tests {
                 }),
                 compute: ComputeReplicaConfig {
                     logging: Default::default(),
+                    arrangement_compression: false,
                 },
             },
             owner_id: RoleId::User(1),
@@ -649,11 +677,12 @@ mod tests {
                     size: "scale=2,workers=4".to_string(),
                     internal: false,
                     billed_as: None,
-                    availability_zones: ManagedReplicaAvailabilityZones::FromReplica(None),
+                    availability_zones: Vec::new(),
                     pending: false,
                 }),
                 compute: ComputeReplicaConfig {
                     logging: Default::default(),
+                    arrangement_compression: false,
                 },
             },
             owner_id: RoleId::User(1),

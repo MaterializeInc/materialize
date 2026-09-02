@@ -46,4 +46,5 @@ pub mod log;
 pub mod lsp;
 pub(crate) mod project;
 pub(crate) mod secret_resolver;
+pub(crate) mod suggest;
 pub(crate) mod types;

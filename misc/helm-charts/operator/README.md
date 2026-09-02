@@ -1,6 +1,6 @@
 # Materialize Kubernetes Operator Helm Chart
 
-![Version: v26.30.0-dev.0](https://img.shields.io/badge/Version-v26.30.0--dev.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v26.30.0-dev.0](https://img.shields.io/badge/AppVersion-v26.30.0--dev.0-informational?style=flat-square)
+![Version: v26.41.0-dev.0](https://img.shields.io/badge/Version-v26.41.0--dev.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v26.41.0-dev.0](https://img.shields.io/badge/AppVersion-v26.41.0--dev.0-informational?style=flat-square)
 
 Materialize Kubernetes Operator Helm Chart
 
@@ -143,12 +143,24 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.affinity` | Affinity to use for the operator pod | ``{}`` |
 | `operator.args.enableInternalStatementLogging` |  | ``true`` |
 | `operator.args.enableLicenseKeyChecks` |  | ``false`` |
+| `operator.args.installV1CRD` | Whether to install the v1 version of the Materialize CRD and the conversion webhook that converts between v1 and v1alpha1. When false, only the v1alpha1 CRD version is installed and no webhook serving certificate or service is created. | ``false`` |
 | `operator.args.startupLogFilter` | Log filtering settings for startup logs | ``"INFO,mz_orchestratord=TRACE"`` |
+| `operator.args.statementLoggingMaxSampleRate` | Caps the fraction of statements recorded in query history, via environmentd's `statement_logging_max_sample_rate`. This is the rate Materialize Cloud runs at. Sampling costs CPU on environmentd, but the volume written is bounded by `statementLoggingTargetDataRate` rather than by this, so lowering this gives up query history completeness without lowering the ceiling on what statement logging stores. Set it to `0` to disable statement logging entirely, or to `null` to inherit environmentd's default. | ``0.99`` |
+| `operator.args.statementLoggingTargetDataRate` | Caps the sustained volume statement logging writes, in bytes per second, via environmentd's `statement_logging_target_data_rate`. This is what actually bounds how fast query history grows, and the recorded history is retained for the lifetime of the environment, so lower it on environments with limited storage. Must be greater than 0. Set it to `null` to inherit environmentd's default of 2071 bytes per second, which is the rate Materialize Cloud runs at. | ``nil`` |
+| `operator.args.webhookCertReloadInterval` | How often orchestratord reloads its webhook TLS certificate from disk and, when the CA changes, refreshes the conversion webhook's CA bundle. Must be shorter than the certificate's lifetime. Accepts a humantime duration (e.g. "1h", "30m"). Leave null to use the binary default. Only used if `installV1CRD` is true. | ``nil`` |
+| `operator.certificate.caDuration` | Lifetime of the root CA that signs the webhook serving certificate, when `source` is "cert-manager". The serving certificate is signed by this CA, so the CA outlives individual serving-certificate rotations. | ``"87600h"`` |
+| `operator.certificate.caRenewBefore` | How long before the root CA expires to renew it. Must be less than `caDuration`. | ``"8760h"`` |
+| `operator.certificate.secretName` | Name of a secret in the operator's namespace containing ca.crt, tls.crt, and tls.key entries. Only used if `source` is "secret". | ``nil`` |
+| `operator.certificate.source` | Where to obtain the certificate for orchestratord. Valid values are 'cert-manager' and 'secret'. Only used if `operator.args.installV1CRD` is true. | ``"cert-manager"`` |
 | `operator.cloudProvider.providers.aws.accountID` | When using AWS, accountID is required | ``""`` |
 | `operator.cloudProvider.providers.aws.enabled` |  | ``false`` |
 | `operator.cloudProvider.providers.aws.iam.roles.connection` | ARN for CREATE CONNECTION feature | ``""`` |
 | `operator.cloudProvider.providers.aws.iam.roles.environment` | ARN of the IAM role for environmentd | ``""`` |
-| `operator.cloudProvider.providers.gcp` | GCP Configuration (placeholder for future use) | ``{"enabled":false}`` |
+| `operator.cloudProvider.providers.gcp` | GCP Configuration | ``{"enabled":false,"nodeUpgradeRolloutTrigger":{"clusterLocation":"","clusterName":"","enabled":false,"notificationSubscription":"","watchedNodePools":[]}}`` |
+| `operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.clusterLocation` | The location (region or zone) of the GKE cluster. | ``""`` |
+| `operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.clusterName` | The name of the GKE cluster. | ``""`` |
+| `operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.notificationSubscription` | The Pub/Sub subscription receiving GKE cluster notifications for this cluster, in `projects/{project}/subscriptions/{subscription}` form. The cluster must be configured to publish upgrade notifications to the corresponding topic, and the operator's service account must be able to subscribe to it and to read the cluster's node pools. | ``""`` |
+| `operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.watchedNodePools` | The node pools to watch. An empty list watches all node pools. | ``[]`` |
 | `operator.cloudProvider.region` | Common cloud provider settings | ``"kind"`` |
 | `operator.cloudProvider.type` | Specifies cloud provider. Valid values are 'aws', 'gcp', 'azure' , 'generic', or 'local' | ``"local"`` |
 | `operator.clusters.defaultReplicationFactor.analytics` |  | ``0`` |
@@ -164,14 +176,18 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.swap_enabled` | Configure sizes such that the pod QoS class is not Guaranteed, as is required for swap to be enabled. Disk doesn't make much sense with swap, as swap performs better than lgalloc, so it also gets disabled. | ``true`` |
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
-| `operator.image.tag` | The tag/version of the operator image to be used | ``"v26.28.0"`` |
+| `operator.image.tag` | The tag/version of the operator image to be used | ``"v26.39.0"`` |
 | `operator.nodeSelector` | Node selector to use for the operator pod | ``{}`` |
+| `operator.podDisruptionBudget.enabled` | Whether to create a PodDisruptionBudget for the operator. Only created when `replicas` is greater than 1, since a budget over a single replica either blocks node drains or protects nothing. | ``true`` |
+| `operator.podDisruptionBudget.maxUnavailable` | Maximum number of operator pods that may be unavailable at once during voluntary disruptions. Expressed as a maximum rather than a minimum so that node drains are never blocked outright, they are only serialized. | ``1`` |
+| `operator.replicas` | Number of operator replicas. The operator uses leader election so that only one replica reconciles at a time. Running more than one replica avoids downtime of the CRD conversion webhook during rollouts and node drains. | ``2`` |
 | `operator.resources.limits` | Resource limits for the operator's CPU and memory | ``{"memory":"512Mi"}`` |
 | `operator.resources.requests` | Resources requested by the operator for CPU and memory | ``{"cpu":"100m","memory":"512Mi"}`` |
 | `operator.secretsController` | Which secrets controller to use for storing secrets. Valid values are 'kubernetes' and 'aws-secrets-manager'. Setting 'aws-secrets-manager' requires a configured AWS cloud provider and IAM role for the environment with Secrets Manager permissions. | ``"kubernetes"`` |
 | `operator.tolerations` | Tolerations to use for the operator pod | ``{}`` |
 | `rbac.create` | Whether to create necessary RBAC roles and bindings | ``true`` |
 | `schedulerName` | Optionally use a non-default kubernetes scheduler. | ``nil`` |
+| `serviceAccount.annotations` | Annotations to add to the service account, e.g. `iam.gke.io/gcp-service-account` to link it to a GCP service account via workload identity. | ``{}`` |
 | `serviceAccount.create` | Whether to create a new service account for the operator | ``true`` |
 | `serviceAccount.name` | The name of the service account to be created | ``"orchestratord"`` |
 | `storage.storageClass.allowVolumeExpansion` |  | ``false`` |
@@ -190,7 +206,7 @@ Specify each parameter using the `--set key=value[,key=value]` argument to `helm
 
 ```shell
 helm install my-materialize-operator \
-  --set operator.image.tag=v26.30.0-dev.0 \
+  --set operator.image.tag=v26.41.0-dev.0 \
   materialize/materialize-operator
 ```
 
@@ -225,7 +241,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v26.30.0-dev.0
+  environmentdImageRef: materialize/environmentd:v26.41.0-dev.0
   backendSecretName: materialize-backend
   environmentdResourceRequirements:
     limits:

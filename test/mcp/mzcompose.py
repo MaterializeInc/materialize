@@ -14,6 +14,7 @@ import re
 import time
 
 import requests
+from psycopg import Cursor
 
 from materialize import MZ_ROOT
 from materialize.mzcompose.composition import Composition
@@ -21,7 +22,7 @@ from materialize.mzcompose.services.materialized import Materialized
 
 SERVICES = [
     Materialized(
-        listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json",
+        listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/no_auth.json",
     ),
 ]
 
@@ -460,19 +461,19 @@ def workflow_endpoints(c: Composition) -> None:
             f"(dex27_other), but activity log shows cluster_name = {observed_cluster!r}"
         )
 
-    # -- read_data_product fails loud when role lacks USAGE on home cluster ---
+    # -- read_data_product falls back to the serving cluster without USAGE ----
     #
-    # `mz_mcp_data_products` filters by SELECT on the object but not by
-    # cluster privileges, so a role may see a data product hosted on a
-    # cluster it can't use. Auto-routing without a USAGE check would
-    # emit `SET CLUSTER = <home>; SELECT ...` and the SELECT would fail
-    # with `permission denied for CLUSTER`. Silently falling back to the
-    # session default would hide the missing privilege as "slow reads
-    # forever," so we instead surface a clear `ClusterPrivilegeMissing`
-    # error and let the caller decide: grant USAGE, or pass an explicit
-    # `cluster` override to read from a cluster they can use.
+    # `mz_mcp_data_products` nulls the advertised cluster unless the role has
+    # USAGE on it (DEX-66), so a role that lacks USAGE on a data product's home
+    # cluster sees a null cluster rather than one it cannot use. A no-override
+    # read then routes to the session's default (serving) cluster instead of
+    # failing: materialized views serve from persist, so the read succeeds with
+    # correct results, just without index benefit. An explicit `cluster`
+    # override still lets the caller target a specific cluster.
 
-    with c.test_case("agent_read_data_product_fails_when_lacking_cluster_usage"):
+    with c.test_case(
+        "agent_read_data_product_falls_back_to_serving_cluster_without_usage"
+    ):
         # Provision a "compute" cluster that hosts the MV's dataflow, and
         # a "serving" cluster the HTTP user has USAGE on. Grant SELECT on
         # the MV but withhold USAGE on the compute cluster.
@@ -510,8 +511,9 @@ def workflow_endpoints(c: Composition) -> None:
             ),
         )
 
-        # No-override read: must fail with ClusterPrivilegeMissing and an
-        # actionable message naming the missing cluster.
+        # No-override read: the advertised cluster is null (the role lacks
+        # USAGE on the home cluster), so the read runs on the session's serving
+        # cluster and succeeds.
         r = post_mcp(
             c,
             "agent",
@@ -529,20 +531,14 @@ def workflow_endpoints(c: Composition) -> None:
         )
         assert r.status_code == 200, f"unexpected status: {r.status_code} {r.text}"
         body = r.json()
-        err = body.get("error")
-        assert err is not None, (
-            "no-override read should fail loud when the role lacks USAGE on "
-            f"the home cluster, but got: {body}"
+        assert "error" not in body, (
+            "no-override read should fall back to the serving cluster when the "
+            f"role lacks USAGE on the home cluster, but got: {body}"
         )
-        assert (
-            err["data"]["error_type"] == "ClusterPrivilegeMissing"
-        ), f"unexpected error_type: {err}"
-        assert (
-            "restricted_compute" in err["message"]
-        ), f"error message should name the missing cluster: {err['message']!r}"
+        rows = json.loads(body["result"]["content"][0]["text"])
+        assert rows == [["9", "override"]], f"unexpected no-override rows: {rows}"
 
-        # With an explicit `cluster` override to a usable cluster, the
-        # read succeeds. Confirms the documented recovery path.
+        # An explicit `cluster` override to a usable cluster also works.
         r = post_mcp(
             c,
             "agent",
@@ -592,6 +588,131 @@ def workflow_endpoints(c: Composition) -> None:
         # Tidy up the role default so it does not leak into later cases.
         c.sql(
             "ALTER ROLE anonymous_http_user RESET cluster",
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+    # -- QAR-136: developer query pins reads to a named cluster replica -------
+    #
+    # On a cluster with more than one replica, introspection reads (including
+    # EXPLAIN ANALYZE) must target a specific replica. The developer `query`
+    # tool accepts an optional `cluster_replica` for this. Verify the three
+    # observable behaviors: untargeted EXPLAIN ANALYZE fails and names the
+    # remedy, a pinned one succeeds, and a nonexistent replica surfaces a
+    # clean ExecutionError.
+
+    with c.test_case("developer_query_cluster_replica_pinning"):
+        c.sql(
+            """
+            DROP CLUSTER IF EXISTS qar136_two_replicas CASCADE;
+            CREATE CLUSTER qar136_two_replicas REPLICAS (
+                r1 (SIZE 'scale=1,workers=1'),
+                r2 (SIZE 'scale=1,workers=1')
+            );
+            GRANT USAGE ON CLUSTER qar136_two_replicas TO anonymous_http_user;
+            """,
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+        def qar136_query(req_id: int, arguments: dict) -> dict:
+            r = post_mcp(
+                c,
+                "developer",
+                jsonrpc(
+                    "tools/call",
+                    {"name": "query", "arguments": arguments},
+                    req_id=req_id,
+                ),
+            )
+            assert r.status_code == 200, f"unexpected status: {r.status_code} {r.text}"
+            return r.json()
+
+        # Without a replica pin, the introspection read cannot choose among
+        # the two replicas. The error should point at the remedy.
+        body = qar136_query(
+            2900,
+            {
+                "cluster": "qar136_two_replicas",
+                "sql_query": "EXPLAIN ANALYZE CLUSTER MEMORY",
+            },
+        )
+        err = body.get("error")
+        assert err is not None, (
+            "untargeted EXPLAIN ANALYZE on a 2-replica cluster should fail, "
+            f"but got: {body}"
+        )
+        assert (
+            "log source reads must target a replica" in err["message"].lower()
+        ), f"error should mention replica targeting: {err['message']!r}"
+
+        # Pinned to r1, the same read succeeds.
+        body = qar136_query(
+            2901,
+            {
+                "cluster": "qar136_two_replicas",
+                "cluster_replica": "r1",
+                "sql_query": "EXPLAIN ANALYZE CLUSTER MEMORY",
+            },
+        )
+        assert "error" not in body, f"pinned EXPLAIN ANALYZE errored: {body}"
+        content = body["result"]["content"]
+        assert (
+            content and content[0]["type"] == "text"
+        ), f"unexpected content: {content}"
+
+        # A nonexistent replica surfaces the SQL layer's error as a clean
+        # ExecutionError rather than anything worse.
+        body = qar136_query(
+            2902,
+            {
+                "cluster": "qar136_two_replicas",
+                "cluster_replica": "no_such_replica",
+                "sql_query": "EXPLAIN ANALYZE CLUSTER MEMORY",
+            },
+        )
+        err = body.get("error")
+        assert err is not None, f"nonexistent replica should fail, but got: {body}"
+        assert (
+            err["data"]["error_type"] == "ExecutionError"
+        ), f"unexpected error_type: {err}"
+
+        # Replica pinning is not part of the agent surface. The agent `query`
+        # dispatch arm drops `cluster_replica`, so supplying one there is
+        # silently accepted-and-ignored rather than honored or rejected. If it
+        # were honored, this nonexistent replica would fail with an
+        # ExecutionError. Because it is dropped, the plain read succeeds. A plain
+        # SELECT does not need replica targeting, so success here proves the pin
+        # was never applied.
+        r = post_mcp(
+            c,
+            "agent",
+            jsonrpc(
+                "tools/call",
+                {
+                    "name": "query",
+                    "arguments": {
+                        "cluster": "qar136_two_replicas",
+                        "cluster_replica": "no_such_replica",
+                        "sql_query": "SELECT 1",
+                    },
+                },
+                req_id=2903,
+            ),
+        )
+        assert r.status_code == 200, f"unexpected status: {r.status_code} {r.text}"
+        body = r.json()
+        assert "error" not in body, (
+            "agent endpoint should ignore cluster_replica, so the read should "
+            f"succeed rather than fail on the bogus replica: {body}"
+        )
+        rows = json.loads(body["result"]["content"][0]["text"])
+        assert rows == [["1"]], f"unexpected rows: {rows}"
+
+        c.sql(
+            "DROP CLUSTER IF EXISTS qar136_two_replicas CASCADE",
             user="mz_system",
             port=6877,
             print_statement=False,
@@ -865,6 +986,165 @@ def workflow_endpoints(c: Composition) -> None:
         }, f"unexpected keys in hydration object: {hydration}"
 
 
+def workflow_restrict_to_user_objects_startup_append_bypass(c: Composition) -> None:
+    """Regression test for SQL-383: a `restrict_to_user_objects` read deferred
+    on the session's startup `mz_sessions` builtin-table append resumed with
+    empty `resolved_ids`, silently skipping the system-catalog guard. Same
+    bug class as the SHOW fix in #36543.
+
+    `EXPLAIN TIMESTAMP` is the reliable vector — it reaches `sequence_plan`
+    and its raw plan depends on `mz_sessions`. The deferral fires only on the
+    *first* `mz_sessions` reference in a session, so the same statement is
+    correctly blocked once the wait future is cleared; we use that for a
+    differential check.
+    """
+    c.up("materialized")
+
+    # `restrict_to_user_objects` is enforced independently of
+    # `enable_rbac_checks`, and the no-auth external SQL listener (port 6875)
+    # lets a LOGIN role connect without a password, so each new connection is
+    # a fresh restricted session.
+    c.sql(
+        """
+        DROP ROLE IF EXISTS restricted_agent;
+        CREATE ROLE restricted_agent LOGIN;
+        ALTER ROLE restricted_agent SET restrict_to_user_objects = true;
+        """,
+        user="mz_system",
+        port=6877,
+        print_statement=False,
+    )
+
+    RESTRICTED = "is restricted"
+    # mz_sessions is the only REQUIRED_BUILTIN_TABLE.
+    BYPASS = "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_internal.mz_sessions"
+
+    def run(cur: Cursor, sql: str) -> str:
+        """Run `sql`; return ``"ok:<nrows>"`` or the error message string."""
+        try:
+            cur.execute(sql.encode())
+        except Exception as e:  # noqa: BLE001 — the message is the assertion
+            return str(e)
+        if cur.description is None:
+            return "ok:0"
+        return f"ok:{len(cur.fetchall())}"
+
+    def fresh_cursor() -> Cursor:
+        # Every check needs a fresh session whose startup append is still pending.
+        return c.sql_cursor(user="restricted_agent", port=6875, reuse_connection=False)
+
+    with c.test_case("explain_timestamp_first_statement_blocked"):
+        cur = fresh_cursor()
+        # First reference: deferred for the startup append, then resumed.
+        first = run(cur, BYPASS)
+        # Second reference: wait future already cleared, no deferral.
+        second = run(cur, BYPASS)
+
+        # Control: holds on both builds; proves the restriction works and that
+        # the statement's resolved_ids carry mz_sessions.
+        assert RESTRICTED in second, (
+            "non-deferred EXPLAIN TIMESTAMP over mz_sessions should be blocked, "
+            f"got: {second!r}"
+        )
+
+        # Regression: fails on the buggy build, passes once `DeferredPlan`
+        # carries `resolved_ids` into the resumed `check_plan`.
+        assert RESTRICTED in first, (
+            f"deferred EXPLAIN TIMESTAMP bypassed restrict_to_user_objects, "
+            f"got: {first!r}"
+        )
+
+    with c.test_case("non_required_builtin_blocked_as_first_statement"):
+        # mz_roles is not a REQUIRED_BUILTIN_TABLE, so no deferral fires —
+        # blocked even as the first statement.
+        outcome = run(
+            fresh_cursor(),
+            "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_catalog.mz_roles",
+        )
+        assert RESTRICTED in outcome, (
+            f"first-statement EXPLAIN TIMESTAMP over mz_roles should be blocked, "
+            f"got: {outcome!r}"
+        )
+
+    with c.test_case("frontend_peek_path_not_vulnerable"):
+        # SELECT uses the frontend peek path, which runs the RBAC check before
+        # awaiting the startup appends. Pins that SELECT is not a bypass vector.
+        outcome = run(fresh_cursor(), "SELECT * FROM mz_internal.mz_sessions")
+        assert RESTRICTED in outcome, (
+            f"first-statement SELECT over mz_sessions should be blocked, "
+            f"got: {outcome!r}"
+        )
+
+    with c.test_case("restricted_agent_can_still_run_safe_queries"):
+        # Sanity: the restriction is targeted, not a blanket failure.
+        rows = c.sql_query(
+            "SELECT current_user",
+            user="restricted_agent",
+            port=6875,
+            reuse_connection=False,
+        )
+        assert rows[0][0] == "restricted_agent", rows
+
+    with c.test_case("unrestricted_role_first_statement_succeeds"):
+        # Positive control on the resume path: an unrestricted role running
+        # the same deferred statement as its first statement must succeed,
+        # not error. If `DeferredPlan` now carries `resolved_ids` correctly
+        # the resumed `rbac::check_plan` returns Ok (no `restrict_to_user_objects`
+        # to enforce), and the EXPLAIN TIMESTAMP plan flows through. A
+        # regression here would mean we broke the non-restricted deferral path.
+        cur = c.sql_cursor(user="materialize", port=6875, reuse_connection=False)
+        outcome = run(cur, BYPASS)
+        assert outcome.startswith("ok:"), (
+            f"unrestricted EXPLAIN TIMESTAMP over mz_sessions should succeed "
+            f"as first statement, got: {outcome!r}"
+        )
+
+    with c.test_case("restricted_agent_user_table_first_statement_succeeds"):
+        # Positive control: a restricted role's first statement against a
+        # user-owned object that does NOT depend on mz_sessions must succeed.
+        # Confirms the fix only blocks the system-catalog refs and leaves
+        # legitimate first-statement reads alone.
+        c.sql(
+            """
+            DROP TABLE IF EXISTS restricted_smoke;
+            CREATE TABLE restricted_smoke (a int);
+            INSERT INTO restricted_smoke VALUES (1), (2), (3);
+            GRANT SELECT ON restricted_smoke TO restricted_agent;
+            GRANT USAGE ON SCHEMA public TO restricted_agent;
+            """,
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+        rows = c.sql_query(
+            "SELECT count(*) FROM restricted_smoke",
+            user="restricted_agent",
+            port=6875,
+            reuse_connection=False,
+        )
+        assert rows[0][0] == 3, rows
+        c.sql(
+            "DROP TABLE restricted_smoke;",
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+    # test_case swallows assertion failures, so the cleanup always runs.
+    # DROP OWNED BY first revokes the schema/object grants the positive-control
+    # cases hand to the role, otherwise DROP ROLE fails with
+    # `DependentObjectsStillExist`.
+    c.sql(
+        """
+        DROP OWNED BY restricted_agent;
+        DROP ROLE restricted_agent;
+        """,
+        user="mz_system",
+        port=6877,
+        print_statement=False,
+    )
+
+
 def workflow_oauth_metadata_host_injection(c: Composition) -> None:
     with c.override(
         Materialized(
@@ -977,3 +1257,117 @@ def workflow_oauth_metadata_extras(c: Composition) -> None:
                 port=6877,
                 print_statement=False,
             )
+
+
+# Error emitted by the 1 MB parser guard (MAX_STATEMENT_BATCH_SIZE in
+# src/sql-parser/src/parser.rs) before any lexing happens.
+SIZE_LIMIT_ERROR = "statement batch size cannot exceed"
+
+
+def workflow_parser_statement_size_limit_bypass(c: Composition) -> None:
+    """Regression test for DEX-64: the 1 MB parser guard lives in
+    `parse_with_limit` / `parse_item_name_with_limit`. Before the fix the MCP
+    handlers called the unbounded `parse()` and `parse_item_name()` directly,
+    so they lexed and parsed multi-megabyte input the guard should reject
+    (HTTP bodies go up to 5 MiB). These cases pin that MCP enforces the same
+    limit; the "statement batch size cannot exceed ..." message is the
+    fingerprint that the guard fired.
+    """
+    c.up("materialized")
+
+    # A >1 MB batch of valid statements. The guard rejects it before lexing;
+    # the unbounded parser instead parses all of them, so a "Found N
+    # statements" rejection would be the fingerprint that the guard was
+    # skipped.
+    batch = "SELECT 1;" * (1_200_000 // len("SELECT 1;"))
+
+    def tool_error(endpoint: str, tool: str, arguments: dict) -> str:
+        r = post_mcp(
+            c, endpoint, jsonrpc("tools/call", {"name": tool, "arguments": arguments})
+        )
+        assert r.status_code == 200, f"{r.status_code}: {r.text}"
+        err = r.json().get("error")
+        assert err is not None, f"oversized input should be rejected: {r.text[:500]}"
+        return err["message"]
+
+    with c.test_case("sql_http_endpoint_enforces_size_limit"):
+        # Control: the reference SQL path rejects it with the guard, on any build.
+        port = c.port("materialized", 6876)
+        r = requests.post(f"http://localhost:{port}/api/sql", json={"query": batch})
+        assert SIZE_LIMIT_ERROR in r.text, r.text[:500]
+
+    # `parse()` bypass, reached through `validate_readonly_query` in both tools.
+    for endpoint, tool, args in [
+        ("agent", "query", {"cluster": "quickstart", "sql_query": batch}),
+        ("developer", "query_system_catalog", {"sql_query": batch}),
+    ]:
+        with c.test_case(f"{endpoint}_{tool}_enforces_size_limit"):
+            msg = tool_error(endpoint, tool, args)
+            assert SIZE_LIMIT_ERROR in msg, f"{tool} parsed the oversized batch: {msg}"
+
+    # `parse_item_name()` bypass: an oversized, non-parseable data product name.
+    with c.test_case("agent_read_data_product_name_enforces_size_limit"):
+        msg = tool_error("agent", "read_data_product", {"name": "(" * 1_200_000})
+        assert (
+            SIZE_LIMIT_ERROR in msg
+        ), f"parse_item_name processed oversized name: {msg[:200]}"
+
+
+def workflow_auth_failure_modes(c: Composition) -> None:
+    """Auth rejection at the HTTP layer, against an OIDC listener.
+
+    The existing OIDC workflows cover the discovery documents and the
+    unauthenticated challenge. These cover what happens when a client does
+    present credentials but they are unusable: a malformed Authorization
+    header, or a bearer token that cannot be validated against the
+    configured issuer. All must be rejected, never accepted or 500'd.
+    """
+    with c.override(
+        Materialized(
+            listeners_config_path=f"{MZ_ROOT}/test/mcp/listener_config_oidc.json",
+        )
+    ):
+        c.up("materialized")
+        base = f"http://localhost:{c.port('materialized', 6876)}"
+        # A real-looking issuer with no reachable JWKS: no bearer token can
+        # be validated against it, which is exactly what we want to assert.
+        c.sql(
+            "ALTER SYSTEM SET oidc_issuer = 'https://issuer.example.com'",
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+        agent = f"{base}/api/mcp/agent"
+
+        # A structurally valid JWT (header.payload.signature) that cannot be
+        # verified against the configured issuer.
+        unverifiable_jwt = (
+            "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9"
+            ".eyJzdWIiOiJhdHRhY2tlciIsImlzcyI6Imh0dHBzOi8vZXZpbC5leGFtcGxlLmNvbSJ9"
+            ".c2lnbmF0dXJl"
+        )
+
+        cases = {
+            "malformed_authorization_header": "Garbage",
+            "bearer_without_token": "Bearer ",
+            "bearer_non_jwt": "Bearer not-a-jwt",
+            "bearer_unverifiable_jwt": f"Bearer {unverifiable_jwt}",
+        }
+        for name, header in cases.items():
+            with c.test_case(f"auth_rejected_{name}"):
+                r = requests.post(
+                    agent,
+                    json=jsonrpc("tools/list"),
+                    headers={"Authorization": header},
+                )
+                # Rejected as unauthorized, never accepted and never a 5xx.
+                assert r.status_code == 401, f"{name}: {r.status_code}: {r.text}"
+
+        with c.test_case("get_without_credentials_returns_401"):
+            # On an authenticated listener, the auth middleware wraps every
+            # routed method (including the GET handler that would otherwise
+            # return 405), so an unauthenticated GET is rejected as 401
+            # before method routing dispatches.
+            r = requests.get(agent)
+            assert r.status_code == 401, f"{r.status_code}: {r.text}"

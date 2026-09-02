@@ -47,12 +47,22 @@ class Executor:
     # Used by INSERT action to prevent writing into different tables in the same transaction
     insert_table: int | None
     db: "Database"
+    # Temp tables/views created on this connection. They die with the
+    # connection, so ReconnectAction drops them from the tracked state.
+    temp_objects: list
     reconnect_next: bool
     rollback_next: bool
     last_log: str
+    # "running" exactly while this session waits on the server. Every path that
+    # makes a round trip has to set it, the end-of-run wedge check reads it to
+    # tell a server-side hang from a worker stuck in the workload's own code.
     last_status: str
     action_run_since_last_commit_rollback: bool
     autocommit: bool
+    user: str
+    # The session's transaction isolation, as last set through set_isolation.
+    # Actions that set an isolation transiently restore this one afterwards.
+    isolation: str
 
     def __init__(
         self,
@@ -60,45 +70,115 @@ class Executor:
         cur: psycopg.Cursor,
         ws: websocket.WebSocket | None,
         db: "Database",
+        user: str = "materialize",
     ):
         self.rng = rng
         self.cur = cur
         self.ws = ws
         self.db = db
+        # The user this executor's worker originally connected as, e.g.
+        # mz_system for the Cancel worker. Reconnects have to restore it.
+        self.user = user
         self.pg_pid = -1
         self.insert_table = None
-        self.reconnect_next = True
-        self.rollback_next = True
+        self.temp_objects = []
+        self.reconnect_next = False
+        self.rollback_next = False
         self.last_log = ""
         self.last_status = ""
         self.action_run_since_last_commit_rollback = False
         self.use_ws = self.rng.choice([True, False]) if self.ws else False
         self.autocommit = cur.connection.autocommit
         self.mz_service = "materialized"
+        # Set while a non-default statement_timeout is configured on this
+        # session, statement timeouts are expected errors then. Cleared again
+        # on RESET and on reconnect, otherwise a hang in this worker stays
+        # invisible for the rest of the run.
+        self.statement_timeout_set = False
+        # Materialize's default, until the worker sets one on connect.
+        self.isolation = "STRICT SERIALIZABLE"
 
     def set_isolation(self, level: str) -> None:
         self.execute(f"SET TRANSACTION_ISOLATION TO '{level}'")
+        self.isolation = level
 
     def commit(self, http: Http = Http.RANDOM) -> None:
-        self.insert_table = None
-        self.execute("commit")
-        # TODO(def-): Enable when things are stable
-        # self.use_ws = self.rng.choice([True, False]) if self.ws else False
+        self._end_transaction("commit", http)
 
     def rollback(self, http: Http = Http.RANDOM) -> None:
+        self._end_transaction("rollback", http)
+
+    def _end_transaction(self, command: str, http: Http) -> None:
         self.insert_table = None
+        self.log(command)
+        self.last_status = "running"
+        ws_error = None
         try:
-            if self.use_ws and http != Http.NO:
-                self.execute("rollback")
+            # When this executor uses the WS session, statements executed with
+            # http != Http.NO accumulate in the WS session's transaction, so
+            # that transaction has to be ended along with the pg session's.
+            # The pg session's transaction must be ended even if the WS
+            # session fails, otherwise an aborted transaction lingers and
+            # fails all subsequent statements.
+            if self.use_ws and self.ws and http != Http.NO:
+                try:
+                    self.ws_query(f"{command};")
+                except QueryError as e:
+                    ws_error = e
+            if command == "commit":
+                self.cur.connection.commit()
             else:
-                self.log("rollback")
                 self.cur.connection.rollback()
         except QueryError:
             raise
         except Exception as e:
-            raise QueryError(str(e), "rollback")
+            raise QueryError(str(e), command)
+        finally:
+            self.last_status = "finished"
+        if ws_error is not None:
+            raise ws_error
         # TODO(def-): Enable when things are stable
         # self.use_ws = self.rng.choice([True, False]) if self.ws else False
+
+    def ws_query(self, query: str) -> None:
+        """Run a query on the WS session and drain its response."""
+        assert self.ws
+        try:
+            self.ws.send(json.dumps({"queries": [{"query": query}]}))
+        except Exception as e:
+            raise QueryError(str(e), query)
+        error = None
+        while True:
+            try:
+                result = json.loads(self.ws.recv())
+            except websocket._exceptions.WebSocketConnectionClosedException as e:
+                raise QueryError(str(e), query)
+
+            result_type = result["type"]
+
+            if result_type in (
+                "CommandStarting",
+                "CommandComplete",
+                "Notice",
+                "Rows",
+                "Row",
+                "ParameterStatus",
+            ):
+                continue
+            elif result_type == "Error":
+                error = QueryError(
+                    f"""WS {result["payload"]["code"]}: {result["payload"]["message"]}
+    {result["payload"].get("details", "")}""",
+                    query,
+                )
+            elif result_type == "ReadyForQuery":
+                if error:
+                    raise error
+                break
+            else:
+                raise RuntimeError(
+                    f"Unexpected result type: {result_type} in: {result}"
+                )
 
     def log(self, msg: str) -> None:
         if not logging:
@@ -116,17 +196,13 @@ class Executor:
         self,
         query: str,
         rows: list[Any],
-        cluster_replica: str | None = None,
     ) -> None:
         query += ";"
         self.log(f"{query} ({rows})")
+        self.last_status = "running"
 
         try:
             try:
-                if cluster_replica:
-                    self.cur.execute(
-                        f"SET cluster_replica = {cluster_replica}".encode()
-                    )
                 with self.cur.copy(query.encode()) as copy:
                     for row in rows:
                         copy.write_row(row)
@@ -136,8 +212,22 @@ class Executor:
             self.action_run_since_last_commit_rollback = True
         finally:
             self.last_status = "finished"
-            if cluster_replica:
-                self.cur.execute("RESET cluster_replica")
+
+    def copy_to_stdout(self, query: str) -> None:
+        query += ";"
+        self.log(query)
+        self.last_status = "running"
+        try:
+            try:
+                with self.cur.copy(query.encode()) as copy:
+                    for _ in copy:
+                        pass
+            except Exception as e:
+                raise QueryError(str(e), query)
+
+            self.action_run_since_last_commit_rollback = True
+        finally:
+            self.last_status = "finished"
 
     def execute(
         self,
@@ -146,13 +236,42 @@ class Executor:
         explainable: bool = False,
         http: Http = Http.NO,
         fetch: bool = False,
-        cluster_replica: str | None = None,
     ) -> None:
         is_http = (
             http == Http.RANDOM and self.rng.choice([True, False])
         ) or http == Http.YES
         if explainable and self.rng.choice([True, False]):
-            query = f"EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR {query}"
+            if self.rng.random() < 0.1:
+                as_json = " AS JSON" if self.rng.choice([True, False]) else ""
+                query = f"EXPLAIN TIMESTAMP{as_json} FOR {query}"
+            else:
+                stage = self.rng.choice(
+                    [
+                        "RAW PLAN",
+                        "DECORRELATED PLAN",
+                        "LOCALLY OPTIMIZED PLAN",
+                        "OPTIMIZED PLAN",
+                        "OPTIMIZED PLAN",
+                        "OPTIMIZED PLAN",
+                        "PHYSICAL PLAN",
+                    ]
+                )
+                modifiers = ""
+                if stage == "OPTIMIZED PLAN" and self.rng.random() < 0.3:
+                    mods = self.rng.sample(
+                        [
+                            "arity",
+                            "join implementations",
+                            "keys",
+                            "types",
+                            "humanized expressions",
+                            "redacted",
+                        ],
+                        self.rng.randint(1, 3),
+                    )
+                    modifiers = f" WITH ({', '.join(mods)})"
+                format = self.rng.choice(["VERBOSE TEXT", "TEXT", "JSON"])
+                query = f"EXPLAIN {stage}{modifiers} AS {format} FOR {query}"
         query += ";"
         extra_info_str = f" ({extra_info})" if extra_info else ""
         use_ws = self.use_ws and http != Http.NO
@@ -162,64 +281,14 @@ class Executor:
         try:
             if not is_http:
                 if use_ws and self.ws:
-                    try:
-                        self.ws.send(json.dumps({"queries": [{"query": query}]}))
-                    except Exception as e:
-                        raise QueryError(str(e), query)
+                    self.ws_query(query)
                 else:
                     try:
-                        if cluster_replica:
-                            self.cur.execute(
-                                f"SET cluster_replica = {cluster_replica}".encode()
-                            )
-                        if query == "commit;":
-                            self.log("commit")
-                            self.cur.connection.commit()
-                        elif query == "rollback;":
-                            self.log("rollback")
-                            self.cur.connection.rollback()
-                        else:
-                            self.cur.execute(query.encode())
+                        self.cur.execute(query.encode())
                     except Exception as e:
                         raise QueryError(str(e), query)
 
                 self.action_run_since_last_commit_rollback = True
-
-                if use_ws and self.ws:
-                    error = None
-                    while True:
-                        try:
-                            result = json.loads(self.ws.recv())
-                        except (
-                            websocket._exceptions.WebSocketConnectionClosedException
-                        ) as e:
-                            raise QueryError(str(e), query)
-
-                        result_type = result["type"]
-
-                        if result_type in (
-                            "CommandStarting",
-                            "CommandComplete",
-                            "Notice",
-                            "Rows",
-                            "Row",
-                            "ParameterStatus",
-                        ):
-                            continue
-                        elif result_type == "Error":
-                            error = QueryError(
-                                f"""WS {result["payload"]["code"]}: {result["payload"]["message"]}
-    {result["payload"].get("details", "")}""",
-                                query,
-                            )
-                        elif result_type == "ReadyForQuery":
-                            if error:
-                                raise error
-                            break
-                        else:
-                            raise RuntimeError(
-                                f"Unexpected result type: {result_type} in: {result}"
-                            )
 
                 if fetch and not use_ws:
                     try:
@@ -262,5 +331,3 @@ class Executor:
                     raise
         finally:
             self.last_status = "finished"
-            if cluster_replica:
-                self.cur.execute("RESET cluster_replica")

@@ -73,6 +73,19 @@ a "hello world"
 b "foobar"
 c "anotha one"
 
+# Regression test for SQL-392: `SHOW CREATE TABLE` must omit the
+# purification-populated column definitions and constraints, which `CREATE TABLE
+# .. FROM SOURCE` rejects as input.
+>[version>=2603000] SHOW CREATE TABLE t1;
+materialize.public.t1 "CREATE TABLE materialize.public.t1\nFROM SOURCE materialize.public.ms_src (REFERENCE = test.dbo.t1_pk);"
+
+# Regression test for database-issues#10010 and SQL-392: the full statement
+# printed by `SHOW CREATE TABLE` (3-part `REFERENCE`, no column list) must
+# round-trip back into a `CREATE TABLE`.
+>[version>=2603000] CREATE TABLE t_roundtrip FROM SOURCE ms_src (REFERENCE test.dbo.t1_pk);
+
+>[version>=2603000] DROP TABLE t_roundtrip;
+
 # source tables see updates
 $ sql-server-execute name=sql-server
 DELETE FROM t1_pk WHERE key_col = 'a';

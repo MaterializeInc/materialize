@@ -31,6 +31,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{IdentError, UnresolvedItemName};
 use mz_sql_parser::parser::{ParserError, ParserStatementError};
 use mz_sql_server_util::SqlServerError;
+use mz_storage_types::connections::InvalidAwsPrivatelinkServiceName;
 use mz_storage_types::sources::ExternalReferenceResolutionError;
 
 use crate::catalog::{
@@ -42,8 +43,8 @@ use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
 use crate::plan::typeconv::CastContext;
 use crate::pure::error::{
-    CsrPurificationError, IcebergSinkPurificationError, KafkaSinkPurificationError,
-    KafkaSourcePurificationError, LoadGeneratorSourcePurificationError,
+    CsrPurificationError, GluePurificationError, IcebergSinkPurificationError,
+    KafkaSinkPurificationError, KafkaSourcePurificationError, LoadGeneratorSourcePurificationError,
     MySqlSourcePurificationError, PgSourcePurificationError, SqlServerSourcePurificationError,
 };
 use crate::session::vars::VarError;
@@ -54,6 +55,10 @@ pub enum PlanError {
     Unsupported {
         feature: String,
         discussion_no: Option<usize>,
+    },
+    /// A burst `HYDRATION SIZE` equal to the cluster `SIZE` (a no-op burst).
+    HydrationSizeEqualsClusterSize {
+        size: String,
     },
     /// This feature is not supported, and will likely never be supported.
     NeverSupported {
@@ -233,6 +238,7 @@ pub enum PlanError {
         name: String,
         supported_azs: BTreeSet<String>,
     },
+    InvalidPrivatelinkServiceName(InvalidAwsPrivatelinkServiceName),
     DuplicatePrivatelinkAvailabilityZone {
         duplicate_azs: BTreeSet<String>,
     },
@@ -276,6 +282,7 @@ pub enum PlanError {
     IcebergSinkPurification(IcebergSinkPurificationError),
     LoadGeneratorSourcePurification(LoadGeneratorSourcePurificationError),
     CsrPurification(CsrPurificationError),
+    GluePurification(GluePurificationError),
     MySqlSourcePurification(MySqlSourcePurificationError),
     SqlServerSourcePurificationError(SqlServerSourcePurificationError),
     UseTablesForSources(String),
@@ -305,6 +312,7 @@ pub enum PlanError {
     NetworkPolicyInUse,
     /// Expected a constant expression that evaluates without an error to a non-null value.
     ConstantExpressionSimplificationFailed(String),
+    InvalidLimit(String),
     InvalidOffset(String),
     /// The named cursor does not exist.
     UnknownCursor(String),
@@ -333,6 +341,11 @@ impl PlanError {
 
     pub fn detail(&self) -> Option<String> {
         match self {
+            Self::HydrationSizeEqualsClusterSize { .. } => Some(
+                "A burst replica at the same size as the steady replicas would not \
+                 accelerate hydration."
+                    .into(),
+            ),
             Self::NeverSupported { details, .. } => details.clone(),
             Self::FetchingCsrSchemaFailed { cause, .. } => Some(cause.to_string_with_causes()),
             Self::PostgresConnectionErr { cause } => Some(cause.to_string_with_causes()),
@@ -371,6 +384,7 @@ impl PlanError {
             Self::KafkaSourcePurification(e) => e.detail(),
             Self::LoadGeneratorSourcePurification(e) => e.detail(),
             Self::CsrPurification(e) => e.detail(),
+            Self::GluePurification(e) => e.detail(),
             Self::KafkaSinkPurification(e) => e.detail(),
             Self::IcebergSinkPurification(e) => e.detail(),
             Self::SubsourceNameConflict {
@@ -445,6 +459,7 @@ impl PlanError {
                 let supported_azs_str = supported_azs.iter().join("\n  ");
                 Some(format!("Did you supply an availability zone name instead of an ID? Known availability zone IDs:\n  {}", supported_azs_str))
             }
+            Self::InvalidPrivatelinkServiceName(err) => Some(err.hint()),
             Self::DuplicatePrivatelinkAvailabilityZone { duplicate_azs, ..} => {
                 let duplicate_azs  = duplicate_azs.iter().join("\n  ");
                 Some(format!("Duplicated availability zones:\n  {}", duplicate_azs))
@@ -475,6 +490,7 @@ impl PlanError {
             Self::KafkaSourcePurification(e) => e.hint(),
             Self::LoadGeneratorSourcePurification(e) => e.hint(),
             Self::CsrPurification(e) => e.hint(),
+            Self::GluePurification(e) => e.hint(),
             Self::KafkaSinkPurification(e) => e.hint(),
             Self::UnknownColumn { table, similar, .. } => {
                 let suffix = "Make sure to surround case sensitive names in double quotes.";
@@ -523,6 +539,9 @@ impl fmt::Display for PlanError {
                     write!(f, ", see https://github.com/MaterializeInc/materialize/discussions/{} for more details", discussion_no)?;
                 }
                 Ok(())
+            }
+            Self::HydrationSizeEqualsClusterSize { size } => {
+                write!(f, "HYDRATION SIZE must differ from the cluster SIZE ('{size}')")
             }
             Self::NeverSupported { feature, documentation_link: documentation_path,.. } => {
                 write!(f, "{feature} is not supported",)?;
@@ -746,6 +765,7 @@ impl fmt::Display for PlanError {
                 })
             },
             Self::InvalidPrivatelinkAvailabilityZone { name, ..} => write!(f, "invalid AWS PrivateLink availability zone {}", name.quoted()),
+            Self::InvalidPrivatelinkServiceName(err) => err.fmt(f),
             Self::DuplicatePrivatelinkAvailabilityZone {..} =>   write!(f, "connection cannot contain duplicate availability zones"),
             Self::InvalidSchemaName => write!(f, "no valid schema selected"),
             Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
@@ -803,6 +823,7 @@ impl fmt::Display for PlanError {
             Self::KafkaSinkPurification(e) => write!(f, "KAFKA sink validation: {}", e),
             Self::IcebergSinkPurification(e) => write!(f, "ICEBERG sink validation: {}", e),
             Self::CsrPurification(e) => write!(f, "CONFLUENT SCHEMA REGISTRY validation: {}", e),
+            Self::GluePurification(e) => write!(f, "AWS GLUE SCHEMA REGISTRY validation: {}", e),
             Self::MySqlSourcePurification(e) => write!(f, "MYSQL source validation: {}", e),
             Self::SqlServerSourcePurificationError(e) => write!(f, "SQL SERVER source validation: {}", e),
             Self::UseTablesForSources(command) => write!(f, "{command} not supported; use CREATE TABLE .. FROM SOURCE instead"),
@@ -860,6 +881,7 @@ impl fmt::Display for PlanError {
                 write!(f, "TIMEOUT=<duration> option is required for ALTER CLUSTER ... WITH (WAIT UNTIL READY ( ... ))")
             },
             Self::ConstantExpressionSimplificationFailed(e) => write!(f, "{}", e),
+            Self::InvalidLimit(e) => write!(f, "Invalid LIMIT clause: {}", e),
             Self::InvalidOffset(e) => write!(f, "Invalid OFFSET clause: {}", e),
             Self::UnknownCursor(name) => {
                 write!(f, "cursor {} does not exist", name.quoted())
@@ -1010,6 +1032,12 @@ impl From<KafkaSinkPurificationError> for PlanError {
 impl From<IcebergSinkPurificationError> for PlanError {
     fn from(e: IcebergSinkPurificationError) -> Self {
         PlanError::IcebergSinkPurification(e)
+    }
+}
+
+impl From<GluePurificationError> for PlanError {
+    fn from(e: GluePurificationError) -> Self {
+        PlanError::GluePurification(e)
     }
 }
 

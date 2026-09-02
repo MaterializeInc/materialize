@@ -18,7 +18,6 @@
 
 use std::fmt;
 
-use mz_lowertest::MzReflect;
 use mz_repr::{ReprColumnType, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
@@ -31,8 +30,7 @@ use serde::{Deserialize, Serialize};
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub enum UnmaterializableFunc {
     CurrentDatabase,
@@ -42,7 +40,6 @@ pub enum UnmaterializableFunc {
     CurrentTimestamp,
     CurrentUser,
     IsRbacEnabled,
-    MzEnvironmentId,
     MzIsSuperuser,
     MzNow,
     MzRoleOidMemberships,
@@ -81,7 +78,6 @@ impl UnmaterializableFunc {
             }
             UnmaterializableFunc::CurrentUser => SqlScalarType::String.nullable(false),
             UnmaterializableFunc::IsRbacEnabled => SqlScalarType::Bool.nullable(false),
-            UnmaterializableFunc::MzEnvironmentId => SqlScalarType::String.nullable(false),
             UnmaterializableFunc::MzIsSuperuser => SqlScalarType::Bool.nullable(false),
             UnmaterializableFunc::MzNow => SqlScalarType::MzTimestamp.nullable(false),
             UnmaterializableFunc::MzRoleOidMemberships => SqlScalarType::Map {
@@ -144,8 +140,7 @@ impl UnmaterializableFunc {
             // Session config inspection
             Self::IsRbacEnabled | Self::ViewableVariables => true,
             // Internal system information: not relevant to data product queries
-            Self::MzEnvironmentId
-            | Self::MzIsSuperuser
+            Self::MzIsSuperuser
             | Self::MzRoleOidMemberships
             | Self::MzUptime
             | Self::MzVersion
@@ -169,7 +164,6 @@ impl fmt::Display for UnmaterializableFunc {
             UnmaterializableFunc::CurrentTimestamp => f.write_str("current_timestamp"),
             UnmaterializableFunc::CurrentUser => f.write_str("current_user"),
             UnmaterializableFunc::IsRbacEnabled => f.write_str("is_rbac_enabled"),
-            UnmaterializableFunc::MzEnvironmentId => f.write_str("mz_environment_id"),
             UnmaterializableFunc::MzIsSuperuser => f.write_str("mz_is_superuser"),
             UnmaterializableFunc::MzNow => f.write_str("mz_now"),
             UnmaterializableFunc::MzRoleOidMemberships => f.write_str("mz_role_oid_memberships"),

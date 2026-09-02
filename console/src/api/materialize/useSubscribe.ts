@@ -16,6 +16,7 @@ import { getStore } from "~/jotai";
 import { useCurrentEnvironmentHttpAddress } from "~/store/environments";
 
 import { queryBuilder } from "./db";
+import { SubscribeCollection } from "./subscribeCollection";
 import {
   SelectFunction,
   SubscribeError,
@@ -44,6 +45,8 @@ export type UseSubscribeReturn<T> = {
   data: T[];
   isError: boolean;
   snapshotComplete: boolean;
+  /** True while a re-subscribe holds the previous data. */
+  resubscribing: boolean;
   error: SubscribeError | undefined;
 };
 
@@ -84,10 +87,8 @@ export function useSubscribe<T extends object, R = SubscribeRow<T>>(
     request,
   });
 
-  const { data, error, snapshotComplete } = React.useSyncExternalStore(
-    subscribe.onChange,
-    subscribe.getSnapshot,
-  );
+  const { data, error, snapshotComplete, resubscribing } =
+    React.useSyncExternalStore(subscribe.onChange, subscribe.getSnapshot);
 
   return {
     data,
@@ -96,6 +97,7 @@ export function useSubscribe<T extends object, R = SubscribeRow<T>>(
     error,
     isError: Boolean(error),
     snapshotComplete,
+    resubscribing: Boolean(resubscribing),
   };
 }
 
@@ -160,6 +162,66 @@ export function useGlobalUpsertSubscribe<T extends object, R = SubscribeRow<T>>(
 }
 
 /**
+ * Executes a subscribe query and feeds the upsert-reduced state into a TanStack DB
+ * collection (via createSubscribeCollection). Mirrors useGlobalUpsertSubscribe but
+ * targets a collection + status atom instead of a single SubscribeState atom.
+ *
+ * Note that the subscribe statement must have WITH (PROGRESS) and ENVELOPE UPSERT.
+ */
+export function useGlobalSubscribeCollection<
+  T extends object,
+  R extends object = SubscribeRow<T>,
+>(
+  options: UseSubscribeOptions<T, R> & {
+    upsertKey: UpsertKeyFunction<T>;
+    target: SubscribeCollection<R>;
+  },
+) {
+  const httpAddress = useCurrentEnvironmentHttpAddress();
+  const request = useSubscribeRequest(options.subscribe);
+  const target = options.target;
+  const [subscribe] = React.useState(
+    new SubscribeManager<T, R>({
+      request,
+      httpAddress,
+      upsert: {
+        key: options.upsertKey,
+      },
+      sessionVariables: {
+        cluster: options?.clusterName,
+      },
+      closeSocketOnComplete: options?.closeSocketOnComplete,
+      select: options.select,
+    }),
+  );
+  useAutomaticallyConnectSocket<T, R>({
+    target: subscribe,
+    subscribe,
+    request,
+  });
+
+  React.useEffect(() => {
+    // applySnapshot itself drops empty pre-snapshots when state already exists,
+    // so the manager can push every snapshot unconditionally.
+    const apply = () => target.applySnapshot(subscribe.getSnapshot());
+    const cleanup = subscribe.onChange(apply);
+    apply();
+    return cleanup;
+  }, [target, subscribe]);
+
+  // Keep the collection actively syncing for the app session by holding a
+  // subscriber, so it doesn't pause/GC when no component is querying it.
+  React.useEffect(() => {
+    const subscription = target.collection.subscribeChanges(() => {});
+    return () => subscription.unsubscribe();
+  }, [target]);
+
+  return {
+    subscribe,
+  };
+}
+
+/**
  * Executes a subscribe query and handles state internally. The raw updates are flushed
  * for each closed timestamp.
  *
@@ -195,10 +257,11 @@ export function useSubscribeManager<T extends object, R = SubscribeRow<T>>({
     }),
   });
 
-  const { data, error, snapshotComplete } = React.useSyncExternalStore(
-    subscribeInstance.onChange,
-    subscribeInstance.getSnapshot,
-  );
+  const { data, error, snapshotComplete, resubscribing } =
+    React.useSyncExternalStore(
+      subscribeInstance.onChange,
+      subscribeInstance.getSnapshot,
+    );
 
   return {
     data,
@@ -207,6 +270,7 @@ export function useSubscribeManager<T extends object, R = SubscribeRow<T>>({
     error,
     isError: Boolean(error),
     snapshotComplete,
+    resubscribing: Boolean(resubscribing),
   };
 }
 

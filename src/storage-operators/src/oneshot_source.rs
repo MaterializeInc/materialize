@@ -486,7 +486,6 @@ where
         let [_row_cap] = caps.try_into().unwrap();
 
         let mut datum_vec = DatumVec::default();
-        let row_arena = RowArena::default();
         let mut row_buf = Row::default();
 
         while let Some(event) = record_chunk_handle.next().await {
@@ -508,9 +507,14 @@ where
 
             match result {
                 Ok(rows) => {
+                    // Scoped to this chunk so the arena's retained capacity does not outlive it,
+                    // and cleared per row below so it only ever holds one row's MFP temporaries
+                    // rather than accumulating the whole source.
+                    let mut row_arena = RowArena::new();
                     // For each row of source data, we pass it through an MFP to re-arrange column
                     // orders and/or fill in default values for missing columns.
                     for row in rows {
+                        row_arena.clear();
                         let mut datums = datum_vec.borrow_with(&row);
                         let result = mfp
                             .evaluate_into(&mut *datums, &row_arena, &mut row_buf)

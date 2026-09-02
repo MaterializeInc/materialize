@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 
@@ -29,6 +29,7 @@ const buildObject = (
   hydratedReplicas: 1,
   totalReplicas: 1,
   lag: null,
+  sourceStatus: null,
   ...overrides,
 });
 
@@ -54,9 +55,11 @@ const eventsSrc = buildObject({
   id: "u103",
   name: "events_src",
   objectType: "source",
+  sourceType: "kafka",
   cluster: { id: "u200", name: "ingest_cluster" },
   hydratedReplicas: 0,
   totalReplicas: 1,
+  sourceStatus: { status: "running", error: null, snapshotCommitted: true },
 });
 
 const buildProps = (
@@ -106,6 +109,63 @@ describe("MaintainedObjects", () => {
 
     // Filter chip summarizes the active filter.
     expect(screen.getByText("Type: index")).toBeVisible();
+  });
+
+  it("shows a source's ingestion status rather than replica hydration", async () => {
+    // A source mid-snapshot has no rehydration latency, so hydration reports 0
+    // of 1 replicas hydrated. That must not surface as "Not Hydrated".
+    const snapshottingSrc = buildObject({
+      id: "u104",
+      name: "snapshotting_src",
+      objectType: "source",
+      sourceType: "postgres",
+      hydratedReplicas: 0,
+      totalReplicas: 1,
+      sourceStatus: {
+        status: "running",
+        error: null,
+        snapshotCommitted: false,
+      },
+    });
+    await renderMaintainedObjects({ objects: [snapshottingSrc] });
+
+    const row = await screen.findByRole("row", { name: /snapshotting_src/ });
+    expect(within(row).getByText("Snapshotting")).toBeVisible();
+    expect(within(row).queryByText("Not Hydrated")).not.toBeInTheDocument();
+  });
+
+  it("surfaces a stalled source's status", async () => {
+    const stalledSrc = buildObject({
+      id: "u105",
+      name: "stalled_src",
+      objectType: "source",
+      sourceType: "kafka",
+      hydratedReplicas: 1,
+      totalReplicas: 1,
+      sourceStatus: {
+        status: "stalled",
+        error: "broker unreachable",
+        snapshotCommitted: true,
+      },
+    });
+    await renderMaintainedObjects({ objects: [stalledSrc] });
+
+    const row = await screen.findByRole("row", { name: /stalled_src/ });
+    expect(within(row).getByText("Stalled")).toBeVisible();
+  });
+
+  it("filters rows by status and reflects it in a chip", async () => {
+    const user = userEvent.setup();
+    await renderMaintainedObjects();
+
+    await user.click(
+      await screen.findByRole("button", { name: "Filter status" }),
+    );
+    await user.click(await screen.findByLabelText("Running"));
+
+    expect(screen.getByText("events_src")).toBeVisible();
+    expect(screen.queryByText("inventory_idx")).not.toBeInTheDocument();
+    expect(screen.getByText("Status: Running")).toBeVisible();
   });
 
   it("filters rows by search term", async () => {

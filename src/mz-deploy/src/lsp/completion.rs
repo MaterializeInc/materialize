@@ -642,6 +642,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `llvm.aarch64.neon.uaddlv.i32.v16i8` on OS `linux`
     fn prefix_no_prefix() {
         let text = "SELECT ";
         let ctx = prefix_context(text, Position::new(0, 7));
@@ -650,6 +651,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `llvm.aarch64.neon.uaddlv.i32.v16i8` on OS `linux`
     fn prefix_bare_ident() {
         let text = "SELECT foo";
         let ctx = prefix_context(text, Position::new(0, 10));
@@ -658,6 +660,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `llvm.aarch64.neon.uaddlv.i32.v16i8` on OS `linux`
     fn prefix_one_dot() {
         let text = "SELECT schema.foo";
         let ctx = prefix_context(text, Position::new(0, 17));
@@ -666,6 +669,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `llvm.aarch64.neon.uaddlv.i32.v16i8` on OS `linux`
     fn prefix_two_dots() {
         let text = "SELECT db.schema.foo";
         let ctx = prefix_context(text, Position::new(0, 20));
@@ -674,6 +678,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `llvm.aarch64.neon.uaddlv.i32.v16i8` on OS `linux`
     fn prefix_mid_line() {
         let text = "SELECT * FROM schema.f";
         let ctx = prefix_context(text, Position::new(0, 22));
@@ -682,6 +687,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `llvm.aarch64.neon.uaddlv.i32.v16i8` on OS `linux`
     fn prefix_text_stored() {
         let text = "SELECT public.f";
         let ctx = prefix_context(text, Position::new(0, 15));

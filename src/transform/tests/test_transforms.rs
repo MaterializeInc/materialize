@@ -18,6 +18,7 @@ use mz_repr::explain::{ExplainConfig, PlanRenderingContext};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_transform::analysis::annotate_plan;
 use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::{Transform, TransformCtx};
 
 const TEST_GLOBAL_ID: GlobalId = GlobalId::Transient(1234567);
 
@@ -31,7 +32,7 @@ fn run_tests() {
             match test_case.directive.as_str() {
                 "define" => handle_define(&mut catalog, &test_case.input),
                 "explain" => handle_explain(&catalog, &test_case.input, &test_case.args),
-                "typecheck" => handle_typecheck(&catalog, &test_case.input, &test_case.args),
+                "typecheck" => handle_typecheck(&catalog, &test_case.input),
                 "apply" => handle_apply(&catalog, &test_case.input, &test_case.args),
                 _ => format!("unknown directive: {}", test_case.directive),
             }
@@ -39,7 +40,7 @@ fn run_tests() {
     });
 }
 
-#[allow(clippy::disallowed_types)]
+#[allow(clippy::disallowed_types)] // what testdrive provides
 fn handle_explain(
     catalog: &TestCatalog,
     input: &str,
@@ -105,12 +106,7 @@ fn handle_explain(
     })
 }
 
-#[allow(clippy::disallowed_types)]
-fn handle_typecheck(
-    catalog: &TestCatalog,
-    input: &str,
-    _args: &std::collections::HashMap<String, Vec<String>>,
-) -> String {
+fn handle_typecheck(catalog: &TestCatalog, input: &str) -> String {
     // Parse the relation, returning early on parse error.
     let relation = match try_parse_mir(catalog, input) {
         Ok(relation) => relation,
@@ -136,7 +132,7 @@ fn handle_typecheck(
     }
 }
 
-#[allow(clippy::disallowed_types)]
+#[allow(clippy::disallowed_types)] // what testdrive provides
 fn handle_apply(
     catalog: &TestCatalog,
     input: &str,
@@ -146,128 +142,153 @@ fn handle_apply(
         return "missing required `pipeline` argument for `apply` directive".to_string();
     };
 
-    if pipeline.len() != 1 {
-        return "unexpected `pipeline` arguments for `apply` directive".to_string();
+    if pipeline.is_empty() {
+        return "empty `pipeline` argument for `apply` directive".to_string();
     }
 
-    let result = match pipeline[0].as_str() {
-        // Pseudo-transforms.
-        "identity" => {
-            // noop
-            let transform = Identity::default();
-            apply_transform(transform, catalog, input)
+    let mut transforms = vec![];
+    for name in pipeline {
+        match get_transforms(name) {
+            Ok(ts) => transforms.extend(ts),
+            Err(err) => return err,
         }
-        // Actual transforms.
-        "anf" => {
-            use mz_transform::cse::anf::ANF;
-            let transform = ANF::default();
-            apply_transform(transform, catalog, input)
-        }
-        "equivalence_propagation" => {
-            use mz_transform::equivalence_propagation::EquivalencePropagation;
-            let transform = EquivalencePropagation::default();
-            apply_transform(transform, catalog, input)
-        }
-        "flat_map_elimination" => {
-            use mz_transform::canonicalization::FlatMapElimination;
-            let transform = FlatMapElimination;
-            apply_transform(transform, catalog, input)
-        }
-        "fold_constants" => {
-            use mz_transform::fold_constants::FoldConstants;
-            let transform = FoldConstants { limit: None };
-            apply_transform(transform, catalog, input)
-        }
-        "fusion_join" => {
-            use mz_transform::fusion::join::Join;
-            let transform = Join;
-            apply_transform(transform, catalog, input)
-        }
-        "fusion_top_k" => {
-            use mz_transform::fusion::top_k::TopK;
-            let transform = TopK;
-            apply_transform(transform, catalog, input)
-        }
-        "literal_lifting" => {
-            use mz_transform::literal_lifting::LiteralLifting;
-            let transform = LiteralLifting::default();
-            apply_transform(transform, catalog, input)
-        }
-        "non_null_requirements" => {
-            use mz_transform::non_null_requirements::NonNullRequirements;
-            let transform = NonNullRequirements::default();
-            apply_transform(transform, catalog, input)
-        }
-        "predicate_pushdown" => {
-            use mz_transform::predicate_pushdown::PredicatePushdown;
-            let transform = PredicatePushdown::default();
-            apply_transform(transform, catalog, input)
-        }
-        "projection_lifting" => {
-            use mz_transform::movement::ProjectionLifting;
-            let transform = ProjectionLifting::default();
-            apply_transform(transform, catalog, input)
-        }
-        "projection_pushdown" => {
-            use mz_transform::movement::ProjectionPushdown;
-            let transform = ProjectionPushdown::default();
-            apply_transform(transform, catalog, input)
-        }
-        "normalize_lets" => {
-            use mz_transform::normalize_lets::NormalizeLets;
-            let transform = NormalizeLets::new(false);
-            apply_transform(transform, catalog, input)
-        }
-        "reduction_pushdown" => {
-            use mz_transform::reduction_pushdown::ReductionPushdown;
-            let transform = ReductionPushdown;
-            apply_transform(transform, catalog, input)
-        }
-        "redundant_join" => {
-            use mz_transform::redundant_join::RedundantJoin;
-            let transform = RedundantJoin::default();
-            apply_transform(transform, catalog, input)
-        }
-        "relation_cse" => {
-            use mz_transform::cse::relation_cse::RelationCSE;
-            let transform = RelationCSE::new(false);
-            apply_transform(transform, catalog, input)
-        }
-        "semijoin_idempotence" => {
-            use mz_transform::semijoin_idempotence::SemijoinIdempotence;
-            let transform = SemijoinIdempotence::default();
-            apply_transform(transform, catalog, input)
-        }
-        "case_literal" => {
-            use mz_transform::case_literal::CaseLiteralTransform;
-            let transform = CaseLiteralTransform;
-            apply_transform(transform, catalog, input)
-        }
-        "coalesce_case" => {
-            use mz_transform::coalesce_case::CoalesceCase;
-            let transform = CoalesceCase;
-            apply_transform(transform, catalog, input)
-        }
-        "threshold_elision" => {
-            use mz_transform::threshold_elision::ThresholdElision;
-            let transform = ThresholdElision;
-            apply_transform(transform, catalog, input)
-        }
-        "union_branch_cancellation" => {
-            use mz_transform::union_cancel::UnionBranchCancellation;
-            let transform = UnionBranchCancellation;
-            apply_transform(transform, catalog, input)
-        }
-        transform => Err(format!("unsupported pipeline transform: {transform}")),
-    };
+    }
 
-    result.unwrap_or_else(|err| err)
+    apply_transforms(transforms, catalog, input, args).unwrap_or_else(|err| err)
 }
 
-fn apply_transform<T: mz_transform::Transform>(
-    transform: T,
+/// Resolves a `pipeline` entry of the `apply` directive to a transform
+/// sequence. Names are the transforms' canonical `Transform::name` strings and
+/// map to a single transform, `optimize` expands to the full optimizer
+/// pipeline.
+fn get_transforms(name: &str) -> Result<Vec<Box<dyn Transform>>, String> {
+    use mz_transform::*;
+    let transform: Box<dyn Transform> = match name {
+        // Pseudo-transforms.
+        "Identity" => Box::new(Identity),
+        "optimize" => return Ok(full_transform_list()),
+        // Actual transforms.
+        "ANF" => Box::new(cse::anf::ANF::default()),
+        "CanonicalizeMfp" => Box::new(canonicalize_mfp::CanonicalizeMfp),
+        "CaseLiteralTransform" => Box::new(case_literal::CaseLiteralTransform),
+        "CoalesceCase" => Box::new(coalesce_case::CoalesceCase),
+        "EquivalencePropagation" => {
+            Box::new(equivalence_propagation::EquivalencePropagation::default())
+        }
+        "FlatMapElimination" => Box::new(canonicalization::FlatMapElimination),
+        "FoldConstants" => Box::new(fold_constants::FoldConstants { limit: None }),
+        "Fusion" => Box::new(fusion::Fusion),
+        "JoinFusion" => Box::new(fusion::join::Join),
+        "LiteralLifting" => Box::new(literal_lifting::LiteralLifting::default()),
+        "NonNullRequirements" => Box::new(non_null_requirements::NonNullRequirements::default()),
+        "NormalizeLets" => Box::new(normalize_lets::NormalizeLets::new(false)),
+        "PredicatePushdown" => Box::new(predicate_pushdown::PredicatePushdown::default()),
+        "ProjectionExtraction" => Box::new(canonicalization::ProjectionExtraction),
+        "ProjectionLifting" => Box::new(movement::ProjectionLifting::default()),
+        "ProjectionPushdown" => Box::new(movement::ProjectionPushdown::default()),
+        "ReductionPushdown" => Box::new(reduction_pushdown::ReductionPushdown),
+        "RedundantJoin" => Box::new(redundant_join::RedundantJoin::default()),
+        "RelationCSE" => Box::new(cse::relation_cse::RelationCSE::new(false)),
+        "SemijoinIdempotence" => Box::new(semijoin_idempotence::SemijoinIdempotence::default()),
+        "ThresholdElision" => Box::new(threshold_elision::ThresholdElision),
+        "TopKFusion" => Box::new(fusion::top_k::TopK),
+        "UnionBranchCancellation" => Box::new(union_cancel::UnionBranchCancellation),
+        "UnionFusion" => Box::new(fusion::union::Union),
+        "UnionNegateFusion" => Box::new(compound::UnionNegateFusion),
+        "WillDistinct" => Box::new(will_distinct::WillDistinct),
+        transform => return Err(format!("unsupported pipeline transform: {transform}")),
+    };
+    Ok(vec![transform])
+}
+
+/// Checks that every single-transform pipeline name accepted by
+/// [`get_transforms`] is the canonical [`Transform::name`] of the transform it
+/// resolves to. Names added to the `match` in [`get_transforms`] must also be
+/// added here. `optimize` is exempt, it expands to the full optimizer pipeline
+/// rather than naming a single transform.
+#[mz_ore::test]
+fn pipeline_names_are_canonical() {
+    const PIPELINE_NAMES: &[&str] = &[
+        "Identity",
+        "ANF",
+        "CanonicalizeMfp",
+        "CaseLiteralTransform",
+        "CoalesceCase",
+        "EquivalencePropagation",
+        "FlatMapElimination",
+        "FoldConstants",
+        "Fusion",
+        "JoinFusion",
+        "LiteralLifting",
+        "NonNullRequirements",
+        "NormalizeLets",
+        "PredicatePushdown",
+        "ProjectionExtraction",
+        "ProjectionLifting",
+        "ProjectionPushdown",
+        "ReductionPushdown",
+        "RedundantJoin",
+        "RelationCSE",
+        "SemijoinIdempotence",
+        "ThresholdElision",
+        "TopKFusion",
+        "UnionBranchCancellation",
+        "UnionFusion",
+        "UnionNegateFusion",
+        "WillDistinct",
+    ];
+
+    for name in PIPELINE_NAMES {
+        let transforms = get_transforms(name).expect("known pipeline name");
+        assert_eq!(
+            transforms.len(),
+            1,
+            "`{name}` must resolve to one transform"
+        );
+        assert_eq!(
+            transforms[0].name(),
+            *name,
+            "pipeline name `{name}` must match the transform's canonical name",
+        );
+    }
+}
+
+/// The full optimizer pipeline, as applied by the `optimize` pipeline name.
+fn full_transform_list() -> Vec<Box<dyn Transform>> {
+    use mz_transform::{Optimizer, TransformCtx, typecheck};
+
+    let features = OptimizerFeatures::default();
+    let typecheck_ctx = typecheck::empty_typechecking_context();
+    let mut df_meta = DataflowMetainfo::default();
+    let mut transform_ctx = TransformCtx::local(
+        &features,
+        &typecheck_ctx,
+        &mut df_meta,
+        None,
+        Some(TEST_GLOBAL_ID),
+    );
+
+    #[allow(deprecated)]
+    Optimizer::logical_optimizer(&mut transform_ctx)
+        .transforms
+        .into_iter()
+        .chain(std::iter::once::<Box<dyn Transform>>(Box::new(
+            mz_transform::movement::ProjectionPushdown::default(),
+        )))
+        .chain(std::iter::once::<Box<dyn Transform>>(Box::new(
+            mz_transform::normalize_lets::NormalizeLets::new(false),
+        )))
+        .chain(Optimizer::logical_cleanup_pass(&mut transform_ctx, false).transforms)
+        .chain(Optimizer::physical_optimizer(&mut transform_ctx).transforms)
+        .collect::<Vec<_>>()
+}
+
+#[allow(clippy::disallowed_types)] // what testdrive provides
+fn apply_transforms(
+    transforms: Vec<Box<dyn Transform>>,
     catalog: &TestCatalog,
     input: &str,
+    args: &std::collections::HashMap<String, Vec<String>>,
 ) -> Result<String, String> {
     // Parse the relation, returning early on parse error.
     let mut relation = try_parse_mir(catalog, input)?;
@@ -277,9 +298,14 @@ fn apply_transform<T: mz_transform::Transform>(
     features.enable_letrec_fixpoint_analysis = true;
     features.enable_dequadratic_eqprop_map = true;
     features.enable_eq_classes_withholding_errors = true;
+    // Tests opt into flag-gated transform behavior via directive args, e.g.
+    // `apply pipeline=WillDistinct enable_will_distinct_propagation=true`.
+    if args.contains_key("enable_will_distinct_propagation") {
+        features.enable_will_distinct_propagation = true;
+    }
     let typecheck_ctx = mz_transform::typecheck::empty_typechecking_context();
     let mut df_meta = DataflowMetainfo::default();
-    let mut transform_ctx = mz_transform::TransformCtx::local(
+    let mut transform_ctx = TransformCtx::local(
         &features,
         &typecheck_ctx,
         &mut df_meta,
@@ -287,10 +313,12 @@ fn apply_transform<T: mz_transform::Transform>(
         Some(TEST_GLOBAL_ID),
     );
 
-    // Apply the transformation, returning early on TransformError.
-    transform
-        .transform(&mut relation, &mut transform_ctx)
-        .map_err(|e| format!("{}\n", e.to_string().trim()))?;
+    // Apply the transformations, returning early on TransformError.
+    for transform in transforms {
+        transform
+            .transform(&mut relation, &mut transform_ctx)
+            .map_err(|e| format!("{}\n", e.to_string().trim()))?;
+    }
 
     // Serialize and return the transformed relation.
     Ok(relation.debug_explain(&ExplainConfig::default(), Some(catalog)))
@@ -323,7 +351,7 @@ fn parse_explain_config(mut flags: BTreeSet<String>) -> Result<ExplainConfig, St
 #[derive(Debug, Default)]
 struct Identity;
 
-impl mz_transform::Transform for Identity {
+impl Transform for Identity {
     fn name(&self) -> &'static str {
         "Identity"
     }
@@ -331,7 +359,7 @@ impl mz_transform::Transform for Identity {
     fn actually_perform_transform(
         &self,
         _relation: &mut mz_expr::MirRelationExpr,
-        _ctx: &mut mz_transform::TransformCtx,
+        _ctx: &mut TransformCtx,
     ) -> Result<(), mz_transform::TransformError> {
         Ok(())
     }

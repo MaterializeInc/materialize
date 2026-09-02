@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/optimize/materialized_view.rs
-revision: 9d0a7c3c6f
+revision: 43a933b189
 ---
 
 # adapter::optimize::materialized_view

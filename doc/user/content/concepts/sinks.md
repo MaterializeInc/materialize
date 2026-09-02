@@ -8,6 +8,7 @@ menu:
     identifier: 'concepts-sinks'
 aliases:
   - /get-started/key-concepts/#sinks
+  - /self-managed/v25.2/concepts/sinks/
 ---
 
 ## Overview

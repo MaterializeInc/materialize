@@ -30,6 +30,7 @@ pub mod bits;
 #[cfg(feature = "bytes")]
 pub mod bytes;
 pub mod cast;
+pub mod cgroup;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
 #[cfg(feature = "async")]
 pub mod channel;
@@ -50,6 +51,7 @@ pub mod hint;
 pub mod id_gen;
 pub mod iter;
 pub mod lex;
+pub mod memory;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "metrics")))]
 #[cfg(feature = "metrics")]
 pub mod metrics;
@@ -70,6 +72,9 @@ pub mod pager;
 pub mod panic;
 pub mod path;
 pub mod permutations;
+#[cfg_attr(nightly_doc_features, doc(cfg(all(feature = "pool", unix))))]
+#[cfg(all(feature = "pool", unix))]
+pub mod pool;
 #[cfg(feature = "process")]
 pub mod process;
 #[cfg(feature = "region")]

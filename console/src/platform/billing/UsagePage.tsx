@@ -19,34 +19,41 @@ import {
   Text,
   useTheme,
 } from "@chakra-ui/react";
-import React, { useMemo, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 
 import { useCurrentOrganization } from "~/api/auth";
-import { DailyCosts, PlanType } from "~/api/cloudGlobalApi";
+import { PlanType } from "~/api/cloudGlobalApi";
 import ErrorBox from "~/components/ErrorBox";
 import { MainContentContainer } from "~/layouts/BaseLayout";
 import { MaterializeTheme } from "~/theme";
 import { nowUTC } from "~/util";
-import { formatCurrency } from "~/utils/format";
 
-import DailyUsageChart, {
-  chartHeightPx,
-  legendHeightPx,
-} from "./DailyUsageChart";
+import AccountSpendBreakdown, {
+  AccountSpendLedger,
+} from "./AccountSpendBreakdown";
 import InvoiceTable from "./InvoiceTable";
-import { UpgradedPlanDetails } from "./PlanDetails";
-import { useDailyCosts, useRecentInvoices } from "./queries";
-import RegionSelect from "./RegionSelect";
-import SpendBreakdown from "./SpendBreakdown";
-import TimeRangeSelect from "./TimeRangeSelect";
-import { getTimeRangeSlice } from "./utils";
+import { AccountSpendPlanDetails } from "./PlanDetails";
+import { useDailyCostsBreakdown, useRecentInvoices } from "./queries";
 
 const DEFAULT_TIME_RANGE_LOOKBACK_DAYS = 7;
+// Fixed window behind the account plan-details box's "Last 30 days" row,
+// independent of the time-range selector.
+const LAST_30_DAYS_LOOKBACK = 30;
 
-const InvoiceTableWrapper = ({ planType }: { planType: PlanType }) => {
+// A leaf account's own invoice list is permanently empty (Orb invoices belong
+// only to the billing owner, never split per child), so an empty result here
+// means there's nothing to show, ever, not just "still loading." Hide the
+// heading along with the table rather than leave a header with no rows.
+const InvoiceHistorySection = ({ planType }: { planType: PlanType }) => {
   const { data: invoices, isLoading, isError, error } = useRecentInvoices();
+  if (!isLoading && !isError && (invoices?.length ?? 0) === 0) {
+    return null;
+  }
   return (
     <>
+      <Text as="h3" textStyle="heading-sm" mb={4}>
+        Invoice history
+      </Text>
       {isLoading ? (
         <Spinner />
       ) : isError ? (
@@ -94,188 +101,80 @@ const AwsMarketplaceInvoiceBanner = () => {
   );
 };
 
-type ChartPanelProps = {
-  timeRange: number;
-  setTimeRange: (val: number) => void;
-  dailyCosts: DailyCosts["daily"] | null;
-  isLoading: boolean;
-  isError: boolean;
-  regionFilter: "all" | string;
-  setRegionFilter: (val: ChartPanelProps["regionFilter"]) => void;
-  error: Error | null;
-};
-
-function getTotalSpend(
-  dailyCosts: DailyCosts["daily"] | null,
-  region: "all" | string,
-): number {
-  if (dailyCosts === null) {
-    return 0;
-  }
-  let totalPrice = 0;
-  for (const day of dailyCosts) {
-    for (const costKey of ["compute", "storage"] as const) {
-      for (const price of day.costs[costKey].prices) {
-        if (region === "all" || price.regionId === region) {
-          totalPrice += parseFloat(price.subtotal);
-        }
-      }
-    }
-  }
-  return totalPrice;
-}
-
-const SelectorPanel = ({
-  timeRange,
-  setTimeRange,
-  regionFilter,
-  setRegionFilter,
-}: {
-  timeRange: number;
-  setTimeRange: (val: number) => void;
-  regionFilter: "all" | string;
-  setRegionFilter: (val: ChartPanelProps["regionFilter"]) => void;
-}) => {
-  return (
-    <HStack gap={4}>
-      <div data-testid="region-select">
-        <RegionSelect region={regionFilter} setRegion={setRegionFilter} />
-      </div>
-      <div data-testid="time-range-select">
-        <TimeRangeSelect timeRange={timeRange} setTimeRange={setTimeRange} />
-      </div>
-    </HStack>
-  );
-};
-
-const ChartPanel = ({
-  dailyCosts,
-  regionFilter,
-  isLoading,
-  isError,
-  error,
-}: ChartPanelProps) => {
-  const totalSpend = useMemo(
-    () => getTotalSpend(dailyCosts, regionFilter),
-    [dailyCosts, regionFilter],
-  );
-
-  return (
-    <Box data-testid="chart-panel">
-      <HStack justifyContent="space-between" my={3}>
-        <Text
-          as="h4"
-          textStyle="heading-md"
-          data-testid={`${regionFilter}-spend-amount`}
-        >
-          {formatCurrency(totalSpend)}
-        </Text>
-      </HStack>
-      <Flex
-        minHeight={legendHeightPx + chartHeightPx}
-        data-testid="chart-container"
-      >
-        {isLoading && (
-          <Spinner
-            data-testid="chart-loading-spinner"
-            size="xl"
-            margin="auto"
-          />
-        )}
-        {isError && (
-          <ErrorBox
-            data-testid="chart-error"
-            message={
-              error?.message || "There was an error fetching your usage."
-            }
-          />
-        )}
-        {!isLoading && !isError && dailyCosts && (
-          <DailyUsageChart region={regionFilter} data={dailyCosts} />
-        )}
-      </Flex>
-    </Box>
-  );
-};
-
 const UsagePage = () => {
   const { organization } = useCurrentOrganization();
   const [regionFilter, setRegionFilter] = useState<"all" | string>("all");
-  const [lastQueryTime, setLastQueryTime] = useState(nowUTC());
+  const [lastQueryTime] = useState(nowUTC());
   const [timeRangeFilter, setTimeRangeFilter] = useState(
     DEFAULT_TIME_RANGE_LOOKBACK_DAYS,
   );
   const {
-    data: dailyCosts,
-    isLoading: isDailyCostsLoading,
-    isError: isDailyCostsError,
-    error: dailyCostsError,
-  } = useDailyCosts(timeRangeFilter, lastQueryTime);
+    data: costBreakdownDays,
+    isLoading: isCostBreakdownLoading,
+    isError: isCostBreakdownError,
+    error: costBreakdownError,
+  } = useDailyCostsBreakdown(timeRangeFilter, lastQueryTime);
+  // A separate fixed 30-day breakdown feeds the plan-details "Last 30 days" row.
+  // When the selected range is also 30 days this shares the query cache.
+  const { data: last30BreakdownDays } = useDailyCostsBreakdown(
+    LAST_30_DAYS_LOOKBACK,
+    lastQueryTime,
+  );
 
   const chartTooltipRef = useRef<HTMLDivElement>(null);
 
-  const timeRangeCosts = useMemo(
-    () => getTimeRangeSlice(dailyCosts?.daily ?? null, timeRangeFilter),
-    [dailyCosts, timeRangeFilter],
-  );
   return (
     <>
       <MainContentContainer width="100%" maxWidth="1400px" mx="auto">
         <Grid
           templateAreas={`
-            "selects details"
-            "chart details"
-            "spend details"
+            "breakdown breakdownDetails"
+            "ledger ledger"
             "invoices ."`}
           gridTemplateColumns="minmax(500px, 70%) minmax(300px, 3fr)"
           gridColumnGap={12}
           gridRowGap={10}
         >
-          <GridItem area="selects" marginBottom={-8}>
-            <SelectorPanel
+          <GridItem area="breakdown">
+            <AccountSpendBreakdown
+              days={costBreakdownDays ?? null}
+              isLoading={isCostBreakdownLoading}
+              isError={isCostBreakdownError}
+              error={costBreakdownError}
+              regionFilter={regionFilter}
+              setRegionFilter={setRegionFilter}
               timeRange={timeRangeFilter}
               setTimeRange={setTimeRangeFilter}
+            />
+          </GridItem>
+          <GridItem area="breakdownDetails">
+            <AccountSpendPlanDetails
+              days={costBreakdownDays ?? null}
+              last30Days={last30BreakdownDays ?? null}
               regionFilter={regionFilter}
-              setRegionFilter={setRegionFilter}
             />
           </GridItem>
-          <GridItem area="chart">
-            <ChartPanel
+          {/* The ledger spans both columns (SAS-154): its own grid row means
+              the Plan details box's bottom edge can never crowd it, no matter
+              how tall either column's content is. */}
+          <GridItem area="ledger">
+            <AccountSpendLedger
+              days={costBreakdownDays ?? null}
+              isLoading={isCostBreakdownLoading}
+              isError={isCostBreakdownError}
               regionFilter={regionFilter}
-              setRegionFilter={setRegionFilter}
-              timeRange={timeRangeFilter}
-              setTimeRange={(range) => {
-                setTimeRangeFilter(range);
-                setLastQueryTime(nowUTC());
-              }}
-              dailyCosts={timeRangeCosts}
-              isLoading={isDailyCostsLoading}
-              isError={isDailyCostsError}
-              error={dailyCostsError}
-            />
-          </GridItem>
-          <GridItem area="details">
-            <UpgradedPlanDetails
-              region={regionFilter}
-              dailyCosts={dailyCosts ?? null}
-              timeSpan={timeRangeFilter}
-            />
-          </GridItem>
-          <GridItem area="spend">
-            <SpendBreakdown
-              region={regionFilter}
-              dailyCosts={timeRangeCosts}
-              totalDays={timeRangeFilter}
             />
           </GridItem>
           <GridItem area="invoices">
-            <Text as="h3" textStyle="heading-sm" mb={4}>
-              Invoice history
-            </Text>
             {organization?.subscription?.marketplace === "aws" ? (
-              <AwsMarketplaceInvoiceBanner />
+              <>
+                <Text as="h3" textStyle="heading-sm" mb={4}>
+                  Invoice history
+                </Text>
+                <AwsMarketplaceInvoiceBanner />
+              </>
             ) : (
-              <InvoiceTableWrapper
+              <InvoiceHistorySection
                 planType={organization?.subscription?.type ?? "uncategorized"}
               />
             )}

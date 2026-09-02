@@ -30,7 +30,14 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
     try uv venv --python 3.10 "$py310_venv"
     try uv pip compile --python-version 3.10 ci/builder/requirements.txt
     try uv pip install --python "$py310_venv/bin/python" --requirement ci/builder/requirements.txt
-    try git_files '*.py' | xargs "$py310_venv/bin/python" -m compileall -q
+    # Wrap the compileall (the actual work) in `try`, not git_files, and keep it
+    # out of a pipeline: `try` in a pipeline runs in a subshell and loses its
+    # accounting. Guard against empty input too, otherwise compileall with no
+    # file arguments compiles all of sys.path instead of the repo.
+    py_files=$(git_files '*.py')
+    if [[ -n "$py_files" ]]; then
+        try xargs "$py310_venv/bin/python" -m compileall -q <<< "$py_files"
+    fi
 fi
 
 try_status_report

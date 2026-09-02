@@ -16,10 +16,10 @@ use bytes::Bytes;
 use derivative::Derivative;
 use futures::TryStreamExt;
 use futures::stream::{BoxStream, StreamExt};
+use mz_ore::url::SensitiveUrl;
 use reqwest::Client;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use serde::{Deserialize, Serialize};
-use url::Url;
 
 use crate::oneshot_source::util::IntoRangeHeaderValue;
 use crate::oneshot_source::{
@@ -87,11 +87,11 @@ fn check_not_redirect(response: &reqwest::Response) -> Result<(), StorageErrorX>
 pub struct HttpOneshotSource {
     #[derivative(Debug = "ignore")]
     client: Client,
-    origin: Url,
+    origin: SensitiveUrl,
 }
 
 impl HttpOneshotSource {
-    pub fn new(client: Client, origin: Url) -> Self {
+    pub fn new(client: Client, origin: SensitiveUrl) -> Self {
         HttpOneshotSource { client, origin }
     }
 }
@@ -99,8 +99,8 @@ impl HttpOneshotSource {
 /// Object returned from an [`HttpOneshotSource`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpObject {
-    /// [`Url`] to access the file.
-    url: Url,
+    /// [`SensitiveUrl`] to access the file.
+    url: SensitiveUrl,
     /// Name of the file.
     filename: String,
     /// Size of this file reported by the [`Content-Length`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Length) header
@@ -209,7 +209,7 @@ impl OneshotSource for HttpOneshotSource {
         // canonically is the right thing do.
         let response = self
             .client
-            .head(self.origin.clone())
+            .head(self.origin.0.clone())
             .send()
             .await
             .context("HEAD request")?;
@@ -225,7 +225,7 @@ impl OneshotSource for HttpOneshotSource {
 
                 let response = self
                     .client
-                    .get(self.origin.clone())
+                    .get(self.origin.0.clone())
                     .send()
                     .await
                     .context("GET request")?;
@@ -296,7 +296,7 @@ impl OneshotSource for HttpOneshotSource {
         // TODO(cf1): Validate our checksum.
 
         let initial_response = async move {
-            let mut request = self.client.get(object.url);
+            let mut request = self.client.get(object.url.0);
 
             if let Some(range) = &range {
                 let value = range.into_range_header_value();

@@ -7,27 +7,34 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import requests
 from kubernetes.client import (
     V1Container,
     V1ContainerPort,
     V1Deployment,
     V1DeploymentSpec,
+    V1HTTPGetAction,
     V1LabelSelector,
     V1ObjectMeta,
     V1PodSpec,
     V1PodTemplateSpec,
+    V1Probe,
     V1Service,
     V1ServicePort,
     V1ServiceSpec,
 )
 
-from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_deployment import K8sDeployment
-from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
+from materialize.cloudtest.util.common import retry
 from materialize.mzcompose.services.redpanda import REDPANDA_VERSION
 
 TOXIPROXY_IMAGE = "jauderho/toxiproxy:v2.8.0"
+
+TOXIPROXY_ADMIN_PORT = 8474
+TOXIPROXY_PROXY_PORT = 9092
+
+ADMIN_REQUEST_TIMEOUT_SECS = 10
 
 
 class ToxiproxyDeployment(K8sDeployment):
@@ -54,9 +61,16 @@ class ToxiproxyDeployment(K8sDeployment):
             image=TOXIPROXY_IMAGE,
             args=["-host=0.0.0.0"],
             ports=[
-                V1ContainerPort(name="admin", container_port=8474),
-                V1ContainerPort(name="kafka-proxy", container_port=9092),
+                V1ContainerPort(name="admin", container_port=TOXIPROXY_ADMIN_PORT),
+                V1ContainerPort(
+                    name="kafka-proxy", container_port=TOXIPROXY_PROXY_PORT
+                ),
             ],
+            readiness_probe=V1Probe(
+                http_get=V1HTTPGetAction(path="/proxies", port="admin"),
+                period_seconds=1,
+                failure_threshold=30,
+            ),
         )
 
         node_selector = None
@@ -99,8 +113,8 @@ class ToxiproxyService(K8sService):
         app_label = name
 
         ports = [
-            V1ServicePort(name="admin", port=8474),
-            V1ServicePort(name="kafka-proxy", port=9092),
+            V1ServicePort(name="admin", port=TOXIPROXY_ADMIN_PORT),
+            V1ServicePort(name="kafka-proxy", port=TOXIPROXY_PROXY_PORT),
         ]
 
         self.service = V1Service(
@@ -116,6 +130,59 @@ class ToxiproxyService(K8sService):
         self.api().delete_namespaced_service(
             name=self._name, namespace=self.namespace()
         )
+
+    def _admin_url(self, path: str) -> str:
+        return f"http://localhost:{self.node_port('admin')}/{path.lstrip('/')}"
+
+    def wait_for_admin_ready(self, max_attempts: int = 60) -> None:
+        """Block until the admin API answers through the NodePort.
+
+        Must be called before any other admin request. The pod's readiness
+        probe only gates the pod, not the node-local routing to it: kube-proxy
+        programs the NodePort rules asynchronously, so the first connection can
+        still be reset. Retrying an idempotent GET until it lands proves the
+        path, which is what lets the mutating helpers issue their request
+        exactly once. Retrying those instead would not be safe, since a
+        duplicate proxy creation is rejected with 409.
+        """
+
+        def get_proxies() -> None:
+            response = requests.get(
+                self._admin_url("/proxies"), timeout=ADMIN_REQUEST_TIMEOUT_SECS
+            )
+            response.raise_for_status()
+
+        retry(
+            f=get_proxies,
+            max_attempts=max_attempts,
+            exception_types=[requests.exceptions.RequestException],
+            message=f"toxiproxy {self._name} admin API never became reachable",
+        )
+
+    def create_proxy(self, name: str, upstream: str, enabled: bool = True) -> None:
+        """Create a proxy listening on the deployment's proxy port."""
+        self._post_proxy("/proxies", name, upstream, enabled)
+
+    def set_proxy_enabled(self, name: str, upstream: str, enabled: bool) -> None:
+        """Enable or disable an existing proxy.
+
+        Disabling closes all open connections and refuses new ones, which is
+        how these tests simulate a PrivateLink endpoint going away.
+        """
+        self._post_proxy(f"/proxies/{name}", name, upstream, enabled)
+
+    def _post_proxy(self, path: str, name: str, upstream: str, enabled: bool) -> None:
+        response = requests.post(
+            self._admin_url(path),
+            json={
+                "name": name,
+                "listen": f"0.0.0.0:{TOXIPROXY_PROXY_PORT}",
+                "upstream": upstream,
+                "enabled": enabled,
+            },
+            timeout=ADMIN_REQUEST_TIMEOUT_SECS,
+        )
+        response.raise_for_status()
 
 
 class PrivateLinkExternalNameService(K8sService):
@@ -163,24 +230,6 @@ class PrivateLinkExternalNameService(K8sService):
         self.api().delete_namespaced_service(
             name=self._name, namespace=self.namespace()
         )
-
-
-def toxiproxy_resources(
-    namespace: str = DEFAULT_K8S_NAMESPACE,
-    name: str = "toxiproxy",
-    apply_node_selectors: bool = False,
-) -> list[K8sResource]:
-    """Create Toxiproxy deployment and service resources.
-
-    Args:
-        namespace: Kubernetes namespace
-        name: Name for this toxiproxy instance (use different names for multi-AZ)
-        apply_node_selectors: Whether to apply node selectors
-    """
-    return [
-        ToxiproxyDeployment(namespace, name, apply_node_selectors),
-        ToxiproxyService(namespace, name),
-    ]
 
 
 class PrivateLinkTestRedpandaDeployment(K8sDeployment):

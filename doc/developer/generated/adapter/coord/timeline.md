@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/timeline.rs
-revision: 4002e6039c
+revision: 09bb18d3c8
 ---
 
 # adapter::coord::timeline

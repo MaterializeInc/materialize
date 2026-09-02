@@ -12,7 +12,6 @@ expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = i16,
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect,
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
 pub struct AddInt16;
@@ -59,6 +58,9 @@ impl std::fmt::Display for AddInt16 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("+")
     }
+}
+impl crate::func::FuncName for AddInt16 {
+    const NAME: &'static str = stringify!(add_int16);
 }
 fn add_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_int16()

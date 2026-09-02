@@ -1,0 +1,209 @@
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on July 6, 2026 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/rename_atomic
+#
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+subtest databases
+
+statement ok
+CREATE DATABASE db;
+CREATE DATABASE db_new
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+ALTER DATABASE db RENAME TO db_old;
+ALTER DATABASE db_new RENAME TO db
+
+# Not supported by Materialize.
+onlyif cockroach
+statement error pgcode 3D000 database "db_new" does not exist
+CREATE SCHEMA db_new.sc
+
+statement ok
+ROLLBACK
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+ALTER DATABASE db RENAME TO db_old;
+ALTER DATABASE db_new RENAME TO db;
+CREATE SCHEMA db.sc;
+COMMIT
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+DROP DATABASE db CASCADE;
+ALTER DATABASE db_old RENAME TO db;
+COMMIT
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+ALTER DATABASE db RENAME TO db_old;
+CREATE DATABASE db;
+COMMIT
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+DROP DATABASE db;
+CREATE DATABASE db;
+COMMIT
+
+subtest schemas
+
+statement ok
+CREATE SCHEMA sc;
+CREATE SCHEMA sc_new
+
+statement ok
+BEGIN;
+ALTER SCHEMA sc RENAME TO sc_old;
+ALTER SCHEMA sc_new RENAME TO sc
+
+statement error pgcode 3F000 transactions which modify objects are restricted to just modifying objects
+CREATE VIEW sc_new.v AS SELECT 1
+
+statement ok
+ROLLBACK
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+ALTER SCHEMA sc RENAME TO sc_old;
+ALTER SCHEMA sc_new RENAME TO sc;
+CREATE VIEW sc.v AS SELECT 1;
+COMMIT
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+DROP SCHEMA sc CASCADE;
+ALTER SCHEMA sc_old RENAME TO sc;
+COMMIT
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+ALTER SCHEMA sc RENAME TO sc_old;
+CREATE SCHEMA sc;
+COMMIT
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+DROP SCHEMA sc;
+CREATE SCHEMA sc;
+COMMIT
+
+subtest objects
+
+statement ok
+CREATE VIEW v AS SELECT 1;
+CREATE VIEW v_new AS SELECT 2
+
+query I
+SELECT * FROM v
+----
+1
+
+statement ok
+BEGIN;
+ALTER VIEW v RENAME TO v_old;
+ALTER VIEW v_new RENAME TO v
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT * FROM v
+----
+2
+
+statement ok
+COMMIT;
+
+query I
+SELECT * FROM v
+----
+2
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+DROP VIEW v;
+ALTER VIEW v_old RENAME TO v
+
+query I
+SELECT * FROM v
+----
+2
+
+statement ok
+COMMIT
+
+query I
+SELECT * FROM v
+----
+2
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+ALTER VIEW v RENAME TO v_old;
+CREATE VIEW v AS SELECT 1;
+COMMIT
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+DROP VIEW v;
+CREATE VIEW v AS SELECT 1;
+COMMIT
+
+# Check for correct caching behavior when scanning the namespace table.
+subtest regression_93002
+
+statement ok
+CREATE SCHEMA sc93002
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+SHOW TABLES FROM sc93002;
+CREATE TABLE sc93002.t(a INT);
+DROP SCHEMA sc93002 CASCADE;
+COMMIT;

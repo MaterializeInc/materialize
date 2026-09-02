@@ -11,18 +11,4 @@
 #
 # unused-deps — prints unused dependencies for all Rust crates.
 
-# Requires https://github.com/est31/cargo-udeps and a working nightly toolchain.
-#
-# cargo-udeps occasionally produces false positives, especially with
-# dependencies that are used only on certain platforms. To ignore these
-# dependencies, see:
-# https://github.com/est31/cargo-udeps#ignoring-some-of-the-dependencies.
-
-set -euo pipefail
-
-cd "$(dirname "$0")/.."
-
-. misc/shlib/shlib.bash
-
-export RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:=nightly}
-cargo udeps --workspace --all-targets "$@"
+exec "$(dirname "$0")"/pyactivate -m materialize.cli.unused-deps "$@"

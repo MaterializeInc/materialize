@@ -1,0 +1,2 @@
+{}
+// FAIL: user lacks privilege "CREATE" on object "test"

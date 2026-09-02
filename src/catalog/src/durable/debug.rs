@@ -70,6 +70,8 @@ pub enum CollectionType {
     Setting,
     SourceReferences,
     SystemConfiguration,
+    ClusterSystemConfiguration,
+    ReplicaSystemConfiguration,
     SystemGidMapping,
     SystemPrivileges,
     StorageCollectionMetadata,
@@ -257,6 +259,22 @@ collection_impl!({
     update: StateUpdateKind::SystemConfiguration,
 });
 collection_impl!({
+    name: ClusterSystemConfigurationCollection,
+    key: proto::ClusterSystemConfigurationKey,
+    value: proto::ClusterSystemConfigurationValue,
+    collection_type: CollectionType::ClusterSystemConfiguration,
+    trace_field: cluster_system_configurations,
+    update: StateUpdateKind::ClusterSystemConfiguration,
+});
+collection_impl!({
+    name: ReplicaSystemConfigurationCollection,
+    key: proto::ReplicaSystemConfigurationKey,
+    value: proto::ReplicaSystemConfigurationValue,
+    collection_type: CollectionType::ReplicaSystemConfiguration,
+    trace_field: replica_system_configurations,
+    update: StateUpdateKind::ReplicaSystemConfiguration,
+});
+collection_impl!({
     name: SystemItemMappingCollection,
     key: proto::GidMappingKey,
     value: proto::GidMappingValue,
@@ -346,6 +364,8 @@ pub struct Trace {
     pub source_references: CollectionTrace<SourceReferencesCollection>,
     pub system_object_mappings: CollectionTrace<SystemItemMappingCollection>,
     pub system_configurations: CollectionTrace<SystemConfigurationCollection>,
+    pub cluster_system_configurations: CollectionTrace<ClusterSystemConfigurationCollection>,
+    pub replica_system_configurations: CollectionTrace<ReplicaSystemConfigurationCollection>,
     pub system_privileges: CollectionTrace<SystemPrivilegeCollection>,
     pub storage_collection_metadata: CollectionTrace<StorageCollectionMetadataCollection>,
     pub unfinalized_shards: CollectionTrace<UnfinalizedShardsCollection>,
@@ -373,6 +393,8 @@ impl Trace {
             source_references: CollectionTrace::new(),
             system_object_mappings: CollectionTrace::new(),
             system_configurations: CollectionTrace::new(),
+            cluster_system_configurations: CollectionTrace::new(),
+            replica_system_configurations: CollectionTrace::new(),
             system_privileges: CollectionTrace::new(),
             storage_collection_metadata: CollectionTrace::new(),
             unfinalized_shards: CollectionTrace::new(),
@@ -400,6 +422,8 @@ impl Trace {
             source_references,
             system_object_mappings,
             system_configurations,
+            cluster_system_configurations,
+            replica_system_configurations,
             system_privileges,
             storage_collection_metadata,
             unfinalized_shards,
@@ -423,6 +447,8 @@ impl Trace {
         source_references.sort();
         system_object_mappings.sort();
         system_configurations.sort();
+        cluster_system_configurations.sort();
+        replica_system_configurations.sort();
         system_privileges.sort();
         storage_collection_metadata.sort();
         unfinalized_shards.sort();

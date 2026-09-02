@@ -965,7 +965,6 @@
   functions:
   - signature: 'mz_environment_id() -> text'
     description: Returns a string containing a `uuid` uniquely identifying the Materialize environment.
-    unmaterializable: true
   - signature: 'mz_uptime() -> interval'
     description: Returns the length of time that the materialized process has been running.
     unmaterializable: true

@@ -44,7 +44,10 @@ class Debezium(Service):
             "kafka": {"condition": "service_healthy"},
             "schema-registry": {"condition": "service_healthy"},
         }
-        environment.append(f"CONNECT_REST_ADVERTISED_HOST_NAME={name}")
+        # Concatenate instead of appending: the default list is shared across
+        # instances, so appending would leak one instance's advertised host
+        # name into every other instance's environment.
+        environment = environment + [f"CONNECT_REST_ADVERTISED_HOST_NAME={name}"]
         if redpanda:
             depends_on = {"redpanda": {"condition": "service_healthy"}}
         super().__init__(

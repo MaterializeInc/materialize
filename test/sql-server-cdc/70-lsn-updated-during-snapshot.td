@@ -84,8 +84,17 @@ WITH Tally(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM Tally WHERE n < 5000) INS
 > VALIDATE CONNECTION sql_server_test_connection;
 
 > CREATE SOURCE sql_server
-  FROM SQL SERVER CONNECTION sql_server_test_connection
-  FOR ALL TABLES;
+  FROM SQL SERVER CONNECTION sql_server_test_connection;
+
+# The tables must exist before the ticker is stopped below, so that the snapshot
+# starts while writes to t2 are still arriving. One DDL transaction, so the
+# source is restarted once rather than once per table.
+> BEGIN
+> CREATE TABLE t1 FROM SOURCE sql_server (REFERENCE dbo.t1);
+> CREATE TABLE t2 FROM SOURCE sql_server (REFERENCE dbo.t2);
+> CREATE TABLE t3 FROM SOURCE sql_server (REFERENCE dbo.t3);
+> CREATE TABLE t4 FROM SOURCE sql_server (REFERENCE dbo.t4);
+> COMMIT
 
 $ sql-server-execute name=sql-server split-lines=false
 USE msdb;

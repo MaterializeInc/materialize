@@ -7,4 +7,6 @@ menu:
     name: "`mz` Reference"
     identifier: cli-reference
     weight: 6
+aliases:
+  - /self-managed/v25.2/integrations/cli/reference/
 ---

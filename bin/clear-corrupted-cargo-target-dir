@@ -9,18 +9,51 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# clear-corrupted-cargo-target-dir - Remove cargo target dir if internal
-# compiler error is detected, necessary in CI as a workaround until
-# https://github.com/rust-lang/rust/issues/148581 is solved.
+# clear-corrupted-cargo-target-dir - Detect build failures that a retry
+# recovers from in the given log, and remove the Cargo target directories when
+# corrupted incremental build artifacts are to blame. Exits 199 on a match,
+# which Buildkite retries automatically, see mkpipeline.py.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-if ! grep -qE "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs|Found unstable fingerprints for" "$1"; then
-  exit
+# Keep these signatures in sync with
+# run_and_detect_retryable_build_failure in materialize.mzbuild.
+incremental_build_failure_pattern="panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs"
+incremental_build_failure_pattern+="|Found unstable fingerprints for"
+incremental_build_failure_pattern+="|ld\.lld: error: undefined symbol"
+incremental_build_failure_pattern+="|signal: 11, SIGSEGV"
+
+registry_fetch_failure_pattern="unable to update registry"
+
+# A cached build-script binary poisoned by cargo cache corruption dies with a
+# bare ENOENT before doing any work. Both halves are required, and the error
+# must be the exact bare line: "failed to run custom build command" alone is
+# any build-script bug, which a retry cannot fix, and a build script that
+# fails on a missing file with an error context of its own produces the ENOENT
+# in a "Caused by:" detail line instead of the bare "Error:" line.
+custom_build_script_enoent() {
+  grep -q "failed to run custom build command" "$1" \
+    && grep -qE '^[[:space:]]*Error: No such file or directory \(os error 2\)[[:space:]]*$' "$1"
+}
+
+if grep -qE "$incremental_build_failure_pattern" "$1"; then
+  echo "--- Detected incremental build failure, clearing cargo target directories"
+  rm -rf target target-xcompile || true
+  exit 199
 fi
 
-echo "--- Detected Rust ICE (https://github.com/rust-lang/rust/issues/148581), clearing cargo target directories"
-rm -rf target target-xcompile || true
-exit 199
+if custom_build_script_enoent "$1"; then
+  echo "--- Detected corrupted cached build script, clearing cargo target directories"
+  rm -rf target target-xcompile || true
+  exit 199
+fi
+
+# Nothing on disk is corrupted, so keep the target directories. Wiping them
+# would turn a network blip into a full rebuild of the workspace, here and in
+# every later job that shares the agent's target directory.
+if grep -qE "$registry_fetch_failure_pattern" "$1"; then
+  echo "--- Detected transient cargo registry failure, retrying"
+  exit 199
+fi

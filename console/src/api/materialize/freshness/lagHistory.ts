@@ -68,6 +68,25 @@ export function buildLagHistoryQuery(
         lagHistoryQuery = lagHistoryQuery.where("object_id", "like", "u%");
       }
 
+      // Push the entity filter to the source read, before the bin + Top-1.
+      // Otherwise the cluster/object filter only enters at the final join (the
+      // `lag_history` CTE), so the Top-1 over `lag_history_binned` runs over
+      // every object in the environment and the join discards the rest. Applied
+      // here it scopes the Top-1 to the requested objects via the
+      // mz_wallclock_global_lag_recent_history object_id index.
+      if (clusterId) {
+        lagHistoryQuery = lagHistoryQuery.where("object_id", "in", (eb) =>
+          eb
+            .selectFrom("mz_objects")
+            .select("id")
+            .where("cluster_id", "=", clusterId),
+        );
+      }
+
+      if (objectIds) {
+        lagHistoryQuery = lagHistoryQuery.where("object_id", "in", objectIds);
+      }
+
       if (lookback.type === "getLatest") {
         // Temporal filter of 2 minutes since the latest will always be within the last minute.
         // This is an optimation to do work on less records.
@@ -132,14 +151,6 @@ export function buildLagHistoryQuery(
           "lag_history.object_id",
           "object_names.id",
         );
-
-      if (clusterId) {
-        cteQuery = cteQuery.where("clusters.id", "=", clusterId);
-      }
-
-      if (objectIds) {
-        cteQuery = cteQuery.where("object_id", "in", objectIds);
-      }
 
       // orderBy and distinctOn inherently gives us the latest max lag per ID since it takes the first row by group
       // using the order specified.

@@ -215,6 +215,14 @@ SELECT convert_from(b, 'invalid encoding') FROM test
 query error invalid utf-8 sequence of 1 bytes
 SELECT convert_from('\x00ff', 'utf-8')
 
+# NUL bytes are valid UTF-8 but are rejected because text values must never
+# contain them.
+query error invalid byte sequence '0x00' for encoding 'utf-8'
+SELECT convert_from('\x00', 'utf-8')
+
+query error invalid byte sequence '0x00' for encoding 'utf-8'
+SELECT convert_from('\x666f6f00626172', 'utf-8')
+
 # get_byte
 
 statement ok

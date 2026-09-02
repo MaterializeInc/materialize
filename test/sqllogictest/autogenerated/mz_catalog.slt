@@ -44,9 +44,9 @@ element_id  text  The␠ID␠of␠the␠array's␠element␠type.
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_audit_events' ORDER BY position
 ----
-id    uint8  Materialize's␠unique,␠monotonically␠increasing␠ID␠for␠the␠event.
-event_type  text  The␠type␠of␠the␠event:␠`create`,␠`drop`,␠or␠`alter`.
-object_type  text  The␠type␠of␠the␠affected␠object:␠`cluster`,␠`cluster-replica`,␠`connection`,␠`database`,␠`function`,␠`index`,␠`materialized-view`,␠`role`,␠`schema`,␠`secret`,␠`sink`,␠`source`,␠`table`,␠`type`,␠or␠`view`.
+id  uint8  Materialize's␠unique,␠monotonically␠increasing␠ID␠for␠the␠event.
+event_type  text  The␠type␠of␠the␠event:␠`create`,␠`drop`,␠`alter`,␠`grant`,␠`revoke`,␠or␠`comment`.
+object_type  text  The␠type␠of␠the␠affected␠object:␠`cluster`,␠`cluster-replica`,␠`connection`,␠`continual-task`,␠`database`,␠`func`,␠`index`,␠`materialized-view`,␠`metric-sink`,␠`network-policy`,␠`role`,␠`schema`,␠`secret`,␠`sink`,␠`source`,␠`system`,␠`table`,␠`type`,␠or␠`view`.
 details  jsonb  Additional␠details␠about␠the␠event.␠The␠shape␠of␠the␠details␠varies␠based␠on␠`event_type`␠and␠`object_type`.
 user  text  The␠user␠who␠triggered␠the␠event,␠or␠`NULL`␠if␠triggered␠by␠the␠system.
 occurred_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠event␠occurred.␠Guaranteed␠to␠be␠in␠order␠of␠event␠creation.␠Events␠created␠in␠the␠same␠transaction␠will␠have␠identical␠values.
@@ -87,7 +87,7 @@ id  text  Materialize's␠unique␠ID␠for␠the␠cluster␠replica.
 name  text  The␠name␠of␠the␠cluster␠replica.
 cluster_id  text  The␠ID␠of␠the␠cluster␠to␠which␠the␠replica␠belongs.␠Corresponds␠to␠`mz_clusters.id`.
 size  text  The␠cluster␠replica's␠size,␠selected␠during␠creation.
-availability_zone  text  The␠availability␠zone␠in␠which␠the␠cluster␠is␠running.
+availability_zone  text  The␠availability␠zones␠the␠replica␠is␠provisioned␠in,␠comma-separated.␠`NULL`␠if␠nothing␠constrains␠the␠replica's␠placement.
 owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠cluster␠replica.␠Corresponds␠to␠`mz_roles.id`.
 disk  boolean  If␠the␠replica␠has␠a␠local␠disk.
 
@@ -255,7 +255,7 @@ id  text  Materialize's␠unique␠ID␠for␠the␠object.
 oid  oid  A␠PostgreSQL-compatible␠OID␠for␠the␠object.
 schema_id  text  The␠ID␠of␠the␠schema␠to␠which␠the␠object␠belongs.␠Corresponds␠to␠`mz_schemas.id`.
 name  text  The␠name␠of␠the␠object.
-type  text  The␠type␠of␠the␠object:␠one␠of␠`table`,␠`source`,␠`view`,␠`materialized-view`,␠`sink`,␠`index`,␠`connection`,␠`secret`,␠`type`,␠or␠`function`.
+type  text  The␠type␠of␠the␠object:␠one␠of␠`table`,␠`source`,␠`view`,␠`materialized-view`,␠`sink`,␠`metric-sink`,␠`index`,␠`connection`,␠`secret`,␠`type`,␠or␠`function`.
 owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠object.␠Corresponds␠to␠`mz_roles.id`.
 cluster_id  text  The␠ID␠of␠the␠cluster␠maintaining␠the␠source,␠materialized␠view,␠index,␠or␠sink.␠Corresponds␠to␠`mz_clusters.id`.␠`NULL`␠for␠other␠object␠types.
 privileges  mz_aclitem[]  The␠privileges␠belonging␠to␠the␠object.
@@ -371,7 +371,7 @@ name  text  The␠name␠of␠the␠source.
 type  text  The␠type␠of␠the␠source:␠`kafka`,␠`mysql`,␠`postgres`,␠`load-generator`,␠`progress`,␠or␠`subsource`.
 connection_id  text  The␠ID␠of␠the␠connection␠associated␠with␠the␠source,␠if␠any.␠Corresponds␠to␠`mz_connections.id`.
 size  text  *Deprecated*␠The␠size␠of␠the␠source.
-envelope_type  text  For␠Kafka␠sources,␠the␠envelope␠type:␠`none`,␠`upsert`,␠or␠`debezium`.␠`NULL`␠for␠other␠source␠types.
+envelope_type  text  For␠old-syntax␠Kafka␠sources,␠the␠envelope␠type:␠`none`,␠`upsert`,␠or␠`debezium`.␠`NULL`␠for␠new-syntax␠Kafka␠sources,␠whose␠envelopes␠are␠defined␠per␠source␠table␠(see␠`mz_kafka_source_tables`),␠and␠for␠other␠source␠types.
 key_format  text  For␠Kafka␠sources,␠the␠format␠of␠the␠Kafka␠message␠key:␠`avro`,␠`csv`,␠`regex`,␠`bytes`,␠`json`,␠`text`,␠or␠`NULL`.
 value_format  text  For␠Kafka␠sources,␠the␠format␠of␠the␠Kafka␠message␠value:␠`avro`,␠`csv`,␠`regex`,␠`bytes`,␠`json`,␠`text`.␠`NULL`␠for␠other␠source␠types.
 cluster_id  text  The␠ID␠of␠the␠cluster␠maintaining␠the␠source.␠Corresponds␠to␠`mz_clusters.id`.

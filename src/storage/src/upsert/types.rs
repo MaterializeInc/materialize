@@ -304,7 +304,7 @@ impl<T, O> StateValue<T, O> {
     /// 2. An estimate (it only looks at value sizes, and not errors)
     ///
     /// Other implementations may use more accurate accounting.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "fuzzing"))]
     pub fn memory_size(&self) -> usize {
         use mz_repr::Row;
         use std::mem::size_of;
@@ -1018,6 +1018,90 @@ impl<'metrics, S, T, O> UpsertState<'metrics, S, T, O> {
             multi_get_scratch: Vec::new(),
             shrink_upsert_unused_buffers_by_ratio,
         }
+    }
+}
+
+/// Owns the metrics/statistics plumbing an [`UpsertState`] requires, so a fuzz
+/// target can build fresh in-memory `UpsertState`s without reconstructing it
+/// each iteration (or leaking it). Construct once. Call [`Self::state`] per
+/// iteration. Exposed only for fuzzing. Not a stable public API.
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub struct FuzzUpsertParts {
+    shared: std::sync::Arc<UpsertSharedMetrics>,
+    worker: UpsertMetrics,
+    stats_defs: crate::statistics::SourceStatisticsMetricDefs,
+}
+
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+impl FuzzUpsertParts {
+    pub fn new() -> Self {
+        let registry = mz_ore::metrics::MetricsRegistry::new();
+        let upsert_defs = crate::metrics::upsert::UpsertMetricDefs::register_with(&registry);
+        let id = GlobalId::User(0);
+        let shared = upsert_defs.shared(&id);
+        let worker = UpsertMetrics::new(&upsert_defs, id, 0, None);
+        let stats_defs = crate::statistics::SourceStatisticsMetricDefs::register_with(&registry);
+        FuzzUpsertParts {
+            shared,
+            worker,
+            stats_defs,
+        }
+    }
+
+    /// A fresh, empty in-memory `UpsertState` borrowing the shared metrics.
+    pub fn state(
+        &self,
+    ) -> UpsertState<'_, crate::upsert::memory::InMemoryHashMap<u64, u64>, u64, u64> {
+        let id = GlobalId::User(0);
+        let stats = crate::statistics::SourceStatistics::new(
+            id,
+            0,
+            &self.stats_defs,
+            id,
+            &mz_persist_client::ShardId::new(),
+            mz_storage_types::sources::SourceEnvelope::CdcV2,
+            timely::progress::Antichain::from_elem(mz_repr::Timestamp::MIN),
+        );
+        UpsertState::new(
+            crate::upsert::memory::InMemoryHashMap::default(),
+            std::sync::Arc::clone(&self.shared),
+            &self.worker,
+            stats,
+            0,
+        )
+    }
+
+    /// A `SourceExportCreationConfig` for driving `drain_staged_input` directly.
+    /// `drain_staged_input` only reads `.id` from it, but the struct requires the
+    /// full metrics/statistics plumbing, which this builds.
+    pub fn source_config(&self) -> crate::source::SourceExportCreationConfig {
+        let id = GlobalId::User(0);
+        let registry = mz_ore::metrics::MetricsRegistry::new();
+        let metrics = crate::metrics::StorageMetrics::register_with(&registry);
+        let source_statistics = crate::statistics::SourceStatistics::new(
+            id,
+            0,
+            &self.stats_defs,
+            id,
+            &mz_persist_client::ShardId::new(),
+            mz_storage_types::sources::SourceEnvelope::CdcV2,
+            timely::progress::Antichain::from_elem(mz_repr::Timestamp::MIN),
+        );
+        crate::source::SourceExportCreationConfig {
+            id,
+            worker_id: 0,
+            metrics,
+            source_statistics,
+        }
+    }
+}
+
+#[cfg(feature = "fuzzing")]
+impl Default for FuzzUpsertParts {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

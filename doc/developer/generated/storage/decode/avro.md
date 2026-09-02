@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/decode/avro.rs
-revision: f23bdd4c1d
+revision: ae8f529217
 ---
 
 # mz-storage::decode::avro

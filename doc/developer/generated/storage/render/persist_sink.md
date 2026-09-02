@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/render/persist_sink.rs
-revision: b0fa98e931
+revision: 64377faf17
 ---
 
 # mz-storage::render::persist_sink

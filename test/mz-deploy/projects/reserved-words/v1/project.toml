@@ -1,0 +1,4 @@
+# The external dependency is a catalog object whose name is a SQL reserved
+# word, so it must be quoted. Declaring it exercises ObjectId::from_str's
+# quote-aware parsing and lock's catalog resolution.
+dependencies = ['materialize.public."select"']

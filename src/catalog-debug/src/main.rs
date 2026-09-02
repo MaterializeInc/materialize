@@ -32,13 +32,13 @@ use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::debug::{
     AuditLogCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
-    ClusterReplicaCollection, Collection, CollectionTrace, CollectionType, CommentCollection,
-    ConfigCollection, DatabaseCollection, DebugCatalogState, DefaultPrivilegeCollection,
-    IdAllocatorCollection, ItemCollection, NetworkPolicyCollection, RoleAuthCollection,
-    RoleCollection, SchemaCollection, SettingCollection, SourceReferencesCollection,
-    StorageCollectionMetadataCollection, SystemConfigurationCollection,
-    SystemItemMappingCollection, SystemPrivilegeCollection, Trace, TxnWalShardCollection,
-    UnfinalizedShardsCollection,
+    ClusterReplicaCollection, ClusterSystemConfigurationCollection, Collection, CollectionTrace,
+    CollectionType, CommentCollection, ConfigCollection, DatabaseCollection, DebugCatalogState,
+    DefaultPrivilegeCollection, IdAllocatorCollection, ItemCollection, NetworkPolicyCollection,
+    ReplicaSystemConfigurationCollection, RoleAuthCollection, RoleCollection, SchemaCollection,
+    SettingCollection, SourceReferencesCollection, StorageCollectionMetadataCollection,
+    SystemConfigurationCollection, SystemItemMappingCollection, SystemPrivilegeCollection, Trace,
+    TxnWalShardCollection, UnfinalizedShardsCollection,
 };
 use mz_catalog::durable::{
     BootstrapArgs, OpenableDurableCatalogState, persist_backed_catalog_state,
@@ -309,6 +309,12 @@ macro_rules! for_collection {
             CollectionType::SystemConfiguration => {
                 $fn::<SystemConfigurationCollection>($($arg),*).await?
             }
+            CollectionType::ClusterSystemConfiguration => {
+                $fn::<ClusterSystemConfigurationCollection>($($arg),*).await?
+            }
+            CollectionType::ReplicaSystemConfiguration => {
+                $fn::<ReplicaSystemConfigurationCollection>($($arg),*).await?
+            }
             CollectionType::SystemGidMapping => {
                 $fn::<SystemItemMappingCollection>($($arg),*).await?
             }
@@ -464,6 +470,8 @@ async fn dump(
         source_references,
         system_object_mappings,
         system_configurations,
+        cluster_system_configurations,
+        replica_system_configurations,
         system_privileges,
         storage_collection_metadata,
         unfinalized_shards,
@@ -525,6 +533,20 @@ async fn dump(
     dump_col(
         &mut data,
         system_configurations,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        cluster_system_configurations,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        replica_system_configurations,
         &ignore,
         stats_only,
         consolidate,
@@ -594,8 +616,7 @@ async fn upgrade_check(
                 cluster_replica_size_map: cluster_replica_sizes.clone(),
             },
         )
-        .await?
-        .0;
+        .await?;
 
     // If this upgrade has new builtin replicas, then we need to assign some size to it. It doesn't
     // really matter what size since it's not persisted, so we pick a random valid one.
@@ -688,8 +709,8 @@ async fn upgrade_check(
 
     let msg = format!(
         "catalog upgrade from {} to {} would succeed in about {} ms",
-        last_seen_version,
-        &BUILD_INFO.human_version(None),
+        last_seen_version.map_or_else(|| "new".into(), |v| v.to_string()),
+        BUILD_INFO.human_version(None),
         dur.as_millis(),
     );
     println!("{msg}");
@@ -705,6 +726,7 @@ async fn upgrade_check(
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
+            | CatalogItem::MetricSink(_)
             | CatalogItem::Index(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
@@ -818,6 +840,6 @@ struct UnescapedDebug(String);
 
 impl std::fmt::Debug for UnescapedDebug {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "'{}'", &self.0)
+        write!(f, "'{}'", self.0)
     }
 }

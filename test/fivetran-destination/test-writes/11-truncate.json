@@ -1,0 +1,12 @@
+{
+    "describe_table": [
+        "test_writes"
+    ],
+    "ops": [
+        {
+            "truncate_before": [
+                "test_writes"
+            ]
+        }
+    ]
+}

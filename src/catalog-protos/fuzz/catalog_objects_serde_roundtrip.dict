@@ -1,0 +1,100 @@
+# libFuzzer dictionary for the catalog_objects_serde_roundtrip target.
+#
+# The raw-bytes arm feeds the input to `serde_json::from_slice::<T>`, which needs
+# a complete JSON object with the exact field names and variant tags before it
+# returns anything at all. The nested types (`ClusterValue`, `ItemValue`,
+# `RoleValue`, `NetworkPolicyValue`, `ClusterReplicaValue`) are out of reach for
+# byte mutation without them, so that arm would spend the whole run bailing on a
+# failed decode. Only the short types (`ConfigValue`, `SettingValue`, `RoleId`)
+# are reachable unaided.
+#
+# Structure.
+"{}"
+"[]"
+":"
+","
+"null"
+"true"
+"false"
+
+# `StateUpdateKind` is `#[serde(tag = "kind")]`, so its discriminant is a field.
+"\"kind\""
+"\"key\""
+"\"value\""
+
+# `StateUpdateKind` variants.
+"\"AuditLog\""
+"\"Cluster\""
+"\"ClusterIntrospectionSourceIndex\""
+"\"ClusterReplica\""
+"\"Comment\""
+"\"Config\""
+"\"Database\""
+"\"DefaultPrivileges\""
+"\"FenceToken\""
+"\"GidMapping\""
+"\"IdAlloc\""
+"\"Item\""
+"\"NetworkPolicy\""
+"\"Role\""
+"\"RoleAuth\""
+"\"Schema\""
+"\"ServerConfiguration\""
+"\"Setting\""
+"\"SourceReferences\""
+"\"StorageCollectionMetadata\""
+"\"SystemPrivileges\""
+"\"TxnWalShard\""
+"\"UnfinalizedShard\""
+
+# Field names reachable from the fuzzed types.
+"\"acl_mode\""
+"\"attributes\""
+"\"auto_scaling_strategy\""
+"\"availability_zones\""
+"\"catalog_id\""
+"\"cluster_id\""
+"\"config\""
+"\"definition\""
+"\"entries\""
+"\"extra_versions\""
+"\"fingerprint\""
+"\"global_id\""
+"\"grantee\""
+"\"grantor\""
+"\"inherit\""
+"\"location\""
+"\"logging\""
+"\"membership\""
+"\"name\""
+"\"oid\""
+"\"owner_id\""
+"\"privileges\""
+"\"replication_factor\""
+"\"rules\""
+"\"schedule\""
+"\"schema_id\""
+"\"size\""
+"\"superuser\""
+"\"variant\""
+"\"vars\""
+"\"version\""
+"\"workload_class\""
+"\"create_sql\""
+
+# Variant tags of the nested enums: `RoleId`/`GlobalId`, `ClusterVariant`,
+# `ReplicaLocation`, `CatalogItem`, `RoleVar`, `ClusterSchedule`.
+"\"System\""
+"\"User\""
+"\"Public\""
+"\"Predefined\""
+"\"Transient\""
+"\"Explain\""
+"\"IntrospectionSourceIndex\""
+"\"Managed\""
+"\"Unmanaged\""
+"\"Manual\""
+"\"Refresh\""
+"\"Flat\""
+"\"SqlSet\""
+"\"V1\""

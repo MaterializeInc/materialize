@@ -57,41 +57,56 @@
     unbounded disk space usage, make sure to use [`DROP
     SOURCE`](/sql/drop-source/) or manually delete the replication slot.
 
+- name: postgres-physical-standby
+  content: |
+    Materialize can replicate from a PostgreSQL physical standby (read
+    replica) instead of the primary, using logical decoding on the standby.
+    This requires **PostgreSQL 16+** on both the primary and the standby, since
+    earlier versions do not support creating logical replication slots on a
+    standby.
+
+    When the upstream is a standby, the replication slot is created on the
+    standby and Materialize only connects to the standby. Note that slot
+    creation on a standby can block until the primary emits a standby snapshot
+    (a `RUNNING_XACTS` WAL record). On an idle primary, run
+    [`SELECT pg_log_standby_snapshot()`](https://www.postgresql.org/docs/16/functions-admin.html#FUNCTIONS-SNAPSHOT-SYNCHRONIZATION)
+    on the primary to unblock source creation.
+
 - name: postgres-supported-types
   content: |
     Materialize natively supports the following PostgreSQL types (including the
     array type for each of the types):
 
-    <ul style="column-count: 3">
-    <li><code>bool</code></li>
-    <li><code>bpchar</code></li>
-    <li><code>bytea</code></li>
-    <li><code>char</code></li>
-    <li><code>date</code></li>
-    <li><code>daterange</code></li>
-    <li><code>float4</code></li>
-    <li><code>float8</code></li>
-    <li><code>int2</code></li>
-    <li><code>int2vector</code></li>
-    <li><code>int4</code></li>
-    <li><code>int4range</code></li>
-    <li><code>int8</code></li>
-    <li><code>int8range</code></li>
-    <li><code>interval</code></li>
-    <li><code>json</code></li>
-    <li><code>jsonb</code></li>
-    <li><code>numeric</code></li>
-    <li><code>numrange</code></li>
-    <li><code>oid</code></li>
-    <li><code>text</code></li>
-    <li><code>time</code></li>
-    <li><code>timestamp</code></li>
-    <li><code>timestamptz</code></li>
-    <li><code>tsrange</code></li>
-    <li><code>tstzrange</code></li>
-    <li><code>uuid</code></li>
-    <li><code>varchar</code></li>
-    </ul>
+    {{< multicolumn-list columns="3" >}}
+    - `bool`
+    - `bpchar`
+    - `bytea`
+    - `char`
+    - `date`
+    - `daterange`
+    - `float4`
+    - `float8`
+    - `int2`
+    - `int2vector`
+    - `int4`
+    - `int4range`
+    - `int8`
+    - `int8range`
+    - `interval`
+    - `json`
+    - `jsonb`
+    - `numeric`
+    - `numrange`
+    - `oid`
+    - `text`
+    - `time`
+    - `timestamp`
+    - `timestamptz`
+    - `tsrange`
+    - `tstzrange`
+    - `uuid`
+    - `varchar`
+    {{< /multicolumn-list >}}
 
 - name: postgres-unsupported-types
   content: |
@@ -143,6 +158,25 @@
     SOURCE` and create a new view (materialized or non-) that unions the new
     table.
 
+- name: postgres-partitioned-tables
+  content: |
+    When you add a [declaratively partitioned
+    table](https://www.postgresql.org/docs/current/ddl-partitioning.html) to a
+    publication, PostgreSQL expands it to the table's leaf partitions; the parent
+    table is not itself replicated. Materialize ingests one table per partition,
+    which you can reassemble into the parent table using `UNION ALL`.
+
+    Materialize does **not** support ingesting from a publication created with
+    [`publish_via_partition_root =
+    true`](https://www.postgresql.org/docs/current/sql-createpublication.html),
+    and doing so can produce incorrect results.
+
+- name: postgres-partitioned-tables-action
+  content: |
+    See [Ingest from partitioned
+    tables](/ingest-data/postgres/partitioned-tables/) for the supported
+    approaches, including how to add and remove partitions over time.
+
 - name: postgres-compatible-schema-changes
   content: |
     The use of [`CREATE SOURCE`](/sql/create-source/postgres-v2/) with `CREATE
@@ -150,67 +184,6 @@
     specifically adding or dropping columns in the upstream tables, without
     downtime. See [Handling upstream schema changes with zero
     downtime](/ingest-data/postgres/source-versioning/) for more details.
-
-- name: postgres-compatible-schema-changes-legacy
-  content: |
-
-    {{< note >}}
-
-    This section refer to the legacy [`CREATE SOURCE ... FOR
-    ...`](/sql/create-source/postgres/) that creates subsources as part of the
-    `CREATE SOURCE` operation.  To be able to handle the upstream column
-    additions and drops, see [`CREATE SOURCE (New
-    Syntax)`](/sql/create-source/postgres-v2/) and [`CREATE TABLE FROM
-    SOURCE`](/sql/create-table).
-
-    {{< /note >}}
-
-    - Adding columns to tables. Materialize will **not ingest** new columns
-    added upstream unless you use [`DROP SOURCE`](/sql/alter-source/#context) to
-    first drop the affected subsource, and then add the table back to the source
-    using [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/).
-
-    - Dropping columns that were added after the source was created. These
-    columns are never ingested, so you can drop them without issue.
-
-    - Adding or removing `NOT NULL` constraints to tables that were nullable
-    when the source was created.
-
-- name: postgres-incompatible-schema-changes-legacy
-  content: |
-    All other schema changes to upstream tables will set the corresponding
-    subsource into an error state, which prevents you from reading from the
-    source.
-
-    To handle incompatible [schema changes](#schema-changes), use [`DROP
-    SOURCE`](/sql/alter-source/#context) and [`ALTER SOURCE...ADD
-    SUBSOURCE`](/sql/alter-source/) to first drop the affected subsource, and
-    then add the table back to the source. When you add the subsource, it will
-    have the updated schema from the corresponding upstream table.
-
-- name: postgres-incompatible-schema-changes
-  content: |
-    All other schema changes to upstream tables will set the corresponding
-    Materialize tables into an error state, preventing reads from these tables.
-
-    To handle [incompatible schema changes](#incompatible-schema-changes), drop
-    the affected table [`DROP TABLE`](/sql/drop-table/) , and then, [`CREATE
-    TABLE FROM SOURCE`](/sql/create-table/) to recreate the table with the
-    updated schema.
-
-- name: postgres-truncation-restriction
-  content: |
-    Avoid truncating upstream tables that are being replicated into Materialize.
-    If a replicated upstream table is truncated, the corresponding
-    subsource(s)/table(s) in Materialize becomes inaccessible and will not
-    produce any data until it is recreated.
-
-    Instead of truncating, use an unqualified `DELETE` to remove all rows from
-    the upstream table:
-
-    ```mzsql
-    DELETE FROM t;
-    ```
 
 - name: postgres-snapshot-behavior
   content: |
@@ -228,23 +201,11 @@
 
 - name: postgres-considerations
   content: |
-    ### Schema changes
-
-    Materialize supports schema changes in the upstream database as follows:
-
-    #### Compatible schema changes (Legacy syntax)
-
     {{% include-from-yaml data="postgres_source_details"
-    name="postgres-compatible-schema-changes-legacy" %}}
+    name="postgres-considerations-body" %}}
 
-    #### Incompatible schema changes
-
-    {{% include-from-yaml data="postgres_source_details"
-    name="postgres-incompatible-schema-changes" %}}
-
-    {{% include-from-yaml data="postgres_source_details"
-    name="postgres-incompatible-schema-changes-handling-legacy" %}}
-
+- name: postgres-considerations-body
+  content: |
     ### Publication membership
 
     {{% include-from-yaml data="postgres_source_details"
@@ -261,11 +222,6 @@
     {{% include-from-yaml data="postgres_source_details"
     name="postgres-unsupported-types" %}}
 
-    ### Truncation
-
-    {{% include-from-yaml data="postgres_source_details"
-    name="postgres-truncation-restriction" %}}
-
     ### Inherited tables
 
     {{% include-from-yaml data="postgres_source_details"
@@ -281,6 +237,14 @@
 
       {{% include-from-yaml data="postgres_source_details"
     name="postgres-inherited-tables-action" %}}
+
+    ### Partitioned tables
+
+    {{% include-from-yaml data="postgres_source_details"
+    name="postgres-partitioned-tables" %}}
+
+    {{% include-from-yaml data="postgres_source_details"
+    name="postgres-partitioned-tables-action" %}}
 
     ### Replication slots
 

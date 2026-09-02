@@ -59,6 +59,7 @@ export const buildClustersQuery = ({
       "c.disk",
       "c.managed",
       "c.size",
+      "c.owner_id as ownerId",
       jsonArrayFrom<{
         id: string;
         name: string;

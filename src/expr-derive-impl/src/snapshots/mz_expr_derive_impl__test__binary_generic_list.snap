@@ -12,7 +12,6 @@ expression: "#[sqlfunc(\n    is_infix_op = true,\n    sqlname = \"||\",\n    pro
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect,
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
 pub struct ListListConcat;
@@ -87,6 +86,9 @@ impl std::fmt::Display for ListListConcat {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("||")
     }
+}
+impl crate::func::FuncName for ListListConcat {
+    const NAME: &'static str = stringify!(list_list_concat);
 }
 fn list_list_concat<'a, T>(
     a: Option<DatumList<'a, T>>,

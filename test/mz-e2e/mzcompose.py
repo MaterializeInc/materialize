@@ -19,6 +19,7 @@ import time
 
 import psycopg
 
+from materialize.mz_env_util import connect_and_print_environment_id
 from materialize.mzcompose import (
     _wait_for_pg,
 )
@@ -79,6 +80,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         assert "materialize.cloud" in c.cloud_hostname()
         wait_for_cloud(c)
+
+        connect_and_print_environment_id(c.cloud_hostname(), USERNAME, APP_PASSWORD)
 
         # Test - `mz app-password`
         # Assert `mz app-password create`

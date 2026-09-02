@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/webhook.rs
-revision: 5d046b3ab6
+revision: f4650d00b
 ---
 
 # adapter::webhook

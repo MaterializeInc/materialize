@@ -113,7 +113,7 @@ const ClusterFreshnessTable = ({
         <Tr>
           <Th>Cluster name</Th>
           <Th>Object name</Th>
-          <Th>Freshness latency</Th>
+          <Th>Freshness</Th>
         </Tr>
       </Thead>
       <Tbody>
@@ -234,7 +234,7 @@ const ClusterFreshness = () => {
         <HStack width="100%" justifyContent="space-between">
           <VStack alignItems="flex-start" gap="1">
             <Text textStyle="heading-md" color={colors.foreground.primary}>
-              Cluster freshness latency
+              Cluster freshness
             </Text>
             <Text textStyle="text-small" color={colors.foreground.secondary}>
               Materialize continuously monitors how far dataflows lag behind the
@@ -252,7 +252,7 @@ const ClusterFreshness = () => {
         </HStack>
       </VStack>
       <AppErrorBoundary
-        message="An error occurred fetching freshness latency data."
+        message="An error occurred fetching freshness data."
         containerProps={{
           padding: "4",
         }}

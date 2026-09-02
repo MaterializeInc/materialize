@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9690 is fixed
+# TODO: Remove when https://linear.app/materializeinc/issue/DB-117 is fixed
 $ skip-if
 SELECT true
 

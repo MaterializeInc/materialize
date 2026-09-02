@@ -26,6 +26,12 @@ organization roles, see [Users and service
 accounts](/security/cloud/users-service-accounts/).
 {{< /annotation >}}
 
+{{< tip >}}
+Instead of granting role membership by hand, you can [sync groups from your
+identity provider](/security/cloud/users-service-accounts/sync-idp-groups/) to
+manage database role membership from your IdP.
+{{</ tip >}}
+
 ## Required privileges for managing roles
 
 {{< note >}}

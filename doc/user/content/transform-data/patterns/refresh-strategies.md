@@ -149,7 +149,7 @@ Because the materialized view is hosted on a scheduled cluster that is
 configured to **turn on ahead of any scheduled refreshes**, you can expect
 `my_scheduled_cluster` to be provisioned at 11PM UTC — or, 1 hour ahead of the
 scheduled refresh time for `mv_refresh_every`. This means that the cluster can
-backfill the view with pre-existing data — a process known as [_hydration_](/transform-data/troubleshooting/#hydrating-upstream-objects)
+backfill the view with pre-existing data — a process known as [_hydration_](/transform-data/troubleshooting/#hydrating-objects)
 — ahead of the refresh operation, which **reduces the total unavailability window
 of the view** to just the duration of the refresh.
 
@@ -293,5 +293,8 @@ WHERE object_type = 'cluster-replica'
 ORDER BY occurred_at DESC;
 ```
 
-Any commands attributed to scheduled refreshes will be marked with
-`"reason":"schedule"` under the `details` column.
+A replica created for a scheduled refresh is marked with `"reason":"schedule"`
+under the `details` column, along with a `scheduling_policies` entry that names
+the materialized views behind the decision. When the refresh window closes, the
+replica's `drop` event is marked with `"reason":"retired"` and carries no
+further detail.

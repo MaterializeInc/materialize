@@ -18,11 +18,10 @@ use std::{fmt, iter};
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use dec::OrderedDecimal;
 use itertools::{Either, Itertools};
-use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 
 use mz_ore::str::separated;
-use mz_ore::{soft_assert_eq_no_log, soft_assert_or_log, soft_panic_or_log};
+use mz_ore::{soft_assert_eq_no_log, soft_assert_or_log};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
@@ -1856,8 +1855,7 @@ impl OneByOneAggr for NaiveOneByOneAggr {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub enum LagLeadType {
     Lag,
@@ -1873,8 +1871,7 @@ pub enum LagLeadType {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub enum AggregateFunc {
     MaxNumeric,
@@ -3067,7 +3064,22 @@ impl<T: TimestampLike> Iterator for TimestampRangeStepInclusive<T> {
             match add_timestamp_months(self.state.deref(), self.step.months) {
                 Ok(state) => match state.checked_add_signed(self.step.duration_as_chrono()) {
                     Some(v) => match CheckedTimestamp::from_timestamplike(v) {
-                        Ok(v) => self.state = v,
+                        Ok(v) => {
+                            // Advance only if the step makes progress toward `stop`. A mixed
+                            // month/day step can reach an in-bounds fixed point (month addition
+                            // saturates a short month back onto the start day), which would
+                            // otherwise loop forever.
+                            let progressed = if self.rev {
+                                v < self.state
+                            } else {
+                                v > self.state
+                            };
+                            if progressed {
+                                self.state = v
+                            } else {
+                                self.done = true
+                            }
+                        }
                         Err(_) => self.done = true,
                     },
                     None => self.done = true,
@@ -3341,8 +3353,7 @@ where
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CaptureGroupDesc {
     pub index: u32,
@@ -3361,7 +3372,6 @@ pub struct CaptureGroupDesc {
     Serialize,
     Deserialize,
     Hash,
-    MzReflect,
     Default
 )]
 pub struct AnalyzedRegexOpts {
@@ -3394,8 +3404,7 @@ impl FromStr for AnalyzedRegexOpts {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct AnalyzedRegex(ReprRegex, Vec<CaptureGroupDesc>, AnalyzedRegexOpts);
 
@@ -3543,8 +3552,7 @@ fn mz_acl_explode<'a>(
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub enum TableFunc {
     AclExplode,
@@ -3669,8 +3677,7 @@ pub enum TableFunc {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 struct WithOrdinality {
     inner: Box<TableFunc>,
@@ -3786,22 +3793,25 @@ impl TableFunc {
                 generate_subscripts_array(datums[0], datums[1].unwrap_int32())
             }
             TableFunc::GuardSubquerySize { column_type: _ } => {
-                // We error if the count is not one,
-                // and produce no rows if equal to one.
+                // A subquery used as an expression may return at most one row.
+                // For 0 or 1 we emit no rows and let the subquery's own output
+                // flow through. Zero can't come directly from the count that
+                // lowering plants (an MIR `count(true)`, at least 1 per group),
+                // but over a provably empty subquery body the optimizer may
+                // vacuously rewrite the counted expression to `null`, and a
+                // count of `null` over a group is 0. Later simplifications can
+                // surface that 0 as a literal argument that is evaluated
+                // during optimization. Emitting no rows is also the correct
+                // semantics: the empty subquery decorrelates to NULL via the
+                // outer lookup.
                 let count = datums[0].unwrap_int64();
-                if count == 1 {
-                    Ok(Box::new([].into_iter()))
-                } else if count > 1 {
+                if count > 1 {
                     Err(EvalError::MultipleRowsFromSubquery)
                 } else if count < 0 {
+                    // Would require negative multiplicities to reach the guard.
                     Err(EvalError::NegativeRowsFromSubquery)
                 } else {
-                    // This shouldn't happen because this is not an SQL `count` but an MIR `count`,
-                    // which produces no output on 0 input rows.
-                    soft_panic_or_log!("subquery counting unexpectedly produced 0");
-                    Err(EvalError::Internal(
-                        "subquery counting unexpectedly produced 0".into(),
-                    ))
+                    Ok(Box::new([].into_iter()))
                 }
             }
             TableFunc::RepeatRow => Ok(Box::new(repeat_row(datums[0]).into_iter())),
@@ -4191,3 +4201,42 @@ impl WithOrdinality {
 }
 
 pub const REPEAT_ROW_NAME: &str = "repeat_row";
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::{Datum, RowArena, SqlScalarType};
+
+    use super::TableFunc;
+    use crate::EvalError;
+
+    /// 0 and 1 are valid (no guard rows), >1 errors with
+    /// `MultipleRowsFromSubquery`, <0 with `NegativeRowsFromSubquery`. Zero is
+    /// legitimate, not "can't happen": the optimizer can turn an empty
+    /// subquery's count into a literal `0` that is evaluated during
+    /// optimization (see the comment in `eval`), so it must not panic (exposed
+    /// by #37049).
+    #[mz_ore::test]
+    fn guard_subquery_size_accepts_zero_and_one() {
+        let func = TableFunc::GuardSubquerySize {
+            column_type: SqlScalarType::Int64,
+        };
+        let temp_storage = RowArena::new();
+
+        for count in [0_i64, 1] {
+            let rows = func
+                .eval(&[Datum::Int64(count)], &temp_storage)
+                .unwrap_or_else(|e| panic!("count {count} should be accepted, got {e:?}"))
+                .count();
+            assert_eq!(rows, 0, "count {count} should emit no guard rows");
+        }
+
+        assert_eq!(
+            func.eval(&[Datum::Int64(2)], &temp_storage).err(),
+            Some(EvalError::MultipleRowsFromSubquery),
+        );
+        assert_eq!(
+            func.eval(&[Datum::Int64(-1)], &temp_storage).err(),
+            Some(EvalError::NegativeRowsFromSubquery),
+        );
+    }
+}

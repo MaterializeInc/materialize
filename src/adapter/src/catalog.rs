@@ -15,6 +15,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use futures::future::BoxFuture;
 use futures::{Future, FutureExt};
@@ -31,7 +32,9 @@ use mz_catalog::builtin::{
     BUILTIN_PREFIXES, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable,
     MZ_CATALOG_SERVER_CLUSTER,
 };
-use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Config, StateConfig};
+use mz_catalog::config::{
+    AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Config, StateConfig,
+};
 #[cfg(test)]
 use mz_catalog::durable::CatalogError;
 use mz_catalog::durable::{
@@ -44,6 +47,7 @@ use mz_catalog::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database,
     NetworkPolicy, Role, RoleAuth, Schema,
 };
+use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -55,7 +59,6 @@ use mz_ore::result::ResultExt as _;
 use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
-use mz_repr::namespaces::MZ_TEMP_SCHEMA;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
@@ -106,6 +109,7 @@ pub(crate) mod consistency;
 mod migrate;
 
 mod apply;
+pub(crate) mod cluster_state;
 mod open;
 mod state;
 mod timeline;
@@ -139,6 +143,35 @@ pub struct Catalog {
     expr_cache_handle: Option<ExpressionCacheHandle>,
     storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::durable::DurableCatalogState>>>,
     transient_revision: u64,
+    /// The latest `transient_revision`, shared by all clones of this catalog.
+    /// While `transient_revision` is this clone's own revision, frozen when
+    /// the snapshot was taken, this field always tracks the latest revision
+    /// across all clones. Comparing the two lets a snapshot holder detect
+    /// from off-thread whether its snapshot is still current, via
+    /// [`Catalog::transient_revision_is_current`], without a Coordinator
+    /// round-trip (see `PeekClient::catalog_snapshot`).
+    ///
+    /// The store happens in `transact`, before the transaction's effects can
+    /// be observed anywhere (responses, notices, builtin table writes), so a
+    /// session that has observed any evidence of a catalog change is
+    /// guaranteed to see the corresponding bump.
+    shared_transient_revision: Arc<AtomicU64>,
+}
+
+/// A handle for advancing the durable catalog upper off the coordinator loop.
+#[derive(Debug, Clone)]
+pub struct CatalogUpperHandle {
+    storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::durable::DurableCatalogState>>>,
+}
+
+impl CatalogUpperHandle {
+    /// Advances the durable catalog upper to at least `new_upper`.
+    pub async fn advance_upper(
+        &self,
+        new_upper: mz_repr::Timestamp,
+    ) -> Result<(), mz_catalog::durable::CatalogError> {
+        self.storage.lock().await.advance_upper(new_upper).await
+    }
 }
 
 // Implement our own Clone because derive can't unless S is Clone, which it's
@@ -150,6 +183,7 @@ impl Clone for Catalog {
             expr_cache_handle: self.expr_cache_handle.clone(),
             storage: Arc::clone(&self.storage),
             transient_revision: self.transient_revision,
+            shared_transient_revision: Arc::clone(&self.shared_transient_revision),
         }
     }
 }
@@ -178,7 +212,7 @@ impl Catalog {
     pub fn set_physical_plan(
         &mut self,
         id: GlobalId,
-        plan: DataflowDescription<mz_compute_types::plan::Plan>,
+        plan: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
     ) {
         self.state.set_physical_plan(id, plan);
     }
@@ -198,7 +232,7 @@ impl Catalog {
     pub fn try_get_physical_plan(
         &self,
         id: &GlobalId,
-    ) -> Option<&DataflowDescription<mz_compute_types::plan::Plan>> {
+    ) -> Option<&DataflowDescription<mz_compute_types::plan::LirRelationExpr>> {
         let entry = self.state.try_get_entry_by_global_id(id)?;
         entry.item().physical_plan().map(AsRef::as_ref)
     }
@@ -301,12 +335,41 @@ impl ConnectionResolver for ConnCatalog<'_> {
     }
 }
 
+/// AWS environment context for a debug catalog.
+///
+/// The `mz_aws_connections` and `mz_aws_privatelink_connections` builtin
+/// materialized views fold `mz_aws_account_id()`, `mz_aws_external_id_prefix()`,
+/// and `mz_aws_connection_role_arn()` into their optimized expressions. A debug
+/// catalog opened to be compared against a live environment (the testdrive
+/// consistency check) must fold those functions to the same values the live
+/// environment used, otherwise the optimized expressions diverge. This mirrors
+/// how `environment_id` is threaded into the catalog copy. Fields left `None`
+/// fold to SQL NULL, matching an environment without that context.
+#[derive(Debug, Clone, Default)]
+pub struct DebugAwsContext {
+    pub aws_account_id: Option<String>,
+    pub aws_external_id_prefix: Option<String>,
+    pub aws_connection_role_arn: Option<String>,
+}
+
 impl Catalog {
     /// Returns the catalog's transient revision, which starts at 1 and is
     /// incremented on every change. This is not persisted to disk, and will
     /// restart on every load.
     pub fn transient_revision(&self) -> u64 {
         self.transient_revision
+    }
+
+    /// Reports whether this catalog's transient revision is still the latest,
+    /// i.e., whether no catalog transaction has committed since this snapshot
+    /// was taken. Can be called on a snapshot from off-thread, without a
+    /// Coordinator round-trip. See the field documentation on
+    /// `shared_transient_revision`.
+    pub fn transient_revision_is_current(&self) -> bool {
+        self.transient_revision
+            == self
+                .shared_transient_revision
+                .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Creates a debug catalog from the current
@@ -331,6 +394,28 @@ impl Catalog {
         let catalog = Self::open_debug_catalog(persist_client, organization_id, &bootstrap_args)
             .await
             .expect("can open debug catalog");
+        f(catalog).await
+    }
+
+    /// Like [`Catalog::with_debug`], but folds the given AWS context into the
+    /// catalog. Used to exercise builtin materialized views that reproduce AWS
+    /// environment context in SQL (see [`DebugAwsContext`]).
+    pub async fn with_debug_aws_context<F, Fut, T>(aws_context: DebugAwsContext, f: F) -> T
+    where
+        F: FnOnce(Catalog) -> Fut,
+        Fut: Future<Output = T>,
+    {
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let bootstrap_args = test_bootstrap_args();
+        let catalog = Self::open_debug_catalog_with_aws_context(
+            persist_client,
+            organization_id,
+            &bootstrap_args,
+            Some(aws_context),
+        )
+        .await
+        .expect("can open debug catalog");
         f(catalog).await
     }
 
@@ -360,8 +445,7 @@ impl Catalog {
         let mut storage = openable_storage
             .open(now().into(), &bootstrap_args)
             .await
-            .expect("can open durable catalog")
-            .0;
+            .expect("can open durable catalog");
         // Drain updates.
         let _ = storage
             .sync_to_current_updates()
@@ -387,7 +471,7 @@ impl Catalog {
             .with_default_deploy_generation()
             .build()
             .await?;
-        let storage = openable_storage.open(now().into(), bootstrap_args).await?.0;
+        let storage = openable_storage.open(now().into(), bootstrap_args).await?;
         let system_parameter_defaults = BTreeMap::default();
         Self::open_debug_catalog_inner(
             persist_client,
@@ -398,6 +482,44 @@ impl Catalog {
             system_parameter_defaults,
             bootstrap_args,
             None,
+            None,
+        )
+        .await
+    }
+
+    /// Like [`Catalog::open_debug_catalog`], but folds `aws_context` into the
+    /// catalog (see [`DebugAwsContext`]).
+    ///
+    /// Calls `open_debug_catalog_inner` directly rather than delegating through
+    /// [`Catalog::open_debug_catalog`], to avoid adding an `async fn` layer to
+    /// the returned future. The catalog-open future is close to the crate
+    /// `recursion_limit`, and the extra nesting overflows it when computing the
+    /// layout of callers such as the `catalog` benchmark.
+    pub async fn open_debug_catalog_with_aws_context(
+        persist_client: PersistClient,
+        organization_id: Uuid,
+        bootstrap_args: &BootstrapArgs,
+        aws_context: Option<DebugAwsContext>,
+    ) -> Result<Catalog, anyhow::Error> {
+        let now = SYSTEM_TIME.clone();
+        let environment_id = None;
+        let openable_storage = TestCatalogStateBuilder::new(persist_client.clone())
+            .with_organization_id(organization_id)
+            .with_default_deploy_generation()
+            .build()
+            .await?;
+        let storage = openable_storage.open(now().into(), bootstrap_args).await?;
+        let system_parameter_defaults = BTreeMap::default();
+        Self::open_debug_catalog_inner(
+            persist_client,
+            storage,
+            now,
+            environment_id,
+            &DUMMY_BUILD_INFO,
+            system_parameter_defaults,
+            bootstrap_args,
+            None,
+            aws_context,
         )
         .await
     }
@@ -430,6 +552,7 @@ impl Catalog {
             system_parameter_defaults,
             bootstrap_args,
             None,
+            None,
         )
         .await
     }
@@ -446,6 +569,7 @@ impl Catalog {
         build_info: &'static BuildInfo,
         bootstrap_args: &BootstrapArgs,
         enable_expression_cache_override: Option<bool>,
+        aws_context: Option<DebugAwsContext>,
     ) -> Result<Catalog, anyhow::Error> {
         let openable_storage = TestCatalogStateBuilder::new(persist_client.clone())
             .with_organization_id(environment_id.organization_id())
@@ -467,6 +591,7 @@ impl Catalog {
             system_parameter_defaults,
             bootstrap_args,
             enable_expression_cache_override,
+            aws_context,
         )
         .await
     }
@@ -480,6 +605,7 @@ impl Catalog {
         system_parameter_defaults: BTreeMap<String, String>,
         bootstrap_args: &BootstrapArgs,
         enable_expression_cache_override: Option<bool>,
+        aws_context: Option<DebugAwsContext>,
     ) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
         let secrets_reader = Arc::new(InMemorySecretsController::new());
@@ -489,8 +615,40 @@ impl Catalog {
         let replica_size = &bootstrap_args.default_cluster_replica_size;
         let read_only = false;
 
+        // Fold the requested AWS context into the connection context and
+        // principal context. The builtin AWS connection views reproduce these
+        // values in SQL, so a catalog compared against a live environment must
+        // resolve them identically. When `aws_context` is `None` the default
+        // `for_tests` context is used unchanged.
+        let mut connection_context = ConnectionContext::for_tests(secrets_reader);
+        let aws_principal_context = match aws_context {
+            None => None,
+            Some(aws_context) => {
+                connection_context.aws_external_id_prefix =
+                    aws_context.aws_external_id_prefix.as_deref().map(|prefix| {
+                        AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable(prefix)
+                            .expect("infallible")
+                    });
+                connection_context.aws_connection_role_arn = aws_context.aws_connection_role_arn;
+                aws_context.aws_account_id.map(|aws_account_id| {
+                    AwsPrincipalContext {
+                        aws_account_id,
+                        // Only `aws_account_id` reaches the `mz_aws_account_id()`
+                        // fold. The external id prefix is read from the connection
+                        // context above, so any placeholder works here.
+                        aws_external_id_prefix:
+                            AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable(
+                                "debug",
+                            )
+                            .expect("infallible"),
+                    }
+                })
+            }
+        };
+
         let OpenCatalogResult {
             catalog,
+            last_seen_version: _,
             migrated_storage_collections_0dt: _,
             new_builtin_collections: _,
             builtin_table_updates: _,
@@ -533,10 +691,10 @@ impl Catalog {
                 remote_system_parameters: None,
                 availability_zones: vec![],
                 egress_addresses: vec![],
-                aws_principal_context: None,
+                aws_principal_context,
                 aws_privatelink_availability_zones: None,
                 http_host_name: None,
-                connection_context: ConnectionContext::for_tests(secrets_reader),
+                connection_context,
                 builtin_item_migration_config: BuiltinItemMigrationConfig {
                     persist_client: persist_client.clone(),
                     read_only,
@@ -575,16 +733,18 @@ impl Catalog {
         self.storage().await.current_upper().await
     }
 
+    /// Allocates and returns both a user [`CatalogItemId`] and [`GlobalId`], delegating to
+    /// [`DurableCatalogState::allocate_user_id`].
     pub async fn allocate_user_id(
         &self,
         commit_ts: mz_repr::Timestamp,
     ) -> Result<(CatalogItemId, GlobalId), Error> {
-        self.storage()
+        Ok(self
+            .storage()
             .await
             .allocate_user_id(commit_ts)
             .await
-            .maybe_terminate("allocating user ids")
-            .err_into()
+            .maybe_terminate("allocating user ids")?)
     }
 
     /// Allocate `amount` many user IDs. See [`DurableCatalogState::allocate_user_ids`].
@@ -593,12 +753,12 @@ impl Catalog {
         amount: u64,
         commit_ts: mz_repr::Timestamp,
     ) -> Result<Vec<(CatalogItemId, GlobalId)>, Error> {
-        self.storage()
+        Ok(self
+            .storage()
             .await
             .allocate_user_ids(amount, commit_ts)
             .await
-            .maybe_terminate("allocating user ids")
-            .err_into()
+            .maybe_terminate("allocating user ids")?)
     }
 
     pub async fn allocate_user_id_for_test(&self) -> Result<(CatalogItemId, GlobalId), Error> {
@@ -665,16 +825,63 @@ impl Catalog {
             .err_into()
     }
 
+    /// Allocates and returns a user [`ClusterId`], delegating to
+    /// [`DurableCatalogState::allocate_user_cluster_id`].
     pub async fn allocate_user_cluster_id(
         &self,
         commit_ts: mz_repr::Timestamp,
     ) -> Result<ClusterId, Error> {
-        self.storage()
+        Ok(self
+            .storage()
             .await
             .allocate_user_cluster_id(commit_ts)
             .await
-            .maybe_terminate("allocating user cluster ids")
-            .err_into()
+            .maybe_terminate("allocating user cluster ids")?)
+    }
+
+    /// Allocate `amount` many user replica IDs. See
+    /// [`DurableCatalogState::allocate_user_replica_ids`].
+    pub async fn allocate_user_replica_ids(
+        &self,
+        amount: u64,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<Vec<ReplicaId>, Error> {
+        Ok(self
+            .storage()
+            .await
+            .allocate_user_replica_ids(amount, commit_ts)
+            .await
+            .maybe_terminate("allocating user replica ids")?)
+    }
+
+    /// Allocate `amount` many system replica IDs. See
+    /// [`DurableCatalogState::allocate_system_replica_ids`].
+    pub async fn allocate_system_replica_ids(
+        &self,
+        amount: u64,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<Vec<ReplicaId>, Error> {
+        Ok(self
+            .storage()
+            .await
+            .allocate_system_replica_ids(amount, commit_ts)
+            .await
+            .maybe_terminate("allocating system replica ids")?)
+    }
+
+    /// Allocate `amount` many replica IDs for `cluster_id`, picking user or
+    /// system IDs based on the cluster's ID type.
+    pub async fn allocate_replica_ids(
+        &self,
+        cluster_id: ClusterId,
+        amount: u64,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<Vec<ReplicaId>, Error> {
+        if cluster_id.is_system() {
+            self.allocate_system_replica_ids(amount, commit_ts).await
+        } else {
+            self.allocate_user_replica_ids(amount, commit_ts).await
+        }
     }
 
     /// Get the next system replica id without allocating it.
@@ -956,35 +1163,34 @@ impl Catalog {
         self.state.try_get_role_auth_by_id(id)
     }
 
-    /// Creates a new schema in the `Catalog` for temporary items
-    /// indicated by the TEMPORARY or TEMP keywords.
-    pub fn create_temporary_schema(
-        &mut self,
-        conn_id: &ConnectionId,
-        owner_id: RoleId,
-    ) -> Result<(), Error> {
-        self.state.create_temporary_schema(conn_id, owner_id)
+    /// Registers the connection's temporary namespace: the `uuid` <->
+    /// `conn_id` mapping used to stamp and apply durable temporary items
+    /// owned by the session. The `mz_temp` schema itself is created when
+    /// the first temporary item is applied.
+    ///
+    /// The coordinator calls this at a session's first temporary-item
+    /// creation, strictly before the transaction that persists the item, and
+    /// guards on [`CatalogState::has_temporary_namespace`], so registering
+    /// an already-registered namespace is a bug.
+    pub fn register_temporary_namespace(&mut self, conn_id: &ConnectionId, uuid: Uuid) {
+        self.state
+            .temporary_namespaces
+            .register(conn_id.clone(), uuid);
     }
 
     fn item_exists_in_temp_schemas(&self, conn_id: &ConnectionId, item_name: &str) -> bool {
-        // Temporary schemas are created lazily, so it's valid for one to not exist yet.
+        // A temporary namespace is registered at the connection's first
+        // temporary-item creation, so it's valid for one to not exist yet.
         self.state
-            .temporary_schemas
-            .get(conn_id)
+            .temporary_namespaces
+            .schema(conn_id)
             .map(|schema| schema.items.contains_key(item_name))
             .unwrap_or(false)
     }
 
-    /// Drops schema for connection if it exists. Returns an error if it exists and has items.
-    /// Returns Ok if conn_id's temp schema does not exist.
-    pub fn drop_temporary_schema(&mut self, conn_id: &ConnectionId) -> Result<(), Error> {
-        let Some(schema) = self.state.temporary_schemas.remove(conn_id) else {
-            return Ok(());
-        };
-        if !schema.items.is_empty() {
-            return Err(Error::new(ErrorKind::SchemaNotEmpty(MZ_TEMP_SCHEMA.into())));
-        }
-        Ok(())
+    /// Removes the connection's temporary namespace, if it has one.
+    pub fn drop_temporary_namespace(&mut self, conn_id: &ConnectionId) {
+        self.state.temporary_namespaces.unregister(conn_id)
     }
 
     pub(crate) fn object_dependents(
@@ -1076,9 +1282,21 @@ impl Catalog {
         }
     }
 
+    /// Advances the catalog upper to at least `new_upper`.
+    ///
+    /// Empty progress can overtake `new_upper`. A durable upper mismatch with content returns
+    /// `CatalogOutOfSync`. See [`mz_catalog::durable::DurableCatalogState::advance_upper`] for
+    /// fencing semantics.
     #[mz_ore::instrument(level = "debug")]
     pub async fn advance_upper(&self, new_upper: mz_repr::Timestamp) -> Result<(), AdapterError> {
         Ok(self.storage().await.advance_upper(new_upper).await?)
+    }
+
+    /// Returns a durable-upper handle that shares the catalog storage mutex.
+    pub fn upper_handle(&self) -> CatalogUpperHandle {
+        CatalogUpperHandle {
+            storage: Arc::clone(&self.storage),
+        }
     }
 
     /// Return the ids of all log sources the given object depends on.
@@ -1356,7 +1574,7 @@ impl Catalog {
         id: GlobalId,
         local_mir: Option<OptimizedMirRelationExpr>,
         mut global_mir: DataflowDescription<OptimizedMirRelationExpr>,
-        mut physical_plan: DataflowDescription<mz_compute_types::plan::Plan>,
+        mut physical_plan: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
         dataflow_metainfos: DataflowMetainfo<Arc<OptimizerNotice>>,
         optimizer_features: OptimizerFeatures,
     ) -> BoxFuture<'static, ()> {
@@ -1437,8 +1655,27 @@ pub fn is_reserved_name(name: &str) -> bool {
         .any(|prefix| name.starts_with(prefix))
 }
 
+/// Role names that PostgreSQL reserves for role specifications in statements
+/// like `GRANT ... TO CURRENT_USER` and `SET ROLE NONE`. A role with such a
+/// name would be ambiguous there, so creating one is not allowed.
+///
+/// PostgreSQL rejects most of these at parse time, only when they appear as
+/// unquoted keywords. Our parser does not track whether an identifier was
+/// quoted, so we instead reject the names themselves. Only the lowercase
+/// spellings are reserved, which is what the unquoted forms normalize to, so
+/// quoted names like `"CURRENT_USER"` remain valid, as in PostgreSQL.
+const RESERVED_ROLE_SPECIFICATION_NAMES: [&str; 5] = [
+    "current_user",
+    "current_role",
+    "session_user",
+    "user",
+    "none",
+];
+
 pub fn is_reserved_role_name(name: &str) -> bool {
-    is_reserved_name(name) || is_public_role(name)
+    is_reserved_name(name)
+        || is_public_role(name)
+        || RESERVED_ROLE_SPECIFICATION_NAMES.contains(&name)
 }
 
 pub fn is_public_role(name: &str) -> bool {
@@ -1456,6 +1693,9 @@ pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType
         CommentObjectId::MaterializedView(_) => ObjectType::MaterializedView,
         CommentObjectId::Source(_) => ObjectType::Source,
         CommentObjectId::Sink(_) => ObjectType::Sink,
+        // Unreachable by construction: `COMMENT ON METRIC SINK` is rejected at parse, so no
+        // metric-sink comment id is ever built. The arm exists only for exhaustiveness.
+        CommentObjectId::MetricSink(_) => ObjectType::MetricSink,
         CommentObjectId::Index(_) => ObjectType::Index,
         CommentObjectId::Func(_) => ObjectType::Func,
         CommentObjectId::Connection(_) => ObjectType::Connection,
@@ -1486,6 +1726,7 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::MaterializedView => ObjectType::MaterializedView,
             mz_sql::catalog::ObjectType::Source => ObjectType::Source,
             mz_sql::catalog::ObjectType::Sink => ObjectType::Sink,
+            mz_sql::catalog::ObjectType::MetricSink => ObjectType::MetricSink,
             mz_sql::catalog::ObjectType::Index => ObjectType::Index,
             mz_sql::catalog::ObjectType::Type => ObjectType::Type,
             mz_sql::catalog::ObjectType::Role => ObjectType::Role,
@@ -1798,7 +2039,7 @@ impl SessionCatalog for ConnCatalog<'_> {
                 self.state
                     .ambient_schemas_by_id
                     .values()
-                    .chain(self.state.temporary_schemas.values())
+                    .chain(self.state.temporary_namespaces.schemas())
                     .map(|schema| schema as &dyn CatalogSchema),
             )
             .collect()
@@ -2293,7 +2534,7 @@ mod tests {
     use mz_sql::session::vars::{SystemVars, VarInput};
 
     use crate::catalog::state::LocalExpressionCache;
-    use crate::catalog::{Catalog, Op};
+    use crate::catalog::{Catalog, DebugAwsContext, Op};
     use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
     use crate::session::Session;
 
@@ -2388,6 +2629,8 @@ mod tests {
             .await
             .expect("unable to open debug catalog");
             assert_eq!(catalog.transient_revision(), 1);
+            assert!(catalog.transient_revision_is_current());
+            let snapshot = catalog.clone();
             let commit_ts = catalog.current_upper().await;
             catalog
                 .transact(
@@ -2402,6 +2645,10 @@ mod tests {
                 .await
                 .expect("failed to transact");
             assert_eq!(catalog.transient_revision(), 2);
+            assert!(catalog.transient_revision_is_current());
+            // The pre-transaction snapshot detects its own staleness through
+            // the shared latest revision.
+            assert!(!snapshot.transient_revision_is_current());
             catalog.expire().await;
         }
         {
@@ -2545,17 +2792,17 @@ mod tests {
                 conn_catalog.effective_search_path(true),
                 conn_catalog.search_path
             );
+            // Because we lazily initialize the `mz_temp` schema,
+            // an explicit `mz_temp` search path before the first
+            // temporary item creation gets filtered out in
+            // `effective_search_path`.
             assert_eq!(
                 conn_catalog.effective_search_path(false),
-                vec![
-                    mz_catalog_schema.clone(),
-                    pg_catalog_schema.clone(),
-                    mz_temp_schema.clone()
-                ]
+                vec![mz_catalog_schema.clone(), pg_catalog_schema.clone(),]
             );
             assert_eq!(
                 conn_catalog.effective_search_path(true),
-                vec![mz_catalog_schema, pg_catalog_schema, mz_temp_schema]
+                vec![mz_temp_schema, mz_catalog_schema, pg_catalog_schema]
             );
             catalog.expire().await;
         })
@@ -2716,7 +2963,20 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn verify_builtin_descs() {
-        Catalog::with_debug(|catalog| async move {
+        // Provide a full AWS context so the builtin AWS connection views resolve
+        // as they do in a cloud environment. Without an account id,
+        // `mz_aws_privatelink_connections.principal` folds to NULL, its
+        // `WHERE principal IS NOT NULL` filter is statically unsatisfiable, and
+        // the optimizer infers an extra empty key that the declared desc, which
+        // describes the cloud shape, does not carry.
+        let aws_context = DebugAwsContext {
+            aws_account_id: Some("123456789000".to_string()),
+            aws_external_id_prefix: Some("eb5cb59b-e2fe-41f3-87ca-d2176a495345".to_string()),
+            aws_connection_role_arn: Some(
+                "arn:aws:iam::123456789000:role/MaterializeConnection".to_string(),
+            ),
+        };
+        Catalog::with_debug_aws_context(aws_context, |catalog| async move {
             let conn_catalog = catalog.for_system_session();
 
             for builtin in BUILTINS::iter() {
@@ -2799,6 +3059,7 @@ mod tests {
                 array: u32,
                 input: u32,
                 receive: u32,
+                send: u32,
             }
 
             struct PgOper {
@@ -2838,7 +3099,7 @@ mod tests {
             let pg_type: BTreeMap<_, _> = query(
                 &client,
                 sql!(
-                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive FROM pg_type"
+                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive, typsend::oid as typsend FROM pg_type"
                 ),
                 &[],
             )
@@ -2854,6 +3115,7 @@ mod tests {
                         array: row.get("typarray"),
                         input: row.get("typinput"),
                         receive: row.get("typreceive"),
+                        send: row.get("typsend"),
                     };
                     (oid, pg_type)
                 })
@@ -2945,10 +3207,15 @@ mod tests {
                             ty.oid, pg_ty.name, ty.name,
                         );
 
-                        let (typinput_oid, typreceive_oid) = match &ty.details.pg_metadata {
-                            None => (0, 0),
-                            Some(pgmeta) => (pgmeta.typinput_oid, pgmeta.typreceive_oid),
-                        };
+                        let (typinput_oid, typreceive_oid, typsend_oid) =
+                            match &ty.details.pg_metadata {
+                                None => (0, 0, 0),
+                                Some(pgmeta) => (
+                                    pgmeta.typinput_oid,
+                                    pgmeta.typreceive_oid,
+                                    pgmeta.typsend_oid,
+                                ),
+                            };
                         assert_eq!(
                             typinput_oid, pg_ty.input,
                             "type {} has typinput OID {:?} in mz but {:?} in pg",
@@ -2958,6 +3225,15 @@ mod tests {
                             typreceive_oid, pg_ty.receive,
                             "type {} has typreceive OID {:?} in mz but {:?} in pg",
                             ty.name, typreceive_oid, pg_ty.receive,
+                        );
+                        // Unlike typinput and typreceive below, typsend is not also
+                        // checked against `func_oids`. Nothing resolves a typsend OID
+                        // to a name, so the corresponding `*send` functions are
+                        // deliberately not registered as builtins.
+                        assert_eq!(
+                            typsend_oid, pg_ty.send,
+                            "type {} has typsend OID {:?} in mz but {:?} in pg",
+                            ty.name, typsend_oid, pg_ty.send,
                         );
                         if typinput_oid != 0 {
                             assert!(

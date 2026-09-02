@@ -38,6 +38,14 @@ mapfile -t packages < <(
 shard_count="${BUILDKITE_PARALLEL_JOB_COUNT:-1}"
 shard_index="${BUILDKITE_PARALLEL_JOB:-0}"
 
+# Populate the registry and git caches before any package is checked. Without
+# this, whichever package runs first is the one that clones every git
+# dependency, so a transient fetch failure there gets reported as that package
+# failing to compile in isolation. Once the caches are warm the checks below
+# need no network at all.
+echo "--- :rust: cargo fetch"
+retry cargo fetch || die "failed to fetch dependencies"
+
 failed=()
 checked=0
 for i in "${!packages[@]}"; do

@@ -46,7 +46,7 @@ import requests
 import yaml
 from requests.auth import HTTPBasicAuth
 
-from materialize import MZ_ROOT, buildkite, cargo, git, rustc_flags, spawn, ui, xcompile
+from materialize import MZ_ROOT, cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize.docker import image_registry
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
@@ -55,22 +55,29 @@ GHCR_PREFIX = "ghcr.io/materializeinc/"
 
 
 class RustIncrementalBuildFailure(Exception):
-    pass
+    """A build failure that corrupted incremental artifacts explain. Recovering
+    requires clearing the cargo target directories before retrying."""
 
 
-def run_and_detect_rust_incremental_build_failure(
+class CargoRegistryFetchFailure(Exception):
+    """A crates.io fetch that failed for transport reasons. Retrying recovers,
+    and the target directories must be kept: nothing in them is corrupted."""
+
+
+def run_and_detect_retryable_build_failure(
     cmd: list[str],
     cwd: str | Path,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     """This function is complex since it prints out each line immediately to
     stdout/stderr, but still records them at the same time so that we can scan
-    for known incremental build failures."""
+    for known retryable build failures."""
     stdout_result = io.StringIO()
     stderr_result = io.StringIO()
     base_env = env if env is not None else os.environ
     p = subprocess.Popen(
         cmd,
+        cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -124,15 +131,37 @@ def run_and_detect_rust_incremental_build_failure(
     stderr_contents = stderr_result.getvalue()
     stderr_result.close()
     if retcode:
+        # Keep these signatures in sync with bin/clear-corrupted-cargo-target-dir.
         incremental_build_failure_msgs = [
             "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs",
             "Found unstable fingerprints for",
             "ld.lld: error: undefined symbol",
             "signal: 11, SIGSEGV",
         ]
+        registry_fetch_failure_msgs = [
+            "unable to update registry",
+        ]
         combined = stdout_contents + stderr_contents
-        if any(msg in combined for msg in incremental_build_failure_msgs):
+        # A cached build-script binary poisoned by cargo cache corruption dies
+        # with a bare ENOENT before doing any work. Both halves are required,
+        # and the error must be the exact bare line: "failed to run custom
+        # build command" alone is any build-script bug, which a retry cannot
+        # fix, and a build script that fails on a missing file with an error
+        # context of its own produces the ENOENT in a "Caused by:" detail line
+        # instead of the bare "Error:" line.
+        custom_build_script_enoent = (
+            "failed to run custom build command" in combined
+            and any(
+                line.strip() == "Error: No such file or directory (os error 2)"
+                for line in combined.splitlines()
+            )
+        )
+        if custom_build_script_enoent or any(
+            msg in combined for msg in incremental_build_failure_msgs
+        ):
             raise RustIncrementalBuildFailure()
+        if any(msg in combined for msg in registry_fetch_failure_msgs):
+            raise CargoRegistryFetchFailure()
 
         raise subprocess.CalledProcessError(
             retcode, p.args, output=stdout_contents, stderr=stderr_contents
@@ -245,9 +274,9 @@ class RepositoryDetails:
 
 
 @cache
-def docker_images() -> frozenset[str]:
+def docker_images() -> set[str]:
     """List the Docker images available on the local machine."""
-    return frozenset(
+    return set(
         spawn.capture(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"])
         .strip()
         .split("\n")
@@ -399,6 +428,108 @@ def is_ghcr_image_pushed(name: str) -> bool:
                 print(name, file=f)
 
     return exists
+
+
+# Registry HTTP statuses that indicate a transient problem rather than a
+# definitive answer about visibility, so the public check retries instead of
+# concluding the image is private.
+_TRANSIENT_REGISTRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+
+def _get_with_retries(url: str, **kwargs: Any) -> requests.Response | None:
+    """GET `url`, retrying transient failures; returns None if all retries fail."""
+    for sleep_time in [2, 5, 10, None]:
+        try:
+            response = requests.get(url, timeout=10, **kwargs)
+        except requests.RequestException as e:
+            if sleep_time is None:
+                print(f"Error requesting {url}: {e}")
+                return None
+        else:
+            if response.status_code not in _TRANSIENT_REGISTRY_STATUSES:
+                return response
+        if sleep_time is not None:
+            time.sleep(sleep_time)
+    return None
+
+
+# These intentionally do *not* share code with `is_*_image_pushed`: those check
+# existence, authenticate when possible, and cache hits in `known-docker-images`.
+# These check *public visibility*, so they must stay anonymous (no auth
+# fallback) and uncached. They return a tri-state so callers can tell a private
+# repo (actionable) apart from a registry blip (retry the build), see
+# `_get_with_retries` returning None:
+#   True  -> definitively public
+#   False -> definitively not public (private, or repo does not exist)
+#   None  -> could not determine (transient registry/network error)
+
+
+def _json_dict_or_none(response: requests.Response) -> dict[str, Any] | None:
+    """Parse `response` as a JSON object, or None if the body isn't one.
+
+    A malformed body must read as "couldn't determine" (None), not crash the
+    caller out of the tri-state handling and fail the whole build.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def is_docker_image_public(name: str) -> bool | None:
+    """Whether the Docker Hub repository for `name` is public (tri-state).
+
+    Reads repository metadata (`is_private`) via the Hub API rather than the
+    registry, which both avoids the registry's anonymous pull-rate limit (see
+    `mz_image_tag_exists`) and is tag-independent. A 404 means the repo is
+    private or absent; transient errors yield None rather than a false "private".
+    """
+    repo = name.rsplit(":", 1)[0]
+    response = _get_with_retries(f"https://hub.docker.com/v2/repositories/{repo}/")
+    if response is None:
+        return None
+    if response.status_code == 404:
+        return False
+    if response.status_code != 200:
+        return None
+    body = _json_dict_or_none(response)
+    return None if body is None else not body.get("is_private", True)
+
+
+def is_ghcr_image_public(name: str) -> bool | None:
+    """Whether the GHCR repository for `name` is public (tri-state).
+
+    Requests an *anonymous* pull token and lists tags: a public repo authorizes
+    the anonymous client (200), a private or missing one rejects it (401/403/404).
+    Like the Docker Hub check, this is tag-independent.
+    """
+    image = name.removeprefix("ghcr.io/").rsplit(":", 1)[0]
+    token_response = _get_with_retries(
+        "https://ghcr.io/token", params={"scope": f"repository:{image}:pull"}
+    )
+    if token_response is None:
+        return None
+    if token_response.status_code in (401, 403):
+        return False
+    if token_response.status_code != 200:
+        return None
+    body = _json_dict_or_none(token_response)
+    if body is None or "token" not in body:
+        return None
+    token = body["token"]
+    response = _get_with_retries(
+        f"https://ghcr.io/v2/{image}/tags/list",
+        params={"n": 1},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    if response is None:
+        return None
+    if response.status_code == 200:
+        return True
+    if response.status_code in (401, 403, 404):
+        return False
+    return None
 
 
 def chmod_x(path: Path) -> None:
@@ -559,10 +690,7 @@ class CargoBuild(CargoPreImage):
         cflags = (
             [
                 f"--target={target(rd.arch)}",
-                f"--gcc-toolchain=/opt/x-tools/{target(rd.arch)}/",
                 "-fuse-ld=lld",
-                f"--sysroot=/opt/x-tools/{target(rd.arch)}/{target(rd.arch)}/sysroot",
-                f"-L/opt/x-tools/{target(rd.arch)}/{target(rd.arch)}/lib64",
             ]
             + rustc_flags.sanitizer_cflags[rd.sanitizer]
             if rd.sanitizer != Sanitizer.none
@@ -576,15 +704,38 @@ class CargoBuild(CargoPreImage):
                 "CXXSTDLIB": "stdc++",
                 "CC": "cc",
                 "CXX": "c++",
-                "CPP": "clang-cpp-18",
+                "CPP": "clang-cpp-19",
                 "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
                 "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
-                "PATH": f"/sanshim:/opt/x-tools/{target(rd.arch)}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "PATH": "/sanshim:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                 "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
             }
             if rd.sanitizer != Sanitizer.none
             else {}
         )
+
+        # clang/lld `-22` suffixes must match the LLVM version of the rustc in
+        # rust-version (root Cargo.toml) and the apt.llvm.org release in
+        # ci/builder/Dockerfile.
+        if (
+            rd.profile == Profile.RELEASE
+            and rd.sanitizer == Sanitizer.none
+            and not rd.coverage
+        ):
+            rustflags += [
+                "-Clinker-plugin-lto",
+            ]
+            extra_env = {
+                "CC": "clang-22",
+                "CXX": "clang++-22",
+                "AR": "llvm-ar-22",
+                "RANLIB": "llvm-ranlib-22",
+                "CFLAGS": "-flto=thin",
+                "CXXFLAGS": "-flto=thin",
+                "LDFLAGS": "--ld-path=/usr/bin/ld.lld-22 -static-libstdc++",
+                "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
+                "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
+            }
 
         cargo_build = rd.build(
             "build", channel=None, rustflags=rustflags, extra_env=extra_env
@@ -645,7 +796,7 @@ class CargoBuild(CargoPreImage):
             rd, list(bins), list(examples), list(features) if features else None
         )
 
-        run_and_detect_rust_incremental_build_failure(cargo_build, cwd=rd.root)
+        run_and_detect_retryable_build_failure(cargo_build, cwd=rd.root)
 
         # Re-run with JSON-formatted messages and capture the output so we can
         # later analyze the build artifacts in `run`. This should be nearly
@@ -738,7 +889,19 @@ class CargoBuild(CargoPreImage):
                 else:
                     package = message["package_id"].split("#")[0].split("/")[-1]
                 for src, dst in self.extract.get(package, {}).items():
-                    spawn.runv(["cp", "-R", out_dir / src, self.path / dst])
+                    # Sources are relative to the build script's `out` dir.
+                    # `$CARGO_TARGET_DIR` instead names the Cargo target root
+                    # (`cargo_target_dir` is the per-target directory below
+                    # it), for artifacts a build script caches outside of
+                    # `out`. Reaching the root with `..` does not work: how
+                    # deep `out` sits below it differs between Cargo versions.
+                    if src.startswith("$CARGO_TARGET_DIR/"):
+                        src_path = target_dir.parent / src.removeprefix(
+                            "$CARGO_TARGET_DIR/"
+                        )
+                    else:
+                        src_path = out_dir / src
+                    spawn.runv(["cp", "-R", src_path, self.path / dst])
 
         self.acquired = True
 
@@ -930,6 +1093,8 @@ class ResolvedImage:
                 self._build_locked(prep, push)
             finally:
                 fcntl.flock(lock_file, fcntl.LOCK_UN)
+        self.acquired = True
+        docker_images().add(self.spec())
 
     def _build_locked(
         self, prep: dict[type[PreImage], Any], push: bool = False
@@ -972,8 +1137,14 @@ class ResolvedImage:
                 str(self.image.path),
             ]
         else:
-            docker_tag = f"docker.io/{self.spec()}"
-            ghcr_tag = f"ghcr.io/materializeinc/{self.spec()}"
+            # `self.spec()` may already be ghcr-qualified (MZ_GHCR), so strip the
+            # prefix before re-deriving each tag. Otherwise they double-prefix and
+            # a dependent image's `FROM self.spec()` can't resolve the local build.
+            spec = self.spec()
+            if spec.startswith(GHCR_PREFIX):
+                spec = spec.removeprefix(GHCR_PREFIX)
+            docker_tag = f"docker.io/{spec}"
+            ghcr_tag = f"{GHCR_PREFIX}{spec}"
             cmd: Sequence[str] = [
                 "docker",
                 "buildx",
@@ -1048,6 +1219,7 @@ class ResolvedImage:
                         stdout=sys.stderr.buffer,
                     )
                     self.acquired = True
+                    docker_images().add(self.spec())
                     break
                 except subprocess.CalledProcessError:
                     if retry < max_retries:
@@ -1055,30 +1227,9 @@ class ResolvedImage:
                         # happened based on error code
                         # (https://github.com/docker/cli/issues/538) and we
                         # want to print output directly to terminal.
-                        if build := os.getenv("CI_WAITING_FOR_BUILD"):
-                            for retry in range(max_retries):
-                                try:
-                                    build_status = buildkite.get_build_status(build)
-                                except subprocess.CalledProcessError:
-                                    time.sleep(sleep_time)
-                                    sleep_time = min(sleep_time * 2, 10)
-                                    break
-                                print(f"Build {build} status: {build_status}")
-                                if build_status == "failed":
-                                    print(
-                                        f"Build {build} has been marked as failed, exiting hard"
-                                    )
-                                    sys.exit(1)
-                                elif build_status == "success":
-                                    break
-                                assert (
-                                    build_status == "pending"
-                                ), f"Unknown build status {build_status}"
-                                time.sleep(1)
-                        else:
-                            print(f"Retrying in {sleep_time}s ...")
-                            time.sleep(sleep_time)
-                            sleep_time = min(sleep_time * 2, 10)
+                        print(f"Retrying in {sleep_time}s ...")
+                        time.sleep(sleep_time)
+                        sleep_time = min(sleep_time * 2, 10)
                         continue
                     else:
                         break
@@ -1096,6 +1247,21 @@ class ResolvedImage:
             ui.say(f"{spec} already exists")
             return True
         return False
+
+    def is_public(self) -> tuple[bool | None, bool | None]:
+        """Report whether the image's repo is public on (Docker Hub, GHCR).
+
+        Each element is True (public), False (private/absent), or None (could
+        not determine). Non-publishable images are reported as public on both,
+        since they are never pushed and so the check does not apply to them.
+        """
+        if not self.publish:
+            return (True, True)
+        spec = self.spec()
+        if spec.startswith(GHCR_PREFIX):
+            spec = spec.removeprefix(GHCR_PREFIX)
+        ghcr_spec = f"{GHCR_PREFIX}{spec}"
+        return (is_docker_image_public(spec), is_ghcr_image_public(ghcr_spec))
 
     def run(
         self,
@@ -1268,14 +1434,10 @@ class DependencySet:
         # Only retry in CI runs since we struggle with flaky docker pulls there
         if not max_retries:
             max_retries = (
-                90
-                if os.getenv("CI_WAITING_FOR_BUILD")
-                else (
-                    5
-                    if ui.env_is_truthy("CI")
-                    and not ui.env_is_truthy("CI_ALLOW_LOCAL_BUILD")
-                    else 1
-                )
+                5
+                if ui.env_is_truthy("CI")
+                and not ui.env_is_truthy("CI_ALLOW_LOCAL_BUILD")
+                else 1
             )
         assert max_retries > 0
 

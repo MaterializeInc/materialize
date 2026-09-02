@@ -1,0 +1,12 @@
+{
+    "describe_table": [
+        "test_writes"
+    ],
+    "ops": [
+        {
+            "soft_truncate_before": [
+                "test_writes"
+            ]
+        }
+    ]
+}

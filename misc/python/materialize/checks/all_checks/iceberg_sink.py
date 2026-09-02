@@ -309,7 +309,7 @@ class AlterIcebergSinkMv(Check):
                   USING AWS CONNECTION aws_conn
                   KEY (a) NOT ENFORCED
                   MODE UPSERT
-                  WITH (COMMIT INTERVAL '1s');
+                  WITH (COMMIT INTERVAL '10s');
                 """))
 
     def manipulate(self) -> list[Testdrive]:
@@ -390,7 +390,7 @@ class AlterIcebergSinkWebhook(Check):
                   USING AWS CONNECTION aws_conn
                   KEY (body) NOT ENFORCED
                   MODE UPSERT
-                  WITH (COMMIT INTERVAL '1s');
+                  WITH (COMMIT INTERVAL '10s');
                 $ webhook-append database=materialize schema=public name=iceberg_webhook_alter1
                 1
                 """))
@@ -451,6 +451,181 @@ class AlterIcebergSinkWebhook(Check):
 
 
 @externally_idempotent(False)
+class AlterIcebergSinkCommitInterval(Check):
+    """Check ALTER SINK ... SET (COMMIT INTERVAL ...) on an Iceberg sink"""
+
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version >= MzVersion.parse_mz("v26.34.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > CREATE TABLE iceberg_table_alter_ci (x int, y string)
+                > CREATE SINK iceberg_sink_alter_ci FROM iceberg_table_alter_ci
+                  INTO ICEBERG CATALOG CONNECTION polaris_conn (
+                    NAMESPACE 'default_namespace',
+                    TABLE 'iceberg_sink_alter_ci'
+                  )
+                  USING AWS CONNECTION aws_conn
+                  KEY (x, y) NOT ENFORCED
+                  MODE UPSERT
+                  WITH (COMMIT INTERVAL '1s');
+                > INSERT INTO iceberg_table_alter_ci VALUES (0, 'a')
+                """))
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > ALTER SINK iceberg_sink_alter_ci SET (COMMIT INTERVAL = '2s');
+
+                > SELECT create_sql LIKE '%COMMIT INTERVAL = ''2s''%' FROM (SHOW CREATE SINK iceberg_sink_alter_ci);
+                true
+
+                > INSERT INTO iceberg_table_alter_ci VALUES (1, 'b')
+                """,
+                """
+                > ALTER SINK iceberg_sink_alter_ci SET (COMMIT INTERVAL = '3s');
+
+                > SELECT create_sql LIKE '%COMMIT INTERVAL = ''3s''%' FROM (SHOW CREATE SINK iceberg_sink_alter_ci);
+                true
+
+                > INSERT INTO iceberg_table_alter_ci VALUES (2, 'c')
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > SELECT create_sql LIKE '%COMMIT INTERVAL = ''3s''%' FROM (SHOW CREATE SINK iceberg_sink_alter_ci);
+                true
+
+                $ set-from-sql var=iceberg_user
+                SELECT user FROM iceberg_credentials
+
+                $ set-from-sql var=iceberg_key
+                SELECT key FROM iceberg_credentials
+
+                $ duckdb-execute name=iceberg
+                CREATE SECRET s3_secret (TYPE S3, KEY_ID '${iceberg_user}', SECRET '${iceberg_key}', ENDPOINT 'minio:9000', URL_STYLE 'path', USE_SSL false, REGION 'minio');
+                SET unsafe_enable_version_guessing = true;
+
+                $ duckdb-query name=iceberg
+                SELECT * FROM iceberg_scan('s3://test-bucket/default_namespace/iceberg_sink_alter_ci') ORDER BY 1
+                0 a
+                1 b
+                2 c
+            """))
+
+
+@externally_idempotent(False)
+class IcebergSinkCommitIntervalMigration(Check):
+    """Regression test for the COMMIT INTERVAL migration (SS-80, #37493).
+
+    Since v26.34, planning rejects `COMMIT INTERVAL < 1s` for Iceberg sinks.
+    Because catalog bootstrap re-plans every object's persisted `create_sql`,
+    an environment that already has such a sink -- created on an older version
+    that accepted it -- panics environmentd on upgrade ("invalid persisted
+    SQL") and crash-loops the whole environment unless the migration rewrites
+    the value to '1s'. We create the sinks on the old base version and assert
+    the environment still boots, the values are rewritten, and the sinks keep
+    committing.
+
+    The interval is covered in both AST shapes a user can persist it as: a
+    single-quoted string ('999ms', stored as WithOptionValue::Value) and a
+    double-quoted value ("998ms", lexed as an identifier and stored as
+    WithOptionValue::UnresolvedItemName). The migration must rewrite both.
+    """
+
+    def _can_run(self, e: Executor) -> bool:
+        # The < 1s rejection landed in v26.34. Only reproducible when the base
+        # version still accepts the value; otherwise the CREATEs in
+        # initialize() fail up-front. Also makes this a no-op in non-upgrade
+        # scenarios (base == current, rejecting build).
+        return (
+            MzVersion.parse_mz("v26.10.0-dev")
+            <= self.base_version
+            < MzVersion.parse_mz("v26.34.0-dev")
+        )
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > CREATE TABLE iceberg_ci_migration_table (x int, y string)
+                > CREATE SINK iceberg_ci_migration_sink1 FROM iceberg_ci_migration_table
+                  INTO ICEBERG CATALOG CONNECTION polaris_conn (
+                    NAMESPACE 'default_namespace',
+                    TABLE 'iceberg_ci_migration_sink1'
+                  )
+                  USING AWS CONNECTION aws_conn
+                  KEY (x, y) NOT ENFORCED
+                  MODE UPSERT
+                  WITH (COMMIT INTERVAL '999ms');
+                > CREATE SINK iceberg_ci_migration_sink2 FROM iceberg_ci_migration_table
+                  INTO ICEBERG CATALOG CONNECTION polaris_conn (
+                    NAMESPACE 'default_namespace',
+                    TABLE 'iceberg_ci_migration_sink2'
+                  )
+                  USING AWS CONNECTION aws_conn
+                  KEY (x, y) NOT ENFORCED
+                  MODE UPSERT
+                  WITH (COMMIT INTERVAL = "998ms");
+                > INSERT INTO iceberg_ci_migration_table VALUES (0, 'a')
+                """))
+
+    def manipulate(self) -> list[Testdrive]:
+        # The regression concerns booting existing sinks, so no additional DDL
+        # is needed after initialization.
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > INSERT INTO iceberg_ci_migration_table VALUES (1, 'b')
+                """,
+                """
+                > INSERT INTO iceberg_ci_migration_table VALUES (2, 'c')
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        # Reaching validate() means bootstrap survived. Once the migration is
+        # available, assert it rewrote both intervals to '1s'.
+        return Testdrive(dedent("""
+                >[version>=2603400] SELECT create_sql LIKE '%COMMIT INTERVAL = ''1s''%' FROM (SHOW CREATE SINK iceberg_ci_migration_sink1);
+                true
+
+                >[version>=2603400] SELECT create_sql LIKE '%COMMIT INTERVAL = ''1s''%' FROM (SHOW CREATE SINK iceberg_ci_migration_sink2);
+                true
+
+                > SELECT status FROM mz_internal.mz_sink_statuses WHERE name LIKE 'iceberg_ci_migration_sink%';
+                running
+                running
+
+                $ set-from-sql var=iceberg_user
+                SELECT user FROM iceberg_credentials
+
+                $ set-from-sql var=iceberg_key
+                SELECT key FROM iceberg_credentials
+
+                $ duckdb-execute name=iceberg
+                CREATE SECRET s3_secret (TYPE S3, KEY_ID '${iceberg_user}', SECRET '${iceberg_key}', ENDPOINT 'minio:9000', URL_STYLE 'path', USE_SSL false, REGION 'minio');
+                SET unsafe_enable_version_guessing = true;
+
+                $ duckdb-query name=iceberg
+                SELECT * FROM iceberg_scan('s3://test-bucket/default_namespace/iceberg_ci_migration_sink1') ORDER BY 1
+                0 a
+                1 b
+                2 c
+
+                $ duckdb-query name=iceberg
+                SELECT * FROM iceberg_scan('s3://test-bucket/default_namespace/iceberg_ci_migration_sink2') ORDER BY 1
+                0 a
+                1 b
+                2 c
+            """))
+
+
+@externally_idempotent(False)
 class AlterIcebergSinkOrder(Check):
     """Check ALTER SINK with a table created after the sink, see incident 131"""
 
@@ -468,7 +643,7 @@ class AlterIcebergSinkOrder(Check):
                   USING AWS CONNECTION aws_conn
                   KEY (x, y) NOT ENFORCED
                   MODE UPSERT
-                  WITH (COMMIT INTERVAL '1s');
+                  WITH (COMMIT INTERVAL '10s');
                 > INSERT INTO iceberg_table_alter_order1 VALUES (0, 'a')
                 """))
 

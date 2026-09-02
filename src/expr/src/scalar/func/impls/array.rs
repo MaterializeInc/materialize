@@ -10,7 +10,6 @@
 use std::fmt;
 
 use mz_expr_derive::sqlfunc;
-use mz_lowertest::MzReflect;
 use mz_repr::adt::array::{Array, ArrayDimension};
 use mz_repr::{Datum, DatumList, Row, RowArena, RowPacker, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
@@ -18,11 +17,10 @@ use serde::{Deserialize, Serialize};
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{Eval, EvalError, MirScalarExpr};
 
-#[sqlfunc(
-    sqlname = "arraytolist",
-    preserves_uniqueness = true,
-    introduces_nulls = false
-)]
+// NOTE: This cast does not preserve uniqueness: It returns only the array's elements and drops the
+// dimension metadata, so arrays that differ only in their lower bounds (e.g. `[1:1]={42}` and
+// `[2:2]={42}`) collapse to the same list.
+#[sqlfunc(sqlname = "arraytolist", introduces_nulls = false)]
 fn cast_array_to_list_one_dim<'a, T>(a: Array<'a, T>) -> Result<DatumList<'a, T>, EvalError> {
     let ndims = a.dims().ndims();
     if ndims > 1 {
@@ -47,8 +45,7 @@ fn cast_array_to_list_one_dim<'a, T>(a: Array<'a, T>) -> Result<DatumList<'a, T>
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastArrayToString {
     pub ty: SqlScalarType,
@@ -116,14 +113,13 @@ impl fmt::Display for CastArrayToString {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
-pub struct CastArrayToJsonb {
-    pub cast_element: Box<MirScalarExpr>,
+pub struct CastArrayToJsonb<E = MirScalarExpr> {
+    pub cast_element: Box<E>,
 }
 
-impl LazyUnaryFunc for CastArrayToJsonb {
+impl<E: Eval> LazyUnaryFunc for CastArrayToJsonb<E> {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
@@ -134,7 +130,7 @@ impl LazyUnaryFunc for CastArrayToJsonb {
             temp_storage: &RowArena,
             elems: &mut impl Iterator<Item = Datum<'a>>,
             dims: &[ArrayDimension],
-            cast_element: &MirScalarExpr,
+            cast_element: &impl Eval,
             packer: &mut RowPacker,
         ) -> Result<(), EvalError> {
             packer.push_list_with(|packer| match dims {
@@ -171,7 +167,7 @@ impl LazyUnaryFunc for CastArrayToJsonb {
             temp_storage,
             &mut elements.into_iter(),
             &dims,
-            &self.cast_element,
+            &*self.cast_element,
             &mut row.packer(),
         )?;
         Ok(temp_storage.push_unary_row(row))
@@ -190,7 +186,11 @@ impl LazyUnaryFunc for CastArrayToJsonb {
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        true
+        // NOTE: JSONB arrays reconstruct nested arrays from dimension lengths
+        // only and carry no lower bounds, so arrays that differ only in their
+        // lower bounds (e.g. `[1:1]={42}` and `[2:2]={42}`) produce the same
+        // JSONB value. This cast is therefore not uniqueness-preserving.
+        false
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
@@ -208,7 +208,27 @@ impl LazyUnaryFunc for CastArrayToJsonb {
     }
 }
 
-impl fmt::Display for CastArrayToJsonb {
+impl<E> CastArrayToJsonb<E> {
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn try_map_expr<'a, E2: TryFrom<&'a E>>(
+        &'a self,
+    ) -> Result<CastArrayToJsonb<E2>, E2::Error> {
+        Ok(CastArrayToJsonb {
+            cast_element: Box::new(E2::try_from(&*self.cast_element)?),
+        })
+    }
+
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn map_expr<'a, E2: From<&'a E>>(&'a self) -> CastArrayToJsonb<E2> {
+        CastArrayToJsonb {
+            cast_element: Box::new(E2::from(&*self.cast_element)),
+        }
+    }
+}
+
+impl<E> fmt::Display for CastArrayToJsonb<E> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("arraytojsonb")
     }
@@ -226,15 +246,14 @@ impl fmt::Display for CastArrayToJsonb {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
-pub struct CastArrayToArray {
+pub struct CastArrayToArray<E = MirScalarExpr> {
     pub return_ty: SqlScalarType,
-    pub cast_expr: Box<MirScalarExpr>,
+    pub cast_expr: Box<E>,
 }
 
-impl LazyUnaryFunc for CastArrayToArray {
+impl<E: Eval> LazyUnaryFunc for CastArrayToArray<E> {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
@@ -287,7 +306,29 @@ impl LazyUnaryFunc for CastArrayToArray {
     }
 }
 
-impl fmt::Display for CastArrayToArray {
+impl<E> CastArrayToArray<E> {
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn try_map_expr<'a, E2: TryFrom<&'a E>>(
+        &'a self,
+    ) -> Result<CastArrayToArray<E2>, E2::Error> {
+        Ok(CastArrayToArray {
+            return_ty: self.return_ty.clone(),
+            cast_expr: Box::new(E2::try_from(&*self.cast_expr)?),
+        })
+    }
+
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn map_expr<'a, E2: From<&'a E>>(&'a self) -> CastArrayToArray<E2> {
+        CastArrayToArray {
+            return_ty: self.return_ty.clone(),
+            cast_expr: Box::new(E2::from(&*self.cast_expr)),
+        }
+    }
+}
+
+impl<E> fmt::Display for CastArrayToArray<E> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("arraytoarray")
     }

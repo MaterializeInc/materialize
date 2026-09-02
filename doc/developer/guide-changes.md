@@ -10,6 +10,61 @@ Guide][google-guide], which is well worth a read if you are unfamiliar. There
 are no notable conflicts between Google's guide and ours, but see the
 [Deviations from Google](#deviations) section for details.
 
+This is a guide, and there will be exceptions.  Use your best judgement when
+deviating from the guidelines.
+
+## TL;DR
+
+The salient points, each linking to its detailed section below.
+
+### For authors
+
+  * **[One semantic change per review unit (RU)](#commit-strategy).** If the
+    description reads "do X *and* Y *and* Z," split it. Never mix refactoring and
+    behavior changes in the same RU.
+
+  * **[Keep PRs small](#pr-size-limits)** — ideally under 500 lines changed; reviewers
+    often ask to split PRs over 1000. Limit each RU to one team's
+    [CODEOWNERS](/.github/CODEOWNERS) scope.
+
+  * **[Stack PRs](#stacked-prs)** when a change is naturally several small,
+    dependent steps.
+
+  * **[Pair with a dedicated reviewer/partner](#working-with-a-dedicated-partner)**
+    on a project, and agree between yourselves how to review the work (stacked
+    PRs or semantic commits) rather than leaning on LOC caps.
+
+  * **[Write a thorough PR description](#change-descriptions)**
+    (Motivation / Description / Verification). Because we squash-merge, the PR
+    description is what lands on `main`. State user-visible effects in
+    user-facing terms — [release notes](#release-notes) are generated from it.
+
+  * **[Open a draft PR first](#polish-requirements)**, self-review it (a great
+    stage to run an [AI review](#ai-assisted-review) too), and make sure it's
+    green in CI before you mark it ready and request review from others.
+
+  * **[Test every behavior change](#testing)** — at a bare minimum, one added or
+    modified test.
+
+### For reviewers
+
+  * **Respond within [two business days](#latency-expectations)**, sooner if
+    possible. If you're overwhelmed,
+    [say so and redistribute](#latency-expectations) rather than letting the PR
+    rot.
+
+  * **[Prioritize by urgency and customer impact](#latency-expectations)** when
+    several PRs are waiting on you. The two are distinct axes.
+
+  * **[Review the code, not the author](#tips-on-giving-pr-feedback)**, explain
+    the *why* behind your comments, and mark non-blocking preferences as "nit:".
+
+  * **Lean on [AI for a first pass](#ai-assisted-review)** — but you remain
+    accountable for the approval.
+
+  * **[Approve PRs that improve overall codebase health](#reviewing-changes)**
+    even when they aren't perfect.
+
 ## Overview
 
 We use [GitHub pull requests](https://github.com/MaterializeInc/materialize/pulls)
@@ -75,6 +130,31 @@ Materialize currently only uses the Semantic PRs approach when merging a PR,
 which we enforce by only allowing squash merging on GitHub. However, for
 reviewing purposes, you can still use the Semantic commits approach.
 
+Whichever approach you use, note that the [PR size limits](#pr-size-limits)
+apply to the *entire* PR, not to individual commits. Splitting a long change
+into many small semantic commits keeps each commit readable, but it does not
+make the PR itself small — your reviewer still faces the full diff. If a
+semantic-commit PR grows past the size limits, that's a signal to
+[stack it into several PRs](#stacked-prs) rather than relying on commit
+boundaries alone.
+
+#### Working with a dedicated partner
+
+The size limits exist because a reviewer typically has no context on your
+change. For a project, you can flip that assumption: pair an implementer with a
+dedicated reviewer/partner from the start, so one writes the feature while the
+other reviews it and stays close to the design throughout.
+
+A large diff is still a lot to review, but a reviewer who already shares your
+context can absorb it far more readily. That lets the pair coordinate on how
+best to handle a large change rather than leaning on LOC caps: split it into
+smaller PRs, or walk through it together, whichever best fits the work.
+
+This applies equally to [stacked PRs](#stacked-prs) and to semantic-commit PRs.
+Agree up front on how you will review: per PR, per semantic commit, or by
+walking the whole change together, and adjust as the project evolves. Settle it
+between yourselves rather than treating the size limits as the only lever.
+
 You should endeavor to limit each *review unit* (RU) to just one semantic
 change. When a single RU contains multiple unrelated changes, it becomes much
 harder for your reviewer to understand, and the quality of the review suffers.
@@ -91,6 +171,14 @@ RU. But doing so makes it very difficult to view the code for the bugfix or
 feature in isolation. This can be particularly problematic if the bugfix or
 feature needs to be reverted—it is much more difficult to revert just one or the
 other if they are in the same RU.
+
+The same applies to refactoring. When a feature or bugfix needs a refactor to
+land cleanly, do the refactor *first*, as its own behavior-preserving RU, and
+build the feature or bugfix on top of it. This keeps the noisy mechanical diff
+out of the change that actually alters behavior, so your reviewer can verify the
+refactor is a no-op and review the behavior change in isolation. A
+[stack of PRs](#stacked-prs) — refactor on the bottom, behavior change on top —
+is the natural way to do this.
 
 You should also endeavor to limit each RU to one team's scope as defined by
 the [CODEOWNERS](/.github/CODEOWNERS) file, in particular for larger changes.
@@ -283,9 +371,54 @@ communicate by text. The downside is that your discussions won't be recorded for
 posterity, but the increased bandwidth of verbal communication can often make
 the tradeoff worthwhile.
 
-Some PRs, especially large refactors, are nearly impossible to split into
-pieces. If you find yourself in this situation, have a conversation with your
-reviewers ahead of time to get their buy in.
+When a change is large but *can* be split into a sequence of dependent steps,
+prefer [stacking it into several small PRs](#stacked-prs) over one big PR. Some
+PRs, especially large refactors, are nearly impossible to split into pieces. If
+you find yourself in this situation, have a conversation with your reviewers
+ahead of time to get their buy in.
+
+### Stacked PRs
+
+When a change is naturally a sequence of small, dependent steps, you don't have
+to choose between one oversized PR and losing the connection between the pieces.
+You can *stack* PRs: each PR targets the branch of the PR below it rather than
+`main`, so every PR in the stack stays small and independently reviewable while
+the dependency order remains explicit.
+
+Stacking is a workflow, not a tool. Whatever you use must sit **atop** Git —
+plain Git branches that GitHub understands — rather than replacing Git. Several
+tools automate the bookkeeping (rebasing the stack, retargeting bases, opening
+the PRs); pick whichever you like. [Jujutsu (`jj`)](https://github.com/jj-vcs/jj)
+in particular is seeing fairly wide adoption internally for managing stacks, and
+some of our tooling (e.g. the [`mz-pr-review`](/.agents/skills/mz-pr-review/SKILL.md)
+skill) already understands `jj` revsets.
+
+The principles matter more than the tool:
+
+  * **Each PR is still a [review unit](#commit-strategy).** Everything above
+    applies per PR: one semantic change, one team's
+    [CODEOWNERS](/.github/CODEOWNERS) scope, a thorough description, and adequate
+    tests.
+
+  * **Target bases explicitly.** The bottom PR targets `main`; each subsequent
+    PR targets the branch below it. This keeps each PR's diff scoped to *its*
+    change rather than re-showing the whole stack.
+
+  * **For a project, pair with a dedicated reviewer/partner.** When the work has
+    a dedicated reviewer who shares your context, agree between yourselves how to
+    review the stack rather than leaning on LOC caps. This is not specific to
+    stacking. See [Working with a dedicated partner](#working-with-a-dedicated-partner).
+
+  * **Merge bottom-up.** Land the bottom PR first, then rebase the rest of the
+    stack. Because we [squash-merge](#commit-strategy), GitHub retargets the next
+    PR's base to `main` automatically once its parent merges, but you still need
+    to rebase to drop the now-squashed commits.
+
+  * **Watch for merge skew within the stack.** The *Merge skew cargo check* CI
+    job validates each PR against `main`, not against its parent in the stack. A
+    PR that compiles atop its parent may not compile atop `main` until the parent
+    lands, so transient failures on upper PRs are expected — but re-check after
+    each merge. See [Merge skew](#merge-skew) for the general case.
 
 ### Early feedback
 
@@ -323,8 +456,12 @@ sake of your reviewer!
 ### Polish requirements
 
 PRs that are submitted for review should meet your own standards for
-"mergeable." Before you click the "Create PR" button, or immediately afterwards,
-do a self-review of your PR to make sure it is up to snuff.
+"mergeable." The recommended workflow is to **open the PR as a
+[draft][draft-pr] first**, self-review it, and let CI run, then mark it ready
+and request review from others only once you've polished it and it's green.
+Opening as a draft keeps reviewers from being notified before the PR is ready,
+and gives you a place to see the full diff and CI results as your reviewer
+will.
 
 The self-review doesn't need to take more than a few minutes. The goal is to
 save your reviewer some time by filtering out glaring errors. Did you leave
@@ -333,6 +470,14 @@ commented-out code or debugging `println!`s strewn about? Did you add any dead
 code? Did you add any blank lines to unrelated files? Did you remember to add
 all the tests you intended to? Have you made the PR as simple and small as it
 can be?
+
+Your self-review is also a great point to run an [AI review](#ai-assisted-review)
+over your own change. The [`mz-pr-review`](/.agents/skills/mz-pr-review/SKILL.md)
+skill runs a structured pass against our standards and is well suited to
+catching missing tests, mechanical issues, and "did you consider X?" prompts
+before a human ever looks at the PR. As on the review side, you remain
+accountable for what you ship, so confirm or discard what it flags rather than
+taking its output at face value.
 
 The self-review is _not_ meant to add a large emotional burden before submitting
 a PR. You should not feel like PRs must be perfect before you can submit them!
@@ -358,13 +503,23 @@ know to read past the unpolished parts.
 
 If your PR seems to meet the "mergeable" bar, but there are areas of the change
 that you are particularly unsure about, drop your reviewers a note on the PR
-indicating the danger zones so they can pay closer attention.
+indicating the danger zones so they can pay closer attention. Leaving a comment
+on your own PR to ask the reviewer a question is fine. But if you find yourself
+annotating your own code to explain what it does, that explanation belongs in
+the code as a comment, not as a PR annotation, where it stays with the code for
+future readers.
 
 ### Choosing reviewers
 
 At the moment, choosing reviewers is a bit of a dark art. The best reviewer for
 a PR is the person besides you who is most familiar with the code that is
 changed. If you are not sure who that is, ask in #eng-general.
+
+Often you won't know the right individual, which is common for a bug fix in code
+you don't own. Finding the reviewer is then a collaborative exercise: assign the
+appropriate team (per [CODEOWNERS](/.github/CODEOWNERS)) to the PR and reach out
+to that team so they can route it to the right person. Don't block on
+identifying one specific reviewer yourself.
 
 If you are more experienced, one additional aspect of choosing a reviewer to
 keep in mind is [mentoring](#mentoring). Asking a less experienced engineer to
@@ -559,6 +714,28 @@ the reviewer, whichever you prefer. Beware that with the semantic commit
 strategy, Reviewable works much better, as it can track a set of commits across
 a force push.
 
+### AI-assisted review
+
+You are encouraged to use AI tooling to assist your review. We maintain skills
+for exactly this, including the [`mz-pr-review`](/.agents/skills/mz-pr-review/SKILL.md)
+skill, which runs a structured pass over a diff against our standards. AI is
+well suited to a first pass: surfacing missing tests, mechanical issues, style
+nits, and "did you consider X?" prompts that you then confirm or discard.
+
+Two rules:
+
+  * **You remain accountable for the approval.** A green checkmark means *you*
+    vouched for the change, not that a model did. Read what the AI flags, throw
+    out the noise, and never approve code you don't understand yourself.
+
+  * **AI assists; it doesn't replace the human review** the [overview](#overview)
+    describes. Mentoring a newcomer and socializing a change with the team are
+    things only a teammate can do.
+
+On the author side, the same applies in reverse: make sure you can explain
+everything you're about to ship, especially AI-generated code, before you
+request review.
+
 ### Latency expectations
 
 One of the most frustrating parts of code review arises when reviewers are slow
@@ -573,8 +750,8 @@ interrupt your "maker time" to review PRs. But if you are already interrupted,
 e.g. because of a meeting or because of a lunch break, try to clear out your
 review queue when you get back to your desk, before you get back into the flow.
 
-As a hard upper limit, **the time to first response should never exceed one
-business day**.
+As a hard upper limit, **the time to first response should never exceed two
+business days**.
 
 For complicated PRs, you may need more than one day to complete the review. In
 that case, you should still try to inform the PR author of the situation ASAP.
@@ -607,6 +784,45 @@ Consider: if you're able to respond to a PR within an hour, that PR can go
 through three rounds of changes in an afternoon and land before EOD, freeing the
 author up to move on to something else the next day. If you only respond to a PR
 once a day, it will take the better part of a week to land the PR.
+
+There is no fixed quota for how much time to spend on your review queue. Each
+engineer has to weigh it against their own priorities and the complexity of the
+PRs in front of them. The one firm expectation is to check your queue for newly
+arrived PRs at least once a day. Beyond that the throughput will vary: some days
+you'll clear five or six PRs, other days you'll clear none, and both are fine.
+
+When you have several PRs in your queue and can't get to them all at once, weigh
+two distinct axes. *Urgency* is how much the cost grows per hour of waiting: a
+regression on `main` is urgent even when the fix is tiny, because it blocks
+everyone. *Priority* is how much the change matters once landed: customer-facing
+fixes rank above internal refactors or speculative work. The two often diverge,
+so a small urgent fix should jump ahead of a larger, higher-priority feature
+whose cost of slipping a day is low.
+
+You read these two axes from different places. Priority is usually clear from
+the PR description alone: a good one makes "Adding SQL syntax for ..."
+recognizably customer-facing where "Refactoring ..." is not, which is one reason
+the [description](#change-descriptions) is expected to convey this. Urgency, by
+contrast, rarely lives in the PR. It reaches you out of band, over Slack or in
+person, so when a PR is time-sensitive the author should say so explicitly
+rather than assume the reviewer will infer it.
+
+The flip side of fast reviews is honesty about your capacity. If your queue is
+backed up and you can't meet the two-business-day bar, *say so* — drop a note on
+the PR, and if the author is blocked, ask in your team channel for someone else
+to pick it up. The cost of a stalled PR compounds: it drifts out of date with
+`main`, accumulates merge conflicts, and blocks whatever the author wants to
+build on top of it, so an unreviewed PR is an ever-increasing burden on the
+team(s) involved, not a static one. Redistributing reviews across the team when
+you're overwhelmed is expected, not a failure.
+
+From the author's side, there is no single answer for how hard to push for a
+review. It depends on the same factors a reviewer uses to prioritize: is there a
+deadline, and who is affected if the PR sits. A change blocking a customer or a
+teammate warrants a direct nudge. A speculative cleanup with nobody waiting does
+not. Calibrate your nudging to the [urgency](#latency-expectations) of the
+change, and since urgency rarely shows up in the PR itself, make it explicit
+when you reach out.
 
 ## Software engineering principles
 
@@ -900,14 +1116,15 @@ submit a PR to fix it!
 * For larger PRs, aim to limit each RU to one team's scope as defined by the
 [CODEOWNERS](/.github/CODEOWNERS) file.
 
-* Always initiate PR reviews within one business day, and sooner if possible.
+* Always initiate PR reviews within two business days, and sooner if possible.
 
 * Verify that every PR has, at a minimum:
 
   * [ ] Adequate testing. Every change in behavior should result in the addition
     or modification of one test at a very bare minimum.
 
-  * [ ] One or more release notes, if there are user-visible changes.
+  * [ ] A description that states any user-visible effect in user-facing terms,
+    since [release notes](#release-notes) are generated from it.
 
 * Accept PRs that improve the overall health of the codebase, even if they
   are not perfect.

@@ -71,12 +71,12 @@ pub(super) fn validate_no_storage_and_computation_in_schema(
             | Statement::CreateConnection(_) => {
                 has_storage = true;
                 let ident = obj.stmt.ident();
-                storage_names.push(ident.object.clone());
+                storage_names.push(ident.object.to_string());
             }
             Statement::CreateView(_) | Statement::CreateMaterializedView(_) => {
                 has_computation = true;
                 let ident = obj.stmt.ident();
-                computation_names.push(ident.object.clone());
+                computation_names.push(ident.object.to_string());
             }
         }
     }

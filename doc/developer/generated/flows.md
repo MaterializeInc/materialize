@@ -21,7 +21,7 @@ graph LR
 9. **`mz_sql::plan::query`** — SQL AST → `HirRelationExpr`
 10. **`mz_sql::plan::lowering`** — decorrelation: `HirRelationExpr` → `MirRelationExpr`
 11. **`mz_adapter::coord::sequencer::inner::peek`** — multi-stage peek pipeline
-12. **`mz_adapter::optimize::peek`** — MIR optimization → LIR `DataflowDescription<Plan>`
+12. **`mz_adapter::optimize::peek`** — MIR optimization → LIR `DataflowDescription<LirRelationExpr>`
 13. **`mz_transform`** — MIR-to-MIR optimization passes (called by optimizer)
 14. **`mz_compute_types::plan::lowering`** — MIR → LIR physical plan
 15. **`mz_adapter::coord::timestamp_selection`** — `determine_timestamp` via oracle

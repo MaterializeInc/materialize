@@ -440,22 +440,162 @@ COMPLETE 2
 
 # Regression pin for the lookup query that
 # `src/environmentd/src/http/mcp.rs:read_data_product` issues under
-# restriction. Joins against `mz_show_my_cluster_privileges` (allow-listed,
-# `pg_has_role` swapped for `mz_session_role_memberships()`) instead of
-# calling `has_cluster_privilege` directly, since that function's
-# `sql_impl` body references `mz_roles` and is still blocked.
+# restriction. The view now nulls the cluster when the role lacks USAGE
+# (via `mz_show_my_cluster_privileges`, allow-listed with `pg_has_role`
+# swapped for `mz_session_role_memberships()`), so the lookup just reads the
+# already-USAGE-filtered cluster back. The agent has USAGE on quickstart via
+# PUBLIC, so it is advertised.
 simple conn=agent_restricted,user=agent
-SELECT dp.cluster,
-       dp.cluster IS NULL OR cp.name IS NOT NULL AS has_cluster_usage
+SELECT dp.cluster
 FROM mz_internal.mz_mcp_data_products dp
-LEFT JOIN mz_internal.mz_show_my_cluster_privileges cp
-    ON cp.name = dp.cluster AND cp.privilege_type = 'USAGE'
 WHERE dp.object_name = '"materialize"."agent_objects"."next_arrivals"'
-ORDER BY (dp.cluster IS NOT NULL AND cp.name IS NOT NULL) DESC,
-         dp.cluster NULLS LAST
+ORDER BY dp.cluster NULLS LAST
 LIMIT 1;
 ----
-quickstart,t
+quickstart
+COMPLETE 1
+
+# =============================================================================
+# DEX-66: the advertised cluster respects cluster USAGE. A data product hosted
+# on a cluster the agent cannot use is still listed (it stays readable from a
+# serving cluster), but its `cluster` is null, so discovery never points at a
+# cluster the agent has no USAGE on.
+# =============================================================================
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER agent_compute REPLICAS (r1 (SIZE 'scale=1,workers=1'));
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE MATERIALIZED VIEW agent_objects.compute_only IN CLUSTER agent_compute AS SELECT 1 AS id;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON agent_objects.compute_only TO agent;
+----
+COMPLETE 0
+
+# The agent has SELECT but no USAGE on agent_compute, so the product is listed
+# with a null cluster.
+simple conn=agent_restricted,user=agent
+SELECT object_name, cluster FROM mz_internal.mz_mcp_data_products WHERE object_name = '"materialize"."agent_objects"."compute_only"';
+----
+"materialize"."agent_objects"."compute_only",NULL
+COMPLETE 1
+
+# The details view nulls the cluster the same way.
+simple conn=agent_restricted,user=agent
+SELECT object_name, cluster FROM mz_internal.mz_mcp_data_product_details WHERE object_name = '"materialize"."agent_objects"."compute_only"';
+----
+"materialize"."agent_objects"."compute_only",NULL
+COMPLETE 1
+
+# A product on a cluster the agent CAN use still advertises that cluster.
+simple conn=agent_restricted,user=agent
+SELECT object_name, cluster FROM mz_internal.mz_mcp_data_products WHERE object_name = '"materialize"."agent_objects"."transfer_windows"';
+----
+"materialize"."agent_objects"."transfer_windows",quickstart
+COMPLETE 1
+
+# =============================================================================
+# DEX-66: multi-cluster coverage. A materialized view indexed on both a usable
+# and an unusable cluster must appear once with the usable cluster and once
+# with a null cluster, and `read_data_product`'s lookup (ORDER BY dp.cluster
+# NULLS LAST) must prefer the usable cluster row.
+#
+# Plain (non-materialized) views on unusable clusters must be excluded from
+# discovery entirely, otherwise the fallback to the session cluster would
+# trigger a full recompute (which is the same reason non-indexed views are
+# already excluded).
+# =============================================================================
+
+simple conn=mz_system,user=mz_system
+CREATE MATERIALIZED VIEW agent_objects.multi_indexed AS SELECT 1 AS id;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE INDEX multi_idx_quickstart IN CLUSTER quickstart ON agent_objects.multi_indexed (id);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE INDEX multi_idx_agent_compute IN CLUSTER agent_compute ON agent_objects.multi_indexed (id);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON agent_objects.multi_indexed TO agent;
+----
+COMPLETE 0
+
+# The MV appears twice: once with the usable cluster (quickstart) and once
+# with a null cluster (the index on agent_compute is hidden because the agent
+# lacks USAGE).
+simple conn=agent_restricted,user=agent
+SELECT object_name, cluster FROM mz_internal.mz_mcp_data_products WHERE object_name = '"materialize"."agent_objects"."multi_indexed"' ORDER BY cluster NULLS LAST;
+----
+"materialize"."agent_objects"."multi_indexed",quickstart
+"materialize"."agent_objects"."multi_indexed",NULL
+COMPLETE 2
+
+# The details view mirrors the discovery view for the multi-cluster case.
+simple conn=agent_restricted,user=agent
+SELECT object_name, cluster FROM mz_internal.mz_mcp_data_product_details WHERE object_name = '"materialize"."agent_objects"."multi_indexed"' ORDER BY cluster NULLS LAST;
+----
+"materialize"."agent_objects"."multi_indexed",quickstart
+"materialize"."agent_objects"."multi_indexed",NULL
+COMPLETE 2
+
+# Regression pin for the `read_data_product` cluster lookup: it must prefer
+# the usable cluster (quickstart) over the null row via `NULLS LAST`. If this
+# regressed, the read would silently fall back to the session cluster even
+# when a usable index exists.
+simple conn=agent_restricted,user=agent
+SELECT dp.cluster FROM mz_internal.mz_mcp_data_products dp WHERE dp.object_name = '"materialize"."agent_objects"."multi_indexed"' ORDER BY dp.cluster NULLS LAST LIMIT 1;
+----
+quickstart
+COMPLETE 1
+
+# A plain (non-materialized) indexed view whose only index sits on a cluster
+# the agent lacks USAGE on must not appear in discovery: falling back to the
+# session cluster would recompute the view.
+simple conn=mz_system,user=mz_system
+CREATE VIEW agent_objects.plain_view_on_agent_compute AS SELECT 1 AS id;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE INDEX plain_view_idx IN CLUSTER agent_compute ON agent_objects.plain_view_on_agent_compute (id);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON agent_objects.plain_view_on_agent_compute TO agent;
+----
+COMPLETE 0
+
+simple conn=agent_restricted,user=agent
+SELECT count(*) FROM mz_internal.mz_mcp_data_products WHERE object_name = '"materialize"."agent_objects"."plain_view_on_agent_compute"';
+----
+0
+COMPLETE 1
+
+simple conn=agent_restricted,user=agent
+SELECT count(*) FROM mz_internal.mz_mcp_data_product_details WHERE object_name = '"materialize"."agent_objects"."plain_view_on_agent_compute"';
+----
+0
+COMPLETE 1
+
+# Sanity check: the index really was created on agent_compute. If the CREATE
+# INDEX above had silently gone somewhere else, the exclusion assertion above
+# would pass vacuously.
+simple conn=mz_system,user=mz_system
+SELECT c.name FROM mz_indexes i JOIN mz_clusters c ON c.id = i.cluster_id WHERE i.name = 'plain_view_idx';
+----
+agent_compute
 COMPLETE 1
 
 # mz_session_role_memberships() is callable in a restricted session (it only
@@ -793,12 +933,6 @@ db error: ERROR: access to system object function version is restricted
 DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
 
 simple conn=agent_restricted,user=agent
-SELECT mz_environment_id();
-----
-db error: ERROR: access to system object function mz_environment_id is restricted
-DETAIL: Access to system catalog objects is restricted for this role. Contact your administrator if you need access.
-
-simple conn=agent_restricted,user=agent
 SELECT mz_is_superuser();
 ----
 db error: ERROR: access to system object function mz_is_superuser is restricted
@@ -826,11 +960,274 @@ SELECT current_database();
 materialize
 COMPLETE 1
 
+# =============================================================================
+# Test: mz_environment_id() is intentionally NOT restricted
+# =============================================================================
+#
+# The environment ID is a process-lifetime constant, not sensitive system
+# state, so it is deliberately excluded from the restrict_to_user_objects
+# gate. It is folded to a literal at plan time (see the Scalar registration
+# in src/sql/src/func.rs and
+# doc/developer/design/20260508_restrict_to_user_objects.md). A restricted
+# session can therefore reach it both directly and indirectly.
+
+# Direct call: returns the env id rather than erroring.
+simple conn=agent_restricted,user=agent
+SELECT mz_environment_id() IS NOT NULL;
+----
+t
+COMPLETE 1
+
+# Indirect: a user view that references it, created and granted by a
+# privileged role, is readable by the restricted agent. Because the value
+# is baked into the view definition at plan time, this returns the env id.
+simple conn=mz_system,user=mz_system
+CREATE VIEW agent_objects.env_id_view AS SELECT mz_environment_id() AS env_id;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON agent_objects.env_id_view TO agent;
+----
+COMPLETE 0
+
+simple conn=agent_restricted,user=agent
+SELECT env_id IS NOT NULL FROM agent_objects.env_id_view;
+----
+t
+COMPLETE 1
+
 # Reset the role default for cleanup (so other tests aren't affected)
 simple conn=mz_system,user=mz_system
 ALTER ROLE agent RESET restrict_to_user_objects;
 ----
 COMPLETE 0
+
+# =============================================================================
+# Data product view semantics (mz_mcp_data_products / _details)
+#
+# The RBAC cases above exercise privilege filtering. These cases pin the
+# view logic itself: which objects qualify, how the description is chosen,
+# and how column types map into the JSON Schema. They run as a
+# fully-privileged owner so the object set is deterministic and independent
+# of the agent-role grants above.
+# =============================================================================
+
+statement ok
+CREATE SCHEMA dp_semantics;
+
+statement ok
+SET search_path = dp_semantics;
+
+# A materialized view qualifies as a data product with no index required.
+statement ok
+CREATE MATERIALIZED VIEW mv_plain AS SELECT 1 AS id;
+
+# A plain (non-indexed) view does NOT qualify: reading it would trigger a
+# full recompute.
+statement ok
+CREATE VIEW v_unindexed AS SELECT 1 AS id;
+
+# A view qualifies only once it has an index.
+statement ok
+CREATE VIEW v_indexed AS SELECT 1 AS id, 'a' AS label;
+
+statement ok
+CREATE INDEX v_indexed_idx ON v_indexed (id);
+
+query T
+SELECT object_name FROM mz_internal.mz_mcp_data_products
+WHERE object_name LIKE '%"dp_semantics"%' ORDER BY object_name;
+----
+"materialize"."dp_semantics"."mv_plain"
+"materialize"."dp_semantics"."v_indexed"
+
+# Multiple indexes on one object must not duplicate its row (SELECT DISTINCT).
+statement ok
+CREATE INDEX v_indexed_idx2 ON v_indexed (label);
+
+query T
+SELECT object_name FROM mz_internal.mz_mcp_data_products
+WHERE object_name = '"materialize"."dp_semantics"."v_indexed"';
+----
+"materialize"."dp_semantics"."v_indexed"
+
+# -----------------------------------------------------------------------------
+# Description precedence: index comment wins over object comment (COALESCE).
+# -----------------------------------------------------------------------------
+
+# No comments: description is NULL.
+query T
+SELECT description FROM mz_internal.mz_mcp_data_products
+WHERE object_name = '"materialize"."dp_semantics"."mv_plain"';
+----
+NULL
+
+# Object comment only: description is the object comment.
+statement ok
+COMMENT ON MATERIALIZED VIEW mv_plain IS 'the object comment';
+
+query T
+SELECT description FROM mz_internal.mz_mcp_data_products
+WHERE object_name = '"materialize"."dp_semantics"."mv_plain"';
+----
+the object comment
+
+# Index comment present: it takes precedence over the object comment. Uses a
+# dedicated single-index view so the COALESCE precedence is unambiguous (with
+# multiple indexes the DISTINCT can surface one row per differing description).
+statement ok
+CREATE VIEW v_desc AS SELECT 1 AS id;
+
+statement ok
+CREATE INDEX v_desc_idx ON v_desc (id);
+
+statement ok
+COMMENT ON VIEW v_desc IS 'object comment on view';
+
+statement ok
+COMMENT ON INDEX v_desc_idx IS 'index comment wins';
+
+query T
+SELECT description FROM mz_internal.mz_mcp_data_products
+WHERE object_name = '"materialize"."dp_semantics"."v_desc"';
+----
+index comment wins
+
+# -----------------------------------------------------------------------------
+# JSON Schema type mapping in mz_mcp_data_product_details.
+# -----------------------------------------------------------------------------
+
+statement ok
+CREATE MATERIALIZED VIEW mv_types AS
+SELECT
+    1::int AS c_int,
+    1.5::double AS c_double,
+    true AS c_bool,
+    'x'::text AS c_text,
+    '2024-01-01'::date AS c_date,
+    '{}'::jsonb AS c_jsonb,
+    '\x00'::bytea AS c_bytea,
+    '12:34:56'::time AS c_time,
+    '2024-01-01 12:00:00'::timestamp AS c_ts,
+    '2024-01-01 12:00:00+00'::timestamptz AS c_tstz,
+    '00000000-0000-0000-0000-000000000000'::uuid AS c_uuid;
+
+# Numeric columns map to JSON Schema type "number".
+query T
+SELECT schema->'properties'->'c_int'->>'type' FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+number
+
+query T
+SELECT schema->'properties'->'c_double'->>'type' FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+number
+
+# Boolean maps to "boolean".
+query T
+SELECT schema->'properties'->'c_bool'->>'type' FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+boolean
+
+# text falls through to the "string" default.
+query T
+SELECT schema->'properties'->'c_text'->>'type' FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+string
+
+# date is a string with a format hint.
+query TT
+SELECT schema->'properties'->'c_date'->>'type', schema->'properties'->'c_date'->>'format'
+FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+string  date
+
+# jsonb maps to a nested "object".
+query T
+SELECT schema->'properties'->'c_jsonb'->>'type' FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+object
+
+# bytea is the most distinctive branch: string with the two extra content
+# hints so a JSON Schema consumer knows to Base64-decode the value.
+query TTT
+SELECT
+    schema->'properties'->'c_bytea'->>'type',
+    schema->'properties'->'c_bytea'->>'contentEncoding',
+    schema->'properties'->'c_bytea'->>'contentMediaType'
+FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+string  base64  application/octet-stream
+
+# time is a string with format=time.
+query TT
+SELECT schema->'properties'->'c_time'->>'type', schema->'properties'->'c_time'->>'format'
+FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+string  time
+
+# timestamp and timestamptz both match the `ilike 'timestamp%'` branch and
+# map to string with format=date-time.
+query TT
+SELECT schema->'properties'->'c_ts'->>'type', schema->'properties'->'c_ts'->>'format'
+FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+string  date-time
+
+query TT
+SELECT schema->'properties'->'c_tstz'->>'type', schema->'properties'->'c_tstz'->>'format'
+FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+string  date-time
+
+# uuid is a string with format=uuid.
+query TT
+SELECT schema->'properties'->'c_uuid'->>'type', schema->'properties'->'c_uuid'->>'format'
+FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+string  uuid
+
+# -----------------------------------------------------------------------------
+# Column comments surface as the property description; absent otherwise.
+# -----------------------------------------------------------------------------
+
+statement ok
+COMMENT ON COLUMN mv_types.c_int IS 'the primary id';
+
+query T
+SELECT schema->'properties'->'c_int'->>'description' FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+the primary id
+
+# A column with no comment has no description key (jsonb_strip_nulls removes it).
+query T
+SELECT schema->'properties'->'c_double' ? 'description' FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+false
+
+# -----------------------------------------------------------------------------
+# Cleanup for this section.
+# -----------------------------------------------------------------------------
+
+statement ok
+SET search_path = public;
+
+statement ok
+DROP SCHEMA dp_semantics CASCADE;
 
 # =============================================================================
 # Cleanup
@@ -844,6 +1241,11 @@ DROP SCHEMA agent_objects CASCADE;
 
 simple conn=mz_system,user=mz_system
 DROP CLUSTER agent_serving CASCADE;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER agent_compute CASCADE;
 ----
 COMPLETE 0
 

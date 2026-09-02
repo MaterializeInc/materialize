@@ -24,6 +24,10 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write
+      # Required by the "Set CLA status for bot author" step below, which
+      # POSTs a commit status. GITHUB_TOKEN cannot trigger the CLA workflow
+      # on bot-authored PRs, so we set the status directly instead.
+      statuses: write
     env:
       BRANCH: automated/update-generated-docs
     steps:

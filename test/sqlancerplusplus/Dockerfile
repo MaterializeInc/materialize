@@ -9,7 +9,7 @@
 
 # Build and run SQLancer++ ported for Materialize
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
 WORKDIR /workdir
 
@@ -25,7 +25,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
 # Build SQLancer++
 RUN git clone --single-branch --depth=1 https://github.com/MaterializeInc/sqlancerplusplus \
     && cd sqlancerplusplus \
-    && git checkout e42267920448183e624123175b7573577e3c6713 \
+    && git checkout 7237554d9cba63cdfe94d076cd806aec3161e6c0 \
     && rm -rf .git \
     && mvn package -DskipTests \
     && sed -i "s/MATERIALIZE.host=localhost/MATERIALIZE.host=materialized/g" dbconfigs/jdbc.properties

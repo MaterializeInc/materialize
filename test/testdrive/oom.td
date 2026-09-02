@@ -9,8 +9,6 @@
 
 # Test that we generate errors instead of crashing due to out of memory issues
 
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_result_size = '1MB'
 

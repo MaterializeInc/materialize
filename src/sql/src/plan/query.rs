@@ -1806,6 +1806,17 @@ pub fn plan_nested_query(
         project,
         group_size_hints,
     } = qcx.checked_recur_mut(|qcx| plan_query(qcx, q))?;
+    // A nested query is an unordered relation. Its `ORDER BY` is only observable
+    // in combination with a row-limiting clause (`LIMIT`/`OFFSET`), which selects
+    // which rows survive. Without such a clause the ordering has no defined
+    // meaning, so it is dropped rather than materialized into a `TopK`.
+    //
+    // NOTE: This diverges from PostgreSQL, where an order-sensitive aggregate
+    // (`array_agg`, `string_agg`, ...) in the outer query observes a sorted
+    // subquery's output as an executor artifact. That behavior is not guaranteed
+    // by the SQL standard and PostgreSQL itself documents it as fragile. Callers
+    // that need a specific aggregation order must use the in-aggregate
+    // `agg(value ORDER BY ...)` form instead.
     if limit.is_some()
         || !offset
             .clone()
@@ -1958,8 +1969,21 @@ fn plan_set_expr(
                 }
                 SetOperator::Except => Hir::except(all, lhs, rhs),
                 SetOperator::Intersect => {
+                    // Planning below duplicates whichever input ends up on the left, so a
+                    // left-deep chain of INTERSECTs doubles the plan at every level, i.e. would be
+                    // exponential. INTERSECT is commutative, so put the cheaper input on the left.
+                    // A subtree is then only duplicated when it is the smaller of the two, so plan
+                    // size obeys T(a + b) <= 2*T(a) + T(b) for input sizes a <= b. The worst case
+                    // is balanced trees, where this solves to O(n^log2(3)) instead of O(2^n).
+                    let (lhs, rhs) = if lhs.relation_node_count() > rhs.relation_node_count() {
+                        (rhs, lhs)
+                    } else {
+                        (lhs, rhs)
+                    };
                     // TODO: Let's not duplicate the left-hand expression into TWO dataflows!
-                    // Though we believe that render() does The Right Thing (TM)
+                    // The optimizer de-duplicates at some point, but it would be good to already
+                    // not duplicate here.
+                    //
                     // Also note that we do *not* need another threshold() at the end of the method chain
                     // because the right-hand side of the outer union only produces existing records,
                     // i.e., the record counts for differential data flow definitely remain non-negative.
@@ -2041,6 +2065,10 @@ fn plan_set_expr(
                 ShowStatement::ShowCreateSink(stmt) => to_hirscope(
                     show::plan_show_create_sink(qcx.scx, stmt.clone())?,
                     show::describe_show_create_sink(qcx.scx, stmt)?,
+                ),
+                ShowStatement::ShowCreateMetricSink(stmt) => to_hirscope(
+                    show::plan_show_create_metric_sink(qcx.scx, stmt.clone())?,
+                    show::describe_show_create_metric_sink(qcx.scx, stmt)?,
                 ),
                 ShowStatement::ShowCreateSource(stmt) => to_hirscope(
                     show::plan_show_create_source(qcx.scx, stmt.clone())?,
@@ -2323,14 +2351,26 @@ fn plan_select_from_where(
         visitor.into_result()?
     };
     let mut table_func_names: BTreeMap<String, Ident> = BTreeMap::new();
+    // Table functions in the SELECT list apply to the output of the reduce
+    // (GROUP BY, aggregates, HAVING), but their columns must already be in
+    // scope when the SELECT list is expanded and GROUP BY items are planned,
+    // so the join is planned here regardless. Step 5 decides whether the
+    // reduce consumes this join or the saved pre-join relation, and in the
+    // latter case Step 8.5 plans the join again on top of the reduce.
+    let pre_table_funcs_arity = from_scope.len();
+    let mut pre_table_funcs_relation = None;
+    let mut table_funcs_deferred = false;
     if !table_funcs.is_empty() {
         let (expr, scope) = plan_scalar_table_funcs(
             qcx,
-            table_funcs,
+            &table_funcs,
             &mut table_func_names,
             &relation_expr,
             &from_scope,
         )?;
+        if !aggregates.is_empty() || !s.group_by.is_empty() || s.having.is_some() {
+            pre_table_funcs_relation = Some(relation_expr.clone());
+        }
         relation_expr = relation_expr.join(expr, HirScalarExpr::literal_true(), JoinKind::Inner);
         from_scope = from_scope.product(scope)?;
     }
@@ -2462,6 +2502,35 @@ fn plan_select_from_where(
                 .push(ScopeItem::from_expr(Expr::Function(sql_function.clone())));
         }
         if !agg_exprs.is_empty() || !group_key.is_empty() || s.having.is_some() {
+            // Table functions join after the reduce only when no group key or
+            // aggregate references their columns, e.g. GROUP BY on a SELECT
+            // list alias of a table function.
+            if let Some(pre_relation_expr) = pre_table_funcs_relation.take() {
+                let mut references_table_funcs = false;
+                let mut check = |column: usize| {
+                    if column >= pre_table_funcs_arity {
+                        references_table_funcs = true;
+                    }
+                };
+                for expr in &group_hir_exprs {
+                    expr.visit_columns_referring_to_root_level(&mut check);
+                }
+                for agg_expr in &agg_exprs {
+                    agg_expr
+                        .expr
+                        .visit_columns_referring_to_root_level(&mut check);
+                }
+                if !references_table_funcs {
+                    relation_expr = pre_relation_expr;
+                    // The group keys point past the table functions' columns,
+                    // which the saved relation does not have.
+                    for (i, key) in group_key.iter_mut().enumerate() {
+                        *key = pre_table_funcs_arity + i;
+                    }
+                    table_funcs_deferred = true;
+                }
+            }
+
             // apply GROUP BY / aggregates
             relation_expr = relation_expr.map(group_hir_exprs).reduce(
                 group_key,
@@ -2474,7 +2543,14 @@ fn plan_select_from_where(
             // from scope. These items need to *exist* because they might shadow
             // variables in outer scopes that would otherwise be valid to
             // reference, but accessing them needs to produce an error.
-            for i in 0..from_scope.len() {
+            // Deferred table functions' columns come back into scope in Step
+            // 8.5, so they must not be recorded as ungrouped.
+            let ungrouped_arity = if table_funcs_deferred {
+                pre_table_funcs_arity
+            } else {
+                from_scope.len()
+            };
+            for i in 0..ungrouped_arity {
                 if !select_all_mapping.contains_key(&i) {
                     let scope_item = &ecx.scope.items[i];
                     group_scope.ungrouped_columns.push(ScopeUngroupedColumn {
@@ -2569,6 +2645,25 @@ fn plan_select_from_where(
         relation_expr = relation_expr.filter(vec![expr]);
     }
 
+    // Step 8.5. Join the table functions deferred in Step 5. Planning them
+    // again rebinds their arguments' column references to the reduced
+    // relation.
+    if table_funcs_deferred {
+        let (expr, scope) = plan_scalar_table_funcs(
+            qcx,
+            &table_funcs,
+            &mut table_func_names,
+            &relation_expr,
+            &group_scope,
+        )?;
+        relation_expr = relation_expr.join(expr, HirScalarExpr::literal_true(), JoinKind::Inner);
+        // `product` resets `ungrouped_columns`, but the ungrouped column
+        // errors from the reduce must survive for the SELECT list.
+        let ungrouped_columns = mem::take(&mut group_scope.ungrouped_columns);
+        group_scope = group_scope.product(scope)?;
+        group_scope.ungrouped_columns = ungrouped_columns;
+    }
+
     // Step 9. Handle SELECT clause.
     let output_columns = {
         let mut new_exprs = vec![];
@@ -2659,6 +2754,19 @@ fn plan_select_from_where(
                 relation_expr = relation_expr.distinct();
             }
             Some(Distinct::On(exprs)) => {
+                // The table functions deferred in Step 5 join below this TopK,
+                // so the distinct would collapse their expansion rather than
+                // expand the rows the distinct picks. PostgreSQL instead
+                // evaluates a SELECT list table function after the distinct
+                // whenever the query has an ORDER BY and the function's output
+                // is not itself a distinct or sort key. Reject these queries
+                // rather than answer them differently.
+                if table_funcs_deferred && !order_by_exprs.is_empty() {
+                    bail_unsupported!(
+                        "SELECT list table function with DISTINCT ON and ORDER BY over an aggregation"
+                    );
+                }
+
                 let ecx = &ExprContext {
                     qcx,
                     name: "DISTINCT ON clause",
@@ -2758,7 +2866,7 @@ fn plan_select_from_where(
 
 fn plan_scalar_table_funcs(
     qcx: &QueryContext,
-    table_funcs: BTreeMap<Function<Aug>, String>,
+    table_funcs: &BTreeMap<Function<Aug>, String>,
     table_func_names: &mut BTreeMap<String, Ident>,
     relation_expr: &HirRelationExpr,
     from_scope: &Scope,
@@ -6075,11 +6183,122 @@ pub fn scalar_type_from_sql(
     }
 }
 
+/// Maximum nesting depth of a custom type. A deeper type is rejected rather than
+/// recursed into, so a long `CREATE TYPE` chain (`l0 <- l1 <- ... <- lN`) cannot
+/// overflow the stack while resolving.
+const MAX_TYPE_NESTING_DEPTH: usize = 128;
+
+/// Maximum number of sub-type resolutions performed while resolving a single
+/// custom type. A record whose fields reference the same sub-type produces a
+/// type tree that is exponential in its depth (fields hold owned copies, not
+/// shared references), so bound the total work to reject such a type before it
+/// exhausts memory / CPU rather than after.
+const MAX_TYPE_RESOLUTION_NODES: usize = 100_000;
+
 pub fn scalar_type_from_catalog(
     catalog: &dyn SessionCatalog,
     id: CatalogItemId,
     modifiers: &[i64],
 ) -> Result<SqlScalarType, PlanError> {
+    let (depth_limit, mut budget) = type_resolution_limits(catalog);
+    scalar_type_from_catalog_inner(catalog, id, modifiers, 0, depth_limit, &mut budget)
+}
+
+/// The `(nesting-depth, resolution-node)` limits to apply while resolving one
+/// root custom type. See [`MAX_TYPE_NESTING_DEPTH`] and
+/// [`MAX_TYPE_RESOLUTION_NODES`] for what each guards against.
+///
+/// The limits are lifted while re-planning a persisted catalog item. The
+/// `unsafe_enable_unbounded_custom_type_resolution` flag signals this, and
+/// `SystemVars::enable_for_item_parsing` force-enables it during bootstrap. A
+/// type that an earlier version already accepted resolves to a finite tree, so
+/// its persisted `create_sql` must keep re-planning after these limits were
+/// introduced. Rejecting such a grandfathered type during rehydration would
+/// turn a graceful planning error into a fatal bootstrap panic. A later
+/// resolution in a normal user session still applies the limits and returns the
+/// graceful error.
+fn type_resolution_limits(catalog: &dyn SessionCatalog) -> (usize, usize) {
+    if catalog
+        .system_vars()
+        .unsafe_enable_unbounded_custom_type_resolution()
+    {
+        (usize::MAX, usize::MAX)
+    } else {
+        (MAX_TYPE_NESTING_DEPTH, MAX_TYPE_RESOLUTION_NODES)
+    }
+}
+
+/// Bounds the total resolution work while resolving one root custom type into a
+/// `SqlScalarType`. A single budget must span the entire root type: a record's
+/// fields, and any containers nested within them, all draw from one shared pool.
+/// A type that is small field-by-field but enormous in aggregate is therefore
+/// still rejected. Resetting the budget per field would let a wide record of
+/// individually-cheap fields resolve into an unbounded type tree and exhaust
+/// memory, which is the denial of service this bound exists to prevent.
+///
+/// Use this when resolving a type that is being assembled from its parts (for
+/// example at `CREATE TYPE` time, before the root exists in the catalog) so that
+/// creation-time validation rejects exactly the types a later direct
+/// [`scalar_type_from_catalog`] call would reject.
+pub struct TypeResolutionBudget {
+    /// Sub-type resolutions remaining before the root type is rejected as too
+    /// complex.
+    remaining: usize,
+    /// Nesting depth past which the root type is rejected. Shared by every
+    /// child so the whole root type is bounded consistently.
+    depth_limit: usize,
+}
+
+impl TypeResolutionBudget {
+    /// Creates a budget for resolving one root type, charging the root node
+    /// itself against the budget. Children resolved through
+    /// [`TypeResolutionBudget::resolve_child`] begin at nesting depth one,
+    /// mirroring a direct [`scalar_type_from_catalog`] call. The limits are
+    /// relaxed for grandfathered persisted items, see [`type_resolution_limits`].
+    pub fn for_root(catalog: &dyn SessionCatalog) -> TypeResolutionBudget {
+        let (depth_limit, budget) = type_resolution_limits(catalog);
+        TypeResolutionBudget {
+            // The root type counts as one node.
+            remaining: budget.saturating_sub(1),
+            depth_limit,
+        }
+    }
+
+    /// Resolves a type referenced directly by the root (a record field, list
+    /// element, or map value) into a `SqlScalarType`, drawing from this shared
+    /// budget so that all such children of one root are bounded together.
+    pub fn resolve_child(
+        &mut self,
+        catalog: &dyn SessionCatalog,
+        id: CatalogItemId,
+        modifiers: &[i64],
+    ) -> Result<SqlScalarType, PlanError> {
+        scalar_type_from_catalog_inner(
+            catalog,
+            id,
+            modifiers,
+            1,
+            self.depth_limit,
+            &mut self.remaining,
+        )
+    }
+}
+
+fn scalar_type_from_catalog_inner(
+    catalog: &dyn SessionCatalog,
+    id: CatalogItemId,
+    modifiers: &[i64],
+    depth: usize,
+    depth_limit: usize,
+    budget: &mut usize,
+) -> Result<SqlScalarType, PlanError> {
+    if depth > depth_limit {
+        sql_bail!("custom type nesting depth exceeds limit of {}", depth_limit);
+    }
+    *budget = match budget.checked_sub(1) {
+        Some(remaining) => remaining,
+        None => sql_bail!("custom type is too complex to resolve"),
+    };
     let entry = catalog.get_item(&id);
     let type_details = match entry.type_details() {
         Some(type_details) => type_details,
@@ -6178,19 +6397,27 @@ pub fn scalar_type_from_catalog(
             match t {
                 CatalogType::Array {
                     element_reference: element_id,
-                } => Ok(SqlScalarType::Array(Box::new(scalar_type_from_catalog(
-                    catalog,
-                    *element_id,
-                    modifiers,
-                )?))),
+                } => Ok(SqlScalarType::Array(Box::new(
+                    scalar_type_from_catalog_inner(
+                        catalog,
+                        *element_id,
+                        modifiers,
+                        depth + 1,
+                        depth_limit,
+                        budget,
+                    )?,
+                ))),
                 CatalogType::List {
                     element_reference: element_id,
                     element_modifiers,
                 } => Ok(SqlScalarType::List {
-                    element_type: Box::new(scalar_type_from_catalog(
+                    element_type: Box::new(scalar_type_from_catalog_inner(
                         catalog,
                         *element_id,
                         element_modifiers,
+                        depth + 1,
+                        depth_limit,
+                        budget,
                     )?),
                     custom_id: Some(id),
                 }),
@@ -6200,26 +6427,39 @@ pub fn scalar_type_from_catalog(
                     value_reference: value_id,
                     value_modifiers,
                 } => Ok(SqlScalarType::Map {
-                    value_type: Box::new(scalar_type_from_catalog(
+                    value_type: Box::new(scalar_type_from_catalog_inner(
                         catalog,
                         *value_id,
                         value_modifiers,
+                        depth + 1,
+                        depth_limit,
+                        budget,
                     )?),
                     custom_id: Some(id),
                 }),
                 CatalogType::Range {
                     element_reference: element_id,
                 } => Ok(SqlScalarType::Range {
-                    element_type: Box::new(scalar_type_from_catalog(catalog, *element_id, &[])?),
+                    element_type: Box::new(scalar_type_from_catalog_inner(
+                        catalog,
+                        *element_id,
+                        &[],
+                        depth + 1,
+                        depth_limit,
+                        budget,
+                    )?),
                 }),
                 CatalogType::Record { fields } => {
                     let scalars: Box<[(ColumnName, SqlColumnType)]> = fields
                         .iter()
                         .map(|f| {
-                            let scalar_type = scalar_type_from_catalog(
+                            let scalar_type = scalar_type_from_catalog_inner(
                                 catalog,
                                 f.type_reference,
                                 &f.type_modifiers,
+                                depth + 1,
+                                depth_limit,
+                                budget,
                             )?;
                             Ok((
                                 f.name.clone(),

@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner/create_view.rs
-revision: 6a75ad9bb5
+revision: 277b33e9c0
 ---
 
 # adapter::coord::sequencer::inner::create_view

@@ -20,13 +20,22 @@ rm -rf profraws
 mkdir profraws
 
 PROFRAW_CHECK_JOBS="$(nproc 2>/dev/null)"
+# Exclude the profraws/ working dir: it lives under the search root, so without
+# this the concurrent workers below re-discover the copies they just wrote and
+# delete them. A failed cp must not delete the original and must fail the run,
+# so copy before removing and exit non-zero if the copy did not succeed.
 # shellcheck disable=SC2016
-find . -name '*.profraw' -print0 | xargs -0 -n 1 -P "$PROFRAW_CHECK_JOBS" \
+find . -name '*.profraw' -not -path './profraws/*' -print0 \
+    | xargs -0 -r -n 1 -P "$PROFRAW_CHECK_JOBS" \
     sh -c 'f="$1"
         echo "$f"
-        cp "$f" profraws/
+        if ! cp "$f" profraws/; then
+            echo "Failed to copy $f" >&2
+            exit 1
+        fi
         rm -f "$f"
         if ! rust-profdata merge -o /dev/null "profraws/$(basename "$f")"; then
+            echo "Invalid profraw discarded: $f" >&2
             rm -f "profraws/$(basename "$f")"
         fi' _
 

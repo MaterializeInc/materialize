@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,20 +9,18 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/union
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/union
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
 mode cockroach
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET unsafe_enable_table_keys = true
-----
-COMPLETE 0
 
 query I rowsort
 VALUES (1), (1), (1), (2), (2) UNION VALUES (1), (3), (1)
@@ -82,75 +80,82 @@ VALUES (1), (1), (1), (2), (2) UNION ALL VALUES (1), (3), (1) ORDER BY 1 DESC LI
 3
 2
 
-# TODO(benesch): uncomment if we improve UNION type matching. PostgreSQL doesn't
-# support these, so it's not high priority.
-#
-# # UNION with NULL columns in operands works.
-# query I
-# VALUES (1) UNION ALL VALUES (NULL) ORDER BY 1
-# ----
-# NULL
-# 1
-#
-# query I
-# VALUES (NULL) UNION ALL VALUES (1) ORDER BY 1
-# ----
-# NULL
-# 1
-#
-# query I
-# VALUES (NULL) UNION ALL VALUES (NULL)
-# ----
-# NULL
-# NULL
+# Not supported by Materialize.
+onlyif cockroach
+# UNION with NULL columns in operands works.
+query I
+VALUES (1) UNION ALL VALUES (NULL) ORDER BY 1
+----
+NULL
+1
 
-# TODO(benesch): uncomment when we have support for pg_typeof and column
-# aliases.
-#
-# query IT rowsort
-# SELECT x, pg_typeof(y) FROM (SELECT 1, NULL UNION ALL SELECT 2, 4) AS t(x, y)
-# ----
-# 1  unknown
-# 2  int
-#
-# query IT rowsort
-# SELECT x, pg_typeof(y) FROM (SELECT 1, 3 UNION ALL SELECT 2, NULL) AS t(x, y)
-# ----
-# 1  int
-# 2  unknown
+# Not supported by Materialize.
+onlyif cockroach
+query I
+VALUES (NULL) UNION ALL VALUES (1) ORDER BY 1
+----
+NULL
+1
 
-# TODO(benesch): uncomment if we improve UNION type matching. PostgreSQL doesn't
-# support these, so it's not high priority.
-#
+query I
+VALUES (NULL) UNION ALL VALUES (NULL)
+----
+NULL
+NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+query IT rowsort
+SELECT x, pg_typeof(y) FROM (SELECT 1, NULL UNION ALL SELECT 2, 4) AS t(x, y)
+----
+1  unknown
+2  bigint
+
+# Not supported by Materialize.
+onlyif cockroach
+query IT rowsort
+SELECT x, pg_typeof(y) FROM (SELECT 1, 3 UNION ALL SELECT 2, NULL) AS t(x, y)
+----
+1  bigint
+2  unknown
+
+# Not supported by Materialize.
+onlyif cockroach
 # INTERSECT with NULL columns in operands works.
-# query I
-# VALUES (1) INTERSECT VALUES (NULL) ORDER BY 1
-# ----
-#
-# query I
-# VALUES (NULL) INTERSECT VALUES (1) ORDER BY 1
-# ----
-#
-# query I
-# VALUES (NULL) INTERSECT VALUES (NULL)
-# ----
-# NULL
-#
-# # EXCEPT with NULL columns in operands works.
-# query I
-# VALUES (1) EXCEPT VALUES (NULL) ORDER BY 1
-# ----
-# 1
-#
-# query I
-# VALUES (NULL) EXCEPT VALUES (1) ORDER BY 1
-# ----
-# NULL
-#
-# query I
-# VALUES (NULL) EXCEPT VALUES (NULL)
-# ----
-#
+query I
+VALUES (1) INTERSECT VALUES (NULL) ORDER BY 1
+----
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+VALUES (NULL) INTERSECT VALUES (1) ORDER BY 1
+----
+
+query I
+VALUES (NULL) INTERSECT VALUES (NULL)
+----
+NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+# EXCEPT with NULL columns in operands works.
+query I
+VALUES (1) EXCEPT VALUES (NULL) ORDER BY 1
+----
+1
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+VALUES (NULL) EXCEPT VALUES (1) ORDER BY 1
+----
+NULL
+
+query I
+VALUES (NULL) EXCEPT VALUES (NULL)
+----
+
 statement ok
 CREATE TABLE uniontest (
   k INT,
@@ -242,20 +247,23 @@ SELECT 1, 2 INTERSECT SELECT 3
 query error pgcode 42601 each EXCEPT query must have the same number of columns: 2 vs 1
 SELECT 1, 2 EXCEPT SELECT 3
 
-query error pgcode 42804 UNION types integer and text cannot be matched
-SELECT 1 UNION SELECT '3'
+# These work with the optimizer on, but not with it off. Skip for now.
+# TODO(jordan,radu): re-enable when optimizer=off goes away.
 
-query error pgcode 42804 INTERSECT types integer and text cannot be matched
-SELECT 1 INTERSECT SELECT '3'
+# query error pgcode 42804 UNION types int and string cannot be matched
+# SELECT 1 UNION SELECT '3'
+#
+# query error pgcode 42804 INTERSECT types int and string cannot be matched
+# SELECT 1 INTERSECT SELECT '3'
+#
+# query error pgcode 42804 EXCEPT types int and string cannot be matched
+# SELECT 1 EXCEPT SELECT '3'
+#
+# query error UNION types int\[] and string\[] cannot be matched
+# SELECT ARRAY[1] UNION ALL SELECT ARRAY['foo']
 
-query error pgcode 42804 EXCEPT types integer and text cannot be matched
-SELECT 1 EXCEPT SELECT '3'
-
-query error pgcode 42703 column "z" does not exist
+query error pgcode 42703 column \"z\" does not exist
 SELECT 1 UNION SELECT 3 ORDER BY z
-
-query error UNION types integer\[] and text\[] cannot be matched
-SELECT ARRAY[1] UNION ALL SELECT ARRAY['foo']
 
 # Check that UNION permits columns of different visible types
 
@@ -267,7 +275,7 @@ CREATE TABLE b (a INTEGER PRIMARY KEY)
 
 query I
 SELECT * FROM a UNION ALL SELECT * FROM b
-----
+
 
 # Make sure that UNION ALL doesn't crash when its two children have different
 # post-processing stages.
@@ -318,3 +326,454 @@ SELECT a FROM (SELECT a FROM c UNION ALL SELECT a FROM a) WHERE a > 0 AND a < 3
 ----
 1
 1
+
+query I
+SELECT 1 FROM (SELECT a FROM a WHERE a > 3 UNION ALL SELECT a FROM c)
+----
+1
+1
+
+query R
+SELECT * from ((values (1.0::decimal)) EXCEPT (values (1.00::decimal))) WHERE column1::string != '1.00';
+----
+
+# Regression test for 41973 (union operator with no output columns).
+statement ok
+CREATE TABLE tab41973 ()
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+INSERT INTO tab41973 (rowid) VALUES (1), (2), (3)
+
+query I
+SELECT 1 FROM ((SELECT * FROM tab41973) UNION ALL (SELECT * FROM tab41973))
+----
+
+
+statement ok
+DROP TABLE IF EXISTS t1, t2;
+CREATE TABLE t1 (j JSONB);
+CREATE TABLE t2 (j JSONB);
+INSERT INTO t1 VALUES ('{"a": "b"}'), ('{"foo": "bar"}'), (NULL);
+INSERT INTO t2 VALUES ('{"c": "d"}'), ('{"foo": "bar"}'), (NULL);
+
+query T rowsort
+(SELECT j FROM t1) UNION (SELECT j FROM t2)
+----
+NULL
+{"a":"b"}
+{"c":"d"}
+{"foo":"bar"}
+
+statement ok
+DROP TABLE IF EXISTS t1, t2;
+
+statement ok
+CREATE TABLE t1 (a INT[]);
+CREATE TABLE t2 (b INT[]);
+INSERT INTO t1 VALUES (ARRAY[1]), (ARRAY[2]), (NULL);
+INSERT INTO t2 VALUES (ARRAY[2]), (ARRAY[3]), (NULL);
+
+query T rowsort
+(SELECT a FROM t1) UNION (SELECT b FROM t2)
+----
+{1}
+{2}
+NULL
+{3}
+
+# Allow UNION of hidden and non-hidden columns.
+statement ok
+CREATE TABLE ab (a INT, b INT);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+SELECT a, b, rowid FROM ab UNION VALUES (1, 2, 3);
+
+statement ok
+DROP TABLE ab;
+
+# Regression test for #59148.
+statement ok
+CREATE TABLE ab (a INT4, b INT8);
+
+statement ok
+INSERT INTO ab VALUES (1, 1), (1, 2), (2, 1), (2, 2);
+
+query I rowsort
+SELECT a FROM ab UNION SELECT b FROM ab
+----
+1
+2
+
+query I rowsort
+SELECT b FROM ab UNION SELECT a FROM ab
+----
+1
+2
+
+statement ok
+DROP TABLE ab;
+
+# Regression test for the vectorized engine not being able to handle a UNION
+# between NULL and a tuple (#59611).
+statement ok
+CREATE TABLE t59611 (a INT);
+
+statement ok
+INSERT INTO t59611 VALUES (1)
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+WITH
+  cte (cte_col)
+    AS (
+      SELECT
+        *
+      FROM
+        (VALUES ((SELECT NULL FROM t59611 LIMIT 1:::INT8)))
+      UNION SELECT * FROM (VALUES ((1, 2)))
+    )
+SELECT
+  NULL
+FROM
+  cte
+----
+NULL
+NULL
+
+statement ok
+CREATE TABLE t34524 (a INT PRIMARY KEY)
+
+# Not supported by Materialize.
+onlyif cockroach
+# Regression test for #34524.
+query I
+(SELECT NULL FROM t34524) EXCEPT (VALUES((SELECT 1 FROM t34524 LIMIT 1)), (1))
+----
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE ab (a INT PRIMARY KEY, b INT, INDEX (b, a));
+INSERT INTO ab VALUES
+  (1, 1),
+  (2, 2),
+  (3, 1),
+  (4, 2),
+  (5, 1),
+  (6, 2),
+  (7, 3)
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE xy (x INT PRIMARY KEY, y INT, INDEX (y, x));
+INSERT INTO xy VALUES
+  (1, 1),
+  (2, 3),
+  (3, 2),
+  (4, 3),
+  (5, 1),
+  (6, 3)
+
+# Not supported by Materialize.
+onlyif cockroach
+# Regression tests for #41245, #40797. Ensure we can plan ordered set ops
+# without a sort.
+query II
+SELECT a, b FROM ab UNION SELECT x AS a, y AS b FROM xy ORDER BY b, a
+----
+1  1
+3  1
+5  1
+2  2
+3  2
+4  2
+6  2
+2  3
+4  3
+6  3
+7  3
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT a FROM ab UNION ALL SELECT x AS a FROM xy ORDER BY a
+----
+1
+1
+2
+2
+3
+3
+4
+4
+5
+5
+6
+6
+7
+
+# Not supported by Materialize.
+onlyif cockroach
+query II
+SELECT a, b FROM ab INTERSECT SELECT x AS a, y AS b FROM xy ORDER BY b, a
+----
+1  1
+5  1
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT b FROM ab INTERSECT ALL SELECT y AS b FROM xy ORDER BY b
+----
+1
+1
+2
+3
+
+# Not supported by Materialize.
+onlyif cockroach
+query II
+SELECT b, a FROM ab EXCEPT SELECT y AS b, x AS a FROM xy ORDER BY b, a
+----
+1  3
+2  2
+2  4
+2  6
+3  7
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT b FROM ab EXCEPT ALL SELECT y AS b FROM xy ORDER BY b
+----
+1
+2
+2
+
+# Not supported by Materialize.
+onlyif cockroach
+# Regression tests for #64062. Use a streaming set operation even though the
+# ordering is not required.
+query II rowsort
+SELECT a, b FROM ab UNION SELECT x AS a, y AS b FROM xy
+----
+1  1
+2  2
+2  3
+3  1
+3  2
+4  2
+4  3
+5  1
+6  2
+6  3
+7  3
+
+# Not supported by Materialize.
+onlyif cockroach
+query II rowsort
+SELECT a, b FROM ab INTERSECT SELECT x AS a, y AS b FROM xy
+----
+1  1
+5  1
+
+# Not supported by Materialize.
+onlyif cockroach
+query I rowsort
+SELECT b FROM ab INTERSECT ALL SELECT y AS b FROM xy
+----
+1
+1
+2
+3
+
+# Not supported by Materialize.
+onlyif cockroach
+query II rowsort
+SELECT b, a FROM ab EXCEPT SELECT y AS b, x AS a FROM xy
+----
+1  3
+2  2
+2  4
+2  6
+3  7
+
+# Not supported by Materialize.
+onlyif cockroach
+query I rowsort
+SELECT b FROM ab EXCEPT ALL SELECT y AS b FROM xy
+----
+1
+2
+2
+
+# Not supported by Materialize.
+onlyif cockroach
+# UNION ALL doesn't need to use a streaming operation.
+query I rowsort
+SELECT a FROM ab UNION ALL SELECT x AS a FROM xy
+----
+1
+1
+2
+2
+3
+3
+4
+4
+5
+5
+6
+6
+7
+
+# Not supported by Materialize.
+onlyif cockroach
+# If the ordering is only required on a subset of the columns, ensure that we
+# still produce the correct ordering.
+statement ok
+TRUNCATE ab;
+TRUNCATE xy;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+INSERT INTO ab VALUES (1, 1), (2, 2), (3, 3), (4, 4), (5, 5);
+INSERT INTO xy VALUES (1, 1), (3, 3), (5, 5), (7, 7);
+
+# Not supported by Materialize.
+onlyif cockroach
+query II
+SELECT a, b FROM ab UNION SELECT x, y FROM xy ORDER BY a
+----
+1  1
+2  2
+3  3
+4  4
+5  5
+7  7
+
+# Not supported by Materialize.
+onlyif cockroach
+query II
+SELECT a, b FROM ab UNION ALL SELECT x, y FROM xy ORDER BY a
+----
+1  1
+1  1
+2  2
+3  3
+3  3
+4  4
+5  5
+5  5
+7  7
+
+# Not supported by Materialize.
+onlyif cockroach
+query II
+SELECT a, b FROM ab INTERSECT SELECT x, y FROM xy ORDER BY a
+----
+1  1
+3  3
+5  5
+
+# Not supported by Materialize.
+onlyif cockroach
+query II
+SELECT a, b FROM ab INTERSECT ALL SELECT x, y FROM xy ORDER BY a
+----
+1  1
+3  3
+5  5
+
+# Not supported by Materialize.
+onlyif cockroach
+query II
+SELECT a, b FROM ab EXCEPT SELECT x, y FROM xy ORDER BY a
+----
+2  2
+4  4
+
+# Not supported by Materialize.
+onlyif cockroach
+query II
+SELECT a, b FROM ab EXCEPT ALL SELECT x, y FROM xy ORDER BY a
+----
+2  2
+4  4
+
+# Regression test for #64181. Ensure that a projection on top of an ordered
+# UNION ALL correctly projects away ordering columns.
+query TT
+WITH q (x, y) AS (
+  SELECT * FROM (VALUES ('a', 'a'), ('b', 'b'), ('c', 'c'))
+  UNION ALL
+  SELECT * FROM (VALUES ('d', 'd'))
+)
+SELECT 'e', y FROM q
+ORDER BY x
+----
+e  a
+e  b
+e  c
+e  d
+
+# Not supported by Materialize.
+onlyif cockroach
+# Regression test for #69497. Ensure streaming set ops return correct results
+# when some input columns are in descending order.
+statement ok
+CREATE TABLE abc (a INT, b INT, c INT, INDEX (a, b, c DESC));
+INSERT INTO abc VALUES (1, 1, 1), (1, 2, 2), (1, 2, 3), (2, 2, 2), (2, 2, 3);
+CREATE TABLE def (d INT PRIMARY KEY, e INT, f INT);
+INSERT INTO def VALUES (1, 1, 1), (2, 2, 2), (3, 2, 3), (4, 2, 2), (5, 2, 3);
+
+# Not supported by Materialize.
+onlyif cockroach
+query III
+SELECT d, e, f FROM def EXCEPT SELECT a, b, c FROM abc ORDER by d, e
+----
+3  2  3
+4  2  2
+5  2  3
+
+# Not supported by Materialize.
+onlyif cockroach
+# Example where the interesting orderings do not include all columns.
+statement ok
+CREATE TABLE abcd (a INT, b INT, c INT, d INT, INDEX (a, b, c DESC) STORING (d));
+INSERT INTO abcd VALUES (1, 1, 1, 1), (1, 2, 2, 2), (1, 2, 3, 3), (2, 2, 2, 2), (2, 2, 3, 3);
+CREATE TABLE efgh (e INT PRIMARY KEY, f INT, g INT, h INT);
+INSERT INTO efgh VALUES (1, 1, 1, 1), (2, 2, 2, 2), (3, 2, 3, 3), (4, 2, 2, 2), (5, 2, 3, 3);
+
+# Not supported by Materialize.
+onlyif cockroach
+query IIII
+SELECT e, f, g, h FROM efgh EXCEPT SELECT a, b, c, d FROM abcd ORDER by e, f
+----
+3  2  3  3
+4  2  2  2
+5  2  3  3
+
+# Not supported by Materialize.
+onlyif cockroach
+# Regression test for #68702. Ensure correct behavior when a column is projected
+# twice on the left side.
+query III
+SELECT a, b AS b1, b AS b2 FROM abc EXCEPT SELECT a, b, c FROM abc ORDER by a, b1
+----
+
+# Not supported by Materialize.
+onlyif cockroach
+query III
+SELECT a, b AS b1, b AS b2 FROM abc INTERSECT SELECT a, c, b FROM abc ORDER by a, b2
+----
+1  1  1
+1  2  2
+2  2  2

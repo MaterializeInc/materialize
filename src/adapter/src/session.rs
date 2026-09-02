@@ -48,7 +48,7 @@ use mz_storage_client::client::TableData;
 use mz_storage_types::sources::Timeline;
 use qcell::{QCell, QCellOwner};
 use timely::progress::Timestamp as _;
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::watch;
 use uuid::Uuid;
 
@@ -1069,8 +1069,14 @@ impl InProgressRows {
     }
 }
 
-/// A channel of batched rows.
-pub type RowBatchStream = UnboundedReceiver<PeekResponseUnary>;
+/// A stream of batched rows delivered to a client writer.
+///
+/// This is a boxed stream, not a bare channel receiver, so the coordinator can
+/// insert an adapter between itself and the client writer. The SUBSCRIBE path
+/// wraps the receiver in a byte-accounting `map` whose closure type cannot be
+/// named, so it has to be boxed. Consumers box the receiver into a
+/// `RecordFirstRowStream` regardless, so this adds no allocation.
+pub type RowBatchStream = Box<dyn futures::Stream<Item = PeekResponseUnary> + Unpin + Send + Sync>;
 
 /// Part of statement lifecycle. These are timestamps that come from the Adapter frontend
 /// (`mz-pgwire`) part of the lifecycle.
@@ -1097,15 +1103,13 @@ impl LifecycleTimestamps {
 pub enum TransactionStatus {
     /// Idle. Matches `TBLOCK_DEFAULT`.
     Default,
-    /// Running a single-query transaction. Matches
+    /// Running a transaction started outside of any `BEGIN`. Matches
     /// `TBLOCK_STARTED`. In PostgreSQL, when using the extended query protocol, this
     /// may be upgraded into multi-statement implicit query (see [`Self::InTransactionImplicit`]).
     /// Additionally, some statements may trigger an eager commit of the implicit transaction,
     /// see: <https://git.postgresql.org/gitweb/?p=postgresql.git&a=commitdiff&h=f92944137>. In
-    /// Materialize however, we eagerly commit all statements outside of an explicit transaction
-    /// when using the extended query protocol. Therefore, we can guarantee that this state will
-    /// always be a single-query transaction and never be upgraded into a multi-statement implicit
-    /// query.
+    /// Materialize we never upgrade it. We eagerly commit it unless it can take on further
+    /// statements of the same pipeline, see [`Self::may_span_pipeline`].
     Started(Transaction),
     /// Currently in a transaction issued from a `BEGIN`. Matches `TBLOCK_INPROGRESS`.
     InTransaction(Transaction),
@@ -1175,6 +1179,30 @@ impl TransactionStatus {
         }
     }
 
+    /// Whether this implicit transaction may stay open for the rest of its
+    /// extended-protocol pipeline, so that the pipeline commits or rolls back as a
+    /// unit like PostgreSQL's.
+    ///
+    /// Only writes may, because they are merely staged. A read already pinned its
+    /// timestamp without timedomain read holds, so a second read could neither join
+    /// that timestamp nor pick its own.
+    pub fn may_span_pipeline(&self) -> bool {
+        match self {
+            TransactionStatus::Started(txn) => match &txn.ops {
+                TransactionOps::Writes(_) => true,
+                TransactionOps::None
+                | TransactionOps::Peeks { .. }
+                | TransactionOps::Subscribe
+                | TransactionOps::SingleStatement { .. }
+                | TransactionOps::DDL { .. } => false,
+            },
+            TransactionStatus::Default
+            | TransactionStatus::InTransaction(_)
+            | TransactionStatus::InTransactionImplicit(_)
+            | TransactionStatus::Failed(_) => false,
+        }
+    }
+
     /// Whether the transaction may contain multiple statements.
     pub fn is_in_multi_statement_transaction(&self) -> bool {
         match self {
@@ -1185,6 +1213,29 @@ impl TransactionStatus {
             | TransactionStatus::Started(_)
             | TransactionStatus::Failed(_) => false,
         }
+    }
+
+    /// Whether a statement other than the current one can belong to this
+    /// transaction, so committing here would commit more than this statement.
+    ///
+    /// This is [`Self::is_in_multi_statement_transaction`] widened to cover the
+    /// `Started` trap. An extended-protocol pipeline stays `Started` from its
+    /// first statement until `Sync`, so a `Started` transaction already holding
+    /// ops has a pipeline accumulating in it, and a statement running now runs
+    /// alongside those ops.
+    ///
+    /// Callers must evaluate this before the current statement stages ops of
+    /// its own. Afterwards `contains_ops` reports the statement's own ops and
+    /// every statement looks like it shares a transaction.
+    ///
+    /// Reports true for a `Failed` transaction that holds ops, since
+    /// `contains_ops` reads through to the inner transaction in that state.
+    /// Callers that treat a failed transaction as one a statement may run in
+    /// need their own check, because pgwire admits only `COMMIT` and `ROLLBACK`
+    /// once a transaction has failed and so nothing else can observe the
+    /// difference.
+    pub fn may_share_transaction_with_other_statements(&self) -> bool {
+        self.is_in_multi_statement_transaction() || self.contains_ops()
     }
 
     /// Whether we are in a multi-statement transaction, AND the query is immediate.
@@ -1264,7 +1315,6 @@ impl TransactionStatus {
 
     /// Checks whether the current state of this transaction allows writes
     /// (adding write ops).
-    /// transaction
     pub fn allows_writes(&self) -> bool {
         match self {
             TransactionStatus::Started(Transaction { ops, access, .. })
@@ -1273,10 +1323,12 @@ impl TransactionStatus {
                 match ops {
                     TransactionOps::None => access != &Some(TransactionAccessMode::ReadOnly),
                     TransactionOps::Peeks { determination, .. } => {
-                        // If-and-only-if peeks thus far do not have a timestamp
-                        // (i.e. they are constant), we can switch to a write
-                        // transaction.
-                        !determination.timestamp_context.contains_timestamp()
+                        // We can switch a peek-only transaction to a write
+                        // transaction only if the peeks thus far are constant
+                        // (i.e. they do not have a timestamp) and the
+                        // transaction is not explicitly marked read-only.
+                        access != &Some(TransactionAccessMode::ReadOnly)
+                            && !determination.timestamp_context.contains_timestamp()
                     }
                     TransactionOps::Subscribe => false,
                     TransactionOps::Writes(_) => true,
@@ -1360,12 +1412,20 @@ impl TransactionStatus {
                                 *requires_linearization = add_requires_linearization;
                             }
                         }
-                        // Iff peeks thus far do not have a timestamp (i.e.
-                        // they are constant), we can switch to a write
-                        // transaction.
+                        // If the peeks thus far are constant (i.e. they do not
+                        // have a timestamp), writes can follow and switch the
+                        // transaction to a write transaction. But a read-only
+                        // transaction must still reject the write. Without that
+                        // check the write would silently turn a read-only
+                        // transaction into a write transaction, and a later
+                        // write would then trip the assert in the `Writes` arm
+                        // below.
                         writes @ TransactionOps::Writes(..)
                             if !determination.timestamp_context.contains_timestamp() =>
                         {
+                            if matches!(access, Some(TransactionAccessMode::ReadOnly)) {
+                                return Err(AdapterError::ReadOnlyTransaction);
+                            }
                             *ops = writes;
                         }
                         _ => return Err(AdapterError::ReadOnlyTransaction),
@@ -1760,7 +1820,7 @@ impl WriteLocksBuilder {
     }
 }
 
-/// Collection of [`WriteLocks`] gathered during [`group_commit`].
+/// Collection of [`WriteLocks`] gathered during [`stage_group_commit`].
 ///
 /// Note: This struct should __never__ be used outside of group commit because it attempts to merge
 /// together several collections of [`WriteLocks`] which if not done carefully can cause deadlocks
@@ -1807,7 +1867,7 @@ impl WriteLocksBuilder {
 /// For total order to exist, Ta < Tb < Tc < Ta, which is impossible.
 /// ```
 ///
-/// [`group_commit`]: super::coord::Coordinator::group_commit
+/// [`stage_group_commit`]: super::coord::Coordinator::stage_group_commit
 #[derive(Debug, Default)]
 pub(crate) struct GroupCommitWriteLocks {
     locks: BTreeMap<CatalogItemId, tokio::sync::OwnedMutexGuard<()>>,
@@ -1821,6 +1881,20 @@ impl GroupCommitWriteLocks {
         // See: <https://github.com/rust-lang/rust/issues/81074>
         let existing = std::mem::take(&mut locks.locks);
         self.locks.extend(existing);
+    }
+
+    /// Absorbs a disjoint group-commit lock collection.
+    pub fn extend(&mut self, mut other: GroupCommitWriteLocks) {
+        assert!(
+            self.locks.keys().all(|id| !other.locks.contains_key(id)),
+            "separately staged group commits must have disjoint lock sets"
+        );
+        self.locks.extend(std::mem::take(&mut other.locks));
+    }
+
+    /// Inserts a single lock, keyed by the collection it guards.
+    pub fn insert_lock(&mut self, id: CatalogItemId, lock: tokio::sync::OwnedMutexGuard<()>) {
+        self.locks.insert(id, lock);
     }
 
     /// Returns the collections we're missing locks for, if any.

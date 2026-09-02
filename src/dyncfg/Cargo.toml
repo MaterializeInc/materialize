@@ -12,10 +12,12 @@ workspace = true
 
 [dependencies]
 humantime.workspace = true
-mz-ore = { path = "../ore", default-features = false, features = ["proptest", "test"] }
 serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+mz-ore = { path = "../ore", default-features = false, features = ["proptest", "test"] }
 
 [features]
 default = []

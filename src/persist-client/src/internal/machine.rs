@@ -18,7 +18,7 @@ use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures::FutureExt;
 use futures::future::{self, BoxFuture};
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 #[allow(unused_imports)] // False positive.
@@ -31,7 +31,7 @@ use mz_persist_types::{Codec, Codec64};
 use semver::Version;
 use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::{Instrument, debug, info, trace_span};
+use tracing::{Instrument, debug, info, trace_span, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::INLINE_WRITES_TOTAL_MAX_BYTES;
@@ -78,6 +78,7 @@ pub(crate) const CLAIM_UNCLAIMED_COMPACTIONS: Config<bool> = Config::new(
     false,
     "If an append doesn't result in a compaction request, but there is some uncompacted batch \
     in state, compact that instead.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const CLAIM_COMPACTION_PERCENT: Config<usize> = Config::new(
@@ -86,12 +87,14 @@ pub(crate) const CLAIM_COMPACTION_PERCENT: Config<usize> = Config::new(
     "Claim a compaction with the given percent chance, if claiming compactions is enabled. \
     (If over 100, we'll always claim at least one; for example, if set to 365, we'll claim at least \
     three and have a 65% chance of claiming a fourth.)",
+    ParameterScope::Environment,
 );
 
 pub(crate) const CLAIM_COMPACTION_MIN_VERSION: Config<String> = Config::new(
     "persist_claim_compaction_min_version",
     String::new(),
     "If set to a valid version string, compact away any earlier versions if possible.",
+    ParameterScope::Environment,
 );
 
 impl<K, V, T, D> Machine<K, V, T, D>
@@ -191,7 +194,14 @@ where
     pub async fn upgrade_version(&self) -> Result<RoutineMaintenance, Version> {
         let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, upgrade_result, maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.remove_rollups, |_, cfg, state| {
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.upgrade_version, |_, cfg, state| {
+                // A tombstone is terminal and version-inert, so treat the
+                // upgrade as trivially satisfied instead of committing a new
+                // state that `compute_next_state_locked` would reject.
+                if state.is_tombstone() {
+                    return Break(NoOpStateTransition(Ok(())));
+                }
+
                 if state.version <= cfg.build_version {
                     // This would be the place to remove any deprecated items from state, now
                     // that we're dropping compatibility with any previous versions.
@@ -215,12 +225,12 @@ where
         }
     }
 
+    /// Registers a leased reader, returning its initial state.
     pub async fn register_leased_reader(
         &self,
         reader_id: &LeasedReaderId,
         purpose: &str,
         lease_duration: Duration,
-        heartbeat_timestamp_ms: u64,
         use_critical_since: bool,
     ) -> (LeasedReaderState<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
@@ -232,7 +242,9 @@ where
                     purpose,
                     seqno,
                     lease_duration,
-                    heartbeat_timestamp_ms,
+                    // NOTE: Sample the clock here rather than hoisting it out of the closure so
+                    // that a fresh value is used on every retry of this command.
+                    (cfg.now)(),
                     use_critical_since,
                 )
             })
@@ -245,9 +257,10 @@ where
         // seqno hold). The real invariant we want to protect here is that the
         // hold is >= the seqno_since, so validate that instead of anything more
         // specific.
-        debug_assert!(
+        mz_ore::soft_assert_no_log!(
             reader_state.seqno >= seqno_since,
-            "{} vs {}",
+            "leased reader {} registered with seqno hold {} below the shard's seqno_since {}",
+            reader_id,
             reader_state.seqno,
             seqno_since,
         );
@@ -311,12 +324,12 @@ where
         (reqs, maintenance)
     }
 
+    /// Appends `batch` if the shard upper matches its lower.
     pub async fn compare_and_append(
         &self,
         batch: &HollowBatch<T>,
         writer_id: &WriterId,
         debug_info: &HandleDebugState,
-        heartbeat_timestamp_ms: u64,
     ) -> CompareAndAppendRes<T> {
         let idempotency_token = IdempotencyToken::new();
         loop {
@@ -324,7 +337,6 @@ where
                 .compare_and_append_idempotent(
                     batch,
                     writer_id,
-                    heartbeat_timestamp_ms,
                     &idempotency_token,
                     debug_info,
                     None,
@@ -368,7 +380,6 @@ where
         &self,
         batch: &HollowBatch<T>,
         writer_id: &WriterId,
-        heartbeat_timestamp_ms: u64,
         idempotency_token: &IdempotencyToken,
         debug_info: &HandleDebugState,
         // Only exposed for testing. In prod, this always starts as None, but
@@ -481,7 +492,9 @@ where
                     state.compare_and_append(
                         batch,
                         writer_id,
-                        heartbeat_timestamp_ms,
+                        // NOTE: Sample the clock here rather than hoisting it out of the closure
+                        // so that a fresh value is used on every retry of this command.
+                        (cfg.now)(),
                         lease_duration_ms,
                         idempotency_token,
                         debug_info,
@@ -505,7 +518,7 @@ where
                     info!(
                         "compare_and_append received an indeterminate error, retrying in {:?}: {}",
                         retry.next_sleep(),
-                        err
+                        err.display_with_causes()
                     );
                     if indeterminate.is_none() {
                         indeterminate = Some(err);
@@ -579,8 +592,8 @@ where
                     assert!(
                         PartialOrder::less_equal(&writer_upper, &shard_upper),
                         "{:?} vs {:?}",
-                        &writer_upper,
-                        &shard_upper
+                        writer_upper,
+                        shard_upper
                     );
                     if PartialOrder::less_than(&writer_upper, batch.desc.upper()) {
                         // No way this could have committed in some previous
@@ -620,22 +633,18 @@ where
         }
     }
 
+    /// Downgrades the reader's since capability, also heartbeating its lease.
     pub async fn downgrade_since(
         &self,
         reader_id: &LeasedReaderId,
         outstanding_seqno: SeqNo,
         new_since: &Antichain<T>,
-        heartbeat_timestamp_ms: u64,
     ) -> (SeqNo, Since<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
-        self.apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |seqno, _cfg, state| {
-            state.downgrade_since(
-                reader_id,
-                seqno,
-                outstanding_seqno,
-                new_since,
-                heartbeat_timestamp_ms,
-            )
+        self.apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |seqno, cfg, state| {
+            // NOTE: Sample the clock here rather than hoisting it out of the closure so that a
+            // fresh value is used on every retry of this command.
+            state.downgrade_since(reader_id, seqno, outstanding_seqno, new_since, (cfg.now)())
         })
         .await
     }
@@ -867,7 +876,7 @@ where
         }
         let mut watch_fut = std::pin::pin!(
             watch
-                .wait_for_seqno_ge(seqno.next())
+                .wait_for_upper_past(frontier)
                 .map(Wake::Watch)
                 .instrument(trace_span!("snapshot::watch"))
         );
@@ -956,7 +965,7 @@ where
                 Wake::Watch(watch) => {
                     watch_fut.set(
                         watch
-                            .wait_for_seqno_ge(seqno.next())
+                            .wait_for_upper_past(frontier)
                             .map(Wake::Watch)
                             .instrument(trace_span!("snapshot::watch")),
                     );
@@ -1138,24 +1147,28 @@ pub(crate) const NEXT_LISTEN_BATCH_RETRYER_FIXED_SLEEP: Config<Duration> = Confi
     Duration::from_millis(1200), // pubsub is on by default!
     "\
     The fixed sleep when polling for new batches from a Listen or Subscribe. Skipped if zero.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF: Config<Duration> = Config::new(
     "persist_next_listen_batch_retryer_initial_backoff",
     Duration::from_millis(100), // pubsub is on by default!
     "The initial backoff when polling for new batches from a Listen or Subscribe.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER: Config<u32> = Config::new(
     "persist_next_listen_batch_retryer_multiplier",
     2,
     "The backoff multiplier when polling for new batches from a Listen or Subscribe.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const NEXT_LISTEN_BATCH_RETRYER_CLAMP: Config<Duration> = Config::new(
     "persist_next_listen_batch_retryer_clamp",
     Duration::from_secs(16), // pubsub is on by default!
     "The backoff clamp duration when polling for new batches from a Listen or Subscribe.",
+    ParameterScope::Environment,
 );
 
 pub(crate) fn next_listen_batch_retry_params(cfg: &ConfigSet) -> RetryParameters {
@@ -1168,6 +1181,12 @@ pub(crate) fn next_listen_batch_retry_params(cfg: &ConfigSet) -> RetryParameters
 }
 
 pub const INFO_MIN_ATTEMPTS: usize = 3;
+
+/// Attempts after which a still-failing retry loop escalates from INFO to WARN.
+/// `retry_external` always uses the persist backoff (clamped at 16s), so this
+/// is roughly five minutes of continuous failure: well past transient retries,
+/// and a sign the operation (e.g. a blob whose GET never returns) is wedged.
+pub const WARN_MIN_ATTEMPTS: usize = 30;
 
 pub async fn retry_external<R, F, WorkFn>(metrics: &RetryMetrics, mut work_fn: WorkFn) -> R
 where
@@ -1187,7 +1206,15 @@ where
                 return x;
             }
             Err(err) => {
-                if retry.attempt() >= INFO_MIN_ATTEMPTS {
+                if retry.attempt() >= WARN_MIN_ATTEMPTS {
+                    warn!(
+                        "external operation {} has failed {} times, retrying in {:?}: {}",
+                        metrics.name,
+                        retry.attempt(),
+                        retry.next_sleep(),
+                        err.display_with_causes()
+                    );
+                } else if retry.attempt() >= INFO_MIN_ATTEMPTS {
                     info!(
                         "external operation {} failed, retrying in {:?}: {}",
                         metrics.name,
@@ -1479,12 +1506,7 @@ pub mod datadriven {
         let reader_id = args.expect("reader_id");
         let (_, since, routine) = datadriven
             .machine
-            .downgrade_since(
-                &reader_id,
-                seqno,
-                &since,
-                (datadriven.machine.applier.cfg.now)(),
-            )
+            .downgrade_since(&reader_id, seqno, &since)
             .await;
         datadriven.routine.push(routine);
         Ok(format!(
@@ -1820,8 +1842,13 @@ pub mod datadriven {
             .expect("unknown batch")
             .clone();
         let truncated_desc = Description::new(lower, upper, batch.batch.desc.since().clone());
-        let () = validate_truncate_batch(&batch.batch, &truncated_desc, false, true)?;
+        let bounds_truncated = validate_truncate_batch(&batch.batch, &truncated_desc, false, true)?;
         let mut new_hollow_batch = (*batch.batch).clone();
+        if bounds_truncated {
+            for run_meta in &mut new_hollow_batch.run_meta {
+                run_meta.set_bounds_truncated();
+            }
+        }
         new_hollow_batch.desc = truncated_desc;
         let new_batch = IdHollowBatch {
             batch: Arc::new(new_hollow_batch),
@@ -2174,7 +2201,6 @@ pub mod datadriven {
                 &reader_id,
                 "tests",
                 READER_LEASE_DURATION.get(&datadriven.client.cfg),
-                (datadriven.client.cfg.now)(),
                 false,
             )
             .await;
@@ -2292,7 +2318,6 @@ pub mod datadriven {
             .expect("unknown batch")
             .clone();
         let token = args.optional("token").unwrap_or_else(IdempotencyToken::new);
-        let now = (datadriven.client.cfg.now)();
 
         let (id, maintenance) = datadriven
             .machine
@@ -2309,7 +2334,6 @@ pub mod datadriven {
                 .compare_and_append_idempotent(
                     &batch.batch,
                     &writer_id,
-                    now,
                     &token,
                     &HandleDebugState::default(),
                     indeterminate,
@@ -2352,37 +2376,42 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let input = args.expect_str("input");
+        let legacy = args.optional("legacy").unwrap_or(false);
         let batch = datadriven
             .batches
             .get(input)
             .expect("unknown batch")
             .clone();
-        let compact_req = datadriven
-            .compactions
-            .get(input)
-            .expect("unknown compact req")
-            .clone();
-        let input_batches = compact_req
-            .inputs
-            .iter()
-            .map(|x| x.id)
-            .collect::<BTreeSet<_>>();
-        let lower_spine_bound = input_batches
-            .first()
-            .map(|id| id.0)
-            .expect("at least one batch must be present");
-        let upper_spine_bound = input_batches
-            .last()
-            .map(|id| id.1)
-            .expect("at least one batch must be present");
-        let id = SpineId(lower_spine_bound, upper_spine_bound);
+        let compaction_input = if legacy {
+            CompactionInput::Legacy
+        } else {
+            let compact_req = datadriven
+                .compactions
+                .get(input)
+                .expect("unknown compact req")
+                .clone();
+            let input_batches = compact_req
+                .inputs
+                .iter()
+                .map(|x| x.id)
+                .collect::<BTreeSet<_>>();
+            let lower_spine_bound = input_batches
+                .first()
+                .map(|id| id.0)
+                .expect("at least one batch must be present");
+            let upper_spine_bound = input_batches
+                .last()
+                .map(|id| id.1)
+                .expect("at least one batch must be present");
+            CompactionInput::IdRange(SpineId(lower_spine_bound, upper_spine_bound))
+        };
         let hollow_batch = (*batch.batch).clone();
 
         let (merge_res, maintenance) = datadriven
             .machine
             .merge_res(&FueledMergeRes {
                 output: hollow_batch,
-                input: CompactionInput::IdRange(id),
+                input: compaction_input,
                 new_active_compaction: None,
             })
             .await;
@@ -2473,7 +2502,6 @@ pub mod tests {
                     &batch.into_hollow_batch(),
                     &write.writer_id,
                     &HandleDebugState::default(),
-                    (write.cfg.now)(),
                 )
                 .await
                 .unwrap();
@@ -2651,5 +2679,67 @@ pub mod tests {
 
         write.expire().await;
         reader.expire().await;
+    }
+
+    /// Regression test for a panic where `upgrade_version` tried to commit a
+    /// new state on a tombstone shard. Upgrading a tombstone must be a no-op:
+    /// the shard stays finalized and its recorded version stays unchanged.
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn version_upgrade_tombstone(dyncfgs: ConfigUpdates) {
+        async fn shard_version(
+            persist_client: &PersistClient,
+            shard_id: ShardId,
+        ) -> Option<semver::Version> {
+            let shard_state = persist_client.inspect_shard::<u64>(&shard_id).await.ok()?;
+            let json_state = serde_json::to_value(shard_state).expect("state serialization error");
+            let version = json_state
+                .get("applier_version")
+                .cloned()
+                .expect("missing applier_version");
+            Some(serde_json::from_value(version).expect("version deserialization error"))
+        }
+
+        let mut cache = new_test_client_cache(&dyncfgs);
+        cache.cfg.build_version = Version::new(26, 1, 0);
+        let client = cache.open(PersistLocation::new_in_mem()).await.unwrap();
+        let shard_id = ShardId::new();
+
+        // Advance since and upper to the empty antichain and finalize the
+        // shard into a tombstone.
+        let (mut write, mut read) = client.expect_open::<String, (), u64, i64>(shard_id).await;
+        read.downgrade_since(&Antichain::new()).await;
+        write.advance_upper(&Antichain::new()).await;
+        write.expire().await;
+        read.expire().await;
+        client
+            .finalize_shard::<String, (), u64, i64>(shard_id, Diagnostics::for_tests())
+            .await
+            .expect("finalization must succeed");
+
+        // Upgrading at the version that wrote the tombstone must not panic or
+        // commit a new state.
+        client
+            .upgrade_version::<String, (), u64, i64>(shard_id, Diagnostics::for_tests())
+            .await
+            .expect("upgrade on tombstone must succeed");
+
+        // Same for upgrading at a newer build version.
+        cache.cfg.build_version = Version::new(27, 1, 0);
+        let client = cache.open(PersistLocation::new_in_mem()).await.unwrap();
+        client
+            .upgrade_version::<String, (), u64, i64>(shard_id, Diagnostics::for_tests())
+            .await
+            .expect("upgrade on tombstone must succeed");
+
+        assert_eq!(
+            shard_version(&client, shard_id).await,
+            Some(Version::new(26, 1, 0)),
+        );
+        let is_finalized = client
+            .is_finalized::<String, (), u64, i64>(shard_id, Diagnostics::for_tests())
+            .await
+            .expect("invalid persist usage");
+        assert!(is_finalized, "shard must still be finalized");
     }
 }

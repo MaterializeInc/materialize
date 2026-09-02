@@ -25,6 +25,7 @@ aws-smithy-runtime-api.workspace = true
 aws-types.workspace = true
 bytes.workspace = true
 columnation.workspace = true
+csv-core.workspace = true
 dec.workspace = true
 derivative.workspace = true
 differential-dataflow.workspace = true
@@ -64,6 +65,7 @@ proptest-derive = { workspace = true, optional = true }
 prost.workspace = true
 rdkafka.workspace = true
 regex.workspace = true
+reqsign-core.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
@@ -81,6 +83,7 @@ iceberg-catalog-rest.workspace = true
 iceberg-storage-opendal.workspace = true
 
 [dev-dependencies]
+chrono.workspace = true
 criterion.workspace = true
 insta.workspace = true
 mz-persist = { path = "../persist" }

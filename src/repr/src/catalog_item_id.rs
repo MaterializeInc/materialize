@@ -11,7 +11,6 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::{Error, anyhow};
-use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
 #[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
@@ -30,8 +29,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.catalog_item_id.rs"));
     PartialOrd,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum CatalogItemId {

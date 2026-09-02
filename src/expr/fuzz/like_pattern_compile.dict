@@ -1,0 +1,20 @@
+# libFuzzer dictionary for the like_pattern_compile target, resolved by
+# `dict_for` in test/cargo-fuzz/mzcompose.py.
+#
+# These tokens pay off only on the target's fully-arbitrary arm, where the input
+# bytes become the pattern and the text directly. Random Unicode there almost
+# never contains a LIKE metacharacter, so that arm stays on trivial literal
+# patterns without help. On the structured arm the input is a recipe of generator
+# choices, and a token is just more choice bytes carrying no structural signal.
+
+# The metacharacters, and an escape sequence.
+"%"
+"_"
+"\\"
+"\\%"
+# Two `%` with non-empty suffixes: the shape that routes to the regex engine.
+"%a%b"
+# Multi-byte literals, so byte offsets and character counts diverge in the
+# `%` backtracking: é (U+00E9, 2 bytes) and 漢 (U+6F22, 3 bytes).
+"\xc3\xa9"
+"\xe6\xbc\xa2"

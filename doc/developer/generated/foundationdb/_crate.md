@@ -1,6 +1,6 @@
 ---
 source: src/foundationdb/src/lib.rs
-revision: 4a1aeff959
+revision: afeabae567
 ---
 
 # mz-foundationdb

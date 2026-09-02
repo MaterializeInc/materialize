@@ -5,6 +5,76 @@ columns:
   - column: Release date
   - column: Notes
 rows:
+  - Materialize Operator: v26.39
+    orchestratord version: v26.39
+    environmentd version: v26.39
+    Release date: "2026-08-27"
+    Notes: "See [v26.39 release notes](/releases/#v26390)"
+  - Materialize Operator: v26.38.2
+    orchestratord version: v26.38.2
+    environmentd version: v26.38.2
+    Release date: "2026-08-25"
+    Notes: "See [v26.38.2 release notes](/releases/#v26382)"
+  - Materialize Operator: v26.38
+    orchestratord version: v26.38
+    environmentd version: v26.38
+    Release date: "2026-08-20"
+    Notes: "See [v26.38 release notes](/releases/#v26382)"
+  - Materialize Operator: v26.37
+    orchestratord version: v26.37
+    environmentd version: v26.37
+    Release date: "2026-08-13"
+    Notes: "See [v26.37 release notes](/releases/#v26370)"
+  - Materialize Operator: v26.36
+    orchestratord version: v26.36
+    environmentd version: v26.36
+    Release date: "2026-08-07"
+    Notes: "See [v26.36 release notes](/releases/#v26360)"
+  - Materialize Operator: v26.35
+    orchestratord version: v26.35
+    environmentd version: v26.35
+    Release date: "2026-07-30"
+    Notes: "See [v26.35 release notes](/releases/#v26350)"
+  - Materialize Operator: v26.34.1
+    orchestratord version: v26.34.1
+    environmentd version: v26.34.1
+    Release date: "2026-07-24"
+    Notes: "See [v26.34.1 release notes](/releases/#v26341)"
+  - Materialize Operator: v26.34
+    orchestratord version: v26.34
+    environmentd version: v26.34
+    Release date: "2026-07-21"
+    Notes: "See [v26.34 release notes](/releases/#v26340)"
+  - Materialize Operator: v26.33
+    orchestratord version: v26.33
+    environmentd version: v26.33
+    Release date: "2026-07-17"
+    Notes: "See [v26.33 release notes](/releases/#v26330)"
+  - Materialize Operator: v26.32
+    orchestratord version: v26.32
+    environmentd version: v26.32
+    Release date: "2026-07-10"
+    Notes: "See [v26.32 release notes](/releases/#v26320)"
+  - Materialize Operator: v26.31.2
+    orchestratord version: v26.31.2
+    environmentd version: v26.31.2
+    Release date: "2026-07-08"
+    Notes: "See [v26.31.2 release notes](/releases/#v26312)"
+  - Materialize Operator: v26.31
+    orchestratord version: v26.31
+    environmentd version: v26.31
+    Release date: "2026-07-03"
+    Notes: "See [v26.31 release notes](/releases/#v26310)"
+  - Materialize Operator: v26.30.1
+    orchestratord version: v26.30.1
+    environmentd version: v26.30.1
+    Release date: "2026-06-26"
+    Notes: "See [v26.30.1 release notes](/releases/#v26301)"
+  - Materialize Operator: v26.29
+    orchestratord version: v26.29
+    environmentd version: v26.29
+    Release date: "2026-06-19"
+    Notes: "See [v26.29 release notes](/releases/#v26290)"
   - Materialize Operator: v26.28
     orchestratord version: v26.28
     environmentd version: v26.28

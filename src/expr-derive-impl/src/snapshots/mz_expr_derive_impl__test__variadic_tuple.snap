@@ -12,7 +12,6 @@ expression: "#[sqlfunc(Replace, sqlname = \"replace\")]\nfn replace(text: &str, 
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect,
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
 pub struct Replace;
@@ -52,6 +51,9 @@ impl std::fmt::Display for Replace {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("replace")
     }
+}
+impl crate::func::FuncName for Replace {
+    const NAME: &'static str = stringify!(replace);
 }
 fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {
     Ok(text.replace(from, to))

@@ -21,7 +21,7 @@ use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use itertools::EitherOrBoth;
-use mz_dyncfg::{Config, ConfigSet, ConfigValHandle};
+use mz_dyncfg::{Config, ConfigSet, ConfigValHandle, ParameterScope};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::{soft_assert_or_log, soft_panic_no_log, soft_panic_or_log};
@@ -66,6 +66,7 @@ pub(crate) const FETCH_SEMAPHORE_COST_ADJUSTMENT: Config<f64> = Config::new(
     "\
     An adjustment multiplied by encoded_size_bytes to approximate an upper \
     bound on the size in lgalloc, which includes the decoded version.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const FETCH_SEMAPHORE_PERMIT_ADJUSTMENT: Config<f64> = Config::new(
@@ -76,6 +77,7 @@ pub(crate) const FETCH_SEMAPHORE_PERMIT_ADJUSTMENT: Config<f64> = Config::new(
     parsed, expressed as a multiplier of the process's memory limit. This data \
     all spills to lgalloc, so values > 1.0 are safe. Only applied to cc \
     replicas.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const PART_DECODE_FORMAT: Config<&'static str> = Config::new(
@@ -84,12 +86,14 @@ pub(crate) const PART_DECODE_FORMAT: Config<&'static str> = Config::new(
     "\
     Format we'll use to decode a Persist Part, either 'row', \
     'row_with_validate', or 'arrow' (Materialize).",
+    ParameterScope::Environment,
 );
 
 pub(crate) const OPTIMIZE_IGNORED_DATA_FETCH: Config<bool> = Config::new(
     "persist_optimize_ignored_data_fetch",
     true,
     "CYA to allow opt-out of a performance optimization to skip fetching ignored data",
+    ParameterScope::Environment,
 );
 
 pub(crate) const VALIDATE_PART_BOUNDS_ON_READ: Config<bool> = Config::new(
@@ -97,6 +101,7 @@ pub(crate) const VALIDATE_PART_BOUNDS_ON_READ: Config<bool> = Config::new(
     false,
     "Validate the part lower <= the batch lower and the part upper <= batch upper,\
     for the batch containing that part",
+    ParameterScope::Environment,
 );
 
 #[derive(Debug, Clone)]
@@ -153,6 +158,33 @@ where
     // Ensures that `BatchFetcher` is of the same type as the `ReadHandle` it's
     // derived from.
     pub(crate) _phantom: PhantomData<fn() -> (K, V, T, D)>,
+}
+
+// Hand-written (rather than derived) so cloning does not require `K: Clone`
+// etc.: every field is an `Arc` or independently `Clone`. The `schema_cache`
+// clone shares the schema-lookup maps and applier, so clones reuse cached
+// schema fetches and only duplicate a small per-clone migration memo. Used to
+// run several `fetch_leased_part` calls concurrently, each on its own clone.
+impl<K, V, T, D> Clone for BatchFetcher<K, V, T, D>
+where
+    T: Timestamp + Lattice + Codec64,
+    K: Debug + Codec,
+    V: Debug + Codec,
+    D: Monoid + Codec64 + Send + Sync,
+{
+    fn clone(&self) -> Self {
+        Self {
+            cfg: self.cfg.clone(),
+            blob: Arc::clone(&self.blob),
+            metrics: Arc::clone(&self.metrics),
+            shard_metrics: Arc::clone(&self.shard_metrics),
+            shard_id: self.shard_id.clone(),
+            read_schemas: self.read_schemas.clone(),
+            schema_cache: self.schema_cache.clone(),
+            is_transient: self.is_transient,
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<K, V, T, D> BatchFetcher<K, V, T, D>
@@ -444,7 +476,12 @@ pub(crate) async fn fetch_batch_part_blob<T>(
     let blob_key = part.key.complete(shard_id);
     let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
         shard_metrics.blob_gets.inc();
-        blob.get(&blob_key).await
+        // Name the blob in the error. A GET stuck retrying forever surfaces only in the retry log
+        // (see `retry_external`), which prints the error, so without this the log cannot say which
+        // blob, and thus which shard, is wedged.
+        blob.get(&blob_key)
+            .await
+            .map_err(|err| err.context(format!("blob {blob_key}")))
     })
     .instrument(get_span.clone())
     .await
@@ -580,6 +617,11 @@ pub struct LeasedBatchPart<T> {
     /// still present in state distinguishes a lost lease from a GC bug.
     pub(crate) reader_id: LeasedReaderId,
     pub(crate) filter_pushdown_audit: bool,
+    /// Whether the containing batch has a run that may hold updates outside
+    /// the registered desc (see `RunMeta::bounds_truncated`). A fetch filters
+    /// those updates out, but write-time part statistics count them, so
+    /// optimizations that substitute statistics for a fetch must not fire.
+    pub(crate) bounds_truncated: bool,
 }
 
 impl<T> LeasedBatchPart<T>
@@ -624,8 +666,11 @@ where
     }
 
     /// Returns the pushdown stats for this part.
+    ///
+    /// Stats written by a newer version may not decode; those return `None`,
+    /// the same as a part that carries no stats.
     pub fn stats(&self) -> Option<PartStats> {
-        self.part.stats().map(|x| x.decode())
+        self.part.stats().and_then(|x| x.try_decode().ok())
     }
 
     /// Apply any relevant projection pushdown optimizations, assuming that the data in the part
@@ -638,6 +683,12 @@ where
             FetchBatchFilter::Listen { .. } | FetchBatchFilter::Compaction { .. } => return,
         };
         if !OPTIMIZE_IGNORED_DATA_FETCH.get(cfg) {
+            return;
+        }
+        // A truncated batch's parts may physically hold updates outside the
+        // registered desc. A fetch filters those out, but the write-time
+        // diffs_sum counts them, so substituting it would fabricate data.
+        if self.bounds_truncated {
             return;
         }
         let (diffs_sum, _stats) = match &self.part {
@@ -656,6 +707,11 @@ where
             &[as_of] => as_of,
             _ => return,
         };
+        // NOTE: `diffs_sum` sums every row physically in the blob, while
+        // reads truncate rows outside the registered desc. Substituting it is
+        // sound only while no writer registers a batch with tighter bounds
+        // than the blob holds (none does today, and rewritten batches prove
+        // it), which nothing here can re-check without fetching the blob.
         let eligible = self.desc.upper().less_equal(as_of) && self.desc.since().less_equal(as_of);
         if !eligible {
             return;
@@ -838,9 +894,14 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
     }
 
     /// Decodes and returns the pushdown stats for this part, if known.
+    ///
+    /// Stats written by a newer version may not decode; those return `None`,
+    /// the same as a part that carries no stats.
     pub fn stats(&self) -> Option<PartStats> {
         match &self.buf {
-            FetchedBlobBuf::Hollow { part, .. } => part.stats.as_ref().map(|x| x.decode()),
+            FetchedBlobBuf::Hollow { part, .. } => {
+                part.stats.as_ref().and_then(|x| x.try_decode().ok())
+            }
             FetchedBlobBuf::Inline { .. } => None,
         }
     }

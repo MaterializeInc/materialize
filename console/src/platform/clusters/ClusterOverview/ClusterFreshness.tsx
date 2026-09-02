@@ -68,7 +68,7 @@ const ClusterFreshnessTable = ({
       <Thead>
         <Tr>
           <Th>Name</Th>
-          <Th>Freshness latency</Th>
+          <Th>Freshness</Th>
         </Tr>
       </Thead>
       <Tbody>
@@ -169,7 +169,7 @@ const ClusterFreshness = ({ clusterId }: { clusterId: string }) => {
           <VStack alignItems="flex-start" gap="1">
             <HStack>
               <Text textStyle="heading-md" color={colors.foreground.primary}>
-                Freshness latency
+                Freshness
               </Text>
             </HStack>
 
@@ -189,7 +189,7 @@ const ClusterFreshness = ({ clusterId }: { clusterId: string }) => {
         </HStack>
       </VStack>
       <AppErrorBoundary
-        message="An error occurred fetching freshness latency data."
+        message="An error occurred fetching freshness data."
         containerProps={{
           padding: "4",
         }}

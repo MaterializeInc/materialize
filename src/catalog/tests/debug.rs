@@ -106,6 +106,8 @@ impl Debug for StableTrace<'_> {
             source_references,
             system_object_mappings,
             system_configurations,
+            cluster_system_configurations,
+            replica_system_configurations,
             system_privileges,
             storage_collection_metadata,
             unfinalized_shards,
@@ -150,6 +152,14 @@ impl Debug for StableTrace<'_> {
             .field("source_references", source_references)
             .field("system_object_mappings", system_object_mappings)
             .field("system_configurations", system_configurations)
+            .field(
+                "cluster_system_configurations",
+                cluster_system_configurations,
+            )
+            .field(
+                "replica_system_configurations",
+                replica_system_configurations,
+            )
             .field("system_privileges", system_privileges)
             .field("storage_collection_metadata", storage_collection_metadata)
             .field("unfinalized_shards", unfinalized_shards)
@@ -187,8 +197,7 @@ async fn test_debug(state_builder: TestCatalogStateBuilder) {
     let _ = openable_state1
         .open(NOW_ZERO().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
 
     // Check epoch
     let mut openable_state2 = state_builder.clone().unwrap_build().await;
@@ -359,8 +368,8 @@ async fn test_debug_edit_fencing(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
+    let _ = state.sync_to_current_updates().await.unwrap();
 
     let mut debug_state = state_builder
         .clone()
@@ -414,8 +423,7 @@ async fn test_debug_edit_fencing(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
 
     // Now debug state should be fenced.
     let err = debug_state
@@ -454,8 +462,7 @@ async fn test_debug_delete_fencing(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     // Drain state updates.
     let _ = state.sync_to_current_updates().await;
 
@@ -511,8 +518,7 @@ async fn test_debug_delete_fencing(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
 
     // Now debug state should be fenced.
     let err = debug_state
@@ -567,8 +573,7 @@ async fn test_concurrent_debugs(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     let state_handle = mz_ore::task::spawn(|| "state", async move {
         // Eventually this state should get fenced by the edit below.
         let err = run_state(&mut state).await.unwrap_err();
@@ -600,8 +605,7 @@ async fn test_concurrent_debugs(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     let configs = state.snapshot().await.unwrap().configs;
     assert_eq!(configs.get(&key).unwrap(), &value);
 
@@ -637,7 +641,6 @@ async fn test_concurrent_debugs(state_builder: TestCatalogStateBuilder) {
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap()
-        .0
         .snapshot()
         .await
         .unwrap()

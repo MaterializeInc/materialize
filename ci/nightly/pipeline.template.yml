@@ -36,7 +36,7 @@ steps:
 
       - id: build-x86_64-asan
         label: ":rust: Build x86_64 (ASan)"
-        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        command: bin/ci-builder run nightly bin/pyactivate -m ci.test.build
         inputs:
           - "*"
         depends_on: []
@@ -45,14 +45,12 @@ steps:
           queue: builder-linux-x86_64
         env:
           CI_SANITIZER: address
-
         sanitizer: skip
         branches: "main"
-        skip: "currently broken"
 
       - id: build-aarch64-asan
         label: ":rust: Build aarch64 (ASan)"
-        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        command: bin/ci-builder run nightly bin/pyactivate -m ci.test.build
         inputs:
           - "*"
         depends_on: []
@@ -63,7 +61,6 @@ steps:
           CI_SANITIZER: address
         sanitizer: skip
         branches: "main"
-        skip: "currently broken"
 
       - id: build-rust-latest-beta
         label: "Build with Latest Rust Beta"
@@ -107,7 +104,12 @@ steps:
 
       - id: unused-deps
         label: Unused dependencies
-        command: bin/ci-builder run nightly bin/unused-deps
+        command: bin/ci-builder run stable bin/unused-deps
+        inputs:
+          - Cargo.lock
+          - Cargo.toml
+          - "**/Cargo.toml"
+          - "**/*.rs"
         depends_on: []
         timeout_in_minutes: 45
         agents:
@@ -117,6 +119,11 @@ steps:
       - id: check-package-isolation
         label: Package-isolated cargo check
         command: bin/ci-builder run stable bin/check-package-isolation
+        inputs:
+          - Cargo.lock
+          - Cargo.toml
+          - "**/Cargo.toml"
+          - "**/*.rs"
         depends_on: []
         timeout_in_minutes: 60
         parallelism: 8
@@ -127,6 +134,9 @@ steps:
       - id: cargo-deny-check-advisories
         label: Security advisories
         command: bin/ci-builder run stable cargo deny check advisories
+        inputs:
+          - Cargo.lock
+          - deny.toml
         depends_on: []
         timeout_in_minutes: 20
         agents:
@@ -148,6 +158,7 @@ steps:
         artifact_paths: [sbom.json, inspector-results.json]
 
   - id: miri-test
+    topics: [kafka, mysql, postgres]
     label: ":rust: Miri test (full)"
     depends_on: []
     timeout_in_minutes: 60
@@ -157,13 +168,16 @@ steps:
           args: [--miri-full]
     agents:
       queue: hetzner-aarch64-16cpu-32gb
+    skip: "Has been creating more toil than use"
     sanitizer: skip
 
   - group: Benchmarks
     key: benchmark
     steps:
       - id: feature-benchmark
+        topics: [cockroach, copy-to-s3, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Feature benchmark against merge base or 'latest'"
+        sanitizer: skip
         depends_on: build-x86_64
         timeout_in_minutes: 120
         parallelism: 12
@@ -177,7 +191,9 @@ steps:
                 # common-ancestor will default to latest if not in a PR
                 - common-ancestor
       - id: scalability-benchmark-dml-dql
+        topics: [postgres]
         label: "Scalability benchmark (read & write) against merge base or 'latest'"
+        sanitizer: skip
         depends_on: build-x86_64
         timeout_in_minutes: 120
         env:
@@ -202,10 +218,11 @@ steps:
                 - --max-concurrency
                 - "256"
       - id: scalability-benchmark-ddl
+        topics: [postgres]
         label: "Scalability benchmark (DDL) against merge base or 'latest'"
+        sanitizer: skip
         depends_on: build-x86_64
         timeout_in_minutes: 120
-        parallelism: 2
         env:
           # Runs against Dockerhub directly
           MZ_GHCR: 0
@@ -231,7 +248,9 @@ steps:
                 - --max-concurrency
                 - "64"
       - id: scalability-benchmark-connection
+        topics: [postgres]
         label: "Scalability benchmark (connection) against merge base or 'latest'"
+        sanitizer: skip
         depends_on: build-x86_64
         timeout_in_minutes: 120
         parallelism: 2
@@ -258,7 +277,9 @@ steps:
                 - --max-concurrency
                 - "1024"
       - id: parallel-benchmark
+        topics: [cockroach, kafka, mysql, postgres]
         label: "Parallel Benchmark"
+        sanitizer: skip
         depends_on: build-x86_64
         timeout_in_minutes: 120
         parallelism: 5
@@ -276,7 +297,9 @@ steps:
                 - common-ancestor
 
       - id: workload-replay
+        topics: [iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
         label: "Workload Replay (1% initial data)"
+        sanitizer: skip
         depends_on: build-x86_64
         timeout_in_minutes: 120
         parallelism: 5
@@ -286,15 +309,37 @@ steps:
               run: benchmark
               args:
                 - --factor-initial-data=0.01
+                - --skip-large
                 - --compare-against
                 - common-ancestor
         agents:
           queue: hetzner-x86-64-dedi-8cpu-32gb
 
+      - id: console-scalability
+        topics: [iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
+        label: "Console scalability (workload replay)"
+        sanitizer: skip
+        depends_on: build-x86_64
+        timeout_in_minutes: 120
+        parallelism: 3
+        artifact_paths:
+          - console/test-results/**/*
+          - console/e2e-tests/k6/queries-*.json
+          - console/e2e-tests/k6/summary-*.json
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: workload-replay
+              run: console-scalability
+              args: [--skip-large]
+        agents:
+          # Larger instance is more stable in performance
+          queue: hetzner-x86-64-dedi-16cpu-64gb
+
   - group: Kafka
     key: kafka
     steps:
       - id: kafka-multi-broker
+        topics: [kafka, kafka-sink]
         label: Kafka multi-broker
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -305,6 +350,7 @@ steps:
               composition: kafka-multi-broker
 
       - id: redpanda-resumption
+        topics: [kafka, kafka-sink]
         label: ":panda_face: resumption"
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -320,6 +366,7 @@ steps:
     key: testdrive
     steps:
       - id: redpanda-testdrive
+        topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
         label: ":panda_face: :racing_car: testdrive"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -332,6 +379,7 @@ steps:
               args: [--redpanda, --slow]
 
       - id: testdrive-partitions-5
+        topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
         label: ":racing_car: testdrive with --kafka-default-partitions 5"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -344,18 +392,21 @@ steps:
               args: [--kafka-default-partitions=5, --slow]
 
       - id: testdrive-replicas-4
+        topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
         label: ":racing_car: testdrive 4 replicas"
+        sanitizer: skip
         depends_on: build-aarch64
         timeout_in_minutes: 60
         parallelism: 2
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--replicas=4, --slow]
 
       - id: testdrive-size-1
+        topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
         label: ":racing_car: testdrive with SIZE 1"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -368,7 +419,9 @@ steps:
               args: [--default-size=1, --slow, --check-statement-logging]
 
       - id: testdrive-size-8
+        topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
         label: ":racing_car: testdrive with SIZE 8"
+        sanitizer: skip
         depends_on: build-aarch64
         timeout_in_minutes: 60
         parallelism: 2
@@ -380,6 +433,7 @@ steps:
               args: [--default-size=8, --slow]
 
       - id: persistence-testdrive
+        topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
         label: ":racing_car: testdrive with --persistent-user-tables"
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -393,6 +447,7 @@ steps:
         skip: "Persistence tests disabled"
 
       - id: azurite-testdrive
+        topics: [azurite, copy-to-s3, kafka, kafka-sink, mysql, postgres]
         label: "testdrive with :azure: blob store"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -406,7 +461,9 @@ steps:
               args: [--azurite, --slow]
 
       - id: azurite-testdrive-size-8
+        topics: [azurite, copy-to-s3, kafka, kafka-sink, mysql, postgres]
         label: ":racing_car: testdrive with SIZE 8 and :azure: blob store"
+        sanitizer: skip
         depends_on: build-aarch64
         timeout_in_minutes: 60
         parallelism: 2
@@ -418,6 +475,7 @@ steps:
               args: [--default-size=8, --azurite, --slow]
 
       - id: testdrive-fdb
+        topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
         label: "testdrive with FoundationDB"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -432,6 +490,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: testdrive-alloydb
+        topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
         label: "testdrive with AlloyDB"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -451,6 +510,7 @@ steps:
     key: limits-group
     steps:
       - id: limits
+        topics: [cockroach, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Product limits"
         depends_on: build-x86_64
         agents:
@@ -460,9 +520,10 @@ steps:
               composition: limits
               run: main
         timeout_in_minutes: 60
-        parallelism: 3
+        parallelism: 2
 
       - id: limits-instance-size
+        topics: [cockroach, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Instance size limits"
         depends_on: build-x86_64
         agents:
@@ -474,17 +535,21 @@ steps:
         timeout_in_minutes: 60
 
       - id: bounded-memory
+        topics: [copy-to-s3, iceberg, kafka, mysql, postgres]
         label: "Bounded Memory"
+        sanitizer: skip
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        parallelism: 3
+        parallelism: 2
         agents:
           queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: bounded-memory
       - id: bounded-memory-search
+        topics: [copy-to-s3, iceberg, kafka, mysql, postgres]
         label: "Bounded Memory Search (materialized only)"
+        sanitizer: skip
         depends_on: build-aarch64
         timeout_in_minutes: 60
         parallelism: 8
@@ -507,6 +572,7 @@ steps:
     key: upsert
     steps:
       - id: upsert-compaction-enabled
+        topics: [kafka]
         label: Upsert (compaction enabled)
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -517,6 +583,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: upsert-compaction-disabled
+        topics: [kafka]
         label: Upsert (compaction disabled)
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -528,8 +595,9 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
   - id: ssh-connection-extended
+    topics: [kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
     label: Extended SSH connection
-    depends_on: build-aarch64
+    depends_on: build-x86_64
     timeout_in_minutes: 45
     plugins:
       - ./ci/plugins/mzcompose:
@@ -540,6 +608,7 @@ steps:
       queue: hetzner-x86-64-4cpu-8gb
 
   - id: sql-server-cdc
+    topics: [sql-server]
     label: SQL Server
     depends_on: build-x86_64
     timeout_in_minutes: 30
@@ -552,6 +621,23 @@ steps:
       #
       # See: <https://github.com/microsoft/mssql-docker/issues/864>
       queue: hetzner-x86-64-8cpu-16gb
+
+  - id: sql-server-cdc-azure
+    topics: [sql-server]
+    label: "SQL Server (Azure SQL Database)"
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [test/sql-server-cdc]
+    # Runs against a single shared Azure SQL Database, so only one build may
+    # touch it at a time.
+    concurrency: 1
+    concurrency_group: 'sql-server-cdc-azure'
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sql-server-cdc
+          run: azure
+    agents:
+      queue: linux-aarch64-small
 
   - id: http-auth
     label: HTTP auth
@@ -569,6 +655,7 @@ steps:
     key: zippy
     steps:
       - id: zippy-kafka-sources
+        topics: [cockroach, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Zippy Kafka Sources"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -580,6 +667,7 @@ steps:
               args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=20m]
 
       - id: zippy-kafka-sources-azurite
+        topics: [azurite, cockroach, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Zippy Kafka Sources with :azure: blob store"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -592,6 +680,7 @@ steps:
               args: [--scenario=KafkaSources, --actions=5000, --max-execution-time=10m, --azurite]
 
       - id: zippy-kafka-parallel-insert
+        topics: [cockroach, debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
         label: "Zippy Kafka Parallel Insert"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -603,6 +692,7 @@ steps:
               args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=10000, --max-execution-time=20m]
 
       - id: zippy-kafka-parallel-insert-azurite
+        topics: [azurite, cockroach, debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
         label: "Zippy Kafka Parallel Insert with :azure: blob store"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -614,6 +704,7 @@ steps:
               args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=10000, --max-execution-time=20m, --azurite]
 
       - id: zippy-user-tables
+        topics: [cockroach, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Zippy User Tables"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -626,6 +717,7 @@ steps:
               args: [--scenario=UserTables, --actions=10000, --max-execution-time=20m]
 
       - id: zippy-postgres-cdc
+        topics: [cockroach, debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
         label: "Zippy Postgres CDC"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -637,6 +729,7 @@ steps:
               args: [--scenario=PostgresCdc, --actions=10000, --max-execution-time=20m]
 
       - id: zippy-mysql-cdc
+        topics: [azurite, cockroach, debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
         label: "Zippy MySQL CDC"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -648,6 +741,7 @@ steps:
               args: [--scenario=MySqlCdc, --actions=10000, --max-execution-time=20m, --azurite]
 
       - id: zippy-sql-server-cdc
+        topics: [azurite, cockroach, debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
         label: "Zippy SQL Server CDC"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -658,9 +752,10 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: zippy
               args: [--scenario=SqlServerCdc, --actions=10000, --max-execution-time=20m, --azurite]
-        skip: "database-issues#9855"
+        skip: "https://linear.app/materializeinc/issue/DB-113"
 
       - id: zippy-debezium-postgres
+        topics: [cockroach, debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
         label: "Zippy Debezium Postgres"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -672,6 +767,7 @@ steps:
               args: [--scenario=DebeziumPostgres, --actions=10000, --max-execution-time=20m]
 
       - id: zippy-cluster-replicas
+        topics: [cockroach, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Zippy Cluster Replicas"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -683,6 +779,7 @@ steps:
               args: [--scenario=ClusterReplicas, --actions=10000, --max-execution-time=20m]
 
       - id: zippy-crdb-latest
+        topics: [cockroach, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Zippy w/ latest CRDB"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -695,17 +792,19 @@ steps:
               args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=20m]
 
       - id: zippy-alter-connection
+        topics: [cockroach, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Zippy w/ alter connection"
         depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
               args: [--scenario=AlterConnectionWithKafkaSources, --actions=10000, --max-execution-time=20m]
 
       - id: zippy-copy-s3
+        topics: [cockroach, copy-to-s3, debezium, iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
         label: "Zippy w/ copy to/from S3"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -720,6 +819,7 @@ steps:
     key: source-resumption-tests
     steps:
       - id: kafka-resumption
+        topics: [kafka, kafka-sink]
         label: Kafka resumption
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -730,8 +830,8 @@ steps:
           queue: hetzner-aarch64-8cpu-16gb
 
       - id: mysql-cdc-resumption
+        topics: [mysql]
         label: MySQL CDC resumption
-        parallelism: 2
         depends_on: build-aarch64
         timeout_in_minutes: 60
         inputs: [test/mysql-cdc-resumption]
@@ -742,8 +842,8 @@ steps:
           queue: hetzner-aarch64-8cpu-16gb
 
       - id: pg-cdc-resumption
+        topics: [postgres]
         label: Postgres CDC resumption
-        parallelism: 2
         depends_on: build-aarch64
         timeout_in_minutes: 60
         inputs: [test/pg-cdc-resumption]
@@ -754,6 +854,7 @@ steps:
           queue: hetzner-aarch64-8cpu-16gb
 
       - id: sql-server-resumption-old-syntax
+        topics: [sql-server]
         label: SQL Server CDC resumption old syntax
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -771,6 +872,7 @@ steps:
     key: cdc-old-source-syntax
     steps:
       - id: mysql-cdc-old-syntax
+        topics: [mysql]
         label: MySQL CDC (before source versioning)
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -781,6 +883,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: mysql-cdc-migration
+        topics: [mysql]
         label: MySQL CDC source-versioning migration
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -793,10 +896,10 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: mysql-cdc-resumption-old-syntax
+        topics: [mysql]
         label: MySQL CDC resumption (before source versioning)
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        parallelism: 2
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc-resumption-old-syntax
@@ -804,6 +907,7 @@ steps:
           queue: hetzner-aarch64-8cpu-16gb
 
       - id: mysql-rtr-old-syntax
+        topics: [mysql]
         label: MySQL RTR (before source versioning)
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -814,6 +918,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: pg-cdc-old-syntax
+        topics: [postgres]
         label: Postgres CDC (before source versioning)
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -825,10 +930,10 @@ steps:
         # the mzbuild postgres version will be used, which depends on the Dockerfile specification
 
       - id: pg-cdc-migration
+        topics: [postgres]
         label: Postgres CDC source-versioning migration
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        parallelism: 2
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc-old-syntax
@@ -837,6 +942,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: pg-cdc-resumption-old-syntax
+        topics: [postgres]
         label: Postgres CDC resumption (before source versioning)
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -847,6 +953,7 @@ steps:
           queue: hetzner-aarch64-8cpu-16gb
 
       - id: pg-cdc-old-syntax-multi-version-upgrade-random
+        topics: [postgres, upgrade]
         label: Postgres CDC (before source versioning, multi-version upgrade, random upgrade path)
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -860,6 +967,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: pg-cdc-old-syntax-multi-version-upgrade-earliest-to-current
+        topics: [postgres, upgrade]
         label: Postgres CDC (before source versioning, multi-version upgrade, earliest to current direct upgrade)
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -873,6 +981,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: pg-rtr-old-syntax
+        topics: [postgres]
         label: Postgres RTR (before source versioning)
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -883,6 +992,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: testdrive-old-kafka-src-syntax
+        topics: [azurite, kafka, kafka-sink, mysql, postgres]
         label: "Testdrive (before Kafka source versioning) with :azure: blob store"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -894,6 +1004,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: testdrive-kafka-migration
+        topics: [kafka, kafka-sink, mysql, postgres]
         label: "Testdrive (before Kafka source versioning) migration"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -906,6 +1017,7 @@ steps:
         parallelism: 4
 
       - id: sql-server-cdc-old-syntax
+        topics: [sql-server]
         label: SQL Server CDC old syntax
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -924,6 +1036,7 @@ steps:
     key: aws
     steps:
       - id: aws-real
+        topics: [iceberg]
         label: AWS (Real)
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -940,6 +1053,7 @@ steps:
               composition: aws
 
       - id: aws-localstack
+        topics: [copy-to-s3]
         label: AWS (Localstack)
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -948,6 +1062,24 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: aws-localstack
+
+      - id: aws-glue-schema-registry-real
+        topics: [kafka]
+        label: AWS Glue Schema Registry (Real)
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        retry:
+          automatic:
+            - exit_status: 1
+              limit: 1
+        agents:
+          # Because of scratch-aws-access
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/scratch-aws-access: ~
+          - ./ci/plugins/mzcompose:
+              composition: aws-glue-schema-registry
+              run: aws
 
       - id: secrets-local-file
         label: "Secrets Local File"
@@ -963,6 +1095,7 @@ steps:
     key: gcp
     steps:
       - id: gcp-real
+        topics: [iceberg]
         label: GCP (Real)
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -977,6 +1110,7 @@ steps:
     key: platform-checks
     steps:
       - id: checks-no-restart-no-upgrade-azurite
+        topics: [azurite, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks without restart or upgrade with :azure: blob store"
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
@@ -990,6 +1124,7 @@ steps:
               args: [--scenario=NoRestartNoUpgrade, "--seed=$BUILDKITE_JOB_ID", --features=azurite]
 
       - id: checks-restart-entire-mz
+        topics: [azurite, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks + restart of the entire Mz"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -1002,6 +1137,7 @@ steps:
               args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID", --features=azurite]
 
       - id: checks-backup-rollback
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks + backup + rollback to previous"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -1014,6 +1150,7 @@ steps:
               args: [--scenario=BackupAndRestoreToPreviousState, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-drop-create-default-replica
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks parallel + DROP/CREATE replica"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -1026,6 +1163,7 @@ steps:
               args: [--scenario=DropCreateDefaultReplica, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-clusterd-compute
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks parallel + restart compute clusterd"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -1038,6 +1176,7 @@ steps:
               args: [--scenario=RestartClusterdCompute, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-entire-mz
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks parallel + restart of the entire Mz"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -1050,6 +1189,7 @@ steps:
               args: [--scenario=RestartEntireMz, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-environmentd-clusterd-storage
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks parallel + restart of environmentd & storage clusterd"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -1062,6 +1202,7 @@ steps:
               args: [--scenario=RestartEnvironmentdClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-kill-clusterd-storage
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks parallel + kill storage clusterd"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -1074,6 +1215,7 @@ steps:
               args: [--scenario=KillClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-entire-mz
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel, upgrade]
         label: "Checks upgrade, whole-Mz restart"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -1086,10 +1228,11 @@ steps:
               args: [--scenario=UpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-self-managed-upgrade
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, self-managed, sql-server, ssh-tunnel, upgrade]
         label: "Checks Self-Managed upgrade, whole-Mz restart"
         depends_on: build-x86_64
         timeout_in_minutes: 60
-        parallelism: 4
+        parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
         plugins:
@@ -1098,10 +1241,11 @@ steps:
               args: [--scenario=UpgradeEntireMzFromLatestSelfManaged, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-self-managed-upgrade-previous
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, self-managed, sql-server, ssh-tunnel, upgrade]
         label: "Checks Self-Managed upgrade from previous, whole-Mz restart"
         depends_on: build-x86_64
         timeout_in_minutes: 60
-        parallelism: 4
+        parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
         plugins:
@@ -1110,10 +1254,11 @@ steps:
               args: [--scenario=UpgradeEntireMzFromPreviousSelfManaged, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-v80-migration
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel, upgrade]
         label: "Checks upgrade v80 migration"
         depends_on: build-x86_64
         timeout_in_minutes: 60
-        parallelism: 4
+        parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
         plugins:
@@ -1122,6 +1267,7 @@ steps:
               args: [--scenario=UpgradeV80Migration, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-preflight-check-rollback
+        topics: [0dt-migration, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel, upgrade]
         label: "Checks preflight-check and roll back upgrade"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -1135,6 +1281,7 @@ steps:
         skip: "flaky due to https://linear.app/materializeinc/issue/DB-85"
 
       - id: checks-0dt-restart-entire-mz-forced-migrations
+        topics: [0dt-migration, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
         label: "Checks 0dt restart of the entire Mz with forced migrations"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -1147,6 +1294,7 @@ steps:
               args: [--scenario=ZeroDowntimeRestartEntireMzForcedMigrations, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-0dt-upgrade-entire-mz
+        topics: [0dt-migration, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel, upgrade]
         label: "Checks 0dt upgrade, whole-Mz restart"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -1159,6 +1307,7 @@ steps:
               args: [--scenario=ZeroDowntimeUpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-0dt-upgrade-entire-mz-two-versions
+        topics: [0dt-migration, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel, upgrade]
         label: "Checks 0dt upgrade across two versions"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -1171,6 +1320,7 @@ steps:
               args: [--scenario=ZeroDowntimeUpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-0dt-upgrade-entire-mz-four-versions
+        topics: [0dt-migration, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel, upgrade]
         label: "Checks 0dt upgrade across four versions"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -1183,6 +1333,7 @@ steps:
               args: [--scenario=ZeroDowntimeUpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: cloudtest-upgrade
+        topics: [debezium, kafka, kafka-sink, mysql, postgres, self-managed, ssh-tunnel, upgrade]
         label: "Platform checks upgrade in Cloudtest/K8s"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -1200,6 +1351,7 @@ steps:
         skip: "TODO(def-) Reenable in one version when labels are fixed in old version"
 
       - id: checks-self-managed-earliest-to-latest-direct-upgrade
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, self-managed, sql-server, ssh-tunnel, upgrade]
         label: "Checks Self-Managed earliest to latest direct upgrade"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -1213,6 +1365,7 @@ steps:
 
 
       - id: checks-self-managed-random-upgrade-path
+        topics: [copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, self-managed, sql-server, ssh-tunnel, upgrade]
         label: "Checks Self-Managed random upgrade path"
         depends_on: build-x86_64
         timeout_in_minutes: 60
@@ -1228,10 +1381,11 @@ steps:
     key: k8s-node-recovery
     steps:
       - id: k8s-node-recovery-envd-on-failing
+        topics: [self-managed]
         label: "K8s recovery: envd on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: database-issues#7499 (k8s node recovery tests flaky)
+        # TODO: https://linear.app/materializeinc/issue/DB-143 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -1256,10 +1410,11 @@ steps:
         sanitizer: skip
 
       - id: k8s-node-recovery-storage-on-failing
+        topics: [self-managed]
         label: "K8s recovery: storage on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: database-issues#7499 (k8s node recovery tests flaky)
+        # TODO: https://linear.app/materializeinc/issue/DB-143 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -1284,10 +1439,11 @@ steps:
         sanitizer: skip
 
       - id: k8s-node-recovery-compute-on-failing
+        topics: [self-managed]
         label: "K8s recovery: compute on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: database-issues#7499 (k8s node recovery tests flaky)
+        # TODO: https://linear.app/materializeinc/issue/DB-143 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -1312,10 +1468,11 @@ steps:
         sanitizer: skip
 
       - id: k8s-node-recovery-replicated-compute-on-failing
+        topics: [self-managed]
         label: "K8s recovery: replicated compute on failing node"
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        # TODO: database-issues#7499 (k8s node recovery tests flaky)
+        # TODO: https://linear.app/materializeinc/issue/DB-143 (k8s node recovery tests flaky)
         retry:
           automatic:
             - exit_status: 1
@@ -1343,6 +1500,7 @@ steps:
     key: persist
     steps:
       - id: persist-maelstrom
+        topics: [cockroach]
         label: Maelstrom coverage of persist
         depends_on: build-aarch64
         timeout_in_minutes: 40
@@ -1355,6 +1513,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: persist-maelstrom-single-node
+        topics: [cockroach]
         label: Long single-node Maelstrom coverage of persist
         depends_on: build-aarch64
         timeout_in_minutes: 40
@@ -1367,6 +1526,7 @@ steps:
               args: [--node-count=1, --consensus=mem, --blob=mem, --time-limit=600, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
 
       - id: persist-maelstrom-multi-node
+        topics: [cockroach]
         label: Long multi-node Maelstrom coverage of persist with CockroachDB consensus
         depends_on: build-aarch64
         timeout_in_minutes: 40
@@ -1379,6 +1539,7 @@ steps:
               args: [--node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
 
       - id: persist-maelstrom-multi-node-postgres
+        topics: [cockroach]
         label: "Long multi-node Maelstrom coverage of persist with :postgres: Consensus"
         depends_on: build-aarch64
         timeout_in_minutes: 40
@@ -1391,6 +1552,7 @@ steps:
               args: [--node-count=4, --consensus=postgres, --blob=maelstrom, --time-limit=300, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
 
       - id: txn-wal-maelstrom
+        topics: [cockroach]
         label: Maelstrom coverage of txn-wal with CockroachDB Consensus
         depends_on: build-aarch64
         timeout_in_minutes: 40
@@ -1403,6 +1565,7 @@ steps:
               args: [--node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --rate=500, --txn-wal]
 
       - id: txn-wal-maelstrom-postgres
+        topics: [cockroach]
         label: "Maelstrom coverage of txn-wal with :postgres: Consensus"
         depends_on: build-aarch64
         timeout_in_minutes: 40
@@ -1415,6 +1578,7 @@ steps:
               args: [--node-count=4, --consensus=postgres, --blob=maelstrom, --time-limit=300, --rate=500, --txn-wal]
 
       - id: persistence-failpoints
+        topics: [kafka, kafka-sink]
         label: Persistence failpoints
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -1430,6 +1594,7 @@ steps:
     key: ld
     steps:
       - id: sql-feature-flags
+        topics: [kafka]
         label: "SQL-level feature flags"
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -1460,6 +1625,19 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: launchdarkly-flag-consistency
+        branches: "main"
+        skip: "TODO: Reenable when Dennis is back"
+
+      - id: launchdarkly-reconnect
+        label: "LaunchDarkly reconnect"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        agents:
+          # Uses a mock LaunchDarkly server; needs no real credentials.
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: launchdarkly-reconnect
 
   - group: E2E
     key: e2e
@@ -1491,10 +1669,12 @@ steps:
             composition: mz-e2e
 
     - id: terraform-aws
+      topics: [self-managed]
       label: "Terraform + Helm Chart E2E on AWS"
       artifact_paths: [test/terraform/aws-temporary/terraform.tfstate, "mz_debug_*.zip"]
       depends_on: devel-docker-tags
-      timeout_in_minutes: 60
+      # Setup and tests get 60 minutes. Cleanup gets the remaining 30 minutes.
+      timeout_in_minutes: 90
       concurrency: 1
       concurrency_group: 'terraform-aws'
       agents:
@@ -1507,15 +1687,15 @@ steps:
             # Cleanup runs in pre-exit hook
             args: [--no-cleanup]
             ci-builder: stable
+            run-timeout: 60m
       branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
     - id: terraform-aws-upgrade
+      topics: [self-managed, upgrade]
       label: "Terraform + Helm Chart Upgrade on AWS"
       artifact_paths: [test/terraform/aws-upgrade/terraform.tfstate, "mz_debug_*.zip"]
       depends_on: devel-docker-tags
-      # ~26 min EKS setup + ~5 min per upgrade step + tests + ~18 min destroy
-      # (cleanup runs in the pre-exit hook, inside the job timeout)
-      timeout_in_minutes: 90
+      timeout_in_minutes: 120
       concurrency: 1
       concurrency_group: 'terraform-upgrade-aws'
       agents:
@@ -1530,16 +1710,22 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: terraform
             run: aws-upgrade
+            # Historical releases can log recovered failures that are fixed in
+            # the current build. Scan from the final upgrade for regressions.
+            log-start-at-last: "--- Upgrading to"
             # Cleanup runs in pre-exit hook
             args: [--no-cleanup]
             ci-builder: stable
+            run-timeout: 90m
       branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
     - id: terraform-gcp
+      topics: [self-managed]
       label: "Terraform + Helm Chart E2E on GCP"
       artifact_paths: [test/terraform/gcp-temporary/terraform.tfstate, "mz_debug_*.zip"]
       depends_on: devel-docker-tags
-      timeout_in_minutes: 60
+      # Setup and tests get 60 minutes. Cleanup gets the remaining 30 minutes.
+      timeout_in_minutes: 90
       concurrency: 1
       concurrency_group: 'terraform-gcp'
       agents:
@@ -1551,14 +1737,17 @@ steps:
             # Cleanup runs in pre-exit hook
             args: [--no-cleanup]
             ci-builder: stable
+            run-timeout: 60m
       branches: "main v*.* *gcp* *tf* *terraform* *helm* *self-managed* *orchestratord*"
       skip: "materialize-terraform-self-managed#157"
 
     - id: terraform-azure
+      topics: [self-managed]
       label: "Terraform + Helm Chart E2E on Azure"
       artifact_paths: [test/terraform/azure-temporary/terraform.tfstate, "mz_debug_*.zip"]
       depends_on: devel-docker-tags
-      timeout_in_minutes: 60
+      # Setup and tests get 60 minutes. Cleanup gets the remaining 30 minutes.
+      timeout_in_minutes: 90
       concurrency: 1
       concurrency_group: 'terraform-azure'
       agents:
@@ -1570,7 +1759,9 @@ steps:
             # Cleanup runs in pre-exit hook
             args: [--no-cleanup]
             ci-builder: stable
+            run-timeout: 60m
       branches: "main v*.* *azure* *tf* *terraform* *helm* *self-managed* *orchestratord*"
+      skip: "Not enough capacity on Azure currently, see #operations"
       # Unreliable port-forward to Azure
       retry:
         automatic:
@@ -1593,6 +1784,7 @@ steps:
         skip: "too flaky currently, find better way to ignore known issues"
 
       - id: output-consistency-postgres
+        topics: [postgres]
         label: "Output consistency (Postgres)"
         depends_on: build-aarch64
         timeout_in_minutes: 58
@@ -1605,6 +1797,7 @@ steps:
         skip: "too flaky currently, find better way to ignore known issues"
 
       - id: output-consistency-version-dfr
+        topics: [cockroach, postgres]
         label: "Output consistency (version for DFR)"
         depends_on: build-aarch64
         timeout_in_minutes: 58
@@ -1617,6 +1810,7 @@ steps:
         skip: "too flaky currently, find better way to ignore known issues"
 
       - id: output-consistency-version-ctf
+        topics: [cockroach, postgres]
         label: "Output consistency (version for CTF)"
         depends_on: build-aarch64
         timeout_in_minutes: 58
@@ -1629,6 +1823,7 @@ steps:
         skip: "too flaky currently, find better way to ignore known issues"
 
       - id: output-consistency-feature-flags-dfr
+        topics: [cockroach, postgres]
         label: "Output consistency (feature-flags for DFR)"
         depends_on: build-aarch64
         timeout_in_minutes: 58
@@ -1653,7 +1848,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlsmith
-              args: [--max-joins=2, --runtime=1500]
+              args: [--max-joins=1, --runtime=1500]
 
       - id: sqlsmith-explain
         label: "SQLsmith explain"
@@ -1761,6 +1956,7 @@ steps:
     key: rqg
     steps:
       - id: rqg-simple-aggregates
+        topics: [postgres]
         label: "RQG simple-aggregates workload"
         depends_on: build-aarch64
         timeout_in_minutes: 45
@@ -1772,6 +1968,7 @@ steps:
               args: ["simple-aggregates", "--seed=$BUILDKITE_JOB_ID"]
 
       - id: rqg-db3-joins
+        topics: [postgres]
         label: "RQG dbt3-joins workload"
         depends_on: build-aarch64
         # Some queries run very slow on Postgres, set a higher timeout to give them a chance to finish
@@ -1786,9 +1983,10 @@ steps:
         skip: "still hangs, even after 2 hours to finish"
 
       - id: rqg-lateral-joins
+        topics: [postgres]
         label: "RQG lateral-joins workload"
         depends_on: build-aarch64
-        skip: "flaky until database-issues#7713 is fixed"
+        skip: "flaky until https://linear.app/materializeinc/issue/DB-141 is fixed"
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1798,6 +1996,7 @@ steps:
               args: ["lateral-joins", "--seed=$BUILDKITE_JOB_ID"]
 
       - id: rqg-subqueries
+        topics: [postgres]
         label: "RQG subqueries workload"
         depends_on: build-aarch64
         timeout_in_minutes: 45
@@ -1809,9 +2008,10 @@ steps:
               args: ["subqueries", "--seed=$BUILDKITE_JOB_ID"]
 
       - id: rqg-window-functions
+        topics: [postgres]
         label: "RQG window functions workload"
         depends_on: build-aarch64
-        skip: "flaky until database-issues#8366 is fixed"
+        skip: "flaky until https://linear.app/materializeinc/issue/DB-137 is fixed"
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -1821,6 +2021,7 @@ steps:
               args: ["window-functions", "--seed=$BUILDKITE_JOB_ID"]
 
       - id: rqg-wmr
+        topics: [postgres]
         label: "RQG WMR workload"
         depends_on: build-aarch64
         timeout_in_minutes: 45
@@ -1834,6 +2035,7 @@ steps:
               args: ["wmr", "--seed=$BUILDKITE_JOB_ID", "--other-tag=common-ancestor"]
 
       - id: rqg-banking
+        topics: [postgres]
         label: "RQG banking workload"
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -1845,6 +2047,7 @@ steps:
               args: ["banking", "--seed=$BUILDKITE_JOB_ID"]
 
       - id: rqg-left-join-stacks
+        topics: [postgres]
         label: "RQG left join stacks workload"
         depends_on: build-aarch64
         timeout_in_minutes: 45
@@ -1856,6 +2059,7 @@ steps:
               args: ["left-join-stacks", "--seed=$BUILDKITE_JOB_ID"]
 
   - id: crdb-restarts
+    topics: [cockroach]
     label: "CRDB rolling restarts"
     depends_on: build-aarch64
     timeout_in_minutes: 30
@@ -1866,6 +2070,7 @@ steps:
           composition: crdb-restarts
 
   - id: pubsub-disruption
+    topics: [kafka]
     label: "PubSub disruption"
     depends_on: build-aarch64
     timeout_in_minutes: 60
@@ -1878,7 +2083,7 @@ steps:
   - id: retain-history
     label: "Check retain history"
     depends_on: build-aarch64
-    skip: "database-issues#7310"
+    skip: "https://linear.app/materializeinc/issue/DB-144"
     timeout_in_minutes: 30
     agents:
       queue: hetzner-aarch64-4cpu-8gb
@@ -1890,6 +2095,7 @@ steps:
     key: data-ingest
     steps:
     - id: data-ingest-1-replica
+      topics: [kafka, mysql, postgres, sql-server]
       label: "Data Ingest (1 replica)"
       depends_on: build-x86_64
       timeout_in_minutes: 90
@@ -1903,6 +2109,7 @@ steps:
             args: [--replicas=1]
 
     - id: data-ingest-2-replicas
+      topics: [kafka, mysql, postgres, sql-server]
       label: "Data Ingest (2 replicas)"
       depends_on: build-x86_64
       timeout_in_minutes: 90
@@ -1916,6 +2123,7 @@ steps:
             args: [--replicas=2]
 
     - id: data-ingest-8-replicas
+      topics: [kafka, mysql, postgres, sql-server]
       label: "Data Ingest (8 replicas)"
       depends_on: build-x86_64
       timeout_in_minutes: 90
@@ -1932,6 +2140,7 @@ steps:
     key: parallel-workload
     steps:
       - id: parallel-workload-read-only
+        topics: [cockroach, copy-to-s3, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Parallel Workload (Read-Only)"
         depends_on: build-x86_64
         artifact_paths: [parallel-workload-queries.log.zst]
@@ -1944,6 +2153,7 @@ steps:
               args: [--runtime=1200, --complexity=read, --threads=8]
 
       - id: parallel-workload-dml
+        topics: [cockroach, copy-to-s3, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Parallel Workload (DML)"
         depends_on: build-x86_64
         artifact_paths: [parallel-workload-queries.log.zst]
@@ -1956,6 +2166,7 @@ steps:
               args: [--runtime=1200, --complexity=dml, --threads=8]
 
       - id: parallel-workload-ddl
+        topics: [cockroach, copy-to-s3, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Parallel Workload (DDL)"
         depends_on: build-x86_64
         artifact_paths: [parallel-workload-queries.log.zst]
@@ -1968,6 +2179,7 @@ steps:
               args: [--runtime=1200, --threads=8]
 
       - id: parallel-workload-ddl-only
+        topics: [cockroach, copy-to-s3, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Parallel Workload (DDL Only)"
         depends_on: build-x86_64
         artifact_paths: [parallel-workload-queries.log.zst]
@@ -1980,6 +2192,7 @@ steps:
               args: [--runtime=1200, --complexity=ddl-only, --threads=8]
 
       - id: parallel-workload-many-threads
+        topics: [cockroach, copy-to-s3, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Parallel Workload (many threads)"
         depends_on: build-x86_64
         artifact_paths: [parallel-workload-queries.log.zst]
@@ -1994,6 +2207,7 @@ steps:
         skip: "Too unstable at the moment"
 
       - id: parallel-workload-rename-naughty
+        topics: [cockroach, copy-to-s3, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Parallel Workload (rename + naughty identifiers)"
         depends_on: build-x86_64
         artifact_paths: [parallel-workload-queries.log.zst]
@@ -2006,6 +2220,7 @@ steps:
               args: [--runtime=1200, --scenario=rename, --naughty-identifiers, --threads=8]
 
       - id: parallel-workload-rename
+        topics: [cockroach, copy-to-s3, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Parallel Workload (rename)"
         depends_on: build-x86_64
         artifact_paths: [parallel-workload-queries.log.zst]
@@ -2018,6 +2233,7 @@ steps:
               args: [--runtime=1200, --scenario=rename, --threads=8]
 
       - id: parallel-workload-repeat-row
+        topics: [cockroach, copy-to-s3, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Parallel Workload (repeat_row)"
         depends_on: build-x86_64
         artifact_paths: [parallel-workload-queries.log.zst]
@@ -2030,6 +2246,7 @@ steps:
               args: [--runtime=1200, --scenario=repeat-row, --threads=8]
 
       - id: parallel-workload-cancel
+        topics: [cockroach, copy-to-s3, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Parallel Workload (cancel)"
         depends_on: build-x86_64
         artifact_paths: [parallel-workload-queries.log.zst]
@@ -2042,6 +2259,7 @@ steps:
               args: [--runtime=1200, --scenario=cancel, --threads=8]
 
       - id: parallel-workload-kill
+        topics: [cockroach, copy-to-s3, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Parallel Workload (kill)"
         depends_on: build-x86_64
         artifact_paths: [parallel-workload-queries.log.zst]
@@ -2054,6 +2272,7 @@ steps:
               args: [--runtime=1200, --scenario=kill, --threads=8]
 
       - id: parallel-workload-backup-restore
+        topics: [cockroach, copy-to-s3, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Parallel Workload (backup & restore)"
         depends_on: build-x86_64
         artifact_paths: [parallel-workload-queries.log.zst]
@@ -2067,6 +2286,7 @@ steps:
               args: [--runtime=1200, --scenario=backup-restore, --naughty-identifiers, --threads=8]
 
       - id: parallel-workload-0dt
+        topics: [0dt-migration, cockroach, copy-to-s3, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Parallel Workload (0dt deploy)"
         depends_on: build-x86_64
         artifact_paths: [parallel-workload-queries.log.zst]
@@ -2079,6 +2299,7 @@ steps:
               args: [--runtime=1200, --scenario=0dt-deploy, --threads=8]
 
   - id: slow-cluster
+    topics: [kafka, kafka-sink, postgres]
     label: Cluster (slow)
     depends_on: build-aarch64
     timeout_in_minutes: 30
@@ -2103,6 +2324,7 @@ steps:
     key: legacy-upgrade
     steps:
       - id: legacy-upgrade-git
+        topics: [cockroach, kafka, kafka-sink, mysql, postgres, upgrade]
         label: Legacy upgrade (last version from git)
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -2114,6 +2336,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: legacy-upgrade-docs
+        topics: [cockroach, kafka, kafka-sink, mysql, postgres, self-managed, upgrade]
         label: Legacy upgrade (last version from docs)
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -2124,6 +2347,7 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
       - id: catalog-migration-incident-1007
+        topics: [upgrade]
         label: "v80->v81 catalog migration fix (incident-1007)"
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -2138,6 +2362,7 @@ steps:
     key: cloudtests
     steps:
       - id: cloudtest
+        topics: [debezium, kafka, kafka-sink, mysql, postgres, self-managed, ssh-tunnel]
         label: Cloudtest
         depends_on: build-aarch64
         timeout_in_minutes: 60
@@ -2166,6 +2391,7 @@ steps:
 
 
       - id: cloudtest-slow
+        topics: [debezium, kafka, kafka-sink, mysql, postgres, self-managed, ssh-tunnel]
         label: "Slow Cloudtest"
         depends_on: build-aarch64
         timeout_in_minutes: 45
@@ -2181,10 +2407,10 @@ steps:
         sanitizer: skip
 
   - id: txn-wal-fencing
+    topics: [azurite]
     label: "Txn-wal fencing with :azure: blob store"
     depends_on: build-aarch64
     timeout_in_minutes: 60
-    parallelism: 2
     plugins:
       - ./ci/plugins/mzcompose:
           composition: txn-wal-fencing
@@ -2192,10 +2418,22 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
+  - id: occ-mixed-mode-read-then-write
+    label: "Read-then-write sequencing split across two environmentd processes"
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: txn-wal-fencing
+          run: mixed-mode-read-then-write
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
   - group: "Copy"
     key: copy
     steps:
     - id: copy-1-replica
+      topics: [copy-to-s3]
       label: "Copy (1 replica)"
       depends_on: build-aarch64
       timeout_in_minutes: 60
@@ -2207,6 +2445,7 @@ steps:
         queue: hetzner-aarch64-8cpu-16gb
 
     - id: copy-2-replicas
+      topics: [copy-to-s3]
       label: "Copy (2 replicas)"
       depends_on: build-aarch64
       timeout_in_minutes: 60
@@ -2219,6 +2458,7 @@ steps:
         queue: hetzner-aarch64-8cpu-16gb
 
   - id: backup-restore
+    topics: [cockroach]
     label: "CRDB / Persist backup and restore"
     depends_on: build-aarch64
     timeout_in_minutes: 30
@@ -2239,6 +2479,7 @@ steps:
           composition: backup-restore-postgres
 
   - id: replica-isolation
+    topics: [kafka]
     label: Replica isolation
     depends_on: build-aarch64
     timeout_in_minutes: 90
@@ -2250,10 +2491,11 @@ steps:
       queue: hetzner-aarch64-4cpu-8gb
 
   - id: 0dt
+    topics: [0dt-migration, kafka, kafka-sink, mysql, postgres, sql-server]
     label: Zero downtime
     depends_on: build-x86_64
     timeout_in_minutes: 60
-    parallelism: 4
+    parallelism: 2
     plugins:
       - ./ci/plugins/mzcompose:
           composition: 0dt
@@ -2265,6 +2507,7 @@ steps:
     key: orchestratord-test
     steps:
       - id: orchestratord-defaults
+        topics: [self-managed]
         label: "Orchestratord + documentation defaults"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
@@ -2279,6 +2522,7 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-rolling-upgrade-downtime
+        topics: [0dt-migration, self-managed, upgrade]
         label: "Orchestratord + rolling upgrade downtime"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
@@ -2293,6 +2537,7 @@ steps:
           queue: hetzner-x86-64-dedi-8cpu-32gb
 
       - id: orchestratord-default-properties
+        topics: [self-managed]
         label: "Orchestratord + defaults for properties"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
@@ -2306,6 +2551,7 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-individual
+        topics: [self-managed]
         label: "Orchestratord + individual properties"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
@@ -2320,11 +2566,11 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-combine
+        topics: [self-managed]
         label: "Orchestratord + combine properties"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 60
-        parallelism: 2
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
@@ -2334,6 +2580,7 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-upgrade-individual
+        topics: [self-managed, upgrade]
         label: "Orchestratord + upgrade, individual props"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
@@ -2347,6 +2594,7 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-upgrade-combine
+        topics: [self-managed, upgrade]
         label: "Orchestratord + upgrade, combine props"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
@@ -2360,6 +2608,7 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-upgrade-chain-individual
+        topics: [self-managed, upgrade]
         label: "Orchestratord + upgrade chain, individual props"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
@@ -2373,6 +2622,7 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-upgrade-chain-combine
+        topics: [self-managed, upgrade]
         label: "Orchestratord + upgrade chain, combine props"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
@@ -2386,6 +2636,7 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-balancer
+        topics: [self-managed]
         label: Orchestratord balancer CRD
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
@@ -2399,6 +2650,7 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-revert-rollout
+        topics: [self-managed]
         label: Orchestratord revert in-progress rollout
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
@@ -2412,6 +2664,7 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-rollout-timeout
+        topics: [self-managed]
         label: Orchestratord cancel rollout after timeout
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
@@ -2424,7 +2677,22 @@ steps:
         agents:
           queue: hetzner-aarch64-16cpu-32gb
 
+      - id: orchestratord-leader-failover
+        topics: [self-managed]
+        label: Orchestratord leader election failover
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: leader-failover
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
       - id: orchestratord-upgrade-operator
+        topics: [self-managed, upgrade]
         label: Orchestratord operator upgrade
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
@@ -2438,6 +2706,7 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-oidc-auth
+        topics: [self-managed]
         label: Orchestratord OIDC auth end-to-end
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
@@ -2452,6 +2721,7 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-clusterd-generation-scheduling
+        topics: [self-managed]
         label: Orchestratord clusterd generation scheduling
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
@@ -2465,7 +2735,50 @@ steps:
         agents:
           queue: hetzner-aarch64-16cpu-32gb
 
+      - id: orchestratord-v1-opt-in
+        topics: [self-managed]
+        label: "Orchestratord v1 opt-in tests"
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: v1-opt-in
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-server-side-apply
+        topics: [self-managed]
+        label: "Orchestratord server-side apply"
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: server-side-apply
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-manually-promote
+        topics: [0dt-migration, self-managed]
+        label: "Orchestratord ManuallyPromote tests"
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: manually-promote
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
   - id: emulator
+    topics: [self-managed]
     label: Materialize Emulator
     depends_on: build-aarch64
     timeout_in_minutes: 30
@@ -2489,19 +2802,21 @@ steps:
           args: [--replicas=2, --parallelism=8]
 
   - id: iceberg
+    topics: [iceberg, postgres]
     label: Iceberg
     depends_on: build-aarch64
-    timeout_in_minutes: 30
+    timeout_in_minutes: 60
     plugins:
       - ./ci/plugins/mzcompose:
           composition: iceberg
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner-aarch64-8cpu-16gb
 
   - group: "Race Condition"
     key: race-condition
     steps:
        - id: race-condition-subsequent
+         topics: [iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
          label: "Race Condition Test (subsequent)"
          depends_on: build-x86_64
          timeout_in_minutes: 60
@@ -2513,6 +2828,7 @@ steps:
                args: [--runtime=1500, --scenario=subsequent]
 
        - id: race-condition-subsequent-100
+         topics: [iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
          label: "Race Condition Test (subsequent, 100 objects)"
          depends_on: build-x86_64
          timeout_in_minutes: 60
@@ -2527,6 +2843,7 @@ steps:
                args: [--runtime=1500, --scenario=subsequent, --num-objects=100, --repetitions=50]
 
        - id: race-condition-subsequent-chain
+         topics: [iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
          label: "Race Condition Test (subsequent chain)"
          depends_on: build-x86_64
          timeout_in_minutes: 60
@@ -2538,6 +2855,7 @@ steps:
                args: [--runtime=1500, --scenario=subsequent-chain]
 
        - id: race-condition-subsequent-chain-50
+         topics: [iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
          label: "Race Condition Test (subsequent chain, 50 objects)"
          depends_on: build-x86_64
          timeout_in_minutes: 60
@@ -2550,6 +2868,7 @@ steps:
                args: [--runtime=1500, --scenario=subsequent-chain, --num-objects=50, --repetitions=50]
 
        - id: race-condition-concurrent
+         topics: [iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
          label: "Race Condition Test (concurrent)"
          depends_on: build-x86_64
          timeout_in_minutes: 60
@@ -2561,9 +2880,162 @@ steps:
                args: [--runtime=1500, --scenario=concurrent]
          skip: "Not stable yet, not clear if this is a product issue"
 
+       - id: race-condition-rotate-keys
+         topics: [iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
+         label: "ALTER CONNECTION ROTATE KEYS vs SET race"
+         depends_on: build-x86_64
+         timeout_in_minutes: 15
+         agents:
+           queue: hetzner-x86-64-4cpu-8gb
+         plugins:
+           - ./ci/plugins/mzcompose:
+               composition: race-condition
+               run: rotate-keys-race
+
+  - id: mz-deploy
+    topics: [kafka, mysql, postgres]
+    label: "mz-deploy"
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    inputs: [src/mz-deploy, test/mz-deploy]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: mz-deploy
+          ci-builder: stable
+    agents:
+      queue: hetzner-x86-64-4cpu-8gb
+
+  - id: clusterd-test-driver
+    label: Clusterd test driver
+    depends_on: build-aarch64
+    timeout_in_minutes: 20
+    inputs: [test/clusterd-test-driver]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: clusterd-test-driver
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  - id: dbt-materialize
+    topics: [kafka]
+    label: dbt-materialize
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    parallelism: 2
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: dbt-materialize
+    agents:
+      queue: hetzner-aarch64-8cpu-16gb
+
+  - id: storage-usage
+    topics: [kafka, postgres]
+    label: Storage usage table
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: storage-usage
+
+  - id: tracing
+    label: Tracing fast path
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [test/tracing]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: tracing
+    agents:
+      # Requires BUILDKITE_SENTRY_DSN
+      queue: linux-aarch64-small
+
+  - id: rtr-combined
+    topics: [kafka, mysql, postgres]
+    label: RTR with all sources
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [test/rtr-combined]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: rtr-combined
+    agents:
+      queue: hetzner-aarch64-16cpu-32gb
+
+  - id: dyncfg
+    label: "Dyncfg"
+    depends_on: build-aarch64
+    timeout_in_minutes: 45
+    inputs: [test/dyncfg]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: dyncfg
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  - id: secrets-logging
+    topics: [kafka, mysql, postgres]
+    label: "Secrets Logging"
+    depends_on: build-aarch64
+    timeout_in_minutes: 45
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: secrets-logging
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  - id: chbench-demo
+    topics: [debezium, kafka, mysql]
+    label: chbench smoke
+    depends_on: build-aarch64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: chbench
+          run: no-load
+          args: [--run-seconds=10, --wait]
+    timeout_in_minutes: 30
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  - id: metabase-demo
+    label: Metabase
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: metabase
+    agents:
+      # too slow to run emulated on aarch64, Metabase'ss docker image is not yet available for aarch64 natively yet: https://github.com/metabase/metabase/issues/13119
+      queue: hetzner-x86-64-4cpu-8gb
+
+  - id: fdb
+    topics: [cockroach]
+    label: "FoundationDB"
+    depends_on: build-aarch64
+    timeout_in_minutes: 40
+    inputs: [test/foundationdb]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: foundationdb
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+
+
   - group: Language
     key: language-tests
     steps:
+      - id: adbc
+        label: Arrow ADBC driver
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: adbc
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
       - id: lang-csharp
         label: ":csharp:"
         depends_on: build-aarch64

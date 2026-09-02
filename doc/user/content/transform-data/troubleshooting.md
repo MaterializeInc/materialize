@@ -200,6 +200,7 @@ WHERE c.name = <CLUSTER_NAME>;
 The most common reasons for query hanging are:
 
 * An upstream source is stalled
+* An upstream source is still snapshotting
 * An upstream object is still hydrating
 * Your cluster is unhealthy
 
@@ -219,21 +220,38 @@ guidance.
 To detect and address stalled sources, follow the [`Ingest data` troubleshooting](/ingest-data/troubleshooting)
 guide.
 
-### Hydrating upstream objects
+### Snapshotting source
 
-When a source, materialized view, or index is created or updated, it must first
-be backfilled with any pre-existing data — a process known as _hydration_.
+When a source is created, it must first _snapshot_ the existing data from the
+upstream system before it can serve results. That is, queries that depend on a
+source that is snapshotting **block until the snapshot is complete**.
 
-Queries that depend objects that are still hydrating will **block until
-hydration is complete**. To see whether an object is still hydrating, navigate
-to the [workflow graph](#detect) for the object in the Materialize console.
+Unlike hydration, snapshotting reads from the upstream system. For large upsert
+sources, this process can be resource-intensive and take a long time. For help
+on diagnosing a slow snapshot and sizing a cluster appropriately for
+snapshotting, follow the [`Ingest data`
+troubleshooting](/ingest-data/troubleshooting) guide.
 
+For upsert sources, see also [Hydrating objects](#hydrating-objects).
+
+### Hydrating objects
+
+Queries that depend on objects that are hydrating **block until hydration is
+complete**. _Hydration_ is when Materialize reconstructs the in-memory state of
+an object by reading from its storage layer (not from the upstream system).
 Hydration time is proportional to data volume and query complexity. This means
 that you should expect objects with large volumes of data and/or complex queries
-to take longer to hydrate. For Cloud, you should also expect hydration to be
-triggered every time a cluster is restarted or sized up, including during
-[Materialize Cloud's routine maintenance
+to take longer to hydrate.
+
+When a materialized view or index is created, it undergoes hydration. Hydration
+also happens whenever a cluster is restarted or resized: the materialized views
+and indexes on that cluster rebuild their in-memory state, and upsert sources
+rebuild their internal index. On Materialize Cloud, this includes restarts
+during the [routine maintenance
 window](/releases/schedule/#cloud-upgrade-schedule).
+
+To see whether an object is still hydrating, navigate to the
+[workflow graph](#detect) for the object in the Materialize console.
 
 ### Unhealthy cluster
 

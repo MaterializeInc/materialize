@@ -836,6 +836,7 @@ Explained Query:
       Reduce::Hierarchical
         aggr_funcs=[min, max]
         monotonic
+        input_key=#0
         key_plan
           project=()
         val_plan

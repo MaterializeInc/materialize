@@ -28,7 +28,10 @@ check_all_files_referenced_in_ci() {
         -not -wholename "./test/get-cloud-hostname/mzcompose.py" `# Utility, no test` \
         | sed -e "s|.*/\([^/]*\)/mzcompose.py|\1|")
     while read -r composition; do
-        if ! grep -q "composition: $composition" ci/*/pipeline.template.yml; then
+        # Anchor at end of line, otherwise a composition whose name prefixes
+        # another (e.g. "cluster" vs "cluster-isolation") passes the check even
+        # when none of its own steps exist.
+        if ! grep -qE "composition: $composition$" ci/*/pipeline.template.yml; then
             echo "mzcompose composition \"$composition\" is unused in any CI pipeline file"
             RETURN=1
         fi
@@ -50,6 +53,9 @@ check_default_workflow_references_others() {
         -not -wholename "./test/cluster-spec-sheet/mzcompose.py" `# Handled differently` \
         -not -wholename "./test/orchestratord/mzcompose.py" `# Handled differently` \
         -not -wholename "./test/workload-replay/mzcompose.py" `# Handled differently` \
+        -not -wholename "./test/race-condition/mzcompose.py" `# rotate-keys-race workflow is run separately` \
+        -not -wholename "./test/aws-glue-schema-registry/mzcompose.py" `# 'aws' workflow runs against real AWS, opt-in via nightly only` \
+        -not -wholename "./test/txn-wal-fencing/mzcompose.py" `# mixed-mode-read-then-write workflow is run separately` \
     )
 
     for file in "${MZCOMPOSE_TEST_FILES[@]}"; do

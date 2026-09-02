@@ -382,10 +382,6 @@ impl StorageState {
 pub struct StorageInstanceContext {
     /// A directory that can be used for scratch work.
     pub scratch_directory: Option<PathBuf>,
-    /// A global `rocksdb::Env`, shared across ALL instances of `RocksDB` (even
-    /// across sources!). This `Env` lets us control some resources (like background threads)
-    /// process-wide.
-    pub rocksdb_env: rocksdb::Env,
     /// The memory limit of the materialize cluster replica. This will
     /// be used to calculate and configure the maximum inflight bytes for backpressure
     pub cluster_memory_limit: Option<usize>,
@@ -393,22 +389,28 @@ pub struct StorageInstanceContext {
 
 impl StorageInstanceContext {
     /// Build a new `StorageInstanceContext`.
-    pub fn new(
-        scratch_directory: Option<PathBuf>,
-        cluster_memory_limit: Option<usize>,
-    ) -> Result<Self, anyhow::Error> {
-        // If no file system is available, fall back to running RocksDB in memory.
-        let rocksdb_env = if scratch_directory.is_some() {
-            rocksdb::Env::new()?
-        } else {
-            rocksdb::Env::mem_env()?
-        };
-
-        Ok(Self {
+    pub fn new(scratch_directory: Option<PathBuf>, cluster_memory_limit: Option<usize>) -> Self {
+        Self {
             scratch_directory,
-            rocksdb_env,
             cluster_memory_limit,
-        })
+        }
+    }
+
+    /// Returns a `rocksdb::Env` for a new RocksDB instance.
+    ///
+    /// With a scratch directory this is the default `Env`, which stores data
+    /// on the host filesystem. Without one, RocksDB runs in memory, and every
+    /// call returns a fresh in-memory `Env`. State written through an `Env`
+    /// is only reachable through that same `Env`, so a per-instance `Env`
+    /// isolates instances from each other and from previous incarnations of
+    /// themselves. Background threads are process-wide either way, both
+    /// variants delegate them to the default `Env`.
+    pub fn rocksdb_env(&self) -> Result<rocksdb::Env, rocksdb::Error> {
+        if self.scratch_directory.is_some() {
+            rocksdb::Env::new()
+        } else {
+            rocksdb::Env::mem_env()
+        }
     }
 }
 
@@ -844,16 +846,29 @@ impl<'w> Worker<'w> {
                     STORAGE_SERVER_MAINTENANCE_INTERVAL
                         .get(self.storage_state.storage_configuration.config_set());
 
-                // Gate the upsert source-stash's use of the column pager. The
-                // pager's budget pool, backend, and codec are the shared ones
-                // configured by compute's `apply_worker_config` (compute and
-                // storage run in the same process); storage only decides whether
-                // its stash participates, via its own dyncfg.
+                // Apply storage's upsert spill flag to both stash flavors'
+                // mechanisms: the storage leg of the process-wide chunk
+                // spill gate (chunked flavor) and the storage-owned column
+                // pager (paged flavor). The buffer pool, the pager pool, and
+                // their budgets are the shared ones configured by compute's
+                // `apply_worker_config` (compute and storage run in the same
+                // process). The chunk gate ORs storage's leg with compute's,
+                // so chunks spill while either subsystem's flag is set.
+                //
+                // The flag is replica-scoped: the storage controller merges
+                // per-replica overrides into the `UpdateConfiguration`
+                // commands it sends, so reading this worker's `ConfigSet`
+                // here observes them.
                 {
                     use mz_storage_types::dyncfgs::ENABLE_UPSERT_PAGED_SPILL;
 
                     let enabled = ENABLE_UPSERT_PAGED_SPILL
                         .get(self.storage_state.storage_configuration.config_set());
+                    debug!(
+                        worker = self.timely_worker.index(),
+                        enabled, "upsert stash spill: applying gate",
+                    );
+                    crate::upsert::upsert_stash_spill::set_enabled(enabled);
                     crate::upsert::upsert_stash_pager::set_enabled(enabled);
                 }
             }
@@ -1070,7 +1085,12 @@ impl<'w> Worker<'w> {
                     }
                 }
                 StorageCommand::RunOneshotIngestion(ingestion) => {
-                    info!(%worker_id, ?ingestion, "reconcile: received RunOneshotIngestion command");
+                    info!(
+                        %worker_id,
+                        ingestion_id = %ingestion.ingestion_id,
+                        collection_id = %ingestion.collection_id,
+                        "reconcile: received RunOneshotIngestion command",
+                    );
                     create_oneshot_ingestions.insert(ingestion.ingestion_id);
                 }
                 StorageCommand::CancelOneshotIngestion(uuid) => {

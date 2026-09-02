@@ -17,14 +17,7 @@ import {
 } from "~/external-library-wrappers/frontegg";
 import { getStore } from "~/jotai";
 import { getQueryClient } from "~/queryClient";
-import { notNullOrUndefined } from "~/util";
 
-import {
-  MaterializeUseCase,
-  PrimaryDataSource,
-  ProjectDescription,
-  RoleDescription,
-} from "./onboardingSurveyOptions";
 import { segment } from "./segment";
 
 async function getAnonymousId() {
@@ -60,11 +53,6 @@ export const TRACK_SIGNUP_API_ENDPOINT = buildFormSubmissionUrl({
   formGuid: "e1f0065e-c5ec-4004-afb7-d4aeab96c6b2",
 });
 
-export const ONBOARDING_SURVEY_API_ENDPOINT = buildFormSubmissionUrl({
-  portalId: "23399445",
-  formGuid: "7038d05b-0ad2-4c85-8ef7-36a163c6ddaf",
-});
-
 type HubspotPayload = {
   fields: { name: string; value: string }[];
   context: { pageUri: string; hutk?: string };
@@ -75,10 +63,6 @@ export const hubspotQueryKeys = {
   trackSignup: () => [
     ...hubspotQueryKeys.all(),
     buildGlobalQueryKey("track-signup"),
-  ],
-  onboardingSurvey: () => [
-    ...hubspotQueryKeys.all(),
-    buildGlobalQueryKey("onboarding-survey"),
   ],
 };
 
@@ -204,112 +188,3 @@ export const trackSignUpInHubspotActions = {
     }
   },
 };
-
-type OnboardingSurveyPayload = {
-  email: string;
-  organizationId: string;
-  userId: string;
-  roleDescription: RoleDescription;
-  roleDescriptionDetails?: string;
-  materializeUseCase: MaterializeUseCase;
-  materializeUseCaseDetails?: string;
-  projectDescription: ProjectDescription;
-  projectDescriptionDetails?: string;
-  primaryDataSource: PrimaryDataSource;
-  primaryDataSourceDetails?: string;
-};
-
-export async function submitOnboardingSurvey(
-  payload: OnboardingSurveyPayload,
-  options?: { retryDelay?: number },
-) {
-  const data: HubspotPayload = {
-    fields: [
-      { name: "email", value: payload.email },
-      { name: "organization_id", value: payload.organizationId },
-      { name: "mz_user_id", value: payload.userId },
-
-      {
-        name: "how_would_you_describe_your_role_",
-        value: payload.roleDescription,
-      },
-
-      {
-        name: "why_are_you_trying_materialize_",
-        value: payload.materializeUseCase,
-      },
-
-      {
-        name: "what_are_you_trying_to_solve_with_materialize_",
-        value: payload.projectDescription,
-      },
-
-      {
-        name: "what_is_the_primary_or_origin_data_source_",
-        value: payload.primaryDataSource,
-      },
-    ],
-    context: {
-      pageUri: window.location.href,
-    },
-  };
-
-  [
-    {
-      name: "how_would_you_describe_your_role__details",
-      value: payload.roleDescriptionDetails,
-    },
-    {
-      name: "why_are_you_trying_materialize__details",
-      value: payload.materializeUseCaseDetails,
-    },
-    {
-      name: "what_are_you_trying_to_solve_with_materialize__details",
-      value: payload.projectDescriptionDetails,
-    },
-    {
-      name: "what_is_the_primary_or_origin_data_source__details",
-      value: payload.primaryDataSourceDetails,
-    },
-  ].forEach(({ name, value }) => {
-    if (notNullOrUndefined(value)) {
-      data.fields.push({
-        name: name,
-        value: value,
-      });
-    }
-  });
-
-  const hutk = getHubspotUtk();
-  if (hutk) {
-    data.context = {
-      ...data.context,
-      hutk,
-    };
-  }
-
-  return getQueryClient()
-    .getMutationCache()
-    .build(getQueryClient(), {
-      mutationKey: hubspotQueryKeys.onboardingSurvey(),
-      mutationFn: (params: HubspotPayload) => {
-        return fetch(ONBOARDING_SURVEY_API_ENDPOINT, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(params),
-        });
-      },
-      retry: 3,
-      retryDelay: options?.retryDelay,
-      onError: (error) => {
-        Sentry.captureException(
-          new Error("Hubspot onboarding survey submit failed", {
-            cause: error,
-          }),
-        );
-      },
-    })
-    .execute(data);
-}

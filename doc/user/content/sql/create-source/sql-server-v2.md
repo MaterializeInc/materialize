@@ -10,8 +10,6 @@ menu:
     weight: 30
 ---
 
-{{< private-preview />}}
-
 {{< source-versioning-disambiguation is_new=true
 other_ref="[old reference page](/sql/create-source/sql-server/)" include_blurb=true >}}
 
@@ -31,6 +29,8 @@ for the database that you would like to replicate.
 - [Create a connection to SQL
   Server](#prerequisite-creating-a-connection-to-sql-server) in Materialize.
   - The connection setup depends on your network security configuration.
+
+{{% include-headless "/headless/sql-server-deployment-guides" %}}
 
 ## Syntax
 
@@ -52,13 +52,16 @@ changes without downtime.
 
 See [Guide: Handle upstream schema changes with zero downtime](/ingest-data/sql-server/source-versioning/) for details.
 
+See also [Handling upstream operations](#handling-upstream-operations) for
+additional upstream operation considerations.
+
 #### Supported types
 
 With the new syntax, after a SQL Server source is created, you [`CREATE TABLE
 FROM SOURCE`](/sql/create-table/) to create a corresponding table in
 Matererialize and start ingesting data.
 
-{{< include-md file="shared-content/sql-server-supported-types.md" >}}
+{{% include-headless "/headless/sql-server-supported-types" %}}
 
 For more information, including strategies for handling unsupported types,
 see [`CREATE TABLE FROM SOURCE`](/sql/create-table/).
@@ -91,6 +94,10 @@ FROM <src_name>_progress;
 The reported `lsn` should increase as Materialize consumes **new** CDC events
 from the upstream SQL Server database. For more details on monitoring source
 ingestion progress and debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="sql-server" %}}
 
 ## Example
 
@@ -154,7 +161,9 @@ an SSH bastion server to accept connections from Materialize, check
 
 #### Creating the source in Materialize
 
-You **must** enable Change Data Capture, see [Enable Change Data Capture SQL Server Instructions](/ingest-data/sql-server/self-hosted/#a-configure-sql-server).
+You **must** enable Change Data Capture. See the setup instructions for
+[Azure SQL Database](/ingest-data/sql-server/azure-db/#a-configure-azure-sql-database)
+or [self-hosted SQL Server](/ingest-data/sql-server/self-hosted/#a-configure-sql-server).
 
 Once CDC is enabled for all of the tables you wish to create subsources for, you can create a `SOURCE` in
 Materialize to begin replicating data!

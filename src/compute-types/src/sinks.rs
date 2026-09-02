@@ -45,6 +45,8 @@ pub enum ComputeSinkConnection<S: 'static = ()> {
     MaterializedView(MaterializedViewSinkConnection<S>),
     /// A compute sink to do a oneshot copy to s3.
     CopyToS3Oneshot(CopyToS3OneshotSinkConnection),
+    /// A compute sink that writes rows into the in-process Prometheus metrics registry.
+    MetricSink(MetricSinkConnection),
 }
 
 impl<S> ComputeSinkConnection<S> {
@@ -54,6 +56,7 @@ impl<S> ComputeSinkConnection<S> {
             ComputeSinkConnection::Subscribe(_) => "subscribe",
             ComputeSinkConnection::MaterializedView(_) => "materialized_view",
             ComputeSinkConnection::CopyToS3Oneshot(_) => "copy_to_s3_oneshot",
+            ComputeSinkConnection::MetricSink(_) => "metric_sink",
         }
     }
 
@@ -72,6 +75,17 @@ impl<S> ComputeSinkConnection<S> {
 pub struct SubscribeSinkConnection {
     /// An ordering for the data in the subscribe.
     pub output: Vec<ColumnOrder>,
+}
+
+/// Connection for a sink that publishes rows into the in-process Prometheus metrics registry.
+///
+/// The sink does not write to persist, so there is no storage metadata to parameterize over.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct MetricSinkConnection {
+    /// Value of the `sink` label on the sink's health gauges. A user sink passes its `GlobalId`,
+    /// which is durable. A coordinator-installed curated sink passes its definition name, because
+    /// its `GlobalId` is transient and would churn the label on every boot.
+    pub label: String,
 }
 
 /// Connection attributes required to do a oneshot copy to s3.

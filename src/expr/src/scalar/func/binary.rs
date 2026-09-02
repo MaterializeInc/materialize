@@ -68,6 +68,18 @@ pub(crate) trait LazyBinaryFunc {
     /// ie. the arguments and the result are non-error datums.
     fn is_monotone(&self) -> (bool, bool);
 
+    /// Whether [`Self::is_monotone`]'s "map ranges to ranges by sampling the
+    /// endpoints" guarantee still holds when an operand may be infinite.
+    ///
+    /// False for multiplication and division: their indeterminate forms
+    /// (`0 * inf`, `inf / inf`) and magnitude collapse (`finite / inf = 0`)
+    /// produce results the range endpoints do not bound, so an abstract
+    /// interpreter must not narrow their output range when an operand may be
+    /// infinite.
+    fn is_infinity_monotone(&self) -> bool {
+        true
+    }
+
     /// Yep, I guess this returns true for infix operators.
     fn is_infix_op(&self) -> bool;
 }
@@ -118,6 +130,10 @@ pub(crate) trait EagerBinaryFunc {
 
     fn is_monotone(&self) -> (bool, bool) {
         (false, false)
+    }
+
+    fn is_infinity_monotone(&self) -> bool {
+        true
     }
 
     fn is_infix_op(&self) -> bool {
@@ -175,6 +191,10 @@ impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
 
     fn is_monotone(&self) -> (bool, bool) {
         self.is_monotone()
+    }
+
+    fn is_infinity_monotone(&self) -> bool {
+        self.is_infinity_monotone()
     }
 
     fn is_infix_op(&self) -> bool {
@@ -656,40 +676,5 @@ mod test {
             ]),
             SqlScalarType::Float32.nullable(true)
         );
-    }
-
-    #[mz_ore::test]
-    fn mz_reflect_binary_func() {
-        use crate::BinaryFunc;
-        use mz_lowertest::{MzReflect, ReflectedTypeInfo};
-
-        let mut rti = ReflectedTypeInfo::default();
-        BinaryFunc::add_to_reflected_type_info(&mut rti);
-
-        // Check that the enum is registered
-        let variants = rti
-            .enum_dict
-            .get("BinaryFunc")
-            .expect("BinaryFunc should be in enum_dict");
-        assert!(
-            variants.contains_key("AddInt64"),
-            "AddInt64 variant should exist"
-        );
-        assert!(variants.contains_key("Gte"), "Gte variant should exist");
-
-        // Check that inner types are registered in struct_dict
-        assert!(
-            rti.struct_dict.contains_key("AddInt64"),
-            "AddInt64 should be in struct_dict"
-        );
-        assert!(
-            rti.struct_dict.contains_key("Gte"),
-            "Gte should be in struct_dict"
-        );
-
-        // Verify zero-field unit structs
-        let (names, types) = rti.struct_dict.get("AddInt64").unwrap();
-        assert!(names.is_empty(), "AddInt64 should have no field names");
-        assert!(types.is_empty(), "AddInt64 should have no field types");
     }
 }

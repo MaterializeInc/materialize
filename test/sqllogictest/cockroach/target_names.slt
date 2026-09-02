@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,12 +9,15 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/target_names
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/target_names
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
 mode cockroach
@@ -22,12 +25,16 @@ mode cockroach
 statement ok
 CREATE TABLE t(a INT[], t STRING);
 
+# Not supported by Materialize.
+onlyif cockroach
 # Simple expressions get the underlying column name as name.
 query ITTIIT colnames
 SELECT *, a, a[0], (((((((((a))))))))), t COLLATE "en_US" FROM t
 ----
 a t a a a t
 
+# Not supported by Materialize.
+onlyif cockroach
 # Functions and function-like expressions get the function name.
 query ITTTTBTT colnames
 SELECT array_length(a, 1),
@@ -46,9 +53,11 @@ array_length  nullif  row  coalesce  iferror  iserror if current_user
 query ITRBBT colnames
 SELECT 123, '123', 123.0, TRUE, FALSE, NULL
 ----
-?column?  ?column?  ?column?  bool  bool   ?column?
-123       123       123.0     true  false  NULL
+?column? ?column? ?column? bool bool ?column?
+123  123  123  true  false  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 # Casts get the underlying expression name if there is one,
 # otherwise the name of the type.
 query IITI colnames
@@ -56,6 +65,8 @@ SELECT t::INT, '123'::INT, t:::STRING, '123':::INT FROM t
 ----
 t  int8  t  int8
 
+# Not supported by Materialize.
+onlyif cockroach
 # Field access gets the field name.
 query T colnames
 SELECT (pg_get_keywords()).word FROM t
@@ -66,7 +77,7 @@ word
 query TT colnames
 SELECT array[1,2,3], array(select 1)
 ----
-array    array
+array ?column?
 {1,2,3}  {1}
 
 # EXISTS in subqueries called "exists"
@@ -93,5 +104,5 @@ SELECT (SELECT 123 AS a),
        (VALUES (cos(1)::INT)),
        (SELECT cos(0)::INT)
 ----
-a   column1 cos
-123 0       1
+a column1 cos
+123  1  1

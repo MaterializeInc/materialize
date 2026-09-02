@@ -1,0 +1,91 @@
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on July 6, 2026 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/multi_statement
+#
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+statement ok
+CREATE TABLE kv (
+  k CHAR PRIMARY KEY,
+  v CHAR
+)
+
+query TT
+SELECT * FROM kv
+----
+
+statement ok
+INSERT INTO kv (k,v) VALUES ('a', 'b'); INSERT INTO kv (k,v) VALUES ('c', 'd')
+
+query TT rowsort
+SELECT * FROM kv
+----
+a b
+c d
+
+# Not supported by Materialize.
+onlyif cockroach
+# error if either statement returns an error
+# first statement returns an error. Second stmt shouldn't execute.
+statement error duplicate key value violates unique constraint "kv_pkey"\nDETAIL: Key \(k\)=\('a'\) already exists\.
+INSERT INTO kv (k,v) VALUES ('a', 'b'); INSERT INTO kv (k,v) VALUES ('e', 'f')
+
+query TT rowsort
+SELECT * FROM kv
+----
+a b
+c d
+
+# Not supported by Materialize.
+onlyif cockroach
+# second statement returns an error, and causes the whole batch to rollbacl
+statement error duplicate key value violates unique constraint "kv_pkey"\nDETAIL: Key \(k\)=\('a'\) already exists\.
+INSERT INTO kv (k,v) VALUES ('g', 'h'); INSERT INTO kv (k,v) VALUES ('a', 'b')
+
+query TT rowsort
+SELECT * FROM kv
+----
+a b
+c d
+
+# parse error runs nothing
+statement error Expected identifier, found string literal "k"
+INSERT INTO kv (k,v) VALUES ('i', 'j'); INSERT INTO VALUES ('k', 'l')
+
+query TT rowsort
+SELECT * FROM kv
+----
+a b
+c d
+
+statement error Unexpected keyword END at the beginning of a statement
+BEGIN; INSERT INTO x.y(a) VALUES (1); END
+
+# Not supported by Materialize.
+onlyif cockroach
+statement error pq: current transaction is aborted, commands ignored until end of transaction block
+SELECT * from kv; ROLLBACK
+
+statement ok
+ROLLBACK
+
+statement error pgcode 42P01 unknown schema 'system'
+BEGIN TRANSACTION; SELECT * FROM system.t; INSERT INTO t(a) VALUES (1)

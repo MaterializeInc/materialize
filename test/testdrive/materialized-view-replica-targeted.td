@@ -17,9 +17,14 @@
 
 $ set-sql-timeout duration=60s
 
-# Enable the feature flag.
+# Enable the feature flag. Also drive the cluster controller's tick down: with
+# the controller on, a SIZE change reshapes in the background (create new
+# replica, cut over, drop the old one), and the resize regression test below
+# relies on the old replica (and the MV targeted at it) being torn down within
+# testdrive's retry window.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_replica_targeted_materialized_views = true
+ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'
 
 > CREATE TABLE t (a int)
 > INSERT INTO t VALUES (1), (2), (3)

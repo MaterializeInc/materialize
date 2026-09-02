@@ -34,7 +34,6 @@ use std::sync::LazyLock;
 use chrono::offset::{Offset, TimeZone};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use dec::OrderedDecimal;
-use mz_lowertest::MzReflect;
 use mz_ore::cast::ReinterpretCast;
 use mz_ore::error::ErrorExt;
 use mz_ore::fmt::FormatBuffer;
@@ -52,14 +51,14 @@ use uuid::Uuid;
 
 use crate::adt::array::ArrayDimension;
 use crate::adt::date::Date;
-use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
+use crate::adt::datetime::{self, DateOrder, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::mz_acl_item::{AclItem, MzAclItem};
 use crate::adt::numeric::{self, NUMERIC_DATUM_MAX_PRECISION, Numeric};
 use crate::adt::pg_legacy_name::NAME_MAX_BYTES;
 use crate::adt::range::{Range, RangeBound, RangeInner};
-use crate::adt::timestamp::CheckedTimestamp;
+use crate::adt::timestamp::{CheckedTimestamp, checked_sub_with_leapsecond};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.strconv.rs"));
 
@@ -225,6 +224,18 @@ pub fn parse_mz_timestamp(s: &str) -> Result<crate::Timestamp, ParseError> {
         .map_err(|e| ParseError::invalid_input_syntax("mz_timestamp", s).with_details(e))
 }
 
+/// Parses an `mz_timestamp` from `s` with the frozen legacy date parsing in
+/// its timestamp fallback.
+///
+/// NOTE: This exists solely to keep the storage source cast
+/// `CastStringToMzTimestamp` evaluation-stable across releases (see the
+/// stability contract in `mz_storage_types::sources::casts`). Use
+/// [`parse_mz_timestamp`] everywhere else.
+pub fn parse_mz_timestamp_legacy(s: &str) -> Result<crate::Timestamp, ParseError> {
+    crate::Timestamp::from_str_legacy(s.trim())
+        .map_err(|e| ParseError::invalid_input_syntax("mz_timestamp", s).with_details(e))
+}
+
 /// Writes an `mz_timestamp` to `buf`.
 pub fn format_mz_timestamp<F>(buf: &mut F, u: crate::Timestamp) -> Nestable
 where
@@ -236,11 +247,37 @@ where
 
 /// Parses an OID from `s`.
 pub fn parse_oid(s: &str) -> Result<u32, ParseError> {
-    // For historical reasons in PostgreSQL, OIDs are parsed as `i32`s and then
-    // reinterpreted as `u32`s.
+    // For historical reasons, PostgreSQL accepts OID inputs whose value fits in
+    // the range of either `u32` or `i32`. The full `u32` range is accepted
+    // directly, while values given with a minus sign are parsed as `i32` and
+    // reinterpreted as `u32` (e.g. `-1` becomes `4294967295`). Anything outside
+    // both ranges is rejected.
     //
     // Do not use this as a model for behavior in other contexts. OIDs should
     // not in general be thought of as freely convertible from `i32`s.
+    let trimmed = s.trim();
+    if let Ok(oid) = trimmed.parse::<u32>() {
+        return Ok(oid);
+    }
+    let oid: i32 = trimmed
+        .parse()
+        .map_err(|e| ParseError::invalid_input_syntax("oid", s).with_details(e))?;
+    Ok(u32::reinterpret_cast(oid))
+}
+
+/// Parses an OID from `s`, accepting only the `i32` range.
+///
+/// This is the historical [`parse_oid`] behavior: values are parsed as `i32`
+/// and reinterpreted as `u32`, so text in `2147483648..=4294967295` is
+/// rejected even though it denotes a valid OID.
+///
+/// NOTE: This exists solely to keep the persisted PostgreSQL source cast
+/// `CastStringToOid` evaluation-stable across releases (see the stability
+/// contract in `mz_storage_types::sources::casts`). PostgreSQL replication
+/// re-casts the old tuple on delete, so widening this cast would let a value
+/// ingested pre-upgrade as an error be retracted post-upgrade as a value,
+/// leaving the error stuck. Use [`parse_oid`] everywhere else.
+pub fn parse_oid_legacy(s: &str) -> Result<u32, ParseError> {
     let oid: i32 = s
         .trim()
         .parse()
@@ -310,7 +347,7 @@ where
         FpCategory::Nan => buf.write_str("NaN"),
         FpCategory::Zero if f.is_sign_negative() => buf.write_str("-0"),
         _ => {
-            debug_assert!(f.is_finite());
+            mz_ore::soft_assert_no_log!(f.is_finite());
             let mut ryu_buf = ryu::Buffer::new();
             let mut s = ryu_buf.format_finite(f);
             if let Some(trimmed) = s.strip_suffix(".0") {
@@ -373,7 +410,10 @@ where
 /// <time zone interval> ::=
 ///     <sign> <hours value> <colon> <minutes value>
 /// ```
-fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, Timezone), String> {
+fn parse_timestamp_string(
+    s: &str,
+    order: DateOrder,
+) -> Result<(NaiveDate, NaiveTime, Timezone), String> {
     if s.is_empty() {
         return Err("timestamp string is empty".into());
     }
@@ -392,7 +432,7 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, Timezone), S
 
     let (ts_string, tz_string, era) = datetime::split_timestamp_string(s);
 
-    let pdt = ParsedDateTime::build_parsed_datetime_timestamp(ts_string, era)?;
+    let pdt = ParsedDateTime::build_parsed_datetime_timestamp(ts_string, era, order)?;
     let d: NaiveDate = pdt.compute_date()?;
     let t: NaiveTime = pdt.compute_time()?;
 
@@ -407,7 +447,21 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, Timezone), S
 
 /// Parses a [`Date`] from `s`.
 pub fn parse_date(s: &str) -> Result<Date, ParseError> {
-    match parse_timestamp_string(s) {
+    parse_date_inner(s, DateOrder::Mdy)
+}
+
+/// Parses a [`Date`] from `s` with the frozen legacy year-month-day
+/// interpretation of ambiguous dates.
+///
+/// NOTE: This exists solely to keep the storage source cast `CastStringToDate`
+/// evaluation-stable across releases (see the stability contract in
+/// `mz_storage_types::sources::casts`). Use [`parse_date`] everywhere else.
+pub fn parse_date_legacy(s: &str) -> Result<Date, ParseError> {
+    parse_date_inner(s, DateOrder::LegacyYmd)
+}
+
+fn parse_date_inner(s: &str, order: DateOrder) -> Result<Date, ParseError> {
+    match parse_timestamp_string(s, order) {
         Ok((date, _, _)) => Date::try_from(date).map_err(|_| ParseError::out_of_range("date", s)),
         Err(e) => Err(ParseError::invalid_input_syntax("date", s).with_details(e)),
     }
@@ -423,6 +477,11 @@ where
     write!(buf, "{:04}-{}", year, d.format("%m-%d"));
     if !year_ad {
         write!(buf, " BC");
+        // The ` BC` suffix carries whitespace, which every element escaper
+        // treats as needing quotes. `Nestable::Yes` is only for renderings that
+        // can *never* need escaping, so it would be a lie here. A Common Era
+        // date is plain `YYYY-MM-DD` and keeps the cheaper answer.
+        return Nestable::MayNeedEscaping;
     }
     Nestable::Yes
 }
@@ -435,27 +494,142 @@ where
 ///     [ <period> [ <seconds fraction> ] ]
 /// ```
 pub fn parse_time(s: &str) -> Result<NaiveTime, ParseError> {
+    parse_time_inner(s, TimeFields::Required)
+}
+
+/// Parses a `NaiveTime` from `s`, resolving a string that names no time field at
+/// all to midnight.
+///
+/// NOTE: This exists solely to keep the storage source cast `CastStringToTime`
+/// evaluation-stable across releases (see the stability contract in
+/// `mz_storage_types::sources::casts`). Use [`parse_time`] everywhere else.
+pub fn parse_time_legacy(s: &str) -> Result<NaiveTime, ParseError> {
+    parse_time_inner(s, TimeFields::Optional)
+}
+
+/// Whether a TIME string has to name at least one time field.
+enum TimeFields {
+    /// Reject a string that names none, as PostgreSQL does.
+    Required,
+    /// Read a string that names none as midnight.
+    Optional,
+}
+
+fn parse_time_inner(s: &str, fields: TimeFields) -> Result<NaiveTime, ParseError> {
     ParsedDateTime::build_parsed_datetime_time(s)
-        .and_then(|pdt| pdt.compute_time())
+        .and_then(|pdt| {
+            // A string carrying no time field at all, `""` or `":"`, tokenizes
+            // to nothing the time grammar has to consume, so it parses without
+            // filling a single field and every field then defaults to zero.
+            // PostgreSQL rejects such a string rather than reading it as
+            // midnight. Hour, minute and second are the only fields the time
+            // grammar fills, and the only ones `compute_time` reads.
+            if matches!(fields, TimeFields::Required)
+                && pdt.hour.is_none()
+                && pdt.minute.is_none()
+                && pdt.second.is_none()
+            {
+                return Err("no time fields found".into());
+            }
+            pdt.compute_time()
+        })
         .map_err(|e| ParseError::invalid_input_syntax("time", s).with_details(e))
 }
 
-/// Writes a [`NaiveDateTime`] timestamp to `buf`.
+/// Writes a [`NaiveTime`] to `buf`.
 pub fn format_time<F>(buf: &mut F, t: NaiveTime) -> Nestable
 where
     F: FormatBuffer,
 {
+    let (carry, micros) = split_nanos_to_micros(t.nanosecond());
+    // A carry out of the last second of the day has nowhere to go: a
+    // `NaiveTime` wraps to midnight rather than reaching PostgreSQL's
+    // `24:00:00`, and rendering a time a whole day early is a worse lie than
+    // dropping the carry. Saturate at the largest renderable fraction instead.
+    let (t, micros) = match carry {
+        false => (t, micros),
+        true => match t
+            .with_nanosecond(0)
+            .expect("0 is a valid nanosecond")
+            .overflowing_add_signed(Duration::seconds(1))
+        {
+            (carried, 0) => (carried, 0),
+            (_, _wrapped) => (t, MICROS_PER_SECOND - 1),
+        },
+    };
     write!(buf, "{}", t.format("%H:%M:%S"));
-    format_nanos_to_micros(buf, t.nanosecond());
+    format_micros(buf, micros);
     Nestable::Yes
 }
 
 /// Parses a `NaiveDateTime` from `s`.
 pub fn parse_timestamp(s: &str) -> Result<CheckedTimestamp<NaiveDateTime>, ParseError> {
-    match parse_timestamp_string(s) {
-        Ok((date, time, _)) => CheckedTimestamp::from_timestamplike(date.and_time(time))
-            .map_err(|_| ParseError::out_of_range("timestamp", s)),
+    parse_timestamp_inner(s, DateOrder::Mdy, LeapSecond::RollOver)
+}
+
+/// Parses a `NaiveDateTime` from `s` with the frozen legacy year-month-day
+/// interpretation of ambiguous dates.
+///
+/// NOTE: This exists solely to keep the storage source cast
+/// `CastStringToTimestamp` evaluation-stable across releases (see the
+/// stability contract in `mz_storage_types::sources::casts`). Use
+/// [`parse_timestamp`] everywhere else.
+pub fn parse_timestamp_legacy(s: &str) -> Result<CheckedTimestamp<NaiveDateTime>, ParseError> {
+    parse_timestamp_inner(s, DateOrder::LegacyYmd, LeapSecond::Keep)
+}
+
+fn parse_timestamp_inner(
+    s: &str,
+    order: DateOrder,
+    leap: LeapSecond,
+) -> Result<CheckedTimestamp<NaiveDateTime>, ParseError> {
+    match parse_timestamp_string(s, order) {
+        Ok((date, time, _)) => {
+            let dt = match leap {
+                LeapSecond::RollOver => roll_over_leap_second(date.and_time(time))
+                    .ok_or_else(|| ParseError::out_of_range("timestamp", s))?,
+                LeapSecond::Keep => date.and_time(time),
+            };
+            CheckedTimestamp::from_timestamplike(dt)
+                .map_err(|_| ParseError::out_of_range("timestamp", s))
+        }
         Err(e) => Err(ParseError::invalid_input_syntax("timestamp", s).with_details(e)),
+    }
+}
+
+/// Whether parsing rolls a `:60` second into the next minute.
+///
+/// The SQL entry points roll over, matching Postgres. The `_legacy` entry
+/// points backing the frozen storage source casts keep chrono's leap-second
+/// representation, because rolling it over would change the datum (or error)
+/// an existing source produces for the same input string, breaking the
+/// stability contract in `mz_storage_types::sources::casts`.
+#[derive(Clone, Copy)]
+enum LeapSecond {
+    RollOver,
+    Keep,
+}
+
+/// Postgres normalizes a parsed `:60` second by rolling it into the next
+/// minute. chrono instead keeps a leap-second representation (nanos >= 1e9)
+/// that sorts before the following second while epoch-style conversions
+/// count it at or past that second, which breaks the monotonicity contracts
+/// persist filter pushdown derives ranges with. Roll it over at the parse
+/// boundary so the leap representation never enters a parsed timestamp.
+/// `TIME` keeps the leap representation: rolling it over would wrap to
+/// 00:00:00 and reverse its ordering, and the whole-second leap time is
+/// harmless.
+///
+/// Returns `None` when the rollover overflows chrono's range (a leap second
+/// on the maximum date), which callers report as out of range.
+fn roll_over_leap_second(dt: NaiveDateTime) -> Option<NaiveDateTime> {
+    use chrono::Timelike;
+    match dt.nanosecond().checked_sub(1_000_000_000) {
+        Some(nanos) => dt
+            .with_nanosecond(nanos)
+            .expect("in range")
+            .checked_add_signed(Duration::try_seconds(1).unwrap()),
+        None => Some(dt),
     }
 }
 
@@ -464,9 +638,10 @@ pub fn format_timestamp<F>(buf: &mut F, ts: &NaiveDateTime) -> Nestable
 where
     F: FormatBuffer,
 {
+    let (ts, micros) = round_to_micros(*ts);
     let (year_ad, year) = ts.year_ce();
     write!(buf, "{:04}-{}", year, ts.format("%m-%d %H:%M:%S"));
-    format_nanos_to_micros(buf, ts.and_utc().timestamp_subsec_nanos());
+    format_micros(buf, micros);
     if !year_ad {
         write!(buf, " BC");
     }
@@ -476,32 +651,62 @@ where
 
 /// Parses a `DateTime<Utc>` from `s`. See `mz_expr::scalar::func::timezone_timestamp` for timezone anomaly considerations.
 pub fn parse_timestamptz(s: &str) -> Result<CheckedTimestamp<DateTime<Utc>>, ParseError> {
-    parse_timestamp_string(s)
-        .and_then(|(date, time, timezone)| {
-            use Timezone::*;
-            let mut dt = date.and_time(time);
-            let offset = match timezone {
-                FixedOffset(offset) => offset,
-                Tz(tz) => match tz.offset_from_local_datetime(&dt).latest() {
-                    Some(offset) => offset.fix(),
-                    None => {
-                        dt += Duration::try_hours(1).unwrap();
-                        tz.offset_from_local_datetime(&dt)
-                            .latest()
-                            .ok_or_else(|| "invalid timezone conversion".to_owned())?
-                            .fix()
-                    }
-                },
-            };
-            Ok(DateTime::from_naive_utc_and_offset(dt - offset, Utc))
-        })
-        .map_err(|e| {
-            ParseError::invalid_input_syntax("timestamp with time zone", s).with_details(e)
-        })
-        .and_then(|ts| {
-            CheckedTimestamp::from_timestamplike(ts)
-                .map_err(|_| ParseError::out_of_range("timestamp with time zone", s))
-        })
+    parse_timestamptz_inner(s, DateOrder::Mdy, LeapSecond::RollOver)
+}
+
+/// Parses a `DateTime<Utc>` from `s` with the frozen legacy year-month-day
+/// interpretation of ambiguous dates.
+///
+/// NOTE: This exists solely to keep the storage source cast
+/// `CastStringToTimestampTz` evaluation-stable across releases (see the
+/// stability contract in `mz_storage_types::sources::casts`). Use
+/// [`parse_timestamptz`] everywhere else.
+pub fn parse_timestamptz_legacy(s: &str) -> Result<CheckedTimestamp<DateTime<Utc>>, ParseError> {
+    parse_timestamptz_inner(s, DateOrder::LegacyYmd, LeapSecond::Keep)
+}
+
+fn parse_timestamptz_inner(
+    s: &str,
+    order: DateOrder,
+    leap: LeapSecond,
+) -> Result<CheckedTimestamp<DateTime<Utc>>, ParseError> {
+    let invalid_syntax = |details: String| {
+        ParseError::invalid_input_syntax("timestamp with time zone", s).with_details(details)
+    };
+    let out_of_range = || ParseError::out_of_range("timestamp with time zone", s);
+
+    let (date, time, timezone) = parse_timestamp_string(s, order).map_err(&invalid_syntax)?;
+    // The rollover applies to the local wall clock, before the offset shifts it
+    // to UTC. A local time that rolls out of chrono's range is rejected even
+    // when the UTC instant it denotes would be representable.
+    let mut dt = match leap {
+        LeapSecond::RollOver => {
+            roll_over_leap_second(date.and_time(time)).ok_or_else(out_of_range)?
+        }
+        LeapSecond::Keep => date.and_time(time),
+    };
+    let offset = match timezone {
+        Timezone::FixedOffset(offset) => offset,
+        Timezone::Tz(tz) => match tz.offset_from_local_datetime(&dt).latest() {
+            Some(offset) => offset.fix(),
+            None => {
+                dt = dt
+                    .checked_add_signed(Duration::try_hours(1).unwrap())
+                    .ok_or_else(out_of_range)?;
+                tz.offset_from_local_datetime(&dt)
+                    .latest()
+                    .ok_or_else(|| invalid_syntax("invalid timezone conversion".to_owned()))?
+                    .fix()
+            }
+        },
+    };
+    // `HIGH_DATE` is exactly `NaiveDate::MAX`, so applying a westward offset to
+    // a time late on that day leaves chrono's range, and chrono's own
+    // `NaiveDateTime - FixedOffset` panics there. This runs before the
+    // `CheckedTimestamp` bound check below, so that check cannot save it.
+    let dt = checked_sub_with_leapsecond(&dt, &offset).ok_or_else(out_of_range)?;
+    CheckedTimestamp::from_timestamplike(DateTime::from_naive_utc_and_offset(dt, Utc))
+        .map_err(|_| out_of_range())
 }
 
 /// Writes a [`DateTime<Utc>`] timestamp to `buf`.
@@ -509,9 +714,10 @@ pub fn format_timestamptz<F>(buf: &mut F, ts: &DateTime<Utc>) -> Nestable
 where
     F: FormatBuffer,
 {
+    let (ts, micros) = round_to_micros(ts.naive_utc());
     let (year_ad, year) = ts.year_ce();
     write!(buf, "{:04}-{}", year, ts.format("%m-%d %H:%M:%S"));
-    format_nanos_to_micros(buf, ts.timestamp_subsec_nanos());
+    format_micros(buf, micros);
     write!(buf, "+00");
     if !year_ad {
         write!(buf, " BC");
@@ -744,24 +950,79 @@ where
     Nestable::Yes
 }
 
-fn format_nanos_to_micros<F>(buf: &mut F, nanos: u32)
+const NANOS_PER_SECOND: u32 = 1_000_000_000;
+const MICROS_PER_SECOND: u32 = 1_000_000;
+
+/// Splits a sub-second nanosecond count into a whole-second carry and the
+/// microsecond fraction to render, rounding half away from zero.
+///
+/// The returned fraction is always below one second, so it can never be written
+/// as a fractional field of more than six digits. Only a nanosecond count of
+/// `.9999995` or more produces a carry.
+///
+/// chrono spells a leap second as a nanosecond count of one second or more, and
+/// its `%S` already accounts for that, rendering `60` on a second-of-minute of
+/// 59 and folding into the next second elsewhere. The leap second is therefore
+/// already in the seconds field and only the part below one second is ours to
+/// write.
+fn split_nanos_to_micros(nanos: u32) -> (bool, u32) {
+    let micros = (nanos % NANOS_PER_SECOND + 500) / 1_000;
+    if micros >= MICROS_PER_SECOND {
+        (true, 0)
+    } else {
+        (false, micros)
+    }
+}
+
+/// Rounds `ts` to microseconds, returning the value whose date and seconds are
+/// to be rendered plus the fraction to append to it.
+///
+/// A fraction that rounds up to a full second is carried into the seconds field
+/// rather than written as a fractional `1_000_000` microseconds, which the
+/// trailing-zero stripper would turn into a nonsense `.1`, roughly one second
+/// early. At the very end of chrono's range the carry has nowhere to go, so the
+/// fraction saturates at `.999999` rather than the value rolling over to an
+/// unrepresentable date.
+fn round_to_micros(ts: NaiveDateTime) -> (NaiveDateTime, u32) {
+    let (carry, micros) = split_nanos_to_micros(ts.and_utc().timestamp_subsec_nanos());
+    if !carry {
+        return (ts, micros);
+    }
+    // Dropping the fraction before adding the second is what makes this correct
+    // for a leap second too: `23:59:59` plus chrono's leap nanos is `23:59:60`,
+    // and the second after it is `00:00:00` of the next minute, which is exactly
+    // where clearing the nanos and adding a second lands.
+    match ts
+        .with_nanosecond(0)
+        .expect("0 is a valid nanosecond")
+        .checked_add_signed(Duration::seconds(1))
+    {
+        Some(carried) => (carried, 0),
+        None => (ts, MICROS_PER_SECOND - 1),
+    }
+}
+
+/// Writes a microsecond fraction to `buf` with trailing zeros stripped, or
+/// nothing at all when it is zero.
+///
+/// `micros` must be below one second, which is what [`split_nanos_to_micros`]
+/// guarantees. A larger value would be written as a fraction it does not fit
+/// in, silently shifting the rendered time by about a second.
+fn format_micros<F>(buf: &mut F, micros: u32)
 where
     F: FormatBuffer,
 {
-    if nanos >= 500 {
-        let mut micros = nanos / 1000;
-        let rem = nanos % 1000;
-        if rem >= 500 {
-            micros += 1;
-        }
-        // strip trailing zeros
-        let mut width = 6;
-        while micros % 10 == 0 {
-            width -= 1;
-            micros /= 10;
-        }
-        write!(buf, ".{:0width$}", micros, width = width);
+    assert!(micros < MICROS_PER_SECOND);
+    if micros == 0 {
+        return;
     }
+    let mut micros = micros;
+    let mut width = 6;
+    while micros % 10 == 0 {
+        width -= 1;
+        micros /= 10;
+    }
+    write!(buf, ".{:0width$}", micros, width = width);
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -914,7 +1175,7 @@ where
             }
 
             if builder.elements.is_empty() {
-                // Per PG, empty arrays are represented by empty dimensions
+                // Empty arrays are represented by empty dimensions
                 // rather than one dimension with 0 length.
                 return Ok((vec![], vec![]));
             }
@@ -1013,7 +1274,14 @@ where
             // Commit an element of this dimension
             self.commit_element(false)?;
 
+            let ndims = self.dimensions.len();
             let d = &mut self.dimensions[self.current_dim];
+
+            // Empty dimensions are only permitted in one-dimensional
+            // arrays, i.e. the only valid empty array literal is `{}`.
+            if d.committed_element_count == 0 && ndims > 1 {
+                return Err(UnexpectedChar(self.current_command_char));
+            }
 
             // Ensure that the elements in this dimension conform to the expected shape.
             match d.length {
@@ -1480,6 +1748,16 @@ where
 
     let lower_bound = match buf.peek() {
         Some(',') => None,
+        // A bound whose rendering needs escaping is emitted quoted by
+        // `format_range`, so the quotes have to come back off here. Without this
+        // the raw substring reaches the element parser, which mostly tolerates a
+        // stray `"` and then misreads it the moment it abuts a meaningful token,
+        // for example the `BC"` of a pre-Common-Era date or timestamp.
+        Some('"') => {
+            let v = lex_quoted_element(buf)?;
+            let v = gen_elem(v).map_err(|e| e.to_string())?;
+            Some(v)
+        }
         Some(_) => {
             let v = buf.take_while(|c| !matches!(c, ','));
             let v = gen_elem(Cow::from(v)).map_err(|e| e.to_string())?;
@@ -1496,6 +1774,12 @@ where
 
     let upper_bound = match buf.peek() {
         Some(']' | ')') => None,
+        // See the lower bound above.
+        Some('"') => {
+            let v = lex_quoted_element(buf)?;
+            let v = gen_elem(v).map_err(|e| e.to_string())?;
+            Some(v)
+        }
         Some(_) => {
             let v = buf.take_while(|c| !matches!(c, ')' | ']'));
             let v = gen_elem(Cow::from(v)).map_err(|e| e.to_string())?;
@@ -1745,8 +2029,10 @@ struct ListElementEscaper;
 
 impl ElementEscaper for ListElementEscaper {
     fn needs_escaping(elem: &[u8]) -> bool {
+        // The parser treats any case variant of unquoted "NULL" as null, so
+        // any such element must be quoted to round-trip.
         elem.is_empty()
-            || elem == b"NULL"
+            || elem.eq_ignore_ascii_case(b"NULL")
             || elem
                 .iter()
                 .any(|c| matches!(c, b'{' | b'}' | b',' | b'"' | b'\\') || c.is_ascii_whitespace())
@@ -1762,7 +2048,7 @@ struct MapElementEscaper;
 impl ElementEscaper for MapElementEscaper {
     fn needs_escaping(elem: &[u8]) -> bool {
         elem.is_empty()
-            || elem == b"NULL"
+            || elem.eq_ignore_ascii_case(b"NULL")
             || elem.iter().any(|c| {
                 matches!(c, b'{' | b'}' | b',' | b'"' | b'=' | b'>' | b'\\')
                     || c.is_ascii_whitespace()
@@ -1787,6 +2073,18 @@ impl ElementEscaper for RecordElementEscaper {
     fn escape_char(c: u8) -> u8 {
         if c == b'"' { b'"' } else { b'\\' }
     }
+}
+
+/// Reports whether `elem` would be quoted by the list, map or record element
+/// escaper.
+///
+/// This is the union of the three, because one rendering can be nested in any of
+/// them. Returning [`Nestable::Yes`] is a promise that this is false, so a
+/// formatter's oracle can check the promise rather than restate the rules.
+pub fn element_needs_escaping(elem: &[u8]) -> bool {
+    ListElementEscaper::needs_escaping(elem)
+        || MapElementEscaper::needs_escaping(elem)
+        || RecordElementEscaper::needs_escaping(elem)
 }
 
 /// Escapes a list, record, or map element in place.
@@ -1942,8 +2240,7 @@ where
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ParseError {
@@ -1963,8 +2260,7 @@ pub struct ParseError {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum ParseErrorKind {
@@ -2084,8 +2380,7 @@ impl RustType<ProtoParseError> for ParseError {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum ParseHexError {
@@ -2140,6 +2435,38 @@ mod tests {
 
     use super::*;
 
+    /// Rolling a leap second over must not panic at the timestamp maximum:
+    /// chrono's max date parses, and adding the rollover second overflows.
+    /// The leap value on the max date errors as out of range instead.
+    #[mz_ore::test]
+    fn leap_second_rollover_at_max_date_errors() {
+        assert!(parse_timestamp("262142-12-31 23:59:60").is_err());
+        assert!(parse_timestamptz("262142-12-31 23:59:60+00").is_err());
+        // One second below the maximum still rolls over successfully.
+        assert_ok!(parse_timestamp("262142-12-31 23:59:59"));
+        // The frozen legacy parse keeps the leap representation instead of
+        // rolling it over, so the same input stays in range there.
+        assert_ok!(parse_timestamp_legacy("262142-12-31 23:59:60"));
+        assert_ok!(parse_timestamptz_legacy("262142-12-31 23:59:60+00"));
+    }
+
+    /// The `timestamptz` rollover applies to the local wall clock, so an
+    /// offset can move the overflow to either side of it. Both sides must
+    /// report out of range rather than panic, and this pins which inputs the
+    /// wall-clock-first order rejects.
+    #[mz_ore::test]
+    fn leap_second_rollover_at_max_date_with_offset_errors() {
+        // The rollover itself stays in range, then the westward offset carries
+        // the UTC instant past the maximum date.
+        assert!(parse_timestamptz("262142-12-31 08:59:60-15").is_err());
+        // The rollover leaves chrono's range before the offset is applied,
+        // even though the UTC instant it denotes, 262142-12-31 23:00:00, is
+        // representable.
+        assert!(parse_timestamptz("262142-12-31 23:59:60+01").is_err());
+        // An eastward offset on the maximum date leaves room for the rollover.
+        assert_ok!(parse_timestamptz("262142-12-31 08:59:60+15"));
+    }
+
     proptest! {
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
@@ -2161,22 +2488,31 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn test_format_nanos_to_micros() {
-        let cases: Vec<(u32, &str)> = vec![
-            (0, ""),
-            (1, ""),
-            (499, ""),
-            (500, ".000001"),
-            (500_000, ".0005"),
-            (5_000_000, ".005"),
-            // Leap second. This is possibly wrong and should maybe be reduced (nanosecond
-            // % 1_000_000_000), but we are at least now aware it does this.
-            (1_999_999_999, ".2"),
+    fn test_split_nanos_to_micros() {
+        let cases: Vec<(u32, bool, &str)> = vec![
+            (0, false, ""),
+            (1, false, ""),
+            (499, false, ""),
+            (500, false, ".000001"),
+            (500_000, false, ".0005"),
+            (5_000_000, false, ".005"),
+            (999_999_499, false, ".999999"),
+            // Rounds up to a full second, which belongs in the seconds field.
+            // Written as a fraction it would render as `.1`.
+            (999_999_500, true, ""),
+            (999_999_900, true, ""),
+            // chrono's leap-second representation. The leap is already in the
+            // seconds field, so only the part below one second is rendered.
+            (1_000_000_000, false, ""),
+            (1_500_000_000, false, ".5"),
+            (1_999_999_999, true, ""),
         ];
-        for (nanos, expect) in cases {
+        for (nanos, expect_carry, expect) in cases {
+            let (carry, micros) = split_nanos_to_micros(nanos);
+            assert_eq!(carry, expect_carry, "carry for {nanos}ns");
             let mut buf = String::new();
-            format_nanos_to_micros(&mut buf, nanos);
-            assert_eq!(&buf, expect);
+            format_micros(&mut buf, micros);
+            assert_eq!(&buf, expect, "fraction for {nanos}ns");
         }
     }
 
@@ -2197,5 +2533,98 @@ mod tests {
 
         let s = format!("{}{}", "x".repeat(62), "א");
         assert_eq!("x".repeat(62), parse_pg_legacy_name(&s));
+    }
+
+    #[mz_ore::test]
+    fn test_parse_oid() {
+        // The full u32 range is accepted, matching PostgreSQL.
+        assert_eq!(parse_oid("0").unwrap(), 0);
+        assert_eq!(parse_oid("2147483647").unwrap(), 2147483647);
+        assert_eq!(parse_oid("2147483648").unwrap(), 2147483648);
+        assert_eq!(parse_oid("4294967295").unwrap(), 4294967295);
+
+        // Negative values in the i32 range are reinterpreted as u32.
+        assert_eq!(parse_oid("-1").unwrap(), 4294967295);
+        assert_eq!(parse_oid("-2147483648").unwrap(), 2147483648);
+
+        // Surrounding whitespace is ignored.
+        assert_eq!(parse_oid("  42 ").unwrap(), 42);
+
+        // Values outside both the u32 and i32 ranges are rejected.
+        assert!(parse_oid("4294967296").is_err());
+        assert!(parse_oid("-2147483649").is_err());
+        assert!(parse_oid("nope").is_err());
+    }
+
+    #[mz_ore::test]
+    fn test_parse_oid_legacy() {
+        // Only the i32 range is accepted, reinterpreting negatives as u32.
+        assert_eq!(parse_oid_legacy("0").unwrap(), 0);
+        assert_eq!(parse_oid_legacy("2147483647").unwrap(), 2147483647);
+        assert_eq!(parse_oid_legacy("-1").unwrap(), 4294967295);
+        assert_eq!(parse_oid_legacy("-2147483648").unwrap(), 2147483648);
+
+        // The frozen behavior rejects the u32-only range that `parse_oid`
+        // accepts. This divergence must not change (storage stability).
+        assert!(parse_oid_legacy("2147483648").is_err());
+        assert!(parse_oid_legacy("4294967295").is_err());
+        assert!(parse_oid_legacy("nope").is_err());
+    }
+
+    fn date(y: i32, m: u32, d: u32) -> Date {
+        Date::try_from(NaiveDate::from_ymd_opt(y, m, d).unwrap()).unwrap()
+    }
+
+    #[mz_ore::test]
+    fn test_parse_date_mdy() {
+        // Pinned `DateStyle = ISO, MDY`: a one- or two-digit leading field
+        // starts a month-day-year date, and a two-digit year is windowed
+        // into 1970..=2069.
+        assert_eq!(parse_date("01/02/03").unwrap(), date(2003, 1, 2));
+        assert_eq!(parse_date("1-2-3").unwrap(), date(2003, 1, 2));
+        assert_eq!(parse_date("01/02/69").unwrap(), date(2069, 1, 2));
+        assert_eq!(parse_date("01/02/70").unwrap(), date(1970, 1, 2));
+        assert_eq!(parse_date("01/02/1999").unwrap(), date(1999, 1, 2));
+        // A leading field of three or more digits is a year, with no
+        // windowing.
+        assert_eq!(parse_date("0099-01-08").unwrap(), date(99, 1, 8));
+        assert_eq!(parse_date("2003-01-02").unwrap(), date(2003, 1, 2));
+        // BC years are never windowed. Year 3 BC is year -2 in chrono.
+        assert_eq!(parse_date("01/02/03 BC").unwrap(), date(-2, 1, 2));
+        // A two-digit leading field is a month, so these are out of range.
+        assert!(parse_date("99-01-08").is_err());
+        assert!(parse_date("13/01/08").is_err());
+
+        assert_eq!(
+            parse_timestamp("01/02/03 04:05:06").unwrap().to_string(),
+            "2003-01-02 04:05:06"
+        );
+        assert_eq!(
+            parse_mz_timestamp("01/02/03").unwrap(),
+            parse_mz_timestamp("2003-01-02").unwrap()
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_parse_date_legacy() {
+        // The frozen behavior keeps year-month-day for ambiguous dates, with
+        // no windowing. This divergence from `parse_date` must not change
+        // (storage stability).
+        assert_eq!(parse_date_legacy("01/02/03").unwrap(), date(1, 2, 3));
+        assert_eq!(parse_date_legacy("99-01-08").unwrap(), date(99, 1, 8));
+        assert!(parse_date_legacy("01/02/1999").is_err());
+        assert_eq!(
+            parse_timestamp_legacy("01/02/03 04:05:06")
+                .unwrap()
+                .to_string(),
+            "0001-02-03 04:05:06"
+        );
+        // The mz_timestamp fallback keeps the frozen interpretation, under
+        // which 0001-02-03 is out of range.
+        assert!(parse_mz_timestamp_legacy("01/02/03").is_err());
+        assert_eq!(
+            parse_mz_timestamp_legacy("2003-01-02").unwrap(),
+            parse_mz_timestamp("2003-01-02").unwrap()
+        );
     }
 }

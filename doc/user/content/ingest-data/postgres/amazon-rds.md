@@ -225,8 +225,7 @@ configuration of resources for an SSH tunnel. For more details, see the
 
 {{< tab "Self-Managed">}}
 
-{{% include-md
-file="shared-content/self-managed/configure-network-security-intro.md" %}}
+{{% include-headless "/headless/self-managed-deployments/configure-network-security-intro" %}}
 
 {{< tabs >}}
 
@@ -433,3 +432,7 @@ your networking configuration.
 
 {{% include-from-yaml data="postgres_source_details"
 name="postgres-considerations" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="postgres" %}}

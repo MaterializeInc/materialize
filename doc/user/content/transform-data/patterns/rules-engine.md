@@ -4,6 +4,7 @@ description: "Encode rules as data and apply them using lateral joins."
 aliases:
   - /guides/rules-engine/
   - /sql/patterns/rules-engine/
+  - /self-managed/v25.2/transform-data/patterns/rules-engine/
 menu:
   main:
     parent: 'sql-patterns'

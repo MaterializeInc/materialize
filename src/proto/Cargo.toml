@@ -25,7 +25,6 @@ regex.workspace = true
 serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true, features = ["arbitrary_precision"] }
 url = { workspace = true, features = ["serde"] }
-uuid.workspace = true
 
 [features]
 default = ["mz-build-tools/default"]

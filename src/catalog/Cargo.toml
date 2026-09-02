@@ -17,7 +17,6 @@ bincode.workspace = true
 bytes = { workspace = true, features = ["serde"] }
 bytesize.workspace = true
 chrono.workspace = true
-clap.workspace = true
 derivative.workspace = true
 differential-dataflow.workspace = true
 futures.workspace = true
@@ -53,8 +52,6 @@ mz-transform = { path = "../transform" }
 openssl.workspace = true
 paste.workspace = true
 prometheus.workspace = true
-prost.workspace = true
-rand.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -74,6 +71,7 @@ mz-catalog-protos = { path = "../catalog-protos", features = ["proptest"] }
 mz-repr = { path = "../repr", features = ["proptest"] }
 proptest.workspace = true
 proptest-derive.workspace = true
+rand.workspace = true
 
 [features]
 default = []

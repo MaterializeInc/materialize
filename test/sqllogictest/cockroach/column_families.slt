@@ -1,0 +1,125 @@
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on July 6, 2026 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/column_families
+#
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+# LogicTest: local 3node-tenant
+
+# Test that different operations still succeed when the primary key is not in column family 0.
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE t (x INT PRIMARY KEY, y INT, z INT, FAMILY (y), FAMILY (z), FAMILY (x));
+INSERT INTO t VALUES (1, 2, 3), (4, 5, 6)
+
+# Not supported by Materialize.
+onlyif cockroach
+query III rowsort
+SELECT * FROM t
+----
+1 2 3
+4 5 6
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+UPDATE t SET x = 2 WHERE y = 2
+
+# Not supported by Materialize.
+onlyif cockroach
+query III rowsort
+SELECT * FROM t
+----
+2 2 3
+4 5 6
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+UPDATE t SET z = 3 WHERE x = 4
+
+# Not supported by Materialize.
+onlyif cockroach
+query III rowsort
+SELECT * FROM t
+----
+2 2 3
+4 5 3
+
+# Not supported by Materialize.
+onlyif cockroach
+query II
+SELECT y, z FROM t WHERE x = 2
+----
+2 3
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t (x DECIMAL PRIMARY KEY, y INT, FAMILY (y), FAMILY (x));
+
+statement ok
+INSERT INTO t VALUES (5.607, 1), (5.6007, 2)
+
+query TI rowsort
+SELECT * FROM t
+----
+5.607 1
+5.6007 2
+
+# Ensure that primary indexes with encoded composite values that are not in family 0 have their
+# composite values stored in the corresponding family.
+
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t (x DECIMAL, y DECIMAL, z INT, FAMILY (z), FAMILY (y), FAMILY (x), PRIMARY KEY (x, y));
+
+statement ok
+INSERT INTO t VALUES (1.00, 2.00, 1)
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTI
+SET tracing=on,kv,results;
+SELECT * FROM t;
+----
+1.00 2.00 1
+
+statement ok
+SET tracing=off
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT message FROM [SHOW KV TRACE FOR SESSION] WHERE
+message LIKE 'fetched: /t/t_pkey/%'
+ORDER BY message
+----
+fetched: /t/t_pkey/1/2.00/x -> /1.00
+fetched: /t/t_pkey/1/2/y -> /2.00
+fetched: /t/t_pkey/1/2/z -> /1

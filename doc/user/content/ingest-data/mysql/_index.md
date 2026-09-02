@@ -7,6 +7,8 @@ menu:
         parent: "ingest-data"
         identifier: "mysql"
         weight: 5
+aliases:
+  - /self-managed/v25.2/ingest-data/mysql/
 ---
 
 ## Change Data Capture (CDC)
@@ -31,6 +33,11 @@ gives you the following benefits:
   read-replica to build views on top of your MySQL data that are efficiently
   maintained and always up-to-date.
 
+When a source is created, Materialize parallelizes the initial snapshot
+across the cluster's workers and can split the read of large tables that meet
+certain requirements {{< private-preview-inline />}}. See [Snapshot
+parallelism](/ingest-data/mysql/snapshot-parallelism/).
+
 ## Supported versions and services
 
 {{< note >}}
@@ -50,4 +57,8 @@ To help you get started, the following integration guides are available:
 
 ## Considerations
 
-{{% include-headless "/headless/mysql-considerations" %}}
+{{% include-headless "/headless/mysql-considerations-body" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="mysql" %}}

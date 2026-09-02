@@ -12,6 +12,20 @@
 > SELECT COUNT(*) FROM t2;
 500000
 
+# The PK tables snapshot as per-worker PK ranges. The distinct-count and the
+# exact checksums catch duplicated or dropped ranges that COUNT(*) alone can
+# mask when a duplicate offsets a loss.
+# t1pk: even pks deleted, leaving odd pks 1..499999 with f2 = 3 * pk.
+> SELECT COUNT(*), COUNT(DISTINCT pk) FROM t1pk;
+250000 250000
+> SELECT SUM(f2) FROM t1pk;
+187500000000
+# t2pk: odd f2 deleted, leaving f2 = 2, 4, .., 250000.
+> SELECT COUNT(*), COUNT(DISTINCT pk) FROM t2pk;
+125000 125000
+> SELECT SUM(f2) FROM t2pk;
+15625125000
+
 # We can encounter different errors here:
 # - encounter an alter table error if the NOT NULL constraint dropped
 # - a NULL decoding failure if the NOT NULL constraint is re-instated

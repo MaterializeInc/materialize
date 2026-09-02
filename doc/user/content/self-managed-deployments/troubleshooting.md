@@ -113,13 +113,19 @@ To increase the cluster's size, you can follow the following steps:
    show clusters;
    ```
 
+   Resizing a cluster is a graceful reconfiguration: Materialize brings up a
+   replica at the new size, waits for it to hydrate, and only then retires the
+   old one. Until that finishes, `SHOW CLUSTERS` reports the old size, and
+   briefly both. Re-run the statement until it settles. The replacement replica
+   also gets a fresh name, so the resized cluster reports `r2` rather than `r1`.
+
    The output should include the `mz_catalog_server` cluster with a size of `50cc`:
 
    ```none
           name        | replicas  | comment
     -------------------+-----------+---------
     mz_analytics      |           |
-    mz_catalog_server | r1 (50cc) |
+    mz_catalog_server | r2 (50cc) |
     mz_probe          |           |
     mz_support        |           |
     mz_system         |           |

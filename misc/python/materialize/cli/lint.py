@@ -39,16 +39,21 @@ def main() -> int:
     verbose_output = args.verbose
     offline = args.offline
 
-    manager = LintManager(print_duration, verbose_output, offline)
+    # Signal offline mode through the environment rather than a CLI flag.
+    # Only a couple of checks care about it, and passing --offline as an
+    # argument to the rest would be misinterpreted (e.g. as a git pathspec).
+    if offline:
+        os.environ["MZ_LINT_OFFLINE"] = "1"
+
+    manager = LintManager(print_duration, verbose_output)
     return_code = manager.run()
     return return_code
 
 
 class LintManager:
-    def __init__(self, print_duration: bool, verbose_output: bool, offline: bool):
+    def __init__(self, print_duration: bool, verbose_output: bool):
         self.print_duration = print_duration
         self.verbose_output = verbose_output
-        self.offline = offline
 
     def run(self) -> int:
         failed_checks = self.run_and_validate_if_no_previous_failures(
@@ -105,8 +110,6 @@ class LintManager:
         tasks = []
         for lint_file in lint_files:
             command = [str(checks_path / lint_file)]
-            if self.offline:
-                command.append("--offline")
             tasks.append((lint_file, command))
 
         return run_parallel(

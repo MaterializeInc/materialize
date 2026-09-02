@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,20 +9,25 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/rename_view
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/rename_view
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
-
-# not supported yet
-halt
 
 mode cockroach
 
-statement error pgcode 42P01 relation "foo" does not exist
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+SET CLUSTER SETTING sql.cross_db_views.enabled = TRUE
+
+statement error pgcode 42P01 unknown catalog item 'foo'
 ALTER VIEW foo RENAME TO bar
 
 statement ok
@@ -46,47 +51,61 @@ SELECT * FROM v
 1 2
 3 4
 
-query T
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTIT
 SHOW TABLES
 ----
-kv
-v
+public  kv  table  root  0  NULL
+public  v   view   root  0  NULL
 
-statement error pgcode 42809 "kv" is not a view
+statement error pgcode 42809 kv is a table not a view
 ALTER VIEW kv RENAME TO new_kv
 
+# Not supported by Materialize.
+onlyif cockroach
 # We allow ALTER TABLE for renaming views.
 statement ok
 ALTER TABLE v RENAME TO new_v
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pgcode 42P01 relation "v" does not exist
 SELECT * FROM v
 
+# Not supported by Materialize.
+onlyif cockroach
 query II rowsort
 SELECT * FROM new_v
 ----
 1 2
 3 4
 
-query T
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTIT
 SHOW TABLES
 ----
-kv
-new_v
+public  kv     table  root  0  NULL
+public  new_v  view   root  0  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 # check the name in the descriptor, which is used by SHOW GRANTS, is also changed
-query TTTTT
+query TTTTTB
 SHOW GRANTS ON new_v
 ----
-test  public new_v  admin  ALL
-test  public new_v  root   ALL
+test  public  new_v  admin  ALL  true
+test  public  new_v  root   ALL  true
 
-statement error invalid table name: ""
+statement error zero\-length delimited identifier
 ALTER VIEW "" RENAME TO foo
 
-statement error invalid table name: ""
+statement error zero\-length delimited identifier
 ALTER VIEW new_v RENAME TO ""
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER VIEW new_v RENAME TO new_v
 
@@ -99,19 +118,23 @@ CREATE TABLE t (
 statement ok
 INSERT INTO t VALUES (4, 16), (5, 25)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE VIEW v as SELECT c1,c2 from t
 
-statement error pgcode 42P07 relation "new_v" already exists
+statement error pgcode 42P07 renaming conflict: in materialize\.public\.v, "v" potentially used ambiguously as item and column
 ALTER VIEW v RENAME TO new_v
 
 user testuser
 
-statement error user testuser does not have DROP privilege on relation v
+statement error unknown schema 'test'
 ALTER VIEW test.v RENAME TO v2
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT DROP ON test.v TO testuser
 
@@ -120,28 +143,34 @@ create database test2
 
 user testuser
 
-statement error user testuser does not have CREATE privilege on database test
+statement error unknown schema 'test'
 ALTER VIEW test.v RENAME TO v2
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT CREATE ON DATABASE test TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER VIEW test.v RENAME TO v2
 
-query T
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTIT
 SHOW TABLES FROM test
 ----
-kv
-new_v
-t
-v2
+public  kv     table  root  0  NULL
+public  new_v  view   root  0  NULL
+public  t      table  root  0  NULL
+public  v2     view   root  0  NULL
 
 user testuser
 
-statement error user testuser does not have CREATE privilege on database test2
+statement error Expected end of statement, found dot
 ALTER VIEW test.v2 RENAME TO test2.v
 
 user root
@@ -149,52 +178,67 @@ user root
 statement ok
 GRANT CREATE ON DATABASE test2 TO testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT DROP ON test.new_v TO testuser
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
-ALTER VIEW test.new_v RENAME TO test2.v
+ALTER VIEW test.new_v RENAME TO test.v
 
-statement ok
-ALTER VIEW test.v2 RENAME TO test2.v2
-
-query T
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTIT
 SHOW TABLES FROM test
 ----
+public  kv  table  root  0  NULL
+public  t   table  root  0  NULL
+public  v   view   root  0  NULL
+public  v2  view   root  0  NULL
 
-query T
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTIT
 SHOW TABLES FROM test2
 ----
-v
-v2
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 query II rowsort
-SELECT * FROM test2.v
+SELECT * FROM test.v
 ----
 1 2
 3 4
 
+# Not supported by Materialize.
+onlyif cockroach
 query II rowsort
-SELECT * FROM test2.v2
+SELECT * FROM test.v2
 ----
 4 16
 5 25
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
-CREATE VIEW v3 AS SELECT count(*) FROM test2.v AS v JOIN test2.v2 AS v2 ON v.k > v2.c1
+CREATE VIEW v3 AS SELECT count(*) FROM test.v AS v JOIN test.v2 AS v2 ON v.k > v2.c1
 
-statement error cannot rename relation "test2.public.v" because view "test.public.v3" depends on it
-ALTER VIEW test2.v RENAME TO test2.v3
+statement error Expected end of statement, found dot
+ALTER VIEW test.v RENAME TO test.v3
 
-statement error cannot rename relation "test2.public.v2" because view "test.public.v3" depends on it
-ALTER VIEW test2.v2 RENAME TO v4
+statement error unknown schema 'test'
+ALTER VIEW test.v2 RENAME TO v4
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER VIEW v3 RENAME TO v4
 
-statement error cannot rename relation "test2.public.v2" because view "test.public.v4" depends on it
-ALTER VIEW test2.v2 RENAME TO v5
+statement error unknown schema 'test'
+ALTER VIEW test.v2 RENAME TO v5

@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use itertools::Itertools;
 use mz_arrow_util::builder::ArrowBuilder;
 use mz_expr::{ColumnOrder, RowSetFinishing};
+use mz_ore::error::ErrorExt;
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::separated;
@@ -236,20 +237,16 @@ fn plan_select_inner(
         None => None,
         Some(mut limit) => {
             limit.bind_parameters_and_simplify_offset(scx, lifetime, params)?;
-            // TODO: Call `try_into_literal_int64` instead of `as_literal`.
-            let Some(limit) = limit.as_literal() else {
-                sql_bail!(
-                    "Top-level LIMIT must be a constant expression, got {}",
-                    limit
-                )
-            };
-            match limit {
-                Datum::Null => None,
-                Datum::Int64(v) if v >= 0 => NonNeg::<i64>::try_from(v).ok(),
-                _ => {
-                    soft_panic_or_log!("Valid literal limit must be asserted in `plan_select`");
-                    sql_bail!("LIMIT must be a non-negative INT or NULL")
-                }
+            // Evaluate the expression to a literal instead of matching on a bare literal
+            // node. Parameter binding can leave the bound value wrapped in casts, e.g.
+            // `integer_to_bigint($1)`.
+            match limit
+                .try_into_nullable_literal_int64()
+                .map_err(|err| PlanError::InvalidLimit(err.to_string_with_causes()))?
+            {
+                None => None,
+                Some(v) if v >= 0 => NonNeg::<i64>::try_from(v).ok(),
+                Some(_) => sql_bail!("LIMIT must not be negative"),
             }
         }
     };
@@ -577,6 +574,16 @@ generate_extracted_config!(
         EnableProjectionPushdownAfterRelationCse,
         Option<bool>,
         Default(None)
+    ),
+    (
+        EnableFixedCorrelatedCteLowering,
+        Option<bool>,
+        Default(None)
+    ),
+    (
+        EnableUnionCancellationAfterRelationCse,
+        Option<bool>,
+        Default(None)
     )
 );
 
@@ -629,6 +636,8 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_join_prioritize_arranged: v.enable_join_prioritize_arranged,
                 enable_projection_pushdown_after_relation_cse: v
                     .enable_projection_pushdown_after_relation_cse,
+                enable_union_cancellation_after_relation_cse: v
+                    .enable_union_cancellation_after_relation_cse,
                 enable_less_reduce_in_eqprop: Default::default(),
                 enable_dequadratic_eqprop_map: Default::default(),
                 enable_eq_classes_withholding_errors: Default::default(),
@@ -636,8 +645,10 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_cast_elimination: Default::default(),
                 enable_case_literal_transform: Default::default(),
                 enable_simplify_quantified_comparisons: Default::default(),
+                enable_simplify_from_less_existence: Default::default(),
                 enable_coalesce_case_transform: Default::default(),
                 enable_will_distinct_propagation: Default::default(),
+                enable_fixed_correlated_cte_lowering: v.enable_fixed_correlated_cte_lowering,
                 enable_rowwise_subquery_lowering: Default::default(),
             },
         })
@@ -979,7 +990,9 @@ GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id"#,
                             from.push("LEFT JOIN per_worker_memory pwm USING (global_id, lir_id)");
 
                             if let Some(worker_id) = worker_id {
-                                predicates.push(format!("pwm.worker_id = {worker_id}"));
+                                predicates.push(format!(
+                                    "(pwm.worker_id = {worker_id} OR pwm.worker_id IS NULL OR {worker_id} IS NULL)"
+                                ));
                             } else {
                                 worker_id = Some("pwm.worker_id");
                                 columns.push("pwm.worker_id AS worker_id");
@@ -1036,7 +1049,9 @@ GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id"#,
                             from.push("LEFT JOIN per_worker_cpu pwc USING (global_id, lir_id)");
 
                             if let Some(worker_id) = worker_id {
-                                predicates.push(format!("pwc.worker_id = {worker_id}"));
+                                predicates.push(format!(
+                                    "(pwc.worker_id = {worker_id} OR pwc.worker_id IS NULL OR {worker_id} IS NULL)"
+                                ));
                             } else {
                                 worker_id = Some("pwc.worker_id");
                                 columns.push("pwc.worker_id AS worker_id");
@@ -1160,7 +1175,9 @@ pub fn plan_explain_analyze_cluster(
                     let mut set_worker_id = false;
                     if let Some(worker_id) = worker_id {
                         // join condition if we're showing skew for more than one property
-                        predicates.push(format!("om.worker_id = {worker_id}"));
+                        predicates.push(format!(
+                            "(om.worker_id = {worker_id} OR om.worker_id IS NULL OR {worker_id} IS NULL)"
+                        ));
                     } else {
                         worker_id = Some("om.worker_id");
                         columns.push("om.worker_id AS worker_id");
@@ -1309,7 +1326,9 @@ GROUP BY pomt.global_id
                     let mut set_worker_id = false;
                     if let Some(worker_id) = worker_id {
                         // join condition if we're showing skew for more than one property
-                        predicates.push(format!("oc.worker_id = {worker_id}"));
+                        predicates.push(format!(
+                            "(oc.worker_id = {worker_id} OR oc.worker_id IS NULL OR {worker_id} IS NULL)"
+                        ));
                     } else {
                         worker_id = Some("oc.worker_id");
                         columns.push("oc.worker_id AS worker_id");

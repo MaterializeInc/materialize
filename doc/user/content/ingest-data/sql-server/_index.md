@@ -37,8 +37,13 @@ Data Capture (CDC) support.
 
 ## Integration Guides
 
+- [Azure SQL Database](/ingest-data/sql-server/azure-db/)
 - [Self-hosted SQL Server](/ingest-data/sql-server/self-hosted/)
 
 ## Considerations
 
-{{% include-headless "/headless/sql-server-considerations" %}}
+{{% include-headless "/headless/sql-server-considerations-body" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="sql-server" %}}

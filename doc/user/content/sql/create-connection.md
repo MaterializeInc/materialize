@@ -21,7 +21,7 @@ securely store each credential in Materialize's secret management system.
 Credentials that are generally not sensitive (like usernames and SSL
 certificates) can be specified as plain `text`, or also stored as secrets.
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 ## Source and sink connections
 
@@ -30,8 +30,9 @@ certificates) can be specified as plain `text`, or also stored as secrets.
 An Amazon Web Services (AWS) connection provides Materialize with access to an
 Identity and Access Management (IAM) user or role in your AWS account. You can
 use AWS connections to perform [bulk exports to Amazon S3](/serve-results/s3/),
-perform [authentication with an Amazon MSK cluster](#kafka-aws-connection), or
-perform [authentication with an Amazon RDS MySQL database](#mysql-aws-connection).
+perform [authentication with an Amazon MSK cluster](#kafka-aws-connection),
+perform [authentication with an Amazon RDS MySQL database](#mysql-aws-connection),
+or [authenticate to an AWS Glue Schema Registry](#aws-glue-schema-registry).
 
 {{% include-syntax file="examples/create_connection" example="syntax-aws" %}}
 
@@ -161,7 +162,7 @@ CREATE CONNECTION aws_credentials TO AWS (
 {{< /tabs >}}
 
 ### S3 compatible object storage
-You can use an AWS connection to perform bulk exports and bulk imports with any S3 compatible object
+You can use an AWS connection to perform bulk exports ([`COPY TO`](/sql/copy-to)) and bulk imports ([`COPY FROM`](/sql/copy-from)) with any S3 compatible object
 storage service, such as Google Cloud Storage, Cloudflare R2, or MinIO. While connecting to S3
 compatible object storage, you need to provide static access key credentials, specify the endpoint,
 and the region.
@@ -177,6 +178,29 @@ CREATE CONNECTION gcs_connection TO AWS (
     REGION = 'us'
 );
 ```
+
+If you are exporting to Google Cloud Storage using [Iceberg sinks](/sql/create-sink/iceberg), use a [GCP connection](#gcp).
+
+### GCP
+{{< private-preview />}}
+
+You can use a GCP connection to export data to
+[Lakehouse/BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog)
+via [Iceberg sinks](/sql/create-sink/iceberg).
+
+The GCP connection uses a [GCP service account key
+(JSON)](https://docs.cloud.google.com/iam/docs/keys-create-delete) to
+authenticate. Create a [GCP service
+account](https://docs.cloud.google.com/iam/docs/service-account-overview) for
+Materialize to use and generate a [service account
+key](https://docs.cloud.google.com/iam/docs/keys-create-delete) in JSON format.
+Base64-encode the entire JSON key (e.g., `base64 < sa_key.json`) and decode it
+in the `CREATE SECRET` statement, as shown below. This avoids escaping quotes
+and newlines in the SQL string literal.
+
+#### Syntax {#gcp-syntax}
+
+{{% include-syntax file="examples/create_connection" example="syntax-gcp" %}}
 
 ### Kafka
 
@@ -317,7 +341,7 @@ SSH bastion host.
 {{< tabs >}}
 {{< tab "AWS PrivateLink (Materialize Cloud)">}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 Depending on the hosted service you are connecting to, you might need to specify
 a PrivateLink connection and [per-availability-zone routing rules for brokers](#kafka-privatelinks) (e.g. Confluent Cloud),
@@ -415,7 +439,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 
 ##### Default connections {#kafka-privatelink-default}
 
-[Redpanda Cloud](/ingest-data/redpanda/redpanda-cloud/)) does not require
+[Redpanda Cloud](/ingest-data/redpanda/redpanda-cloud/) does not require
 listing every broker individually. In this case, you should specify a
 PrivateLink connection and the port of the bootstrap server instead.
 
@@ -558,7 +582,7 @@ you can tunnel the connection through an AWS PrivateLink service (Materialize Cl
 {{< tabs >}}
 {{< tab "AWS PrivateLink (Materialize Cloud)">}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 ##### Example {#csr-privatelink-example}
 
@@ -595,6 +619,103 @@ CREATE CONNECTION csr_ssh TO CONFLUENT SCHEMA REGISTRY (
 {{< /tab >}}
 {{< /tabs >}}
 
+### AWS Glue Schema Registry
+
+{{< public-preview />}}
+
+An AWS Glue Schema Registry connection establishes a link to an [AWS Glue Schema
+Registry]. You can use AWS Glue Schema Registry connections in the `FORMAT`
+clause of [`CREATE SOURCE`] statements to decode Avro-encoded messages, and of
+[`CREATE SINK`] statements to encode them, with schemas managed in AWS Glue.
+
+The connection authenticates to AWS through a separate [AWS connection](#aws),
+which supplies the credentials and region. See [AWS](#aws) for how to grant
+Materialize access to your AWS account.
+
+#### Syntax {#glue-syntax}
+
+{{% include-syntax file="examples/create_connection" example="syntax-glue" %}}
+
+#### Examples {#glue-example}
+
+```mzsql
+CREATE CONNECTION aws_conn TO AWS (
+    ASSUME ROLE ARN = 'arn:aws:iam::123456789000:role/MaterializeGlue'
+);
+
+CREATE CONNECTION glue_conn TO AWS GLUE SCHEMA REGISTRY (
+    AWS CONNECTION = aws_conn,
+    REGISTRY = 'default-registry'
+);
+```
+
+#### Permissions {#glue-permissions}
+
+The IAM role assumed by the [AWS connection](#aws) must be allowed to access the
+registry. Sources only read. Sinks also register schemas. Materialize uses the
+following AWS Glue actions:
+
+| Action | When it is used |
+|--------|-----------------|
+| `glue:GetRegistry` | At connection creation, to validate the connection. Only required when `VALIDATE` is `true` (the default). |
+| `glue:GetSchemaVersion` | Source: when the source is created, to pin the schema, and at runtime, to fetch the writer schema for each new schema version encountered. Sink: to poll a newly registered schema version until it becomes available. Always required. |
+| `glue:GetSchemaByDefinition` | Sink, to find an existing version matching the schema being registered. |
+| `glue:RegisterSchemaVersion` | Sink, to add a version to an existing schema. |
+| `glue:CreateSchema` | Sink, to create a schema on its first publish. |
+| `glue:GetSchema` | Sink, to read an existing schema's compatibility level and warn when it differs from the requested one. Optional. |
+
+A least-privilege policy for a source, scoped to a single registry, grants only
+the read actions:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "glue:GetRegistry",
+                "glue:GetSchemaVersion"
+            ],
+            "Resource": [
+                "arn:aws:glue:<region>:<account>:registry/<registry-name>",
+                "arn:aws:glue:<region>:<account>:schema/<registry-name>/*"
+            ]
+        }
+    ]
+}
+```
+
+A sink additionally needs the schema-write actions on the same resources:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "glue:GetRegistry",
+                "glue:GetSchemaVersion",
+                "glue:GetSchemaByDefinition",
+                "glue:RegisterSchemaVersion",
+                "glue:CreateSchema",
+                "glue:GetSchema"
+            ],
+            "Resource": [
+                "arn:aws:glue:<region>:<account>:registry/<registry-name>",
+                "arn:aws:glue:<region>:<account>:schema/<registry-name>/*"
+            ]
+        }
+    ]
+}
+```
+
+If you create the connection with `WITH (VALIDATE = false)`, you can omit
+`glue:GetRegistry`. The registry itself must already exist. Materialize sinks
+create and version schemas within it but never create the registry. For details
+on creating and authorizing the AWS connection, see [AWS](#aws).
+
 ### MySQL
 
 A MySQL connection establishes a link to a [MySQL] server. You can use
@@ -626,7 +747,7 @@ SSH bastion host.
 {{< tabs >}}
 {{< tab "AWS PrivateLink (Materialize Cloud)">}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 ##### Example {#mysql-privatelink-example}
 
@@ -725,7 +846,7 @@ the connection through an AWS PrivateLink service (Materialize Cloud)or an SSH b
 {{< tabs >}}
 {{< tab "AWS PrivateLink">}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 ##### Example {#postgres-privatelink-example}
 
@@ -807,25 +928,48 @@ CREATE CONNECTION sqlserver_connection TO SQL SERVER (
 An Iceberg catalog connection establishes a link to an [Apache Iceberg](https://iceberg.apache.org/)
 catalog. You can use Iceberg catalog connections to create [Iceberg sinks](/sql/create-sink/iceberg).
 
+Materialize supports two catalog types:
+
+| Catalog type | Destination | Authentication |
+| --- | --- | --- |
+| `'s3tablesrest'` | [AWS S3 Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html) | [AWS connection](#aws) |
+| `'rest'` | [Google Cloud BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog) {{< private-preview-inline />}} | [GCP connection](#gcp) |
+
 #### Syntax {#iceberg-catalog-syntax}
 
-{{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog" %}}
+{{< tabs >}}
+{{< tab "AWS S3 Tables" >}}
 
-#### Example {#iceberg-catalog-example}
+{{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog-s3tables" %}}
 
-```mzsql
--- First, create an AWS connection for authentication
-CREATE CONNECTION aws_connection
-  TO AWS (ASSUME ROLE ARN = 'arn:aws:iam::123456789012:role/MaterializeIceberg');
+{{< /tab >}}
+{{< tab "GCP BigLake" >}}
 
--- Create the Iceberg catalog connection
-CREATE CONNECTION iceberg_catalog TO ICEBERG CATALOG (
-    CATALOG TYPE = 's3tablesrest',
-    URL = 'https://s3tables.us-east-1.amazonaws.com/iceberg',
-    WAREHOUSE = 'arn:aws:s3tables:us-east-1:123456789012:bucket/my-table-bucket',
-    AWS CONNECTION = aws_connection
-);
-```
+{{< private-preview />}}
+
+{{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog-biglake" %}}
+
+{{< /tab >}}
+{{< /tabs >}}
+
+#### Examples {#iceberg-catalog-examples}
+
+{{< tabs >}}
+{{< tab "AWS S3 Tables" >}}
+
+{{% include-example file="examples/create_connection"
+example="example-iceberg-catalog-connection" %}}
+
+{{< /tab >}}
+{{< tab "GCP BigLake" >}}
+
+{{< private-preview />}}
+
+{{% include-example file="examples/create_connection"
+example="example-iceberg-catalog-gcp-connection" %}}
+
+{{< /tab >}}
+{{< /tabs >}}
 
 For more information about using Iceberg sinks, see the [Iceberg sink documentation](/serve-results/sink/iceberg/).
 
@@ -835,7 +979,7 @@ For more information about using Iceberg sinks, see the [Iceberg sink documentat
 
 ### AWS PrivateLink (Materialize Cloud) {#aws-privatelink}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 An AWS PrivateLink connection establishes a link to an [AWS PrivateLink] service.
 You can use AWS PrivateLink connections in [Confluent Schema Registry connections](#confluent-schema-registry),
@@ -970,6 +1114,7 @@ Connection type             | Validated by default |
 AWS                         |                      |
 Kafka                       | ✓                    |
 Confluent Schema Registry   | ✓                    |
+AWS Glue Schema Registry    | ✓                    |
 MySQL                       | ✓                    |
 PostgreSQL                  | ✓                    |
 SSH Tunnel                  |                      |
@@ -1000,6 +1145,7 @@ The privileges required to execute this statement are:
 
 [AWS PrivateLink]: https://aws.amazon.com/privatelink/
 [Confluent Schema Registry]: https://docs.confluent.io/platform/current/schema-registry/index.html#sr-overview
+[AWS Glue Schema Registry]: https://docs.aws.amazon.com/glue/latest/dg/schema-registry.html
 [Kafka]: https://kafka.apache.org
 [MySQL]: https://www.mysql.com/
 [PostgreSQL]: https://www.postgresql.org

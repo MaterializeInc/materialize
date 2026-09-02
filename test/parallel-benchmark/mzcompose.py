@@ -12,6 +12,7 @@ Benchmark with scenarios combining closed and open loops, can run multiple
 actions concurrently, measures various kinds of statistics.
 """
 
+import argparse
 import gc
 import os
 import time
@@ -23,7 +24,10 @@ from matplotlib.markers import MarkerStyle
 
 from materialize import MZ_ROOT, buildkite
 from materialize.docker import image_registry
-from materialize.mz_env_util import get_cloud_hostname
+from materialize.mz_env_util import (
+    connect_and_print_environment_id,
+    get_cloud_hostname,
+)
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import (
     Composition,
@@ -408,6 +412,7 @@ def run_once(
             port=6875,
             ssl=True,
         )
+        connect_and_print_environment_id(target.host, target.user, target.password)
     elif args.canary_env:
         assert not args.mz_url
         assert not args.benchmarking_env
@@ -427,6 +432,7 @@ def run_once(
             port=6875,
             ssl=True,
         )
+        connect_and_print_environment_id(target.host, target.user, target.password)
     elif args.mz_url:
         overrides = [
             Testdrive(
@@ -437,6 +443,14 @@ def run_once(
         ]
         target = parse_pg_conn_string(args.mz_url)
     else:
+        additional_system_parameter_defaults = (
+            ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS | {"max_connections": "100000"}
+        )
+        if params is not None:
+            for param in params.split(";"):
+                param_name, param_value = param.split("=")
+                additional_system_parameter_defaults[param_name] = param_value
+
         overrides = [
             Materialized(
                 image=f"{image_registry()}/materialized:{tag}" if tag else None,
@@ -444,11 +458,9 @@ def run_once(
                 soft_assertions=False,
                 external_metadata_store=True,
                 external_blob_store=True,
-                # TODO: Better azurite support detection
-                blob_store_is_azure=args.azurite and bool(tag),
+                blob_store_is_azure=args.azurite,
                 sanity_restart=False,
-                additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
-                | {"max_connections": "100000"},
+                additional_system_parameter_defaults=additional_system_parameter_defaults,
                 metadata_store="cockroach",
             ),
             Testdrive(
@@ -456,8 +468,7 @@ def run_once(
                 seed=1,
                 metadata_store="cockroach",
                 external_blob_store=True,
-                # TODO: Better azurite support detection
-                blob_store_is_azure=args.azurite and bool(tag),
+                blob_store_is_azure=args.azurite,
             ),
         ]
         target = None
@@ -518,18 +529,34 @@ def run_once(
                 periodic_dists={pd[0]: int(pd[1]) for pd in args.periodic_dist or []},
             )
             scenario = scenario_class(c, conn_infos)
-            scenario.setup(c, conn_infos)
+            # Bound before the try, because the finally reports against it and a
+            # setup() that raises would otherwise leave it unbound, replacing
+            # the failure with an UnboundLocalError.
             start_time = time.time()
             Path(MZ_ROOT / "plots").mkdir(parents=True, exist_ok=True)
             try:
+                # Inside the try because setup() is what starts the worker
+                # threads and builds the connection pool. A failure partway
+                # through leaves those threads parked on an empty job queue,
+                # and only teardown()'s sentinels release them.
+                scenario.setup(c, conn_infos)
+                # After setup(), because this is the denominator of the reported
+                # qps. Starting the thread pool and opening the connections is
+                # harness time, and a scenario with a qps guarantee has less
+                # slack than that costs.
+                start_time = time.time()
                 if not args.benchmarking_env:
                     # Don't let the garbage collector interfere with our measurements
                     gc.disable()
                 scenario.run(c, state)
+            finally:
+                # teardown() must run even if scenario.run() raised, otherwise
+                # its worker threads (up to thread_pool_size, non-daemon) never
+                # stop and block interpreter shutdown until the CI step times
+                # out. gc.enable() likewise must be reached on the failure path.
                 scenario.teardown()
                 gc.collect()
                 gc.enable()
-            finally:
                 new_stats, new_failures = report(
                     mz_string,
                     scenario,
@@ -713,7 +740,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     parser.add_argument(
         "--guarantees",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
         help="Check guarantees defined by test scenarios",
     )
@@ -860,6 +887,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             suffix=f"this_run{run_number}",
             sqlite_store=args.sqlite_store,
         )
+        # Drop any prior-run entry for the scenarios we just ran before adding
+        # this run's. all_this_stats is keyed by scenario instance and each
+        # rerun creates a fresh instance, so without this a retried scenario
+        # would be uploaded once per attempt (including the failed first one).
+        all_this_stats = {
+            scenario: scenario_stats
+            for scenario, scenario_stats in all_this_stats.items()
+            if type(scenario).name() not in retried_scenario_names
+        }
         all_this_stats.update(this_stats)
         # Replace guarantee failures for retried scenarios, keep others
         guarantee_failures = [

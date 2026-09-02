@@ -709,12 +709,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # and kafka implementations, if --extended is passed
     workflows = [
         # These tests core functionality related to kafka with ssh and error reporting.
-        # (workflow_kafka, (False,), True),  # TODO: Reenable when database-issues#9638 is fixed
+        # (workflow_kafka, (False,), True),  # TODO: Reenable when https://linear.app/materializeinc/issue/SS-287 is fixed
         (workflow_hidden_hosts, (False,), True),
         # These tests core functionality related to pg with ssh and error reporting.
         (workflow_basic_ssh_features, (), False),
         (workflow_pg, (), True),
-        # (workflow_kafka_restart_replica, (), True),  # TODO: Reenable when database-issues#9638 is fixed
+        # (workflow_kafka_restart_replica, (), True),  # TODO: Reenable when https://linear.app/materializeinc/issue/SS-287 is fixed
         (workflow_kafka_sink, (), True),
         (workflow_sql_server, (), True),
         (workflow_mysql, (), True),
@@ -722,7 +722,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.extended:
         workflows.extend(
             [
-                # (workflow_kafka, (True,), True),  # TODO: Reenable when database-issues#9638 is fixed
+                # (workflow_kafka, (True,), True),  # TODO: Reenable when https://linear.app/materializeinc/issue/SS-287 is fixed
                 (workflow_hidden_hosts, (True,), True),
                 # Various special cases related to ssh
                 (workflow_ssh_key_after_restart, (), False),

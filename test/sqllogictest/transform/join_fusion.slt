@@ -118,12 +118,12 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 Explained Query:
   Project (#0{l_orderkey}..=#7{l_receiptdate}, #0{l_orderkey}, #9{o_custkey}..=#14{c_acctbal}) // { arity: 15 }
     Filter (#5{l_shipdate} != #11{o_orderdate}) AND (#14{c_acctbal} >= #10{o_totalprice}) // { arity: 15 }
-      Join on=(#0{l_orderkey} = #8{o_orderkey} AND date_to_timestamp(#11{o_orderdate}) = (#5{l_shipdate} - 9 months)) type=delta // { arity: 15 }
+      Join on=(#0{l_orderkey} = #8{o_orderkey} AND date_to_timestamp(#11{o_orderdate}) = (#5{l_shipdate} - 9 mons)) type=delta // { arity: 15 }
         implementation
           %0:lineitem » %1:orders[#0{o_orderkey}, date_to_timestamp(#3{o_orderdate})]KK » %2:customer[×]
-          %1:orders » %0:lineitem[#0{l_orderkey}, (#5{l_shipdate} - 9 months)]KK » %2:customer[×]
+          %1:orders » %0:lineitem[#0{l_orderkey}, (#5{l_shipdate} - 9 mons)]KK » %2:customer[×]
           %2:customer » %0:lineitem[×] » %1:orders[#0{o_orderkey}, date_to_timestamp(#3{o_orderdate})]KK
-        ArrangeBy keys=[[], [#0{l_orderkey}, (#5{l_shipdate} - 9 months)]] // { arity: 8 }
+        ArrangeBy keys=[[], [#0{l_orderkey}, (#5{l_shipdate} - 9 mons)]] // { arity: 8 }
           ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 8 }
         ArrangeBy keys=[[#0{o_orderkey}, date_to_timestamp(#3{o_orderdate})]] // { arity: 4 }
           Filter (#0{o_orderkey}) IS NOT NULL // { arity: 4 }

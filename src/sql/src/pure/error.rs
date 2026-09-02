@@ -280,6 +280,51 @@ impl CsrPurificationError {
     }
 }
 
+/// Logical errors detectable during purification for AWS Glue Schema Registry.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum GluePurificationError {
+    #[error("{0} is not an AWS GLUE SCHEMA REGISTRY CONNECTION")]
+    NotGlueConnection(FullItemName),
+    #[error("SCHEMA NAME option is required")]
+    MissingSchemaName,
+    #[error("loading AWS SDK configuration failed")]
+    LoadSdkConfigError(Arc<anyhow::Error>),
+    #[error("Glue schema lookup failed (registry {registry:?}, schema {schema:?})")]
+    SchemaLookupError {
+        registry: String,
+        schema: String,
+        #[source]
+        cause: Arc<mz_aws_glue_schema_registry::GetSchemaVersionError>,
+    },
+    #[error("Glue schema {schema:?} in registry {registry:?} has no definition")]
+    EmptyDefinition { registry: String, schema: String },
+    #[error(
+        "Glue schema {schema:?} in registry {registry:?} uses unsupported data format {format}; only AVRO is supported"
+    )]
+    UnsupportedDataFormat {
+        registry: String,
+        schema: String,
+        format: String,
+    },
+}
+
+impl GluePurificationError {
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::LoadSdkConfigError(e) => Some(e.to_string_with_causes()),
+            Self::SchemaLookupError { cause, .. } => Some(cause.to_string_with_causes()),
+            Self::NotGlueConnection(_)
+            | Self::MissingSchemaName
+            | Self::EmptyDefinition { .. }
+            | Self::UnsupportedDataFormat { .. } => None,
+        }
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        None
+    }
+}
+
 /// Logical errors detectable during purification for a MySQL SOURCE.
 #[derive(Debug, thiserror::Error)]
 pub enum MySqlSourcePurificationError {

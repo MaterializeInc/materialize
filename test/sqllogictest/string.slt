@@ -1969,3 +1969,17 @@ select string_to_array('abc', '|', 'abc') from string_to_array_words;
 {NULL}
 
 # string_to_array - end.
+
+### NUL characters ###
+
+# Text values must never contain NUL characters, so string literals that
+# would produce one are rejected at lexing.
+
+query error null character in string literal
+SELECT E'\u0000'
+
+query error null character in string literal
+SELECT E'\U00000000'
+
+query error null character in string literal
+SELECT E'foo\u0000bar'

@@ -16,13 +16,7 @@
 {% macro deploy_init(ignore_existing_objects=False) %}
 
 {% set current_target_name = target.name %}
-{% set deployment = var('deployment') %}
-{% set target_config = deployment[current_target_name] %}
-
--- Check if the target-specific configuration exists
-{% if not target_config %}
-    {{ exceptions.raise_compiler_error("No deployment configuration found for target " ~ current_target_name) }}
-{% endif %}
+{% set target_config = internal_get_deployment_config() %}
 
 {{ log("Creating deployment environment for target " ~ current_target_name, info=True) }}
 
@@ -98,10 +92,10 @@
     {% else %}
         {{ log("Creating deployment schema " ~ deploy_schema, info=True)}}
         {% set create_schema %}
-        CREATE SCHEMA {{ deploy_schema }};
+        CREATE SCHEMA {{ adapter.quote(deploy_schema) }};
         {% endset %}
         {{ run_query(create_schema) }}
-        {{ set_schema_ci_tag() }}
+        {{ set_schema_ci_tag(deploy_schema) }}
         {{ internal_copy_schema_default_privs(schema, deploy_schema) }}
         {{ internal_copy_schema_grants(schema, deploy_schema) }}
     {% endif %}
@@ -133,12 +127,17 @@
         {% set refresh_hydration_time_estimate = results[4] %}
 
         {% if managed %}
+            {# The deployment cluster inherits the production cluster's
+               autoscaling strategy, so it bursts to the hydration size while
+               the deployment environment hydrates ahead of the cutover. #}
+            {% set auto_scaling_strategy = internal_get_cluster_auto_scaling_strategy(origin_cluster) %}
             {% set deploy_cluster = create_cluster(
                 cluster_name=cluster,
                 size=size,
                 replication_factor=replication_factor,
                 schedule_type=schedule_type,
                 refresh_hydration_time_estimate=refresh_hydration_time_estimate,
+                auto_scaling_strategy=auto_scaling_strategy,
                 ignore_existing_objects=ignore_existing_objects,
                 force_deploy_suffix=True
             ) %}
@@ -165,7 +164,7 @@ SELECT
     WHEN object_owner = 'PUBLIC' THEN 'FOR ALL ROLES '
     ELSE 'FOR ROLE ' || quote_ident(object_owner) || ' '
   END ||
-  'IN SCHEMA {{ to }} '         ||
+  'IN SCHEMA ' || quote_ident({{ dbt.string_literal(to) }}) || ' ' ||
   'GRANT '  || privilege_type   || ' ' ||
   'ON '     || object_type      || 's ' ||
   CASE

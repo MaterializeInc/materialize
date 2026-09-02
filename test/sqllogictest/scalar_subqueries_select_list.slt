@@ -919,3 +919,49 @@ query IT
 SELECT CASE (SELECT 1) WHEN 1 THEN 0 ELSE 2 END, 'TEXT';
 ----
 0  TEXT
+
+#
+# Regression: a scalar subquery whose body constant-folds to empty makes the
+# subquery-size guard see a count of 0. This used to hit a `soft_panic_or_log!`
+# ("subquery counting unexpectedly produced 0") and abort optimization; a count
+# of 0 is legitimate (the empty subquery yields NULL). Exposed by #37049, found
+# by the RQG `subqueries`/`simple-aggregates` workloads. These are the verbatim
+# failing queries; they need the RQG `simple.sql` schema (DOUBLE columns, NOT
+# NULL, materialized views), so re-create t1/t2 here.
+#
+
+statement ok
+DROP TABLE t1, t2, t3 CASCADE
+
+statement ok
+CREATE TABLE t1 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL)
+
+statement ok
+INSERT INTO t1 VALUES (NULL, 0), (1, 1), (1, 1), (2, 2), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8)
+
+statement ok
+CREATE TABLE t2 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL)
+
+statement ok
+INSERT INTO t2 VALUES (NULL, 0), (NULL, 0), (1, 1), (2, 2), (2, 2), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8)
+
+statement ok
+CREATE MATERIALIZED VIEW pk1 AS SELECT DISTINCT ON (f1) f1 , f2 FROM t1 WHERE f1 IS NOT NULL AND f2 IS NOT NULL
+
+statement ok
+CREATE MATERIALIZED VIEW pk2 AS SELECT DISTINCT ON (f1) f1 , f2 FROM t2 WHERE f1 IS NOT NULL AND f2 IS NOT NULL
+
+query RR rowsort
+SELECT ( SELECT inner1 . f1  FROM t1 AS inner1 LEFT JOIN t2 AS inner2 ON ( inner2 . f1  = 5 ) WHERE inner2 . f2  IS  NULL AND outer1 . f1  IS NOT NULL ORDER BY 1 LIMIT 1 ) , ( SELECT inner2 . f1  FROM t1 AS inner1 LEFT JOIN t2 AS inner2 ON ( inner1 . f2 + 1 = inner2 . f1  ) WHERE inner2 . f2  = outer1 . f1  ORDER BY 1 LIMIT 0 ) FROM t1 AS outer1 RIGHT JOIN ( SELECT DISTINCT inner1 . f2  AS f1 , inner2 . f1  AS f2 FROM pk2 AS inner1 , pk2 AS inner2 WHERE inner1 . f2  IS  NULL OR inner1 . f2  = inner2 . f1  ) AS outer2 ON ( outer2 . f1 + 1  IN ( SELECT DISTINCT inner2 . f1 + 1 FROM t1 AS inner1 , t1 AS inner2 WHERE outer2 . f2 + 1 IS NOT NULL ) ) WHERE outer1 . f1  IS  NULL OR outer2 . f2  = ( SELECT inner1 . f2  FROM t1 AS inner1 LEFT JOIN t2 AS inner2 ON ( inner2 . f2  IS  NULL ) WHERE outer2 . f2 + 1 BETWEEN inner2 . f2  AND 7 OR inner2 . f1 + 1 BETWEEN 3 AND outer2 . f1 + 1 ORDER BY 1 LIMIT 1 )
+----
+NULL  NULL
+NULL  NULL
+NULL  NULL
+NULL  NULL
+NULL  NULL
+NULL  NULL
+NULL  NULL
+
+query IRIII rowsort
+SELECT DISTINCT (a1.f1) AS c1, (a2.f1) AS c2, (a1.f2) AS c3, (MIN ( DISTINCT a1 . f1 + a1 . f2 )) AS agg1 , (SUM(LENGTH(a1 . f1::TEXT))) AS agg2 FROM (SELECT * FROM ( VALUES (1,2) ) t1 (f1,f2)) AS a1  JOIN ( SELECT a2 . f2 + a2 . f2 AS f1 , AVG (  a2 . f2 + a1 . f2 + NULLIF ( a1 . f1 , a2 . f1 ) ) AS f2 FROM pk2 AS a1  JOIN pk2 AS a2 ON ( NULLIF ( a2 . f1 , a1 . f2 ) IS  NULL ) WHERE a1 . f2  IN ( 2 , 0 ) AND a2 . f2 + a1 . f2 > a1 . f2 GROUP BY 1 ORDER BY 1 , 2 LIMIT 3 OFFSET 6 ) AS a2 ON ( a2 . f1 + a2 . f2 + a1 . f2 < a2 . f1 + a1 . f2 ) WHERE NOT ( a2 . f2  IN ( 3 , 9 ) ) OR a2 . f2 + a2 . f2  IN ( 8 , 3 , 4 ) GROUP BY 1 , 2 , 3 EXCEPT DISTINCT SELECT  (a1.f1) AS c1, (a2.f1) AS c2, (a1.f2) AS c3, (MAX (  a1 . f2 )) AS agg1 , (ARRAY_LENGTH ( ARRAY_AGG ( a1 . f1 ), 1 )) AS agg2 FROM pk1 AS a1  JOIN ( SELECT a1 . f2 + a2 . f2 AS f1 , a2 . f2 + a1 . f1 AS f2 FROM t2 AS a1  JOIN t2 AS a2 USING ( f1 , f2 ) WHERE NOT ( NULLIF ( a1 . f2 , a1 . f2 )  IN ( 1 , 0 ) ) OR a2 . f1 IS NOT NULL OR a1 . f1 + a2 . f1 < ( SELECT  agg2 FROM ( SELECT  (a2 . f2) AS c1, (a2 . f2) AS c2, (a2 . f2 + a2 . f2) AS c3, (AVG ( a2 . f1 + a2 . f1 )) AS agg1 , (MIN (  a1 . f2 + a1 . f1 )) AS agg2 FROM t2 AS a1 LEFT JOIN ( SELECT a2 . f2 + a1 . f2 + a1 . f1 + a2 . f2 AS f1 , a2 . f2 + a1 . f2 AS f2 FROM pk1 AS a1 RIGHT JOIN pk2 AS a2 USING ( f1 ) WHERE a2 . f1 IS NOT NULL AND a2 . f2 + a2 . f2 + a2 . f1 IS  NULL ORDER BY 1 , 2 LIMIT 5  ) AS a2 ON ( NULLIF ( a1 . f2 , a1 . f2 ) = a2 . f2 ) WHERE a2 . f2 + a1 . f2 NOT IN ( 9 , 2 , 5 , 2 , 4 , 2 , 7 , 9 , 8 ) AND a1 . f2 + a1 . f1 NOT IN ( 9 , 5 ) OR NOT ( a2 . f1 IS  NULL ) OR a1 . f2 + a2 . f1  IN ( 6 , 8 , 4 ) OR NULLIF ( a2 . f2 , a1 . f1 ) IS NOT NULL AND a1 . f2 + NULLIF ( a1 . f2 , a1 . f2 ) = a2 . f1 + a1 . f2 AND a2 . f1 + a2 . f2 = a2 . f2 + a2 . f2 + NULLIF ( a1 . f2 , a1 . f2 ) AND NOT ( a1 . f2 + a2 . f2 = NULLIF ( a2 . f2 , a2 . f2 ) ) GROUP BY 1 , 2 , 3 ) AS dt ORDER BY 1 LIMIT 1 OFFSET 2 ) AND a1 . f2 + a1 . f2 + a1 . f2  IN ( 3 , 1 , 2 ) ORDER BY 1 , 2 ) AS a2 USING ( f2 ) WHERE NOT ( a1 . f1 > NULLIF ( a2 . f1 , a2 . f2 ) ) AND a2 . f2 + a2 . f2 NOT IN ( 6 , 0 ) GROUP BY 1 , 2 , 3
+----

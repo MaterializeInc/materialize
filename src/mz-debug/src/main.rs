@@ -104,10 +104,23 @@ pub struct Args {
     /// If true, the tool will dump the prometheus metrics in Materialize.
     #[clap(long, default_value = "true", action = clap::ArgAction::Set, global = true)]
     dump_prometheus_metrics: bool,
+    /// If true, the tool will collect CPU profiles from Materialize. While a CPU
+    /// profile is captured, memory profiling is temporarily disabled on that
+    /// service and restored afterwards.
+    #[clap(long, default_value = "true", action = clap::ArgAction::Set, global = true)]
+    dump_cpu_profiles: bool,
+    /// How long, in seconds, to sample each CPU profile.
+    #[clap(
+        long,
+        default_value = "10",
+        value_parser = clap::value_parser!(u64).range(1..=3600),
+        global = true
+    )]
+    cpu_profile_duration_seconds: u64,
     /// The username to use to connect to Materialize,
     #[clap(long, env = "MZ_USERNAME", global = true)]
     mz_username: Option<String>,
-    /// The password to use to connect to Materialize if the authenticator kind is Password.
+    /// The password to use to connect to Materialize if the authenticator kind is Password, Sasl, or Oidc.
     #[clap(long, env = "MZ_PASSWORD", global = true)]
     mz_password: Option<String>,
     /// The URL of the Materialize SQL connection used to dump the system catalog.
@@ -194,6 +207,8 @@ pub struct Context {
     dump_system_catalog: bool,
     dump_heap_profiles: bool,
     dump_prometheus_metrics: bool,
+    dump_cpu_profiles: bool,
+    cpu_profile_duration_secs: u64,
 }
 
 #[tokio::main]
@@ -391,6 +406,8 @@ async fn initialize_context(
         dump_system_catalog: global_args.dump_system_catalog,
         dump_heap_profiles: global_args.dump_heap_profiles,
         dump_prometheus_metrics: global_args.dump_prometheus_metrics,
+        dump_cpu_profiles: global_args.dump_cpu_profiles,
+        cpu_profile_duration_secs: global_args.cpu_profile_duration_seconds,
     })
 }
 
@@ -501,7 +518,7 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
 
     info!("Zipping debug directory");
 
-    let zip_file_name = format!("{}.zip", &context.base_path.display());
+    let zip_file_name = format!("{}.zip", context.base_path.display());
 
     if let Err(e) = zip_debug_folder(PathBuf::from(&zip_file_name), &context.base_path) {
         warn!("Failed to zip debug directory: {:#}", e);

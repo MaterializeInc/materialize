@@ -13,7 +13,7 @@ from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, disabled, externally_idempotent
 
 
-@disabled("due to database-issues#9223")
+@disabled("due to https://linear.app/materializeinc/issue/SS-296")
 @externally_idempotent(False)
 class SourceErrors(Check):
     def initialize(self) -> Testdrive:

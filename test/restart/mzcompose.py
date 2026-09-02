@@ -13,8 +13,10 @@ processes). See cluster tests for separate clusterds, see platform-checks for
 further restart scenarios.
 """
 
+import copy
 import json
 import time
+from datetime import datetime
 from textwrap import dedent
 
 import requests
@@ -24,6 +26,7 @@ from psycopg.errors import (
 )
 
 from materialize import MZ_ROOT, buildkite
+from materialize.mzcompose import cluster_replica_size_map
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -64,7 +67,7 @@ SERVICES = [
 
 def workflow_retain_history(c: Composition) -> None:
     def check_retain_history(name: str):
-        start = time.time()
+        start = time.monotonic()
         while True:
             ts = c.sql_query(
                 f"EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM retain_{name}"
@@ -74,13 +77,16 @@ def workflow_retain_history(c: Composition) -> None:
             source = ts["sources"][0]
             since = source["read_frontier"][0]
             upper = source["write_frontier"][0]
-            if upper - since > 2000:
+            # The write frontier is exclusive, so an exact 2,000 ms gap retains
+            # the requested two seconds of history.
+            if upper - since >= 2000:
                 break
-            end = time.time()
-            # seconds since start
-            elapsed = end - start
+            elapsed = time.monotonic() - start
             if elapsed > 10:
-                raise UIError("timeout hit while waiting for retain history")
+                raise UIError(
+                    f"timeout hit while waiting for retain history for retain_{name}: "
+                    f"read frontier {since}, write frontier {upper}"
+                )
             time.sleep(0.5)
 
     def check_retain_history_for(names: list[str]):
@@ -289,8 +295,6 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
     c.testdrive(
         service="testdrive_no_reset",
         input=dedent("""
-            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-
             # We can create a cluster with sizes 'scale=1,workers=1' and 'scale=1,workers=2'
             > CREATE CLUSTER test REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=2'))
 
@@ -314,8 +318,6 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
     c.testdrive(
         service="testdrive_no_reset",
         input=dedent("""
-            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-
             # Cluster replica of disallowed sizes still exist
             > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
             test r1 scale=1,workers=1 true ""
@@ -349,13 +351,61 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
             > SHOW allowed_cluster_replica_sizes
             "\\"scale=1,workers=1\\", \\"scale=1,workers=2\\""
 
-            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-
             # Reset for following tests
             $ postgres-execute connection=mz_system
             ALTER SYSTEM RESET allowed_cluster_replica_sizes
             """),
     )
+
+
+def workflow_disabled_cluster_replica_size_survives_restart(c: Composition) -> None:
+    # SQL-306: disabling a size in `cluster_replica_sizes` that an existing
+    # replica still uses must not crash the environment at startup. Disabling
+    # is how you retire a size while leaving existing replicas running, so
+    # those replicas keep working and only new replicas of that size are
+    # refused.
+    c.down(destroy_volumes=True)
+
+    sizes = cluster_replica_size_map()
+    size = "scale=2,workers=4"
+    assert (
+        size in sizes and not sizes[size]["disabled"]
+    ), f"test assumes {size} exists and is enabled in the default size map"
+
+    # Boot with the size enabled and create a replica that uses it.
+    with c.override(Materialized(cluster_replica_size=sizes)):
+        c.up("materialized", Service("testdrive_no_reset", idle=True))
+        c.testdrive(
+            service="testdrive_no_reset",
+            input=dedent(f"""
+                > CREATE CLUSTER test REPLICAS (r1 (SIZE '{size}'))
+
+                > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+                test r1 {size} true ""
+                """),
+        )
+        c.kill("materialized")
+
+    # Restart with that size disabled. Startup rebuilds each replica from its
+    # durable size in apply_cluster_replica_update, so a disabled size must not
+    # stop the environment from booting and the existing replica must survive.
+    # A new replica of the disabled size is still refused.
+    disabled = copy.deepcopy(sizes)
+    disabled[size]["disabled"] = True
+    with c.override(Materialized(cluster_replica_size=disabled)):
+        c.up("materialized", Service("testdrive_no_reset", idle=True))
+        c.testdrive(
+            service="testdrive_no_reset",
+            input=dedent(f"""
+                # Existing replica of the now-disabled size survives the restart.
+                > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+                test r1 {size} true ""
+
+                # Creating a new replica of the disabled size is rejected.
+                ! CREATE CLUSTER REPLICA test.r2 SIZE '{size}'
+                contains:unknown cluster replica size {size}
+                """),
+        )
 
 
 def workflow_allow_user_sessions(c: Composition) -> None:
@@ -445,7 +495,7 @@ def workflow_mcp_feature_flags(c: Composition) -> None:
 
     with c.override(
         Materialized(
-            listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json",
+            listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/no_auth.json",
         )
     ):
         c.up("materialized")
@@ -634,9 +684,17 @@ def workflow_drop_materialize_database(c: Composition) -> None:
     # Verify that materialize hasn't blown up
     c.sql("SELECT 1")
 
-    # Restore for next tests
+    # Restore for next tests. The recreated database is owned by mz_system, so
+    # the materialize role must be re-granted the database-level privileges
+    # (notably CREATE, needed to create schemas) and the public schema
+    # privileges it holds by default.
     c.sql(
         "CREATE DATABASE materialize",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        "GRANT ALL PRIVILEGES ON DATABASE materialize TO materialize",
         port=6877,
         user="mz_system",
     )
@@ -983,6 +1041,683 @@ def workflow_user_id_no_reuse_after_restart(c: Composition) -> None:
     c.sql("DROP TABLE idreuse_t3")
     c.sql("DROP TABLE idreuse_t2")
     c.sql("DROP TABLE idreuse_t1")
+
+
+def workflow_rename_schema_types_functions(c: Composition) -> None:
+    """Verify that ALTER SCHEMA RENAME updates references to a renamed schema's types.
+
+    A type is only ever referenced by a schema-qualified name in "data type"
+    position: a cast, a table column type, or a nested element type. Every kind
+    of dependent object (view, materialized view, table, another type) reaches
+    the type the same way, so all of them must have their create_sql rewritten
+    on rename.
+
+    Regression test for three related bugs:
+
+    1. transact.rs RenameSchema only iterated schema.items, missing schema.types
+       (and schema.functions). The renamed schema's own types kept stale
+       create_sql, which fails to re-parse on restart (the original panic).
+
+    2. transform.rs CreateSqlRewriteSchema never descended into data types, so
+       references to a renamed schema's types inside dependents' create_sql
+       (casts, column types, element types) were left pointing at the old name.
+
+    3. consistency.rs check_items() only iterated schema.items, so a type with
+       invalid create_sql after a rename was never flagged by the checker.
+
+    The persisted create_sql is only re-parsed on boot, so the corruption is
+    invisible until a restart, after which the stale references fail to resolve.
+    """
+
+    c.up("materialized")
+
+    # Create a schema with a custom type, then exercise every object kind that
+    # can reference that type by a schema-qualified name.
+    c.sql("CREATE SCHEMA s1")
+    c.sql("CREATE TYPE s1.mytype AS LIST (ELEMENT TYPE = int4)")
+    # View: references the type in a cast.
+    c.sql("CREATE VIEW public.v_uses_type AS SELECT NULL::s1.mytype")
+    # Materialized view: same, but persisted as a separate object kind.
+    c.sql("CREATE MATERIALIZED VIEW public.mv_uses_type AS SELECT NULL::s1.mytype")
+    # Table: references the type as a column type.
+    c.sql("CREATE TABLE public.t_uses_type (a s1.mytype)")
+    # Type-in-type: an outer type in another schema whose element type is the
+    # renamed schema's type (nested data type position).
+    c.sql("CREATE TYPE public.outer_type AS LIST (ELEMENT TYPE = s1.mytype)")
+
+    # Sanity: everything works before rename.
+    assert c.sql_query("SELECT count(*) FROM public.v_uses_type")[0][0] == 1
+    assert c.sql_query("SELECT count(*) FROM public.mv_uses_type")[0][0] == 1
+    assert c.sql_query("SELECT count(*) FROM public.t_uses_type")[0][0] == 0
+
+    # Rename the schema.
+    c.sql("ALTER SCHEMA s1 RENAME TO s2")
+
+    # Restart Materialize. The persisted create_sql is re-parsed on boot, so any
+    # dependent whose create_sql still references the old schema name "s1" (which
+    # no longer exists) fails to resolve here.
+    c.kill("materialized")
+    c.up("materialized")
+
+    # After restart, every dependent must still be queryable.
+    assert c.sql_query("SELECT count(*) FROM public.v_uses_type")[0][0] == 1
+    assert c.sql_query("SELECT count(*) FROM public.mv_uses_type")[0][0] == 1
+    assert c.sql_query("SELECT count(*) FROM public.t_uses_type")[0][0] == 0
+
+    # Every object's create_sql must reference the new schema name, never the old
+    # one. This covers the type itself and each kind of dependent.
+    checks = [
+        ("mz_types", "mytype"),
+        ("mz_types", "outer_type"),
+        ("mz_views", "v_uses_type"),
+        ("mz_materialized_views", "mv_uses_type"),
+        ("mz_tables", "t_uses_type"),
+    ]
+    for catalog_table, name in checks:
+        result = c.sql_query(
+            f"SELECT create_sql FROM {catalog_table} WHERE name = '{name}'"
+        )
+        create_sql = result[0][0]
+        assert (
+            '"s2"' in create_sql and '"s1"' not in create_sql
+        ), f"{name} create_sql still references old schema after rename: {create_sql}"
+
+    # Cleanup.
+    c.sql("DROP TABLE public.t_uses_type")
+    c.sql("DROP MATERIALIZED VIEW public.mv_uses_type")
+    c.sql("DROP VIEW public.v_uses_type")
+    c.sql("DROP TYPE public.outer_type")
+    c.sql("DROP TYPE s2.mytype")
+    c.sql("DROP SCHEMA s2")
+
+
+def workflow_arrangement_sizes_stale_snapshot_after_restart(c: Composition) -> None:
+    """After a restart, mz_object_arrangement_size_history should not
+    record rows read from stale pre-restart shard contents (SQL-218).
+
+    The collections backing the history snapshots retain pre-restart rows
+    until the new introspection subscribes replace them. Each round drops
+    two indexes and kills environmentd immediately, before the drops'
+    retractions can reach the collections, so the retained shard contents
+    include rows for objects that no longer exist in the catalog. After
+    the restart nothing can legitimately report those objects, so any
+    post-restart history row for them must have been read from the stale
+    shard contents. Unlike asserting on sizes, this cannot
+    false-positive: a rehydrating index legitimately reports its
+    pre-restart size, but a dropped object cannot be reported at all.
+    """
+
+    num_replicas = 2
+    all_names = [f"sidx{i}" for i in range(1, 21)]
+
+    def name_filter(names: list[str]) -> str:
+        return "(" + ", ".join(f"'{n}'" for n in names) + ")"
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "arrangement_size_history_collection_interval": "500ms",
+            },
+            sanity_restart=False,
+        )
+    ):
+        c.up("materialized")
+        c.sql(dedent(f"""\
+                CREATE CLUSTER stale_test SIZE 'scale=1,workers=1', REPLICATION FACTOR {num_replicas};
+                CREATE TABLE stale_t (a int, b text);
+                INSERT INTO stale_t SELECT g, repeat('x', 1024) FROM generate_series(1, 30000) g;
+                CREATE VIEW stale_v AS SELECT a, b FROM stale_t;
+                {"".join(f"CREATE INDEX sidx{i} IN CLUSTER stale_test ON stale_v ((a + {i}));" for i in range(1, 21))}
+                """))
+
+        # Object IDs must be captured before dropping: history rows are keyed
+        # by object_id, and dropped objects no longer join against mz_objects.
+        object_ids = {name: obj_id for obj_id, name in c.sql_query(f"""
+                SELECT o.id, o.name FROM mz_objects o
+                WHERE o.name IN {name_filter(all_names)}""")}
+        assert len(object_ids) == len(all_names)
+
+        def wait_for_full_sample(names: list[str]) -> None:
+            expected_count = len(names) * num_replicas
+            deadline = time.time() + 120
+            while time.time() < deadline:
+                if c.sql_query(f"""
+                    SELECT 1 FROM mz_internal.mz_object_arrangement_size_history h
+                    JOIN mz_objects o ON o.id = h.object_id
+                    WHERE o.name IN {name_filter(names)}
+                    GROUP BY h.collection_timestamp
+                    HAVING count(*) = {expected_count} LIMIT 1"""):
+                    return
+                time.sleep(0.5)
+            raise UIError("timed out waiting for a full sample")
+
+        remaining = all_names
+        wait_for_full_sample(remaining)
+
+        for round_num in range(5):
+            dropped, remaining = remaining[:2], remaining[2:]
+
+            # Kill right after the drops: their retractions cannot reach the
+            # storage collections before the process dies, so the retained
+            # shard contents keep rows for the now-nonexistent indexes.
+            c.sql(";".join(f"DROP INDEX {name}" for name in dropped))
+            c.kill("materialized")
+            c.up("materialized")
+
+            # With the freshness gate, recording cannot resume until well
+            # after this query runs, so `boundary` cleanly separates pre-kill
+            # rows from anything recorded after the restart.
+            boundary = c.sql_query("""
+                SELECT max(collection_timestamp)::text
+                FROM mz_internal.mz_object_arrangement_size_history""")[0][0]
+            assert boundary is not None, (
+                f"round {round_num}: history table is empty right after "
+                "restart; pre-restart contents must be retained"
+            )
+
+            # A full post-restart sample of the remaining indexes implies the
+            # subscribes have delivered, so the stale window has closed.
+            wait_for_full_sample(remaining)
+
+            dropped_ids = ", ".join(f"'{object_ids[name]}'" for name in dropped)
+            stale_rows = c.sql_query(f"""
+                SELECT h.collection_timestamp::text, h.replica_id, h.object_id, h.size
+                FROM mz_internal.mz_object_arrangement_size_history h
+                WHERE h.object_id IN ({dropped_ids})
+                  AND h.collection_timestamp > '{boundary}'::timestamptz
+                ORDER BY h.collection_timestamp""")
+
+            assert not stale_rows, (
+                f"round {round_num}: {len(stale_rows)} post-restart history "
+                f"rows recorded for indexes dropped just before the restart "
+                f"({dropped}); first 10: {stale_rows[:10]}"
+            )
+
+
+def workflow_temporary_item_cleanup(c: Composition) -> None:
+    """Temporary tables and views are durable catalog items tagged with the
+    UUID of the session that created them (SQL-150), so they need explicit
+    cleanup on both paths out of a session.
+
+    Graceful close is handled by the session-close hook, which drops the
+    session's items in one catalog transaction. A crash never runs that hook,
+    so the items are instead reclaimed the next time the catalog is opened with
+    write intent, which fences out every previous owner and therefore every
+    session that could still own one.
+    """
+
+    def forget_cached_conns() -> None:
+        """Drop the connections `sql_query` caches.
+
+        A SIGKILL severs them, and reusing a dead socket surfaces as a spurious
+        "server closed the connection unexpectedly" rather than as a retry.
+        """
+        for conn in c.conns.values():
+            try:
+                conn.close()
+            except Exception:
+                pass
+        c.conns.clear()
+
+    def query(sql: str) -> list[tuple]:
+        try:
+            return c.sql_query(sql)
+        except OperationalError:
+            forget_cached_conns()
+            raise
+
+    def wait_for(sql: str, expected: list[tuple], what: str) -> None:
+        """Poll until `sql` returns `expected`."""
+        deadline = time.time() + 120
+        actual = None
+        while time.time() < deadline:
+            try:
+                actual = query(sql)
+                if actual == expected:
+                    return
+            except OperationalError:
+                # environmentd is still coming back up.
+                pass
+            time.sleep(0.5)
+        raise UIError(
+            f"timed out waiting for {what}: wanted {expected}, last saw {actual}"
+        )
+
+    # Temporary items report the temporary schema sentinel '0'.
+    temp_item_counts = """
+        SELECT
+          (SELECT count(*) FROM mz_tables WHERE name = 'tt' AND schema_id = '0'),
+          (SELECT count(*) FROM mz_views WHERE name = 'tv' AND schema_id = '0')
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    # Two sessions create temporary items of the same name. Name uniqueness is
+    # scoped by the owning session, so both must coexist, and mz_tables and
+    # mz_views report every item regardless of owner.
+    conn_a = c.sql_connection()
+    conn_b = c.sql_connection()
+    conn_ids = {}
+    for label, conn in (("a", conn_a), ("b", conn_b)):
+        cur = conn.cursor()
+        cur.execute("SELECT pg_backend_pid()")
+        conn_ids[label] = cur.fetchall()[0][0]
+        cur.execute("CREATE TEMP TABLE tt (a int)")
+        cur.execute("CREATE TEMP VIEW tv AS SELECT * FROM tt")
+
+    wait_for(temp_item_counts, [(2, 2)], "both sessions' temporary items to appear")
+
+    sessions = query(f"""SELECT count(*) FROM mz_internal.mz_sessions
+            WHERE connection_id IN ({conn_ids["a"]}, {conn_ids["b"]})""")
+    assert sessions == [(2,)], f"both sessions should be in mz_sessions, saw {sessions}"
+
+    # --- Graceful close: only the closing session's items go ------------------
+
+    conn_a.close()
+
+    wait_for(
+        temp_item_counts,
+        [(1, 1)],
+        "session a's temporary items to be dropped and session b's to survive",
+    )
+    wait_for(
+        f"""SELECT count(*) FROM mz_internal.mz_sessions
+            WHERE connection_id = {conn_ids["a"]}""",
+        [(0,)],
+        "session a's mz_sessions row to be retracted",
+    )
+
+    # Session b still owns and resolves its own items.
+    cur_b = conn_b.cursor()
+    cur_b.execute("INSERT INTO tt VALUES (1)")
+    cur_b.execute("SELECT count(*) FROM tv")
+    assert cur_b.fetchall() == [(1,)], "session b lost its own temporary items"
+
+    # A comment on a temporary item is a durable catalog row too, and item ids
+    # are reused, so reclamation must drop it or it can re-attach to an
+    # unrelated later object.
+    cur_b.execute("COMMENT ON TABLE tt IS 'crash victim'")
+    temp_comment_count = """
+        SELECT count(*) FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'Comment'
+          AND data->'value'->>'comment' = 'crash victim'
+    """
+    comments = c.sql_query(temp_comment_count, port=6877, user="mz_system")
+    assert comments == [(1,)], f"the temp table's comment was not written: {comments}"
+
+    # Capture the shard backing session b's temp table: the metadata row of
+    # the one remaining ephemeral item that has storage (the temp view has
+    # none). It is what boot-time reclamation must clean up after the kill.
+    shards = c.sql_query(
+        """SELECT m.data->'value'->>'shard'
+           FROM mz_internal.mz_catalog_raw m
+           WHERE m.data->>'kind' = 'StorageCollectionMetadata'
+             AND m.data->'key'->'id' IN (
+               SELECT i.data->'value'->'global_id'
+               FROM mz_internal.mz_catalog_raw i
+               WHERE i.data->>'kind' = 'Item'
+                 AND i.data->'value'->>'ephemeral_owner_session' IS NOT NULL)""",
+        port=6877,
+        user="mz_system",
+    )
+    assert len(shards) == 1, f"expected one ephemeral storage mapping: {shards}"
+    temp_shard = shards[0][0]
+
+    # --- kill -9, with session b's items still live ---------------------------
+
+    c.kill("materialized")
+    c.up("materialized")
+    forget_cached_conns()
+
+    wait_for(
+        temp_item_counts,
+        [(0, 0)],
+        "the crashed session's temporary items to be reclaimed at boot",
+    )
+    wait_for(
+        f"""SELECT count(*) FROM mz_internal.mz_sessions
+            WHERE connection_id IN ({conn_ids["a"]}, {conn_ids["b"]})""",
+        [(0,)],
+        "stale mz_sessions rows to be retracted at boot",
+    )
+
+    # mz_tables and mz_views are projections. Only mz_catalog_raw shows whether
+    # the durable rows themselves are gone, so a reclamation that merely stopped
+    # rendering the items would still be caught here. It is system-only.
+    ephemeral = c.sql_query(
+        """SELECT count(*) FROM mz_internal.mz_catalog_raw
+           WHERE data->>'kind' = 'Item'
+             AND data->'value'->>'ephemeral_owner_session' IS NOT NULL""",
+        port=6877,
+        user="mz_system",
+    )
+    assert ephemeral == [
+        (0,)
+    ], f"ephemeral catalog items survived the restart: {ephemeral}"
+
+    # The temp table's storage mapping must have moved to the finalization
+    # WAL in the same reclamation, else the metadata row and its persist
+    # shard would leak forever. Both rows are stable to assert on here: the
+    # metadata deletion is permanent, and the WAL row survives until the
+    # next committed catalog transaction, which cannot have happened because
+    # nothing has run DDL since the restart.
+    metadata = c.sql_query(
+        f"""SELECT count(*) FROM mz_internal.mz_catalog_raw
+            WHERE data->>'kind' = 'StorageCollectionMetadata'
+              AND data->'value'->>'shard' = '{temp_shard}'""",
+        port=6877,
+        user="mz_system",
+    )
+    assert metadata == [
+        (0,)
+    ], f"temp table's storage metadata survived the restart: {temp_shard}"
+    unfinalized = c.sql_query(
+        f"""SELECT count(*) FROM mz_internal.mz_catalog_raw
+            WHERE data->>'kind' = 'UnfinalizedShard'
+              AND data->'key'->>'shard' = '{temp_shard}'""",
+        port=6877,
+        user="mz_system",
+    )
+    assert unfinalized == [
+        (1,)
+    ], f"temp table's shard was not enqueued for finalization: {temp_shard}"
+
+    # The comment row dies with its item.
+    comments = c.sql_query(temp_comment_count, port=6877, user="mz_system")
+    assert comments == [
+        (0,)
+    ], f"the temp table's comment survived the restart: {comments}"
+
+    # conn_b's socket died with the process; closing is bookkeeping only.
+    try:
+        conn_b.close()
+    except Exception:
+        pass
+
+
+def workflow_hydration_history_survives_restart(c: Composition) -> None:
+    """Durable object and replica hydration rows outlive their writer.
+
+    Killing the service also restarts clusterd, so the replica hydrates again
+    and legitimately records fresh episodes: one when rehydration forms a
+    single episode, more when the introspection indexes complete before the
+    user dataflows install. What must hold is that the pre-restart episodes
+    are still there afterwards, unchanged, that every fresh episode starts
+    after every pre-restart finish, and that repeated sweeps do not duplicate
+    anything. Asserting exact row counts would instead assert on collection
+    timing.
+    """
+
+    def episodes(name: str = "hydration_history_i") -> list[list]:
+        return c.sql_query(f"""
+            SELECT h.installed_at::text, h.started_at::text,
+                   h.hydrated_at::text, h.status
+            FROM mz_internal.mz_object_hydration_history AS h
+            JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.object_id
+            JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+            WHERE o.name = '{name}'
+            ORDER BY h.installed_at""")
+
+    def replica_episodes() -> list[list]:
+        return c.sql_query("""
+            SELECT h.replica_id, h.started_at::text, h.finished_at::text,
+                   h.object_count::text, h.peak_memory_bytes::text,
+                   h.peak_disk_bytes::text, h.status
+            FROM mz_internal.mz_replica_hydration_history AS h
+            JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
+            JOIN mz_catalog.mz_clusters AS c ON c.id = h.cluster_id
+            WHERE r.name = 'r1' AND c.name = 'hydration_history'
+            ORDER BY h.started_at""")
+
+    def replica_episode_identities(episodes: list[list]) -> list[tuple[str, str]]:
+        return [(episode[0], episode[1]) for episode in episodes]
+
+    def parse_ts(text: str) -> datetime:
+        return datetime.fromisoformat(text)
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "hydration_history_collection_interval": "1s",
+                # Pin retention: CI randomizes it, and a short period would
+                # prune the episode this test restarts around.
+                "hydration_history_retention_period": "30d",
+            },
+            sanity_restart=False,
+        )
+    ):
+        c.up("materialized")
+        c.sql(dedent("""\
+            CREATE CLUSTER hydration_history SIZE 'scale=1,workers=2';
+            CREATE TABLE hydration_history_t (a int);
+            INSERT INTO hydration_history_t SELECT generate_series(1, 100000);
+            CREATE INDEX hydration_history_i
+                IN CLUSTER hydration_history ON hydration_history_t (a);
+            CREATE MATERIALIZED VIEW hydration_history_mv_a
+                IN CLUSTER hydration_history AS SELECT a + 1 AS a FROM hydration_history_t;
+            CREATE MATERIALIZED VIEW hydration_history_mv_b
+                IN CLUSTER hydration_history AS SELECT a + 2 AS a FROM hydration_history_t;
+            """))
+
+        deadline = time.time() + 120
+        before = []
+        while time.time() < deadline:
+            before = episodes()
+            if before:
+                break
+            time.sleep(0.5)
+        assert (
+            len(before) == 1
+        ), f"expected exactly one episode, got {before} (empty means it timed out)"
+
+        deadline = time.time() + 120
+        replica_before = []
+        while time.time() < deadline:
+            replica_before = replica_episodes()
+            if replica_before:
+                break
+            time.sleep(0.5)
+        assert replica_before, "replica hydration history timed out before restart"
+
+        # Discover an MV whose persist-sink worker is off worker 0 instead of
+        # predicting it from user-ID allocation and hashing. Enough input data
+        # separates compute completion from the active worker's durable write,
+        # but a single MV is not a reliable trial: its sink can land on worker
+        # 0, and a fast snapshot write can collapse both workers' stamps into
+        # one logging batch. Either way the separation is unobservable on that
+        # MV, so once a trial is fully hydrated and disqualified, create
+        # another MV: a fresh id rolls the sink worker and a fresh snapshot
+        # write rolls the timing.
+        deadline = time.time() + 240
+        mv_names = ["hydration_history_mv_a", "hydration_history_mv_b"]
+        max_mvs = 8
+        candidates = []
+        worker_rows = []
+        with c.sql_cursor(reuse_connection=True) as cursor:
+            try:
+                cursor.execute("SET cluster = hydration_history")
+                cursor.execute("SET cluster_replica = r1")
+                while time.time() < deadline:
+                    name_list = ", ".join(f"'{name}'" for name in mv_names)
+                    cursor.execute(f"""
+                        SELECT
+                            mv.name,
+                            max(h.hydrated_at)::text,
+                            (max(h.hydrated_at)
+                                FILTER (WHERE h.worker_id = 0))::text
+                        FROM mz_introspection.mz_compute_hydration_times_per_worker AS h
+                        JOIN mz_internal.mz_object_global_ids AS g
+                          ON g.global_id = h.export_id
+                        JOIN mz_catalog.mz_materialized_views AS mv ON mv.id = g.id
+                        WHERE mv.name IN ({name_list})
+                        GROUP BY mv.name
+                        HAVING count(*) = 2
+                           AND count(*) = count(h.hydrated_at)
+                        ORDER BY mv.name
+                        """.encode())
+                    worker_rows = cursor.fetchall()
+                    candidates = [
+                        row
+                        for row in worker_rows
+                        if row[1] is not None and row[2] != row[1]
+                    ]
+                    if candidates:
+                        break
+                    if len(worker_rows) == len(mv_names) and len(mv_names) < max_mvs:
+                        name = f"hydration_history_mv_{chr(ord('a') + len(mv_names))}"
+                        cursor.execute(f"""
+                            CREATE MATERIALIZED VIEW {name}
+                                IN CLUSTER hydration_history
+                                AS SELECT a + {len(mv_names) + 1} AS a
+                                FROM hydration_history_t
+                            """.encode())
+                        mv_names.append(name)
+                    time.sleep(0.5)
+            finally:
+                cursor.execute("RESET cluster_replica")
+                cursor.execute("RESET cluster")
+        assert candidates, (
+            "no MV produced an observable off-worker-0 persist-sink finish, "
+            f"tried {len(mv_names)}: {worker_rows}"
+        )
+        mv_name, latest_worker_finish, worker_zero_finish = candidates[0]
+
+        # The selected MV's history episode must use the all-worker maximum,
+        # not worker 0's earlier compute-only finish.
+        deadline = time.time() + 120
+        mv_episodes = []
+        while time.time() < deadline:
+            mv_episodes = episodes(mv_name)
+            if mv_episodes:
+                break
+            time.sleep(0.5)
+        assert (
+            len(mv_episodes) == 1
+        ), f"expected one materialized view episode for {mv_name}, got {mv_episodes}"
+        assert mv_episodes[0][2] == latest_worker_finish, (
+            f"durable finish {mv_episodes[0][2]} did not match "
+            f"latest worker finish {latest_worker_finish}. "
+            f"worker 0 finished at {worker_zero_finish}"
+        )
+
+        # Re-read the pre-restart episodes immediately before the kill. The
+        # waits above leave minutes in which a further legitimate episode can
+        # be recorded, and the fresh-episode assertions after the restart
+        # assume this set is current. Two equal consecutive reads shrink the
+        # remaining window to a sweep that starts and commits within one poll
+        # gap.
+        deadline = time.time() + 120
+        replica_before = replica_episodes()
+        replica_before_settled = False
+        while time.time() < deadline:
+            time.sleep(2.0)
+            current = replica_episodes()
+            replica_before_settled = current == replica_before
+            if replica_before_settled:
+                break
+            replica_before = current
+        assert (
+            replica_before_settled
+        ), f"pre-restart replica episodes did not settle: {replica_before}"
+        replica_before_ids = replica_episode_identities(replica_before)
+        replica_before_started_at = {identity[1] for identity in replica_before_ids}
+        assert len(replica_before_ids) == len(
+            set(replica_before_ids)
+        ), f"duplicate replica hydration identities before restart: {replica_before}"
+        latest_before_finish = max(parse_ts(episode[2]) for episode in replica_before)
+
+        c.kill("materialized")
+        c.up("materialized")
+
+        # The pre-restart episode must remain byte-identical, and restarting the
+        # replica must produce exactly one episode with a fresh installation.
+        deadline = time.time() + 120
+        after = []
+        fresh = []
+        while time.time() < deadline:
+            after = episodes()
+            fresh = [episode for episode in after if episode[0] != before[0][0]]
+            if before[0] in after and len(fresh) == 1:
+                break
+            time.sleep(0.5)
+        assert (
+            before[0] in after
+        ), f"restart lost the pre-restart episode: had {before}, now {after}"
+        assert (
+            len(after) == 2 and len(fresh) == 1
+        ), f"expected one preserved and one fresh episode, got {after}"
+
+        deadline = time.time() + 120
+        replica_after = []
+        replica_after_ids = []
+        replica_fresh_ids = set()
+        while time.time() < deadline:
+            replica_after = replica_episodes()
+            replica_after_ids = replica_episode_identities(replica_after)
+            replica_fresh_ids = set(replica_after_ids) - set(replica_before_ids)
+            if set(replica_before_ids) <= set(replica_after_ids) and replica_fresh_ids:
+                break
+            time.sleep(0.5)
+        assert all(
+            episode in replica_after for episode in replica_before
+        ), f"restart changed replica episodes: had {replica_before}, now {replica_after}"
+        assert set(replica_before_ids) <= set(
+            replica_after_ids
+        ), f"restart lost replica episodes: had {replica_before}, now {replica_after}"
+        # Rehydration can record one fresh episode or several: the
+        # introspection indexes can finish before the user dataflows install,
+        # forming an earlier disconnected episode that is recorded on its own.
+        # The monotonic history guard orders them all after pre-restart
+        # history.
+        assert (
+            replica_fresh_ids
+        ), f"restart did not produce a fresh replica identity: {replica_after}"
+        assert all(
+            parse_ts(identity[1]) > latest_before_finish
+            for identity in replica_fresh_ids
+        ), f"fresh replica episode overlaps pre-restart history: {replica_after}"
+        assert all(
+            identity[1] not in replica_before_started_at
+            for identity in replica_fresh_ids
+        ), f"restart reused a replica hydration start: {replica_after}"
+        assert len(replica_after_ids) == len(
+            set(replica_after_ids)
+        ), f"restart produced duplicate replica hydration identities: {replica_after}"
+
+        # Let several sweeps run. The pre-restart episodes must not be
+        # duplicated, and everything recorded since the restart must stay
+        # ordered after them.
+        time.sleep(10)
+        settled = episodes()
+        assert (
+            before[0] in settled
+        ), f"pre-restart episode disappeared: had {before}, now {settled}"
+        assert len(settled) == len(
+            set(tuple(row) for row in settled)
+        ), f"sweeps duplicated a hydration episode: {settled}"
+        assert len(settled) == 2, f"expected two settled episodes, got {settled}"
+
+        replica_settled = replica_episodes()
+        replica_settled_ids = replica_episode_identities(replica_settled)
+        assert len(replica_settled_ids) == len(
+            set(replica_settled_ids)
+        ), f"sweeps duplicated a replica hydration identity: {replica_settled}"
+        assert set(replica_before_ids) <= set(
+            replica_settled_ids
+        ), f"pre-restart replica episodes disappeared: {replica_settled}"
+        assert all(
+            episode in replica_settled for episode in replica_before
+        ), f"pre-restart replica episodes changed: {replica_settled}"
+        assert replica_fresh_ids <= set(
+            replica_settled_ids
+        ), f"post-restart replica episodes disappeared: {replica_settled}"
+        assert all(
+            parse_ts(identity[1]) > latest_before_finish
+            for identity in set(replica_settled_ids) - set(replica_before_ids)
+        ), f"settled replica episodes overlap pre-restart history: {replica_settled}"
 
 
 def workflow_default(c: Composition) -> None:

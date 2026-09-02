@@ -42,7 +42,7 @@ two-tier architecture](/manage/operational-guidelines/).
 Materialize supports multi-replica clusters, allowing for distribution across
 Availability Zones (AZs):
 
-{{< include-md file="shared-content/multi-replica-az.md" >}}
+{{% include-headless "/headless/multi-replica-az" %}}
 
 Multi-replica **compute clusters** and multi-replica **serving clusters**
 (excluding sink clusters) with replicas distributed across AZs provide DR
@@ -59,7 +59,7 @@ data uninterrupted in the case of a replica failure.
 
 {{< annotation type="💡 Cost and work capacity" >}}
 
-{{< include-md file="shared-content/cluster-replica-cost-capacity-notes.md" >}}
+{{% include-headless "/headless/cluster-replica-cost-capacity-notes" %}}
 
 {{</ annotation >}}
 
@@ -69,7 +69,7 @@ If you require resilience beyond a single region, consider the Level 3 strategy.
 
 {{< note >}}
 
-{{< include-md file="/shared-content/regional-dr-infrastructure-as-code.md" >}}
+{{% include-headless "/headless/regional-dr-infrastructure-as-code" %}}
 
 {{</ note >}}
 
@@ -104,7 +104,7 @@ variation](#hybrid-variation).
 - The hybrid strategy is available if your deployment uses a [three-tier or a
 two-tier architecture](/manage/operational-guidelines/).
 
-- {{< include-md file="/shared-content/regional-dr-infrastructure-as-code.md" >}}
+- {{< include-md file="content/headless/regional-dr-infrastructure-as-code.md" >}}
 {{</ note >}}
 
 For a more cost-effective variation to the duplicate Materialize environment in

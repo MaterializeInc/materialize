@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_interchange::avro::Decoder;
+use mz_interchange::avro::{Decoder, WriterSchemaProvider};
 use mz_ore::error::ErrorExt;
 use mz_repr::Row;
 use mz_storage_types::errors::DecodeErrorKind;
@@ -22,18 +22,11 @@ impl AvroDecoderState {
     pub fn new(
         value_schema: &str,
         reference_schemas: &[String],
-        ccsr_client: Option<mz_ccsr::Client>,
+        writer_schemas: WriterSchemaProvider,
         debug_name: String,
-        confluent_wire_format: bool,
     ) -> Result<Self, anyhow::Error> {
         Ok(AvroDecoderState {
-            decoder: Decoder::new(
-                value_schema,
-                reference_schemas,
-                ccsr_client,
-                debug_name,
-                confluent_wire_format,
-            )?,
+            decoder: Decoder::new(value_schema, reference_schemas, writer_schemas, debug_name)?,
             events_success: 0,
         })
     }

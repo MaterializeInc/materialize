@@ -434,6 +434,11 @@ pub struct Args {
     /// configuration parameters.
     #[clap(long, env = "LAUNCHDARKLY_SDK_KEY")]
     launchdarkly_sdk_key: Option<String>,
+    /// Overrides the LaunchDarkly streaming, polling, and events endpoints with
+    /// a single base URL, as for a relay proxy. Primarily intended for pointing
+    /// the SDK at a mock LaunchDarkly server in tests.
+    #[clap(long, env = "LAUNCHDARKLY_BASE_URI", value_name = "URL")]
+    launchdarkly_base_uri: Option<String>,
     /// A list of PARAM_NAME=KEY_NAME pairs from system parameter names to
     /// LaunchDarkly feature keys.
     ///
@@ -657,6 +662,15 @@ pub fn main() {
 
 fn run(mut args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::install_enhanced_handler();
+
+    // Pin the rustls crypto provider to aws-lc-rs. The LaunchDarkly SDK uses
+    // hyper-rustls, so building its client resolves the process-default rustls
+    // provider. The workspace also links rustls' `ring` feature (pulled by
+    // other hyper-rustls chains), and with both provider features enabled
+    // rustls cannot choose a default on its own and panics. The call is
+    // idempotent, so ignore the result.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let envd_start = Instant::now();
 
     // Configure signal handling as soon as possible. We want signals to be
@@ -741,6 +755,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     runtime.block_on(mz_metrics::register_metrics_into(
         &metrics_registry,
         mz_dyncfgs::all_dyncfgs(),
+        // environmentd has no scratch directory, so it tracks no disk usage.
+        None,
     ));
 
     // Initialize fail crate for failpoint support
@@ -748,6 +764,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     // Configure connections.
     let tls = args.tls.into_config()?;
+    let frontegg_oauth_issuer_url = args.frontegg.oauth_issuer_url().map(str::to_string);
     let frontegg = FronteggAuthenticator::from_args(args.frontegg, &metrics_registry)?;
     let listeners_config: ListenersConfig = {
         let f = File::open(args.listeners_config_path)?;
@@ -1021,6 +1038,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     });
 
     let persist_clients = Arc::new(persist_clients);
+    let system_dyncfgs = Arc::clone(&persist_clients.cfg().configs);
     let connection_context = ConnectionContext::from_cli_args(
         args.environment_id.to_string(),
         &args.tracing.startup_log_filter,
@@ -1090,6 +1108,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 tls_reload_certs: mz_server_core::default_cert_reload_ticker(),
                 external_login_password_mz_system: args.external_login_password_mz_system,
                 frontegg,
+                frontegg_oauth_issuer_url,
                 cors_allowed_origin,
                 cors_allowed_origin_list,
                 egress_addresses: args.announce_egress_address,
@@ -1099,6 +1118,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 controller,
                 secrets_controller,
                 cloud_resource_controller,
+                system_dyncfgs,
                 // Storage options.
                 storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
                 storage_usage_retention_period: args.storage_usage_retention_period,
@@ -1111,6 +1131,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 segment_client_side: args.segment_client_side,
                 test_only_dummy_segment_client: args.test_only_dummy_segment_client,
                 launchdarkly_sdk_key: args.launchdarkly_sdk_key,
+                launchdarkly_base_uri: args.launchdarkly_base_uri,
                 launchdarkly_key_map: args
                     .launchdarkly_key_map
                     .into_iter()

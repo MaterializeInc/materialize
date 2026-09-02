@@ -17,6 +17,12 @@ use std::time::Duration;
 pub struct ComputeReplicaConfig {
     /// TODO(database-issues#7533): Add documentation.
     pub logging: ComputeReplicaLogging,
+    /// Whether arrangements on this replica request dictionary compression.
+    ///
+    /// This carries the configured value. Whether the replica honors it is
+    /// gated at replica creation by the `enable_arrangement_dictionary_compression_alpha`
+    /// feature flag.
+    pub arrangement_compression: bool,
 }
 
 /// Logging configuration of a replica.

@@ -10,6 +10,15 @@ menu:
 
 aliases:
   - /transform-data/patterns/window-functions/
+  - /self-managed/v25.2/transform-data/idiomatic-materialize-sql/
+  - /self-managed/v25.2/transform-data/idiomatic-materialize-sql/first-value/
+  - /self-managed/v25.2/transform-data/idiomatic-materialize-sql/last-value/
+  - /self-managed/v25.2/transform-data/idiomatic-materialize-sql/any/
+  - /self-managed/v25.2/transform-data/idiomatic-materialize-sql/lag/
+  - /self-managed/v25.2/transform-data/idiomatic-materialize-sql/lead/
+  - /self-managed/v25.2/transform-data/idiomatic-materialize-sql/mz_now/
+  - /self-managed/v25.2/transform-data/idiomatic-materialize-sql/top-k/
+  - /self-managed/v25.2/transform-data/idiomatic-materialize-sql/appendix/
 ---
 
 Materialize follows the SQL standard (SQL-92) implementation and strives for

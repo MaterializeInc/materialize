@@ -7,6 +7,8 @@ menu:
     identifier: dataflow-troubleshooting
     parent: transform-data
     weight: 88
+aliases:
+  - /self-managed/v25.2/transform-data/troubleshooting/
 ---
 
 If you're unable to troubleshoot your issue using the [`Ingest data`](/ingest-data/troubleshooting/)

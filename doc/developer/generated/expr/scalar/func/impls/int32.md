@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/int32.rs
-revision: 703a0c27c8
+revision: 94ee2d5448
 ---
 
 # mz-expr::scalar::func::impls::int32

@@ -1,0 +1,42 @@
+{
+    "create_table": {
+        "test_odd_writes": {
+            "columns": {
+                "a": "INT",
+                "b": "STRING"
+            },
+            "primary_key": [
+                "a",
+                "b"
+            ]
+        }
+    },
+    "ops": [
+        {
+            "upsert": {
+                "test_odd_writes": [
+                    {
+                        "a": 1,
+                        "b": ",,"
+                    },
+                    {
+                        "a": 2,
+                        "b": ",\t,"
+                    },
+                    {
+                        "a": 3,
+                        "b": ","
+                    },
+                    {
+                        "a": 4,
+                        "b": "'\","
+                    },
+                    {
+                        "a": 5,
+                        "b": "     \n  '\t,,,\",,\""
+                    }
+                ]
+            }
+        }
+    ]
+}

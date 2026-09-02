@@ -17,8 +17,15 @@ MZ_REPO_REF="${BUILDKITE_REPO_REF:-origin}"
 MZ_REPO_PULL_REQUEST_BASE_BRANCH="${BUILDKITE_PULL_REQUEST_BASE_BRANCH:-main}"
 
 if [[ "${BUILDKITE:-}" != "true" ]]; then
-  # when running locally, our origin may point to a fork of the repo but we want the mz repo
-  MZ_REPO_REF=$(git remote -v | grep -i "MaterializeInc/materialize" | grep "fetch" | head -n1 | cut -f1)
+  # when running locally, our origin may point to a fork of the repo but we want the mz repo.
+  # Keep the default ref if no such remote exists (a fork-only clone). The `|| true`
+  # is required: grep exits non-zero when there is no match, and head closing the pipe
+  # early makes upstream grep exit with SIGPIPE, either of which would abort this
+  # sourced script under `set -euo pipefail` and kill the check with no output.
+  mz_repo_ref=$(git remote -v | grep -i "MaterializeInc/materialize" | grep "fetch" | head -n1 | cut -f1 || true)
+  if [[ -n "$mz_repo_ref" ]]; then
+    MZ_REPO_REF="$mz_repo_ref"
+  fi
 fi
 
 configure_git_user_if_in_buildkite() {

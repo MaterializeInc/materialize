@@ -19,15 +19,30 @@
 //! - `DirtyCluster(cluster)` - All clusters that must be refreshed
 //! - `DirtySchema(database, schema)` - All schemas containing dirty objects
 //!
+//! ## Seeds
+//!
+//! The fixed-point starts from two caller-supplied inputs:
+//! - `ChangedStmt(O)` — objects whose hashes differ between the old and new
+//!   snapshots.
+//! - `ForcedSchema(Db, Sch)` — schemas the caller marks dirty unconditionally
+//!   (`stage --redeploy-schema`), redeployed even when nothing in them changed.
+//!
 //! ## Propagation Rules
 //!
 //! ### Rule Category 1 — Statement Dirtiness
 //! ```datalog
 //! DirtyStmt(O) :- ChangedStmt(O)                             # Changed objects are dirty
 //! DirtyStmt(O) :- StmtUsesCluster(O, C), DirtyCluster(C)     # Objects on dirty statement clusters are dirty
-//! DirtyStmt(O) :- DependsOn(O, P), DirtyStmt(P), NOT IsChangedReplacement(P)  # Downstream dependents are dirty (except through changed replacement MVs)
-//! DirtyStmt(O) :- DirtySchema(Db, Sch), ObjectInSchema(O, Db, Sch) # Objects in dirty schemas are dirty
+//! DirtyStmt(O) :- DependsOn(O, P), DirtyStmt(P), NOT IsReplacement(P)  # Downstream dependents are dirty, except through replacement MVs
+//! DirtyStmt(O) :- DirtySchema(Db, Sch), ObjectInSchema(O, Db, Sch)     # Every object in a dirty schema is dirty
 //! ```
+//!
+//! **Replacement MVs:** A replacement MV (in a stable-API schema, redeployed in
+//! place) has exactly one special property — its dirtiness does not propagate
+//! *downstream* to dependents in other schemas. Otherwise it behaves like any
+//! other compute object: a dirty replacement MV dirties its schema, a dirty
+//! stable schema redeploys all of its MVs atomically, and a dirty cluster
+//! propagates normally.
 //!
 //! **Key Insight:** Index clusters do NOT cause objects to be marked dirty. Indexes are physical
 //! optimizations that can be managed independently without redeploying the object's statement.
@@ -48,6 +63,7 @@
 //!
 //! ### Rule Category 3 — Schema Dirtiness
 //! ```datalog
+//! DirtySchema(Db, Sch) :- ForcedSchema(Db, Sch)                                    # Forced schemas are dirty up front (seed)
 //! DirtySchema(Db, Sch) :- DirtyStmt(O), ObjectInSchema(O, Db, Sch), NOT IsSink(O)  # Dirty objects make their schemas dirty (excluding sinks)
 //! ```
 //!
@@ -67,7 +83,6 @@ use crate::client::DeploymentKind;
 use crate::project::SchemaQualifier;
 use crate::project::analysis::deployment_snapshot::DeploymentSnapshot;
 use crate::project::ir::graph::Project;
-use crate::project::ir::object_id::ObjectId;
 use std::collections::BTreeSet;
 
 use base_facts::extract_base_facts;
@@ -84,6 +99,9 @@ impl ChangeSet {
     /// * `old_snapshot` - Previous deployment snapshot
     /// * `new_snapshot` - Current deployment snapshot
     /// * `project` - MIR project with dependency information
+    /// * `forced_dirty_schemas` - Schemas to treat as dirty even when unchanged
+    ///   (e.g. `stage --redeploy-schema`); pass an empty set for pure
+    ///   change-driven dirtiness
     ///
     /// # Returns
     /// A ChangeSet identifying all objects requiring redeployment
@@ -91,6 +109,7 @@ impl ChangeSet {
         old_snapshot: &DeploymentSnapshot,
         new_snapshot: &DeploymentSnapshot,
         project: &Project,
+        forced_dirty_schemas: &BTreeSet<SchemaQualifier>,
     ) -> Self {
         // Step 1: Find changed objects by comparing hashes
         let changed_objects = find_changed_objects(old_snapshot, new_snapshot);
@@ -98,31 +117,9 @@ impl ChangeSet {
         // Step 2: Extract base facts from project
         let base_facts = extract_base_facts(project);
 
-        // Step 2b: Identify changed replacement objects (exist in old snapshot AND old schema was Replacement)
-        // These use the in-place replacement protocol, so dirtiness should NOT propagate
-        // through them to downstream objects.
-        // Objects transitioning from a non-replacement schema (e.g., Objects) to Replacement
-        // must go through blue/green swap, not CREATE REPLACEMENT.
-        let changed_replacements: BTreeSet<ObjectId> = base_facts
-            .is_replacement
-            .iter()
-            .filter(|obj| {
-                old_snapshot.objects.contains_key(*obj)
-                    && old_snapshot
-                        .schemas
-                        .get(&SchemaQualifier::new(
-                            obj.expect_database().to_string(),
-                            obj.schema().to_string(),
-                        ))
-                        .copied()
-                        == Some(DeploymentKind::Replacement)
-            })
-            .cloned()
-            .collect();
-
         // Step 3: Run Datalog fixed-point computation
         let (dirty_stmts, dirty_clusters, dirty_schemas) =
-            compute_dirty_datalog(&changed_objects, &base_facts, &changed_replacements);
+            compute_dirty_datalog(&changed_objects, &base_facts, forced_dirty_schemas);
 
         // Step 4: Separate replacement objects into new vs changed
         // - New: use blue-green swap. Includes objects not in old snapshot OR objects whose
@@ -264,6 +261,94 @@ mod tests {
         assert!(
             dirty_stmts.contains(&obj3),
             "obj3 (same schema as changed obj1) should be dirty"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_forced_dirty_schema_redeploys_schema_and_dependents() {
+        // Nothing changed, but schema "a" is forced dirty. Every object in "a"
+        // and its downstream dependents (even in other schemas) must be dirty,
+        // while an unrelated schema stays clean.
+        let a1 = ObjectId::new("db".to_string(), "a".to_string(), "a1".to_string());
+        let a2 = ObjectId::new("db".to_string(), "a".to_string(), "a2".to_string());
+        let b1 = ObjectId::new("db".to_string(), "b".to_string(), "b1".to_string());
+        let c1 = ObjectId::new("db".to_string(), "c".to_string(), "c1".to_string());
+
+        let base_facts = BaseFacts {
+            object_in_schema: vec![
+                (a1.clone(), "db".to_string(), "a".to_string()),
+                (a2.clone(), "db".to_string(), "a".to_string()),
+                (b1.clone(), "db".to_string(), "b".to_string()),
+                (c1.clone(), "db".to_string(), "c".to_string()),
+            ],
+            // b1 depends on a1 (child, parent).
+            depends_on: vec![(b1.clone(), a1.clone())],
+            stmt_uses_cluster: vec![],
+            index_uses_cluster: vec![],
+            is_sink: BTreeSet::new(),
+            is_replacement: BTreeSet::new(),
+        };
+
+        // Nothing changed; force schema "a" dirty.
+        let changed_stmts = BTreeSet::new();
+        let mut forced = BTreeSet::new();
+        forced.insert(SchemaQualifier::new("db".to_string(), "a".to_string()));
+
+        let (dirty_stmts, _clusters, dirty_schemas) =
+            compute_dirty_datalog(&changed_stmts, &base_facts, &forced);
+
+        assert!(
+            dirty_stmts.contains(&a1),
+            "a1 in forced schema should be dirty"
+        );
+        assert!(
+            dirty_stmts.contains(&a2),
+            "a2 in forced schema should be dirty"
+        );
+        assert!(
+            dirty_stmts.contains(&b1),
+            "b1 (depends on a1) should be dirty"
+        );
+        assert!(
+            !dirty_stmts.contains(&c1),
+            "c1 (unrelated schema) should not be dirty"
+        );
+
+        assert!(dirty_schemas.contains(&SchemaQualifier::new("db".to_string(), "a".to_string())));
+        assert!(dirty_schemas.contains(&SchemaQualifier::new("db".to_string(), "b".to_string())));
+        assert!(!dirty_schemas.contains(&SchemaQualifier::new("db".to_string(), "c".to_string())));
+    }
+
+    #[mz_ore::test]
+    fn test_forced_dirty_schema_includes_replacement_objects() {
+        // Normal schema atomicity skips replacement MVs, but a schema the caller
+        // explicitly forces must redeploy them too.
+        let mv = ObjectId::new("db".to_string(), "core".to_string(), "summary".to_string());
+
+        let base_facts = BaseFacts {
+            object_in_schema: vec![(mv.clone(), "db".to_string(), "core".to_string())],
+            depends_on: vec![],
+            stmt_uses_cluster: vec![],
+            index_uses_cluster: vec![],
+            is_sink: BTreeSet::new(),
+            is_replacement: BTreeSet::from([mv.clone()]),
+        };
+
+        // Not forced: the unchanged replacement MV stays clean.
+        let (unforced, _, _) =
+            compute_dirty_datalog(&BTreeSet::new(), &base_facts, &BTreeSet::new());
+        assert!(
+            !unforced.contains(&mv),
+            "replacement MV should not be dirty without a change or force"
+        );
+
+        // Forced: the replacement MV is redeployed.
+        let mut forced = BTreeSet::new();
+        forced.insert(SchemaQualifier::new("db".to_string(), "core".to_string()));
+        let (forced_dirty, _, _) = compute_dirty_datalog(&BTreeSet::new(), &base_facts, &forced);
+        assert!(
+            forced_dirty.contains(&mv),
+            "forcing the schema should redeploy its replacement MV"
         );
     }
 
@@ -720,8 +805,9 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn test_replacement_mv_does_not_dirty_its_schema() {
-        // A changed replacement MV should NOT make its schema dirty.
+    fn test_replacement_mv_dirties_its_schema() {
+        // A changed replacement MV dirties its schema, which redeploys
+        // atomically: every other object in the schema is pulled in too.
 
         let mv1 = ObjectId::new("db".to_string(), "analytics".to_string(), "mv1".to_string());
         let mv2 = ObjectId::new("db".to_string(), "analytics".to_string(), "mv2".to_string());
@@ -759,25 +845,25 @@ mod tests {
         // mv1 should be dirty (it changed)
         assert!(dirty_stmts.contains(&mv1), "mv1 should be dirty");
 
-        // Schema should NOT be dirty (replacement MVs don't propagate to schemas)
+        // Schema should be dirty - a dirty replacement MV dirties its schema
         assert!(
-            !dirty_schemas.contains(&SchemaQualifier::new(
+            dirty_schemas.contains(&SchemaQualifier::new(
                 "db".to_string(),
                 "analytics".to_string()
             )),
-            "analytics schema should NOT be dirty - replacement MV doesn't dirty schema"
+            "analytics schema should be dirty - dirty replacement MV dirties its schema"
         );
 
-        // mv2 should NOT be dirty (schema isn't dirty, so no propagation)
+        // mv2 should be dirty (schema atomicity pulls in the sibling replacement MV)
         assert!(
-            !dirty_stmts.contains(&mv2),
-            "mv2 should NOT be dirty - schema not dirty"
+            dirty_stmts.contains(&mv2),
+            "mv2 should be dirty - schema redeploys atomically"
         );
 
-        // view1 should NOT be dirty either
+        // view1 should be dirty too (schema atomicity)
         assert!(
-            !dirty_stmts.contains(&view1),
-            "view1 should NOT be dirty - schema not dirty"
+            dirty_stmts.contains(&view1),
+            "view1 should be dirty - schema redeploys atomically"
         );
     }
 
@@ -812,9 +898,9 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn test_replacement_mv_not_pulled_in_by_dirty_schema() {
-        // When a non-replacement object makes a schema dirty,
-        // replacement MVs in that schema should NOT be pulled in (Rule 6 exclusion).
+    fn test_replacement_mv_pulled_in_by_dirty_schema() {
+        // When a non-replacement object makes a schema dirty, replacement MVs in
+        // that schema are pulled in too: the schema redeploys atomically (Rule 6).
 
         let regular = ObjectId::new(
             "db".to_string(),
@@ -874,10 +960,10 @@ mod tests {
             "other should be dirty via schema propagation"
         );
 
-        // replacement_mv should NOT be pulled in
+        // replacement_mv should be pulled in too - the schema redeploys atomically
         assert!(
-            !dirty_stmts.contains(&replacement_mv),
-            "replacement MV should NOT be pulled in by dirty schema"
+            dirty_stmts.contains(&replacement_mv),
+            "replacement MV should be pulled in by dirty schema"
         );
     }
 
@@ -922,19 +1008,21 @@ mod tests {
         let (dirty_stmts, _dirty_clusters, dirty_schemas) =
             compute_dirty_datalog(&changed_stmts, &base_facts, &BTreeSet::new());
 
-        // replacement_mv should be dirty via dependency
+        // replacement_mv should be dirty via dependency (the skip is on the
+        // parent, not the child)
         assert!(
             dirty_stmts.contains(&replacement_mv),
             "replacement MV should be dirty - depends on changed upstream"
         );
 
-        // But analytics schema should NOT be dirty (replacement MV doesn't propagate)
+        // The now-dirty replacement MV dirties its own schema like any other
+        // compute object.
         assert!(
-            !dirty_schemas.contains(&SchemaQualifier::new(
+            dirty_schemas.contains(&SchemaQualifier::new(
                 "db".to_string(),
                 "analytics".to_string()
             )),
-            "analytics schema should NOT be dirty - replacement MV doesn't dirty schema"
+            "analytics schema should be dirty - dirty replacement MV dirties its schema"
         );
     }
 
@@ -993,13 +1081,83 @@ mod tests {
             "replacement MV should be dirty - its cluster is dirty"
         );
 
-        // analytics schema still should NOT be dirty
+        // analytics schema is dirty - the dirty replacement MV dirties its schema
         assert!(
-            !dirty_schemas.contains(&SchemaQualifier::new(
+            dirty_schemas.contains(&SchemaQualifier::new(
                 "db".to_string(),
                 "analytics".to_string()
             )),
-            "analytics schema should NOT be dirty even though replacement MV is dirty"
+            "analytics schema should be dirty - its replacement MV is dirty"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_dependent_of_dirty_replacement_mv_not_dirtied() {
+        // The one special property of a replacement MV: its dirtiness does NOT
+        // propagate downstream to dependents in other schemas (Rule 4 skips a
+        // replacement parent).
+
+        let replacement_mv = ObjectId::new(
+            "db".to_string(),
+            "analytics".to_string(),
+            "my_mv".to_string(),
+        );
+        let downstream = ObjectId::new(
+            "db".to_string(),
+            "consumer".to_string(),
+            "report".to_string(),
+        );
+
+        let mut is_replacement = BTreeSet::new();
+        is_replacement.insert(replacement_mv.clone());
+
+        let base_facts = BaseFacts {
+            object_in_schema: vec![
+                (
+                    replacement_mv.clone(),
+                    "db".to_string(),
+                    "analytics".to_string(),
+                ),
+                (downstream.clone(), "db".to_string(), "consumer".to_string()),
+            ],
+            depends_on: vec![(downstream.clone(), replacement_mv.clone())],
+            stmt_uses_cluster: vec![],
+            index_uses_cluster: vec![],
+            is_sink: BTreeSet::new(),
+            is_replacement,
+        };
+
+        // The replacement MV itself changed
+        let mut changed_stmts = BTreeSet::new();
+        changed_stmts.insert(replacement_mv.clone());
+
+        let (dirty_stmts, _dirty_clusters, dirty_schemas) =
+            compute_dirty_datalog(&changed_stmts, &base_facts, &BTreeSet::new());
+
+        // The replacement MV is dirty (it changed) and dirties its own schema
+        assert!(
+            dirty_stmts.contains(&replacement_mv),
+            "replacement MV is dirty"
+        );
+        assert!(
+            dirty_schemas.contains(&SchemaQualifier::new(
+                "db".to_string(),
+                "analytics".to_string()
+            )),
+            "analytics schema should be dirty"
+        );
+
+        // But the downstream dependent in another schema is NOT pulled in
+        assert!(
+            !dirty_stmts.contains(&downstream),
+            "downstream dependent should NOT be dirty - replacement MV does not fan out"
+        );
+        assert!(
+            !dirty_schemas.contains(&SchemaQualifier::new(
+                "db".to_string(),
+                "consumer".to_string()
+            )),
+            "consumer schema should NOT be dirty"
         );
     }
 
@@ -1091,13 +1249,14 @@ mod tests {
             "replacement_mv2 should be dirty via cluster"
         );
 
-        // analytics schema should NOT be dirty
+        // analytics schema should be dirty - its replacement MVs went dirty via
+        // the shared cluster, and a dirty replacement MV dirties its schema
         assert!(
-            !dirty_schemas.contains(&SchemaQualifier::new(
+            dirty_schemas.contains(&SchemaQualifier::new(
                 "db".to_string(),
                 "analytics".to_string()
             )),
-            "analytics schema should NOT be dirty - only replacement MVs are there"
+            "analytics schema should be dirty - its replacement MVs are dirty"
         );
     }
 
@@ -1201,8 +1360,12 @@ mod tests {
             true, // is_replacement
         );
 
-        let changeset =
-            ChangeSet::from_deployment_snapshot_comparison(&old_snapshot, &new_snapshot, &project);
+        let changeset = ChangeSet::from_deployment_snapshot_comparison(
+            &old_snapshot,
+            &new_snapshot,
+            &project,
+            &BTreeSet::new(),
+        );
 
         // Object should be in new_replacement_objects (blue/green), NOT changed_replacement_objects
         assert!(
@@ -1213,6 +1376,64 @@ mod tests {
             !changeset.changed_replacement_objects.contains(&obj_id),
             "Object transitioning from Objects->Replacement schema should NOT use CREATE REPLACEMENT"
         );
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn test_forced_replacement_schema_routes_to_changed_replacement() {
+        // Forcing an *unchanged* replacement schema (stage --redeploy-schema)
+        // redeploys its MV through the CREATE REPLACEMENT path
+        // (changed_replacement_objects), even though the hash is identical.
+        let obj_id = ObjectId::new(
+            "db".to_string(),
+            "analytics".to_string(),
+            "my_mv".to_string(),
+        );
+
+        // Identical old/new snapshot: nothing changed; schema is Replacement.
+        let snapshot = DeploymentSnapshot {
+            objects: BTreeMap::from([(obj_id.clone(), "hash".to_string())]),
+            schemas: BTreeMap::from([(
+                SchemaQualifier::new("db".to_string(), "analytics".to_string()),
+                DeploymentKind::Replacement,
+            )]),
+        };
+
+        let project = build_project(
+            "db",
+            "analytics",
+            vec![(
+                obj_id.clone(),
+                parse_materialized_view("CREATE MATERIALIZED VIEW my_mv IN CLUSTER c1 AS SELECT 1"),
+            )],
+            true,
+        );
+
+        // Without forcing, an unchanged schema is a no-op.
+        let unforced = ChangeSet::from_deployment_snapshot_comparison(
+            &snapshot,
+            &snapshot,
+            &project,
+            &BTreeSet::new(),
+        );
+        assert!(
+            unforced.is_empty(),
+            "unchanged replacement schema should be a no-op"
+        );
+
+        // Forcing the schema redeploys the MV via CREATE REPLACEMENT.
+        let forced = BTreeSet::from([SchemaQualifier::new(
+            "db".to_string(),
+            "analytics".to_string(),
+        )]);
+        let changeset =
+            ChangeSet::from_deployment_snapshot_comparison(&snapshot, &snapshot, &project, &forced);
+        assert!(changeset.objects_to_deploy.contains(&obj_id));
+        assert!(
+            changeset.changed_replacement_objects.contains(&obj_id),
+            "forced unchanged replacement MV should redeploy via CREATE REPLACEMENT"
+        );
+        assert!(!changeset.new_replacement_objects.contains(&obj_id));
     }
 
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
@@ -1255,8 +1476,12 @@ mod tests {
             true,
         );
 
-        let changeset =
-            ChangeSet::from_deployment_snapshot_comparison(&old_snapshot, &new_snapshot, &project);
+        let changeset = ChangeSet::from_deployment_snapshot_comparison(
+            &old_snapshot,
+            &new_snapshot,
+            &project,
+            &BTreeSet::new(),
+        );
 
         // Object should be in changed_replacement_objects (CREATE REPLACEMENT)
         assert!(

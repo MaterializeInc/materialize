@@ -1,0 +1,256 @@
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on July 6, 2026 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/show_create
+#
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+statement ok
+SET experimental_enable_unique_without_index_constraints = true
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE c (
+  a INT NOT NULL,
+  b INT NULL,
+  INDEX c_a_b_idx (a ASC, b ASC),
+  UNIQUE WITHOUT INDEX (a, b),
+  CONSTRAINT unique_a_partial UNIQUE WITHOUT INDEX (a) WHERE b > 0,
+  FAMILY fam_0_a_rowid (a, rowid),
+  FAMILY fam_1_b (b)
+)
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+COMMENT ON TABLE c IS 'table'
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+COMMENT ON COLUMN c.a IS 'column'
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+COMMENT ON INDEX c_a_b_idx IS 'index'
+
+statement ok
+CREATE TABLE d (d INT PRIMARY KEY)
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT colnames
+SHOW CREATE c
+----
+table_name  create_statement
+c           CREATE TABLE public.c (
+              a INT8 NOT NULL,
+              b INT8 NULL,
+              rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
+              CONSTRAINT c_pkey PRIMARY KEY (rowid ASC),
+              INDEX c_a_b_idx (a ASC, b ASC),
+              FAMILY fam_0_a_rowid (a, rowid),
+              FAMILY fam_1_b (b),
+              CONSTRAINT unique_a_b UNIQUE WITHOUT INDEX (a, b),
+              CONSTRAINT unique_a_partial UNIQUE WITHOUT INDEX (a) WHERE b > 0:::INT8
+            );
+            COMMENT ON TABLE public.c IS 'table';
+            COMMENT ON COLUMN public.c.a IS 'column';
+            COMMENT ON INDEX public.c@c_a_b_idx IS 'index'
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE c ADD CONSTRAINT check_b CHECK (b IN (1, 2, 3)) NOT VALID;
+ALTER TABLE c ADD CONSTRAINT fk_a FOREIGN KEY (a) REFERENCES d (d) NOT VALID;
+ALTER TABLE c ADD CONSTRAINT unique_a UNIQUE (a);
+ALTER TABLE c ADD CONSTRAINT unique_b UNIQUE WITHOUT INDEX (b) NOT VALID;
+ALTER TABLE c ADD CONSTRAINT unique_b_partial UNIQUE WITHOUT INDEX (b) WHERE a > 0 NOT VALID;
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SHOW CREATE c
+----
+c  CREATE TABLE public.c (
+     a INT8 NOT NULL,
+     b INT8 NULL,
+     rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
+     CONSTRAINT c_pkey PRIMARY KEY (rowid ASC),
+     CONSTRAINT fk_a FOREIGN KEY (a) REFERENCES public.d(d) NOT VALID,
+     INDEX c_a_b_idx (a ASC, b ASC),
+     UNIQUE INDEX unique_a (a ASC),
+     FAMILY fam_0_a_rowid (a, rowid),
+     FAMILY fam_1_b (b),
+     CONSTRAINT check_b CHECK (b IN (1:::INT8, 2:::INT8, 3:::INT8)) NOT VALID,
+     CONSTRAINT unique_a_b UNIQUE WITHOUT INDEX (a, b),
+     CONSTRAINT unique_a_partial UNIQUE WITHOUT INDEX (a) WHERE b > 0:::INT8,
+     CONSTRAINT unique_b UNIQUE WITHOUT INDEX (b) NOT VALID,
+     CONSTRAINT unique_b_partial UNIQUE WITHOUT INDEX (b) WHERE a > 0:::INT8 NOT VALID
+   );
+   COMMENT ON TABLE public.c IS 'table';
+   COMMENT ON COLUMN public.c.a IS 'column';
+   COMMENT ON INDEX public.c@c_a_b_idx IS 'index'
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE c VALIDATE CONSTRAINT check_b;
+ALTER TABLE c VALIDATE CONSTRAINT fk_a;
+ALTER TABLE c VALIDATE CONSTRAINT unique_a;
+ALTER TABLE c VALIDATE CONSTRAINT unique_b;
+ALTER TABLE c VALIDATE CONSTRAINT unique_a_b;
+ALTER TABLE c VALIDATE CONSTRAINT unique_b_partial;
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SHOW CREATE c
+----
+c  CREATE TABLE public.c (
+     a INT8 NOT NULL,
+     b INT8 NULL,
+     rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
+     CONSTRAINT c_pkey PRIMARY KEY (rowid ASC),
+     CONSTRAINT fk_a FOREIGN KEY (a) REFERENCES public.d(d),
+     INDEX c_a_b_idx (a ASC, b ASC),
+     UNIQUE INDEX unique_a (a ASC),
+     FAMILY fam_0_a_rowid (a, rowid),
+     FAMILY fam_1_b (b),
+     CONSTRAINT check_b CHECK (b IN (1:::INT8, 2:::INT8, 3:::INT8)),
+     CONSTRAINT unique_a_b UNIQUE WITHOUT INDEX (a, b),
+     CONSTRAINT unique_a_partial UNIQUE WITHOUT INDEX (a) WHERE b > 0:::INT8,
+     CONSTRAINT unique_b UNIQUE WITHOUT INDEX (b),
+     CONSTRAINT unique_b_partial UNIQUE WITHOUT INDEX (b) WHERE a > 0:::INT8
+   );
+   COMMENT ON TABLE public.c IS 'table';
+   COMMENT ON COLUMN public.c.a IS 'column';
+   COMMENT ON INDEX public.c@c_a_b_idx IS 'index'
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SHOW CREATE c WITH REDACT
+----
+c  CREATE TABLE public.c (
+     a INT8 NOT NULL,
+     b INT8 NULL,
+     rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
+     CONSTRAINT c_pkey PRIMARY KEY (rowid ASC),
+     CONSTRAINT fk_a FOREIGN KEY (a) REFERENCES public.d(d),
+     INDEX c_a_b_idx (a ASC, b ASC),
+     UNIQUE INDEX unique_a (a ASC),
+     FAMILY fam_0_a_rowid (a, rowid),
+     FAMILY fam_1_b (b),
+     CONSTRAINT check_b CHECK (b IN (‹×›:::INT8, ‹×›:::INT8, ‹×›:::INT8)),
+     CONSTRAINT unique_a_b UNIQUE WITHOUT INDEX (a, b),
+     CONSTRAINT unique_a_partial UNIQUE WITHOUT INDEX (a) WHERE b > ‹×›:::INT8,
+     CONSTRAINT unique_b UNIQUE WITHOUT INDEX (b),
+     CONSTRAINT unique_b_partial UNIQUE WITHOUT INDEX (b) WHERE a > ‹×›:::INT8
+   );
+   COMMENT ON TABLE public.c IS 'table';
+   COMMENT ON COLUMN public.c.a IS 'column';
+   COMMENT ON INDEX public.c@c_a_b_idx IS 'index'
+
+subtest alter_column_type_not_break_show_create
+
+statement ok
+SET enable_experimental_alter_column_type_general = true;
+
+statement ok
+CREATE TABLE t (c INT);
+
+statement ok
+COMMENT ON COLUMN t.c IS 'first comment';
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT create_statement FROM [SHOW CREATE TABLE t];
+----
+CREATE TABLE public.t (
+  c INT8 NULL,
+  rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
+  CONSTRAINT t_pkey PRIMARY KEY (rowid ASC)
+);
+COMMENT ON COLUMN public.t.c IS 'first comment'
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE t ALTER COLUMN c TYPE character varying;
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT create_statement FROM [SHOW CREATE TABLE t];
+----
+CREATE TABLE public.t (
+  c VARCHAR NULL,
+  rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
+  CONSTRAINT t_pkey PRIMARY KEY (rowid ASC)
+);
+COMMENT ON COLUMN public.t.c IS 'first comment'
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT create_statement FROM [SHOW CREATE TABLE t WITH REDACT];
+----
+CREATE TABLE public.t (
+  c VARCHAR NULL,
+  rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
+  CONSTRAINT t_pkey PRIMARY KEY (rowid ASC)
+);
+COMMENT ON COLUMN public.t.c IS 'first comment'
+
+
+statement ok
+CREATE TABLE t1 (
+  k INT PRIMARY KEY,
+  a INT UNIQUE,
+  b STRING,
+  INDEX (a, b)
+)
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SHOW CREATE INDEXES FROM t1
+----
+t1_pkey     CREATE UNIQUE INDEX t1_pkey ON public.t1 (k ASC)
+t1_a_key    CREATE UNIQUE INDEX t1_a_key ON public.t1 (a ASC)
+t1_a_b_idx  CREATE INDEX t1_a_b_idx ON public.t1 (a ASC, b ASC)
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SHOW CREATE SECONDARY INDEXES FROM t1
+----
+t1_a_key    CREATE UNIQUE INDEX t1_a_key ON public.t1 (a ASC)
+t1_a_b_idx  CREATE INDEX t1_a_b_idx ON public.t1 (a ASC, b ASC)
+
+statement error Expected end of statement, found INDEXES
+SHOW CREATE INDEXES FROM nonexistent
+
+statement error Expected end of statement, found identifier "secondary"
+SHOW CREATE SECONDARY INDEXES FROM nonexistent

@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -76,6 +77,9 @@ pub struct StatementBeganExecutionRecord {
     pub transaction_id: TransactionId,
     pub transient_index_id: Option<GlobalId>,
     pub mz_version: String,
+    /// The kind of statement being executed, if known. Used to redact
+    /// `error_message` for kinds that can carry secret material.
+    pub kind: Option<StatementKind>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -226,6 +230,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             | ExecuteResponse::CreatedClusterReplica
             | ExecuteResponse::CreatedIndex
             | ExecuteResponse::CreatedIntrospectionSubscribe
+            | ExecuteResponse::CreatedMetricSink
             | ExecuteResponse::CreatedSecret
             | ExecuteResponse::CreatedSink
             | ExecuteResponse::CreatedSource
@@ -280,7 +285,10 @@ pub enum PreparedStatementLoggingInfo {
     /// The statement has already been logged; we don't need to log it
     /// again if a future execution hits the sampling rate; we merely
     /// need to reference the corresponding UUID.
-    AlreadyLogged { uuid: Uuid },
+    AlreadyLogged {
+        uuid: Uuid,
+        kind: Option<StatementKind>,
+    },
     /// The statement has not yet been logged; if a future execution
     /// hits the sampling rate, we need to log it at that point.
     StillToLog {
@@ -307,6 +315,15 @@ pub enum PreparedStatementLoggingInfo {
 }
 
 impl PreparedStatementLoggingInfo {
+    /// The kind of the prepared statement, if known. Available regardless of
+    /// whether the statement has already been logged.
+    pub fn kind(&self) -> Option<StatementKind> {
+        match self {
+            PreparedStatementLoggingInfo::StillToLog { kind, .. } => *kind,
+            PreparedStatementLoggingInfo::AlreadyLogged { kind, .. } => *kind,
+        }
+    }
+
     /// Constructor for the [`PreparedStatementLoggingInfo::StillToLog`] variant that ensures SQL
     /// statements are properly redacted.
     pub fn still_to_log<A: AstInfo>(
@@ -319,17 +336,12 @@ impl PreparedStatementLoggingInfo {
     ) -> Self {
         let kind = stmt.map(StatementKind::from);
         let sql = match kind {
-            // Always redact SQL statements that may contain sensitive information.
-            // CREATE SECRET and ALTER SECRET statements can contain secret values, so we redact them.
-            // INSERT, UPDATE, and EXECUTE statements can include large amounts of user data, so we redact them for both
-            // data privacy and to avoid logging excessive data.
-            Some(
-                StatementKind::CreateSecret
-                | StatementKind::AlterSecret
-                | StatementKind::Insert
-                | StatementKind::Update
-                | StatementKind::Execute,
-            ) => stmt.map(|s| s.to_ast_string_redacted()).unwrap_or_default(),
+            // Redact the SQL text of statements that can carry sensitive material:
+            // secret values (`CREATE`/`ALTER SECRET`), or bulk/PII user data
+            // (`INSERT`/`UPDATE`/`EXECUTE`). See `StatementKind::is_sensitive`.
+            Some(kind) if kind.is_sensitive() => {
+                stmt.map(|s| s.to_ast_string_redacted()).unwrap_or_default()
+            }
             _ => raw_sql,
         };
 
@@ -470,7 +482,8 @@ impl StatementLoggingFrontend {
     ///
     /// This function processes prepared statement logging info and builds the event rows.
     /// It does NOT do throttling - that is handled externally by the caller in `begin_statement_execution`.
-    /// It DOES mutate the logging info to mark the statement as already logged.
+    /// This is a read-only operation that does not mutate
+    /// the `PreparedStatementLoggingInfo` metadata.
     ///
     /// # Arguments
     /// * `session` - The session executing the statement
@@ -483,14 +496,13 @@ impl StatementLoggingFrontend {
     /// - `Uuid`: The UUID of the prepared statement.
     fn get_prepared_statement_info(
         &self,
-        session: &mut Session,
+        session: &Session,
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
     ) -> (Option<PreparedStatementEvent>, Uuid) {
-        let logging_ref = session.qcell_rw(&*logging);
-        let mut prepared_statement_event = None;
+        let logging_ref = session.qcell_ro(&*logging);
 
-        let ps_uuid = match logging_ref {
-            PreparedStatementLoggingInfo::AlreadyLogged { uuid } => *uuid,
+        match logging_ref {
+            PreparedStatementLoggingInfo::AlreadyLogged { uuid, .. } => (None, *uuid),
             PreparedStatementLoggingInfo::StillToLog {
                 sql,
                 redacted_sql,
@@ -506,18 +518,13 @@ impl StatementLoggingFrontend {
                     "accounting for logging should be done in `begin_statement_execution`"
                 );
                 let uuid = epoch_to_uuid_v7(prepared_at);
-                let sql = std::mem::take(sql);
-                let redacted_sql = std::mem::take(redacted_sql);
                 let sql_hash: [u8; 32] = Sha256::digest(sql.as_bytes()).into();
-
-                // Copy session_id before mutating logging_ref
-                let sid = *session_id;
 
                 let record = StatementPreparedRecord {
                     id: uuid,
                     sql_hash,
-                    name: std::mem::take(name),
-                    session_id: sid,
+                    name: name.clone(),
+                    session_id: *session_id,
                     prepared_at: *prepared_at,
                     kind: *kind,
                 };
@@ -526,6 +533,10 @@ impl StatementLoggingFrontend {
                 let mut mpsh_row = Row::default();
                 let mut mpsh_packer = mpsh_row.packer();
                 pack_statement_prepared_update(&record, &mut mpsh_packer);
+
+                // Read throttled_count from shared state
+                let throttled_count = self.throttling_state.get_throttled_count();
+                mpsh_packer.push(Datum::UInt64(CastFrom::cast_from(throttled_count)));
 
                 let sql_row = Row::pack([
                     Datum::TimestampTz(
@@ -539,23 +550,35 @@ impl StatementLoggingFrontend {
                     Datum::String(redacted_sql.as_str()),
                 ]);
 
-                // Read throttled_count from shared state
-                let throttled_count = self.throttling_state.get_throttled_count();
-
-                mpsh_packer.push(Datum::UInt64(CastFrom::cast_from(throttled_count)));
-
-                prepared_statement_event = Some(PreparedStatementEvent {
+                let prepared_statement_event = PreparedStatementEvent {
                     prepared_statement: mpsh_row,
                     sql_text: sql_row,
-                    session_id: sid,
-                });
+                    session_id: *session_id,
+                };
 
-                *logging_ref = PreparedStatementLoggingInfo::AlreadyLogged { uuid };
-                uuid
+                (Some(prepared_statement_event), uuid)
             }
-        };
+        }
+    }
 
-        (prepared_statement_event, ps_uuid)
+    /// Marks a prepared statement as "already logged", so future executions only reference its
+    /// UUID rather than logging it again.
+    ///
+    /// This must only be called once we are committed to logging the prepared statement, i.e.
+    /// after the sampling and throttling checks in [`Self::begin_statement_execution`] have
+    /// passed. Mirrors `Coordinator::record_prepared_statement_as_logged` used by the old peek
+    /// sequencing.
+    fn record_prepared_statement_as_logged(
+        &self,
+        uuid: Uuid,
+        session: &mut Session,
+        logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
+    ) {
+        let logging = session.qcell_rw(&*logging);
+        if let PreparedStatementLoggingInfo::StillToLog { kind, .. } = logging {
+            let kind = *kind;
+            *logging = PreparedStatementLoggingInfo::AlreadyLogged { uuid, kind };
+        }
     }
 
     /// Begin statement execution logging from the frontend. (Corresponds to
@@ -646,7 +669,12 @@ impl StatementLoggingFrontend {
             return None;
         }
 
-        // Get prepared statement info (this also marks it as logged)
+        // Capture the statement kind for the began-execution record, before
+        // `record_prepared_statement_as_logged` transitions the logging info to
+        // `AlreadyLogged`.
+        let kind = session.qcell_ro(logging).kind();
+
+        // Get prepared statement info.
         let (prepared_statement_event, ps_uuid) =
             self.get_prepared_statement_info(session, logging);
 
@@ -668,6 +696,7 @@ impl StatementLoggingFrontend {
             session,
             began_at,
             self.build_info_human_version.clone(),
+            kind,
         );
 
         // Build rows to calculate cost for throttling
@@ -704,6 +733,10 @@ impl StatementLoggingFrontend {
             self.throttling_state.increment_throttled_count();
             return None;
         }
+
+        // Throttling passed, so we are now committed to mark the
+        // prepared statement as logged.
+        self.record_prepared_statement_as_logged(ps_uuid, session, logging);
 
         // When we successfully log the first instance of a prepared statement
         // (i.e., it is not throttled), reset the throttled count for future tracking.
@@ -756,15 +789,32 @@ pub(crate) fn should_sample_statement(
     }
 }
 
-/// Helper function to serialize statement parameters for logging.
+/// Serializes statement parameters for logging as UTF-8 strings.
+///
+/// Non-UTF-8 wire bytes are lossily replaced with `U+FFFD`.
 fn serialize_params(params: &Params) -> Vec<Option<String>> {
     std::iter::zip(params.execute_types.iter(), params.datums.iter())
-        .map(|(r#type, datum)| {
+        .enumerate()
+        .map(|(index, (r#type, datum))| {
             mz_pgrepr::Value::from_datum(datum, r#type).map(|val| {
                 let mut buf = BytesMut::new();
-                val.encode_text(&mut buf);
-                String::from_utf8(Into::<Vec<u8>>::into(buf))
-                    .expect("Serialization shouldn't produce non-UTF-8 strings.")
+                val.encode_text(&mut buf, mz_pgrepr::TextEncodeSettings::STABLE);
+                // NOTE: `encode_text` can emit non-UTF-8 bytes for `"char"`
+                // (`PgLegacyChar`) params, which write their byte verbatim.
+                // Log the raw bytes so operators can recover what came in.
+                match String::from_utf8_lossy(&buf) {
+                    Cow::Borrowed(s) => s.to_owned(),
+                    Cow::Owned(s) => {
+                        let bytes_hex: String = buf.iter().map(|b| format!("{:02x}", b)).collect();
+                        tracing::warn!(
+                            index,
+                            ty = ?r#type,
+                            bytes_hex = %bytes_hex,
+                            "non-UTF-8 bytes in statement-logging param, replaced with U+FFFD"
+                        );
+                        s
+                    }
+                }
             })
         })
         .collect()
@@ -779,6 +829,7 @@ pub(crate) fn create_began_execution_record(
     session: &Session,
     began_at: EpochMillis,
     build_info_version: String,
+    kind: Option<StatementKind>,
 ) -> StatementBeganExecutionRecord {
     let params = serialize_params(params);
     StatementBeganExecutionRecord {
@@ -802,6 +853,7 @@ pub(crate) fn create_began_execution_record(
                 9999999
             }),
         mz_version: build_info_version,
+        kind,
         // These are not known yet; we'll fill them in later.
         cluster_id: None,
         cluster_name: None,
@@ -875,6 +927,8 @@ pub(crate) fn pack_statement_execution_inner(
         transaction_id,
         transient_index_id,
         mz_version,
+        // Not packed into a column; only used to redact `error_message`.
+        kind: _,
     } = record;
 
     let cluster = cluster_id.map(|id| id.to_string());
@@ -1016,5 +1070,41 @@ impl WatchSetCreation {
             storage_ids,
             compute_ids,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::{Datum, Row, SqlScalarType};
+    use mz_sql::plan::Params;
+
+    use super::serialize_params;
+
+    /// A `"char"` param whose byte is `>= 0x80` used to panic
+    /// `String::from_utf8` on the statement-logging path. It should now
+    /// round-trip through `from_utf8_lossy` and emit the replacement
+    /// character instead.
+    #[mz_ore::test]
+    fn serialize_params_replaces_non_utf8_char() {
+        let params = Params {
+            datums: Row::pack_slice(&[Datum::UInt8(0xFF)]),
+            execute_types: vec![SqlScalarType::PgLegacyChar],
+            expected_types: vec![SqlScalarType::PgLegacyChar],
+        };
+        let out = serialize_params(&params);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].as_deref(), Some("\u{FFFD}"));
+    }
+
+    /// An ASCII `"char"` param must render as its ASCII character, unchanged.
+    #[mz_ore::test]
+    fn serialize_params_ascii_char_unchanged() {
+        let params = Params {
+            datums: Row::pack_slice(&[Datum::UInt8(b'A')]),
+            execute_types: vec![SqlScalarType::PgLegacyChar],
+            expected_types: vec![SqlScalarType::PgLegacyChar],
+        };
+        let out = serialize_params(&params);
+        assert_eq!(out[0].as_deref(), Some("A"));
     }
 }

@@ -14,11 +14,11 @@ use crate::plan::interpret::{PhysicallyMonotonic, SingleTimeMonotonic};
 use crate::plan::reduce::{HierarchicalPlan, MonotonicPlan};
 use crate::plan::top_k::{MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan};
 use crate::plan::transform::{BottomUpTransform, TransformConfig};
-use crate::plan::{Plan, PlanNode, ReducePlan};
+use crate::plan::{LirRelationExpr, LirRelationNode, ReducePlan};
 
 /// A transformation that takes the result of single-time physical monotonicity
 /// analysis and refines, as appropriate, the setting of the `must_consolidate`
-/// flag in monotonic `Plan` nodes with forced consolidation.
+/// flag in monotonic `LirRelationExpr` nodes with forced consolidation.
 #[derive(Debug)]
 pub struct RelaxMustConsolidate;
 
@@ -35,12 +35,12 @@ impl BottomUpTransform for RelaxMustConsolidate {
         SingleTimeMonotonic::new(&config.monotonic_ids)
     }
 
-    fn action(plan: &mut Plan, _plan_info: &Self::Info, input_infos: &[Self::Info]) {
-        // Look at `input_infos` and type of `Plan` node and refine the `must_consolidate` flag.
+    fn action(plan: &mut LirRelationExpr, _plan_info: &Self::Info, input_infos: &[Self::Info]) {
+        // Look at `input_infos` and type of `LirRelationExpr` node and refine the `must_consolidate` flag.
         // Note that the LIR nodes we care about have a single input.
         match (&mut plan.node, input_infos) {
             (
-                PlanNode::Reduce {
+                LirRelationNode::Reduce {
                     plan:
                         ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(MonotonicPlan {
                             must_consolidate,
@@ -48,14 +48,14 @@ impl BottomUpTransform for RelaxMustConsolidate {
                         })),
                     ..
                 }
-                | PlanNode::TopK {
+                | LirRelationNode::TopK {
                     top_k_plan:
                         TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                             must_consolidate, ..
                         }),
                     ..
                 }
-                | PlanNode::TopK {
+                | LirRelationNode::TopK {
                     top_k_plan:
                         TopKPlan::MonotonicTopK(MonotonicTopKPlan {
                             must_consolidate, ..

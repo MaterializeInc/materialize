@@ -115,6 +115,73 @@ SELECT 'hi'::text = ANY(ARRAY[]::text[])
 ----
 false
 
+# A NULL array yields NULL, distinct from the empty-array case above.
+query B
+SELECT 33 = ANY(NULL::int[])
+----
+NULL
+
+query B
+SELECT 33 = ALL(NULL::int[])
+----
+NULL
+
+# An empty array yields the empty-set answer, not NULL.
+query B
+SELECT 33 = ALL(ARRAY[]::int[])
+----
+true
+
+# NULL elements propagate through the comparison per three-valued logic.
+query B
+SELECT 33 = ANY(ARRAY[NULL]::int[])
+----
+NULL
+
+query B
+SELECT 33 = ANY(ARRAY[33, NULL])
+----
+true
+
+query B
+SELECT 33 = ANY(ARRAY[1, NULL])
+----
+NULL
+
+query B
+SELECT 33 = ALL(ARRAY[33, NULL])
+----
+NULL
+
+query B
+SELECT 33 = ALL(ARRAY[1, NULL])
+----
+false
+
+# The NULL-array rule is a property of the quantifier, not of `=`.
+query B
+SELECT 33 < ANY(NULL::int[])
+----
+NULL
+
+query B
+SELECT 33 < ALL(NULL::int[])
+----
+NULL
+
+# The cases above all use a constant array, where the NULL guard folds away
+# before execution. Reading the array from a relation instead keeps the guard
+# in the plan, so this exercises the lowered form.
+query IBB
+SELECT i, 1 = ANY(a), 1 = ALL(a)
+FROM (VALUES (1, NULL::int[]), (2, ARRAY[]::int[]), (3, ARRAY[1]), (4, ARRAY[NULL::int])) v (i, a)
+ORDER BY i
+----
+1  NULL  NULL
+2  false  true
+3  true  true
+4  NULL  NULL
+
 query error ARRAY types integer and boolean cannot be matched
 SELECT 123.4 = ANY(ARRAY[1, true, 'hi'::text])
 
@@ -584,6 +651,21 @@ SELECT array_remove(ARRAY[1,1,1], 1)
 
 query error removing elements from multidimensional arrays is not supported
 SELECT array_remove(ARRAY[[1]], 1)
+
+query error integer list\[\] not yet supported
+SELECT array_remove(NULL, LIST[1])
+
+query error map\[text=>integer\]\[\] not yet supported
+SELECT array_remove(NULL, '{a=>1}'::map[text=>int4])
+
+statement ok
+CREATE TABLE t0 (c3 int4 list)
+
+query error integer list\[\] not yet supported
+SELECT array_remove('[2020-01-01,2021-01-01)', t0.c3) AS col0 FROM t0
+
+statement ok
+DROP TABLE t0
 
 # array_cat
 
@@ -1061,6 +1143,22 @@ SELECT array_position(ARRAY['sun','mon','tue','wed','thu','fri','sat','mon'], nu
 ----
 NULL
 
+# Searching for NULL finds the first NULL element (IS NOT DISTINCT FROM semantics).
+query I
+SELECT array_position(ARRAY['sun','mon',NULL,'fri'], NULL)
+----
+3
+
+query I
+SELECT array_position(ARRAY[NULL, 'sun', NULL]::text[], NULL)
+----
+1
+
+query I
+SELECT array_position(ARRAY['sun', NULL, 'mon']::text[], NULL, 3)
+----
+NULL
+
 query I
 SELECT array_position(null::text[], 'abc')
 ----
@@ -1071,10 +1169,14 @@ SELECT array_position(null::text[], 'abc', null)
 ----
 NULL
 
-query I
+# Deliberately different from PostgreSQL, which returns NULL here: it validates
+# the initial position only after a fast path that fires when the search term is
+# NULL and the array holds no NULL element. PostgreSQL therefore errors for
+# `array_position(ARRAY['sun', NULL], null, null)` but not for the query below.
+# Rejecting a NULL initial position regardless of the array contents is the more
+# defensible behavior.
+query error initial position must not be null
 SELECT array_position(ARRAY['sun'], null, null)
-----
-NULL
 
 query error initial position must not be null
 SELECT array_position(ARRAY['sun','mon','tue','wed','thu','fri','sat','mon'], 'mon', null)
@@ -1137,18 +1239,11 @@ FROM (
         ('{{{a}},{{a}}}'),
         ('{{{a}},{{null}}}'),
         ('{}'),
-        ('{{},{}}'),
-        ('{{{}},{{}}}'),
-        ('{{{null}},{{null}}}'),
-        -- Can exceed max dims with empty array which consolidates down
-        ('{{{{{{{},{}}}}}}}')
+        ('{{{null}},{{null}}}')
     ) AS x (a)
 ) AS x (v);
 ----
 end
-{}	end
-{}	end
-{}	end
 {}	end
 {""}	1		end
 {'}	1	'	end
@@ -1171,7 +1266,7 @@ end
 {{c,d},{c,d},{c,d}}	3	2	c	end
 {{{NULL}},{{NULL}}}	2	1	1	end
 {{{b},{b}},{{b},{b}}}	2	2	1	b	end
-{{c,NULL},{NULL,d},{null,NULL}}	3	2	c	end
+{{c,NULL},{NULL,d},{"null",NULL}}	3	2	c	end
 {{{{b},{b}}},{{{b},{b}}},{{{b},{b}}}}	3	1	2	1	b	end
 
 # Test that whitespace produces same results
@@ -1281,7 +1376,7 @@ SELECT '{{a}'::int[];
 query error invalid input syntax for type array: Junk after closing right brace\.: "\{a\}\}"
 SELECT '{a}}'::int[];
 
-query error invalid input syntax for type array: Unexpected end of input\.: "\{\{\}"
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{\}"
 SELECT '{{}'::int[];
 
 query error invalid input syntax for type array: Junk after closing right brace\.: "\{\}\}"
@@ -1293,7 +1388,7 @@ SELECT '{  {a}'::int[];
 query error invalid input syntax for type array: Junk after closing right brace\.: "\{  a\}\}"
 SELECT '{  a}}'::int[];
 
-query error invalid input syntax for type array: Unexpected end of input\.: "\{\{  \}"
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{  \}"
 SELECT '{{  }'::int[];
 
 query error invalid input syntax for type array: Junk after closing right brace\.: "\{\}  \}"
@@ -1310,7 +1405,7 @@ SELECT '{{1}{1}}'::text[];
 query error invalid input syntax for type array: Junk after closing right brace\.: "\{\}\{\}"
 SELECT '{}{}'::text[];
 
-query error invalid input syntax for type array: Unexpected "\{" character\.: "\{\{\}\{\}\}"
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{\}\{\}\}"
 SELECT '{{}{}}'::text[];
 
 #
@@ -1332,16 +1427,16 @@ SELECT '{{1},{{2}}}'::text[];
 query error invalid input syntax for type array: Unexpected array element\.: "\{\{\{1\}\},\{2\}\}"
 SELECT '{{{1}},{2}}'::text[];
 
-query error invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{\},\{\{\}\}\}"
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{\},\{\{\}\}\}"
 SELECT '{{},{{}}}'::text[];
 
-query error invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{\{\}\},\{\}\}"
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{\{\}\},\{\}\}"
 SELECT '{{{}},{}}'::text[];
 
-query error invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{1\},\{\}\}"
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{1\},\{\}\}"
 SELECT '{{1},{}}'::text[];
 
-query error invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{\},\{1\}\}"
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{\},\{1\}\}"
 SELECT '{{},{1}}'::text[];
 
 query error invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{1,2\},\{1\}\}"
@@ -1355,8 +1450,16 @@ SELECT '{null, {1}}'::text[];
 query error invalid input syntax for type array: Unexpected array element\.: "\{\{1\}, null\}"
 SELECT '{{1}, null}'::text[];
 
-query error invalid input syntax for type array: Multidimensional arrays must have sub\-arrays with matching dimensions\.: "\{\{\{null\}\},\{\{\}\}\}"
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{\{null\}\},\{\{\}\}\}"
 SELECT '{{{null}},{{}}}'::text[];
+
+#
+# Empty dimensions are only allowed in one-dimensional arrays
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{\}\}"
+SELECT '{{}}'::text[];
+
+query error invalid input syntax for type array: Unexpected "\}" character\.: "\{\{\},\{\}\}"
+SELECT '{{},{}}'::text[];
 
 # Exceeded dimensions
 query error number of array dimensions \(7\) exceeds the maximum allowed \(6\)
@@ -1403,7 +1506,7 @@ statement ok
 CREATE TABLE t5 (row_index int, multi_dim_text_array_empty TEXT[][], multi_dim_text_array_two_elem TEXT[][]);
 
 statement ok
-INSERT INTO t5 SELECT 0, '{{}}'::TEXT[][], '{{a, b}, {a, A}}'::TEXT[][];
+INSERT INTO t5 SELECT 0, '{}'::TEXT[][], '{{a, b}, {a, A}}'::TEXT[][];
 
 query T
 SELECT ((multi_dim_text_array_empty) @> (multi_dim_text_array_two_elem)) FROM t5;
@@ -1473,3 +1576,16 @@ SELECT ARRAY[NULL::BIGINT[], ARRAY[]::BIGINT[], NULL::BIGINT[]];
 
 query error number of array elements \(3\) does not match declared cardinality \(2\)
 SELECT ARRAY[ARRAY[1, 2], ARRAY[3, 4, 5], ARRAY[6]];
+
+# Regression test for SQL-466: string elements matching "NULL" in any case
+# must be quoted in text output, so that they round-trip.
+
+query TT
+SELECT ARRAY['null']::text, (ARRAY['null']::text)::text[] = ARRAY['null'];
+----
+{"null"}  true
+
+query T
+SELECT ARRAY['null', 'NuLl', NULL, 'nullish']::text;
+----
+{"null","NuLl",NULL,nullish}

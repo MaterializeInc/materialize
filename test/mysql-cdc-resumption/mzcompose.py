@@ -56,11 +56,11 @@ def workflow_default(c: Composition) -> None:
         if name == "default":
             return
 
-        # TODO(def-): Reenable when database-issues#7775 is fixed
+        # TODO(def-): Reenable when https://linear.app/materializeinc/issue/SS-312 is fixed
         if name in ("bin-log-manipulations", "short-bin-log-retention"):
             return
 
-        # TODO: Reenable when database-issues#7683 is fixed
+        # TODO: Reenable when SS-405 is fixed
         if name == "backup-restore":
             return
 
@@ -617,7 +617,7 @@ def backup_restore_mysql(c: Composition) -> None:
 
     run_testdrive_files(c, "verify-mysql-select.td")
 
-    # TODO: database-issues#7683: one of the two following commands must succeed
+    # TODO: SS-405: one of the two following commands must succeed
     # run_testdrive_files(c, "verify-rows-after-restore-t1.td")
     # run_testdrive_files(c, "verify-source-failed.td")
 

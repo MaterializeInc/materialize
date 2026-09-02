@@ -299,6 +299,131 @@ SELECT variance(a), var_samp(a), var_pop(a), stddev(a), stddev_samp(a), stddev_p
 ----
 0.9166666666666666  0.9166666666666666  0.6875  0.9574271077563381  0.9574271077563381  0.82915619758885
 
+# Regression tests for SQL-362: variance and stddev with DISTINCT returned
+# wrong results because DISTINCT was pushed into the decomposed sum(x*x),
+# deduplicating on x*x instead of x, which collapses values that differ only
+# in sign, e.g. -2 and 2.
+
+statement ok
+CREATE TABLE t_distinct_variance (f float, n numeric, i int, si smallint, bi bigint, r real)
+
+statement ok
+INSERT INTO t_distinct_variance VALUES
+  (-2.0, -2.0, -2, -2, -2, -2.0),
+  (2.0, 2.0, 2, 2, 2, 2.0),
+  (2.0, 2.0, 2, 2, 2, 2.0)
+
+query RRRRRR
+SELECT variance(DISTINCT f), var_samp(DISTINCT f), var_pop(DISTINCT f), stddev(DISTINCT f), stddev_samp(DISTINCT f), stddev_pop(DISTINCT f) FROM t_distinct_variance
+----
+8  8  4  2.8284271247461903  2.8284271247461903  2
+
+query RRRRRR
+SELECT variance(DISTINCT n), var_samp(DISTINCT n), var_pop(DISTINCT n), stddev(DISTINCT n), stddev_samp(DISTINCT n), stddev_pop(DISTINCT n) FROM t_distinct_variance
+----
+8  8  4  2.82842712474619009760337744841939615714  2.82842712474619009760337744841939615714  2
+
+query RRRRRR
+SELECT variance(DISTINCT i), var_samp(DISTINCT i), var_pop(DISTINCT i), stddev(DISTINCT i), stddev_samp(DISTINCT i), stddev_pop(DISTINCT i) FROM t_distinct_variance
+----
+8  8  4  2.82842712474619009760337744841939615714  2.82842712474619009760337744841939615714  2
+
+query RRRR
+SELECT var_samp(DISTINCT si), var_pop(DISTINCT si), var_samp(DISTINCT bi), var_pop(DISTINCT bi) FROM t_distinct_variance
+----
+8  4  8  4
+
+query RR
+SELECT var_samp(DISTINCT r), stddev_pop(DISTINCT r) FROM t_distinct_variance
+----
+8  2
+
+# NULL inputs are ignored, also under DISTINCT.
+
+statement ok
+INSERT INTO t_distinct_variance VALUES (NULL, NULL, NULL, NULL, NULL, NULL)
+
+query RRRR
+SELECT var_samp(DISTINCT f), var_pop(DISTINCT f), var_samp(DISTINCT n), var_pop(DISTINCT n) FROM t_distinct_variance
+----
+8  4  8  4
+
+# A single distinct value has sample variance NULL and population variance 0.
+
+query RRRR
+SELECT var_samp(DISTINCT f), var_pop(DISTINCT f), stddev_samp(DISTINCT f), stddev_pop(DISTINCT f) FROM t_distinct_variance WHERE f > 0
+----
+NULL  0  NULL  0
+
+# Empty input and all-NULL input yield NULL.
+
+query RRRR
+SELECT var_samp(DISTINCT f), var_pop(DISTINCT f), stddev(DISTINCT f), stddev_pop(DISTINCT f) FROM t_distinct_variance WHERE f > 100
+----
+NULL  NULL  NULL  NULL
+
+query RRRR
+SELECT var_samp(DISTINCT f), var_pop(DISTINCT f), stddev(DISTINCT f), stddev_pop(DISTINCT f) FROM t_distinct_variance WHERE f IS NULL
+----
+NULL  NULL  NULL  NULL
+
+# DISTINCT combined with FILTER.
+
+query RR
+SELECT var_samp(DISTINCT f) FILTER (WHERE f > -3), var_pop(DISTINCT f) FILTER (WHERE f <> 2.0) FROM t_distinct_variance
+----
+8  0
+
+# DISTINCT with GROUP BY.
+
+query IR
+SELECT i2.g, var_pop(DISTINCT i2.x) FROM (VALUES (1, -2.0), (1, 2.0), (1, 2.0), (2, 3.0)) i2(g, x) GROUP BY i2.g ORDER BY i2.g
+----
+1  4
+2  0
+
+# Without DISTINCT, results are unchanged by the DISTINCT-aware expansion.
+
+query RRRR
+SELECT var_samp(f), var_pop(f), stddev_samp(f), stddev_pop(f) FROM t_distinct_variance
+----
+5.333333333333333  3.5555555555555554  2.309401076758503  1.8856180831641267
+
+# The exact reproduction from the issue.
+
+query RRRRRI
+SELECT
+  var_samp(DISTINCT x),
+  var_pop(DISTINCT x),
+  stddev_samp(DISTINCT x),
+  stddev_pop(DISTINCT x),
+  avg(DISTINCT x),
+  count(DISTINCT x)
+FROM (VALUES (-2.0), (2.0), (2.0)) AS t_repro(x)
+----
+8  4  2.82842712474619009760337744841939615714  2  0  2
+
+# Special float values under DISTINCT. NaN compares greater than any number,
+# so it lands in the non-negative branch of the sign-split sum of squares.
+
+query RR
+SELECT var_samp(DISTINCT x), var_pop(DISTINCT x) FROM (VALUES ('NaN'::float8), (1), (2)) t_nan(x)
+----
+NaN  NaN
+
+query RR
+SELECT var_samp(DISTINCT x), var_pop(DISTINCT x) FROM (VALUES ('-Infinity'::float8), (1), (2)) t_inf(x)
+----
+NaN  NaN
+
+query RR
+SELECT var_samp(DISTINCT x), var_pop(DISTINCT x) FROM (VALUES (0.0::float8), ('-0.0'::float8), (2)) t_zero(x)
+----
+2  1
+
+query error DISTINCT in window aggregates
+SELECT stddev(DISTINCT f) OVER () FROM t_distinct_variance
+
 # TODO(benesch): these filter tests are copied from cockroach/aggregate.slt;
 # remove them from here when we can run that file in its entirely.
 

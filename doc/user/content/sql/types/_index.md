@@ -8,6 +8,9 @@ menu:
     parent: sql
     weight: 110
 disable_list: true
+aliases:
+  - /self-managed/v25.2/sql/types/list/
+  - /self-managed/v25.2/sql/types/
 ---
 
 Materialize's type system consists of two classes of types:

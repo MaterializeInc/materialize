@@ -78,6 +78,7 @@ module "karpenter" {
   oidc_provider_arn       = module.eks.oidc_provider_arn
   cluster_oidc_issuer_url = module.eks.cluster_oidc_issuer_url
   node_selector           = local.base_node_labels
+  tags                    = var.tags
 
   depends_on = [
     module.eks,
@@ -284,6 +285,10 @@ module "operator" {
     module.eks,
     module.networking,
     module.nodepool_generic,
+    # The operator chart renders cert-manager Certificate/Issuer resources for
+    # the conversion webhook (install_v1_crd defaults to true), so cert-manager
+    # CRDs must be registered before the operator's helm_release applies.
+    module.cert_manager,
   ]
 }
 

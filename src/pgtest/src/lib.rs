@@ -43,6 +43,9 @@
 //! The default is `CMS` (code, message, severity). For example: `until
 //! err_field_typs=SC` would return the severity and code fields in any
 //! ErrorResponse message.
+//! - `parameter_status` names the parameters whose `ParameterStatus` messages
+//! are recorded. All others are skipped. For example `until
+//! parameter_status=application_name`.
 //!
 //! For example, to execute a simple prepared statement:
 //! ```pgtest
@@ -135,7 +138,12 @@ impl PgConn {
             Message::AuthenticationOk => {}
             _ => bail!("expected AuthenticationOk"),
         };
-        conn.until(vec!["ReadyForQuery"], vec!['C', 'S', 'M'], BTreeSet::new())?;
+        conn.until(
+            vec!["ReadyForQuery"],
+            vec!['C', 'S', 'M'],
+            BTreeSet::new(),
+            &BTreeSet::new(),
+        )?;
         Ok(conn)
     }
 
@@ -150,6 +158,7 @@ impl PgConn {
         until: Vec<&str>,
         err_field_typs: Vec<char>,
         ignore: BTreeSet<String>,
+        parameter_status: &BTreeSet<String>,
     ) -> anyhow::Result<Vec<String>> {
         let mut msgs = Vec::with_capacity(until.len());
         for expect in until {
@@ -296,7 +305,19 @@ impl PgConn {
                             parameters: body.parameters().collect().unwrap(),
                         })?,
                     ),
-                    Message::ParameterStatus(_) => continue,
+                    Message::ParameterStatus(body) => {
+                        let name = body.name()?;
+                        if !parameter_status.contains(name) {
+                            continue;
+                        }
+                        (
+                            "ParameterStatus",
+                            serde_json::to_string(&ParameterStatus {
+                                name: name.to_string(),
+                                value: body.value()?.to_string(),
+                            })?,
+                        )
+                    }
                     Message::NoData => ("NoData", "".to_string()),
                     Message::EmptyQueryResponse => ("EmptyQueryResponse", "".to_string()),
                     _ => ("UNKNOWN", format!("'{}'", ch)),
@@ -414,9 +435,10 @@ impl PgTest {
         until: Vec<&str>,
         err_field_typs: Vec<char>,
         ignore: BTreeSet<String>,
+        parameter_status: &BTreeSet<String>,
     ) -> anyhow::Result<Vec<String>> {
         let conn = self.get_conn(conn, options)?;
-        conn.until(until, err_field_typs, ignore)
+        conn.until(until, err_field_typs, ignore, parameter_status)
     }
 }
 
@@ -456,6 +478,12 @@ pub struct ParameterDescription {
 #[derive(Serialize)]
 pub struct CommandComplete {
     pub tag: String,
+}
+
+#[derive(Serialize)]
+pub struct ParameterStatus {
+    pub name: String,
+    pub value: String,
 }
 
 #[derive(Serialize)]
@@ -618,14 +646,26 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: String, user: String, timeo
                         ignore.insert(v);
                     }
                 }
+                let parameter_status: BTreeSet<String> = args
+                    .remove("parameter_status")
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
                 if !args.is_empty() {
                     panic!("extra until arguments: {:?}", args);
                 }
                 format!(
                     "{}\n",
-                    pgt.until(conn, options, lines.collect(), err_field_typs, ignore)
-                        .unwrap()
-                        .join("\n")
+                    pgt.until(
+                        conn,
+                        options,
+                        lines.collect(),
+                        err_field_typs,
+                        ignore,
+                        &parameter_status,
+                    )
+                    .unwrap()
+                    .join("\n")
                 )
             }
             _ => panic!("unknown directive {}", tc.input),

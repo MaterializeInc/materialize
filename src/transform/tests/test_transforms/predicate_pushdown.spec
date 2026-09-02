@@ -29,7 +29,7 @@ Source defined as t1
 
 
 # Pushing through Get, Distinct, Union, Project, Join
-apply pipeline=predicate_pushdown
+apply pipeline=PredicatePushdown
 Return
   Filter #0 = "a"
     Get l1
@@ -73,7 +73,7 @@ Return
 ## ------------
 
 # TODO: Push a literal constraint through a loop
-apply pipeline=predicate_pushdown
+apply pipeline=PredicatePushdown
 Return
   Filter (#0 = "foo")
     Get l0

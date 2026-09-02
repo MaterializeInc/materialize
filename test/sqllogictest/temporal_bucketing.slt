@@ -105,8 +105,8 @@ GROUP BY bucket;
 materialize.public.mv_rearm:
   Mfp
     project=(#0, #2)
-    filter=((mz_now() < timestamp_to_mz_timestamp((#1{m} + 1 day))))
     map=(1)
+    TemporalFilter: mz_now() < timestamp_to_mz_timestamp((#1{m} + 1 day))
     input_key=#0
     Reduce::Hierarchical
       aggr_funcs=[max]
@@ -209,12 +209,12 @@ materialize.public.mv_union_firing:
         temporal_bucketing_strategies=[TemporalBucketing, TemporalBucketing]
         Get::Collection materialize.public.events
           project=(#0)
-          filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))))
+          TemporalFilter: mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))
           raw=true
         Negate
           Get::Collection materialize.public.events
             project=(#0)
-            filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 90 days))))
+            TemporalFilter: mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 90 days))
             raw=true
 
 Target cluster: quickstart
@@ -257,7 +257,7 @@ materialize.public.mv_except_distinct_buckets_at_reduce:
               project=()
             Get::Collection materialize.public.events
               project=(#0)
-              filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))))
+              TemporalFilter: mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))
               raw=true
         Negate
           ArrangeBy
@@ -270,7 +270,7 @@ materialize.public.mv_except_distinct_buckets_at_reduce:
                 project=()
               Get::Collection materialize.public.events
                 project=(#0)
-                filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 90 days))))
+                TemporalFilter: mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 90 days))
                 raw=true
 
 Target cluster: quickstart

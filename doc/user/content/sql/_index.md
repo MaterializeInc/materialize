@@ -9,6 +9,30 @@ menu:
     weight: 100
 aliases:
   - /sql/alter-owner/
+  - /self-managed/v25.2/sql/
+  - /self-managed/v25.2/sql/alter-system-set/
+  - /self-managed/v25.2/sql/alter-system-reset/
+  - /self-managed/v25.2/sql/alter-swap/
+  - /self-managed/v25.2/sql/alter-role/
+  - /self-managed/v25.2/sql/alter-owner/
+  - /self-managed/v25.2/sql/alter-rename/
+  - /self-managed/v25.2/sql/create-materialized-view/
+  - /self-managed/v25.2/sql/create-cluster/
+  - /self-managed/v25.2/sql/create-connection/
+  - /self-managed/v25.2/sql/create-role/
+  - /self-managed/v25.2/sql/create-sink/
+  - /self-managed/v25.2/sql/create-sink/kafka/
+  - /self-managed/v25.2/sql/set/
+  - /self-managed/v25.2/sql/show/
+  - /self-managed/v25.2/sql/show-roles/
+  - /self-managed/v25.2/sql/appendix-cluster-sizes/
+  - /self-managed/v25.2/sql/system-clusters/
+  - /self-managed/v25.2/sql/system-catalog/
+  - /self-managed/v25.2/sql/system-catalog/mz_catalog/
+  - /self-managed/v25.2/sql/system-catalog/pg_catalog/
+  - /self-managed/v25.2/sql/system-catalog/mz_internal/
+  - /self-managed/v25.2/sql/system-catalog/mz_introspection/
+  - /self-managed/v25.2/sql/system-catalog/information_schema/
 ---
 
 ## Create/Alter/Drop Objects

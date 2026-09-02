@@ -6,6 +6,7 @@ disableKinds = ['taxonomy']
 
 [params]
 repo = "//github.com/MaterializeInc/materialize"
+canonicalHost = "https://materialize.com"
 bannerMessage = ""
 bannerLink = ""
 
@@ -73,6 +74,16 @@ identifier = "sql"
 name = "SQL Reference"
 weight = 75
 
+#
+# Legacy Create Source
+#
+
+[[menu.main]]
+name = "Legacy Syntax"
+parent = 'create-source'
+identifier = 'create-source-legacy'
+weight = 90
+
 
 [[menu.main]]
 identifier = "reference"
@@ -113,6 +124,18 @@ weight = 55
   isPlainText = true
   notAlternative = true
 
+#
+# Custom output format for the llms.txt docs index
+#
+[outputFormats.llmstxt]
+  mediaType = "text/plain"
+  baseName = "llms"
+  isPlainText = true
+  notAlternative = true
+
+[outputs]
+  home = ["HTML", "RSS", "llmstxt"]
+
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works
 unsafe = true
@@ -139,6 +162,3 @@ include = "docs/**"
 #
 # include = "**.html" # would only include files with ".html" suffix
 # exclude = "**.{jpg, png}" # would exclude files with ".jpg" or ".png" suffix
-
-# Avoid deleting self-managed docs which are deployed from the self-managed-docs branches.
-exclude = "docs/{self-managed/v25.2}/**"

@@ -16,7 +16,6 @@ use std::hash::{Hash, Hasher};
 use bitflags::bitflags;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
-use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
 use postgres_protocol::types;
 #[cfg(any(test, feature = "proptest"))]
@@ -785,8 +784,7 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum InvalidRangeError {
@@ -796,6 +794,10 @@ pub enum InvalidRangeError {
     DiscontiguousUnion,
     DiscontiguousDifference,
     NullRangeBoundFlags,
+    /// The encoded range data is structurally invalid (e.g. a null bound,
+    /// bounds of inconsistent types, or the wrong number of bounds). Only
+    /// reachable by decoding untrusted/corrupted bytes.
+    InvalidRangeData,
 }
 
 impl Display for InvalidRangeError {
@@ -817,6 +819,7 @@ impl Display for InvalidRangeError {
             InvalidRangeError::NullRangeBoundFlags => {
                 f.write_str("range constructor flags argument must not be null")
             }
+            InvalidRangeError::InvalidRangeData => f.write_str("invalid range data"),
         }
     }
 }
@@ -847,6 +850,7 @@ impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
             InvalidRangeError::DiscontiguousUnion => DiscontiguousUnion(()),
             InvalidRangeError::DiscontiguousDifference => DiscontiguousDifference(()),
             InvalidRangeError::NullRangeBoundFlags => NullRangeBoundFlags(()),
+            InvalidRangeError::InvalidRangeData => InvalidRangeData(()),
         };
         ProtoInvalidRangeError { kind: Some(kind) }
     }
@@ -863,6 +867,7 @@ impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
                 DiscontiguousUnion(()) => InvalidRangeError::DiscontiguousUnion,
                 DiscontiguousDifference(()) => InvalidRangeError::DiscontiguousDifference,
                 NullRangeBoundFlags(()) => InvalidRangeError::NullRangeBoundFlags,
+                InvalidRangeData(()) => InvalidRangeError::InvalidRangeData,
             }),
             None => Err(TryFromProtoError::missing_field(
                 "`ProtoInvalidRangeError::kind`",

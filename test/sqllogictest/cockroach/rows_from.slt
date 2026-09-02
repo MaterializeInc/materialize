@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,20 +9,18 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/rows_from
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/rows_from
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
 mode cockroach
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_with_ordinality_legacy_fallback = true
-----
-COMPLETE 0
 
 query II colnames
 SELECT * FROM ROWS FROM (generate_series(1,2), generate_series(4,8))
@@ -54,46 +52,55 @@ SELECT * FROM ROWS FROM (generate_series(1,0), generate_series(1,1))
 generate_series  generate_series
 NULL             1
 
-## TODO: In Materialize, `TabletizedScalar` somehow doesn't work with `greatest`. This works in both Postgres and
-## Cockroach.
-#query II colnames
-#SELECT * FROM ROWS FROM (generate_series(1,2), greatest(1,2,3,4))
-#----
-#generate_series  greatest
-#1                4
-#2                NULL
-
-query IT colnames
-SELECT * FROM ROWS FROM (generate_series(1,2), current_user())
+# Not supported by Materialize.
+onlyif cockroach
+query II colnames
+SELECT * FROM ROWS FROM (generate_series(1,2), greatest(1,2,3,4))
 ----
-generate_series current_user
-2  NULL
-1  materialize
+generate_series  greatest
+1                4
+2                NULL
 
+# Not supported by Materialize.
+onlyif cockroach
+query IT colnames
+SELECT * FROM ROWS FROM (generate_series(1,2), current_user)
+----
+generate_series  current_user
+1                root
+2                NULL
+
+# Not supported by Materialize.
+onlyif cockroach
 query TI colnames
-SELECT * FROM ROWS FROM (current_user(), generate_series(1,2))
+SELECT * FROM ROWS FROM (current_user, generate_series(1,2))
 ----
 current_user generate_series
-NULL  2
-materialize  1
+root         1
+NULL         2
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT colnames
-SELECT * FROM ROWS FROM (current_user(), current_user())
+SELECT * FROM ROWS FROM (current_user, current_user)
 ----
 current_user current_user
-materialize  materialize
+root         root
 
+# Not supported by Materialize.
+onlyif cockroach
 query III colnames
 SELECT * FROM ROWS FROM (information_schema._pg_expandarray(array[4,5,6]), generate_series(10,15));
 ----
-x n generate_series
+x     n     generate_series
+4     1     10
+5     2     11
+6     3     12
 NULL  NULL  13
 NULL  NULL  14
 NULL  NULL  15
-4  1  10
-5  2  11
-6  3  12
 
-## No `pg_get_keywords` in Materialize
-#statement error pg_get_keywords\(\): set-returning functions must appear at the top level of FROM
-#SELECT * FROM ROWS FROM(generate_series(length((pg_get_keywords()).word),10));
+# Regression test for #27389.
+
+statement error function "pg_get_keywords" does not exist
+SELECT * FROM ROWS FROM(generate_series(length((pg_get_keywords()).word),10));

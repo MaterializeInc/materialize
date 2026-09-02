@@ -98,6 +98,20 @@ error: hexadecimal escapes are not supported
 e'\x1fg'
   ^
 
+parse-scalar
+e'\u0000'
+----
+error: null character in string literal
+e'\u0000'
+  ^
+
+parse-scalar
+e'\U00000000'
+----
+error: null character in string literal
+e'\U00000000'
+  ^
+
 # Dollar string literals.
 
 parse-statement roundtrip

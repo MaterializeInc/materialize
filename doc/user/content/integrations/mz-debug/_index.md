@@ -19,9 +19,8 @@ disable_list: true
 {{< tab "macOS" >}}
 
 ```shell
-ARCH=$(uname -m)
 sudo echo "Preparing to extract mz-debug..."
-curl -L "https://binaries.materialize.com/mz-debug-latest-$ARCH-apple-darwin.tar.gz" \
+curl -L "https://binaries.materialize.com/mz-debug-latest-arm64-apple-darwin.tar.gz" \
 | sudo tar -xzC /usr/local --strip-components=1
 ```
 {{</ tab >}}

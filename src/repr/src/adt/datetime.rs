@@ -16,7 +16,6 @@ use std::fmt;
 use std::str::FromStr;
 
 use chrono::{NaiveDate, NaiveTime, Timelike};
-use mz_lowertest::MzReflect;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_pgtz::timezone::Timezone;
 #[cfg(any(test, feature = "proptest"))]
@@ -39,8 +38,7 @@ use crate::adt::interval::Interval;
     Eq,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum DateTimeUnits {
@@ -735,7 +733,10 @@ impl ParsedDateTime {
             if fmt.is_none() {
                 fmt = match value_parts.pop_front() {
                     Some(next_part) => {
-                        match determine_format_w_datetimefield(next_part.clone(), None)? {
+                        match determine_format_w_datetimefield(
+                            next_part.clone(),
+                            leading_time_precision,
+                        )? {
                             Some(TimePartFormat::SqlStandard(f)) => {
                                 match f {
                                     // Do not capture this token because expression
@@ -813,12 +814,13 @@ impl ParsedDateTime {
     pub fn build_parsed_datetime_timestamp(
         value: &str,
         era: CalendarEra,
+        order: DateOrder,
     ) -> Result<ParsedDateTime, String> {
         let mut pdt = ParsedDateTime::default();
 
         let mut ts_actual = tokenize_time_str(value)?;
 
-        fill_pdt_date(&mut pdt, &mut ts_actual)?;
+        fill_pdt_date(&mut pdt, &mut ts_actual, order, era)?;
 
         if let CalendarEra::BC = era {
             pdt.year = pdt.year.map(|mut y| {
@@ -1080,12 +1082,19 @@ impl ParsedDateTime {
 fn fill_pdt_date(
     pdt: &mut ParsedDateTime,
     actual: &mut VecDeque<TimeStrToken>,
+    order: DateOrder,
+    era: CalendarEra,
 ) -> Result<(), String> {
     use TimeStrToken::*;
 
-    // Check for one number that represents YYYYMMDDD.
+    // Check for one number that represents YYYYMMDDD. A following `Dash` means
+    // the date uses explicit `Y-M-D` separators, so the leading number is a
+    // full year (which can be 6 digits, e.g. `118852-02-05`), not a compact
+    // date. Only treat it as compact when it is a standalone number.
     match actual.front() {
-        Some(&Num(mut val, ref digits)) if 6 <= *digits && *digits <= 8 => {
+        Some(&Num(mut val, ref digits))
+            if 6 <= *digits && *digits <= 8 && !matches!(actual.get(1), Some(Dash)) =>
+        {
             let unit = i64::try_from(val % 100)
                 .expect("modulo between u64 and constant 100 should fit signed 64-bit integer");
             pdt.day = Some(DateTimeFieldValue::new(unit, 0));
@@ -1119,6 +1128,26 @@ fn fill_pdt_date(
         _ => (),
     }
 
+    // PostgreSQL under the pinned `DateStyle = ISO, MDY` reads a separated
+    // date whose leading field has one or two digits as month-day-year, and
+    // only a leading field of three or more digits as year-month-day. The
+    // formats below fill fields positionally as year-month-day, so record the
+    // digit counts up front and reorder the fields after a successful fill.
+    let mdy = match (order, actual.front()) {
+        (DateOrder::Mdy, Some(&Num(_, digits))) => digits <= 2,
+        _ => false,
+    };
+    // Digit count of the third numeric field, the year in a month-day-year
+    // date, which decides two-digit-year windowing.
+    let year_digits = actual
+        .iter()
+        .take_while(|t| matches!(t, Num(..) | Dash | Delim))
+        .filter_map(|t| match t {
+            Num(_, digits) => Some(*digits),
+            _ => None,
+        })
+        .nth(2);
+
     let valid_formats = [
         [
             Num(0, 1), // year
@@ -1148,6 +1177,22 @@ fn fill_pdt_date(
     for expected in valid_formats {
         match fill_pdt_from_tokens(pdt, actual, &expected, DateTimeField::Year, 1) {
             Ok(()) => {
+                // In a month-day-year date the positional fill above put the
+                // month in `year`, the day in `month`, and the year in `day`.
+                if mdy {
+                    if let (Some(month), Some(day), Some(mut year)) = (pdt.year, pdt.month, pdt.day)
+                    {
+                        // Window two-digit years into 1970..=2069, as
+                        // PostgreSQL does. Explicit BC years are never
+                        // windowed.
+                        if era == CalendarEra::AD && year_digits.is_some_and(|d| d <= 2) {
+                            year.unit += if year.unit < 70 { 2000 } else { 1900 };
+                        }
+                        pdt.year = Some(year);
+                        pdt.month = Some(month);
+                        pdt.day = Some(day);
+                    }
+                }
                 return Ok(());
             }
             Err(_) => {
@@ -1805,10 +1850,23 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>, S
     Ok(toks)
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CalendarEra {
     BC,
     AD,
+}
+
+/// Determines how ambiguous all-numeric dates like `01/02/03` are interpreted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DateOrder {
+    /// PostgreSQL semantics under the pinned `DateStyle = ISO, MDY`: a date
+    /// whose leading field has one or two digits is month-day-year, and a
+    /// two-digit year is windowed into 1970..=2069.
+    Mdy,
+    /// Always year-month-day, with no year windowing. Frozen behavior for
+    /// storage source casts, which must not change across releases (see the
+    /// stability contract in `mz_storage_types::sources::casts`).
+    LegacyYmd,
 }
 
 /// Takes a 'date timezone' 'date time timezone' string and splits it into 'date
@@ -2808,10 +2866,105 @@ mod tests {
                 ..Default::default()
             },
         );
+        // A 6-digit year with explicit `-` separators must be read as a full
+        // year, not a compact `YYMMDD` date. This value is producible by our own
+        // timestamp formatting, so parsing it back must round-trip.
+        run_test_build_parsed_datetime_timestamp(
+            "118852-02-05 00:00:00",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(118852, 0)),
+                month: Some(DateTimeFieldValue::new(2, 0)),
+                day: Some(DateTimeFieldValue::new(5, 0)),
+                hour: Some(DateTimeFieldValue::new(0, 0)),
+                minute: Some(DateTimeFieldValue::new(0, 0)),
+                second: Some(DateTimeFieldValue::new(0, 0)),
+                ..Default::default()
+            },
+        );
+        // A standalone number with no separators is still parsed as a compact
+        // date (`YYYYMMDD`).
+        run_test_build_parsed_datetime_timestamp(
+            "20000102",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(2000, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                ..Default::default()
+            },
+        );
+        // A one- or two-digit leading field starts a month-day-year date, and
+        // a two-digit year is windowed into 1970..=2069.
+        run_test_build_parsed_datetime_timestamp(
+            "01/02/03",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(2003, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                ..Default::default()
+            },
+        );
+        run_test_build_parsed_datetime_timestamp(
+            "01-02-70 3:4:5.6",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(1970, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                hour: Some(DateTimeFieldValue::new(3, 0)),
+                minute: Some(DateTimeFieldValue::new(4, 0)),
+                second: Some(DateTimeFieldValue::new(5, 600_000_000)),
+                ..Default::default()
+            },
+        );
+        // A four-digit year in month-day-year position is not windowed.
+        run_test_build_parsed_datetime_timestamp(
+            "1/2/1999",
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(1999, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                ..Default::default()
+            },
+        );
+        // BC years are never windowed.
+        assert_eq!(
+            ParsedDateTime::build_parsed_datetime_timestamp(
+                "01/02/03",
+                CalendarEra::BC,
+                DateOrder::Mdy,
+            )
+            .unwrap(),
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(-3, 0)),
+                month: Some(DateTimeFieldValue::new(1, 0)),
+                day: Some(DateTimeFieldValue::new(2, 0)),
+                ..Default::default()
+            },
+        );
+        // The legacy order keeps the frozen year-month-day interpretation
+        // with no windowing.
+        assert_eq!(
+            ParsedDateTime::build_parsed_datetime_timestamp(
+                "01/02/03",
+                CalendarEra::AD,
+                DateOrder::LegacyYmd,
+            )
+            .unwrap(),
+            ParsedDateTime {
+                year: Some(DateTimeFieldValue::new(1, 0)),
+                month: Some(DateTimeFieldValue::new(2, 0)),
+                day: Some(DateTimeFieldValue::new(3, 0)),
+                ..Default::default()
+            },
+        );
 
         fn run_test_build_parsed_datetime_timestamp(test: &str, res: ParsedDateTime) {
             assert_eq!(
-                ParsedDateTime::build_parsed_datetime_timestamp(test, CalendarEra::AD).unwrap(),
+                ParsedDateTime::build_parsed_datetime_timestamp(
+                    test,
+                    CalendarEra::AD,
+                    DateOrder::Mdy
+                )
+                .unwrap(),
                 res
             );
         }
@@ -3514,6 +3667,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn proptest_packed_naive_time_sort_order() {
         let time = add_arb_duration(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
         let strat = proptest::collection::vec(time, 0..128);

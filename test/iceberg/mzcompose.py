@@ -15,9 +15,7 @@ import urllib.error
 import urllib.request
 
 from materialize.mzcompose.composition import Composition, Service
-from materialize.mzcompose.helpers.iceberg import (
-    setup_polaris_for_iceberg,
-)
+from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mz import Mz
@@ -43,7 +41,9 @@ SERVICES = [
 ]
 
 
-def _setup(c: Composition) -> str:
+def _setup(
+    c: Composition, vended: bool = False, static_credentials: bool = True
+) -> str:
     """Start fresh and return the S3 access key."""
     c.down(destroy_volumes=True)
     c.up(
@@ -52,7 +52,9 @@ def _setup(c: Composition) -> str:
         Service("polaris-bootstrap", idle=True),
         Service("polaris", idle=True),
     )
-    _, key = setup_polaris_for_iceberg(c)
+    _, key = setup_polaris_for_iceberg(
+        c, vended=vended, static_credentials=static_credentials
+    )
     return key
 
 
@@ -65,6 +67,25 @@ def workflow_default(c: Composition) -> None:
             c.workflow(name)
 
     c.test_parts(list(c.workflows.keys()), process)
+
+
+def workflow_vended_credentials(c: Composition) -> None:
+    """An Iceberg sink must work against a REST catalog that only hands out
+    temporary, table-scoped credentials.
+
+    The Polaris catalog is created with credential vending enabled and without
+    the long-lived S3 credentials it would otherwise return to clients, so
+    Materialize has no static credentials to fall back on. The sink can only
+    reach MinIO with what Polaris mints for it in response to the
+    `X-Iceberg-Access-Delegation: vended-credentials` request the Iceberg
+    catalog connection sends."""
+    key = _setup(c, vended=True, static_credentials=False)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "vended-credentials.td",
+    )
 
 
 def workflow_smoke(c: Composition) -> None:
@@ -95,6 +116,20 @@ def workflow_gcp_connection_validation(c: Composition) -> None:
     )
 
 
+def workflow_oauth2_server_url(c: Composition) -> None:
+    """OAUTH2 SERVER URL redirects a REST catalog connection's token exchange
+    away from the endpoint the Iceberg specification derives from the catalog
+    URL. Catalogs behind an auth gateway that will not serve an unauthenticated
+    exchange, such as Databricks Unity Catalog, need it. This exercises
+    connection planning only and needs no Iceberg backend."""
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    c.run_testdrive_files(
+        "oauth2-server-url.td",
+    )
+
+
 def workflow_mode_append(c: Composition) -> None:
     key = _setup(c)
 
@@ -102,6 +137,70 @@ def workflow_mode_append(c: Composition) -> None:
         f"--var=s3-access-key={key}",
         "--var=aws-endpoint=minio:9000",
         "mode-append.td",
+    )
+
+
+def workflow_idle_gap(c: Composition) -> None:
+    """A caught-up Iceberg sink whose input goes quiet and then receives a
+    write must stay healthy. Differential's arrange leaves a gap in the emitted
+    batch stream across a data-free frontier advance, and `write_data_files`
+    has to tolerate it rather than halting the dataflow."""
+    key = _setup(c)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "idle-gap.td",
+    )
+
+
+def workflow_alter_commit_interval(c: Composition) -> None:
+    """ALTER SINK ... SET (COMMIT INTERVAL ...) restarts the sink dataflow
+    with the new interval and subsequent batches follow the new cadence."""
+    key = _setup(c)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "alter-commit-interval.td",
+    )
+
+
+def workflow_empty_source(c: Composition) -> None:
+    """A fresh Iceberg sink whose input closes after producing zero rows
+    commits empty snapshots instead of stalling or erroring."""
+    key = _setup(c)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "empty-source.td",
+    )
+
+
+def workflow_finite_source(c: Composition) -> None:
+    """A fresh Iceberg sink whose input contains data and then closes must
+    commit all the data and then seal itself with a final empty-upper
+    commit. Restarting Materialize afterwards must not re-commit or error."""
+    key = _setup(c)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "finite-source.td",
+    )
+
+    # The sink resumes from an Iceberg table whose committed frontier is
+    # empty. It must come back healthy and idle, without committing
+    # anything new.
+    c.kill("materialized")
+    c.up("materialized")
+
+    c.run_testdrive_files(
+        "--no-reset",
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "finite-source-verify.td",
     )
 
 

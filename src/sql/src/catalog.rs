@@ -53,7 +53,9 @@ use crate::names::{
 };
 use crate::plan::statement::StatementDesc;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
-use crate::plan::{ClusterSchedule, CreateClusterPlan, PlanError, PlanNotice, query};
+use crate::plan::{
+    AutoScalingStrategy, ClusterSchedule, CreateClusterPlan, PlanError, PlanNotice, query,
+};
 use crate::session::vars::{OwnedVarInput, SystemVars};
 
 /// A catalog keeps track of SQL objects and session state available to the
@@ -438,6 +440,15 @@ pub struct CatalogConfig {
     pub now: NowFn,
     /// Context for source and sink connections.
     pub connection_context: ConnectionContext,
+    /// The AWS account ID that Materialize runs under, if configured.
+    ///
+    /// This is the `aws_account_id` from the catalog's `AwsPrincipalContext`.
+    /// It is plumbed through here (rather than the whole context) because the
+    /// external-id prefix and connection role ARN already live on
+    /// [`ConnectionContext`], and because `AwsPrincipalContext` is defined in
+    /// `mz-catalog`, which cannot be a dependency of `mz-sql`. Folded into a
+    /// literal by `mz_aws_account_id()`; `None` on non-cloud/local envs.
+    pub aws_account_id: Option<String>,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
 }
@@ -777,6 +788,9 @@ pub trait CatalogCluster<'a> {
     /// Returns the replication factor of the cluster, if the cluster is a managed cluster.
     fn replication_factor(&self) -> Option<u32>;
 
+    /// Returns the user-configured autoscaling strategy of the cluster, if the
+    /// cluster is managed and has one set.
+    fn auto_scaling_strategy(&self) -> Option<&AutoScalingStrategy>;
     /// Try to convert this cluster into a [`CreateClusterPlan`].
     // TODO(jkosh44) Make this infallible and convert to `to_plan`.
     fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError>;
@@ -957,6 +971,8 @@ pub enum CatalogItemType {
     Secret,
     /// A connection.
     Connection,
+    /// A metric sink.
+    MetricSink,
 }
 
 impl CatalogItemType {
@@ -990,6 +1006,7 @@ impl CatalogItemType {
             CatalogItemType::Func => false,
             CatalogItemType::Secret => false,
             CatalogItemType::Connection => false,
+            CatalogItemType::MetricSink => false,
         }
     }
 }
@@ -1007,6 +1024,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Func => f.write_str("func"),
             CatalogItemType::Secret => f.write_str("secret"),
             CatalogItemType::Connection => f.write_str("connection"),
+            CatalogItemType::MetricSink => f.write_str("metric sink"),
         }
     }
 }
@@ -1024,6 +1042,7 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Func => ObjectType::Func,
             CatalogItemType::Secret => ObjectType::Secret,
             CatalogItemType::Connection => ObjectType::Connection,
+            CatalogItemType::MetricSink => ObjectType::MetricSink,
         }
     }
 }
@@ -1041,6 +1060,7 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
             CatalogItemType::Func => mz_audit_log::ObjectType::Func,
             CatalogItemType::Secret => mz_audit_log::ObjectType::Secret,
             CatalogItemType::Connection => mz_audit_log::ObjectType::Connection,
+            CatalogItemType::MetricSink => mz_audit_log::ObjectType::MetricSink,
         }
     }
 }
@@ -1063,6 +1083,8 @@ pub struct CatalogTypePgMetadata {
     pub typinput_oid: u32,
     /// The OID of the `typreceive` function in PostgreSQL.
     pub typreceive_oid: u32,
+    /// The OID of the `typsend` function in PostgreSQL.
+    pub typsend_oid: u32,
 }
 
 /// Represents a reference to type in the catalog
@@ -1155,13 +1177,14 @@ impl CatalogType<IdReference> {
         match &self {
             CatalogType::Record { fields } => {
                 let mut desc = RelationDesc::builder();
+                // Share one budget across every field. Resolving each field with
+                // a fresh budget would let a wide record materialize an
+                // unbounded type tree here even though each field is individually
+                // within the bound.
+                let mut budget = query::TypeResolutionBudget::for_root(catalog);
                 for f in fields {
                     let name = f.name.clone();
-                    let ty = query::scalar_type_from_catalog(
-                        catalog,
-                        f.type_reference,
-                        &f.type_modifiers,
-                    )?;
+                    let ty = budget.resolve_child(catalog, f.type_reference, &f.type_modifiers)?;
                     // TODO: support plumbing `NOT NULL` constraints through
                     // `CREATE TYPE`.
                     let ty = ty.nullable(true);
@@ -1557,6 +1580,7 @@ pub enum ObjectType {
     MaterializedView,
     Source,
     Sink,
+    MetricSink,
     Index,
     Type,
     Role,
@@ -1579,6 +1603,7 @@ impl ObjectType {
             | ObjectType::MaterializedView
             | ObjectType::Source => true,
             ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
@@ -1603,6 +1628,7 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Source => ObjectType::Source,
             mz_sql_parser::ast::ObjectType::Subsource => ObjectType::Source,
             mz_sql_parser::ast::ObjectType::Sink => ObjectType::Sink,
+            mz_sql_parser::ast::ObjectType::MetricSink => ObjectType::MetricSink,
             mz_sql_parser::ast::ObjectType::Index => ObjectType::Index,
             mz_sql_parser::ast::ObjectType::Type => ObjectType::Type,
             mz_sql_parser::ast::ObjectType::Role => ObjectType::Role,
@@ -1626,6 +1652,7 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::MaterializedView(_) => ObjectType::MaterializedView,
             CommentObjectId::Source(_) => ObjectType::Source,
             CommentObjectId::Sink(_) => ObjectType::Sink,
+            CommentObjectId::MetricSink(_) => ObjectType::MetricSink,
             CommentObjectId::Index(_) => ObjectType::Index,
             CommentObjectId::Func(_) => ObjectType::Func,
             CommentObjectId::Connection(_) => ObjectType::Connection,
@@ -1649,6 +1676,7 @@ impl Display for ObjectType {
             ObjectType::MaterializedView => "MATERIALIZED VIEW",
             ObjectType::Source => "SOURCE",
             ObjectType::Sink => "SINK",
+            ObjectType::MetricSink => "METRIC SINK",
             ObjectType::Index => "INDEX",
             ObjectType::Type => "TYPE",
             ObjectType::Role => "ROLE",

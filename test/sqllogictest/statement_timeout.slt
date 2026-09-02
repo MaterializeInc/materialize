@@ -40,3 +40,27 @@ query TIIII
 EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM t WHERE value > 10;
 ----
 materialize.public.t  0  0  0  0
+
+# Regression: generate_series over timestamps must terminate on a mixed-sign
+# month/day step. INTERVAL '1 month -29 days' looks ascending (as_microseconds
+# treats a month as 30 days, so 30 - 29 = +1 day), but the iterator adds a
+# calendar month with end-of-month saturation: from 2021-01-31, +1 month
+# saturates to 2021-02-28, then -29 days returns to 2021-01-30, which is <= the
+# start. The series stops advancing there, so it yields only the start row.
+
+statement ok
+CREATE TABLE gen_sink (ts timestamp)
+
+statement ok
+SET statement_timeout = '30s'
+
+statement ok
+INSERT INTO gen_sink SELECT * FROM generate_series(TIMESTAMP '2021-01-31 03:00:00', TIMESTAMP '2021-02-10', INTERVAL '1 month -29 days')
+
+query T
+SELECT * FROM gen_sink
+----
+2021-01-31 03:00:00
+
+statement ok
+SET statement_timeout = 0

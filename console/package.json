@@ -12,10 +12,10 @@
     "build:local": "SENTRY_RELEASE=' ' yarn build",
     "build:analyze": "BUNDLE_ANALYZE=1 yarn build:local",
     "test": "DEBUG_PRINT_LIMIT=100000 vitest",
-    "test:e2e": "playwright test --project=chromium --ui",
+    "test:e2e": "PLAYWRIGHT_FORCE_ASYNC_LOADER=1 playwright test --project=chromium --ui",
     "test:sql": "vitest --config vitest.sql.config.js",
-    "test:e2e:all": "playwright test --project=chromium --project=webkit --project=teardown",
-    "test:e2e:scalability": "playwright test --project=scalability",
+    "test:e2e:all": "PLAYWRIGHT_FORCE_ASYNC_LOADER=1 playwright test --project=chromium --project=webkit --project=teardown",
+    "test:e2e:scalability": "PLAYWRIGHT_FORCE_ASYNC_LOADER=1 playwright test --project=scalability",
     "lint": "eslint --ignore-path .gitignore --max-warnings 0 .",
     "lint:fix": "eslint --ignore-path .gitignore --fix .",
     "playwright": "playwright",
@@ -55,6 +55,8 @@
     "@sentry/react": "^10.45.0",
     "@stripe/react-stripe-js": "^5.6.1",
     "@stripe/stripe-js": "^9.5.0",
+    "@tanstack/db": "0.6.17",
+    "@tanstack/react-db": "0.1.95",
     "@tanstack/react-query": "^5.95.0",
     "@tanstack/react-query-devtools": "^5.95.0",
     "@tanstack/react-table": "^8.21.3",
@@ -75,7 +77,7 @@
     "base32-encoding": "^1.0.0",
     "buffer": "^6.0.3",
     "codemirror": "^6.0.1",
-    "copy-to-clipboard": "^3.3.3",
+    "copy-to-clipboard": "^4.0.2",
     "d3": "^7.9.0",
     "d3-graphviz": "^5.6.0",
     "d3-scale-chromatic": "^3.1.0",
@@ -118,10 +120,10 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@babel/core": "^7.29.0",
+    "@babel/core": "^7.29.6",
     "@emotion/babel-plugin": "^11.13.5",
     "@frontegg/client": "^5.3.2",
-    "@playwright/test": "^1.48.2",
+    "@playwright/test": "^1.61.0",
     "@sentry/vite-plugin": "^5.1.1",
     "@svgr/babel-plugin-transform-svg-component": "^8.0.0",
     "@tanstack/eslint-plugin-query": "^5.95.0",
@@ -161,7 +163,6 @@
     "eslint-plugin-react-refresh": "^0.4.14",
     "eslint-plugin-simple-import-sort": "^12.1.1",
     "eslint-plugin-unicorn": "^56.0.0",
-    "extract-zip": "^2.0.1",
     "fast-xml-parser": "^5.7.0",
     "intersection-observer": "^0.12.2",
     "jotai-devtools": "^0.10.1",
@@ -181,13 +182,13 @@
     "terser": "^5.46.1",
     "tsx": "^4.22.2",
     "typescript-eslint-language-service": "^5.0.5",
-    "vite": "^6.4.2",
+    "vite": "^6.4.3",
     "vite-bundle-analyzer": "^1.3.8",
     "vite-plugin-html": "^3.2.2",
     "vite-plugin-svgr": "^4.3.0",
     "vite-plugin-wasm": "^3.4.1",
     "vite-tsconfig-paths": "^6.1.1",
-    "vitest": "^3.0.5"
+    "vitest": "^3.2.6"
   },
   "eslintConfig": {
     "env": {
@@ -345,15 +346,18 @@
   "resolutions": {
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.40.0",
-    "@remix-run/router": "^1.23.2",
+    "@remix-run/router": "^1.23.3",
     "diff": "^4.0.4",
     "esbuild": "^0.25.0",
     "glob": "^12.0.0",
-    "ip-address": "^10.2.0",
+    "ip-address": "^10.4.0",
+    "js-cookie": "^3.0.7",
+    "js-yaml": "^4.3.1",
     "jsondiffpatch": "^0.7.2",
-    "react-router": "^6.30.2",
+    "react-router": "^6.30.4",
     "react-router-dom": "^6.30.2",
-    "tar": "^7.5.11"
+    "tar": "^7.5.22",
+    "uuid": "^14.0.0"
   },
   "browserslist": [
     "defaults"

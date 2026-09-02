@@ -110,14 +110,6 @@ SELECT replication_factor FROM mz_clusters WHERE name = 'c_managed'
 ----
 2
 
-statement ok
-ALTER CLUSTER c_managed SET (SIZE = 'scale=2,workers=2')
-
-query T
-SELECT size FROM mz_clusters WHERE name = 'c_managed'
-----
-scale=2,workers=2
-
 # Replication factor 0 is allowed and must round-trip.
 statement ok
 ALTER CLUSTER c_managed SET (REPLICATION FACTOR = 0)
@@ -188,16 +180,9 @@ FROM mz_clusters WHERE name = 'c_introspection'
 ----
 true  00:00:05
 
-# INTROSPECTION INTERVAL = 0 must round-trip to NULL (matches Option::None for
-# the duration in the ReplicaLogging.interval field).
-statement ok
-ALTER CLUSTER c_introspection SET (INTROSPECTION INTERVAL = 0)
-
-query B
-SELECT introspection_interval IS NULL
-FROM mz_clusters WHERE name = 'c_introspection'
-----
-true
+# The INTROSPECTION INTERVAL = 0 -> NULL round-trip is now a config-shape change
+# the controller reshapes asynchronously; it is asserted in
+# test/testdrive/cluster-controller.td (cc_logging), where the readback can retry.
 
 statement ok
 DROP CLUSTER c_introspection

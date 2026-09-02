@@ -126,7 +126,7 @@ impl<T> ParserStatementErrorMapper<T> for Result<T, ParserError> {
 pub fn parse_statements_with_limit(
     sql: &str,
 ) -> Result<Result<Vec<StatementParseResult<'_>>, ParserStatementError>, String> {
-    if sql.bytes().count() > MAX_STATEMENT_BATCH_SIZE {
+    if sql.len() > MAX_STATEMENT_BATCH_SIZE {
         return Err(format!(
             "statement batch size cannot exceed {}",
             ByteSize::b(u64::cast_from(MAX_STATEMENT_BATCH_SIZE))
@@ -204,6 +204,24 @@ pub fn parse_item_name(sql: &str) -> Result<UnresolvedItemName, ParserError> {
     } else {
         Ok(name)
     }
+}
+
+/// Parses a SQL item name, rejecting inputs larger than
+/// [`MAX_STATEMENT_BATCH_SIZE`] before lexing.
+///
+/// The outer `Result` is for the size guard; the inner `Result` is for the
+/// parser. Mirrors [`parse_statements_with_limit`] so untrusted-input paths
+/// (e.g. the MCP HTTP handlers) can bound work before allocating.
+pub fn parse_item_name_with_limit(
+    sql: &str,
+) -> Result<Result<UnresolvedItemName, ParserError>, String> {
+    if sql.len() > MAX_STATEMENT_BATCH_SIZE {
+        return Err(format!(
+            "statement batch size cannot exceed {}",
+            ByteSize::b(u64::cast_from(MAX_STATEMENT_BATCH_SIZE))
+        ));
+    }
+    Ok(parse_item_name(sql))
 }
 
 /// Parses a string containing a comma-separated list of identifiers and
@@ -343,8 +361,12 @@ const SPECULATIVE_FAILURES_PER_TOKEN: usize = 100;
 /// Defines a number of precedence classes operators follow. Since this enum derives Ord, the
 /// precedence classes are ordered from weakest binding at the top to tightest binding at the
 /// bottom.
+///
+/// The expression printer's `ast::defs::expr::prec` ranks are derived from this
+/// ladder via `as u8`, so this enum is the single source of truth for output
+/// parenthesization precedence too. Keep the ordering authoritative.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
-enum Precedence {
+pub(crate) enum Precedence {
     Zero,
     Or,
     And,
@@ -2038,6 +2060,9 @@ impl<'a> Parser<'a> {
         } else if self.peek_keyword(SCHEMA) {
             self.parse_create_schema()
                 .map_parser_err(StatementKind::CreateSchema)
+        } else if self.peek_keywords(&[METRIC, SINK]) {
+            self.parse_create_metric_sink()
+                .map_parser_err(StatementKind::CreateMetricSink)
         } else if self.peek_keyword(SINK) {
             self.parse_create_sink()
                 .map_parser_err(StatementKind::CreateSink)
@@ -2201,6 +2226,32 @@ impl<'a> Parser<'a> {
         let avro_schema = if self.parse_keywords(&[CONFLUENT, SCHEMA, REGISTRY]) {
             let csr_connection = self.parse_csr_connection_avro()?;
             AvroSchema::Csr { csr_connection }
+        } else if self.parse_keywords(&[AWS, GLUE, SCHEMA, REGISTRY]) {
+            self.expect_keyword(CONNECTION)?;
+            let connection = self.parse_raw_name()?;
+            let with_options = if self.consume_token(&Token::LParen) {
+                let opts = self.parse_comma_separated(Parser::parse_glue_avro_option)?;
+                self.expect_token(&Token::RParen)?;
+                opts
+            } else {
+                vec![]
+            };
+            // SEED VALUE SCHEMA '<json>' is normally emitted by purification
+            // and re-parsed when persisted create_sql is reloaded. A user may
+            // also write it directly; that is accepted here (purification trusts
+            // a pre-populated seed), though it is not the intended path.
+            let seed = if self.parse_keyword(SEED) {
+                self.expect_keywords(&[VALUE, SCHEMA])?;
+                let value_schema = self.parse_literal_string()?;
+                Some(GlueAvroSeed { value_schema })
+            } else {
+                None
+            };
+            AvroSchema::Glue {
+                connection,
+                with_options,
+                seed,
+            }
         } else if self.parse_keyword(SCHEMA) {
             self.prev_token();
             self.expect_keyword(SCHEMA)?;
@@ -2221,7 +2272,7 @@ impl<'a> Parser<'a> {
         } else {
             return self.expected(
                 self.peek_pos(),
-                "CONFLUENT SCHEMA REGISTRY or SCHEMA",
+                "CONFLUENT SCHEMA REGISTRY, AWS GLUE SCHEMA REGISTRY, or SCHEMA",
                 self.peek_token(),
             );
         };
@@ -2232,6 +2283,47 @@ impl<'a> Parser<'a> {
         self.expect_keywords(&[CONFLUENT, WIRE, FORMAT])?;
         Ok(AvroSchemaOption {
             name: AvroSchemaOptionName::ConfluentWireFormat,
+            value: self.parse_optional_option_value()?,
+        })
+    }
+
+    fn parse_glue_avro_option(&mut self) -> Result<GlueAvroOption<Raw>, ParserError> {
+        // The singular `SCHEMA NAME` is used by sources; the `KEY`/`VALUE`-prefixed
+        // options mirror the CSR clause and are used by sinks. Which options are
+        // valid in which context is enforced in the planner and purifier, not
+        // here. Values are parsed as optional so a missing value surfaces a clear
+        // planner error rather than a parse error.
+        let name = match self.expect_one_of_keywords(&[SCHEMA, KEY, VALUE])? {
+            SCHEMA => {
+                self.expect_keyword(NAME)?;
+                GlueAvroOptionName::SchemaName
+            }
+            KEY => match self.expect_one_of_keywords(&[SCHEMA, COMPATIBILITY])? {
+                SCHEMA => {
+                    self.expect_keyword(NAME)?;
+                    GlueAvroOptionName::KeySchemaName
+                }
+                COMPATIBILITY => {
+                    self.expect_keyword(LEVEL)?;
+                    GlueAvroOptionName::KeyCompatibilityLevel
+                }
+                _ => unreachable!(),
+            },
+            VALUE => match self.expect_one_of_keywords(&[SCHEMA, COMPATIBILITY])? {
+                SCHEMA => {
+                    self.expect_keyword(NAME)?;
+                    GlueAvroOptionName::ValueSchemaName
+                }
+                COMPATIBILITY => {
+                    self.expect_keyword(LEVEL)?;
+                    GlueAvroOptionName::ValueCompatibilityLevel
+                }
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
+        Ok(GlueAvroOption {
+            name,
             value: self.parse_optional_option_value()?,
         })
     }
@@ -2882,6 +2974,7 @@ impl<'a> Parser<'a> {
                 ENDPOINT,
                 GCP,
                 HOST,
+                OAUTH2,
                 PASSWORD,
                 PORT,
                 PUBLIC,
@@ -2901,10 +2994,14 @@ impl<'a> Parser<'a> {
                 USERNAME,
                 WAREHOUSE,
             ])? {
-                ACCESS => {
-                    self.expect_keywords(&[KEY, ID])?;
-                    ConnectionOptionName::AccessKeyId
-                }
+                ACCESS => match self.expect_one_of_keywords(&[KEY, DELEGATION])? {
+                    KEY => {
+                        self.expect_keyword(ID)?;
+                        ConnectionOptionName::AccessKeyId
+                    }
+                    DELEGATION => ConnectionOptionName::AccessDelegation,
+                    _ => unreachable!(),
+                },
                 ASSUME => {
                     self.expect_keyword(ROLE)?;
                     match self.expect_one_of_keywords(&[ARN, SESSION])? {
@@ -2939,6 +3036,10 @@ impl<'a> Parser<'a> {
                     ConnectionOptionName::GcpConnection
                 }
                 HOST => ConnectionOptionName::Host,
+                OAUTH2 => {
+                    self.expect_keywords(&[SERVER, URL])?;
+                    ConnectionOptionName::Oauth2ServerUrl
+                }
                 PASSWORD => ConnectionOptionName::Password,
                 PORT => ConnectionOptionName::Port,
                 PUBLIC => {
@@ -3021,6 +3122,9 @@ impl<'a> Parser<'a> {
             )),
             ConnectionOptionName::GcpConnection => Some(self.parse_object_option_value()?),
             ConnectionOptionName::SshTunnel => Some(self.parse_object_option_value()?),
+            _ if name.value_contains_sensitive_data() => {
+                self.parse_optional_connection_credential_option_value()?
+            }
             _ => self.parse_optional_option_value()?,
         };
         Ok(ConnectionOption { name, value })
@@ -3547,6 +3651,41 @@ impl<'a> Parser<'a> {
         }?;
 
         Ok(Statement::CreateSink(statement))
+    }
+
+    fn parse_create_metric_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keywords(&[METRIC, SINK])?;
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_item_name()?;
+        let in_cluster = self.parse_optional_in_cluster()?;
+        self.expect_keyword(FROM)?;
+        let from = self.parse_raw_name()?;
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_create_metric_sink_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
+        Ok(Statement::CreateMetricSink(CreateMetricSinkStatement {
+            name,
+            in_cluster,
+            if_not_exists,
+            from,
+            with_options,
+        }))
+    }
+
+    /// Parse the PREFIX option for CREATE METRIC SINK
+    fn parse_create_metric_sink_option(
+        &mut self,
+    ) -> Result<CreateMetricSinkOption<Raw>, ParserError> {
+        self.expect_keyword(PREFIX)?;
+        Ok(CreateMetricSinkOption {
+            name: CreateMetricSinkOptionName::Prefix,
+            value: self.parse_optional_option_value()?,
+        })
     }
 
     /// Parse the name of a CREATE SINK optional parameter
@@ -4472,6 +4611,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_identifier()?;
         // For historical reasons, the parentheses around the options can be
         // omitted.
@@ -4494,13 +4634,16 @@ impl<'a> Parser<'a> {
             name,
             options,
             features,
+            if_not_exists,
         }))
     }
 
     fn parse_cluster_option_name(&mut self) -> Result<ClusterOptionName, ParserError> {
         let option = self.expect_one_of_keywords(&[
+            AUTO,
             AVAILABILITY,
             DISK,
+            EXPERIMENTAL,
             INTROSPECTION,
             MANAGED,
             REPLICAS,
@@ -4510,11 +4653,19 @@ impl<'a> Parser<'a> {
             WORKLOAD,
         ])?;
         let name = match option {
+            AUTO => {
+                self.expect_keywords(&[SCALING, STRATEGY])?;
+                ClusterOptionName::AutoScalingStrategy
+            }
             AVAILABILITY => {
                 self.expect_keyword(ZONES)?;
                 ClusterOptionName::AvailabilityZones
             }
             DISK => ClusterOptionName::Disk,
+            EXPERIMENTAL => {
+                self.expect_keywords(&[ARRANGEMENT, COMPRESSION])?;
+                ClusterOptionName::ExperimentalArrangementCompression
+            }
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
                 DEBUGGING => ClusterOptionName::IntrospectionDebugging,
                 INTERVAL => ClusterOptionName::IntrospectionInterval,
@@ -4543,6 +4694,9 @@ impl<'a> Parser<'a> {
         match name {
             ClusterOptionName::Replicas => self.parse_cluster_option_replicas(),
             ClusterOptionName::Schedule => self.parse_cluster_option_schedule(),
+            ClusterOptionName::AutoScalingStrategy => {
+                self.parse_cluster_option_auto_scaling_strategy()
+            }
             _ => {
                 let value = self.parse_optional_option_value()?;
                 Ok(ClusterOption { name, value })
@@ -4645,6 +4799,60 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse the value of the `AUTO SCALING STRATEGY` cluster option: a
+    /// paren-enclosed list of strategy sub-policies. v1 supports only
+    /// `ON HYDRATION (HYDRATION SIZE = '...' [, LINGER DURATION = '...'])`. An
+    /// empty list `()` disables autoscaling.
+    fn parse_cluster_option_auto_scaling_strategy(
+        &mut self,
+    ) -> Result<ClusterOption<Raw>, ParserError> {
+        let _ = self.consume_token(&Token::Eq);
+        self.expect_token(&Token::LParen)?;
+        let mut value = ClusterAutoScalingStrategyOptionValue { on_hydration: None };
+        if !self.consume_token(&Token::RParen) {
+            // The list is a comma-separated set of strategy sub-policies, each
+            // named by a leading keyword. Only `ON HYDRATION` exists in v1.
+            loop {
+                self.expect_keywords(&[ON, HYDRATION])?;
+                self.expect_token(&Token::LParen)?;
+                self.expect_keywords(&[HYDRATION, SIZE])?;
+                let _ = self.consume_token(&Token::Eq);
+                let hydration_size = self.parse_value()?;
+                let linger_duration = if self.consume_token(&Token::Comma) {
+                    self.expect_keywords(&[LINGER, DURATION])?;
+                    let _ = self.consume_token(&Token::Eq);
+                    Some(self.parse_value()?)
+                } else {
+                    None
+                };
+                self.expect_token(&Token::RParen)?;
+                // Each sub-policy may appear at most once; a repeated entry would
+                // otherwise silently keep only the last.
+                if value.on_hydration.is_some() {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_pos(),
+                        "ON HYDRATION specified more than once"
+                    );
+                }
+                value.on_hydration = Some(OnHydrationOptionValue {
+                    hydration_size,
+                    linger_duration,
+                });
+                if !self.consume_token(&Token::Comma) {
+                    break;
+                }
+            }
+            self.expect_token(&Token::RParen)?;
+        }
+        Ok(ClusterOption {
+            name: ClusterOptionName::AutoScalingStrategy,
+            value: Some(WithOptionValue::ClusterAutoScalingStrategyOptionValue(
+                value,
+            )),
+        })
+    }
+
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[
             AVAILABILITY,
@@ -4652,6 +4860,7 @@ impl<'a> Parser<'a> {
             COMPUTE,
             COMPUTECTL,
             DISK,
+            EXPERIMENTAL,
             INTERNAL,
             INTROSPECTION,
             SIZE,
@@ -4676,6 +4885,10 @@ impl<'a> Parser<'a> {
                 ReplicaOptionName::ComputectlAddresses
             }
             DISK => ReplicaOptionName::Disk,
+            EXPERIMENTAL => {
+                self.expect_keywords(&[ARRANGEMENT, COMPRESSION])?;
+                ReplicaOptionName::ExperimentalArrangementCompression
+            }
             INTERNAL => ReplicaOptionName::Internal,
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
                 DEBUGGING => ReplicaOptionName::IntrospectionDebugging,
@@ -4707,6 +4920,7 @@ impl<'a> Parser<'a> {
 
     fn parse_create_cluster_replica(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.next_token();
+        let if_not_exists = self.parse_if_not_exists()?;
         let of_cluster = self.parse_identifier()?;
         self.expect_token(&Token::Dot)?;
         let name = self.parse_identifier()?;
@@ -4721,6 +4935,7 @@ impl<'a> Parser<'a> {
             CreateClusterReplicaStatement {
                 of_cluster,
                 definition: ReplicaDefinition { name, options },
+                if_not_exists,
             },
         ))
     }
@@ -4875,6 +5090,7 @@ impl<'a> Parser<'a> {
             | ObjectType::MaterializedView
             | ObjectType::Source
             | ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
@@ -5476,6 +5692,40 @@ impl<'a> Parser<'a> {
         Ok(WithOptionValue::Item(self.parse_raw_name()?))
     }
 
+    fn parse_optional_connection_credential_option_value(
+        &mut self,
+    ) -> Result<Option<WithOptionValue<Raw>>, ParserError> {
+        match self.peek_token() {
+            Some(Token::RParen) | Some(Token::Comma) | Some(Token::Semicolon) | None => Ok(None),
+            _ => {
+                let _ = self.consume_token(&Token::Eq);
+                Ok(Some(self.parse_connection_credential_option_value()?))
+            }
+        }
+    }
+
+    fn parse_connection_credential_option_value(
+        &mut self,
+    ) -> Result<WithOptionValue<Raw>, ParserError> {
+        if self.parse_keyword(SECRET) {
+            if let Some(secret) = self.maybe_parse(Parser::parse_raw_name) {
+                Ok(WithOptionValue::Secret(secret))
+            } else {
+                Ok(WithOptionValue::Value(Value::String("secret".to_string())))
+            }
+        } else if let Some(value) = self.maybe_parse(Parser::parse_value) {
+            Ok(WithOptionValue::Value(value))
+        } else if let Some(ident) = self.maybe_parse(Parser::parse_identifier) {
+            Ok(WithOptionValue::Value(Value::String(ident.into_string())))
+        } else {
+            self.expected(
+                self.peek_pos(),
+                "connection credential value",
+                self.peek_token(),
+            )
+        }
+    }
+
     fn parse_optional_option_value(&mut self) -> Result<Option<WithOptionValue<Raw>>, ParserError> {
         // The next token might be a value and might not. The only valid things
         // that indicate no value would be `)` for end-of-options , `,` for
@@ -5523,6 +5773,15 @@ impl<'a> Parser<'a> {
     fn parse_option_map(
         &mut self,
     ) -> Result<Option<BTreeMap<String, WithOptionValue<Raw>>>, ParserError> {
+        // `MAP` only begins a map literal when a `[` follows it. Committing on
+        // the keyword alone makes a bare `map` in an option-value position a hard
+        // error on the missing bracket, rather than falling through to the item
+        // name it is: `TOPIC CONFIG = "map"` prints as `TOPIC CONFIG = map`,
+        // since `map` is a legal bare identifier everywhere else, and that output
+        // then failed to reparse.
+        if !(self.peek_keyword(MAP) && self.peek_nth_token(1) == Some(Token::LBracket)) {
+            return Ok(None);
+        }
         Ok(if self.parse_keyword(MAP) {
             self.expect_token(&Token::LBracket)?;
             let mut map = BTreeMap::new();
@@ -5682,7 +5941,10 @@ impl<'a> Parser<'a> {
             ObjectType::NetworkPolicy => self
                 .parse_alter_network_policy()
                 .map_parser_err(StatementKind::AlterNetworkPolicy),
-            ObjectType::Func | ObjectType::Subsource => parser_err!(
+            // Metric sinks are adapter-created and not a user surface, so they deliberately
+            // support no ALTER at all, `RENAME TO` and `OWNER TO` included. REASSIGN OWNED
+            // works off object ids and is unaffected.
+            ObjectType::Func | ObjectType::Subsource | ObjectType::MetricSink => parser_err!(
                 self,
                 self.peek_prev_pos(),
                 format!("Unsupported ALTER on {object_type}")
@@ -6431,6 +6693,7 @@ impl<'a> Parser<'a> {
             ObjectType::View => &[SET, RENAME, OWNER, RESET],
             ObjectType::Source
             | ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Role
@@ -7277,6 +7540,7 @@ impl<'a> Parser<'a> {
             | ObjectType::Source
             | ObjectType::Subsource
             | ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
@@ -8069,6 +8333,10 @@ impl<'a> Parser<'a> {
                     let in_cluster = self.parse_optional_in_cluster()?;
                     ShowObjectType::Sink { in_cluster }
                 }
+                ObjectType::MetricSink => {
+                    let in_cluster = self.parse_optional_in_cluster()?;
+                    ShowObjectType::MetricSink { in_cluster }
+                }
                 ObjectType::Type => ShowObjectType::Type,
                 ObjectType::Role => ShowObjectType::Role,
                 ObjectType::ClusterReplica => ShowObjectType::ClusterReplica,
@@ -8161,6 +8429,13 @@ impl<'a> Parser<'a> {
                 sink_name: self.parse_raw_name()?,
                 redacted,
             }))
+        } else if self.parse_keywords(&[CREATE, METRIC, SINK]) {
+            Ok(ShowStatement::ShowCreateMetricSink(
+                ShowCreateMetricSinkStatement {
+                    metric_sink_name: self.parse_raw_name()?,
+                    redacted,
+                },
+            ))
         } else if self.parse_keywords(&[CREATE, INDEX]) {
             Ok(ShowStatement::ShowCreateIndex(ShowCreateIndexStatement {
                 index_name: self.parse_raw_name()?,
@@ -9203,6 +9478,7 @@ impl<'a> Parser<'a> {
             match self.parse_one_of_keywords(&[TEXT, JSON, DOT]) {
                 Some(TEXT) => Some(ExplainFormat::Text),
                 Some(JSON) => Some(ExplainFormat::Json),
+                Some(DOT) => Some(ExplainFormat::Dot),
                 None => return Err(ParserError::new(self.index, "expected a format")),
                 _ => unreachable!(),
             }
@@ -9263,7 +9539,7 @@ impl<'a> Parser<'a> {
             let err = parser_err!(
                 self,
                 self.peek_prev_pos(),
-                format!("WITH HOLD is unsupported for cursors")
+                "WITH HOLD is unsupported for cursors"
             )
             .map_parser_err(StatementKind::Declare);
             self.expect_keyword(HOLD)
@@ -9678,6 +9954,7 @@ impl<'a> Parser<'a> {
                 )
             }
             ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::ClusterReplica
             | ObjectType::Role
@@ -9709,6 +9986,7 @@ impl<'a> Parser<'a> {
                 MATERIALIZED,
                 SOURCE,
                 SINK,
+                METRIC,
                 INDEX,
                 TYPE,
                 ROLE,
@@ -9732,6 +10010,13 @@ impl<'a> Parser<'a> {
                 }
                 SOURCE => ObjectType::Source,
                 SINK => ObjectType::Sink,
+                METRIC => {
+                    if let Err(e) = self.expect_keyword(SINK) {
+                        self.prev_token();
+                        return Err(e);
+                    }
+                    ObjectType::MetricSink
+                }
                 INDEX => ObjectType::Index,
                 TYPE => ObjectType::Type,
                 ROLE | USER => ObjectType::Role,
@@ -9768,6 +10053,7 @@ impl<'a> Parser<'a> {
                 MATERIALIZED,
                 SOURCE,
                 SINK,
+                METRIC,
                 INDEX,
                 TYPE,
                 ROLE,
@@ -9778,6 +10064,7 @@ impl<'a> Parser<'a> {
                 DATABASE,
                 SCHEMA,
                 FUNCTION,
+                NETWORK,
             ])? {
                 TABLE => ObjectType::Table,
                 VIEW => ObjectType::View,
@@ -9791,6 +10078,14 @@ impl<'a> Parser<'a> {
                 }
                 SOURCE => ObjectType::Source,
                 SINK => ObjectType::Sink,
+                METRIC => {
+                    if self.parse_keyword(SINK) {
+                        ObjectType::MetricSink
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
                 INDEX => ObjectType::Index,
                 TYPE => ObjectType::Type,
                 ROLE | USER => ObjectType::Role,
@@ -9806,6 +10101,14 @@ impl<'a> Parser<'a> {
                 DATABASE => ObjectType::Database,
                 SCHEMA => ObjectType::Schema,
                 FUNCTION => ObjectType::Func,
+                NETWORK => {
+                    if self.parse_keyword(POLICY) {
+                        ObjectType::NetworkPolicy
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
                 _ => unreachable!(),
             },
         )
@@ -9873,6 +10176,7 @@ impl<'a> Parser<'a> {
                 MATERIALIZED,
                 SOURCES,
                 SINKS,
+                METRIC,
                 INDEXES,
                 TYPES,
                 ROLES,
@@ -9898,6 +10202,14 @@ impl<'a> Parser<'a> {
                 }
                 SOURCES => ObjectType::Source,
                 SINKS => ObjectType::Sink,
+                METRIC => {
+                    if self.parse_keyword(SINKS) {
+                        ObjectType::MetricSink
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
                 INDEXES => ObjectType::Index,
                 TYPES => ObjectType::Type,
                 ROLES | USERS => ObjectType::Role,
@@ -9943,7 +10255,7 @@ impl<'a> Parser<'a> {
             return parser_err!(
                 self,
                 self.peek_prev_pos(),
-                format!("For object type MATERIALIZED VIEWS, you must specify 'TABLES'")
+                "For object type MATERIALIZED VIEWS, you must specify 'TABLES'"
             );
         }
 
@@ -9986,7 +10298,7 @@ impl<'a> Parser<'a> {
             return parser_err!(
                 self,
                 self.peek_prev_pos(),
-                format!("For object type MATERIALIZED VIEWS, you must specify 'TABLES'")
+                "For object type MATERIALIZED VIEWS, you must specify 'TABLES'"
             );
         }
 

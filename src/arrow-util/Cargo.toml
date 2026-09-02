@@ -20,9 +20,10 @@ mz-repr = { path = "../repr" }
 mz-ore = { path = "../ore" }
 num-traits.workspace = true
 ordered-float.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [features]
 default = []

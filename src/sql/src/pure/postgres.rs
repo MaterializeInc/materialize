@@ -284,18 +284,22 @@ pub(super) fn generate_source_export_statement_values(
     let mut constraints = vec![];
     for key in table.keys.clone() {
         let mut key_columns = vec![];
+        let mut all_key_cols_included = true;
 
         for col_num in key.cols {
-            let ident = Ident::new(
-                table
-                    .columns
-                    .iter()
-                    .find(|col| col.col_num == col_num)
-                    .expect("key exists as column")
-                    .name
-                    .clone(),
-            )?;
-            key_columns.push(ident);
+            match table.columns.iter().find(|col| col.col_num == col_num) {
+                Some(col) => {
+                    let ident = Ident::new(col.name.clone())?;
+                    key_columns.push(ident);
+                }
+                None => {
+                    all_key_cols_included = false;
+                    break;
+                }
+            }
+        }
+        if !all_key_cols_included {
+            continue;
         }
 
         let constraint = mz_sql_parser::ast::TableConstraint::Unique {
@@ -312,7 +316,14 @@ pub(super) fn generate_source_export_statement_values(
             constraints.push(constraint);
         }
     }
-    let details = SourceExportStatementDetails::Postgres { table };
+    // Newly purified exports always take the full-range oid cast. The flag is
+    // persisted in the statement details so replanning keeps the choice stable
+    // for the lifetime of the export, while exports whose details predate the
+    // flag decode as `false` and stay on the legacy cast.
+    let details = SourceExportStatementDetails::Postgres {
+        table,
+        cast_oid_full_range: true,
+    };
 
     let text_columns = text_columns.map(|mut columns| {
         columns.sort();
@@ -447,7 +458,20 @@ pub(super) async fn purify_source_exports(
             let exclude_columns = exclude_column_map.remove(&desc.oid);
 
             if let Some(exclude_cols) = &exclude_columns {
+                let excluded_col_nums: BTreeSet<u16> = desc
+                    .columns
+                    .iter()
+                    .filter(|c| exclude_cols.contains(&c.name))
+                    .map(|c| c.col_num)
+                    .collect();
                 desc.columns.retain(|c| !exclude_cols.contains(&c.name));
+                // A key naming an excluded column can never be re-verified against
+                // upstream, since the column (and any constraint on it) can be
+                // dropped independently of the columns we still track. Drop such
+                // keys now rather than carrying a stale key that will look like an
+                // incompatible schema change once the excluded column disappears.
+                desc.keys
+                    .retain(|k| k.cols.iter().all(|c| !excluded_col_nums.contains(c)));
             }
 
             if let (Some(text_cols), Some(exclude_cols)) = (&text_columns, &exclude_columns) {
@@ -550,6 +574,7 @@ pub(crate) fn generate_column_casts(
     scx: &StatementContext,
     table: &PostgresTableDesc,
     text_columns: &Vec<Ident>,
+    cast_oid_full_range: bool,
 ) -> Result<Vec<(CastType, StorageScalarExpr)>, PlanError> {
     // Generate the cast expressions required to convert the text encoded columns into
     // the appropriate target types, creating a Vec<StorageScalarExpr>.
@@ -592,7 +617,7 @@ pub(crate) fn generate_column_casts(
             }
         };
 
-        let cast_expr = match pg_type_to_cast_func(scx, &ty) {
+        let cast_expr = match pg_type_to_cast_func(scx, &ty, cast_oid_full_range) {
             Ok(None) => {
                 // No cast needed (e.g. Text → String identity).
                 StorageScalarExpr::Column(i)
@@ -654,6 +679,7 @@ fn resolve_pg_type_to_scalar_type(
 fn pg_type_to_cast_func(
     scx: &StatementContext,
     ty: &mz_pgrepr::Type,
+    cast_oid_full_range: bool,
 ) -> Result<Option<CastFunc>, PlanError> {
     use mz_pgrepr::Type;
 
@@ -681,7 +707,13 @@ fn pg_type_to_cast_func(
                 _ => unreachable!("Numeric must resolve to Numeric"),
             }
         }
-        Type::Oid => CastFunc::CastStringToOid,
+        Type::Oid => {
+            if cast_oid_full_range {
+                CastFunc::CastStringToOidFullRange
+            } else {
+                CastFunc::CastStringToOid
+            }
+        }
         Type::Text => return Ok(None),
         Type::BpChar { .. } => {
             // Resolve through the catalog to get the repr CharLength type.
@@ -736,7 +768,7 @@ fn pg_type_to_cast_func(
         Type::Json => CastFunc::CastStringToJsonb,
         Type::Array(elem) => {
             let return_ty = resolve_pg_type_to_scalar_type(scx, ty)?;
-            let elem_cast = build_element_cast_expr(scx, elem)?;
+            let elem_cast = build_element_cast_expr(scx, elem, cast_oid_full_range)?;
             CastFunc::CastStringToArray {
                 return_ty,
                 cast_expr: Box::new(elem_cast),
@@ -744,7 +776,7 @@ fn pg_type_to_cast_func(
         }
         Type::List(elem) => {
             let return_ty = resolve_pg_type_to_scalar_type(scx, ty)?;
-            let elem_cast = build_element_cast_expr(scx, elem)?;
+            let elem_cast = build_element_cast_expr(scx, elem, cast_oid_full_range)?;
             CastFunc::CastStringToList {
                 return_ty,
                 cast_expr: Box::new(elem_cast),
@@ -752,7 +784,7 @@ fn pg_type_to_cast_func(
         }
         Type::Map { value_type } => {
             let return_ty = resolve_pg_type_to_scalar_type(scx, ty)?;
-            let value_cast = build_element_cast_expr(scx, value_type)?;
+            let value_cast = build_element_cast_expr(scx, value_type, cast_oid_full_range)?;
             CastFunc::CastStringToMap {
                 return_ty,
                 cast_expr: Box::new(value_cast),
@@ -760,7 +792,7 @@ fn pg_type_to_cast_func(
         }
         Type::Range { element_type } => {
             let return_ty = resolve_pg_type_to_scalar_type(scx, ty)?;
-            let elem_cast = build_element_cast_expr(scx, element_type)?;
+            let elem_cast = build_element_cast_expr(scx, element_type, cast_oid_full_range)?;
             CastFunc::CastStringToRange {
                 return_ty,
                 cast_expr: Box::new(elem_cast),
@@ -792,8 +824,9 @@ fn pg_type_to_cast_func(
 fn build_element_cast_expr(
     scx: &StatementContext,
     elem_ty: &mz_pgrepr::Type,
+    cast_oid_full_range: bool,
 ) -> Result<StorageScalarExpr, PlanError> {
-    match pg_type_to_cast_func(scx, elem_ty)? {
+    match pg_type_to_cast_func(scx, elem_ty, cast_oid_full_range)? {
         None => Ok(StorageScalarExpr::Column(0)),
         Some(cast_func) => Ok(StorageScalarExpr::CallUnary(
             cast_func,

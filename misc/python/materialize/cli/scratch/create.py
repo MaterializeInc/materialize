@@ -147,6 +147,12 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
         help='Additional tags/labels for created instance. Format: {"key": "value"}',
     )
     parser.add_argument(
+        "--team",
+        type=str,
+        default="engineering",
+        help="Value for the `team` tag required by the scratch account. Defaults to `engineering`.",
+    )
+    parser.add_argument(
         "--instance-profile",
         type=str,
         default=DEFAULT_INSTANCE_PROFILE_NAME,
@@ -217,6 +223,8 @@ def run(args: argparse.Namespace) -> None:
 
     check_required_vars()
     extra_tags["LaunchedBy"] = whoami()
+    # --extra-tags wins if it also specifies a team.
+    extra_tags.setdefault("team", args.team)
 
     if args.ssh and len(descs) != 1:
         raise RuntimeError(f"Cannot use `--ssh` with {len(descs)} instances")

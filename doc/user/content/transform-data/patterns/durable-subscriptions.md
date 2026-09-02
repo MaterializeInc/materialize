@@ -7,6 +7,7 @@ menu:
 aliases:
   - /transform-data/patterns/time-travel-queries/
   - /transform-data/patterns/time-travel-queries/#history-retention-period
+  - /self-managed/v25.2/transform-data/patterns/durable-subscriptions/
 ---
 
 [//]: # "TODO: Move to Serve results section"

@@ -15,9 +15,9 @@
 # of some unstable niceties, like the `doc_cfg` annotations to indicate in the
 # docs what features must be enabled to use an item.
 #
-# CI always uses a nightly toolchain to run this script. To use one locally:
-#
-#     $ RUSTUP_TOOLCHAIN=nightly bin/doc
+# CI runs this script with a nightly toolchain already on the PATH. Run locally,
+# it selects the same nightly that `bin/ci-builder` pins, so that local doc builds
+# match what CI tests.
 #
 
 set -euo pipefail
@@ -26,13 +26,16 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-# The -Z flags are only available in nightly. If running locally using rustup proxy,
-# add the +nightly flag, otherwise, assume the caller (CI) is using the correct
-# binary. RUSTFLAGS and RUSTDOCFLAGS are toolchain variables, not rustup variables, so we
-# need to pass flags via `cargo`
-RUSTUP_FLAGS=""
+# The -Z flags are only available in nightly. When running locally, `cargo` is the
+# rustup proxy, so select the nightly through `RUSTUP_TOOLCHAIN`. In CI, `cargo` is
+# the nightly binary itself and ignores that variable.
 if [[ -z "${CI+x}" || "$CI" != "true" ]] ; then
-  RUSTUP_FLAGS="+nightly"
+  # Pin to the same nightly CI uses. A bare `nightly` resolves to whatever the
+  # newest nightly is, which drifts from what CI tests and can pick up nightly
+  # regressions that the pinned date deliberately avoids.
+  nightly_date=$(sed -n 's/^NIGHTLY_RUST_DATE=\(.*\)$/\1/p' bin/ci-builder)
+  [[ -n "$nightly_date" ]] || die "could not read NIGHTLY_RUST_DATE from bin/ci-builder"
+  export RUSTUP_TOOLCHAIN="nightly-$nightly_date"
 fi
 
 RUSTDOCFLAGS+=" -D warnings "
@@ -45,12 +48,12 @@ target=${CARGO_TARGET_DIR:-target}
 
 CARGO_DOC_OUTPUT=$(mktemp)
 # TODO: Remove -Zrustdoc-mergeable-info when https://github.com/rust-lang/rust/issues/146895 is fixed
-if ! cargo $RUSTUP_FLAGS doc --all-features -Zrustdoc-mergeable-info "$@" 2> "$CARGO_DOC_OUTPUT"; then
+if ! cargo doc --all-features -Zrustdoc-mergeable-info "$@" 2> "$CARGO_DOC_OUTPUT"; then
   if grep -q "invalid template" "$CARGO_DOC_OUTPUT"; then
     echo "Failed due to invalid template, nuking doc directory and retrying from scratch"
     rm -f "$CARGO_DOC_OUTPUT"
     rm -rf "$target"/doc
-    cargo $RUSTUP_FLAGS doc --all-features -Zrustdoc-mergeable-info "$@"
+    cargo doc --all-features -Zrustdoc-mergeable-info "$@"
   else
     echo "cargo doc failed:"
     cat "$CARGO_DOC_OUTPUT"

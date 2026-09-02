@@ -60,7 +60,21 @@ For details, see [CREATE Sink: Kafka/Redpanda](/sql/create-sink/kafka/).
 
 {{< public-preview />}}
 
-{{% include-example file="examples/create_sink_iceberg" example="syntax" %}}
+{{< tabs >}}
+
+{{< tab "MODE UPSERT" >}}
+
+{{% include-example file="examples/create_sink_iceberg" example="syntax-upsert" %}}
+
+{{< /tab >}}
+
+{{< tab "MODE APPEND" >}}
+
+{{% include-example file="examples/create_sink_iceberg" example="syntax-append" %}}
+
+{{< /tab >}}
+
+{{< /tabs >}}
 
 For details, see [CREATE Sink: Iceberg](/sql/create-sink/iceberg/).
 {{< /tab >}}

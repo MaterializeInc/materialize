@@ -13,8 +13,10 @@ use std::{io, str};
 
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
+use dec::OrderedDecimal;
 use itertools::Itertools;
 use mz_ore::cast::ReinterpretCast;
+use mz_ore::fmt::FormatBuffer;
 use mz_pgrepr_consts::oid::TYPE_INT2_OID;
 use mz_pgwire_common::Format;
 use mz_repr::adt::array::ArrayDimension;
@@ -22,6 +24,7 @@ use mz_repr::adt::char;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
+use mz_repr::adt::numeric::{self as mz_repr_numeric, NumericMaxScale, rescale};
 use mz_repr::adt::pg_legacy_name::NAME_MAX_BYTES;
 use mz_repr::adt::range::{Range, RangeInner};
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -30,9 +33,9 @@ use mz_repr::{Datum, RowArena, RowPacker, RowRef, SqlRelationType, SqlScalarType
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use uuid::Uuid;
 
-use crate::types::{UINT2, UINT4, UINT8};
-use crate::value::error::IntoDatumError;
-use crate::{Interval, Jsonb, Numeric, Type, UInt2, UInt4, UInt8};
+use crate::types::{NumericConstraints, UINT2, UINT4, UINT8};
+use crate::value::error::{IntoDatumError, NulCharacterError};
+use crate::{Interval, Jsonb, Numeric, Type, UInt2, UInt4, UInt8, regproc};
 
 pub mod error;
 pub mod interval;
@@ -89,6 +92,12 @@ pub enum Value {
     Numeric(Numeric),
     /// An object identifier.
     Oid(u32),
+    /// An object identifier naming a function.
+    ///
+    /// Kept distinct from [`Value::Oid`] because the text encoding resolves the
+    /// OID to the function's name, matching PostgreSQL's `regprocout`. The
+    /// binary encoding is identical to an `oid`, as it is in PostgreSQL.
+    RegProc(u32),
     /// A sequence of heterogeneous values.
     Record(Vec<Option<Value>>),
     /// A time.
@@ -138,8 +147,12 @@ impl Value {
             (Datum::UInt8(c), SqlScalarType::PgLegacyChar) => Some(Value::Char(c)),
             (Datum::UInt16(u), SqlScalarType::UInt16) => Some(Value::UInt2(UInt2(u))),
             (Datum::UInt32(oid), SqlScalarType::Oid) => Some(Value::Oid(oid)),
+            (Datum::UInt32(oid), SqlScalarType::RegProc) => Some(Value::RegProc(oid)),
+            // NOTE: `regclass` and `regtype` collapse into `Value::Oid`, so they
+            // render as digits where PostgreSQL renders a name. Unlike `regproc`
+            // they can name objects a user created, which no static table can
+            // know. Resolution for those two lives in the SQL cast to `text`.
             (Datum::UInt32(oid), SqlScalarType::RegClass) => Some(Value::Oid(oid)),
-            (Datum::UInt32(oid), SqlScalarType::RegProc) => Some(Value::Oid(oid)),
             (Datum::UInt32(oid), SqlScalarType::RegType) => Some(Value::Oid(oid)),
             (Datum::UInt32(u), SqlScalarType::UInt32) => Some(Value::UInt4(UInt4(u))),
             (Datum::UInt64(u), SqlScalarType::UInt64) => Some(Value::UInt8(UInt8(u))),
@@ -302,7 +315,7 @@ impl Value {
                     })
                 })?
             }
-            Value::Oid(oid) => Datum::UInt32(oid),
+            Value::Oid(oid) | Value::RegProc(oid) => Datum::UInt32(oid),
             Value::Record(_) => {
                 // This situation is handled gracefully by Value::decode; if we
                 // wind up here it's a programming error.
@@ -347,10 +360,18 @@ impl Value {
     }
 
     /// Serializes this value to `buf` in the specified `format`.
-    pub fn encode(&self, ty: &Type, format: Format, buf: &mut BytesMut) -> Result<(), io::Error> {
+    ///
+    /// `settings` affects only the text encoding.
+    pub fn encode(
+        &self,
+        ty: &Type,
+        format: Format,
+        buf: &mut BytesMut,
+        settings: TextEncodeSettings,
+    ) -> Result<(), io::Error> {
         match format {
             Format::Text => {
-                self.encode_text(buf);
+                self.encode_text(buf, settings);
                 Ok(())
             }
             Format::Binary => self.encode_binary(ty, buf),
@@ -359,12 +380,13 @@ impl Value {
 
     /// Serializes this value to `buf` using the [text encoding
     /// format](Format::Text).
-    pub fn encode_text(&self, buf: &mut BytesMut) -> Nestable {
+    pub fn encode_text(&self, buf: &mut BytesMut, settings: TextEncodeSettings) -> Nestable {
+        let extra_float_digits = settings.extra_float_digits;
         match self {
             Value::Array { dims, elements } => {
                 strconv::format_array(buf, dims, elements, |buf, elem| match elem {
                     None => Ok::<_, ()>(buf.write_null()),
-                    Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
+                    Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer(), settings)),
                 })
                 .expect("provided closure never fails")
             }
@@ -373,7 +395,7 @@ impl Value {
                     Ok::<_, ()>(
                         elem.as_ref()
                             .expect("Int2Vector does not support NULL values")
-                            .encode_text(buf.nonnull_buffer()),
+                            .encode_text(buf.nonnull_buffer(), settings),
                     )
                 })
                 .expect("provided closure never fails")
@@ -392,23 +414,35 @@ impl Value {
             Value::UInt4(u) => strconv::format_uint32(buf, u.0),
             Value::UInt8(u) => strconv::format_uint64(buf, u.0),
             Value::Interval(iv) => strconv::format_interval(buf, iv.0),
-            Value::Float4(f) => strconv::format_float32(buf, *f),
-            Value::Float8(f) => strconv::format_float64(buf, *f),
+            Value::Float4(f) if extra_float_digits > 0 => strconv::format_float32(buf, *f),
+            Value::Float4(f) => {
+                format_float_limited(buf, f64::from(*f), FLOAT4_DIGITS + extra_float_digits)
+            }
+            Value::Float8(f) if extra_float_digits > 0 => strconv::format_float64(buf, *f),
+            Value::Float8(f) => format_float_limited(buf, *f, FLOAT8_DIGITS + extra_float_digits),
             Value::Jsonb(js) => strconv::format_jsonb(buf, js.0.as_ref()),
             Value::List(elems) => strconv::format_list(buf, elems, |buf, elem| match elem {
                 None => Ok::<_, ()>(buf.write_null()),
-                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
+                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer(), settings)),
             })
             .expect("provided closure never fails"),
             Value::Map(elems) => strconv::format_map(buf, elems, |buf, value| match value {
                 None => Ok::<_, ()>(buf.write_null()),
-                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
+                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer(), settings)),
             })
             .expect("provided closure never fails"),
             Value::Oid(oid) => strconv::format_uint32(buf, *oid),
+            // Mirrors PostgreSQL's `regprocout`.
+            Value::RegProc(oid) => match *oid {
+                0 => strconv::format_string(buf, REGPROC_NULL),
+                oid => match regproc::name(oid) {
+                    Some(name) => strconv::format_string(buf, name),
+                    None => strconv::format_uint32(buf, oid),
+                },
+            },
             Value::Record(elems) => strconv::format_record(buf, elems, |buf, elem| match elem {
                 None => Ok::<_, ()>(buf.write_null()),
-                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
+                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer(), settings)),
             })
             .expect("provided closure never fails"),
             Value::Text(s) | Value::VarChar(s) | Value::BpChar(s) | Value::Name(s) => {
@@ -421,7 +455,7 @@ impl Value {
             Value::Numeric(d) => strconv::format_numeric(buf, &d.0),
             Value::MzTimestamp(t) => strconv::format_mz_timestamp(buf, *t),
             Value::Range(range) => strconv::format_range(buf, range, |buf, elem| match elem {
-                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer())),
+                Some(elem) => Ok(elem.encode_text(buf.nonnull_buffer(), settings)),
                 None => Ok::<_, ()>(buf.write_null()),
             })
             .expect("provided closure never fails"),
@@ -528,7 +562,9 @@ impl Value {
                 Err("binary encoding of map types is not implemented".into())
             }
             Value::Name(s) => s.to_sql(&PgType::NAME, buf),
-            Value::Oid(i) => i.to_sql(&PgType::OID, buf),
+            // PostgreSQL's `regprocsend` is `int4send`, so binary is identical to
+            // an `oid`.
+            Value::Oid(i) | Value::RegProc(i) => i.to_sql(&PgType::OID, buf),
             Value::Record(fields) => {
                 let nfields = pg_len("record field length", fields.len())?;
                 buf.put_i32(nfields);
@@ -668,6 +704,9 @@ impl Value {
         raw: &'a [u8],
     ) -> Result<Value, Box<dyn Error + Sync + Send>> {
         let s = str::from_utf8(raw)?;
+        // Match PostgreSQL, which rejects NUL bytes in text-format values of
+        // any type as part of client encoding verification.
+        reject_nul(s)?;
         Ok(match ty {
             Type::Array(elem_type) => {
                 let (elements, dims) = strconv::parse_array(
@@ -711,10 +750,12 @@ impl Value {
                 },
             )?),
             Type::Name => Value::Name(strconv::parse_pg_legacy_name(s)),
-            Type::Numeric { .. } => Value::Numeric(Numeric(strconv::parse_numeric(s)?)),
-            Type::Oid | Type::RegClass | Type::RegProc | Type::RegType => {
-                Value::Oid(strconv::parse_oid(s)?)
-            }
+            Type::Numeric { constraints } => Value::Numeric(Numeric(rescale_numeric(
+                strconv::parse_numeric(s)?,
+                constraints.as_ref(),
+            )?)),
+            Type::Oid | Type::RegClass | Type::RegType => Value::Oid(strconv::parse_oid(s)?),
+            Type::RegProc => Value::RegProc(parse_regproc(s)?),
             Type::Record(_) => {
                 return Err("input of anonymous composite types is not implemented".into());
             }
@@ -725,7 +766,7 @@ impl Value {
             Type::TimeTz { .. } => return Err("input of timetz types is not implemented".into()),
             Type::Timestamp { .. } => Value::Timestamp(strconv::parse_timestamp(s)?),
             Type::TimestampTz { .. } => Value::TimestampTz(strconv::parse_timestamptz(s)?),
-            Type::Uuid => Value::Uuid(Uuid::parse_str(s)?),
+            Type::Uuid => Value::Uuid(strconv::parse_uuid(s)?),
             Type::MzTimestamp => Value::MzTimestamp(strconv::parse_mz_timestamp(s)?),
             Type::Range { element_type } => Value::Range(strconv::parse_range(s, |elem_text| {
                 Value::decode_text(element_type, elem_text.as_bytes()).map(Box::new)
@@ -741,6 +782,9 @@ impl Value {
         s: &'a str,
         packer: &mut RowPacker,
     ) -> Result<(), Box<dyn Error + Sync + Send>> {
+        // Match PostgreSQL, which rejects NUL bytes in text-format values of
+        // any type as part of client encoding verification.
+        reject_nul(s)?;
         Ok(match ty {
             Type::Array(elem_type) => {
                 let (elements, dims) =
@@ -815,10 +859,14 @@ impl Value {
                 })?;
             }
             Type::Name => packer.push(Datum::String(&strconv::parse_pg_legacy_name(s))),
-            Type::Numeric { .. } => packer.push(Datum::Numeric(strconv::parse_numeric(s)?)),
-            Type::Oid | Type::RegClass | Type::RegProc | Type::RegType => {
+            Type::Numeric { constraints } => packer.push(Datum::Numeric(rescale_numeric(
+                strconv::parse_numeric(s)?,
+                constraints.as_ref(),
+            )?)),
+            Type::Oid | Type::RegClass | Type::RegType => {
                 packer.push(Datum::UInt32(strconv::parse_oid(s)?))
             }
+            Type::RegProc => packer.push(Datum::UInt32(parse_regproc(s)?)),
             Type::Record(_) => {
                 return Err("input of anonymous composite types is not implemented".into());
             }
@@ -831,7 +879,7 @@ impl Value {
             Type::TimestampTz { .. } => {
                 packer.push(Datum::TimestampTz(strconv::parse_timestamptz(s)?))
             }
-            Type::Uuid => packer.push(Datum::Uuid(Uuid::parse_str(s)?)),
+            Type::Uuid => packer.push(Datum::Uuid(strconv::parse_uuid(s)?)),
             Type::MzTimestamp => packer.push(Datum::MzTimestamp(strconv::parse_mz_timestamp(s)?)),
             Type::Range { element_type } => {
                 let range = strconv::parse_range(s, |elem_text| {
@@ -882,20 +930,56 @@ impl Value {
             Type::Map { .. } => Err("binary decoding of map types is not implemented".into()),
             Type::Name => {
                 let s = String::from_sql(ty.inner(), raw)?;
+                reject_nul(&s)?;
                 if s.len() > NAME_MAX_BYTES {
                     return Err("identifier too long".into());
                 }
                 Ok(Value::Name(s))
             }
-            Type::Numeric { .. } => Numeric::from_sql(ty.inner(), raw).map(Value::Numeric),
-            Type::Oid | Type::RegClass | Type::RegProc | Type::RegType => {
+            Type::Numeric { constraints } => {
+                let n = Numeric::from_sql(ty.inner(), raw)?;
+                // The wire format's `0xD000`/`0xF000` sign words spell
+                // `±Infinity`, which `Numeric::from_sql` decodes because it also
+                // decodes query *results*, where an infinite numeric is
+                // legitimate (aggregation overflow produces one). As a parameter
+                // it must be rejected: the text path rejects `'Infinity'::numeric`
+                // (`strconv::parse_numeric`), so accepting the binary spelling
+                // would let a client smuggle in a value no SQL literal can name.
+                if n.0.0.is_infinite() {
+                    return Err("numeric infinity is not supported".into());
+                }
+                Ok(Value::Numeric(Numeric(rescale_numeric(
+                    n.0,
+                    constraints.as_ref(),
+                )?)))
+            }
+            Type::Oid | Type::RegClass | Type::RegType => {
                 u32::from_sql(ty.inner(), raw).map(Value::Oid)
             }
+            Type::RegProc => u32::from_sql(ty.inner(), raw).map(Value::RegProc),
             Type::Record(_) => Err("input of anonymous composite types is not implemented".into()),
-            Type::Text => String::from_sql(ty.inner(), raw).map(Value::Text),
-            Type::BpChar { .. } => String::from_sql(ty.inner(), raw).map(Value::BpChar),
-            Type::VarChar { .. } => String::from_sql(ty.inner(), raw).map(Value::VarChar),
-            Type::Time { .. } => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),
+            Type::Text => decode_binary_string(ty, raw).map(Value::Text),
+            Type::BpChar { .. } => decode_binary_string(ty, raw).map(Value::BpChar),
+            Type::VarChar { .. } => decode_binary_string(ty, raw).map(Value::VarChar),
+            Type::Time { .. } => {
+                // The wire value is microseconds since midnight. Do not use
+                // `NaiveTime::from_sql`. Its duration arithmetic silently
+                // wraps around midnight, turning out-of-range values like
+                // 24:00:00 into 00:00:00. Reject them instead, including
+                // 24:00:00 itself, which `NaiveTime` cannot represent and
+                // the text path rejects too.
+                const USECS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000;
+                let usecs = i64::from_sql(ty.inner(), raw)?;
+                if !(0..USECS_PER_DAY).contains(&usecs) {
+                    return Err("time out of range".into());
+                }
+                let secs = u32::try_from(usecs / 1_000_000).expect("less than 86,400");
+                let nanos = u32::try_from(usecs % 1_000_000).expect("less than 1,000,000") * 1_000;
+                Ok(Value::Time(
+                    NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos)
+                        .expect("validated against USECS_PER_DAY"),
+                ))
+            }
             Type::TimeTz { .. } => Err("input of timetz types is not implemented".into()),
             Type::Timestamp { .. } => {
                 let ts = NaiveDateTime::from_sql(ty.inner(), raw)?;
@@ -921,6 +1005,142 @@ impl Value {
             Type::AclItem => Err("aclitem has no binary encoding".into()),
         }
     }
+}
+
+/// The text PostgreSQL's `regprocout` emits for OID 0, and that `regprocin`
+/// reads back as OID 0.
+const REGPROC_NULL: &str = "-";
+
+/// Parses the text format of a `regproc`, matching PostgreSQL's `regprocin`.
+///
+/// Accepting names is what keeps a `COPY ... TO` rendering loadable by
+/// `COPY ... FROM`, since the text encoding emits names. An overloaded name
+/// renders schema-qualified and names every one of its impls, so it does not
+/// round trip, which is true of PostgreSQL as well.
+fn parse_regproc(s: &str) -> Result<u32, Box<dyn Error + Sync + Send>> {
+    if s == REGPROC_NULL {
+        return Ok(0);
+    }
+    match regproc::oid(s) {
+        Ok(oid) => Ok(oid),
+        // PostgreSQL refuses the same input rather than picking an overload.
+        Err(regproc::NameLookupError::Ambiguous) => {
+            Err(format!("more than one function named \"{}\"", s).into())
+        }
+        Err(regproc::NameLookupError::NotFound) => match strconv::parse_oid(s) {
+            Ok(oid) => Ok(oid),
+            // Number-shaped input keeps its numeric diagnosis, which is what
+            // reports an out of range OID. Anything else was meant as a name, so
+            // report a missing function, matching PostgreSQL.
+            Err(err) if is_number_shaped(s) => Err(err.into()),
+            Err(_) => Err(format!("function \"{}\" does not exist", s).into()),
+        },
+    }
+}
+
+/// Whether `s` is shaped like a decimal number, ignoring whether it is in range.
+fn is_number_shaped(s: &str) -> bool {
+    let digits = s.trim();
+    let digits = digits.strip_prefix(['+', '-']).unwrap_or(digits);
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Session settings that affect how values are encoded as text.
+///
+/// PostgreSQL's text output for some types depends on session state. Encoders
+/// whose output must not depend on the session, such as everything evaluated
+/// in the dataflow layer, use [`TextEncodeSettings::STABLE`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextEncodeSettings {
+    /// PostgreSQL's `extra_float_digits`: positive values select the shortest
+    /// round-trippable encoding for `float4` and `float8`, while zero and
+    /// negative values limit output to `FLOAT4_DIGITS` or `FLOAT8_DIGITS` plus
+    /// this value significant digits.
+    pub extra_float_digits: i32,
+}
+
+impl TextEncodeSettings {
+    /// Settings that do not depend on session state.
+    pub const STABLE: TextEncodeSettings = TextEncodeSettings {
+        extra_float_digits: 1,
+    };
+}
+
+/// The number of significant decimal digits that survive a round trip through
+/// `f32` and `f64` respectively.
+const FLOAT4_DIGITS: i32 = 6;
+const FLOAT8_DIGITS: i32 = 15;
+
+/// Formats `f` with `ndig` significant digits like C's `%.*g`, mirroring
+/// PostgreSQL's `float4out`/`float8out` when `extra_float_digits` is zero or
+/// negative. Like PostgreSQL, `ndig` values below 1 are clamped to 1, and
+/// non-finite values are spelled `NaN`, `Infinity`, and `-Infinity`.
+fn format_float_limited(buf: &mut BytesMut, f: f64, ndig: i32) -> Nestable {
+    if f.is_nan() {
+        buf.write_str("NaN");
+        return Nestable::Yes;
+    }
+    if f.is_infinite() {
+        buf.write_str(if f < 0.0 { "-Infinity" } else { "Infinity" });
+        return Nestable::Yes;
+    }
+    let ndig = ndig.max(1);
+    // The exponent decides between the two notations, and it must be taken
+    // after rounding to `ndig` digits, as rounding can carry into the next
+    // exponent. `sci` has the shape `d[.ddd]e<exp>`.
+    let prec = usize::try_from(ndig - 1).expect("ndig is at least 1");
+    let sci = format!("{:.prec$e}", f);
+    let (mantissa, exp) = sci.split_once('e').expect("e format has an exponent");
+    let exp: i32 = exp.parse().expect("valid exponent");
+    if exp < -4 || exp >= ndig {
+        // Scientific notation. `%g` strips the fraction's trailing zeros and
+        // pads the exponent to at least two digits.
+        let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
+        write!(buf, "{mantissa}e{exp:+03}");
+    } else {
+        // Fixed-point notation. Rounding to `ndig - 1 - exp` decimal places
+        // leaves exactly `ndig` significant digits. Trailing zeros are
+        // stripped.
+        let decimals = usize::try_from(ndig - 1 - exp).expect("exp is less than ndig");
+        let fixed = format!("{f:.decimals$}");
+        let fixed = match fixed.contains('.') {
+            true => fixed.trim_end_matches('0').trim_end_matches('.'),
+            false => &fixed,
+        };
+        buf.write_str(fixed);
+    }
+    Nestable::Yes
+}
+
+/// Returns an error if `s` contains a NUL character, which PostgreSQL rejects
+/// in text values.
+fn reject_nul(s: &str) -> Result<(), Box<dyn Error + Sync + Send>> {
+    if s.contains('\0') {
+        Err(Box::new(NulCharacterError))
+    } else {
+        Ok(())
+    }
+}
+
+/// Decodes a binary-format string value, rejecting embedded NUL characters.
+fn decode_binary_string(ty: &Type, raw: &[u8]) -> Result<String, Box<dyn Error + Sync + Send>> {
+    let s = String::from_sql(ty.inner(), raw)?;
+    reject_nul(&s)?;
+    Ok(s)
+}
+
+/// Rescales `n` to the scale required by `constraints`, if any.
+fn rescale_numeric(
+    mut n: OrderedDecimal<mz_repr_numeric::Numeric>,
+    constraints: Option<&NumericConstraints>,
+) -> Result<OrderedDecimal<mz_repr_numeric::Numeric>, Box<dyn Error + Sync + Send>> {
+    if let Some(constraints) = constraints {
+        rescale(
+            &mut n.0,
+            NumericMaxScale::try_from(i64::from(constraints.max_scale()))?.into_u8(),
+        )?;
+    }
+    Ok(n)
 }
 
 fn encode_element(buf: &mut BytesMut, elem: Option<&Value>, ty: &Type) -> Result<(), io::Error> {
@@ -997,6 +1217,106 @@ mod tests {
         });
     }
 
+    /// A `regproc` renders as the function's name in text format and as a bare
+    /// OID in binary, which is what PostgreSQL's `regprocout` and
+    /// `regprocsend` do.
+    #[mz_ore::test]
+    fn regproc_text_encoding_resolves_names() {
+        // 1242 is `boolin`, uniquely named. 1398 is one of six `abs` overloads,
+        // so PostgreSQL qualifies it. 99999 names no function. The qualified
+        // overload does not round trip, because its rendering names all six.
+        for (oid, expected, round_trips) in [
+            (0, "-", true),
+            (1242, "boolin", true),
+            (1398, "pg_catalog.abs", false),
+            (99999, "99999", true),
+            (u32::MAX, "4294967295", true),
+        ] {
+            let mut buf = BytesMut::new();
+            Value::from_datum(Datum::UInt32(oid), &SqlScalarType::RegProc)
+                .expect("a non-null datum encodes")
+                .encode_text(&mut buf, TextEncodeSettings::STABLE);
+            assert_eq!(str::from_utf8(&buf).unwrap(), expected, "regproc {oid}");
+
+            if round_trips {
+                let Value::RegProc(decoded) = Value::decode_text(&Type::RegProc, &buf).unwrap()
+                else {
+                    panic!("decoding a regproc must yield Value::RegProc");
+                };
+                assert_eq!(decoded, oid, "text rendering {expected} did not round trip");
+            }
+
+            let mut binary = BytesMut::new();
+            Value::RegProc(oid)
+                .encode_binary(&Type::RegProc, &mut binary)
+                .expect("regproc has a binary encoding");
+            assert_eq!(&binary[..], &oid.to_be_bytes()[..], "regproc {oid} binary");
+        }
+    }
+
+    /// An overloaded name is an error rather than an arbitrary choice, which is
+    /// what PostgreSQL does too.
+    #[mz_ore::test]
+    fn regproc_text_decoding_rejects_ambiguous_names() {
+        assert_eq!(
+            Value::decode_text(&Type::RegProc, b"pg_catalog.abs")
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+                .unwrap_err(),
+            "more than one function named \"pg_catalog.abs\"",
+        );
+        assert_eq!(
+            Value::decode_text(&Type::RegProc, b"no_such_function")
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+                .unwrap_err(),
+            "function \"no_such_function\" does not exist",
+        );
+        let out_of_range = Value::decode_text(&Type::RegProc, b"99999999999999")
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+            .unwrap_err();
+        assert!(
+            out_of_range.starts_with("invalid input syntax for type oid"),
+            "unexpected error for an out of range OID: {out_of_range}",
+        );
+    }
+
+    /// [`format_float_limited`] must match C's `%.*g`, which PostgreSQL's
+    /// `float4out`/`float8out` use when `extra_float_digits` is zero or
+    /// negative.
+    #[mz_ore::test]
+    fn format_float_limited_matches_printf_g() {
+        for (f, ndig, expected) in [
+            (0.1_f64 + 0.2_f64, 15, "0.3"),
+            (0.1_f64 + 0.2_f64, 1, "0.3"),
+            (f64::from(123.45679_f32), 6, "123.457"),
+            (f64::from(123.45679_f32), 3, "123"),
+            (1e15, 15, "1e+15"),
+            (-123456.0, 3, "-1.23e+05"),
+            (999.999, 3, "1e+03"),
+            (0.0001, 15, "0.0001"),
+            (-0.00001, 15, "-1e-05"),
+            (0.0, 15, "0"),
+            (-0.0, 15, "-0"),
+            (100.0, 15, "100"),
+            (1.23456789012345, 12, "1.23456789012"),
+            (f64::NAN, 15, "NaN"),
+            (f64::INFINITY, 15, "Infinity"),
+            (f64::NEG_INFINITY, -100, "-Infinity"),
+            // `ndig` values below 1 clamp to 1.
+            (0.1_f64 + 0.2_f64, -5, "0.3"),
+        ] {
+            let mut buf = BytesMut::new();
+            format_float_limited(&mut buf, f, ndig);
+            assert_eq!(
+                str::from_utf8(&buf).unwrap(),
+                expected,
+                "{f} with {ndig} digits"
+            );
+        }
+    }
+
     /// Verifies that we correctly print the chain of parsing errors, all the way through the stack.
     #[mz_ore::test]
     fn decode_text_error_smoke_test() {
@@ -1009,7 +1329,7 @@ mod tests {
         };
 
         let mut buf = BytesMut::new();
-        bool_array.encode_text(&mut buf);
+        bool_array.encode_text(&mut buf, TextEncodeSettings::STABLE);
         let buf = buf.to_vec();
 
         let int_array_tpe = Type::Array(Box::new(Type::Int4));
@@ -1019,5 +1339,133 @@ mod tests {
             decoded_int_array.map_err(|e| e.to_string()).unwrap_err(),
             "invalid input syntax for type array: Specifying array lower bounds is not supported: \"[0:0]={t}\"".to_string()
         );
+    }
+
+    /// Decoding a numeric must round it to the destination's declared scale,
+    /// and the text and binary paths must agree. `COPY ... FROM` relies on the
+    /// text/CSV side of this (SS-193); binary parameters rely on the binary
+    /// side. `COPY ... FORMAT BINARY` is unsupported, so the binary path is
+    /// exercised here rather than via mzcompose.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // numeric/decimal contexts unsupported under miri
+    fn decode_numeric_applies_destination_scale() {
+        // A `numeric(10, 2)` destination: scale 2.
+        let ty = Type::from(&SqlScalarType::Numeric {
+            max_scale: Some(NumericMaxScale::try_from(2_i64).unwrap()),
+        });
+        let expected = strconv::parse_numeric("10.45").unwrap();
+
+        // Encode an over-scale value (10.447, scale 3) to binary, then decode
+        // it back through the scale-2 type.
+        let input = Value::Numeric(Numeric(strconv::parse_numeric("10.447").unwrap()));
+        let mut buf = BytesMut::new();
+        input
+            .encode_binary(&ty, &mut buf)
+            .expect("encoding 10.447 as numeric must succeed");
+        let Value::Numeric(Numeric(binary)) = Value::decode_binary(&ty, &buf).unwrap() else {
+            panic!("decode_binary of a numeric must yield Value::Numeric");
+        };
+        assert_eq!(binary, expected, "binary decode did not rescale to scale 2");
+
+        // The text path must agree with the binary path.
+        let Value::Numeric(Numeric(text)) = Value::decode_text(&ty, b"10.447").unwrap() else {
+            panic!("decode_text of a numeric must yield Value::Numeric");
+        };
+        assert_eq!(text, expected, "text decode did not rescale to scale 2");
+    }
+
+    /// The numeric wire format's `±Infinity` sign words must be rejected as a
+    /// parameter, matching the text path, which rejects `'Infinity'::numeric`.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // numeric/decimal contexts unsupported under miri
+    fn decode_binary_numeric_rejects_infinity() {
+        let ty = Type::Numeric { constraints: None };
+        // units = 0, weight = 0, sign, dscale = 0.
+        let header = |sign: u16| {
+            let mut b = Vec::new();
+            b.extend_from_slice(&0i16.to_be_bytes());
+            b.extend_from_slice(&0i16.to_be_bytes());
+            b.extend_from_slice(&sign.to_be_bytes());
+            b.extend_from_slice(&0i16.to_be_bytes());
+            b
+        };
+        // +Infinity and -Infinity.
+        for sign in [0xD000, 0xF000] {
+            let res = Value::decode_binary(&ty, &header(sign));
+            assert_eq!(
+                res.map(|_| ()).map_err(|e| e.to_string()).unwrap_err(),
+                "numeric infinity is not supported",
+                "sign {sign:#x} must be rejected",
+            );
+        }
+        // NaN, which the text path does accept, still decodes.
+        let Value::Numeric(Numeric(nan)) = Value::decode_binary(&ty, &header(0xC000)).unwrap()
+        else {
+            panic!("decode_binary of a numeric must yield Value::Numeric");
+        };
+        assert_eq!(nan, strconv::parse_numeric("NaN").unwrap());
+    }
+
+    /// Binary time values are microseconds since midnight. Out-of-range
+    /// values, including 24:00:00, must error rather than silently wrap
+    /// around midnight (SQL-473).
+    #[mz_ore::test]
+    fn decode_binary_time_rejects_out_of_range() {
+        const USECS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000;
+        let ty = Type::Time { precision: None };
+
+        for usecs in [USECS_PER_DAY, USECS_PER_DAY + 1, -1, i64::MIN, i64::MAX] {
+            let res = Value::decode_binary(&ty, &usecs.to_be_bytes());
+            assert_eq!(
+                res.map(|_| ()).map_err(|e| e.to_string()).unwrap_err(),
+                "time out of range",
+                "{usecs} microseconds must be rejected",
+            );
+        }
+
+        let Value::Time(t) = Value::decode_binary(&ty, &(USECS_PER_DAY - 1).to_be_bytes()).unwrap()
+        else {
+            panic!("decoding a time value must yield Value::Time");
+        };
+        assert_eq!(
+            t,
+            NaiveTime::from_hms_micro_opt(23, 59, 59, 999_999).unwrap()
+        );
+    }
+
+    /// Text values must never contain NUL characters, in either wire format.
+    #[mz_ore::test]
+    fn decode_rejects_nul_in_strings() {
+        const NUL_ERR: &str = "invalid byte sequence for encoding \"UTF8\": 0x00";
+        let raw = b"foo\x00bar";
+
+        for ty in [
+            Type::Text,
+            Type::BpChar { length: None },
+            Type::VarChar { max_length: None },
+            Type::Name,
+        ] {
+            for format in [Format::Text, Format::Binary] {
+                let res = Value::decode(format, &ty, raw);
+                assert_eq!(
+                    res.map(|_| ()).map_err(|e| e.to_string()).unwrap_err(),
+                    NUL_ERR,
+                    "{ty:?} in {format:?} format must reject NUL",
+                );
+            }
+        }
+
+        // The text format rejects NUL bytes regardless of the target type.
+        let res = Value::decode_text(&Type::Bytea, b"\\x00\x00");
+        assert_eq!(
+            res.map(|_| ()).map_err(|e| e.to_string()).unwrap_err(),
+            NUL_ERR,
+        );
+
+        // NUL-free values still decode.
+        let Value::Text(s) = Value::decode(Format::Binary, &Type::Text, b"foobar").unwrap() else {
+            panic!("decoding a text value must yield Value::Text");
+        };
+        assert_eq!(s, "foobar");
     }
 }

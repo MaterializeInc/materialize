@@ -165,8 +165,9 @@ In Materialize, a DDL-only transaction block is a transaction that can contain
 multiple DDL statements. The following DDL statements are allowed in DDL-only
 transactions:
 
-- [`ALTER ... RENAME`](/sql/alter-schema/#rename-schema) (e.g., `ALTER TABLE ... RENAME`, `ALTER SCHEMA ... RENAME`)
-- [`ALTER ... SWAP`](/sql/alter-schema/#swap-with) (e.g., `ALTER SCHEMA ... SWAP`)
+- `ALTER ... RENAME` (e.g., [`ALTER TABLE ... RENAME`](/sql/alter-table/),
+  [`ALTER SCHEMA ... RENAME`](/sql/alter-schema/))
+- `ALTER ... SWAP` (e.g., [`ALTER SCHEMA ... SWAP`](/sql/alter-schema/))
 - [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/)
 - [`CREATE SOURCE`](/sql/create-source/)
 

@@ -1,6 +1,6 @@
 ---
 source: src/pgrepr/src/lib.rs
-revision: ccd84bf8e8
+revision: c317ceee3c
 ---
 
 # mz-pgrepr
@@ -10,6 +10,7 @@ Provides representation and serialization of PostgreSQL data types for use in Ma
 ## Module structure
 
 * `oid` — re-exports OID constants from `mz-pgrepr-consts`.
+* `regproc` — re-exports the `regproc` name-lookup table from `mz-pgrepr-consts`; provides `name(oid)` and `oid(name)` for resolving builtin function OIDs to their text `regproc` renderings and back.
 * `types` — the `Type` enum mapping every supported PostgreSQL type (including Materialize extensions) to OIDs and type modifiers.
 * `value` — the `Value` enum, `Datum`↔`Value` conversion, and wire-format encoding/decoding; child modules handle complex types (numeric, interval, jsonb, record, unsigned integers).
 
@@ -17,7 +18,10 @@ Provides representation and serialization of PostgreSQL data types for use in Ma
 
 * `Value` — a PostgreSQL datum; supports text and binary encoding via `mz_pgwire_common::Format`.
 * `Type` — the type of a `Value`, with typmod encoding/decoding.
+* `TextEncodeSettings` — session parameters that govern text encoding (e.g. `extra_float_digits`); `TextEncodeSettings::STABLE` is used by all non-session callers.
 * `values_from_row` — converts an `mz_repr::RowRef` to a vector of `Option<Value>` for pgwire responses.
+* `NulCharacterError` — error returned when a decoded text value contains a NUL character.
+* `IntoDatumError` — error for fallible `Value`-to-`Datum` conversions.
 
 ## Dependencies
 

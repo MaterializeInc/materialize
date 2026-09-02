@@ -93,6 +93,9 @@ def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> N
             AlterConnectionHost,
         }
     )
+    # Sort so that parallel jobs, each of which computes its own shard, agree
+    # on the shard split. Set iteration order differs between processes.
+    checks.sort(key=lambda ch: ch.__name__)
     checks = buildkite.shard_list(checks, lambda ch: ch.__name__)
     if buildkite.get_parallelism_index() != 0 or buildkite.get_parallelism_count() != 1:
         print(

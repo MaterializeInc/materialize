@@ -1451,7 +1451,7 @@ impl PolymorphicSolution {
                 assert_eq!(
                     c, &compat_class,
                     "do not know how to correlate polymorphic classes {:?} and {:?}",
-                    c, &compat_class,
+                    c, compat_class,
                 )
             }
         };
@@ -1627,6 +1627,17 @@ fn coerce_args_to_types(
                         // polymorphic type.
                         PlanError::UnsolvablePolymorphicFunctionInput
                     })?;
+                if let SqlScalarType::Array(elem) = &target {
+                    if matches!(
+                        **elem,
+                        SqlScalarType::List { .. } | SqlScalarType::Map { .. }
+                    ) {
+                        bail_unsupported!(format!(
+                            "{}[]",
+                            ecx.humanize_sql_scalar_type(elem, false)
+                        ));
+                    }
+                }
                 do_convert(cexpr, &target)?
             }
         };
@@ -3833,7 +3844,12 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 // prevents `sum(NULL)` from choosing the `Float64`
                 // implementation, so that we match PostgreSQL's behavior.
                 // Plus we will one day want to support this overload.
-                bail_unsupported!("sum(interval)");
+                //
+                // The message mentions `avg` because `avg(interval)` desugars
+                // to `sum(interval) / count(interval)` before type checking
+                // (see `plan_avg` in `transform_ast.rs`), so this error is all
+                // a user who typed only `avg` gets to see.
+                bail_unsupported!("sum(interval) and avg(interval)");
             }) => Interval, 2113;
         },
 
@@ -4676,9 +4692,77 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params![MapAny] => UnaryFunc::MapLength(func::MapLength)
                 => Int32, oid::FUNC_MAP_LENGTH_OID;
         },
+        // `mz_environment_id` is a plan-time constant: its value is fixed
+        // for the lifetime of the envd process. Fold directly to a literal
+        // here so downstream layers (MVs, indexes, dataflow) can treat it
+        // as an ordinary string, not an unmaterializable function.
+        //
+        // Unlike the other system-information functions in this file, it is
+        // intentionally not gated by `restrict_to_user_objects`. The
+        // environment ID is not sensitive, and because the fold bakes the
+        // value into any stored view that references it, a gate here could
+        // only ever be partial (it would catch direct calls but not values
+        // already materialized into a view), which is more misleading than
+        // no gate at all. See
+        // doc/developer/design/20260508_restrict_to_user_objects.md.
         "mz_environment_id" => Scalar {
-            params!() => UnmaterializableFunc::MzEnvironmentId
-                => String, oid::FUNC_MZ_ENVIRONMENT_ID_OID;
+            params!() => Operation::nullary(|ecx| {
+                let env_id = ecx.catalog().config().environment_id.to_string();
+                Ok(HirScalarExpr::literal(
+                    Datum::String(&env_id),
+                    SqlScalarType::String,
+                ))
+            }) => String, oid::FUNC_MZ_ENVIRONMENT_ID_OID;
+        },
+        // The three AWS-context functions below are plan-time constants, fixed
+        // for the lifetime of the envd process, folded to a literal here for the
+        // same reason as `mz_environment_id`: the mz_aws_connections and
+        // mz_aws_privatelink_connections materialized views reproduce the AWS
+        // principal, external id, and trust policy in SQL, and a materialized
+        // view cannot reference an unmaterializable function. They return NULL
+        // on environments without the corresponding context (non-cloud/local).
+        //
+        // Like `mz_environment_id`, they are not gated by
+        // `restrict_to_user_objects`. The fold bakes the value into any stored
+        // view that references it, so a gate here could only catch direct calls,
+        // not values already materialized into a view, which is more misleading
+        // than no gate. Restricted sessions are still blocked from the system
+        // connection views themselves (they are system relations). See
+        // doc/developer/design/20260508_restrict_to_user_objects.md.
+        "mz_aws_account_id" => Scalar {
+            params!() => Operation::nullary(|ecx| {
+                Ok(match &ecx.catalog().config().aws_account_id {
+                    Some(account_id) => {
+                        HirScalarExpr::literal(Datum::String(account_id), SqlScalarType::String)
+                    }
+                    None => HirScalarExpr::literal_null(SqlScalarType::String),
+                })
+            }) => String, oid::FUNC_MZ_AWS_ACCOUNT_ID_OID;
+        },
+        "mz_aws_external_id_prefix" => Scalar {
+            params!() => Operation::nullary(|ecx| {
+                let prefix = ecx
+                    .catalog()
+                    .config()
+                    .connection_context
+                    .aws_external_id_prefix
+                    .as_ref()
+                    .map(|p| p.to_string());
+                Ok(match prefix {
+                    Some(prefix) => {
+                        HirScalarExpr::literal(Datum::String(&prefix), SqlScalarType::String)
+                    }
+                    None => HirScalarExpr::literal_null(SqlScalarType::String),
+                })
+            }) => String, oid::FUNC_MZ_AWS_EXTERNAL_ID_PREFIX_OID;
+        },
+        "mz_aws_connection_role_arn" => Scalar {
+            params!() => Operation::nullary(|ecx| {
+                Ok(match &ecx.catalog().config().connection_context.aws_connection_role_arn {
+                    Some(arn) => HirScalarExpr::literal(Datum::String(arn), SqlScalarType::String),
+                    None => HirScalarExpr::literal_null(SqlScalarType::String),
+                })
+            }) => String, oid::FUNC_MZ_AWS_CONNECTION_ROLE_ARN_OID;
         },
         "mz_is_superuser" => Scalar {
             params!() => UnmaterializableFunc::MzIsSuperuser
@@ -5254,6 +5338,15 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
                 func::MzValidateRolePrivilege,
             ) => Bool, oid::FUNC_MZ_VALIDATE_ROLE_PRIVILEGE_OID;
         },
+        "parse_catalog_acl_mode" => Scalar {
+            params!(Jsonb) => UnaryFunc::ParseCatalogAclMode(func::ParseCatalogAclMode)
+                => String, oid::FUNC_PARSE_CATALOG_ACL_MODE_OID;
+        },
+        "parse_catalog_audit_log_details" => Scalar {
+            params!(Jsonb) => UnaryFunc::ParseCatalogAuditLogDetails(
+                func::ParseCatalogAuditLogDetails,
+            ) => Jsonb, oid::FUNC_PARSE_CATALOG_AUDIT_LOG_DETAILS_OID;
+        },
         "parse_catalog_create_sql" => Scalar {
             params!(String) => UnaryFunc::ParseCatalogCreateSql(func::ParseCatalogCreateSql)
                 => Jsonb, oid::FUNC_PARSE_CATALOG_CREATE_SQL_OID;
@@ -5267,6 +5360,26 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
                 => SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)),
                 oid::FUNC_PARSE_CATALOG_PRIVILEGES_OID;
         },
+        "parse_kafka_source_details" => Scalar {
+            params!(String) => UnaryFunc::ParseKafkaSourceDetails(
+                func::ParseKafkaSourceDetails,
+            ) => Jsonb, oid::FUNC_PARSE_KAFKA_SOURCE_DETAILS_OID;
+        },
+        "parse_postgres_source_details" => Scalar {
+            params!(String) => UnaryFunc::ParsePostgresSourceDetails(
+                func::ParsePostgresSourceDetails,
+            ) => Jsonb, oid::FUNC_PARSE_POSTGRES_SOURCE_DETAILS_OID;
+        },
+        "parse_source_export_details" => Scalar {
+            params!(String) => UnaryFunc::ParseSourceExportDetails(
+                func::ParseSourceExportDetails,
+            ) => Jsonb, oid::FUNC_PARSE_SOURCE_EXPORT_DETAILS_OID;
+        },
+        "parse_connection_details" => Scalar {
+            params!(String) => UnaryFunc::ParseConnectionDetails(
+                func::ParseConnectionDetails,
+            ) => Jsonb, oid::FUNC_PARSE_CONNECTION_DETAILS_OID;
+        },
         "redact_sql" => Scalar {
             params!(String) => UnaryFunc::RedactSql(func::RedactSql)
                 => String, oid::FUNC_REDACT_SQL_OID;
@@ -5278,11 +5391,17 @@ pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock
     use ParamType::*;
     use SqlScalarBaseType::*;
     builtins! {
+        // `mz_all`/`mz_any` back the `ALL`/`ANY` subquery operators, whose
+        // rewrite in `transform_ast` always feeds them a boolean comparison.
+        // The parameter must stay `Bool`: `AggregateFunc::All`/`Any` render as
+        // accumulable reduces whose accumulator only accepts boolean datums, so
+        // a non-boolean argument would crash a compute worker at runtime rather
+        // than being rejected here at plan time (database-issues#9298).
         "mz_all" => Aggregate {
-            params!(Any) => AggregateFunc::All => Bool, oid::FUNC_MZ_ALL_OID;
+            params!(Bool) => AggregateFunc::All => Bool, oid::FUNC_MZ_ALL_OID;
         },
         "mz_any" => Aggregate {
-            params!(Any) => AggregateFunc::Any => Bool, oid::FUNC_MZ_ANY_OID;
+            params!(Bool) => AggregateFunc::Any => Bool, oid::FUNC_MZ_ANY_OID;
         },
         "mz_avg_promotion_internal_v1" => Scalar {
             // Promotes a numeric type to the smallest fractional type that

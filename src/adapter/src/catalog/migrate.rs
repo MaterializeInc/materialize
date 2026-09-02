@@ -8,13 +8,14 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 use base64::prelude::*;
 use maplit::btreeset;
 use mz_catalog::builtin::{BUILTINS, BuiltinTable};
 use mz_catalog::durable::objects::{SystemObjectDescription, SystemObjectMapping};
 use mz_catalog::durable::{MOCK_AUTHENTICATION_NONCE_KEY, Transaction};
-use mz_catalog::memory::objects::{BootstrapStateUpdateKind, StateUpdate};
+use mz_catalog::memory::objects::{StateUpdate, StateUpdateKind};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_persist_types::ShardId;
@@ -120,7 +121,7 @@ where
 pub(crate) struct MigrateResult {
     pub(crate) builtin_table_updates: Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
     pub(crate) catalog_updates: Vec<ParsedStateUpdate>,
-    pub(crate) post_item_updates: Vec<(BootstrapStateUpdateKind, Timestamp, Diff)>,
+    pub(crate) post_item_updates: Vec<(StateUpdateKind, Timestamp, Diff)>,
 }
 
 /// Migrates all user items and loads them into `state`.
@@ -153,6 +154,9 @@ pub(crate) async fn migrate(
         ast_rewrite_create_sink_partition_strategy(stmt)?;
         ast_rewrite_sql_server_constraints(stmt)?;
         ast_rewrite_add_missing_index_ids(tx, stmt)?;
+        ast_rewrite_kafka_metadata_refresh_intervals(stmt)?;
+        ast_rewrite_small_commit_intervals(stmt)?;
+        ast_rewrite_strip_builtin_version_pins(stmt)?;
         Ok(())
     })?;
 
@@ -172,14 +176,12 @@ pub(crate) async fn migrate(
         .into_iter()
         // The only post-item update kind we currently generate is to
         // update storage collection metadata.
-        .partition(|(kind, _, _)| {
-            matches!(kind, BootstrapStateUpdateKind::StorageCollectionMetadata(_))
-        });
+        .partition(|(kind, _, _)| matches!(kind, StateUpdateKind::StorageCollectionMetadata(_)));
 
     let item_updates = item_updates
         .into_iter()
         .map(|(kind, ts, diff)| StateUpdate {
-            kind: kind.into(),
+            kind,
             ts,
             diff: diff.try_into().expect("valid diff"),
         })
@@ -1038,4 +1040,194 @@ fn ast_rewrite_add_missing_index_ids(
     stmt.on_name = mz_sql::ast::RawItemName::Id(item_id.to_string(), unresolved_name, None);
 
     Ok(())
+}
+
+/// Strips the `VERSION` qualifier from by-id references to non-user (builtin)
+/// items.
+///
+/// A version pin on a builtin is meaningless, since builtins are not
+/// user-versioned. Older binaries could still persist such a pin, and once the
+/// builtin is converted to an item type without versions (e.g. a materialized
+/// view) reparsing the pin fails with `InvalidVersion` and panics during
+/// catalog open, wedging the upgrade. Stripping it makes the reference resolve
+/// to the latest version.
+///
+/// The read-side resolver tolerates these pins too, so this is durable cleanup
+/// rather than a correctness requirement. Safe to run every boot: stripping an
+/// absent version is a no-op.
+fn ast_rewrite_strip_builtin_version_pins(stmt: &mut Statement<Raw>) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::RawItemName;
+    use mz_sql::ast::visit_mut::{VisitMut, VisitMutNode};
+
+    struct StripBuiltinVersionPins;
+
+    impl<'ast> VisitMut<'ast, Raw> for StripBuiltinVersionPins {
+        fn visit_item_name_mut(&mut self, item_name: &mut RawItemName) {
+            if let RawItemName::Id(id, _, version) = item_name {
+                if version.is_some() {
+                    if let Ok(parsed) = id.parse::<CatalogItemId>() {
+                        if !parsed.is_user() {
+                            *version = None;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut visitor = StripBuiltinVersionPins;
+    stmt.visit_mut(&mut visitor);
+    Ok(())
+}
+
+fn ast_rewrite_kafka_metadata_refresh_intervals(
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::{
+        CreateSinkConnection, CreateSourceConnection, KafkaSinkConfigOptionName,
+        KafkaSourceConfigOptionName, WithOptionValue,
+    };
+    // A user can persist the interval either as a string literal
+    // (`WithOptionValue::Value`) or, if they wrote it as a double-quoted
+    // value, as a lexed identifier (`WithOptionValue::UnresolvedItemName`).
+    // Both shapes must be handled here.
+    let interval: Option<&mut WithOptionValue<Raw>> = match stmt {
+        Statement::CreateSource(stmt) => {
+            if let CreateSourceConnection::Kafka { options, .. } = &mut stmt.connection {
+                options.iter_mut().find_map(|option| {
+                    if matches!(
+                        option.name,
+                        KafkaSourceConfigOptionName::TopicMetadataRefreshInterval
+                    ) {
+                        option.value.as_mut()
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        }
+        Statement::CreateSink(stmt) => {
+            if let CreateSinkConnection::Kafka { options, .. } = &mut stmt.connection {
+                options.iter_mut().find_map(|option| {
+                    if matches!(
+                        option.name,
+                        KafkaSinkConfigOptionName::TopicMetadataRefreshInterval
+                    ) {
+                        option.value.as_mut()
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+
+    let Some(interval) = interval else {
+        return Ok(());
+    };
+
+    rewrite_interval_option_floor_1s(interval, "kafka metadata refresh interval")
+}
+
+/// Planning enforces a 1 second minimum `COMMIT INTERVAL`, but smaller
+/// intervals used to be accepted (and a sub-millisecond one left the sink
+/// unable to ever commit). Rewrite any persisted smaller interval to 1s so
+/// the sink still plans after an upgrade.
+///
+/// `COMMIT INTERVAL` is a generic `CREATE SINK` option in the grammar, but only
+/// Iceberg sinks accept it and only Iceberg planning enforces the 1s floor.
+fn ast_rewrite_small_commit_intervals(stmt: &mut Statement<Raw>) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::{CreateSinkConnection, CreateSinkOptionName};
+
+    let Statement::CreateSink(stmt) = stmt else {
+        return Ok(());
+    };
+    if !matches!(stmt.connection, CreateSinkConnection::Iceberg { .. }) {
+        return Ok(());
+    }
+    let interval = stmt.with_options.iter_mut().find_map(|o| {
+        if matches!(o.name, CreateSinkOptionName::CommitInterval) {
+            o.value.as_mut()
+        } else {
+            None
+        }
+    });
+    let Some(interval) = interval else {
+        return Ok(());
+    };
+
+    rewrite_interval_option_floor_1s(interval, "commit interval")
+}
+
+/// Rewrites an interval option value to `'1s'` if it is below 1 second.
+fn rewrite_interval_option_floor_1s(
+    value: &mut mz_sql::ast::WithOptionValue<Raw>,
+    label: &str,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::{Value, WithOptionValue};
+    use mz_sql::plan::TryFromValue;
+
+    let dur = Duration::try_from_value(value.clone())
+        .map_err(|e| anyhow::anyhow!("invalid value for {label}: {value:?}: {e}"))?;
+
+    if dur < Duration::from_secs(1) {
+        *value = WithOptionValue::Value(Value::String("1s".to_string()));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strip(sql: &str) -> String {
+        let mut stmt = mz_sql::parse::parse(sql)
+            .expect("test sql parses")
+            .into_element()
+            .ast;
+        ast_rewrite_strip_builtin_version_pins(&mut stmt).expect("rewrite succeeds");
+        stmt.to_ast_string_stable()
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` (SQL parser stack growth)
+    fn strips_version_from_builtin_reference() {
+        // A system (builtin) id must lose its version pin: builtins are never
+        // user-versioned, so a persisted `VERSION 0` is a stale artifact that
+        // wedges catalog open once the builtin is converted to a non-table.
+        let out = strip(
+            r#"CREATE VIEW "materialize"."public"."v" AS SELECT 1 FROM [s518 AS "mz_catalog"."mz_audit_events" VERSION 0]"#,
+        );
+        assert!(!out.contains("VERSION"), "version not stripped: {out}");
+        // The reference itself is preserved, only the version is dropped.
+        assert!(out.contains("s518"), "reference dropped: {out}");
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` (SQL parser stack growth)
+    fn preserves_version_on_user_reference() {
+        // A user table legitimately carries versions (`ALTER TABLE ... ADD
+        // COLUMN`), so the pin must survive.
+        let out = strip(
+            r#"CREATE VIEW "materialize"."public"."v" AS SELECT 1 FROM [u5 AS "materialize"."public"."t" VERSION 1]"#,
+        );
+        assert!(out.contains("VERSION"), "user version stripped: {out}");
+        assert!(out.contains("u5"), "reference dropped: {out}");
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` (SQL parser stack growth)
+    fn leaves_unpinned_builtin_reference_untouched() {
+        let out = strip(
+            r#"CREATE VIEW "materialize"."public"."v" AS SELECT 1 FROM [s518 AS "mz_catalog"."mz_audit_events"]"#,
+        );
+        assert!(!out.contains("VERSION"), "unexpected version: {out}");
+        assert!(out.contains("s518"), "reference dropped: {out}");
+    }
 }

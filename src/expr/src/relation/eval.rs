@@ -26,7 +26,6 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
-use differential_dataflow::consolidation::consolidate;
 use mz_repr::{Datum, Diff, Row, RowArena};
 
 use crate::{
@@ -292,6 +291,24 @@ fn over_limit() -> EvalError {
 
 fn unsupported(msg: &str) -> EvalError {
     EvalError::Internal(format!("constant evaluation: {msg}").into())
+}
+
+/// Sort `rows` by row, sum the multiplicities of equal rows, and discard those
+/// that cancel.
+///
+/// This is `differential_dataflow::consolidation::consolidate` in all but name;
+/// `mz-expr` does not depend on differential dataflow.
+fn consolidate(rows: &mut Vec<(Row, Diff)>) {
+    rows.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+    rows.dedup_by(|(row, diff), (prev_row, prev_diff)| {
+        if row == prev_row {
+            *prev_diff += *diff;
+            true
+        } else {
+            false
+        }
+    });
+    rows.retain(|(_, diff)| *diff != Diff::ZERO);
 }
 
 /// Evaluate a `Reduce` over constant `rows`, grouping by `group_key` and

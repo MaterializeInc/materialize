@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![recursion_limit = "256"]
+
 //! A SQL stream processor built on top of [timely dataflow] and
 //! [differential dataflow].
 //!
@@ -14,11 +16,11 @@
 //! [timely dataflow]: ../timely/index.html
 
 use ::http::HeaderValue;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use std::{env, io};
 
@@ -43,6 +45,7 @@ use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
+use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::future::OreFutureExt;
@@ -57,9 +60,8 @@ use mz_pgwire::MetricsConfig;
 use mz_pgwire_common::ConnectionCounter;
 use mz_repr::strconv;
 use mz_secrets::SecretsController;
-use mz_server_core::listeners::{
-    HttpListenerConfig, ListenerConfig, ListenersConfig, SqlListenerConfig,
-};
+use mz_server_core::listeners::v26_32_0::ListenersConfig;
+use mz_server_core::listeners::{HttpListenerConfig, ListenerConfig, SqlListenerConfig};
 use mz_server_core::{
     ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext, ServeConfig,
     TlsCertConfig, TlsMode,
@@ -107,6 +109,8 @@ pub struct Config {
     pub external_login_password_mz_system: Option<Password>,
     /// Frontegg JWT authenticator.
     pub frontegg: Option<FronteggAuthenticator>,
+    /// Frontegg workspace URL advertised in MCP OAuth discovery.
+    pub frontegg_oauth_issuer_url: Option<String>,
     /// Origins for which cross-origin resource sharing (CORS) for HTTP requests
     /// is permitted.
     pub cors_allowed_origin: AllowOrigin,
@@ -135,6 +139,8 @@ pub struct Config {
     pub secrets_controller: Arc<dyn SecretsController>,
     /// VpcEndpoint controller configuration.
     pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
+    /// The process-wide live system dyncfg set.
+    pub system_dyncfgs: Arc<ConfigSet>,
 
     // === Storage options. ===
     /// The interval at which to collect storage usage information.
@@ -162,6 +168,9 @@ pub struct Config {
     /// An SDK key for LaunchDarkly. Enables system parameter synchronization
     /// with LaunchDarkly.
     pub launchdarkly_sdk_key: Option<String>,
+    /// Overrides the LaunchDarkly service endpoints with a single base URL, as
+    /// for a relay proxy or a mock server in tests.
+    pub launchdarkly_base_uri: Option<String>,
     /// An invertible map from system parameter names to LaunchDarkly feature
     /// keys to use when propagating values from the latter to the former.
     pub launchdarkly_key_map: BTreeMap<String, String>,
@@ -272,7 +281,7 @@ impl Listener<SqlListenerConfig> {
         metrics: MetricsConfig,
         helm_chart_version: Option<String>,
     ) -> ListenerHandle {
-        let label: &'static str = Box::leak(name.into_boxed_str());
+        let label = leak_listener_name(&name);
         let tls = tls_reloading_context.map(|context| mz_server_core::ReloadingTlsConfig {
             context,
             mode: if self.config.enable_tls {
@@ -310,7 +319,7 @@ impl Listener<SqlListenerConfig> {
 impl Listener<HttpListenerConfig> {
     #[instrument(name = "environmentd::serve_http")]
     pub async fn serve_http(self, config: HttpConfig) -> ListenerHandle {
-        let task_name = format!("{}_http_server", &config.source);
+        let task_name = format!("{}_http_server", config.source);
         task::spawn(|| task_name, {
             let http_server = HttpServer::new(config);
             mz_server_core::serve(ServeConfig {
@@ -323,6 +332,29 @@ impl Listener<HttpListenerConfig> {
         });
         self.handle
     }
+}
+
+/// The `&'static str` listener names handed to the metrics layers, kept so that
+/// a process which serves repeatedly reuses one allocation per name.
+static LISTENER_NAMES: LazyLock<Mutex<BTreeSet<&'static str>>> =
+    LazyLock::new(|| Mutex::new(BTreeSet::new()));
+
+/// Returns a `&'static str` for `name`, leaking it on first use.
+///
+/// The metrics layer a listener is wired into wants a `'static` label. Leaking
+/// is how it gets one, but an unconditional leak both grows with every restart
+/// in a process that serves more than once, such as `sqllogictest`, and reads
+/// to LeakSanitizer as a genuine leak that fails the process at exit. Holding
+/// the leaked strs in a static solves both: one allocation per distinct name,
+/// still reachable at exit.
+fn leak_listener_name(name: &str) -> &'static str {
+    let mut names = LISTENER_NAMES.lock().expect("lock poisoned");
+    if let Some(name) = names.get(name) {
+        return name;
+    }
+    let name: &'static str = Box::leak(name.to_owned().into_boxed_str());
+    names.insert(name);
+    name
 }
 
 pub struct Listeners {
@@ -390,7 +422,7 @@ impl Listeners {
         let mut http_listener_handles = BTreeMap::new();
         for (name, listener) in self.http {
             let authenticator_kind = listener.config.authenticator_kind();
-            let source: &'static str = Box::leak(name.clone().into_boxed_str());
+            let source = leak_listener_name(&name);
             let tls = if listener.config.enable_tls() {
                 tls_reloading_context.clone()
             } else {
@@ -401,6 +433,7 @@ impl Listeners {
                 active_connection_counter: active_connection_counter.clone(),
                 helm_chart_version: config.helm_chart_version.clone(),
                 http_host_name: config.http_host_name.clone(),
+                frontegg_oauth_issuer_url: config.frontegg_oauth_issuer_url.clone(),
                 source,
                 tls,
                 authenticator_kind,
@@ -409,13 +442,13 @@ impl Listeners {
                 allowed_origin: config.cors_allowed_origin.clone(),
                 allowed_origin_list: config.cors_allowed_origin_list.clone(),
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
+                dyncfgs: Arc::clone(&config.system_dyncfgs),
                 metrics: metrics.clone(),
                 metrics_registry: metrics_registry.clone(),
                 mcp_metrics: mcp_metrics.clone(),
                 oauth_metadata_metrics: oauth_metadata_metrics.clone(),
-                allowed_roles: listener.config.allowed_roles(),
                 internal_route_config: Arc::clone(&internal_route_config),
-                routes_enabled: listener.config.routes.clone(),
+                routes_enabled: listener.config.routes,
                 replica_http_locator: Arc::clone(&config.controller.replica_http_locator),
             };
             http_listener_handles.insert(name.clone(), listener.serve_http(http_config).await);
@@ -475,6 +508,7 @@ impl Listeners {
                     config.launchdarkly_key_map,
                     SystemParameterSyncClientConfig::LaunchDarkly {
                         sdk_key: key,
+                        base_uri: config.launchdarkly_base_uri,
                         now_fn: config.now.clone(),
                     },
                 )),
@@ -670,19 +704,19 @@ impl Listeners {
         };
 
         // Load the adapter durable storage.
-        let (adapter_storage, audit_logs_iterator) = if read_only {
+        let adapter_storage = if read_only {
             // TODO: behavior of migrations when booting in savepoint mode is
             // not well defined.
-            let (adapter_storage, audit_logs_iterator) = openable_adapter_storage
+            let adapter_storage = openable_adapter_storage
                 .open_savepoint(boot_ts, &bootstrap_args)
                 .await?;
             // In read-only mode, we intentionally do not call `set_is_leader`,
             // because we are by definition not the leader if we are in
             // read-only mode.
 
-            (adapter_storage, audit_logs_iterator)
+            adapter_storage
         } else {
-            let (adapter_storage, audit_logs_iterator) = openable_adapter_storage
+            let adapter_storage = openable_adapter_storage
                 .open(boot_ts, &bootstrap_args)
                 .await?;
 
@@ -691,7 +725,7 @@ impl Listeners {
             // fenced out all other environments using the adapter storage.
             deployment_state.set_is_leader();
 
-            (adapter_storage, audit_logs_iterator)
+            adapter_storage
         };
 
         // Enable Persist compaction if we're not in read only.
@@ -727,6 +761,7 @@ impl Listeners {
         );
 
         // Initialize adapter.
+        let license_key = config.license_key.clone();
         let segment_client = config.segment_api_key.map(|api_key| {
             mz_segment::Client::new(mz_segment::Config {
                 api_key,
@@ -745,7 +780,6 @@ impl Listeners {
             controller_config: config.controller,
             controller_envd_epoch: envd_epoch,
             storage: adapter_storage,
-            audit_logs_iterator,
             timestamp_oracle_url: config.timestamp_oracle_url,
             unsafe_mode: config.unsafe_mode,
             all_features: config.all_features,
@@ -832,6 +866,8 @@ impl Listeners {
                 segment_client,
                 adapter_client: adapter_client.clone(),
                 environment_id: config.environment_id,
+                license_key: license_key.clone(),
+                helm_chart_version: config.helm_chart_version.clone(),
                 report_interval: Duration::from_secs(3600),
             });
         } else if config.test_only_dummy_segment_client {
@@ -846,6 +882,8 @@ impl Listeners {
                 segment_client,
                 adapter_client: adapter_client.clone(),
                 environment_id: config.environment_id,
+                license_key: license_key.clone(),
+                helm_chart_version: config.helm_chart_version.clone(),
                 report_interval: Duration::from_secs(180),
             });
         }
@@ -876,6 +914,8 @@ impl Listeners {
         Ok(Server {
             sql_listener_handles,
             http_listener_handles,
+            #[cfg(feature = "test")]
+            adapter_client,
             _adapter_handle: adapter_handle,
         })
     }
@@ -900,5 +940,15 @@ pub struct Server {
     // Drop order matters for these fields.
     pub sql_listener_handles: BTreeMap<String, ListenerHandle>,
     pub http_listener_handles: BTreeMap<String, ListenerHandle>,
+    #[cfg(feature = "test")]
+    adapter_client: AdapterClient,
     _adapter_handle: mz_adapter::Handle,
+}
+
+impl Server {
+    /// A client for the adapter, letting tests drive the adapter API directly.
+    #[cfg(feature = "test")]
+    pub fn adapter_client(&self) -> &AdapterClient {
+        &self.adapter_client
+    }
 }

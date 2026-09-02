@@ -11,18 +11,18 @@ menu:
 
 {{< public-preview />}}
 
-Use `CREATE SINK ... INTO ICEBERG CATALOG...` to create Iceberg sinks. Iceberg sinks write data from Materialize into an Iceberg table hosted on
-AWS S3 Tables. As data changes in Materialize, your Iceberg tables are
-automatically kept up to date.
+Use `CREATE SINK ... INTO ICEBERG CATALOG...` to create Iceberg sinks. Iceberg
+sinks write data from Materialize into an Iceberg table hosted on AWS S3
+Tables or Google Cloud BigLake. As data changes in Materialize, your Iceberg
+tables are automatically kept up to date.
 
-To create an Iceberg sink, you need:
-
-- An [AWS connection](/sql/create-connection/#aws) for authentication with
-  object storage.
-- An [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) to
-  specify access parameters to your Iceberg catalog.
+To create an Iceberg sink, you need an [Iceberg catalog
+connection](/sql/create-connection/#iceberg-catalog) that specifies access
+parameters to your Iceberg catalog.
 
 ## Syntax
+
+{{% include-headless "/headless/iceberg-sinks/syntax-change-aws-connection" %}}
 
 {{< tabs level=3 >}}
 
@@ -80,7 +80,7 @@ name="exactly-once-delivery" >}}
 
 The `COMMIT INTERVAL` setting involves tradeoffs between latency and efficiency:
 
-| Shorter intervals (e.g., < `60s`) | Longer intervals (e.g., `5m`) |
+| Shorter intervals (e.g., < `1m`) | Longer intervals (e.g., `5m`) |
 |---------------------------------|-------------------------------|
 | Lower latency - data visible sooner | Higher latency - data takes longer to appear |
 | More small files - can degrade query performance | Fewer, larger files - better query performance |
@@ -88,11 +88,14 @@ The `COMMIT INTERVAL` setting involves tradeoffs between latency and efficiency:
 | Higher S3 write costs (more PUT requests) | Lower S3 write costs |
 
 **Recommendations:**
-- For production: `60s` to `5m`
+- For production: `1m` to `5m`
 - For batch analytics: `5m` to `15m`
 
+Starting in v26.34, you can change the commit interval of an existing sink with
+[`ALTER SINK`](/sql/alter-sink/).
+
 {{< note >}}
-Outside of development environments, commit intervals should be at least `60s`.
+Outside of development environments, commit intervals should be at least `1m`.
 Short commit intervals increase catalog overhead and produce many small files.
 Small files will result in degraded query performance. It also increases load on
 the Iceberg metadata, which can result in a degraded catalog and non-responsive
@@ -170,11 +173,23 @@ Consider running [Iceberg compaction](https://iceberg.apache.org/docs/latest/mai
 
 ### Prerequisites: Create connections
 
-To create an Iceberg sink, you need an AWS connection and an Iceberg catalog
-connection.
+To create an Iceberg sink, you need an [Iceberg catalog connection](/serve-results/sink/iceberg/):
+
+{{< tabs >}}
+{{< tab "AWS S3 Tables" >}}
 
 {{% include-example file="examples/create_connection"
 example="example-iceberg-catalog-connection" %}}
+
+{{< /tab >}}
+{{< tab "GCP BigLake" >}}
+{{< private-preview />}}
+
+{{% include-example file="examples/create_connection"
+example="example-iceberg-catalog-gcp-connection" %}}
+
+{{< /tab >}}
+{{< /tabs >}}
 
 ### Creating an upsert sink
 
@@ -198,7 +213,6 @@ CREATE SINK deduped_sink
     NAMESPACE = 'raw',
     TABLE = 'events'
   )
-  USING AWS CONNECTION aws_connection
   KEY (event_id) NOT ENFORCED
   MODE UPSERT
   WITH (COMMIT INTERVAL = '1m');

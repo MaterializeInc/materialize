@@ -44,16 +44,16 @@ macro_rules! metrics {
                 $(self.$name.set(<$type as Unit>::from(rusage.$name));)*
                 Ok(())
             }
-            /// Returns the `(name, help)` of every metric defined here.
+            /// Returns the `(name, help, labels)` of every metric defined here.
             ///
             /// Used by `mz-metrics-catalog` to document metrics whose names are
             /// assembled at macro-expansion time and so are invisible to its
             /// source scraper.
-            pub(crate) fn descs(&self) -> Vec<(String, String)> {
+            pub(crate) fn descs(&self) -> Vec<(String, String, Vec<String>)> {
                 use prometheus::core::Collector;
                 let mut descs = Vec::new();
                 $(for d in self.$name.desc() {
-                    descs.push((d.fq_name.clone(), d.help.clone()));
+                    descs.push((d.fq_name.clone(), d.help.clone(), crate::desc_labels(d)));
                 })*
                 descs
             }
@@ -131,6 +131,22 @@ metrics! {
     (ru_oublock, "block output operations", "_total", Unitless),
     (ru_nvcsw, "voluntary context switches", "_total", Unitless),
     (ru_nivcsw, "involuntary context switches", "_total", Unitless)
+}
+
+/// Read this process's peak resident set size, in bytes.
+///
+/// The kernel maintains this high-water mark itself, so it cannot miss a short-lived spike the
+/// way a sampled maximum can.
+pub(crate) fn max_rss_bytes() -> Result<i64, std::io::Error> {
+    let rusage = unsafe {
+        let mut rusage = std::mem::zeroed();
+        let ret = libc::getrusage(libc::RUSAGE_SELF, &mut rusage);
+        if ret < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        rusage
+    };
+    Ok(<MaxrssToBytes as Unit>::from(rusage.ru_maxrss))
 }
 
 /// Register a task to read rusage stats.

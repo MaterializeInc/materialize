@@ -7,10 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+FROM node:26-trixie-slim AS node
+
+# Node 25 dropped corepack from the distribution, but the console pins its
+# package manager through `packageManager` in console/package.json and CI drives
+# yarn through `corepack enable`. Reinstall it here so that the stages copying
+# `/usr/local/lib/node_modules` below still find `corepack/dist/corepack.js`.
+RUN npm install -g corepack
+
 # Stage 1: Build a minimum CI Builder image that we can use for the initial
 # steps like `mkpipeline` and `Build`, as well as any tests that are self
 # contained and use other Docker images.
-FROM ubuntu:noble-20260410 AS ci-builder-min
+FROM debian:13-slim AS ci-builder-min
 
 WORKDIR /workdir
 
@@ -39,14 +47,14 @@ ARG XZ_OPT=-T0
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
-    docker.io \
+    docker-cli \
     eatmydata \
     gdb \
     git \
     gnupg2 \
     pigz \
     python3 \
-    python3.12-venv \
+    python3-venv \
     zstd \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
@@ -107,14 +115,10 @@ RUN \
     && rust/install.sh --components=cargo \
     && rm -rf rust.asc rust.tar.gz rust
 
-# Remove Ubuntu user causing UID collisions.
-# https://bugs.launchpad.net/cloud-images/+bug/2005129
-RUN userdel -r ubuntu
-
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
 
 # Stage 2: Build a full CI Builder image that can be used for any CI job.
-FROM ci-builder-min as ci-builder-full
+FROM ci-builder-min AS ci-builder-full
 
 ARG ARCH_GCC
 ARG ARCH_GO
@@ -122,7 +126,7 @@ ARG ARCH_GO
 WORKDIR /workdir
 
 # Install dependencies needed by any CI job. Not all of these are available in
-# the Ubuntu repositories.
+# the Debian repositories.
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     autoconf \
     automake \
@@ -132,7 +136,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     clang \
     cmake \
     curl \
-    docker.io \
+    docker-cli \
     gcc \
     g++ \
     gdb \
@@ -143,13 +147,12 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     libc6-dbg \
     libclang-common-18-dev \
     libclang-dev \
-    libclang-rt-18-dev \
+    libclang-rt-19-dev \
     libpq-dev \
     libxml2 \
     lld \
     llvm \
     make \
-    npm \
     openssh-client \
     pkg-config \
     postgresql-client \
@@ -165,20 +168,33 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     && rm -rf /var/lib/apt/lists/* \
     && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
 
-# Install Node.js LTS, for our Python typechecker. This is up here because we don't
-# expect it to change often.
+# The `-22` here must match the LLVM version of the rustc in rust-version (root
+# Cargo.toml). Bump both together, or cross-language LTO fails to link (the
+# linker cannot read newer bitcode).
+COPY apt-llvm.asc .
 
-COPY nodesource.asc .
-
-RUN gpg --dearmor < nodesource.asc > /etc/apt/keyrings/nodesource.gpg \
-    && rm nodesource.asc \
-    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+RUN gpg --dearmor < apt-llvm.asc > /etc/apt/keyrings/apt-llvm.gpg \
+    && rm apt-llvm.asc \
+    && echo "deb [signed-by=/etc/apt/keyrings/apt-llvm.gpg] http://apt.llvm.org/trixie/ llvm-toolchain-trixie-22 main" > /etc/apt/sources.list.d/apt-llvm.list \
     && apt-get update \
-    && apt-get install -y --no-install-recommends nodejs \
+    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    clang-22 \
+    lld-22 \
+    llvm-22 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    && rm -rf /usr/share/doc/nodejs \
-    && npm install -g corepack \
+    && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
+
+RUN printf '#!/bin/sh\nexec /usr/bin/clang-22 --ld-path=/usr/bin/ld.lld-22 "$@"\n' > /usr/local/bin/clang-lld-22 \
+    && chmod +x /usr/local/bin/clang-lld-22
+
+# Install Node.js LTS, for our Python typechecker. This is up here because we don't
+# expect it to change often.
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack \
+    && ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && corepack enable
 
 RUN curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.$ARCH_GCC.tar.xz > shellcheck.tar.xz \
@@ -247,6 +263,14 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=0.1.61" --locked --features=vendored-openssl cargo-udeps \
     && cargo install --root /usr/local --version "=0.4.0" --locked cargo-binutils \
     && cargo install --root /usr/local --version "=0.13.1" --locked wasm-pack \
+    && if [ "$RUST_VERSION" = "nightly" ]; then \
+           # NOTE: no --locked, unlike the installs above. cargo-fuzz 0.13.1's \
+           # bundled Cargo.lock pins deps that fail on the pinned nightly \
+           # (yanked futures-util/zip, plus a crate using the perma-unstable \
+           # `rustc_layout_scalar_valid_range_*` attribute). Let cargo resolve \
+           # compatible versions instead. \
+           cargo install --root /usr/local --version "=0.13.1" cargo-fuzz; \
+       fi \
     && rm -rf /cargo/registry /cargo/git
 
 # Shims for sanitizers
@@ -307,16 +331,15 @@ RUN if [ $ARCH_GCC = x86_64 ]; then \
 
 # Install KinD, kubectl, helm & helm-docs
 
-# TODO(def-) Upgrading kind/kubectl seems to cause Cloudtest failures
-RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
+RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
     && chmod +x /usr/local/bin/kind \
-    && if [ $ARCH_GO = amd64 ]; then echo 'c72eda46430f065fb45c5f70e7c957cc9209402ef309294821978677c8fb3284 /usr/local/bin/kind' | sha256sum --check; fi \
-    && if [ $ARCH_GO = arm64 ]; then echo '03d45095dbd9cc1689f179a3e5e5da24b77c2d1b257d7645abf1b4174bebcf2a /usr/local/bin/kind' | sha256sum --check; fi
+    && if [ $ARCH_GO = amd64 ]; then echo '50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54 /usr/local/bin/kind' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo 'b92cd615e97585de8ddade28ed5cd7feb4248d717c233eea5b03c37298900f5d /usr/local/bin/kind' | sha256sum --check; fi
 
-RUN curl -fsSL https://dl.k8s.io/release/v1.24.3/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
+RUN curl -fsSL https://dl.k8s.io/release/v1.34.10/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
     && chmod +x /usr/local/bin/kubectl \
-    && if [ $ARCH_GO = amd64 ]; then echo '8a45348bdaf81d46caf1706c8bf95b3f431150554f47d444ffde89e8cdd712c1 /usr/local/bin/kubectl' | sha256sum --check; fi \
-    && if [ $ARCH_GO = arm64 ]; then echo 'bdad4d3063ddb7bfa5ecf17fb8b029d5d81d7d4ea1650e4369aafa13ed97149a /usr/local/bin/kubectl' | sha256sum --check; fi
+    && if [ $ARCH_GO = amd64 ]; then echo '95bd70842bd11a524d24acd5b68726899e3488e153e45e2b4ae846545beda050 /usr/local/bin/kubectl' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo '52d3aeefea32fdfa3671ccd636be5da463ddfd0a2fc09d7bcbaedcff4c76cad5 /usr/local/bin/kubectl' | sha256sum --check; fi
 
 RUN curl -fsSL https://get.helm.sh/helm-v4.0.0-linux-$ARCH_GO.tar.gz > helm.tar.gz \
     && if [ $ARCH_GO = amd64 ]; then echo 'c77e9e7c1cc96e066bd240d190d1beed9a6b08060b2043ef0862c4f865eca08f helm.tar.gz' | sha256sum --check; fi \
@@ -386,7 +409,7 @@ RUN arch_fdb=$(echo "$ARCH_GCC" | sed -e "s/x86_64/amd64/") \
 COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
 
 ENV LDFLAGS="-fuse-ld=lld -static-libstdc++"
-ENV RUSTFLAGS="-Clink-arg=-Wl,--compress-debug-sections=zstd -Clink-arg=-Wl,-O3 -Clink-arg=-fuse-ld=lld -Csymbol-mangling-version=v0 -Ctarget-cpu=$RUST_CPU_TARGET -Ctarget-feature=$RUST_TARGET_FEATURES --cfg=tokio_unstable"
+ENV RUSTFLAGS="-Clink-arg=-Wl,--compress-debug-sections=zstd -Clink-arg=-Wl,-O3 -Clink-arg=-fuse-ld=lld -Clink-arg=-Wl,--icf=all -Csymbol-mangling-version=v0 -Ctarget-cpu=$RUST_CPU_TARGET -Ctarget-feature=$RUST_TARGET_FEATURES --cfg=tokio_unstable"
 ENV PATH=/opt/google-cloud-sdk/bin:$PATH
 ENV CARGO_TARGET_DIR=/mnt/build
 ENV CARGO_INCREMENTAL=1
@@ -399,7 +422,7 @@ RUN mkdir /cargo && chmod 777 /cargo
 VOLUME /cargo
 
 # Stage 3: Build a lightweight CI Builder image for console/playwright jobs.
-FROM ubuntu:noble-20260410 AS ci-builder-console
+FROM debian:13-slim AS ci-builder-console
 
 ARG ARCH_GCC
 ARG ARCH_GO
@@ -417,7 +440,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     ca-certificates \
     curl \
     dnsmasq \
-    docker.io \
+    docker-cli \
     eatmydata \
     gettext-base \
     git \
@@ -465,8 +488,8 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     libgtk-3-0t64 \
     libharfbuzz-icu0 \
     libhyphen0 \
-    libicu74 \
-    libjpeg-turbo8 \
+    libicu76 \
+    libjpeg62-turbo \
     liblcms2-2 \
     libmanette-0.2-0 \
     libopus0 \
@@ -492,29 +515,22 @@ RUN mkdir -p /usr/local/lib/docker/cli-plugins \
     && curl -fsSL https://github.com/docker/buildx/releases/download/v0.30.1/buildx-v0.30.1.linux-$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-buildx \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
 
-COPY nodesource.asc .
-
-RUN gpg --dearmor < nodesource.asc > /etc/apt/keyrings/nodesource.gpg \
-    && rm nodesource.asc \
-    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends nodejs \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* \
-    && rm -rf /usr/share/doc/nodejs \
-    && npm install -g corepack \
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack \
+    && ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && corepack enable
 
-# TODO(def-) Upgrading kind/kubectl seems to cause Cloudtest failures
-RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
+RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
     && chmod +x /usr/local/bin/kind \
-    && if [ $ARCH_GO = amd64 ]; then echo 'c72eda46430f065fb45c5f70e7c957cc9209402ef309294821978677c8fb3284 /usr/local/bin/kind' | sha256sum --check; fi \
-    && if [ $ARCH_GO = arm64 ]; then echo '03d45095dbd9cc1689f179a3e5e5da24b77c2d1b257d7645abf1b4174bebcf2a /usr/local/bin/kind' | sha256sum --check; fi
+    && if [ $ARCH_GO = amd64 ]; then echo '50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54 /usr/local/bin/kind' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo 'b92cd615e97585de8ddade28ed5cd7feb4248d717c233eea5b03c37298900f5d /usr/local/bin/kind' | sha256sum --check; fi
 
-RUN curl -fsSL https://dl.k8s.io/release/v1.24.3/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
+RUN curl -fsSL https://dl.k8s.io/release/v1.34.10/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
     && chmod +x /usr/local/bin/kubectl \
-    && if [ $ARCH_GO = amd64 ]; then echo '8a45348bdaf81d46caf1706c8bf95b3f431150554f47d444ffde89e8cdd712c1 /usr/local/bin/kubectl' | sha256sum --check; fi \
-    && if [ $ARCH_GO = arm64 ]; then echo 'bdad4d3063ddb7bfa5ecf17fb8b029d5d81d7d4ea1650e4369aafa13ed97149a /usr/local/bin/kubectl' | sha256sum --check; fi
+    && if [ $ARCH_GO = amd64 ]; then echo '95bd70842bd11a524d24acd5b68726899e3488e153e45e2b4ae846545beda050 /usr/local/bin/kubectl' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo '52d3aeefea32fdfa3671ccd636be5da463ddfd0a2fc09d7bcbaedcff4c76cad5 /usr/local/bin/kubectl' | sha256sum --check; fi
 
 # Use Helm 3 (not 4) because the cloud repo's bin/kind-create uses relative
 # file paths for vendored charts, which Helm 4 rejects as invalid URLs.
@@ -542,10 +558,6 @@ RUN gpg --import rust.asc \
     && rm -rf rust.asc rust.tar.gz rust
 
 COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
-
-# Remove Ubuntu user causing UID collisions.
-# https://bugs.launchpad.net/cloud-images/+bug/2005129
-RUN userdel -r ubuntu
 
 # Allow passwordless sudo for the CI user (created at runtime by autouseradd).
 RUN echo "ALL ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ci \

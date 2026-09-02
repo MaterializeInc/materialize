@@ -26,6 +26,7 @@ use mz_cluster_client::ReplicaId;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::ClusterId;
 use mz_ore::instrument;
+use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::to_datetime;
 use mz_ore::retry::Retry;
 use mz_ore::task;
@@ -52,7 +53,7 @@ use tracing::{Instrument, Level, event, info_span, warn};
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult};
 use crate::coord::Coordinator;
-use crate::coord::appends::BuiltinTableAppendNotify;
+use crate::coord::appends::{BuiltinTableAppendCompletion, BuiltinTableAppendNotify};
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::session::{Session, Transaction, TransactionOps};
 use crate::telemetry::{EventDetails, SegmentClientExt};
@@ -117,6 +118,14 @@ impl Coordinator {
         // thing to do is panic and let restart/bootstrap handle it.
         apply_implications_res.expect("cannot fail to apply catalog update implications");
 
+        // NOTE: `check_consistency` only runs with soft assertions enabled, so
+        // this phase reads about zero in production. We time it because a local
+        // rig debugging a transact stall commonly has them on, where the check is
+        // O(catalog size) and would otherwise appear as an unexplained remainder
+        // against the wrapper metric. The observation stays outside the macro,
+        // anything inside it compiles out exactly where soft assertions are off.
+        let consistency_start = Instant::now();
+
         // Note: It's important that we keep the function call inside macro, this way we only run
         // the consistency checks if soft assertions are enabled.
         mz_ore::soft_assert_eq_no_log!(
@@ -125,16 +134,39 @@ impl Coordinator {
             "coordinator inconsistency detected"
         );
 
+        self.metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["consistency_check"])
+            .observe(consistency_start.elapsed().as_secs_f64());
+
+        let side_effects_seconds = self
+            .metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["side_effects"]);
+        // Distinct from `table_updates_wait` in `catalog_transact_with_context`.
+        // Here the group commit has already been running concurrently with
+        // `apply_catalog_implications` above, so this wrapper is first polled
+        // late and only records the residual wait.
+        let table_updates_wait = self
+            .metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["table_updates_residual_wait"]);
         let side_effects_fut = side_effect(self, ctx);
 
         // Run our side effects concurrently with the table updates.
         let ((), ()) = futures::future::join(
-            side_effects_fut.instrument(info_span!(
-                "coord::catalog_transact_with_side_effects::side_effects_fut"
-            )),
-            table_updates.instrument(info_span!(
-                "coord::catalog_transact_with_side_effects::table_updates"
-            )),
+            side_effects_fut
+                .wall_time()
+                .observe(side_effects_seconds)
+                .instrument(info_span!(
+                    "coord::catalog_transact_with_side_effects::side_effects_fut"
+                )),
+            table_updates
+                .wall_time()
+                .observe(table_updates_wait)
+                .instrument(info_span!(
+                    "coord::catalog_transact_with_side_effects::table_updates"
+                )),
         )
         .await;
 
@@ -166,6 +198,10 @@ impl Coordinator {
 
         let (table_updates, catalog_updates) = self.catalog_transact_inner(conn_id, ops).await?;
 
+        let table_updates_wait = self
+            .metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["table_updates_wait"]);
         let apply_catalog_implications_fut = self.apply_catalog_implications(ctx, catalog_updates);
 
         // Apply catalog implications concurrently with the table updates.
@@ -173,9 +209,12 @@ impl Coordinator {
             apply_catalog_implications_fut.instrument(info_span!(
                 "coord::catalog_transact_with_context::side_effects_fut"
             )),
-            table_updates.instrument(info_span!(
-                "coord::catalog_transact_with_context::table_updates"
-            )),
+            table_updates
+                .wall_time()
+                .observe(table_updates_wait)
+                .instrument(info_span!(
+                    "coord::catalog_transact_with_context::table_updates"
+                )),
         )
         .await;
 
@@ -184,6 +223,10 @@ impl Coordinator {
         // let restart/bootstrap handle it.
         combined_apply_res.expect("cannot fail to apply catalog implications");
 
+        // See the note in `catalog_transact_with_side_effects` on why this is
+        // timed outside the macro and reads about zero in production.
+        let consistency_start = Instant::now();
+
         // Note: It's important that we keep the function call inside macro, this way we only run
         // the consistency checks if soft assertions are enabled.
         mz_ore::soft_assert_eq_no_log!(
@@ -191,6 +234,11 @@ impl Coordinator {
             Ok(()),
             "coordinator inconsistency detected"
         );
+
+        self.metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["consistency_check"])
+            .observe(consistency_start.elapsed().as_secs_f64());
 
         self.metrics
             .catalog_transact_seconds
@@ -251,19 +299,42 @@ impl Coordinator {
             return Err(AdapterError::DDLTransactionRace);
         }
 
+        // The per-statement phases of a DDL transaction carry their own labels.
+        // The work differs from a real transaction's phases, and it is billed
+        // once per statement rather than once per transaction, so pooling the two
+        // populations under one label would blur both.
+        let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();
+
         // Clone what we need from the session before taking &mut below.
+        let clone_start = Instant::now();
         let txn_ops_clone = txn_ops.clone();
         let txn_state_clone = txn_state.clone();
+        // NOTE: `txn_snapshot` is a deep clone of the durable `Snapshot`, which is
+        // O(catalog size) in allocations, once per statement. `txn_state` next to
+        // it is cheap, `CatalogState` holds its large collections in `imbl` maps.
         let prev_snapshot = txn_snapshot.clone();
+        phase_seconds
+            .with_label_values(&["ddl_txn_snapshot_clone"])
+            .observe(clone_start.elapsed().as_secs_f64());
 
         // Validate resource limits with all accumulated + new ops (cheap O(N) counting).
+        let prep_start = Instant::now();
         let mut combined_ops = txn_ops_clone;
         combined_ops.extend(ops.iter().cloned());
         let conn_id = ctx.session().conn_id().clone();
-        self.validate_resource_limits(&combined_ops, &conn_id)?;
+        let validate_res = self.validate_resource_limits(&combined_ops, &conn_id);
+        phase_seconds
+            .with_label_values(&["ddl_txn_prep"])
+            .observe(prep_start.elapsed().as_secs_f64());
+        validate_res?;
 
         // Get oracle timestamp for audit log entries.
-        let oracle_write_ts = self.get_local_write_ts().await.timestamp;
+        let oracle_write_ts = self
+            .get_local_write_ts()
+            .wall_time()
+            .observe(phase_seconds.with_label_values(&["ddl_txn_write_ts"]))
+            .await
+            .timestamp;
 
         // Get ConnMeta for the session.
         let conn = self.active_conns.get(ctx.session().conn_id());
@@ -282,6 +353,8 @@ impl Coordinator {
                 prev_snapshot,
                 oracle_write_ts,
             )
+            .wall_time()
+            .observe(phase_seconds.with_label_values(&["ddl_txn_dry_run"]))
             .await?;
 
         // Accumulate ops for eventual COMMIT.
@@ -319,6 +392,9 @@ impl Coordinator {
 
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
+        let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();
+        let phase_start = Instant::now();
+
         let mut webhook_sources_to_restart = BTreeSet::new();
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
@@ -335,6 +411,7 @@ impl Coordinator {
         let mut update_cluster_scheduling_config = false;
         let mut update_http_config = false;
         let mut update_advance_timelines_interval = false;
+        let mut update_optimizer_e2e_latency_warning_threshold = false;
 
         for op in &ops {
             match op {
@@ -389,6 +466,8 @@ impl Coordinator {
                     update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
                     update_http_config |= vars::is_http_config_var(name);
                     update_advance_timelines_interval |= name == DEFAULT_TIMESTAMP_INTERVAL.name();
+                    update_optimizer_e2e_latency_warning_threshold |=
+                        name == vars::OPTIMIZER_E2E_LATENCY_WARNING_THRESHOLD.name();
                 }
                 catalog::Op::ResetAllSystemConfiguration => {
                     // Assume they all need to be updated.
@@ -405,6 +484,7 @@ impl Coordinator {
                     update_metrics_config = true;
                     update_http_config = true;
                     update_advance_timelines_interval = true;
+                    update_optimizer_e2e_latency_warning_threshold = true;
                 }
                 catalog::Op::RenameItem { id, .. } => {
                     let item = self.catalog().get_entry(id);
@@ -453,7 +533,13 @@ impl Coordinator {
             }
         }
 
-        self.validate_resource_limits(&ops, conn_id.unwrap_or(&SYSTEM_CONN_ID))?;
+        // Observe before propagating, so a transaction rejected on resource
+        // limits still accounts for the op scan it burned on the loop.
+        let validate_res = self.validate_resource_limits(&ops, conn_id.unwrap_or(&SYSTEM_CONN_ID));
+        phase_seconds
+            .with_label_values(&["prep"])
+            .observe(phase_start.elapsed().as_secs_f64());
+        validate_res?;
 
         // This will produce timestamps that are guaranteed to increase on each
         // call, and also never be behind the system clock. If the system clock
@@ -463,7 +549,11 @@ impl Coordinator {
         // always going up, and believe we will always be close to the system
         // clock because it is well configured (chrony) and so may only rarely
         // regress or pause for 10s.
-        let oracle_write_ts = self.get_local_write_ts().await.timestamp;
+        let oracle_write_ts = self
+            .get_catalog_write_ts()
+            .wall_time()
+            .observe(phase_seconds.with_label_values(&["write_ts"]))
+            .await;
 
         let Coordinator {
             catalog,
@@ -475,6 +565,25 @@ impl Coordinator {
         let catalog = Arc::make_mut(catalog);
         let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
 
+        // Register the session as an ephemeral owner (its uuid <-> connection
+        // mapping) at its first temporary-item creation.
+        if let Some(conn) = conn {
+            let creates_temp_item = ops.iter().any(
+                |op| matches!(op, catalog::Op::CreateItem { item, .. } if item.is_temporary()),
+            );
+            if creates_temp_item && !catalog.state().has_temporary_namespace(conn.conn_id()) {
+                catalog.register_temporary_namespace(conn.conn_id(), conn.uuid());
+            }
+        }
+
+        // NOTE: This phase contains every durable `sync` and `commit` a catalog
+        // transaction performs, which is what makes `transact` minus those two
+        // histograms an estimate of the in-memory work. Two caveats. More than
+        // one sync happens per transaction, so the subtraction is only valid on
+        // rates of `_sum`, never on per-observation means. And durable
+        // `allocate_id` (user ID pool refills, storage usage batch IDs) observes
+        // into the same histograms from outside any catalog transaction, so the
+        // estimate is biased low while allocation is active.
         let TransactionResult {
             builtin_table_updates,
             catalog_updates,
@@ -486,6 +595,8 @@ impl Coordinator {
                 conn,
                 ops,
             )
+            .wall_time()
+            .observe(phase_seconds.with_label_values(&["transact"]))
             .await?;
 
         for (cluster_id, replica_id) in &cluster_replicas_to_drop {
@@ -513,10 +624,13 @@ impl Coordinator {
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
-        let (builtin_update_notify, _) = self
-            .builtin_table_update()
-            .execute(builtin_table_updates)
-            .await;
+        let stage_start = Instant::now();
+        let builtin_update_notify = self.builtin_table_update().execute(builtin_table_updates);
+        phase_seconds
+            .with_label_values(&["stage_builtin"])
+            .observe(stage_start.elapsed().as_secs_f64());
+
+        let finalize_start = Instant::now();
 
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
@@ -561,6 +675,14 @@ impl Coordinator {
                     self.advance_timelines_interval = tokio::time::interval(new_interval);
                 }
             }
+            if update_optimizer_e2e_latency_warning_threshold {
+                let threshold = self
+                    .catalog()
+                    .system_config()
+                    .optimizer_e2e_latency_warning_threshold();
+                self.optimizer_metrics
+                    .set_e2e_optimization_time_log_threshold(threshold);
+            }
         }
         .instrument(info_span!("coord::catalog_transact_with::finalize"))
         .await;
@@ -588,11 +710,16 @@ impl Coordinator {
             }
         }
 
+        phase_seconds
+            .with_label_values(&["finalize"])
+            .observe(finalize_start.elapsed().as_secs_f64());
+
         Ok((builtin_update_notify, catalog_updates))
     }
 
     pub(crate) fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
         self.drop_introspection_subscribes(replica_id);
+        self.drop_metric_sinks(replica_id);
 
         self.controller
             .drop_replica(cluster_id, replica_id)
@@ -613,16 +740,27 @@ impl Coordinator {
     }
 
     /// A convenience method for dropping tables.
-    pub(crate) fn drop_tables(&mut self, tables: Vec<(CatalogItemId, GlobalId)>, ts: Timestamp) {
+    pub(crate) async fn drop_tables(&mut self, tables: Vec<(CatalogItemId, GlobalId)>) {
         for (item_id, _gid) in &tables {
             self.active_webhooks.remove(item_id);
         }
 
+        let table_gids: Vec<_> = tables.into_iter().map(|(_id, gid)| gid).collect();
+
+        // FIFO ordering places the forget after every staged append.
+        let forget_ids = self
+            .controller
+            .storage
+            .txns_table_ids(table_gids.clone())
+            .unwrap_or_terminate("cannot fail to look up txns-registered tables");
+        if !forget_ids.is_empty() {
+            self.forget_tables_via_committer(forget_ids).await;
+        }
+
         let storage_metadata = self.catalog.state().storage_metadata();
-        let table_gids = tables.into_iter().map(|(_id, gid)| gid).collect();
         self.controller
             .storage
-            .drop_tables(storage_metadata, table_gids, ts)
+            .drop_tables(storage_metadata, table_gids)
             .unwrap_or_terminate("cannot fail to drop tables");
     }
 
@@ -638,7 +776,10 @@ impl Coordinator {
     /// sink was known to the controller. It is the caller's responsibility to
     /// retire the returned sink. Consider using `retire_compute_sinks` instead.
     #[must_use]
-    pub async fn drop_compute_sink(&mut self, sink_id: GlobalId) -> Option<ActiveComputeSink> {
+    pub async fn drop_compute_sink(
+        &mut self,
+        sink_id: GlobalId,
+    ) -> Option<(ActiveComputeSink, BuiltinTableAppendNotify)> {
         self.drop_compute_sinks([sink_id]).await.remove(&sink_id)
     }
 
@@ -647,18 +788,20 @@ impl Coordinator {
     /// For each sink that exists, the coordinator and controller's state
     /// associated with the sink is removed.
     ///
-    /// Returns a map containing the controller's state for each sink that was
-    /// removed. It is the caller's responsibility to retire the returned sinks.
-    /// Consider using `retire_compute_sinks` instead.
+    /// Returns a map from sink id to the controller's state for the sink and a notify that
+    /// resolves once the sink's `mz_subscriptions` retraction is durable (see
+    /// `remove_active_compute_sink`). It is the caller's responsibility to await the notify
+    /// off the coordinator loop and then retire the returned sinks. Consider using
+    /// `retire_compute_sinks` instead.
     #[must_use]
     pub async fn drop_compute_sinks(
         &mut self,
         sink_ids: impl IntoIterator<Item = GlobalId>,
-    ) -> BTreeMap<GlobalId, ActiveComputeSink> {
+    ) -> BTreeMap<GlobalId, (ActiveComputeSink, BuiltinTableAppendNotify)> {
         let mut by_id = BTreeMap::new();
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for sink_id in sink_ids {
-            let sink = match self.remove_active_compute_sink(sink_id).await {
+            let (sink, write_notify) = match self.remove_active_compute_sink(sink_id).await {
                 None => {
                     // This can happen due to a race condition: an internal
                     // subscribe may be cleaned up via its own message while
@@ -667,14 +810,14 @@ impl Coordinator {
                     tracing::debug!(%sink_id, "drop_compute_sinks: sink already removed");
                     continue;
                 }
-                Some(sink) => sink,
+                Some(entry) => entry,
             };
 
             by_cluster
                 .entry(sink.cluster_id())
                 .or_default()
                 .push(sink_id);
-            by_id.insert(sink_id, sink);
+            by_id.insert(sink_id, (sink, write_notify));
         }
         for (cluster_id, ids) in by_cluster {
             let compute = &mut self.controller.compute;
@@ -691,18 +834,41 @@ impl Coordinator {
     /// Retires a batch of sinks with disparate reasons for retirement.
     ///
     /// Each sink identified in `reasons` is dropped (see `drop_compute_sinks`),
-    /// then retired with its corresponding reason.
+    /// then retired with its corresponding reason. Returns a notify that resolves
+    /// once all `mz_subscriptions` retractions are durable and the sinks are retired.
     pub async fn retire_compute_sinks(
         &mut self,
         mut reasons: BTreeMap<GlobalId, ActiveComputeSinkRetireReason>,
-    ) {
+    ) -> BuiltinTableAppendCompletion {
         let sink_ids = reasons.keys().cloned();
-        for (id, sink) in self.drop_compute_sinks(sink_ids).await {
-            let reason = reasons
-                .remove(&id)
-                .expect("all returned IDs are in `reasons`");
-            sink.retire(reason);
-        }
+        let to_retire: Vec<_> = self
+            .drop_compute_sinks(sink_ids)
+            .await
+            .into_iter()
+            .map(|(id, (sink, write_notify))| {
+                let reason = reasons
+                    .remove(&id)
+                    .expect("all returned IDs are in `reasons`");
+                (sink, write_notify, reason)
+            })
+            .collect();
+
+        // Retire off the coordinator loop. We wait for each `mz_subscriptions` retraction
+        // before telling the subscribing client that the sink is gone. The returned notify
+        // lets statements that caused the retirement also wait before sending their response.
+        // The wait must not happen on the coordinator loop, since that would block every
+        // other session on the group-commit oracle round trip.
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        task::spawn(|| "retire_compute_sinks", async move {
+            for (sink, write_notify, reason) in to_retire {
+                write_notify.await;
+                sink.retire(reason);
+            }
+            let _ = done_tx.send(());
+        });
+        BuiltinTableAppendCompletion::new(Box::pin(async move {
+            let _ = done_rx.await;
+        }))
     }
 
     /// Drops all pending replicas for a set of clusters
@@ -744,7 +910,10 @@ impl Coordinator {
 
     /// Cancels all active compute sinks for the identified connection.
     #[mz_ore::instrument(level = "debug")]
-    pub(crate) async fn cancel_compute_sinks_for_conn(&mut self, conn_id: &ConnectionId) {
+    pub(crate) async fn cancel_compute_sinks_for_conn(
+        &mut self,
+        conn_id: &ConnectionId,
+    ) -> BuiltinTableAppendCompletion {
         self.retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Canceled)
             .await
     }
@@ -765,7 +934,7 @@ impl Coordinator {
         &mut self,
         conn_id: &ConnectionId,
         reason: ActiveComputeSinkRetireReason,
-    ) {
+    ) -> BuiltinTableAppendCompletion {
         let drop_sinks = self
             .active_conns
             .get_mut(conn_id)
@@ -774,7 +943,7 @@ impl Coordinator {
             .iter()
             .map(|sink_id| (*sink_id, reason.clone()))
             .collect();
-        self.retire_compute_sinks(drop_sinks).await;
+        self.retire_compute_sinks(drop_sinks).await
     }
 
     /// Cleans pending cluster reconfiguraiotns for the identified connection
@@ -1160,7 +1329,8 @@ impl Coordinator {
                         | CatalogItem::View(_)
                         | CatalogItem::Index(_)
                         | CatalogItem::Type(_)
-                        | CatalogItem::Func(_) => {}
+                        | CatalogItem::Func(_)
+                        | CatalogItem::MetricSink(_) => {}
                     }
                 }
                 Op::DropObjects(drop_object_infos) => {
@@ -1239,7 +1409,8 @@ impl Coordinator {
                                     | CatalogItem::View(_)
                                     | CatalogItem::Index(_)
                                     | CatalogItem::Type(_)
-                                    | CatalogItem::Func(_) => {}
+                                    | CatalogItem::Func(_)
+                                    | CatalogItem::MetricSink(_) => {}
                                 }
                             }
                         }
@@ -1269,7 +1440,8 @@ impl Coordinator {
                     | CatalogItem::View(_)
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
-                    | CatalogItem::Func(_) => {}
+                    | CatalogItem::Func(_)
+                    | CatalogItem::MetricSink(_) => {}
                 },
                 Op::AlterRole { .. }
                 | Op::AlterRetainHistory { .. }
@@ -1292,7 +1464,9 @@ impl Coordinator {
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
+                | Op::UpdateScopedSystemParameters { .. }
                 | Op::Comment { .. }
+                | Op::CheckClusterState { .. }
                 | Op::InjectAuditEvents { .. } => {}
             }
         }
@@ -1422,7 +1596,7 @@ impl Coordinator {
             )?;
         }
         self.validate_resource_limit_numeric(
-            self.current_credit_consumption_rate(),
+            self.current_credit_consumption_rate(None),
             new_credit_consumption_rate,
             |system_vars| {
                 self.license_key

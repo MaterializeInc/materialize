@@ -50,7 +50,7 @@ use crate::adt::datetime::PackedNaiveTime;
 use crate::adt::interval::PackedInterval;
 use crate::adt::jsonb::{JsonbPacker, JsonbRef};
 use crate::adt::mz_acl_item::{PackedAclItem, PackedMzAclItem};
-use crate::adt::numeric::{Numeric, PackedNumeric};
+use crate::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, Numeric, PackedNumeric};
 use crate::adt::range::{Range, RangeInner, RangeLowerBound, RangeUpperBound};
 use crate::adt::timestamp::{CheckedTimestamp, PackedNaiveDateTime};
 use crate::row::proto_datum::DatumType;
@@ -1442,6 +1442,14 @@ impl RowColumnarEncoder {
 
                 // We name the Fields in Parquet with the column index, but for
                 // backwards compat use the column name for stats.
+                //
+                // NOTE: name-keyed stats are sound only while durable
+                // relations never carry duplicate column names (the planner
+                // enforces this) and a dropped column's name can never be
+                // reused by a later version (persist rejects schema
+                // migrations containing drops). Filter pushdown consults
+                // these stats by name; violating either invariant attaches
+                // one column's stats to another and yields wrong results.
                 let name = (col_idx.to_raw(), col_name.as_str().into());
 
                 (name, encoder)
@@ -2121,7 +2129,21 @@ impl RowPacker<'_> {
                 .map_err(|err| err.to_string())?
             }
             Some(DatumType::Dict(x)) => self.push_dict_with(|row| -> Result<(), String> {
+                let mut prev_key: Option<&str> = None;
                 for e in x.elements.iter() {
+                    // Map keys must be unique and strictly ascending; iterating a
+                    // map that violates this trips a debug_assert. A crafted
+                    // proto can, so reject it as a decode error here instead.
+                    if let Some(prev) = prev_key
+                        && e.key.as_str() <= prev
+                    {
+                        return Err(format!(
+                            "dict keys must be unique and in ascending order, \
+                             but {:?} came after {:?}",
+                            e.key, prev,
+                        ));
+                    }
+                    prev_key = Some(e.key.as_str());
                     row.push(Datum::from(e.key.as_str()));
                     let val = e
                         .val
@@ -2134,6 +2156,24 @@ impl RowPacker<'_> {
             Some(DatumType::Numeric(x)) => {
                 // Reminder that special values like NaN, PosInf, and NegInf are
                 // represented as variants of ProtoDatumOther.
+                //
+                // `decPackedToNumber` (called via `Decimal::from_packed_bcd`)
+                // doesn't bounds-check its input: it segfaults on an empty bcd,
+                // and it writes one BCD digit per input nibble into `Numeric`'s
+                // fixed-size coefficient, overrunning it for a longer bcd. Both
+                // are reachable from untrusted proto bytes, so bound the length
+                // before descending into the FFI. `to_packed_bcd` never emits
+                // more than MAX_BCD_LEN bytes: one nibble per digit plus a sign
+                // nibble, rounded up to whole bytes.
+                const MAX_BCD_LEN: usize =
+                    mz_ore::cast::u8_to_usize(NUMERIC_DATUM_MAX_PRECISION) / 2 + 1;
+                if x.bcd.is_empty() || x.bcd.len() > MAX_BCD_LEN {
+                    return Err(format!(
+                        "ProtoNumeric.bcd length {} not in 1..={}",
+                        x.bcd.len(),
+                        MAX_BCD_LEN,
+                    ));
+                }
                 let n = Decimal::from_packed_bcd(&x.bcd, x.scale).map_err(|err| err.to_string())?;
                 self.push(Datum::from(n))
             }
@@ -2150,6 +2190,24 @@ impl RowPacker<'_> {
                             upper,
                         } = &**inner;
 
+                        // Range bounds must not be `Datum::Null`, because
+                        // `push_range_with` panics on that invariant. Reject
+                        // untrusted proto bytes that would push a `Null` bound
+                        // before calling it.
+                        let is_null_proto = |d: &ProtoDatum| {
+                            matches!(
+                                d.datum_type,
+                                Some(DatumType::Other(o))
+                                    if ProtoDatumOther::try_from(o)
+                                        == Ok(ProtoDatumOther::Null)
+                            )
+                        };
+                        if lower.as_deref().is_some_and(is_null_proto)
+                            || upper.as_deref().is_some_and(is_null_proto)
+                        {
+                            return Err("range bound cannot be Null".into());
+                        }
+
                         self.push_range_with(
                             RangeLowerBound {
                                 inclusive: *lower_inclusive,
@@ -2164,7 +2222,7 @@ impl RowPacker<'_> {
                                     .map(|d| |row: &mut RowPacker| row.try_push_proto(&*d)),
                             },
                         )
-                        .expect("decoding ProtoRow must succeed");
+                        .map_err(|err| err.to_string())?;
                     }
                 }
             }
@@ -2238,10 +2296,75 @@ mod tests {
     use crate::adt::interval::Interval;
     use crate::adt::numeric::Numeric;
     use crate::adt::timestamp::CheckedTimestamp;
-    use crate::fixed_length::ToDatumIter;
     use crate::relation::arb_relation_desc;
     use crate::{ColumnName, RowArena, SqlColumnType, arb_datum_for_column, arb_row_for_relation};
     use crate::{Datum, RelationDesc, Row, SqlScalarType};
+
+    #[mz_ore::test]
+    fn proto_row_invalid_range_is_error() {
+        // A ProtoRow with a range whose bounds have inconsistent datum kinds
+        // (or a null/extra bound) must decode to an error, not panic. The range
+        // packer used to `assert!` these invariants. Regression for the
+        // row_proto_roundtrip cargo-fuzz finding.
+        use prost::Message;
+        let bytes: &[u8] = &[
+            0x0a, 0x03, 0xaa, 0x01, 0x00, 0x0a, 0x03, 0xaa, 0x01, 0x00, 0x0a, 0x03, 0xa2, 0x01,
+            0x00, 0x0a, 0x03, 0xaa, 0x01, 0x00, 0x0a, 0x20, 0xfa, 0x01, 0x1d, 0x1d, 0x9f, 0x00,
+            0x00, 0x00, 0xaa, 0x01, 0x00, 0x0a, 0x13, 0xf8, 0x01, 0x08, 0xaa, 0x0a, 0x03, 0xba,
+            0x01, 0x00, 0x22, 0x03, 0xba, 0x01, 0x00, 0x12, 0x03, 0xaa, 0x01, 0x00, 0x0a, 0x03,
+            0xaa, 0x01, 0x00,
+        ];
+        let proto = ProtoRow::decode(bytes).expect("crash input decodes as a proto");
+        let result: Result<Row, _> = proto.into_rust();
+        assert_err!(result);
+    }
+
+    #[mz_ore::test]
+    fn proto_row_unordered_dict_keys_is_error() {
+        // A ProtoRow with a dict whose keys are duplicated or not in ascending
+        // order must decode to an error, not panic. Iterating such a map trips
+        // a debug_assert. Regression for the row_proto_roundtrip cargo-fuzz
+        // finding.
+        use prost::Message;
+        let bytes: &[u8] = &[
+            0x0a, 0x32, 0x18, 0x4e, 0x18, 0x18, 0x68, 0x4e, 0xe8, 0x68, 0x57, 0xba, 0x01, 0x0a,
+            0x0a, 0x08, 0x60, 0xff, 0xff, 0x10, 0x12, 0x02, 0x10, 0x10, 0x99, 0x68, 0x0a, 0x18,
+            0x18, 0x4e, 0x18, 0x18, 0x68, 0x4e, 0xe8, 0x5b, 0x18, 0x68, 0x57, 0xba, 0x01, 0x0a,
+            0x0a, 0x08, 0x60, 0xff, 0xff, 0x10, 0x12, 0x02, 0x18, 0x10,
+        ];
+        let proto = ProtoRow::decode(bytes).expect("crash input decodes as a proto");
+        let result: Result<Row, _> = proto.into_rust();
+        assert_err!(result);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn proto_row_oversized_numeric_bcd_is_error() {
+        // A `ProtoNumeric` whose `bcd` holds more digits than `Numeric`'s
+        // coefficient can hold must decode to an error. `decPackedToNumber`
+        // writes one BCD digit per input nibble into the fixed-size
+        // coefficient without bounds-checking it, so a long `bcd` writes past
+        // the end of the `Decimal` and eventually segfaults.
+        for len in [21, 64, 4096] {
+            let mut bcd = vec![0x99u8; len];
+            // DECPPLUS, so the sign nibble check passes and the digit copy runs.
+            *bcd.last_mut().unwrap() = 0x9c;
+            let proto = ProtoRow {
+                datums: vec![ProtoDatum {
+                    datum_type: Some(DatumType::Numeric(ProtoNumeric { bcd, scale: 0 })),
+                }],
+            };
+            assert_err!(Row::try_from(&proto));
+        }
+
+        // The bound must not reject anything we encode: a numeric at max
+        // precision packs into exactly MAX_BCD_LEN bytes.
+        let mut cx = crate::adt::numeric::cx_datum();
+        let digits = "9".repeat(usize::from(NUMERIC_DATUM_MAX_PRECISION));
+        let n: Numeric = cx.parse(digits.as_str()).unwrap();
+        let row = Row::pack_slice(&[Datum::Numeric(OrderedDecimal(n))]);
+        assert_eq!(Row::try_from(&row.into_proto()).unwrap(), row);
+    }
 
     #[track_caller]
     fn roundtrip_datum<'a>(
@@ -2393,8 +2516,8 @@ mod tests {
                 a_prefix.cmp(b_prefix).is_le(),
                 "ordering should be consistent on preserves_order columns: {:#?}\n{:?}\n{:?}",
                 desc.iter().take(ordered_prefix_len).collect_vec(),
-                a.to_datum_iter().take(ordered_prefix_len).collect_vec(),
-                b.to_datum_iter().take(ordered_prefix_len).collect_vec()
+                a.iter().take(ordered_prefix_len).collect_vec(),
+                b.iter().take(ordered_prefix_len).collect_vec()
             );
         }
 

@@ -1,17 +1,24 @@
 ---
 source: src/storage/src/upsert_continual_feedback_v2.rs
-revision: 4160cefd79
+revision: 844b947128
 ---
 
 # mz-storage::upsert_continual_feedback_v2
 
 Implements an alternative feedback UPSERT operator that converts a stream of upsert commands `(key, Option<value>)` into a differential collection of `(key, value)` pairs, using a feedback loop through persist to maintain the "previous value" state needed for computing retractions.
 
-The operator runs a loop where each iteration: ingests source upsert commands into a `MergeBatcher` (which consolidates entries for the same `(key, time)` by retaining the update with the highest `FromTime`/Kafka offset), checks the persist frontier probe to determine which times have been committed, and then seals and drains the batcher.
+The operator runs a loop where each iteration: ingests source upsert commands into a stash batcher (which consolidates entries for the same `(key, time)` by retaining the update with the highest `FromTime`/Kafka offset), checks the persist frontier probe to determine which times have been committed, and then seals and drains the batcher.
 The seal step is skipped unless eligible entries are possible — specifically, unless `cap.time() <= persist_upper` and `persist_upper < input_upper` — to avoid an O(N) merge cost when nothing can be processed (e.g., during upstream snapshots or when the source races ahead of persist during rehydration).
-Drained entries are classified by `drain_sealed_input` (an `async fn`) into three categories relative to `persist_upper`: entries at the frontier (`ts == persist_upper`) are eligible and processed against the current persisted state (retraction emitted for any existing value, new value inserted); entries above the frontier (`ts > persist_upper`) are ineligible and pushed back into the batcher for the next iteration; entries below the frontier (`ts < persist_upper`) have already been persisted by some writer and are dropped. Dropping below-upper entries mirrors v1's behavior and prevents the output capability from being pinned below the shard upper forever. Eligible updates are emitted directly through the output handle via `give_fueled` (using `upsert_value_byte_len` as the size estimate) rather than staged in an intermediate buffer, allowing timely to yield under large snapshot drains.
+Drained entries are classified into three categories relative to `persist_upper`: entries at the frontier (`ts == persist_upper`) are eligible and processed against the current persisted state in the feedback arrangement (retraction emitted for any existing value, new value inserted); entries above the frontier (`ts > persist_upper`) are ineligible and pushed back into the batcher for the next iteration; entries below the frontier (`ts < persist_upper`) have already been persisted by some writer and are dropped. Dropping below-upper entries mirrors v1's behavior and prevents the output capability from being pinned below the shard upper forever. Eligible updates are emitted directly through the output handle via `give_fueled` (using `upsert_value_byte_len` as the size estimate) rather than staged in an intermediate buffer, allowing timely to yield under large snapshot drains.
 Output capability is downgraded to the minimum time of any buffered data and dropped when the batcher is empty.
+
+`UpsertStashFlavor` is a `Copy` enum resolved from `ENABLE_UPSERT_CHUNKED_STASH` at operator construction time by `UpsertStashFlavor::from_config`. It selects between two instantiations of the same operator loop: `Paged` (paged columnar merge batcher stash, `ValRowSpine` feedback arrangement, cursor-based drain) and `Chunked` (chunk merge batcher stash, chunk-spine feedback arrangement, bulk-probe drain). Both spill paths are gated by `ENABLE_UPSERT_PAGED_SPILL`.
 
 `UpsertDiff` is a custom `Semigroup` diff type that carries the upsert payload and a `from_time` for deduplication; `UpsertKey` and `UpsertValue` are the key and value types exchanged over the dataflow.
 The operator's output edge uses a `FueledBuilder<CapacityContainerBuilder<Vec<(UpsertValue, T, Diff)>>>` (aliased as `UpsertOutputHandle`) so that `give_fueled` calls drive cooperative yielding under large drains.
-The persist-feedback arrangement is backed by a `ValRowSpine<UpsertKey, _, _>` (using `ValRowColPagedBuilder`): keys are stored in a columnation arena (`UpsertKey` is a fixed-size `[u8; 32]` and uses `CopyRegion`) and values are stored as packed `Row` bytes in a `DatumContainer`, allowing the OS to evict cold value pages efficiently under memory pressure.
+
+For the paged flavor, the feedback arrangement uses a `ValRowSpine<UpsertKey, _, _>` (with `UpsertFeedbackBatcher`, a wrapper over `Col2ValPagedBatcher` that injects the storage-owned pager at construction so the feedback arrangement spills under the same `ENABLE_UPSERT_PAGED_SPILL` flag as the source stash). Keys are stored in a columnation arena (`UpsertKey` is a fixed-size `[u8; 32]` and uses `CopyRegion`), and values are stored as packed `Row` bytes in a `DatumContainer`.
+
+For the chunked flavor, the feedback arrangement is a `ChunkSpine<FeedbackChunk<T>>`: sorted, consolidated runs of `(UpsertKey, Row, T, Diff)` updates stored as `Rc`-shared chunk batches that spill through the process buffer pool. The drain reads prior state through bulk `UnloadChunk` probes rather than cursor borrows.
+
+The `build_upsert_operator` private function implements the shared ingest/seal/drain/capability loop and is parameterized over an `UpsertOperatorArm` trait that abstracts the few points where the two flavors diverge. `upsert_inner` dispatches to one of two concrete arms based on the resolved flavor.

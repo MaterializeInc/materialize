@@ -124,8 +124,7 @@ to serve as your SSH bastion host.
 
 {{< tab "Self-Managed">}}
 
-{{% include-md
-file="shared-content/self-managed/configure-network-security-intro.md" %}}
+{{% include-headless "/headless/self-managed-deployments/configure-network-security-intro" %}}
 
 {{< tabs >}}
 
@@ -215,3 +214,7 @@ your networking configuration.
 ## Considerations
 
 {{% include-headless "/headless/mysql-considerations" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="mysql" %}}

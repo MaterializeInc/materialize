@@ -18,7 +18,7 @@ as a [`mz_timestamp`] value.
 
 ### `mz_now()` clause
 
-{{< include-md file="shared-content/mz_now_clause_requirements.md" >}}
+{{< include-md file="content/headless/mz_now_clause_requirements.md" >}}
 
 ### Usage patterns
 
@@ -61,7 +61,7 @@ materialized would be resource prohibitive.
 The [`mz_now()`](/sql/functions/now_and_mz_now) clause has the following
 restrictions:
 
-- {{< include-md file="shared-content/mz_now_clause_disjunction_restrictions.md" >}}
+- {{< include-md file="content/headless/mz_now_clause_disjunction_restrictions.md" >}}
 
   For example:
 

@@ -1,0 +1,85 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_catalog.mz_aws_privatelink_connections. The view is a
+# BuiltinMaterializedView backed by SQL over mz_internal.mz_catalog_raw: see
+# MZ_AWS_PRIVATELINK_CONNECTIONS in src/catalog/src/builtin/mz_catalog.rs. The
+# principal is reconstructed from the AWS principal context. A local
+# sqllogictest env has no such context, so the context functions fold to NULL
+# and the view emits no row, matching the removed packer which skipped the row
+# when the context was absent. The populated form is exercised by
+# test/cloudtest/test_privatelink_connection.py.
+
+mode cockroach
+
+reset-server
+
+# --- Schema -------------------------------------------------------------------
+
+# Lock down: 2 columns, canonical order, types, and nullability.
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_aws_privatelink_connections' AND s.name = 'mz_catalog'
+ORDER BY c.position
+----
+id  text  false
+principal  text  false
+
+# --- Empty on a fresh env -----------------------------------------------------
+
+query I
+SELECT count(*) FROM mz_aws_privatelink_connections
+----
+0
+
+# --- Skip on missing AWS context ----------------------------------------------
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_aws_privatelink_connections = 5
+----
+COMPLETE 0
+
+statement ok
+CREATE CONNECTION plc TO AWS PRIVATELINK (
+    SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+    AVAILABILITY ZONES ('use1-az1', 'use1-az2')
+)
+
+# The connection exists as an aws-privatelink connection ...
+query I
+SELECT count(*) FROM mz_connections WHERE name = 'plc' AND type = 'aws-privatelink'
+----
+1
+
+# ... but with no AWS principal context the principal is NULL, so the view skips
+# it, exactly like the packer did.
+query I
+SELECT count(*) FROM mz_aws_privatelink_connections
+----
+0
+
+# --- FK-like invariant: every row joins its parent connection -----------------
+
+query I
+SELECT count(*) FROM mz_aws_privatelink_connections plc
+LEFT JOIN mz_connections c ON plc.id = c.id
+WHERE c.id IS NULL
+----
+0
+
+statement ok
+DROP CONNECTION plc
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET max_aws_privatelink_connections
+----
+COMPLETE 0

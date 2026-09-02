@@ -19,6 +19,7 @@ import random
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from typing import Any
 
 from materialize.docker import image_registry
@@ -32,6 +33,7 @@ from materialize.util import PropagatingThread
 from materialize.workload_replay.config import (
     LOCATION,
     SEED_RANGE,
+    additional_system_parameter_defaults,
     cluster_replica_sizes,
 )
 from materialize.workload_replay.data import (
@@ -92,8 +94,13 @@ def test(
     run_ingestions: bool,
     run_queries: bool,
     max_concurrent_queries: int,
+    during_continuous: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
-    """Run a single workload test."""
+    """Run a single workload test.
+
+    When `during_continuous` is set, the continuous phase runs until the
+    callback returns instead of for `runtime` seconds.
+    """
     print(f"--- {posixpath.relpath(file, LOCATION)}")
     services = set()
 
@@ -271,12 +278,17 @@ def test(
             thread.start()
 
         try:
-            stop_event.wait(timeout=runtime)
+            if during_continuous is not None:
+                during_continuous()
+            else:
+                stop_event.wait(timeout=runtime)
         finally:
             stop_event.set()
             for thread in threads:
                 thread.join()
             print_replay_stats(stats)
+    elif during_continuous is not None:
+        during_continuous()
     else:
         print("No continuous ingestions or queries defined, skipping phase")
 
@@ -287,7 +299,7 @@ def benchmark(
     c: Composition,
     file: pathlib.Path,
     workload: dict,
-    compare_against: str,
+    compare_against: str | None,
     factor_initial_data: float,
     factor_ingestions: float,
     factor_queries: float,
@@ -297,7 +309,13 @@ def benchmark(
     early_initial_data: bool,
     max_concurrent_queries: int,
 ) -> None:
-    """Run a benchmark comparing two versions of Materialize."""
+    """Run a benchmark of Materialize.
+
+    When `compare_against` is set, an older reference version is run first and
+    its stats are compared against the current version. Otherwise only the
+    current version is run, which still exercises that the workload replays
+    without crashing.
+    """
     import random
 
     services = [
@@ -309,50 +327,65 @@ def benchmark(
         "schema-registry",
         "ssh-bastion-host",
         "testdrive",
+        # Object-store and Iceberg-catalog state must be reset too, else it
+        # persists between the reference and current runs of a comparison.
+        "polaris",
+        "polaris-bootstrap",
+        "minio",
+        "azurite",
     ]
 
     # When scale_data is false, use 100% initial data
     settings = workload.get("settings", {})
     if not settings.get("scale_data", True):
         factor_initial_data = 1.0
+    else:
+        # A workload can shrink itself further via
+        # `settings.factor_initial_data_multiplier` — useful when a single
+        # captured workload is dramatically larger than the rest and would
+        # blow past the CI timeout at the global factor.
+        factor_initial_data *= settings.get("factor_initial_data_multiplier", 1.0)
 
     print_workload_stats(file, workload)
 
-    tag = resolve_tag(compare_against)
-    print(f"-- Running against materialized:{tag} (reference)")
-    random.seed(seed)
-    with c.override(
-        Materialized(
-            image=f"{image_registry()}/materialized:{tag}",
-            cluster_replica_size=cluster_replica_sizes,
-            ports=[6875, 6874, 6876, 6877, 6878, 6880, 6881, 26257],
-            environment_extra=["MZ_NO_BUILTIN_CONSOLE=0"],
-            additional_system_parameter_defaults={"enable_rbac_checks": "false"},
-        )
-    ):
-        stats_old = test(
-            c,
-            workload,
-            file,
-            factor_initial_data,
-            factor_ingestions,
-            factor_queries,
-            runtime,
-            verbose,
-            True,
-            True,
-            early_initial_data,
-            True,
-            True,
-            max_concurrent_queries,
-        )
-        old_version = c.query_mz_version()
-    try:
-        c.kill(*services)
-    except:
-        pass
-    c.rm(*services, destroy_volumes=True)
-    c.rm_volumes("mzdata")
+    stats_old = None
+    old_version = None
+    if compare_against:
+        tag = resolve_tag(compare_against)
+        print(f"-- Running against materialized:{tag} (reference)")
+        random.seed(seed)
+        with c.override(
+            Materialized(
+                image=f"{image_registry()}/materialized:{tag}",
+                cluster_replica_size=cluster_replica_sizes,
+                ports=[6875, 6874, 6876, 6877, 6878, 6880, 6881, 26257],
+                environment_extra=["MZ_NO_BUILTIN_CONSOLE=0"],
+                additional_system_parameter_defaults=additional_system_parameter_defaults,
+            )
+        ):
+            stats_old = test(
+                c,
+                workload,
+                file,
+                factor_initial_data,
+                factor_ingestions,
+                factor_queries,
+                runtime,
+                verbose,
+                True,
+                True,
+                early_initial_data,
+                True,
+                True,
+                max_concurrent_queries,
+            )
+            old_version = c.query_mz_version()
+        try:
+            c.kill(*services)
+        except:
+            pass
+        c.rm(*services, destroy_volumes=True)
+        c.rm_volumes("mzdata")
     print("-- Running against current materialized")
     random.seed(seed)
     with c.override(
@@ -361,7 +394,7 @@ def benchmark(
             cluster_replica_size=cluster_replica_sizes,
             ports=[6875, 6874, 6876, 6877, 6878, 6880, 6881, 26257],
             environment_extra=["MZ_NO_BUILTIN_CONSOLE=0"],
-            additional_system_parameter_defaults={"enable_rbac_checks": "false"},
+            additional_system_parameter_defaults=additional_system_parameter_defaults,
         )
     ):
         stats_new = test(
@@ -388,6 +421,10 @@ def benchmark(
     c.rm(*services, destroy_volumes=True)
     c.rm_volumes("mzdata")
     filename = posixpath.relpath(file, LOCATION)
+
+    if stats_old is None or old_version is None:
+        print(f"-- Ran {new_version} without a reference version to compare against")
+        return
 
     print(f"-- Comparing {old_version} against {new_version}")
     plot_docker_stats_compare(

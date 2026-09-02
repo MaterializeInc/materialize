@@ -13,14 +13,18 @@
 //! allocations, as well as a `dictionary` encoding wrapper that is able to rewrite
 //! the byte slices to use spare tags in each column to reference common values.
 
+pub use self::arc_batch::{ArcBatch, ArcBuilder};
 pub use self::dictionary::DatumContainer;
 pub use self::dictionary::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{
-    RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowColPagedBuilder, RowRowSpine,
-    RowSpine, RowValBatcher, RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder,
-    ValRowColPagedBuilder, ValRowSpine,
+    ArcOrdKeyBuilder, ArcOrdKeySpine, ArcOrdValBuilder, ArcOrdValSpine, RowBatcher, RowBuilder,
+    RowRowBatcher, RowRowBuilder, RowRowColPagedBuilder, RowRowSpine, RowSpine, RowValBatcher,
+    RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder, ValRowColPagedBuilder, ValRowSpine,
 };
+
+mod arc_batch;
+
 use differential_dataflow::trace::implementations::OffsetList;
 
 /// Enable per-column dictionary compression in row containers.
@@ -29,21 +33,19 @@ pub static DICTIONARY_COMPRESSION: std::sync::atomic::AtomicBool =
 
 /// Spines specialized to contain `Row` types in keys and values.
 mod spines {
-    use std::rc::Rc;
-
     use columnation::Columnation;
     use differential_dataflow::trace::implementations::Layout;
     use differential_dataflow::trace::implementations::Update;
+    use differential_dataflow::trace::implementations::Vector;
     use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
     use differential_dataflow::trace::implementations::ord_neu::{
-        OrdKeyBatch, OrdValBatch, OrdValBuilder,
+        OrdKeyBatch, OrdKeyBuilder, OrdValBatch, OrdValBuilder,
     };
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
-    use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use mz_repr::Row;
-    use mz_timely_util::columnar::Column;
     use mz_timely_util::columnation::{ColInternalMerger, ColumnationStack};
 
+    use crate::arc_batch::{ArcBatch, ArcBuilder};
     use crate::{DatumContainer, OffsetOptimized};
 
     /// Batcher matching `mz_compute::typedefs::KeyValBatcher`, redeclared
@@ -51,38 +53,61 @@ mod spines {
     type KeyValBatcher<K, V, T, D> = MergeBatcher<ColInternalMerger<(K, V), T, D>>;
     type KeyBatcher<K, T, D> = KeyValBatcher<K, (), T, D>;
 
-    pub type RowRowSpine<T, R> = Spine<Rc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>>;
+    pub type RowRowSpine<T, R> = Spine<ArcBatch<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>>;
     pub type RowRowBatcher<T, R> = KeyValBatcher<Row, Row, T, R>;
-    pub type RowRowBuilder<T, R> = RcBuilder<crate::dictionary::builders::RowRowBuilder<T, R>>;
+    pub type RowRowBuilder<T, R> = ArcBuilder<crate::dictionary::builders::RowRowBuilder<T, R>>;
 
-    /// `RowRowBuilder` variant that consumes [`Column`] chunks. Pairs with
-    /// [`Col2ValPagedBatcher`] for the spillable arrange path. This is the stock
-    /// (non-dictionary) builder; dictionary-compressing the paged path is a follow-up.
+    /// `RowRowBuilder` variant that consumes [`Column`] chunks. Pairs with any
+    /// batcher whose chains are `Column`s, spillable
+    /// ([`Col2ValPagedBatcher`]) or resident ([`Col2ValColBatcher`]) alike, so
+    /// the `Paged` in the name records where it started rather than a
+    /// restriction. Installs a dictionary codec at seal time, gathering
+    /// statistics from the sealed `Column` chain, so columnar arrangements
+    /// compress on the same footing as the columnation-fed [`RowRowBuilder`].
     ///
+    /// [`Col2ValColBatcher`]: mz_timely_util::columnar::Col2ValColBatcher
     /// [`Col2ValPagedBatcher`]: mz_timely_util::columnar::Col2ValPagedBatcher
+    /// [`Column`]: mz_timely_util::columnar::Column
     pub type RowRowColPagedBuilder<T, R> =
-        RcBuilder<OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, Column<((Row, Row), T, R)>>>;
+        ArcBuilder<crate::dictionary::builders::RowRowColPagedBuilder<T, R>>;
 
-    pub type RowValSpine<V, T, R> = Spine<Rc<OrdValBatch<RowValLayout<((Row, V), T, R)>>>>;
+    pub type RowValSpine<V, T, R> = Spine<ArcBatch<OrdValBatch<RowValLayout<((Row, V), T, R)>>>>;
     pub type RowValBatcher<V, T, R> = KeyValBatcher<Row, V, T, R>;
     pub type RowValBuilder<V, T, R> =
-        RcBuilder<crate::dictionary::builders::RowValBuilder<V, T, R>>;
+        ArcBuilder<crate::dictionary::builders::RowValBuilder<V, T, R>>;
 
-    pub type RowSpine<T, R> = Spine<Rc<OrdKeyBatch<RowLayout<((Row, ()), T, R)>>>>;
+    pub type RowSpine<T, R> = Spine<ArcBatch<OrdKeyBatch<RowLayout<((Row, ()), T, R)>>>>;
     pub type RowBatcher<T, R> = KeyBatcher<Row, T, R>;
-    pub type RowBuilder<T, R> = RcBuilder<crate::dictionary::builders::RowBuilder<T, R>>;
+    pub type RowBuilder<T, R> = ArcBuilder<crate::dictionary::builders::RowBuilder<T, R>>;
 
-    pub type ValRowSpine<K, T, R> = Spine<Rc<OrdValBatch<ValRowLayout<((K, Row), T, R)>>>>;
+    pub type ValRowSpine<K, T, R> = Spine<ArcBatch<OrdValBatch<ValRowLayout<((K, Row), T, R)>>>>;
     pub type ValRowBatcher<K, T, R> = KeyValBatcher<K, Row, T, R>;
     pub type ValRowBuilder<K, T, R> =
-        RcBuilder<crate::dictionary::builders::ValRowBuilder<K, T, R>>;
+        ArcBuilder<crate::dictionary::builders::ValRowBuilder<K, T, R>>;
 
     /// `ValRowBuilder` variant that consumes [`Column`] chunks. Pairs with
     /// `Col2ValPagedBatcher<K, Row, T, R>` for the spillable arrange path where
     /// keys are arbitrary `Columnar` values (e.g. `UpsertKey`) and values are
-    /// packed `Row` bytes.
+    /// packed `Row` bytes. Installs a dictionary codec on the value container at
+    /// seal time, gathering statistics from the sealed `Column` chain; keys are
+    /// not `Row`-shaped and so are left uncompressed.
+    ///
+    /// [`Column`]: mz_timely_util::columnar::Column
     pub type ValRowColPagedBuilder<K, T, R> =
-        RcBuilder<OrdValBuilder<ValRowLayout<((K, Row), T, R)>, Column<((K, Row), T, R)>>>;
+        ArcBuilder<crate::dictionary::builders::ValRowColPagedBuilder<K, T, R>>;
+
+    /// A generic `Arc`-backed key/value spine, for callers outside `mz_compute` that need an
+    /// arrangement over non-`Row`-specialized types. The `Arc` handle rides on the local
+    /// [`ArcBatch`] newtype, so no differential-side `Arc` batch impls are required.
+    pub type ArcOrdValSpine<K, V, T, R> = Spine<ArcBatch<OrdValBatch<Vector<((K, V), T, R)>>>>;
+    /// Generic `Arc`-backed key-only spine. See [`ArcOrdValSpine`].
+    pub type ArcOrdKeySpine<K, T, R> = Spine<ArcBatch<OrdKeyBatch<Vector<((K, ()), T, R)>>>>;
+    /// Builder pairing with [`ArcOrdValSpine`].
+    pub type ArcOrdValBuilder<K, V, T, R> =
+        ArcBuilder<OrdValBuilder<Vector<((K, V), T, R)>, Vec<((K, V), T, R)>>>;
+    /// Builder pairing with [`ArcOrdKeySpine`].
+    pub type ArcOrdKeyBuilder<K, T, R> =
+        ArcBuilder<OrdKeyBuilder<Vector<((K, ()), T, R)>, Vec<((K, ()), T, R)>>>;
 
     /// A layout based on timely stacks
     pub struct RowRowLayout<U: Update<Key = Row, Val = Row>> {
@@ -151,10 +176,28 @@ mod spines {
 #[cfg(test)]
 mod tests {
     use crate::DatumContainer;
+    use crate::spines::{RowLayout, RowRowLayout, RowValLayout};
     use differential_dataflow::trace::implementations::BatchContainer;
+    use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdValBatch};
     use mz_repr::adt::date::Date;
     use mz_repr::adt::interval::Interval;
-    use mz_repr::{Datum, Row, SqlScalarType};
+    use mz_repr::{Datum, Diff, Row, SqlScalarType, Timestamp};
+    use mz_timely_util::columnation::ColumnationStack;
+
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    /// The batch types backing our spines must stay `Send + Sync`, so that batches
+    /// can be shared across threads (for example behind an `Arc`) to serve reads
+    /// from outside the worker that maintains the trace. This holds because the
+    /// backing containers bottom out in `Vec`s, lgalloc regions, and `CompactBytes`,
+    /// all of which are thread-safe.
+    #[mz_ore::test]
+    fn batches_are_send_sync() {
+        assert_send_sync::<OrdValBatch<RowRowLayout<((Row, Row), Timestamp, Diff)>>>();
+        assert_send_sync::<OrdValBatch<RowValLayout<((Row, Row), Timestamp, Diff)>>>();
+        assert_send_sync::<OrdKeyBatch<RowLayout<((Row, ()), Timestamp, Diff)>>>();
+        assert_send_sync::<ColumnationStack<((Row, Row), Timestamp, Diff)>>();
+    }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::with_exposed_provenance` are not supported
@@ -375,6 +418,94 @@ mod tests {
             }
         }
     }
+
+    /// A batch built via the builder's `push`/`done` path (as the `reduce` operator
+    /// does) that stays under `STATS_THRESHOLD` never installs a codec at build time.
+    /// `done` now promotes the gathered statistics into the codec slot, so the batch
+    /// carries a codec + heavy-hitter summary and does not poison a later merge.
+    ///
+    /// This drives that container lifecycle directly: gather raw (well under the
+    /// threshold), promote at "done", then merge two such containers the way a spine
+    /// compaction does. With promotion the merge takes the `new_from` path and
+    /// compresses; without it both inputs are codec-less and the merge stays raw.
+    /// Every merged row must still round-trip.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // integer-to-pointer casts in row decoding are unsupported under miri
+    fn push_done_promotion_avoids_merge_poison() {
+        use std::sync::atomic::Ordering;
+        use timely::container::PushInto;
+
+        // Gate the dictionary path on. Safe for other tests: the flag only controls
+        // whether `DatumContainer` gathers stats; it never changes decode results.
+        crate::DICTIONARY_COMPRESSION.store(true, Ordering::Relaxed);
+
+        // Low-cardinality rows, well under `STATS_THRESHOLD` (64Ki): a repeated
+        // multi-byte string the dictionary compresses, plus an integer column that
+        // exercises raw fall-through.
+        let rows: Vec<Row> = (0..2_000i64)
+            .map(|i| {
+                Row::pack_slice(&[
+                    Datum::Int64(i % 8),
+                    Datum::String("a repeated string value"),
+                ])
+            })
+            .collect();
+
+        // Build a container the way the push/done path does: gather raw without ever
+        // crossing `STATS_THRESHOLD`, optionally promoting at "done".
+        let build = |promote: bool| {
+            let mut c = DatumContainer::with_capacity(rows.len());
+            for row in &rows {
+                c.push_into(row);
+            }
+            if promote {
+                c.promote_stats_to_codec();
+            }
+            c
+        };
+
+        // Merge two containers as a spine compaction does: allocate via
+        // `merge_capacity`, then copy every row through.
+        let merge = |a: &DatumContainer, b: &DatumContainer| {
+            let mut m = DatumContainer::merge_capacity(a, b);
+            for i in 0..a.len() {
+                m.push_into(a.index(i));
+            }
+            for i in 0..b.len() {
+                m.push_into(b.index(i));
+            }
+            m
+        };
+
+        let heap = |c: &DatumContainer| {
+            let mut size = 0;
+            c.heap_size(|_, cap| size += cap);
+            size
+        };
+
+        // Codec-less inputs (no promotion): the merge cannot `new_from` and stays raw.
+        let poisoned = merge(&build(false), &build(false));
+        // Promoted inputs carry a codec + summary: the merge `new_from`s and compresses.
+        let compressed = merge(&build(true), &build(true));
+
+        // Round-trip: every merged row decodes back to the corresponding input row
+        // (the merge here concatenates a's rows then b's rows, no consolidation).
+        assert_eq!(compressed.len(), rows.len() * 2);
+        for i in 0..compressed.len() {
+            let got = compressed.index(i).collect::<Vec<_>>();
+            let want = rows[i % rows.len()].iter().collect::<Vec<_>>();
+            assert_eq!(got, want, "merged row {i} round-trips");
+        }
+
+        // The promoted merge must actually compress relative to the poisoned one,
+        // confirming promotion carried a usable summary into `new_from`.
+        assert!(
+            heap(&compressed) < heap(&poisoned),
+            "promotion should let the merge compress: compressed={} poisoned={}",
+            heap(&compressed),
+            heap(&poisoned),
+        );
+    }
 }
 
 /// A `[u8]`-specialized container.
@@ -533,7 +664,7 @@ mod bytes_container {
         }
         #[inline(always)]
         fn len(&self) -> usize {
-            debug_assert_eq!(self.len, self.offsets.len() - 1);
+            mz_ore::soft_assert_eq_no_log!(self.len, self.offsets.len() - 1);
             self.len
         }
 
@@ -766,6 +897,7 @@ mod dictionary {
     /// several variants, corresponding to the RowRow, RowVal, and Row-only spine types.
     pub mod builders {
 
+        use columnar::{Columnar, Index};
         use columnation::Columnation;
         use differential_dataflow::difference::Semigroup;
         use differential_dataflow::lattice::Lattice;
@@ -773,10 +905,11 @@ mod dictionary {
         use differential_dataflow::trace::Description;
         use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder};
         use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
+        use mz_timely_util::columnar::Column;
         use mz_timely_util::columnation::ColumnationStack as TimelyStack;
         use timely::progress::Timestamp;
 
-        use mz_repr::Row;
+        use mz_repr::{Row, RowRef};
 
         use super::super::row_codec::ColumnsCodec;
         use super::{DatumContainer, DatumSeq};
@@ -785,17 +918,26 @@ mod dictionary {
 
         /// Gather encoding statistics across `rows` and produce a codec from them.
         ///
+        /// Accepts anything that borrows as a [`RowRef`], so it serves both the
+        /// columnation-fed builders (which yield `&Row`) and the paged builders
+        /// (which yield `&RowRef` straight out of a [`Column`] chunk).
+        ///
         /// Returns `None` when dictionary compression is disabled.
-        fn build_codec<'a>(rows: impl IntoIterator<Item = &'a Row>) -> Option<ColumnsCodec> {
+        fn build_codec<'a, B>(rows: impl IntoIterator<Item = &'a B>) -> Option<ColumnsCodec>
+        where
+            B: std::borrow::Borrow<RowRef> + ?Sized + 'a,
+        {
             if !DICTIONARY_COMPRESSION.load(std::sync::atomic::Ordering::Relaxed) {
                 return None;
             }
             let mut stats = ColumnsCodec::default();
-            let mut buf = Vec::default();
             for row in rows {
+                let row = row.borrow();
                 if !row.is_empty() {
-                    stats.encode(DatumSeq::borrow_as(row).bytes_iter(), &mut buf);
-                    buf.clear();
+                    // Gather stats only; the encoded output would be thrown away here, so
+                    // `observe` skips the per-value lookup and the throwaway-buffer memcpy
+                    // that `encode` would do (see `ColumnsCodec::observe`).
+                    stats.observe(DatumSeq::borrow_as(row).bytes_iter());
                 }
             }
             Some(ColumnsCodec::new_from([&stats]))
@@ -824,7 +966,17 @@ mod dictionary {
                 self.inner.push(chunk)
             }
             fn done(self, description: Description<Self::Time>) -> Self::Output {
-                self.inner.done(description)
+                // The push/done build path (e.g. the `reduce` operator, which builds
+                // batches with `Builder::new()` + `push` + `done` rather than `seal`)
+                // never runs `seal`'s codec install. Install a codec here from the
+                // statistics gathered during `push`, mirroring `seal` — but without
+                // building a dictionary or re-encoding the rows; see
+                // `DatumContainer::promote_stats_to_codec` for why a codec-less batch
+                // must be avoided even though its rows stay raw.
+                let mut inner = self.inner;
+                inner.result.keys.promote_stats_to_codec();
+                inner.result.vals.vals.promote_stats_to_codec();
+                inner.done(description)
             }
             fn seal(
                 chain: &mut Vec<Self::Input>,
@@ -891,7 +1043,11 @@ mod dictionary {
                 self.inner.push(chunk)
             }
             fn done(self, description: Description<Self::Time>) -> Self::Output {
-                self.inner.done(description)
+                // See `RowRowBuilder::done`: install a codec on the `Row`-shaped key
+                // container for the push/done (e.g. `reduce`) path that skips `seal`.
+                let mut inner = self.inner;
+                inner.result.keys.promote_stats_to_codec();
+                inner.done(description)
             }
             fn seal(
                 chain: &mut Vec<Self::Input>,
@@ -945,7 +1101,11 @@ mod dictionary {
                 self.inner.push(chunk)
             }
             fn done(self, description: Description<Self::Time>) -> Self::Output {
-                self.inner.done(description)
+                // See `RowRowBuilder::done`: install a codec on the `Row`-shaped key
+                // container for the push/done (e.g. `reduce`) path that skips `seal`.
+                let mut inner = self.inner;
+                inner.result.keys.promote_stats_to_codec();
+                inner.done(description)
             }
             fn seal(
                 chain: &mut Vec<Self::Input>,
@@ -1006,7 +1166,11 @@ mod dictionary {
                 self.inner.push(chunk)
             }
             fn done(self, description: Description<Self::Time>) -> Self::Output {
-                self.inner.done(description)
+                // See `RowRowBuilder::done`: install a codec on the `Row`-shaped value
+                // container for the push/done (e.g. `reduce`) path that skips `seal`.
+                let mut inner = self.inner;
+                inner.result.vals.vals.promote_stats_to_codec();
+                inner.done(description)
             }
             fn seal(
                 chain: &mut Vec<Self::Input>,
@@ -1016,6 +1180,142 @@ mod dictionary {
                     chain
                         .iter()
                         .flat_map(|link| link.iter().map(|((_, v), _, _)| v)),
+                );
+
+                use differential_dataflow::trace::implementations::BuilderInput;
+
+                let (keys, vals, upds) = <Self::Input as BuilderInput<
+                    TimelyStack<K>,
+                    DatumContainer,
+                >>::key_val_upd_counts(&chain[..]);
+                let mut builder = Self::with_capacity(keys, vals, upds);
+                // See `RowRowBuilder::seal`: drop the now-redundant stats gatherer.
+                builder.inner.result.vals.vals.codec = val_codec;
+                builder.inner.result.vals.vals.stats = None;
+
+                for mut chunk in chain.drain(..) {
+                    builder.push(&mut chunk);
+                }
+
+                builder.done(description)
+            }
+        }
+
+        /// Counterpart of [`RowRowBuilder`] that consumes [`Column`] chunks
+        /// instead of columnation stacks, whether or not the batcher that
+        /// produced them pages. Mirrors `RowRowBuilder::seal`:
+        /// it gathers key and value statistics from the sealed chain and
+        /// installs codecs directly, then drops the per-container stats gatherer.
+        pub struct RowRowColPagedBuilder<
+            T: Lattice + Timestamp + Columnation + Columnar,
+            R: Ord + Semigroup + Columnation + Columnar + Clone + 'static,
+        > {
+            inner: OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, Column<((Row, Row), T, R)>>,
+        }
+
+        impl<
+            T: Lattice + Timestamp + Columnation + Columnar,
+            R: Ord + Semigroup + Columnation + Columnar + Clone + 'static,
+        > Builder for RowRowColPagedBuilder<T, R>
+        {
+            type Input = Column<((Row, Row), T, R)>;
+            type Time = T;
+            type Output = OrdValBatch<RowRowLayout<((Row, Row), T, R)>>;
+
+            fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
+                Self {
+                    inner: Builder::with_capacity(keys, vals, upds),
+                }
+            }
+            fn push(&mut self, chunk: &mut Self::Input) {
+                self.inner.push(chunk)
+            }
+            fn done(self, description: Description<Self::Time>) -> Self::Output {
+                self.inner.done(description)
+            }
+            fn seal(
+                chain: &mut Vec<Self::Input>,
+                description: Description<Self::Time>,
+            ) -> Self::Output {
+                // `into_index_iter` yields the value column's `Row`s as `&RowRef`,
+                // which `build_codec` consumes directly.
+                let key_codec = build_codec(
+                    chain
+                        .iter()
+                        .flat_map(|c| c.borrow().into_index_iter().map(|((k, _), _, _)| k)),
+                );
+                let val_codec = build_codec(
+                    chain
+                        .iter()
+                        .flat_map(|c| c.borrow().into_index_iter().map(|((_, v), _, _)| v)),
+                );
+
+                use differential_dataflow::trace::implementations::BuilderInput;
+
+                let (keys, vals, upds) = <Self::Input as BuilderInput<
+                    DatumContainer,
+                    DatumContainer,
+                >>::key_val_upd_counts(&chain[..]);
+                let mut builder = Self::with_capacity(keys, vals, upds);
+                // See `RowRowBuilder::seal`: install the codecs and drop the
+                // now-redundant per-container stats gatherer.
+                builder.inner.result.keys.codec = key_codec;
+                builder.inner.result.keys.stats = None;
+                builder.inner.result.vals.vals.codec = val_codec;
+                builder.inner.result.vals.vals.stats = None;
+
+                for mut chunk in chain.drain(..) {
+                    builder.push(&mut chunk);
+                }
+
+                builder.done(description)
+            }
+        }
+
+        /// Paged counterpart of [`ValRowBuilder`] that consumes [`Column`]
+        /// chunks. Keys are arbitrary `Columnar` values (not `Row`-shaped) and
+        /// stay uncompressed; only the value container receives a codec.
+        pub struct ValRowColPagedBuilder<
+            K: Ord + Clone + Columnation + Columnar + 'static,
+            T: Lattice + Timestamp + Columnation + Columnar,
+            R: Ord + Semigroup + Columnation + Columnar + Clone + 'static,
+        > {
+            inner: OrdValBuilder<ValRowLayout<((K, Row), T, R)>, Column<((K, Row), T, R)>>,
+        }
+
+        impl<
+            K: Ord + Clone + Columnation + Columnar + 'static,
+            T: Lattice + Timestamp + Columnation + Columnar,
+            R: Ord + Semigroup + Columnation + Columnar + Clone + 'static,
+        > Builder for ValRowColPagedBuilder<K, T, R>
+        where
+            for<'a> columnar::Ref<'a, K>: Copy + Ord,
+            for<'a, 'b> &'a K: PartialEq<columnar::Ref<'b, K>>,
+            for<'a> TimelyStack<K>: timely::container::PushInto<columnar::Ref<'a, K>>,
+        {
+            type Input = Column<((K, Row), T, R)>;
+            type Time = T;
+            type Output = OrdValBatch<ValRowLayout<((K, Row), T, R)>>;
+
+            fn with_capacity(keys: usize, vals: usize, upds: usize) -> Self {
+                Self {
+                    inner: Builder::with_capacity(keys, vals, upds),
+                }
+            }
+            fn push(&mut self, chunk: &mut Self::Input) {
+                self.inner.push(chunk)
+            }
+            fn done(self, description: Description<Self::Time>) -> Self::Output {
+                self.inner.done(description)
+            }
+            fn seal(
+                chain: &mut Vec<Self::Input>,
+                description: Description<Self::Time>,
+            ) -> Self::Output {
+                let val_codec = build_codec(
+                    chain
+                        .iter()
+                        .flat_map(|c| c.borrow().into_index_iter().map(|((_, v), _, _)| v)),
                 );
 
                 use differential_dataflow::trace::implementations::BuilderInput;
@@ -1186,6 +1486,35 @@ mod dictionary {
             }
             if let Some(stats) = &self.stats {
                 stats.heap_size(&mut callback);
+            }
+        }
+
+        /// Promote a gathered-but-uninstalled statistics summary into the codec slot.
+        ///
+        /// A container filled via the builder's `push`/`done` path — as the `reduce`
+        /// operator does, building batches with `Builder::new()` + `push` + `done`
+        /// rather than `seal` — gathers statistics on every push but never reaches
+        /// `seal`'s codec install, and only crosses the mid-formation
+        /// `STATS_THRESHOLD` install if it grows past it. A smaller such container
+        /// would otherwise be finalized with no codec at all, even with the flag on.
+        ///
+        /// That is a problem not because this batch needs compressing — its rows are
+        /// already stored raw and we deliberately do *not* re-encode them here — but
+        /// because a codec-less batch poisons future merges: [`Self::merge_capacity`]
+        /// keys off the presence of a codec, so a codec-less input forces the merged
+        /// container onto the uncompressed path. Moving the gathered statistics into
+        /// the codec slot leaves the batch carrying a codec whose retained heavy-hitter
+        /// summary a later merge can rebuild from via `ColumnsCodec::new_from`, while
+        /// installing no dictionary: the empty `decode` map resolves every stored
+        /// (raw) column through the literal-datum fall-through, so reads stay correct.
+        ///
+        /// We move the summary as-is rather than building a dictionary via `new_safe`
+        /// / `new_from` (which reset the summary): unlike `seal` and the mid-formation
+        /// install, `done` has no further rows to re-observe, so a reset summary would
+        /// leave the eventual merge nothing to rebuild from.
+        pub(crate) fn promote_stats_to_codec(&mut self) {
+            if self.codec.is_none() {
+                self.codec = self.stats.take();
             }
         }
     }
@@ -1400,33 +1729,27 @@ mod dictionary {
         type Item = Datum<'a>;
         #[inline(always)]
         fn next(&mut self) -> Option<Self::Item> {
-            // Fast path: no codec means raw row-encoded bytes. Parse directly off the
-            // cursor with a single `read_datum`, skipping the `ColumnsIter::next`
-            // round-trip that would size a slice and re-parse it.
-            if self.iter.index.is_none() {
-                if self.iter.data.is_empty() {
-                    return None;
-                }
-                return Some(unsafe { read_datum(&mut self.iter.data) });
-            }
+            // Delegate to `ColumnsIter`, which handles both the codec and no-codec
+            // cases. The no-codec scan hot path is served directly by `extend_datums`
+            // (which decodes without going through this iterator), so the only callers
+            // left here are the codec-encoded `extend_datums`/`to_row` paths and tests;
+            // none warrant a dedicated no-codec fast path.
             self.iter
                 .next()
                 .map(|mut bytes| unsafe { read_datum(&mut bytes) })
         }
     }
 
-    use mz_repr::fixed_length::ToDatumIter;
-    impl<'long> ToDatumIter for DatumSeq<'long> {
-        type DatumIter<'short>
-            = DatumSeq<'short>
-        where
-            Self: 'short;
-        #[inline(always)]
-        fn to_datum_iter<'short>(&'short self) -> Self::DatumIter<'short> {
-            *self
-        }
+    use mz_repr::RowArena;
+    use mz_repr::fixed_length::ExtendDatums;
+    impl<'long> ExtendDatums for DatumSeq<'long> {
         #[inline]
-        fn extend_datums<'a>(&'a self, target: &mut Vec<Datum<'a>>, max: Option<usize>) {
+        fn extend_datums<'a>(
+            &'a self,
+            _arena: &'a RowArena,
+            target: &mut Vec<Datum<'a>>,
+            max: Option<usize>,
+        ) {
             // Branch on codec presence ONCE per row rather than once per datum.
             // With no codec (the common, feature-off case) push raw datums in a
             // tight loop, matching the pre-dictionary path; with a codec, fall
@@ -1469,6 +1792,12 @@ mod row_codec {
     pub use dictionary::DictionaryCodec;
     #[cfg(test)]
     pub use dictionary::SAFE_TAG_BASE;
+
+    // Deterministic hasher state for the codecs' hash maps: a fixed-seed
+    // `ahash::RandomState` shared with `mz_timely_util`'s consolidation hasher, so
+    // the heavy-hitter summaries — and therefore which values each codec compresses
+    // — are identical across runs and replicas, as the old `BTreeMap` backing was.
+    use mz_timely_util::hash::fixed_state;
 
     // The codecs encode and decode `[u8]` data specific to the `[Row]` encoding. They
     // soundly decode data they themselves encoded from valid `[Row]` data, but may be
@@ -1654,9 +1983,15 @@ mod row_codec {
     /// It goes without saying that if either of these approaches are incorrect,
     /// there are calamitous unsoundness implications.
     mod dictionary {
+        // The `encode` map is a pure value->tag lookup table (never iterated for logic),
+        // so `mz_ore::collections::HashMap`'s order-hiding would suffice — but it offers
+        // no fixed-seed constructor, and we want the same deterministic hasher as the
+        // summary above. `heap_size`'s `keys()` walk is an order-insensitive sum.
+        #![allow(clippy::disallowed_types)]
 
-        use std::collections::BTreeMap;
+        use std::collections::HashMap;
 
+        use super::fixed_state;
         pub use super::{BytesMap, MisraGries};
 
         /// First byte value that is structurally unused by the datum encoding.
@@ -1677,7 +2012,13 @@ mod row_codec {
         /// `decode` map directly.
         #[derive(Default, Debug)]
         pub struct DictionaryCodec {
-            encode: BTreeMap<Vec<u8>, u8>,
+            // Looked up once per value on the encode path; mostly misses (only popular
+            // values compress), so a hash map beats a `BTreeMap`'s byte-slice walk. The
+            // map is only ever read via `get` — never iterated — so its hasher seed has
+            // no observable effect; the populated maps are built with `fixed_state` in
+            // `new_from`/`new_safe` for consistency, while the derived-`Default` (stats
+            // accumulator) variant stays empty and is never consulted.
+            encode: HashMap<Vec<u8>, u8, ahash::RandomState>,
             pub decode: BytesMap,
             stats: (MisraGries<Vec<u8>>, [u64; 4]),
         }
@@ -1694,7 +2035,7 @@ mod row_codec {
                 I: IntoIterator<Item = &'a [u8]>,
             {
                 for bytes in iter.into_iter() {
-                    debug_assert!(
+                    mz_ore::soft_assert_no_log!(
                         !bytes.is_empty(),
                         "row encoding never yields empty column slices",
                     );
@@ -1711,7 +2052,7 @@ mod row_codec {
                         // entry instead of reading the datum. This `debug_assert` makes
                         // the load-bearing "no later first-byte outside the observed
                         // union" invariant self-checking.
-                        debug_assert!(
+                        mz_ore::soft_assert_no_log!(
                             self.decode.get(bytes[0].into()).is_none(),
                             "raw datum first-byte {} collides with a dictionary tag; \
                              decode would be ambiguous",
@@ -1742,7 +2083,7 @@ mod row_codec {
                     .into_iter()
                     .filter(|(next_bytes, count)| next_bytes.len() > 1 && count > &1);
                 // Establish encoding and decoding rules.
-                let mut encode = BTreeMap::new();
+                let mut encode = HashMap::with_hasher(fixed_state());
                 let mut decode = BytesMap::default();
                 for tag in 0..=255 {
                     let tag_idx: usize = (tag % 4).into();
@@ -1773,12 +2114,13 @@ mod row_codec {
         impl DictionaryCodec {
             /// Visit contained allocations to determine their size and capacity.
             ///
-            /// `BTreeMap` exposes no capacity, so its node storage is approximated as
-            /// one logical entry's worth of bytes per element; the dominant terms (the
-            /// owned key bytes and the `decode` map's byte arena) are accounted exactly.
+            /// The `encode` table is approximated as one logical entry's worth of bytes
+            /// per element for size and its reserved `capacity()` for capacity; the
+            /// dominant terms (the owned key bytes and the `decode` map's byte arena)
+            /// are accounted exactly.
             pub fn heap_size(&self, callback: &mut impl FnMut(usize, usize)) {
                 let entry = std::mem::size_of::<(Vec<u8>, u8)>();
-                callback(self.encode.len() * entry, self.encode.len() * entry);
+                callback(self.encode.len() * entry, self.encode.capacity() * entry);
                 for key in self.encode.keys() {
                     callback(key.len(), key.capacity());
                 }
@@ -1809,7 +2151,7 @@ mod row_codec {
             ///    occur, ceasing to compress the ones that do.
             #[inline]
             pub fn observe(&mut self, bytes: &[u8]) {
-                debug_assert!(
+                mz_ore::soft_assert_no_log!(
                     !bytes.is_empty(),
                     "row encoding never yields empty column slices",
                 );
@@ -1838,7 +2180,7 @@ mod row_codec {
                     .done()
                     .into_iter()
                     .filter(|(next_bytes, count)| next_bytes.len() > 1 && count > &1);
-                let mut encode = BTreeMap::new();
+                let mut encode = HashMap::with_hasher(fixed_state());
                 let mut decode = BytesMap::default();
                 // Fill slots 0..SAFE_TAG_BASE with None (reserved for datum tags).
                 for _ in 0..SAFE_TAG_BASE {
@@ -1909,32 +2251,46 @@ mod row_codec {
     }
 
     mod misra_gries {
+        // The summary must iterate its entries (to extract heavy hitters in `done`, to
+        // `tidy`, and to size itself), which `mz_ore::collections::HashMap` deliberately
+        // forbids. We instead get determinism from the fixed-seed hasher (`fixed_state`)
+        // plus the total-order sort in `done`; `tidy`/`heap_size` are order-insensitive.
+        #![allow(clippy::disallowed_types)]
 
-        use std::collections::BTreeMap;
+        use std::collections::HashMap;
+        use std::hash::Hash;
+
+        use super::fixed_state;
 
         /// Maintains a summary of "heavy hitters" in a presented collection of items.
         ///
-        /// Uses a `BTreeMap` internally so that repeated observations of the same
-        /// element only allocate once (on first sighting). Tidy is performed when
-        /// the number of *distinct* elements exceeds `2 * k`, reducing to at most
-        /// `k` entries.
+        /// Uses a hash map internally so that repeated observations of the same
+        /// element only allocate once (on first sighting), and so the per-element
+        /// `insert_ref` is an O(1) hash rather than an O(log n) walk of byte-slice
+        /// comparisons. This is the hot path: one lookup per column per row, fed both
+        /// while gathering stats and on the steady-state encode path. The hasher is
+        /// fixed-seed (see [`fixed_state`]) so the summary — and thus which values a
+        /// codec compresses — stays deterministic across runs and replicas.
+        ///
+        /// Tidy is performed when the number of *distinct* elements exceeds `2 * k`,
+        /// reducing to at most `k` entries.
         #[derive(Clone, Debug)]
-        pub struct MisraGries<T: Ord> {
-            inner: BTreeMap<T, usize>,
+        pub struct MisraGries<T: Ord + Hash> {
+            inner: HashMap<T, usize, ahash::RandomState>,
             k: usize,
         }
 
-        impl<T: Ord> Default for MisraGries<T> {
+        impl<T: Ord + Hash> Default for MisraGries<T> {
             #[inline(always)]
             fn default() -> Self {
                 Self {
-                    inner: BTreeMap::new(),
+                    inner: HashMap::with_hasher(fixed_state()),
                     k: 512,
                 }
             }
         }
 
-        impl<T: Ord> MisraGries<T> {
+        impl<T: Ord + Hash> MisraGries<T> {
             /// Inserts an additional element to the summary.
             #[inline(always)]
             pub fn insert(&mut self, element: T) {
@@ -1952,7 +2308,9 @@ mod row_codec {
             /// Completes the summary, and extracts the items and their counts.
             pub fn done(self) -> Vec<(T, usize)> {
                 let mut result: Vec<_> = self.inner.into_iter().collect();
-                result.sort_by(|x, y| y.1.cmp(&x.1));
+                // Descending count, ties broken by key, so the values a codec selects
+                // are deterministic regardless of hash-map iteration order.
+                result.sort_by(|x, y| y.1.cmp(&x.1).then_with(|| x.0.cmp(&y.0)));
                 result
             }
 
@@ -1976,11 +2334,12 @@ mod row_codec {
         impl MisraGries<Vec<u8>> {
             /// Visit contained allocations to determine their size and capacity.
             ///
-            /// `BTreeMap` exposes no capacity, so node storage is approximated as one
-            /// logical entry per element; the owned key bytes are accounted exactly.
+            /// The hash table is approximated as one logical entry per element for
+            /// size and its reserved `capacity()` for capacity; the owned key bytes
+            /// are accounted exactly.
             pub fn heap_size(&self, callback: &mut impl FnMut(usize, usize)) {
                 let entry = std::mem::size_of::<(Vec<u8>, usize)>();
-                callback(self.inner.len() * entry, self.inner.len() * entry);
+                callback(self.inner.len() * entry, self.inner.capacity() * entry);
                 for key in self.inner.keys() {
                     callback(key.len(), key.capacity());
                 }
@@ -1997,7 +2356,7 @@ mod row_codec {
             }
         }
 
-        impl<T: Ord> std::ops::AddAssign for MisraGries<T> {
+        impl<T: Ord + Hash> std::ops::AddAssign for MisraGries<T> {
             fn add_assign(&mut self, rhs: Self) {
                 for (element, count) in rhs.done() {
                     self.update(element, count);

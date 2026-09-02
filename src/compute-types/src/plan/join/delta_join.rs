@@ -17,6 +17,7 @@
 //! This implementation strategy allows us to re-use existing arrangements, and
 //! not create any new stateful operators.
 
+use itertools::Itertools as _;
 use mz_expr::{
     Columns, JoinInputCharacteristics, JoinInputMapper, MapFilterProject, MirScalarExpr,
     join_permutations, permutation_for_arrangement,
@@ -25,6 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::plan::AvailableCollections;
 use crate::plan::join::{JoinBuildState, JoinClosure};
+use crate::plan::scalar::{LirScalarExpr, lses_from_mses};
 
 /// A delta query is implemented by a set of paths, one for each input.
 ///
@@ -46,8 +48,13 @@ pub struct DeltaJoinPlan {
 pub struct DeltaPathPlan {
     /// The relation whose updates seed the dataflow path.
     pub source_relation: usize,
-    /// The key we expect the source relation to be arranged by.
-    pub source_key: Vec<MirScalarExpr>,
+    /// The key we expect the source relation to be arranged by, or `None` when the source
+    /// relation is consumed as a raw (unarranged) collection.
+    ///
+    /// The `None` case arises only in single-time dataflows (e.g. a `SELECT` or other one-shot
+    /// query), where a single delta path suffices and its source can be hydrated directly from a
+    /// collection rather than an arrangement.
+    pub source_key: Option<Vec<LirScalarExpr>>,
     /// An initial closure to apply before any stages.
     pub initial_closure: JoinClosure,
     /// A *sequence* of stages to apply one after the other.
@@ -68,11 +75,11 @@ pub struct DeltaStagePlan {
     /// While this starts as a stream of the source relation,
     /// it evolves through multiple lookups and ceases to be
     /// the same thing, hence the different name.
-    pub stream_key: Vec<MirScalarExpr>,
+    pub stream_key: Vec<LirScalarExpr>,
     /// The thinning expression to apply on the value part of the stream
     pub stream_thinning: Vec<usize>,
     /// The key expressions to use for the lookup relation.
-    pub lookup_key: Vec<MirScalarExpr>,
+    pub lookup_key: Vec<LirScalarExpr>,
     /// The closure to apply to the concatenation of columns
     /// of the stream and lookup relations.
     pub closure: JoinClosure,
@@ -91,6 +98,22 @@ impl DeltaJoinPlan {
             vec![Default::default(); input_mapper.total_inputs()];
         let number_of_inputs = input_mapper.total_inputs();
         assert_eq!(number_of_inputs, join_orders.len());
+
+        let join_orders = join_orders
+            .into_iter()
+            .map(|order| {
+                order
+                    .into_iter()
+                    .map(|(lookup_relation, lookup_key, characteristics)| {
+                        (
+                            *lookup_relation,
+                            lses_from_mses(lookup_key),
+                            characteristics,
+                        )
+                    })
+                    .collect_vec()
+            })
+            .collect_vec();
 
         // Pick the "first" (by `Ord`) key for the source relation of each path.
         // (This matches the probably arbitrary historical practice from `mod render`.)
@@ -236,7 +259,7 @@ impl DeltaJoinPlan {
                 initial_closure,
                 stage_plans,
                 final_closure,
-                source_key: source_key.to_vec(),
+                source_key: Some(source_key.to_vec()),
             });
         }
 

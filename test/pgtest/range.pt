@@ -1,25 +1,28 @@
 # test that our range types' binary functions have the same implementation/results as PG
 
+# The tables are created in their own pipeline: a pipeline is one implicit
+# transaction, and Materialize cannot run a DDL in a transaction.
 send
 Parse {"query": "CREATE TABLE int4range_values (a int4range)"}
-Bind
-Execute
-Parse {"query": "INSERT INTO int4range_values VALUES ('[,1)'), ('[,1]'), ('[,)'), ('[,]'), ('(,1)'), ('(,1]'), ('(,)'), ('(,]'), ('[-1,1)'), ('[-1,1]'), ('(-1,1)'), ('(-1,1]'), ('[0,0)'), ('[0,0]'), ('(0,0)'), ('(0,0]'), ('[1,)'), ('[1,]'), ('(1,)'), ('(1,]')"}
 Bind
 Execute
 Parse {"query": "CREATE TABLE int4range_test_values (v int4range)"}
 Bind
 Execute
-Parse {"query": "INSERT INTO int4range_test_values VALUES ('empty'), ('(,)'), ('(,1)'), ('(-1,)'), ('[-1,1)'), ('[-99,-50)'), ('[50,99)')"}
-Bind
-Execute
 Parse {"query": "CREATE TABLE numrange_values (a numrange)"}
 Bind
 Execute
-Parse {"query": "INSERT INTO numrange_values VALUES ('[,1)'), ('[,1]'), ('[,)'), ('[,]'), ('(,1)'), ('(,1]'), ('(,)'), ('(,]'), ('[-1,1)'), ('[-1,1]'), ('(-1,1)'), ('(-1,1]'), ('[0,0)'), ('[0,0]'), ('(0,0)'), ('(0,0]'), ('[1,)'), ('[1,]'), ('(1,)'), ('(1,]')"}
+Parse {"query": "CREATE TABLE numrange_test_values (v numrange)"}
 Bind
 Execute
-Parse {"query": "CREATE TABLE numrange_test_values (v numrange)"}
+Sync
+Parse {"query": "INSERT INTO int4range_values VALUES ('[,1)'), ('[,1]'), ('[,)'), ('[,]'), ('(,1)'), ('(,1]'), ('(,)'), ('(,]'), ('[-1,1)'), ('[-1,1]'), ('(-1,1)'), ('(-1,1]'), ('[0,0)'), ('[0,0]'), ('(0,0)'), ('(0,0]'), ('[1,)'), ('[1,]'), ('(1,)'), ('(1,]')"}
+Bind
+Execute
+Parse {"query": "INSERT INTO int4range_test_values VALUES ('empty'), ('(,)'), ('(,1)'), ('(-1,)'), ('[-1,1)'), ('[-99,-50)'), ('[50,99)')"}
+Bind
+Execute
+Parse {"query": "INSERT INTO numrange_values VALUES ('[,1)'), ('[,1]'), ('[,)'), ('[,]'), ('(,1)'), ('(,1]'), ('(,)'), ('(,]'), ('[-1,1)'), ('[-1,1]'), ('(-1,1)'), ('(-1,1]'), ('[0,0)'), ('[0,0]'), ('(0,0)'), ('(0,0]'), ('[1,)'), ('[1,]'), ('(1,)'), ('(1,]')"}
 Bind
 Execute
 Parse {"query": "INSERT INTO numrange_test_values VALUES ('empty'), ('(,)'), ('(,1)'), ('(-1,)'), ('[-1,1)'), ('[-99,-50)'), ('[50,99)')"}
@@ -30,28 +33,30 @@ Sync
 
 until
 ReadyForQuery
+ReadyForQuery
 ----
 ParseComplete
 BindComplete
 CommandComplete {"tag":"CREATE TABLE"}
 ParseComplete
 BindComplete
-CommandComplete {"tag":"INSERT 0 20"}
+CommandComplete {"tag":"CREATE TABLE"}
 ParseComplete
 BindComplete
 CommandComplete {"tag":"CREATE TABLE"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 20"}
 ParseComplete
 BindComplete
 CommandComplete {"tag":"INSERT 0 7"}
 ParseComplete
 BindComplete
-CommandComplete {"tag":"CREATE TABLE"}
-ParseComplete
-BindComplete
 CommandComplete {"tag":"INSERT 0 20"}
-ParseComplete
-BindComplete
-CommandComplete {"tag":"CREATE TABLE"}
 ParseComplete
 BindComplete
 CommandComplete {"tag":"INSERT 0 7"}

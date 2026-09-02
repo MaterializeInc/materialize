@@ -1,0 +1,586 @@
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on July 6, 2026 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/drop_index
+#
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+# LogicTest: default-configs local-mixed-22.2-23.1
+
+statement ok
+CREATE TABLE users (
+  id    INT PRIMARY KEY,
+  name  VARCHAR NOT NULL,
+  title VARCHAR,
+  INDEX foo (name),
+  UNIQUE INDEX bar (id, name),
+  INDEX baw (name, title)
+)
+
+statement ok
+CREATE TABLE othertable (
+   x INT,
+   y INT,
+   INDEX baw (x),
+   INDEX yak (y, x)
+)
+
+statement error unknown catalog item 'baw'
+DROP INDEX baw
+
+# Not supported by Materialize.
+onlyif cockroach
+statement error index name "baw" is ambiguous
+DROP INDEX IF EXISTS baw
+
+statement error pgcode 42704 unknown catalog item 'ark'
+DROP INDEX ark
+
+statement ok
+DROP INDEX IF EXISTS ark
+
+statement error pgcode 42704 Expected end of statement, found operator "@"
+DROP INDEX users@ark
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP INDEX IF EXISTS users@ark
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP INDEX yak
+
+statement ok
+CREATE INDEX yak ON othertable (y, x)
+
+statement ok
+DROP INDEX IF EXISTS yak
+
+statement ok
+DROP TABLE othertable
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP INDEX baw
+
+statement ok
+INSERT INTO users VALUES (1, 'tom', 'cat'),(2, 'jerry', 'rat')
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTBITTTBBB colnames
+SHOW INDEXES FROM users
+----
+table_name  index_name  non_unique  seq_in_index  column_name  definition  direction  storing  implicit  visible
+users       bar         false       1             id           id          ASC        false    false     true
+users       bar         false       2             name         name        ASC        false    false     true
+users       foo         true        1             name         name        ASC        false    false     true
+users       foo         true        2             id           id          ASC        false    true      true
+users       users_pkey  false       1             id           id          ASC        false    false     true
+users       users_pkey  false       2             name         name        N/A        true     false     true
+users       users_pkey  false       3             title        title       N/A        true     false     true
+
+statement error Expected end of statement, found operator "@"
+DROP INDEX users@zap
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP INDEX IF EXISTS users@zap
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTBITTTBBB colnames
+SHOW INDEXES FROM users
+----
+table_name  index_name  non_unique  seq_in_index  column_name  definition  direction  storing  implicit  visible
+users       bar         false       1             id           id          ASC        false    false     true
+users       bar         false       2             name         name        ASC        false    false     true
+users       foo         true        1             name         name        ASC        false    false     true
+users       foo         true        2             id           id          ASC        false    true      true
+users       users_pkey  false       1             id           id          ASC        false    false     true
+users       users_pkey  false       2             name         name        N/A        true     false     true
+users       users_pkey  false       3             title        title       N/A        true     false     true
+
+# Also test that dropping with a non-existing index still drops 'foo'.
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP INDEX IF EXISTS users@foo, users@zap
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTBITTTBBB colnames
+SHOW INDEXES FROM users
+----
+table_name  index_name  non_unique  seq_in_index  column_name  definition  direction  storing  implicit  visible
+users       bar         false       1             id           id          ASC        false    false     true
+users       bar         false       2             name         name        ASC        false    false     true
+users       users_pkey  false       1             id           id          ASC        false    false     true
+users       users_pkey  false       2             name         name        N/A        true     false     true
+users       users_pkey  false       3             title        title       N/A        true     false     true
+
+user testuser
+
+skipif config local-legacy-schema-changer
+skipif config local-mixed-22.2-23.1
+statement error Expected end of statement, found operator "@"
+DROP INDEX users@bar
+
+onlyif config local-legacy-schema-changer
+statement error user testuser does not have CREATE privilege on relation users
+DROP INDEX users@bar
+
+user root
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+GRANT CREATE ON TABLE users TO testuser
+
+user testuser
+
+statement error Expected end of statement, found operator "@"
+DROP INDEX users@bar
+
+statement error Expected end of statement, found operator "@"
+DROP INDEX users@bar RESTRICT
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP INDEX users@bar CASCADE
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTBITTTBBB colnames
+SHOW INDEXES FROM users
+----
+table_name  index_name  non_unique  seq_in_index  column_name  definition  direction  storing  implicit  visible
+users       users_pkey  false       1             id           id          ASC        false    false     true
+users       users_pkey  false       2             name         name        N/A        true     false     true
+users       users_pkey  false       3             title        title       N/A        true     false     true
+
+user root
+
+query ITT rowsort
+SELECT * FROM users
+----
+1 tom   cat
+2 jerry rat
+
+statement ok
+CREATE INDEX foo ON users (name)
+
+statement ok
+CREATE INDEX bar ON users (title)
+
+statement ok
+CREATE INDEX baz ON users (name, title)
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP INDEX IF EXISTS users@invalid, users@baz
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTBITTTBBB colnames
+SHOW INDEXES FROM users
+----
+table_name  index_name  non_unique  seq_in_index  column_name  definition  direction  storing  implicit  visible
+users       bar         true        1             title        title       ASC        false    false     true
+users       bar         true        2             id           id          ASC        false    true      true
+users       foo         true        1             name         name        ASC        false    false     true
+users       foo         true        2             id           id          ASC        false    true      true
+users       users_pkey  false       1             id           id          ASC        false    false     true
+users       users_pkey  false       2             name         name        N/A        true     false     true
+users       users_pkey  false       3             title        title       N/A        true     false     true
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE VIEW v AS SELECT name FROM users@{FORCE_INDEX=foo}
+
+statement error Expected end of statement, found operator "@"
+DROP INDEX users@foo
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP INDEX users@bar
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTBITTTBBB colnames
+SHOW INDEXES FROM users
+----
+table_name  index_name  non_unique  seq_in_index  column_name  definition  direction  storing  implicit  visible
+users       foo         true        1             name         name        ASC        false    false     true
+users       foo         true        2             id           id          ASC        false    true      true
+users       users_pkey  false       1             id           id          ASC        false    false     true
+users       users_pkey  false       2             name         name        N/A        true     false     true
+users       users_pkey  false       3             title        title       N/A        true     false     true
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE VIEW v2 AS SELECT name FROM v
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTIT
+SHOW TABLES
+----
+public  users  table  root  0  NULL
+public  v      view   root  0  NULL
+public  v2     view   root  0  NULL
+
+statement ok
+GRANT ALL ON users to testuser
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+GRANT ALL ON v to testuser
+
+user testuser
+
+statement error Expected end of statement, found operator "@"
+DROP INDEX users@foo CASCADE
+
+user root
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP INDEX users@foo CASCADE
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTBITTTBBB colnames
+SHOW INDEXES FROM users
+----
+table_name  index_name  non_unique  seq_in_index  column_name  definition  direction  storing  implicit  visible
+users       users_pkey  false       1             id           id          ASC        false    false     true
+users       users_pkey  false       2             name         name        N/A        true     false     true
+users       users_pkey  false       3             title        title       N/A        true     false     true
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTIT
+SHOW TABLES
+----
+public  users  table  root  0  NULL
+
+# Test that schema change job description is correct #80889
+statement ok
+CREATE TABLE tbl (c string);
+
+statement ok
+CREATE INDEX expr_idx ON tbl(lower(c));
+
+statement ok
+DROP INDEX expr_idx;
+
+# Not supported by Materialize.
+onlyif cockroach
+query T colnames
+SELECT description FROM [show jobs] ORDER BY created DESC LIMIT 2;
+----
+description
+GC for DROP INDEX test.public.tbl@expr_idx
+DROP INDEX test.public.tbl@expr_idx
+
+# Test the syntax without a '@'
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE INDEX baz ON users (name)
+
+# Also test that dropping with a non-existing index still drops 'baz'.
+
+statement ok
+DROP INDEX IF EXISTS baz, zap
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTBITTTBBB colnames
+SHOW INDEXES FROM users
+----
+table_name  index_name  non_unique  seq_in_index  column_name  definition  direction  storing  implicit  visible
+users       users_pkey  false       1             id           id          ASC        false    false     true
+users       users_pkey  false       2             name         name        N/A        true     false     true
+users       users_pkey  false       3             title        title       N/A        true     false     true
+
+# Test that it still succeeds when an index does not exist.
+
+statement ok
+DROP INDEX IF EXISTS baz
+
+# Test that presence of a view or sequence doesn't break DROP INDEX (#21834)
+
+statement ok
+CREATE DATABASE view_test
+
+statement ok
+SET DATABASE = view_test
+
+statement ok
+CREATE TABLE t (id INT)
+
+statement ok
+CREATE VIEW v AS SELECT id FROM t
+
+statement error pgcode 42704 unknown catalog item 'nonexistent_index'
+DROP INDEX nonexistent_index
+
+statement ok
+CREATE DATABASE sequence_test
+
+statement ok
+SET DATABASE = sequence_test
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE SEQUENCE s
+
+statement error pgcode 42704 unknown catalog item 'nonexistent_index'
+DROP INDEX nonexistent_index
+
+statement ok
+CREATE TABLE tu (a INT UNIQUE)
+
+statement ok
+CREATE UNIQUE INDEX tu_a ON tu(a)
+
+statement error unknown catalog item 'tu_a_key'
+DROP INDEX tu_a_key
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP INDEX tu_a
+
+# Test that we have more relaxed restrictions on dropping indexes referenced by fks.
+subtest fk_drop
+
+# Ensure that DROP INDEX CASCADE does not delete the foreign key when
+# there is another index that can satisfy the foreign key constraint.
+statement ok
+CREATE TABLE fk1 (x int);
+
+statement ok
+CREATE TABLE fk2 (x int PRIMARY KEY);
+
+statement ok
+CREATE INDEX i ON fk1 (x);
+
+statement ok
+CREATE INDEX i2 ON fk1 (x);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE fk1 ADD CONSTRAINT fk1 FOREIGN KEY (x) REFERENCES fk2 (x);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP INDEX fk1@i CASCADE
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SHOW CREATE fk1
+----
+fk1  CREATE TABLE public.fk1 (
+       x INT8 NULL,
+       rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
+       CONSTRAINT fk1_pkey PRIMARY KEY (rowid ASC),
+       CONSTRAINT fk1 FOREIGN KEY (x) REFERENCES public.fk2(x),
+       INDEX i2 (x ASC)
+     )
+
+# test that notices are generated on index drops
+subtest notice_on_drop_index
+
+query T noticetrace
+CREATE TABLE drop_index_test(a int); CREATE INDEX drop_index_test_index ON drop_index_test(a); DROP INDEX drop_index_test_index
+----
+NOTICE: the data for dropped indexes is reclaimed asynchronously
+HINT: The reclamation delay can be customized in the zone configuration for the table.
+
+# test correct error reporting from NewUniquenessConstraintViolationError; see #46276
+subtest new_uniqueness_constraint_error
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE t (a INT PRIMARY KEY, b DECIMAL(10,1) NOT NULL DEFAULT(0), UNIQUE INDEX t_secondary (b), FAMILY (a, b));
+INSERT INTO t VALUES (100, 500.5);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+DROP INDEX t_secondary CASCADE;
+ALTER TABLE t DROP COLUMN b;
+INSERT INTO t SELECT a + 1 FROM t;
+
+statement error pgcode 23505 Unexpected keyword UPSERT at the beginning of a statement
+UPSERT INTO t SELECT a + 1 FROM t;
+
+statement ok
+COMMIT;
+
+# test the primary key cannot be dropped with drop index; see #56853
+subtest drop_primary_key
+
+statement error pgcode 0A000 Expected end of statement, found operator "@"
+CREATE TABLE drop_primary(); DROP INDEX drop_primary@drop_primary_pkey CASCADE;
+
+# This subtest tests that dropping a unique index that is serving
+# a inbound FK constraint works properly:
+#  - no cascade: return error
+#  - cascade AND:
+#    - there exists another unique index on the same columns: only drop the index
+#    - there exists another unique index but not on the same columns: drop the index and the FK constraint
+#    - there exists another unique without index constraint on the same columns: only drop the index
+#    - there exists another unique_without_index constraint but not on the same columns: drop the index and the FK constraint
+subtest drop_unique_index_serving_FK_96731
+
+statement ok
+CREATE TABLE t2_96731(i INT PRIMARY KEY, j INT);
+
+statement ok
+CREATE UNIQUE INDEX t2_96731_idx ON t2_96731(j);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE t1_96731(i INT PRIMARY KEY, j INT REFERENCES t2_96731(j));
+
+statement error unknown catalog item 't2_96731_idx'
+DROP INDEX t2_96731_idx;
+
+# Create another unique index on the same columns and ensure
+# dropping the index won't drop the FK constraint.
+statement ok
+CREATE UNIQUE INDEX t2_96731_idx2 ON t2_96731(j);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP INDEX t2_96731_idx CASCADE;
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTB colnames
+SHOW CONSTRAINTS FROM t1_96731;
+----
+table_name  constraint_name  constraint_type  details                                 validated
+t1_96731    t1_96731_j_fkey  FOREIGN KEY      FOREIGN KEY (j) REFERENCES t2_96731(j)  true
+t1_96731    t1_96731_pkey    PRIMARY KEY      PRIMARY KEY (i ASC)                     true
+
+# Not supported by Materialize.
+onlyif cockroach
+# Drop the last unique index will drop the FK as well this time.
+statement ok
+DROP INDEX t2_96731_idx2 CASCADE;
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTB colnames
+SHOW CONSTRAINTS FROM t1_96731;
+----
+table_name  constraint_name  constraint_type  details              validated
+t1_96731    t1_96731_pkey    PRIMARY KEY      PRIMARY KEY (i ASC)  true
+
+# Recreate the unique index and FK constraint.
+statement ok
+CREATE UNIQUE INDEX t2_96731_idx ON t2_96731(j);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE t1_96731 ADD FOREIGN KEY (j) REFERENCES t2_96731(j);
+
+# Not supported by Materialize.
+onlyif cockroach
+# Create a unique_without_index constraint on the same columns and ensure
+# dropping the index won't drop the FK constraint.
+statement ok
+SET experimental_enable_unique_without_index_constraints = true;
+ALTER TABLE t2_96731 ADD CONSTRAINT unique_j UNIQUE WITHOUT INDEX (j);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP INDEX t2_96731_idx CASCADE;
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTB colnames
+SHOW CONSTRAINTS FROM t1_96731;
+----
+table_name  constraint_name  constraint_type  details                                 validated
+t1_96731    t1_96731_j_fkey  FOREIGN KEY      FOREIGN KEY (j) REFERENCES t2_96731(j)  true
+t1_96731    t1_96731_pkey    PRIMARY KEY      PRIMARY KEY (i ASC)                     true
+
+# Recreate the unique index, drop the unique_without_index constraint,
+# and add another one on different columns.
+statement ok
+CREATE UNIQUE INDEX t2_96731_idx ON t2_96731(j);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE t2_96731 DROP CONSTRAINT unique_j
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE t2_96731 ADD CONSTRAINT unique_i UNIQUE WITHOUT INDEX (i);
+
+# Not supported by Materialize.
+onlyif cockroach
+# Now dropping the index will also drop the FK constraint.
+statement ok
+DROP INDEX t2_96731_idx CASCADE;
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTTTB colnames
+SHOW CONSTRAINTS FROM t1_96731;
+----
+table_name  constraint_name  constraint_type  details              validated
+t1_96731    t1_96731_pkey    PRIMARY KEY      PRIMARY KEY (i ASC)  true
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP TABLE t1_96731, t2_96731;

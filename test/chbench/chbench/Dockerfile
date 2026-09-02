@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base AS build
+MZFROM debian-base AS build
+
+ARG ARCH_GCC
 
 RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -16,27 +18,25 @@ RUN apt-get update \
         curl \
         gnupg2 \
         libconfig++-dev \
-        libmysqlclient-dev \
         libpqxx-dev \
         unixodbc-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Build the MySQL ODBC connector.
+# Install the MySQL ODBC connector.
 
 COPY mysql.asc .
 
-RUN gpg --import mysql.asc \
+RUN arch_mysql=$(echo "$ARCH_GCC" | sed -e "s/x86_64/x86-64bit/") \
+    && archive="mysql-connector-odbc-9.6.0-linux-glibc2.28-$arch_mysql.tar.gz" \
+    && directory=${archive%.tar.gz} \
+    && gpg --import mysql.asc \
     && echo "trusted-key B7B3B788A8D3785C" >> ~/.gnupg/gpg.conf \
-    && curl -fsSL https://dev.mysql.com/get/Downloads/Connector-ODBC/9.6/mysql-connector-odbc-9.6.0-src.tar.gz > mysql-odbc.tar.gz \
-    && curl -fsSL "https://dev.mysql.com/downloads/gpg/?file=mysql-connector-odbc-9.6.0-src.tar.gz&p=10" > mysql-odbc.asc \
+    && curl -fsSL "https://dev.mysql.com/get/Downloads/Connector-ODBC/9.6/$archive" > mysql-odbc.tar.gz \
+    && curl -fsSL "https://dev.mysql.com/downloads/gpg/?file=$archive&p=10" > mysql-odbc.asc \
     && gpg --verify mysql-odbc.asc mysql-odbc.tar.gz \
-    && tar -xzf mysql-odbc.tar.gz
-
-RUN cd mysql-connector-odbc-9.6.0-src \
-    && cmake -DWITH_UNIXODBC=1 -DDISABLE_GUI=1 . \
-    && make -j8 \
-    && make install
+    && mkdir /mysql-connector-odbc \
+    && tar -xzf mysql-odbc.tar.gz --strip-components=2 -C /mysql-connector-odbc "$directory/lib"
 
 # Build chBenchmark.
 
@@ -50,14 +50,14 @@ RUN ls build
 
 # Copy the build artifacts into a fresh image.
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
-RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y libconfig++9v5 libmysqlclient21 libpqxx-7.8t64 unixodbc && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y libconfig++11 libpqxx-7.10 unixodbc && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY odbc.ini /etc/odbc.ini
 COPY mz-default-postgres.cfg /etc/chbenchmark/mz-default-postgres.cfg
 COPY mz-default-mysql.cfg /etc/chbenchmark/mz-default-mysql.cfg
-COPY --from=build /usr/local/lib/libmyodbc9a.so /usr/local/lib/libmyodbc9a.so
+COPY --from=build /mysql-connector-odbc /usr/local/lib/mysql-connector-odbc
 COPY --from=build /build/chbenchmark /usr/local/bin/chBenchmark
 
 ENTRYPOINT ["chBenchmark"]

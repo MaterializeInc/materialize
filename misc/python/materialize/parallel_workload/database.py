@@ -16,8 +16,8 @@ from enum import Enum
 from pg8000.native import identifier, literal
 
 from materialize.data_ingest.data_type import (
-    DATA_TYPES,
     DATA_TYPES_FOR_AVRO,
+    DATA_TYPES_FOR_COLUMNS,
     DATA_TYPES_FOR_KEY,
     DATA_TYPES_FOR_MYSQL,
     DATA_TYPES_FOR_SQL_SERVER,
@@ -47,6 +47,7 @@ from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.parallel_workload.column import (
     Column,
     KafkaColumn,
+    LoadGeneratorColumn,
     MySqlColumn,
     PostgresColumn,
     SqlServerColumn,
@@ -58,28 +59,39 @@ from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.expression import ExprKind, expression
 from materialize.parallel_workload.settings import Complexity, Scenario
 
-MAX_COLUMNS = 5
+MAX_COLUMNS = 50
 MAX_INCLUDE_HEADERS = 5
-MAX_ROWS = 50
+# The row count a table is held at. Measured with a view whose join was a cross
+# product, one `COPY (SELECT * FROM view WHERE .. LIMIT 100) TO 's3://..'` over
+# 500-row bases cost ~450 MiB of replica RSS with only four columns, and pw
+# tables carry up to MAX_COLUMNS of them. A handful of such reads at once is
+# what grew a clusterd to 19 GiB and had the kernel OOM-killer take it, plus
+# environmentd and the Kafka broker, out of the one cgroup all of a run's
+# containers share (nightlies 17660-17701). 100 keeps enough rows for the DML,
+# persist and index paths to be interesting. See also JOIN_KEY_TYPES, which
+# keeps a view's join from squaring this in the first place.
+MAX_ROWS = 100
 MAX_CLUSTERS = 4
 MAX_CLUSTER_REPLICAS = 2
-MAX_DBS = 5
-MAX_SCHEMAS = 5
-MAX_TABLES = 5
-MAX_VIEWS = 15
-MAX_INDEXES = 15
-MAX_ROLES = 15
-MAX_WEBHOOK_SOURCES = 5
-MAX_KAFKA_SOURCES = 5
-MAX_MYSQL_SOURCES = 5
-MAX_SQL_SERVER_SOURCES = 5
-MAX_POSTGRES_SOURCES = 5
-MAX_KAFKA_SINKS = 5
-MAX_ICEBERG_SINKS = 5
+MAX_DBS = 50
+MAX_SCHEMAS = 50
+MAX_TABLES = 50
+MAX_VIEWS = 150
+MAX_INDEXES = 150
+MAX_ROLES = 150
+MAX_WEBHOOK_SOURCES = 50
+MAX_KAFKA_SOURCES = 50
+MAX_MYSQL_SOURCES = 50
+MAX_SQL_SERVER_SOURCES = 50
+MAX_POSTGRES_SOURCES = 50
+MAX_LOADGEN_SOURCES = 50
+MAX_KAFKA_SINKS = 50
+MAX_ICEBERG_SINKS = 50
+MAX_TYPES = 50
+MAX_NETWORK_POLICIES = 30
 
 MAX_INITIAL_DBS = 1
 MAX_INITIAL_SCHEMAS = 1
-MAX_INITIAL_CLUSTERS = 2
 MAX_INITIAL_TABLES = 2
 MAX_INITIAL_VIEWS = 2
 MAX_INITIAL_ROLES = 1
@@ -88,7 +100,17 @@ MAX_INITIAL_KAFKA_SOURCES = 1
 MAX_INITIAL_MYSQL_SOURCES = 1
 MAX_INITIAL_SQL_SERVER_SOURCES = 1
 MAX_INITIAL_POSTGRES_SOURCES = 1
-MAX_INITIAL_KAFKA_SINKS = 1
+MAX_INITIAL_LOADGEN_SOURCES = 1
+
+# Types eligible as the equality anchor of a two-base view's join, see
+# `View.join_key_expr`. A type qualifies when Materialize has `=` for it (map
+# has none) and, less obviously, when its random values collide often enough
+# that the equality still lets rows through: every type here draws one of a
+# handful of sentinels (the type's min or max, 0, 1, one of five fixed strings)
+# about a fifth of the time, so on the order of a percent of the cross product
+# survives. An equality on uuid or timestamp columns would bound the join just
+# as well but always produce an empty view, which tests nothing.
+JOIN_KEY_TYPES = NUMBER_TYPES + [Text]
 
 
 class BodyFormat(Enum):
@@ -166,6 +188,17 @@ class MzTempSchema(Schema):
 class DBObject:
     columns: list[Column]
     lock: threading.Lock
+    # Whether reading from this object can legitimately reach the empty
+    # (sealed) frontier: its own shard seals in normal operation, or a
+    # dataflow reading it sees an input frontier that becomes empty. Plain
+    # tables and unbounded sources never seal, so the default is False.
+    # Bounded (UP TO) load generators seal once they finish, and views
+    # propagate sealing from their inputs, materialized or not.
+    can_seal: bool = False
+    # Whether a read-then-write's selection may (transitively) read this
+    # object. The adapter refuses one that reaches a source or a source-export
+    # table, so only plain tables and views over them qualify.
+    read_then_write_input: bool = False
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -178,6 +211,8 @@ class DBObject:
 
 
 class Table(DBObject):
+    read_then_write_input = True
+
     table_id: int
     rename: int
     num_rows: int
@@ -191,7 +226,7 @@ class Table(DBObject):
         self.table_id = table_id
         self.schema = schema
         self.columns = [
-            Column(rng, i, rng.choice(DATA_TYPES), self)
+            Column(rng, i, rng.choice(DATA_TYPES_FOR_COLUMNS), self)
             for i in range(rng.randint(2, MAX_COLUMNS))
         ]
         self.num_rows = 0
@@ -266,7 +301,8 @@ class View(DBObject):
             list(base_object2.columns) if base_object2 else []
         )
         self.data_types = [
-            rng.choice(list(DATA_TYPES)) for i in range(rng.randint(1, MAX_COLUMNS))
+            rng.choice(list(DATA_TYPES_FOR_COLUMNS))
+            for i in range(rng.randint(1, MAX_COLUMNS))
         ]
         self.expressions = [
             expression(data_type, all_columns, rng, kind=ExprKind.MATERIALIZABLE)
@@ -279,24 +315,57 @@ class View(DBObject):
 
         self.materialized = not self.temp and rng.choice([True, False])
 
-        self.refresh = (
-            rng.choice(
-                [
-                    "ON COMMIT",
-                    f"EVERY '{rng.randint(1, 60)} seconds {rng.randint(0, 60)} minutes'",
-                    f"EVERY '{rng.randint(1, 60)} seconds {rng.randint(0, 60)} minutes' ALIGNED TO (mz_now())",
-                    # Always in the future of all refreshes of previously generated MVs
-                    "AT mz_now()::string::int8 + 1000",
-                ]
-            )
-            if self.materialized
-            else None
+        # (SQL, whether the view's shard seals during a run): a REFRESH AT view
+        # seals once its last refresh has passed.
+        refresh_options = [
+            ("ON COMMIT", False),
+            # TODO: Restore minute-scale intervals when CPU-196 is fixed
+            (f"EVERY '{rng.randint(1, 15)} seconds'", False),
+            (f"EVERY '{rng.randint(1, 15)} seconds' ALIGNED TO (mz_now())", False),
+            # Always in the future of all refreshes of previously generated MVs
+            ("AT mz_now()::string::int8 + 1000", True),
+            # The near refresh makes the view readable, the far one parks its
+            # write frontier a millennium out without ever sealing it. That is
+            # what separates a read-then-write's write timestamp taken from the
+            # oracle from one taken from the selection's frontier, which drags
+            # the monotone, durable oracle into the future with it.
+            ("AT mz_now()::string::int8 + 1000, REFRESH AT '3000-01-01'", False),
+        ]
+        self.refresh, refresh_seals = (
+            rng.choice(refresh_options) if self.materialized else (None, False)
+        )
+
+        # A materialized view's shard seals (its write frontier advances to the
+        # empty frontier) once it can never produce more output. That happens
+        # for REFRESH AT views after their last refresh, for repeat_row(-1)
+        # constant views on hydration, and transitively for any view that reads
+        # from an input that itself seals. The replacement and sealed-shard
+        # oracles key off this to tell legitimate seals from wrongly finalized
+        # shards. Unmaterialized views have no shard, but a dataflow reading
+        # one inlines its inputs, so sealing must propagate through them too.
+        self.can_seal = (
+            refresh_seals
+            or self.repeat_row_const
+            or base_object.can_seal
+            or (base_object2 is not None and base_object2.can_seal)
+        )
+
+        self.read_then_write_input = base_object.read_then_write_input and (
+            base_object2 is None or base_object2.read_then_write_input
         )
 
         if base_object2:
-            self.on_expr = expression(
+            # The random boolean alone references an arbitrary subset of the
+            # columns, so it usually names only one side or neither, and the
+            # join plans as a cross product whose output squares MAX_ROWS. The
+            # equality anchor makes the output linear in the input instead.
+            # Cross joins stay covered by the ad-hoc SELECTs, which carry a
+            # LIMIT the optimizer can push into the join.
+            join_key = self.join_key_expr(base_object, base_object2, rng)
+            predicate = expression(
                 Boolean, all_columns, rng, kind=ExprKind.MATERIALIZABLE
             )
+            self.on_expr = f"{join_key} AND ({predicate})"
 
         self.union = rng.random() < 0.1
         if self.union:
@@ -314,6 +383,32 @@ class View(DBObject):
             self.data_types = [Long]
             self.columns = [Column(rng, 0, Long, self)]
             self.union = False
+
+    @staticmethod
+    def join_key_expr(left: DBObject, right: DBObject, rng: random.Random) -> str:
+        """An equality between one column of each side, so that the join has a
+        key and its output stays linear in the input.
+
+        Matches the join shape `SelectAction.generate_select_query` emits, with
+        two additions. A `JOIN_KEY_TYPES` pair wins over an equally valid pair of
+        some other type, whose values would never collide and leave the view
+        permanently empty. And a pair of objects sharing no column type at all,
+        which a query can answer by not joining but a two-base view cannot, falls
+        back to comparing the columns as text. That bounds the join just as well,
+        only with a near-empty result."""
+        candidates = [
+            (left_column, right_column)
+            for left_column in left.columns
+            for right_column in right.columns
+            # Materialize has no `=` for map.
+            if left_column.data_type is right_column.data_type
+            and left_column.data_type is not TextTextMap
+        ]
+        colliding = [pair for pair in candidates if pair[0].data_type in JOIN_KEY_TYPES]
+        if candidates:
+            left_column, right_column = rng.choice(colliding or candidates)
+            return f"{left_column} = {right_column}"
+        return f"{rng.choice(left.columns)}::text = {rng.choice(right.columns)}::text"
 
     def name(self) -> str:
         if self.rename:
@@ -370,8 +465,12 @@ class View(DBObject):
 
         return query
 
-    def create(self, exe: Executor) -> None:
+    def create(self, exe: Executor, or_replace: bool = False) -> None:
         query = "CREATE "
+        # OR REPLACE keeps the same catalog item, swapping its definition and
+        # rebuilding the dataflow. It is incompatible with TEMP.
+        if or_replace and not self.temp:
+            query += "OR REPLACE "
         if self.temp:
             query += "TEMP "
         if self.materialized:
@@ -485,7 +584,6 @@ class KafkaSource(DBObject):
     lock: threading.Lock
     columns: list[KafkaColumn]
     schema: Schema
-    num_rows: int
 
     def __init__(
         self,
@@ -499,7 +597,6 @@ class KafkaSource(DBObject):
         self.source_id = source_id
         self.cluster = cluster
         self.schema = schema
-        self.num_rows = 0
         fields = []
         for i in range(rng.randint(1, 10)):
             fields.append(
@@ -507,10 +604,25 @@ class KafkaSource(DBObject):
                 Field(f"key{i}", rng.choice(DATA_TYPES_FOR_AVRO), True)
             )
         for i in range(rng.randint(0, 20)):
-            fields.append(Field(f"value{i}", rng.choice(DATA_TYPES_FOR_AVRO), False))
+            # Value columns are randomly nullable so their Avro type becomes a
+            # `["null", T]` union, exercising union schema resolution in the
+            # source decode path. Keys stay non-nullable.
+            fields.append(
+                Field(
+                    f"value{i}",
+                    rng.choice(DATA_TYPES_FOR_AVRO),
+                    False,
+                    nullable=rng.choice([True, False]),
+                )
+            )
         self.columns = [
-            KafkaColumn(field.name, field.data_type, False, self) for field in fields
+            KafkaColumn(field.name, field.data_type, field.nullable, self)
+            for field in fields
         ]
+        # Sometimes evolve the schema before creating the source: write records
+        # under a narrower (promotable) writer schema first, so the source must
+        # promote them through union schema resolution. See
+        # KafkaExecutor._write_promotion_preamble.
         self.executor = KafkaExecutor(
             self.source_id,
             ports,
@@ -518,6 +630,7 @@ class KafkaSource(DBObject):
             schema.db.name(),
             schema.name(),
             cluster.name(),
+            evolve_schema=rng.choice([True, False]),
         )
         workload = rng.choice(list(WORKLOADS))(azurite=False)
         for transaction_def in workload.cycle:
@@ -560,14 +673,19 @@ class IcebergSink(DBObject):
         self.cluster = cluster
         self.schema = schema
         self.base_object = base_object
-        key_cols = [
-            column
-            for column in rng.sample(
-                base_object.columns, k=rng.randint(1, len(base_object.columns))
-            )
-        ]
-        key_col_names = [column.name(True) for column in key_cols]
-        self.key = f"KEY ({', '.join(key_col_names)}) NOT ENFORCED"
+        self.mode = rng.choice(["UPSERT", "APPEND"])
+        if self.mode == "UPSERT":
+            key_cols = [
+                column
+                for column in rng.sample(
+                    base_object.columns, k=rng.randint(1, len(base_object.columns))
+                )
+            ]
+            key_col_names = [column.name(True) for column in key_cols]
+            self.key = f"KEY ({', '.join(key_col_names)}) NOT ENFORCED"
+        else:
+            # APPEND mode does not permit a KEY.
+            self.key = ""
         self.table_name = f"icesink_topic{self.sink_id}_{uuid.uuid4().hex[:8]}"
         self.rename = 0
 
@@ -580,7 +698,7 @@ class IcebergSink(DBObject):
         return f"{self.schema}.{identifier(self.name())}"
 
     def create(self, exe: Executor) -> None:
-        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO ICEBERG CATALOG CONNECTION polaris_conn (NAMESPACE 'default_namespace', TABLE '{self.table_name}') USING AWS CONNECTION aws_conn {self.key} MODE UPSERT WITH (COMMIT INTERVAL '1s')"
+        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO ICEBERG CATALOG CONNECTION polaris_conn (NAMESPACE 'default_namespace', TABLE '{self.table_name}') USING AWS CONNECTION aws_conn {self.key} MODE {self.mode} WITH (COMMIT INTERVAL '1s')"
         exe.execute(query)
 
 
@@ -592,6 +710,8 @@ class KafkaSink(DBObject):
     base_object: DBObject
     envelope: str
     key: str
+    connection_options: list[str]
+    no_snapshot: bool
 
     def __init__(
         self,
@@ -606,6 +726,19 @@ class KafkaSink(DBObject):
         self.cluster = cluster
         self.schema = schema
         self.base_object = base_object
+        self.connection_options = []
+        if rng.random() < 0.3:
+            compression = rng.choice(["none", "gzip", "lz4", "zstd", "snappy"])
+            self.connection_options.append(f"COMPRESSION TYPE = '{compression}'")
+        if rng.random() < 0.2:
+            self.connection_options.append(
+                f"TRANSACTIONAL ID PREFIX 'pw-txn-{self.sink_id}'"
+            )
+        if rng.random() < 0.2:
+            self.connection_options.append(
+                f"PROGRESS GROUP ID PREFIX 'pw-progress-{self.sink_id}'"
+            )
+        self.no_snapshot = rng.random() < 0.2
         universal_formats = [
             "FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
             "FORMAT JSON",
@@ -615,9 +748,7 @@ class KafkaSink(DBObject):
         if len(base_object.columns) == 1:
             formats.extend(single_column_formats)
         self.format = rng.choice(formats)
-        self.envelope = (
-            "UPSERT" if self.format == "JSON" else rng.choice(["DEBEZIUM", "UPSERT"])
-        )
+        self.envelope = rng.choice(["DEBEZIUM", "UPSERT"])
         if self.envelope == "UPSERT" or rng.choice([True, False]):
             key_cols = [
                 column
@@ -667,7 +798,10 @@ class KafkaSink(DBObject):
             if self.partition_count
             else ""
         )
-        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO KAFKA CONNECTION kafka_conn (TOPIC {topic}{maybe_partition}) {self.key} {self.format} ENVELOPE {self.envelope}"
+        options = "".join(f", {option}" for option in self.connection_options)
+        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO KAFKA CONNECTION kafka_conn (TOPIC {topic}{maybe_partition}{options}) {self.key} {self.format} ENVELOPE {self.envelope}"
+        if self.no_snapshot:
+            query += " WITH (SNAPSHOT = false)"
         exe.execute(query)
 
 
@@ -679,7 +813,6 @@ class MySqlSource(DBObject):
     lock: threading.Lock
     columns: list[MySqlColumn]
     schema: Schema
-    num_rows: int
 
     def __init__(
         self,
@@ -693,9 +826,17 @@ class MySqlSource(DBObject):
         self.source_id = source_id
         self.cluster = cluster
         self.schema = schema
-        self.num_rows = 0
+        # Bias toward a single-column key: only tables with a single-column
+        # integer primary key take the parallel PK-range snapshot path, the
+        # rest fall back to a whole-table read by one worker.
+        num_keys = rng.choice([1, 1, 1, 2, rng.randint(2, 10)])
+        # Rows inserted upstream before CREATE SOURCE so the initial snapshot
+        # has data to read and split across workers. Kept within the SMALLINT
+        # range because every key column receives the row's negated sequence
+        # number.
+        self.prepopulate_rows = rng.choice([0, 100, rng.randint(1000, 30000)])
         fields = []
-        for i in range(rng.randint(1, 10)):
+        for i in range(num_keys):
             fields.append(
                 # naughtify: MySql column identifiers are escaped differently for MySql sources: key3_ЁЂЃЄЅІЇЈЉЊЋЌЍЎЏА gets "", but pg8000.native.identifier() doesn't
                 Field(f"key{i}", rng.choice(DATA_TYPES_FOR_KEY), True)
@@ -723,7 +864,7 @@ class MySqlSource(DBObject):
         return f"{self.schema}.{self.name()}"
 
     def create(self, exe: Executor) -> None:
-        self.executor.create(logging_exe=exe)
+        self.executor.create(logging_exe=exe, prepopulate_rows=self.prepopulate_rows)
 
 
 class PostgresSource(DBObject):
@@ -734,7 +875,6 @@ class PostgresSource(DBObject):
     lock: threading.Lock
     columns: list[PostgresColumn]
     schema: Schema
-    num_rows: int
 
     def __init__(
         self,
@@ -748,7 +888,6 @@ class PostgresSource(DBObject):
         self.source_id = source_id
         self.cluster = cluster
         self.schema = schema
-        self.num_rows = 0
         fields = []
         for i in range(rng.randint(1, 10)):
             fields.append(
@@ -789,7 +928,6 @@ class SqlServerSource(DBObject):
     lock: threading.Lock
     columns: list[SqlServerColumn]
     schema: Schema
-    num_rows: int
 
     def __init__(
         self,
@@ -804,7 +942,6 @@ class SqlServerSource(DBObject):
         self.source_id = source_id
         self.cluster = cluster
         self.schema = schema
-        self.num_rows = 0
         fields = []
         for i in range(rng.randint(1, 10)):
             fields.append(Field(f"key{i}", rng.choice(DATA_TYPES_FOR_KEY), True))
@@ -838,21 +975,134 @@ class SqlServerSource(DBObject):
         self.executor.create(logging_exe=exe)
 
 
+class LoadGeneratorSource(DBObject):
+    """A COUNTER load generator source. Always bounded by UP TO so it cannot
+    grow without limit, which also exercises the finished-source lifecycle
+    state. The readable object (str(self)) is the table created from the
+    source, matching the source-table model the other sources use."""
+
+    # A finished (UP TO reached) counter advances the source table's frontier
+    # to the empty antichain, so anything reading it seals legitimately.
+    can_seal = True
+
+    source_id: int
+    cluster: "Cluster"
+    schema: Schema
+    columns: list[LoadGeneratorColumn]
+    tick_interval: str
+    up_to: int
+
+    def __init__(
+        self,
+        source_id: int,
+        cluster: "Cluster",
+        schema: Schema,
+        rng: random.Random,
+    ):
+        super().__init__()
+        self.source_id = source_id
+        self.cluster = cluster
+        self.schema = schema
+        self.tick_interval = rng.choice(["10ms", "100ms", "1s"])
+        # Bounded near MAX_ROWS: this source-table is a readable relation that
+        # views/MVs join over, and unlike user tables it is not capped by
+        # MAX_ROWS. A large counter feeding a maintained join is a clusterd
+        # memory risk, so keep it in the same size class as the other data.
+        self.up_to = rng.randint(1, MAX_ROWS)
+        self.columns = [LoadGeneratorColumn("counter", Long, False, self)]
+
+    def name(self) -> str:
+        return naughtify(f"lg-{self.source_id}")
+
+    def source_name(self) -> str:
+        return naughtify(f"lg-src-{self.source_id}")
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{identifier(self.name())}"
+
+    def create(self, exe: Executor) -> None:
+        source = f"{self.schema}.{identifier(self.source_name())}"
+        exe.execute(
+            f"CREATE SOURCE {source} IN CLUSTER {self.cluster} FROM LOAD GENERATOR COUNTER (TICK INTERVAL '{self.tick_interval}', UP TO {self.up_to})"
+        )
+        exe.execute(f"CREATE TABLE {self} FROM SOURCE {source}")
+
+
+class MultiLoadGeneratorSource:
+    """A multi-subsource load generator (AUCTION / TPCH / MARKETING) created
+    with FOR ALL TABLES. Tracked create/drop-only, not as a readable relation:
+    its subsources have fixed names and hardcoded schemas, so wiring them into
+    the general read/expression machinery is out of scope. The value is the
+    multi-subsource source lifecycle and CASCADE teardown under concurrency.
+
+    At most one source per generator type exists at a time, because FOR ALL
+    TABLES names its subsources fixedly (a second AUCTION would collide on
+    `auctions`, `bids`, ...)."""
+
+    source_id: int
+    cluster: "Cluster"
+    schema: Schema
+    generator: str
+    tick_interval: str
+    lock: threading.Lock
+
+    def __init__(
+        self,
+        source_id: int,
+        cluster: "Cluster",
+        schema: Schema,
+        generator: str,
+        rng: random.Random,
+    ):
+        self.source_id = source_id
+        self.cluster = cluster
+        self.schema = schema
+        self.generator = generator
+        self.tick_interval = rng.choice(["100ms", "1s"])
+        self.lock = threading.Lock()
+
+    def name(self) -> str:
+        return naughtify(f"mlg-{self.source_id}")
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{identifier(self.name())}"
+
+    def create(self, exe: Executor) -> None:
+        options = [f"TICK INTERVAL '{self.tick_interval}'"]
+        if self.generator == "TPCH":
+            options.append("SCALE FACTOR 0.0001")
+        query = (
+            f"CREATE SOURCE {self} IN CLUSTER {self.cluster} "
+            f"FROM LOAD GENERATOR {self.generator} ({', '.join(options)}) "
+            f"FOR ALL TABLES"
+        )
+        exe.execute(query)
+
+
 class S3Object(DBObject):
+    """A COPY TO dump of `table` that CopyFromS3Action can load back into it.
+
+    Only registered for verbatim (SELECT *) dumps of non-temp tables, so the
+    file's column names and types match the table's."""
+
     key: str
     bucket: str
     format: str
+    table: Table
 
     def __init__(
         self,
         key: str,
         bucket: str,
         format: str,
+        table: Table,
     ):
         super().__init__()
         self.key = key
         self.bucket = bucket
         self.format = format
+        self.table = table
+        self.columns = table.columns
 
     def name(self) -> str:
         return f"{self.bucket}/{self.key}"
@@ -860,26 +1110,183 @@ class S3Object(DBObject):
     def __str__(self) -> str:
         return self.name()
 
+
+# A fixed name, never run through `naughtify`, in `materialize.public` rather
+# than one of the workload's own databases: no action creates, renames, swaps or
+# drops that database or schema, so the name resolves for a whole run and the
+# end-of-run check is guaranteed to find the table.
+READ_THEN_WRITE_COUNTER_NAME = "materialize.public.pw_rtw_counter"
+
+# The frontend read-then-write path gives up after its OCC retry budget when a
+# statement keeps losing the race for the write timestamp. That is a
+# user-visible consequence of contention, not a bug, so every action whose
+# statement is a read-then-write (DELETE, UPDATE, INSERT ... SELECT,
+# INSERT ... RETURNING) has to tolerate it. It is still counted in the error
+# statistics.
+OCC_CONTENTION_EXHAUSTED_ERROR = (
+    "read-then-write exceeded maximum retry attempts under contention"
+)
+
+# Error texts that prove an increment did not land.
+#
+# An exhausted retry budget is checked right after an attempt the group
+# committer rejected, so nothing was appended.
+#
+# A concurrently modified dependency is reported when the coordinator rejects a
+# statement whose dependency changed underneath it, before anything is appended:
+# a plan it revalidates before sequencing, or a staged write that group commit
+# drops because a concurrent ALTER TABLE left the rows stale against the table's
+# current schema. The frontend path reports it for a changed write target, also
+# before any write. The other error is a cluster-resolution failure during
+# planning, which the workload provokes on purpose by pointing the default
+# cluster at a nonexistent one, so the statement never reaches a write path at
+# all. The trailing quote keeps it from matching "unknown cluster replica size"
+# errors.
+#
+# Every other failure counts as unknown, a statement timeout and a cancellation
+# included, because either can race a commit that did happen. A wrong entry here
+# makes healthy runs fail, an unnecessary unknown only widens the upper bound.
+DEFINITELY_NOT_COMMITTED_ERRORS = (
+    OCC_CONTENTION_EXHAUSTED_ERROR,
+    "was concurrently modified",
+    "unknown cluster '",
+)
+
+
+class ReadThenWriteCounter:
+    """A single-row counter table that `ReadThenWriteCounterUpdateAction`
+    increments with read-then-write UPDATEs, plus the tallies of the outcomes its
+    workers saw.
+
+    The table is registered in none of the `Database` object lists and lives
+    outside the workload's own databases, so no other action writes to, renames,
+    alters or drops it. That is what makes it an oracle: every increment of `v`
+    comes from one recorded attempt, so
+
+        definitely_committed <= v <= definitely_committed + unknown
+
+    must hold at the end of a run. A violation means a lost update, an update
+    applied twice, a success reported for a write that never landed, or an error
+    reported for a write that did land. The lower bound is
+    dropped in the backup-restore scenario, see `validate`.
+    """
+
+    lock: threading.Lock
+    definitely_committed: int
+    definitely_not_committed: int
+    unknown: int
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.definitely_committed = 0
+        self.definitely_not_committed = 0
+        self.unknown = 0
+
+    def __str__(self) -> str:
+        return READ_THEN_WRITE_COUNTER_NAME
+
     def create(self, exe: Executor) -> None:
-        query = f"CREATE TABLE '{self.key}'("
-        query += ",\n    ".join(column.create() for column in self.columns)
-        query += ")"
-        exe.execute(query)
+        """Creates and seeds the table, once per run.
+
+        Assumes the harness has already granted all privileges on tables to
+        PUBLIC, so that a worker which reconnected as a random role can still
+        increment the counter."""
+        exe.execute(f"DROP TABLE IF EXISTS {self} CASCADE")
+        exe.execute(f"CREATE TABLE {self} (id int, v bigint)")
+        exe.execute(f"INSERT INTO {self} VALUES (1, 0)")
+
+    def drop(self, exe: Executor) -> None:
+        exe.execute(f"DROP TABLE IF EXISTS {self} CASCADE")
+
+    def record_committed(self) -> None:
+        with self.lock:
+            self.definitely_committed += 1
+
+    def record_unknown(self) -> None:
+        with self.lock:
+            self.unknown += 1
+
+    def record_failure(self, error: str) -> None:
+        """Classifies a failed increment, see `DEFINITELY_NOT_COMMITTED_ERRORS`.
+        An error this cannot classify counts as unknown."""
+        if not any(known in error for known in DEFINITELY_NOT_COMMITTED_ERRORS):
+            self.record_unknown()
+            return
+        with self.lock:
+            self.definitely_not_committed += 1
+
+    def validate(self, exe: Executor) -> None:
+        """Checks the conservation invariant, raising if it is violated.
+
+        Must run after all workers have joined, otherwise an in-flight increment
+        can land between reading the tallies and reading the table."""
+        with self.lock:
+            committed = self.definitely_committed
+            unknown = self.unknown
+            tallies = (
+                f"definitely_committed={committed} "
+                f"definitely_not_committed={self.definitely_not_committed} "
+                f"unknown={unknown}"
+            )
+        print(f"read-then-write counter tallies: {tallies}")
+
+        # A restore rolls the whole instance back to the backup point, so
+        # increments that committed after it are gone and the lower bound does
+        # not hold in that scenario. Rolling back can only lose increments, never
+        # invent them, so the upper bound holds everywhere and stays sharp.
+        lower = 0 if exe.db.scenario == Scenario.BackupRestore else committed
+        upper = committed + unknown
+
+        # `FlipFlagsAction` points the system-wide default cluster at a
+        # nonexistent one to hunt for panics, and it can still be doing that when
+        # the run ends. This session inherits that default, so the read below
+        # needs a cluster that is certainly there. quickstart is the only one the
+        # harness guarantees: the workload creates and drops its own clusters,
+        # but never that one.
+        exe.execute("SET cluster = quickstart")
+        exe.execute(f"SELECT id, v FROM {self}")
+        rows = exe.cur.fetchall()
+        if len(rows) != 1 or rows[0][0] != 1:
+            message = (
+                f"read-then-write counter table should hold exactly the seeded row "
+                f"(1, v), "
+                f"found {rows} ({tallies})"
+            )
+            print(f"+++ {message}")
+            raise ValueError(message)
+        value = rows[0][1]
+        if not lower <= value <= upper:
+            message = (
+                f"read-then-write counter conservation invariant violated: "
+                f"observed v={value}, "
+                f"expected {lower} <= v <= {upper} ({tallies})"
+            )
+            print(f"+++ {message}")
+            raise ValueError(message)
+        print(
+            f"read-then-write counter conservation invariant holds: "
+            f"{lower} <= v={value} <= {upper}"
+        )
 
 
 class Index:
     _name: str
+    schema: Schema
     lock: threading.Lock
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, schema: Schema):
         self._name = name
+        # The index lives in the indexed object's schema. Referencing the
+        # schema object (instead of a rendered string) keeps the reference
+        # valid across schema renames.
+        self.schema = schema
         self.lock = threading.Lock()
 
     def name(self) -> str:
         return self._name
 
     def __str__(self) -> str:
-        return identifier(self.name())
+        return f"{self.schema}.{identifier(self.name())}"
 
 
 class Role:
@@ -895,6 +1302,11 @@ class Role:
 
     def create(self, exe: Executor) -> None:
         exe.execute(f"CREATE ROLE {self}")
+        # Make the workload's own user (materialize) a member, so it can
+        # manage the role, e.g. transfer object ownership to it: ALTER ..
+        # OWNER TO <role> requires the executor to be a member of <role>.
+        # The creating session has admin on the role it just created.
+        exe.execute(f"GRANT {self} TO materialize")
 
 
 class ClusterReplica:
@@ -912,6 +1324,12 @@ class ClusterReplica:
         self.lock = threading.Lock()
 
     def name(self) -> str:
+        # A managed cluster's replicas are named by the controller as r1..rN,
+        # never by us, so neither the rename counter nor naughtify applies.
+        # Rendering our own name there would make every reference to the
+        # replica, e.g. a replica-targeted materialized view, fail to resolve.
+        if self.cluster.managed:
+            return f"r{self.replica_id+1}"
         if self.rename:
             return naughtify(f"r-{self.replica_id+1}-{self.rename}")
         return naughtify(f"r-{self.replica_id+1}")
@@ -976,6 +1394,78 @@ class Cluster:
         exe.execute(query)
 
 
+class Type:
+    """A user-defined type (row, list, or map). Schema-scoped."""
+
+    type_id: int
+    schema: Schema
+    kind: str
+    lock: threading.Lock
+    rng: random.Random
+
+    def __init__(self, type_id: int, schema: Schema, rng: random.Random):
+        self.type_id = type_id
+        self.schema = schema
+        self.kind = rng.choice(["row", "list", "map"])
+        self.rng = rng
+        self.lock = threading.Lock()
+
+    def name(self) -> str:
+        return naughtify(f"type-{self.type_id}")
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{identifier(self.name())}"
+
+    def create(self, exe: Executor) -> None:
+        if self.kind == "row":
+            scalar_types = ["int4", "text", "bool", "float8", "timestamp"]
+            fields = ", ".join(
+                f"f{i} {self.rng.choice(scalar_types)}"
+                for i in range(self.rng.randint(1, 4))
+            )
+            query = f"CREATE TYPE {self} AS ({fields})"
+        elif self.kind == "list":
+            element = self.rng.choice(["int4", "text", "float8"])
+            query = f"CREATE TYPE {self} AS LIST (ELEMENT TYPE = {element})"
+        else:
+            value = self.rng.choice(["int4", "text", "float8"])
+            query = f"CREATE TYPE {self} AS MAP (KEY TYPE = text, VALUE TYPE = {value})"
+        exe.execute(query)
+
+
+class NetworkPolicy:
+    """A network policy. Top-level (not schema-scoped), like clusters.
+
+    Rules are always allow-all so the workload can never lock itself out of
+    its own connections. The policy is never installed as the active
+    `network_policy` system parameter for the same reason."""
+
+    policy_id: int
+    num_rules: int
+    lock: threading.Lock
+
+    def __init__(self, policy_id: int, rng: random.Random):
+        self.policy_id = policy_id
+        self.num_rules = rng.randint(1, 3)
+        self.lock = threading.Lock()
+
+    def name(self) -> str:
+        return naughtify(f"netpol-{self.policy_id}")
+
+    def __str__(self) -> str:
+        return identifier(self.name())
+
+    def rules_clause(self) -> str:
+        rules = ", ".join(
+            f"r{i} (action='allow', direction='ingress', address='0.0.0.0/0')"
+            for i in range(self.num_rules)
+        )
+        return f"RULES ({rules})"
+
+    def create(self, exe: Executor) -> None:
+        exe.execute(f"CREATE NETWORK POLICY {self} ({self.rules_clause()})")
+
+
 # TODO: Can access both databases from same connection!
 class Database:
     complexity: Complexity
@@ -1005,16 +1495,26 @@ class Database:
     postgres_source_id: int
     sql_server_sources: list[SqlServerSource]
     sql_server_source_id: int
+    loadgen_sources: list[LoadGeneratorSource]
+    loadgen_source_id: int
+    multi_loadgen_sources: list[MultiLoadGeneratorSource]
+    multi_loadgen_source_id: int
     iceberg_sinks: list[IcebergSink]
     iceberg_sink_id: int
     kafka_sinks: list[KafkaSink]
     kafka_sink_id: int
+    types: list[Type]
+    type_id: int
+    network_policies: list[NetworkPolicy]
+    network_policy_id: int
     s3_path: int
     s3_objects: list[S3Object]
+    read_then_write_counter: ReadThenWriteCounter
     lock: threading.Lock
     seed: str
     sqlsmith_state: str
     flags: dict[str, str]
+    num_threads: int
 
     def __init__(
         self,
@@ -1025,12 +1525,14 @@ class Database:
         complexity: Complexity,
         scenario: Scenario,
         naughty_identifiers: bool,
+        num_threads: int,
     ):
         self.host = host
         self.ports = ports
         self.complexity = complexity
         self.scenario = scenario
         self.seed = seed
+        self.num_threads = num_threads
         set_naughty_identifiers(naughty_identifiers)
 
         self.s3_path = 0
@@ -1066,18 +1568,35 @@ class Database:
         self.view_id = len(self.views)
         self.roles = [Role(i) for i in range(rng.randint(0, MAX_INITIAL_ROLES))]
         self.role_id = len(self.roles)
-        # At least one storage cluster required for WebhookSources
+        # Cluster 0 is the one cluster whose shape nothing churns: every cluster
+        # action skips it and operates on `clusters[1:]`, so it stays available
+        # for sources and sinks. Which cluster a given source or sink actually
+        # lands on is still random, both here and in the Create*Action paths.
+        #
+        # Each of those actions needs a cluster of a specific kind past cluster
+        # 0: managed for AlterClusterSetAction and FlipFlagsAction's per-cluster
+        # arrangement compression, unmanaged for Create/DropClusterReplicaAction.
+        # Drawing the count and the kinds the way the other initial objects are
+        # drawn covers both in one run out of eight, and the rest spend the whole
+        # run skipping. Nightly 17774 reported 369 AlterClusterSet, 129
+        # ReconfigureCluster and 117 CreateClusterReplica attempts with not one
+        # success between them. So the kinds are fixed and only cluster 0's is
+        # left to the seed.
         self.clusters = [
             Cluster(
-                i,
-                managed=rng.choice([True, False]),
-                size=rng.choice(
-                    ["scale=1,workers=1", "scale=1,workers=4", "scale=2,workers=2"]
-                ),
+                cluster_id,
+                managed=managed,
+                size=rng.choice(["scale=1,workers=1", "scale=1,workers=2"]),
+                # One replica each, which is what lets Create and
+                # DropClusterReplicaAction take turns on the unmanaged cluster:
+                # Create needs room below MAX_CLUSTER_REPLICAS, Drop needs more
+                # than one replica so the cluster keeps serving requests.
                 replication_factor=1,
                 introspection_interval="1s",
             )
-            for i in range(rng.randint(1, MAX_INITIAL_CLUSTERS))
+            for cluster_id, managed in enumerate(
+                [rng.choice([True, False]), True, False]
+            )
         ]
         self.cluster_id = len(self.clusters)
         self.indexes = set()
@@ -1086,10 +1605,19 @@ class Database:
             for i in range(rng.randint(0, MAX_INITIAL_WEBHOOK_SOURCES))
         ]
         self.webhook_source_id = len(self.webhook_sources)
+        # The CDC source lists are populated by `create_initial_sources`, not
+        # here: such a source's executor connects to the source's database on
+        # construction, and that database only exists once `create` has made it.
         self.kafka_sources = []
         self.mysql_sources = []
         self.postgres_sources = []
         self.sql_server_sources = []
+        self.loadgen_sources = [
+            LoadGeneratorSource(
+                i, rng.choice(self.clusters), rng.choice(self.schemas), rng
+            )
+            for i in range(rng.randint(0, MAX_INITIAL_LOADGEN_SOURCES))
+        ]
         self.iceberg_sinks = []
         self.kafka_sinks = []
         self.s3_objects = []
@@ -1097,8 +1625,16 @@ class Database:
         self.mysql_source_id = len(self.mysql_sources)
         self.postgres_source_id = len(self.postgres_sources)
         self.sql_server_source_id = len(self.sql_server_sources)
+        self.loadgen_source_id = len(self.loadgen_sources)
+        self.multi_loadgen_sources = []
+        self.multi_loadgen_source_id = 0
         self.iceberg_sink_id = len(self.iceberg_sinks)
         self.kafka_sink_id = len(self.kafka_sinks)
+        self.read_then_write_counter = ReadThenWriteCounter()
+        self.types = []
+        self.type_id = 0
+        self.network_policies = []
+        self.network_policy_id = 0
         self.lock = threading.Lock()
         self.sqlsmith_state = ""
         self.flags = {}
@@ -1111,9 +1647,16 @@ class Database:
         | PostgresSource
         | SqlServerSource
         | KafkaSource
+        | LoadGeneratorSource
         | View
         | Table
     ]:
+        # Temp objects are intentionally included. Referencing one from a
+        # persistent object (sink, non-temp view) must be rejected by the
+        # server, not accepted, so keeping them here lets the workload stress
+        # that boundary and surface panics. The expected rejection ("non-
+        # temporary items cannot depend on temporary item") and cross-session
+        # "unknown catalog item" are ignored, see Action.errors_to_ignore.
         return (
             self.tables
             + self.views
@@ -1121,6 +1664,7 @@ class Database:
             + self.mysql_sources
             + self.postgres_sources
             + self.sql_server_sources
+            + self.loadgen_sources
             + self.webhook_sources
         )
 
@@ -1132,6 +1676,7 @@ class Database:
         | PostgresSource
         | SqlServerSource
         | KafkaSource
+        | LoadGeneratorSource
         | View
         | Table
     ]:
@@ -1139,11 +1684,97 @@ class Database:
             obj for obj in self.db_objects() if type(obj) != View or obj.materialized
         ]
 
+    def db_objects_for_sinks(
+        self,
+    ) -> list[
+        WebhookSource
+        | MySqlSource
+        | PostgresSource
+        | SqlServerSource
+        | KafkaSource
+        | View
+        | Table
+    ]:
+        """Objects usable as a sink's input (base object or ALTER SINK SET
+        FROM target). Load generator source tables are excluded: an
+        ALTER SINK .. SET FROM one can trigger the sink stall of
+        https://linear.app/materializeinc/issue/SS-344, which is worse for a
+        continuously-producing input."""
+        return [
+            obj
+            for obj in self.db_objects_without_views()
+            if not isinstance(obj, LoadGeneratorSource)
+        ]
+
     def __iter__(self):
         """Returns all relations"""
         return (
             self.schemas + self.clusters + self.roles + self.db_objects()
         ).__iter__()
+
+    def create_initial_sources(self, exe: Executor) -> None:
+        """Populate the CDC source lists, once the databases they connect to
+        exist.
+
+        SourceInsertAction is the only writer of a CDC source, and DML
+        complexity gives the DDL action list weight 0, so nothing there ever
+        runs a Create*SourceAction. Without a source from the start that action
+        cannot succeed once in a whole run, which is why the Kafka source is
+        unconditional rather than randomized down to zero like the other initial
+        objects.
+
+        Skipped for a 0dt deploy. A source executor connects on construction and
+        picks one of the two environmentds at random every time it connects, and
+        the second one only comes up mid-run when ZeroDowntimeDeployAction
+        deploys it, so constructing a source here fails outright half the time.
+        That scenario runs at DDL complexity, so its actions create the sources
+        instead."""
+        if self.scenario == Scenario.ZeroDowntimeDeploy:
+            return
+        self.kafka_sources = [
+            KafkaSource(
+                i,
+                exe.rng.choice(self.clusters),
+                exe.rng.choice(self.schemas),
+                self.ports,
+                exe.rng,
+            )
+            for i in range(MAX_INITIAL_KAFKA_SOURCES)
+        ]
+        self.kafka_source_id = len(self.kafka_sources)
+        self.postgres_sources = [
+            PostgresSource(
+                i,
+                exe.rng.choice(self.clusters),
+                exe.rng.choice(self.schemas),
+                self.ports,
+                exe.rng,
+            )
+            # A Postgres source is not expected to survive a backup & restore,
+            # see database-issues#6881 and
+            # CreatePostgresSourceAction.applicable.
+            for i in range(
+                0
+                if self.scenario == Scenario.BackupRestore
+                else exe.rng.randint(0, MAX_INITIAL_POSTGRES_SOURCES)
+            )
+        ]
+        self.postgres_source_id = len(self.postgres_sources)
+        self.mysql_sources = [
+            MySqlSource(
+                i,
+                exe.rng.choice(self.clusters),
+                exe.rng.choice(self.schemas),
+                self.ports,
+                exe.rng,
+            )
+            for i in range(exe.rng.randint(0, MAX_INITIAL_MYSQL_SOURCES))
+        ]
+        self.mysql_source_id = len(self.mysql_sources)
+        # MAX_INITIAL_SQL_SERVER_SOURCES stays unused: a SQL Server source
+        # drives CPU far above the other source kinds (SS-290), enough to have
+        # starved whole runs, and one in every run's initial database would put
+        # that back for good.
 
     def create(self, exe: Executor, composition: Composition) -> None:
         for db in self.dbs:
@@ -1162,6 +1793,13 @@ class Database:
         exe.execute("SELECT name FROM mz_roles WHERE name LIKE 'r%'")
         for row in exe.cur.fetchall():
             exe.execute(f"DROP ROLE {identifier(row[0])}")
+
+        # Network policies survive restarts and are top-level, so leftovers
+        # from a killed run have to be swept before recreating.
+        exe.execute("SELECT name FROM mz_internal.mz_network_policies")
+        for row in exe.cur.fetchall():
+            if row[0].startswith("netpol-"):
+                exe.execute(f"DROP NETWORK POLICY {identifier(row[0])}")
 
         print("Creating connections")
 
@@ -1217,7 +1855,13 @@ class Database:
                 "INSERT INTO materialize.public.repeat_row_source VALUES (1), (1), (-1), (-1), (0)"
             )
 
+        # Created and seeded exactly once per run: re-seeding mid-run would reset
+        # `v` while the workers' tallies keep growing.
+        self.read_then_write_counter.create(exe)
+
         print("Creating relations")
+
+        self.create_initial_sources(exe)
 
         for relation in self:
             relation.create(exe)
@@ -1235,6 +1879,10 @@ class Database:
         # self.sqlsmith_state = result.stdout
 
     def drop(self, exe: Executor) -> None:
+        # The counter table lives outside the workload's databases, so dropping
+        # them does not reclaim it.
+        self.read_then_write_counter.drop(exe)
+
         for db in self.dbs:
             print(f"Dropping database {db}")
             db.drop(exe)

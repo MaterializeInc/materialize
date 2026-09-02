@@ -24,14 +24,15 @@ from materialize.github import (
     KnownGitHubIssue,
 )
 
-LINEAR_CLOSED_STATE_TYPES = {"completed", "canceled"}
+LINEAR_CLOSED_STATE_TYPES = {"completed", "canceled", "duplicate"}
+LINEAR_STALE_STATE_NAMES = {"stale"}
 
 
 def _search_issues_graphql(token: str) -> list[dict[str, Any]]:
     query = """
-    query($term: String!, $cursor: String) {
-      searchIssues(
-        term: $term
+    query($cursor: String) {
+      issues(
+        filter: { description: { contains: "ci-regexp:" } }
         first: 100
         after: $cursor
         includeArchived: false
@@ -57,7 +58,7 @@ def _search_issues_graphql(token: str) -> list[dict[str, Any]]:
     cursor = None
 
     while True:
-        variables: dict[str, Any] = {"term": "ci-regexp"}
+        variables: dict[str, Any] = {}
         if cursor:
             variables["cursor"] = cursor
 
@@ -68,6 +69,7 @@ def _search_issues_graphql(token: str) -> list[dict[str, Any]]:
                 "Content-Type": "application/json",
             },
             json={"query": query, "variables": variables},
+            timeout=60,
         )
 
         if response.status_code != 200:
@@ -81,7 +83,7 @@ def _search_issues_graphql(token: str) -> list[dict[str, Any]]:
         if "errors" in result:
             raise ValueError(f"Linear GraphQL errors: {result['errors']}")
 
-        search_data = result["data"]["searchIssues"]
+        search_data = result["data"]["issues"]
         for node in search_data["nodes"]:
             if node is None:
                 continue

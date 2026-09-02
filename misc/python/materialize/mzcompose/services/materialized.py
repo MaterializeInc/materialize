@@ -15,7 +15,7 @@ import tempfile
 from enum import Enum
 from typing import Any
 
-from materialize import MZ_ROOT, docker
+from materialize import docker
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import (
     DEFAULT_CRDB_ENVIRONMENT,
@@ -24,6 +24,7 @@ from materialize.mzcompose import (
     bootstrap_cluster_replica_size,
     cluster_replica_size_map,
     get_default_system_parameters,
+    sanitizer_enabled,
 )
 from materialize.mzcompose.service import (
     Service,
@@ -32,6 +33,9 @@ from materialize.mzcompose.service import (
 )
 from materialize.mzcompose.services import foundationdb
 from materialize.mzcompose.services.azurite import azure_blob_uri
+from materialize.mzcompose.services.listener_config import (
+    resolve_listeners_config_path,
+)
 from materialize.mzcompose.services.metadata_store import (
     EXTERNAL_METADATA_STORE_ADDRESS,
     METADATA_STORE,
@@ -47,7 +51,6 @@ class MaterializeEmulator(Service):
         name = "materialized"
 
         config: ServiceConfig = {
-            "mzbuild": name,
             "ports": [6875, 6874, 6876, 6877, 6878, 26257],
             "healthcheck": {
                 "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
@@ -56,6 +59,10 @@ class MaterializeEmulator(Service):
                 "start_period": "600s",
             },
         }
+        if image is not None:
+            config["image"] = image
+        else:
+            config["mzbuild"] = name
 
         super().__init__(name=name, config=config)
 
@@ -63,6 +70,18 @@ class MaterializeEmulator(Service):
 class Materialized(Service):
     class Size:
         DEFAULT_SIZE = 4
+
+        @staticmethod
+        def default() -> int:
+            """The size a composition should use when the caller pins none.
+
+            A `scale=N` replica is N separate clusterd processes, and a
+            sanitized clusterd holds several times the resident memory of an
+            ordinary one. A composition that keeps many clusters alive at once
+            runs the agent's memory cgroup out of memory at `DEFAULT_SIZE`, so
+            give a sanitized run one process per replica instead.
+            """
+            return 1 if sanitizer_enabled() else Materialized.Size.DEFAULT_SIZE
 
     def __init__(
         self,
@@ -102,7 +121,7 @@ class Materialized(Service):
         default_replication_factor: int = 1,
         builtin_system_cluster_replication_factor: int | None = None,
         builtin_probe_cluster_replication_factor: int | None = None,
-        listeners_config_path: str = f"{MZ_ROOT}/src/materialized/ci/listener_configs/testdrive.json",
+        listeners_config_path: str | None = None,
         config_sync_file_path: str | None = None,
         support_external_clusterd: bool = False,
         networks: (
@@ -123,9 +142,17 @@ class Materialized(Service):
         if cluster_replica_size is None:
             cluster_replica_size = cluster_replica_size_map()
         if builtin_system_cluster_replication_factor is None:
-            builtin_system_cluster_replication_factor = default_replication_factor
+            # Deliberately not `default_replication_factor`. A builtin cluster
+            # honors its replication factor, so tracking the user default here
+            # would run two mz_system and two mz_probe replicas in every
+            # composition that asks for a replicated user cluster, at no benefit
+            # to what those tests actually exercise. One replica is all these
+            # clusters need, and is what the flags below are here to guarantee.
+            # A test that needs a different builtin factor, including 0, has to
+            # ask for it explicitly.
+            builtin_system_cluster_replication_factor = 1
         if builtin_probe_cluster_replication_factor is None:
-            builtin_probe_cluster_replication_factor = default_replication_factor
+            builtin_probe_cluster_replication_factor = 1
 
         environment = [
             "MZ_NO_TELEMETRY=1",
@@ -182,14 +209,26 @@ class Materialized(Service):
 
         if system_parameter_defaults is None:
             system_parameter_defaults = get_default_system_parameters(
-                system_parameter_version or image_version
+                system_parameter_version or image_version,
+                metadata_store=metadata_store,
             )
+        else:
+            # Copy so the writes below don't leak into the caller's dict,
+            # which is often shared across multiple Materialized instances.
+            system_parameter_defaults = dict(system_parameter_defaults)
 
         system_parameter_defaults["default_cluster_replication_factor"] = str(
             default_replication_factor
         )
         if additional_system_parameter_defaults is not None:
             system_parameter_defaults.update(additional_system_parameter_defaults)
+
+        # `persist_pg_consensus_read_committed` panics persist on CockroachDB.
+        # Force it off there regardless of how the defaults were produced, since
+        # a caller may have derived them for the default Postgres backend and
+        # handed them to a CRDB-backed environmentd.
+        if metadata_store == "cockroach":
+            system_parameter_defaults["persist_pg_consensus_read_committed"] = "false"
 
         if len(system_parameter_defaults) > 0:
             environment += [
@@ -340,9 +379,12 @@ class Materialized(Service):
         if platform:
             config["platform"] = platform
 
-        if image_version is None or image_version >= "v0.147.0-dev":
-            assert os.path.exists(listeners_config_path)
-            volumes.append(f"{listeners_config_path}:/listeners_config")
+        config_path = listeners_config_path or resolve_listeners_config_path(
+            image_version or MzVersion.parse_cargo()
+        )
+        if config_path is not None:
+            assert os.path.exists(config_path)
+            volumes.append(f"{config_path}:/listeners_config")
             environment.append("MZ_LISTENERS_CONFIG_PATH=/listeners_config")
 
         if config_sync_file_path is not None:

@@ -15,18 +15,21 @@ use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey, CommentValue,
-    ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
-    DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
+    ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterSystemConfigurationKey,
+    ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, ConfigKey,
+    ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
+    GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
-    NetworkPolicyKey, NetworkPolicyValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
+    NetworkPolicyKey, NetworkPolicyValue, ReplicaSystemConfigurationKey,
+    ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
     ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
     SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
     StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
     SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
 use crate::durable::{
-    ClusterConfig, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
+    BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
+    ReconfigurationStatus, ReconfigurationTarget, ReplicaConfig, ReplicaLocation,
 };
 
 use super::{RoleAuthKey, RoleAuthValue};
@@ -72,16 +75,24 @@ impl RustType<proto::ClusterVariant> for ClusterVariant {
                 size,
                 availability_zones,
                 logging,
+                arrangement_compression,
                 replication_factor,
                 optimizer_feature_overrides,
                 schedule,
+                auto_scaling_strategy,
+                reconfiguration,
+                burst,
             }) => proto::ClusterVariant::Managed(proto::ManagedCluster {
                 size: size.to_string(),
                 availability_zones: availability_zones.clone(),
                 logging: logging.into_proto(),
+                arrangement_compression: *arrangement_compression,
                 replication_factor: *replication_factor,
                 optimizer_feature_overrides: optimizer_feature_overrides.into_proto(),
                 schedule: schedule.into_proto(),
+                auto_scaling_strategy: auto_scaling_strategy.into_proto(),
+                reconfiguration: reconfiguration.into_proto(),
+                burst: burst.into_proto(),
             }),
             ClusterVariant::Unmanaged => proto::ClusterVariant::Unmanaged,
         }
@@ -94,11 +105,101 @@ impl RustType<proto::ClusterVariant> for ClusterVariant {
                 size: managed.size,
                 availability_zones: managed.availability_zones,
                 logging: managed.logging.into_rust()?,
+                arrangement_compression: managed.arrangement_compression,
                 replication_factor: managed.replication_factor,
                 optimizer_feature_overrides: managed.optimizer_feature_overrides.into_rust()?,
                 schedule: managed.schedule.into_rust()?,
+                auto_scaling_strategy: managed.auto_scaling_strategy.into_rust()?,
+                reconfiguration: managed.reconfiguration.into_rust()?,
+                burst: managed.burst.into_rust()?,
             })),
         }
+    }
+}
+
+impl RustType<proto::ReconfigurationState> for ReconfigurationState {
+    fn into_proto(&self) -> proto::ReconfigurationState {
+        proto::ReconfigurationState {
+            target: self.target.into_proto(),
+            deadline: self.deadline.into(),
+            on_timeout: self.on_timeout.into_proto(),
+            status: self.status.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ReconfigurationState) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            target: proto.target.into_rust()?,
+            deadline: mz_repr::Timestamp::new(proto.deadline),
+            on_timeout: proto.on_timeout.into_rust()?,
+            status: proto.status.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::ReconfigurationStatus> for ReconfigurationStatus {
+    fn into_proto(&self) -> proto::ReconfigurationStatus {
+        match self {
+            ReconfigurationStatus::InProgress => proto::ReconfigurationStatus::InProgress,
+            ReconfigurationStatus::Finalized => proto::ReconfigurationStatus::Finalized,
+            ReconfigurationStatus::TimedOut => proto::ReconfigurationStatus::TimedOut,
+            ReconfigurationStatus::Cancelled => proto::ReconfigurationStatus::Cancelled,
+            ReconfigurationStatus::ResourceExhausted => {
+                proto::ReconfigurationStatus::ResourceExhausted
+            }
+        }
+    }
+
+    fn from_proto(proto: proto::ReconfigurationStatus) -> Result<Self, TryFromProtoError> {
+        Ok(match proto {
+            proto::ReconfigurationStatus::InProgress => ReconfigurationStatus::InProgress,
+            proto::ReconfigurationStatus::Finalized => ReconfigurationStatus::Finalized,
+            proto::ReconfigurationStatus::TimedOut => ReconfigurationStatus::TimedOut,
+            proto::ReconfigurationStatus::Cancelled => ReconfigurationStatus::Cancelled,
+            proto::ReconfigurationStatus::ResourceExhausted => {
+                ReconfigurationStatus::ResourceExhausted
+            }
+        })
+    }
+}
+
+impl RustType<proto::ReconfigurationTarget> for ReconfigurationTarget {
+    fn into_proto(&self) -> proto::ReconfigurationTarget {
+        proto::ReconfigurationTarget {
+            size: self.size.clone(),
+            replication_factor: self.replication_factor,
+            availability_zones: self.availability_zones.clone(),
+            logging: self.logging.into_proto(),
+            arrangement_compression: self.arrangement_compression,
+        }
+    }
+
+    fn from_proto(proto: proto::ReconfigurationTarget) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            size: proto.size,
+            replication_factor: proto.replication_factor,
+            availability_zones: proto.availability_zones,
+            logging: proto.logging.into_rust()?,
+            arrangement_compression: proto.arrangement_compression,
+        })
+    }
+}
+
+impl RustType<proto::BurstState> for BurstState {
+    fn into_proto(&self) -> proto::BurstState {
+        proto::BurstState {
+            burst_size: self.burst_size.clone(),
+            linger_duration: self.linger_duration.into_proto(),
+            steady_hydrated_at: self.steady_hydrated_at.map(Into::into),
+        }
+    }
+
+    fn from_proto(proto: proto::BurstState) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            burst_size: proto.burst_size,
+            linger_duration: proto.linger_duration.into_rust()?,
+            steady_hydrated_at: proto.steady_hydrated_at.map(mz_repr::Timestamp::new),
+        })
     }
 }
 
@@ -107,6 +208,7 @@ impl RustType<proto::ReplicaConfig> for ReplicaConfig {
         proto::ReplicaConfig {
             logging: self.logging.into_proto(),
             location: self.location.into_proto(),
+            arrangement_compression: self.arrangement_compression,
         }
     }
 
@@ -114,6 +216,7 @@ impl RustType<proto::ReplicaConfig> for ReplicaConfig {
         Ok(ReplicaConfig {
             location: proto.location.into_rust()?,
             logging: proto.logging.into_rust()?,
+            arrangement_compression: proto.arrangement_compression,
         })
     }
 }
@@ -130,13 +233,13 @@ impl RustType<proto::ReplicaLocation> for ReplicaLocation {
             }),
             ReplicaLocation::Managed {
                 size,
-                availability_zone,
+                availability_zones,
                 billed_as,
                 internal,
                 pending,
             } => proto::ReplicaLocation::Managed(proto::ManagedLocation {
                 size: size.to_string(),
-                availability_zone: availability_zone.clone(),
+                availability_zones: availability_zones.clone(),
                 billed_as: billed_as.clone(),
                 internal: *internal,
                 pending: *pending,
@@ -151,7 +254,7 @@ impl RustType<proto::ReplicaLocation> for ReplicaLocation {
                 computectl_addrs: location.computectl_addrs,
             }),
             proto::ReplicaLocation::Managed(location) => Ok(ReplicaLocation::Managed {
-                availability_zone: location.availability_zone,
+                availability_zones: location.availability_zones,
                 billed_as: location.billed_as,
                 internal: location.internal,
                 size: location.size,
@@ -460,6 +563,7 @@ impl RustType<proto::ItemValue> for ItemValue {
                     version: version.into_proto(),
                 })
                 .collect(),
+            ephemeral_owner_session: self.ephemeral_owner_session,
         }
     }
 
@@ -485,6 +589,7 @@ impl RustType<proto::ItemValue> for ItemValue {
             oid: proto.oid,
             global_id: proto.global_id.into_rust()?,
             extra_versions,
+            ephemeral_owner_session: proto.ephemeral_owner_session,
         })
     }
 }
@@ -746,6 +851,66 @@ impl RustType<proto::ServerConfigurationValue> for ServerConfigurationValue {
 
     fn from_proto(proto: proto::ServerConfigurationValue) -> Result<Self, TryFromProtoError> {
         Ok(ServerConfigurationValue { value: proto.value })
+    }
+}
+
+impl RustType<proto::ClusterSystemConfigurationKey> for ClusterSystemConfigurationKey {
+    fn into_proto(&self) -> proto::ClusterSystemConfigurationKey {
+        proto::ClusterSystemConfigurationKey {
+            cluster_id: self.cluster_id.into_proto(),
+            name: self.name.clone(),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterSystemConfigurationKey) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterSystemConfigurationKey {
+            cluster_id: proto.cluster_id.into_rust()?,
+            name: proto.name,
+        })
+    }
+}
+
+impl RustType<proto::ClusterSystemConfigurationValue> for ClusterSystemConfigurationValue {
+    fn into_proto(&self) -> proto::ClusterSystemConfigurationValue {
+        proto::ClusterSystemConfigurationValue {
+            value: self.value.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::ClusterSystemConfigurationValue,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterSystemConfigurationValue { value: proto.value })
+    }
+}
+
+impl RustType<proto::ReplicaSystemConfigurationKey> for ReplicaSystemConfigurationKey {
+    fn into_proto(&self) -> proto::ReplicaSystemConfigurationKey {
+        proto::ReplicaSystemConfigurationKey {
+            replica_id: self.replica_id.into_proto(),
+            name: self.name.clone(),
+        }
+    }
+
+    fn from_proto(proto: proto::ReplicaSystemConfigurationKey) -> Result<Self, TryFromProtoError> {
+        Ok(ReplicaSystemConfigurationKey {
+            replica_id: proto.replica_id.into_rust()?,
+            name: proto.name,
+        })
+    }
+}
+
+impl RustType<proto::ReplicaSystemConfigurationValue> for ReplicaSystemConfigurationValue {
+    fn into_proto(&self) -> proto::ReplicaSystemConfigurationValue {
+        proto::ReplicaSystemConfigurationValue {
+            value: self.value.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::ReplicaSystemConfigurationValue,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(ReplicaSystemConfigurationValue { value: proto.value })
     }
 }
 

@@ -19,11 +19,17 @@ pub fn unescape(s: &[u8]) -> Result<Vec<u8>, anyhow::Error> {
     let mut s = s.iter().copied().fuse();
     while let Some(b) = s.next() {
         match b {
-            b'\\' if s.next() == Some(b'x') => match (next_hex(&mut s), next_hex(&mut s)) {
-                (Some(c1), Some(c0)) => out.push((c1 << 4) + c0),
-                _ => bail!("invalid hexadecimal escape"),
+            // NOTE: the escaped byte must be consumed in the arm body, not in
+            // a match guard. A guard's `s.next()` runs even when the guard
+            // fails, silently eating the byte after the backslash.
+            b'\\' => match s.next() {
+                Some(b'x') => match (next_hex(&mut s), next_hex(&mut s)) {
+                    (Some(c1), Some(c0)) => out.push((c1 << 4) + c0),
+                    _ => bail!("invalid hexadecimal escape"),
+                },
+                Some(b) => out.push(b),
+                None => bail!("trailing backslash in byte string"),
             },
-            b'\\' => continue,
             _ => out.push(b),
         }
     }

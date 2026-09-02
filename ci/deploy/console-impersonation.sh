@@ -25,6 +25,7 @@ npx vercel@latest pull --yes \
   --environment="$VERCEL_ENVIRONMENT" \
   --git-branch=deploy/internal-impersonation \
   --token="$VERCEL_TOKEN"
+bin/apply-vercel-csp.js --sentry-release="$SENTRY_RELEASE"
 npx vercel@latest build --token="$VERCEL_TOKEN"
 
 deployment_url="$(npx vercel@latest deploy --prebuilt --token="$VERCEL_TOKEN")"

@@ -19,7 +19,7 @@ trivial_numeric_casts = "warn"
 unused_lifetimes = "warn"
 unused_macro_rules = "warn"
 unused_import_braces = "warn"
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(stamped, coverage, nightly_doc_features, release, tokio_unstable)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(stamped, coverage, nightly_doc_features, release, tokio_unstable, kani)'] }
 
 [workspace.lints.rustdoc]
 

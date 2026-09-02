@@ -19,9 +19,10 @@ use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
 use crate::ast::{
     AstInfo, CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
-    CreateTableStatement, CreateViewStatement, CreateWebhookSourceStatement, Expr, Ident, Query,
-    Raw, RawItemName, Statement, UnresolvedItemName, ViewDefinition,
+    CreateMetricSinkStatement, CreateSecretStatement, CreateSinkStatement, CreateSourceStatement,
+    CreateSubsourceStatement, CreateTableStatement, CreateViewStatement,
+    CreateWebhookSourceStatement, Expr, Ident, Query, Raw, RawDataType, RawItemName, Statement,
+    UnresolvedItemName, ViewDefinition,
 };
 use crate::names::FullItemName;
 
@@ -41,6 +42,7 @@ pub fn create_stmt_rename_schema_refs(
         | stmt @ Statement::CreateSource(_)
         | stmt @ Statement::CreateSubsource(_)
         | stmt @ Statement::CreateSink(_)
+        | stmt @ Statement::CreateMetricSink(_)
         | stmt @ Statement::CreateView(_)
         | stmt @ Statement::CreateMaterializedView(_)
         | stmt @ Statement::CreateTable(_)
@@ -117,6 +119,28 @@ impl<'a, 'ast> VisitMut<'ast, Raw> for CreateSqlRewriteSchema<'a> {
         unresolved_item_name: &'ast mut UnresolvedItemName,
     ) {
         self.maybe_rewrite_idents(&mut unresolved_item_name.0);
+    }
+
+    fn visit_data_type_mut(&mut self, data_type: &'ast mut RawDataType) {
+        // The generated `visit_data_type_mut` is a no-op because `DataType` is an
+        // associated type the generic visitor treats opaquely, so we must descend
+        // by hand. A type is referenced by a schema-qualified name precisely in
+        // these data type positions (a cast, a column type, or a nested element
+        // type), so without this a schema rename leaves stale references in any
+        // dependent that uses one of the schema's types.
+        match data_type {
+            RawDataType::Array(element_type) | RawDataType::List(element_type) => {
+                self.visit_data_type_mut(element_type)
+            }
+            RawDataType::Map {
+                key_type,
+                value_type,
+            } => {
+                self.visit_data_type_mut(key_type);
+                self.visit_data_type_mut(value_type);
+            }
+            RawDataType::Other { name, .. } => self.visit_item_name_mut(name),
+        }
     }
 
     fn visit_item_name_mut(
@@ -197,6 +221,9 @@ pub fn create_stmt_rename_refs(
             maybe_update_item_name(on_name.name_mut());
         }
         Statement::CreateSink(CreateSinkStatement { from, .. }) => {
+            maybe_update_item_name(from.name_mut());
+        }
+        Statement::CreateMetricSink(CreateMetricSinkStatement { from, .. }) => {
             maybe_update_item_name(from.name_mut());
         }
         Statement::CreateTableFromSource(CreateTableFromSourceStatement { source, .. }) => {

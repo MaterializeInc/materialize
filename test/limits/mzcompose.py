@@ -24,6 +24,7 @@ from textwrap import dedent
 from urllib.parse import quote
 
 from materialize import MZ_ROOT, buildkite
+from materialize.mzcompose import sanitizer_enabled
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -63,15 +64,18 @@ from materialize.util import all_subclasses
 
 PRODUCT_LIMITS_FRAMEWORK_VERSION = "1.0.0"
 
+SLOWDOWN = 10 if sanitizer_enabled() else 1
+
+
+def sql_timeout(seconds: int) -> int:
+    """The deadline to give a statement, in seconds, scaled for the build."""
+    return seconds * SLOWDOWN
+
 
 class Statistics:
     def __init__(self, wallclock: float, explain_wallclock: float | None):
         self.wallclock = wallclock
         self.explain_wallclock = explain_wallclock
-
-    def __str__(self) -> str:
-        return f"""  wallclock: {self.wallclock:>7.2f}
-  explain_wallclock: {self.explain_wallclock:>7.2f}ms"""
 
 
 class Generator:
@@ -95,9 +99,6 @@ class Generator:
     @classmethod
     def header(cls) -> None:
         print(f"\n#\n# {cls}\n#\n")
-        print(
-            "$ postgres-connect name=mz_system url=postgres://mz_system@materialized:6877/materialize"
-        )
         print("$ postgres-execute connection=mz_system")
         print("DROP SCHEMA IF EXISTS public CASCADE;")
         print(f"CREATE SCHEMA public /* {cls} */;")
@@ -123,7 +124,10 @@ class Generator:
         raise NotImplementedError
 
     @classmethod
-    def store_explain_and_run(cls, query: str) -> str | None:
+    def store_explain_and_run(cls, query: str) -> None:
+        """Print `query` as a testdrive command and record it for EXPLAIN
+        timing. Each call overwrites the previous one, so only the last
+        query of a scenario is timed."""
         cls.EXPLAIN = f"EXPLAIN {query}"
         print(f"> {query}")
 
@@ -238,7 +242,7 @@ class Indexes(Generator):
 
 
 class IndexedViews(Generator):
-    MAX_COUNT = 1000  # TODO: Bump when https://github.com/MaterializeInc/database-issues/issues/9307 is fixed
+    MAX_COUNT = 1000  # TODO: Bump when DB-196 is fixed
 
     @classmethod
     def body(cls) -> None:
@@ -317,6 +321,11 @@ class ArrangementSizesHistory(Generator):
             ")"
         )
         print("true")
+
+        # Restore the default cadence, otherwise all later scenarios run
+        # with 5s introspection collection churn.
+        print("$ postgres-execute connection=mz_system")
+        print("ALTER SYSTEM RESET arrangement_size_history_collection_interval;")
 
 
 class KafkaTopics(Generator):
@@ -402,7 +411,7 @@ class KafkaSourcesSameTopic(Generator):
               ENVELOPE NONE;
               """)
 
-        print("$ set-sql-timeout duration=600s")
+        print(f"$ set-sql-timeout duration={sql_timeout(600)}s")
 
         for i in cls.all():
             cls.store_explain_and_run(f"SELECT * FROM s{i}")
@@ -420,7 +429,7 @@ class KafkaPartitions(Generator):
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         # gh#12193 : topic_metadata_refresh_interval_ms is not observed so a default refresh interval of 300s applies
-        print("$ set-sql-timeout duration=600s")
+        print(f"$ set-sql-timeout duration={sql_timeout(600)}s")
         print('$ set key-schema={"type": "string"}')
         print(
             '$ set value-schema={"type": "record", "name": "r", "fields": [{"name": "f1", "type": "string"}]}'
@@ -688,10 +697,11 @@ class KafkaSinksSameSource(Generator):
 
 class IcebergSinks(Generator):
     COUNT = min(Generator.COUNT, 100)  # polaris gets overloaded easily
+    VERSION = "1.1.0"
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-sql-timeout duration=300s")
+        print(f"$ set-sql-timeout duration={sql_timeout(300)}s")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_materialized_views = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -711,7 +721,7 @@ class IcebergSinks(Generator):
             $ set-from-sql var=iceberg_key
             SELECT key FROM public2.iceberg_credentials
 
-            > CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = '{iceberg_user}', SECRET ACCESS KEY = SECRET public2.iceberg_secret, ENDPOINT = 'http://minio:9000/', REGION = 'us-east-1');
+            > CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = '${iceberg_user}', SECRET ACCESS KEY = SECRET public2.iceberg_secret, ENDPOINT = 'http://minio:9000/', REGION = 'us-east-1');
 
             > CREATE CONNECTION polaris_conn TO ICEBERG CATALOG (CATALOG TYPE = 'REST', URL = 'http://polaris:8181/api/catalog', CREDENTIAL = 'root:root', WAREHOUSE = 'default_catalog', SCOPE = 'PRINCIPAL_ROLE:ALL');
 
@@ -743,9 +753,6 @@ class IcebergSinks(Generator):
                        WHERE mz_sinks.name = 's{i}';
                      true
 
-                     $ set-from-sql var=iceberg_user
-                     SELECT user FROM public2.iceberg_credentials
-
                      $ duckdb-query name=iceberg
                      SELECT * FROM iceberg_scan('s3://test-bucket/default_namespace/sink-{i}')
                      {i}
@@ -754,10 +761,11 @@ class IcebergSinks(Generator):
 
 class IcebergSinksSameSource(Generator):
     COUNT = min(Generator.COUNT, 100)  # polaris gets overloaded easily
+    VERSION = "1.1.0"
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-sql-timeout duration=300s")
+        print(f"$ set-sql-timeout duration={sql_timeout(300)}s")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sinks = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -772,7 +780,7 @@ class IcebergSinksSameSource(Generator):
             $ set-from-sql var=iceberg_key
             SELECT key FROM public2.iceberg_credentials
 
-            > CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = '{iceberg_user}', SECRET ACCESS KEY = SECRET public2.iceberg_secret, ENDPOINT = 'http://minio:9000/', REGION = 'us-east-1');
+            > CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = '${iceberg_user}', SECRET ACCESS KEY = SECRET public2.iceberg_secret, ENDPOINT = 'http://minio:9000/', REGION = 'us-east-1');
 
             > CREATE CONNECTION polaris_conn TO ICEBERG CATALOG (CATALOG TYPE = 'REST', URL = 'http://polaris:8181/api/catalog', CREDENTIAL = 'root:root', WAREHOUSE = 'default_catalog', SCOPE = 'PRINCIPAL_ROLE:ALL');
 
@@ -804,9 +812,6 @@ class IcebergSinksSameSource(Generator):
                        JOIN mz_sinks ON mz_sink_statistics.id = mz_sinks.id
                        WHERE mz_sinks.name = 's{i}';
                      true
-
-                     $ set-from-sql var=iceberg_user
-                     SELECT user FROM public2.iceberg_credentials
 
                      $ duckdb-query name=iceberg
                      SELECT * FROM iceberg_scan('s3://test-bucket/default_namespace/sink-{i}')
@@ -1051,7 +1056,7 @@ class ViewsMaterializedNested(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-sql-timeout duration=300s")
+        print(f"$ set-sql-timeout duration={sql_timeout(300)}s")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_materialized_views = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -1067,6 +1072,32 @@ class ViewsMaterializedNested(Generator):
 
         cls.store_explain_and_run(f"SELECT * FROM v{cls.COUNT};")
         print(f"{cls.COUNT}")
+
+
+class ReadThenWriteNestedViews(Generator):
+    # A read-then-write (DELETE ... WHERE ... IN (SELECT ... FROM deep_view))
+    # validates the transitive dependencies of its read set. That validation
+    # must not recurse over the view chain (SQL-426: it used to, overflowing the
+    # coordinator stack). This is a smoke test of the read-then-write path over
+    # a nested-view read set. The inner SELECT is a one-shot peek that inlines
+    # the chain, so COUNT is capped like ViewsNested. The deep-chain validation
+    # itself is covered by a Rust unit test.
+    COUNT = min(Generator.COUNT, 10)
+
+    @classmethod
+    def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
+        print("> CREATE TABLE t (a INTEGER);")
+        print("> INSERT INTO t VALUES (1);")
+        print("> CREATE VIEW c0 AS SELECT a FROM t;")
+
+        for i in cls.all():
+            print(f"> CREATE VIEW c{i} AS SELECT a FROM c{i-1};")
+
+        print(f"> DELETE FROM t WHERE a IN (SELECT a FROM c{cls.COUNT});")
+        cls.store_explain_and_run("SELECT count(*) FROM t;")
+        print("0")
 
 
 class CTEs(Generator):
@@ -1194,7 +1225,7 @@ class WhereExpression(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("> SET statement_timeout='120s'")
+        print(f"> SET statement_timeout='{sql_timeout(120)}s'")
         column_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
         print(f"> CREATE TABLE t1 ({column_list});")
 
@@ -1474,8 +1505,8 @@ class ArrayAgg(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-sql-timeout duration=300s")
-        print("> SET statement_timeout='300s'")
+        print(f"$ set-sql-timeout duration={sql_timeout(300)}s")
+        print(f"> SET statement_timeout='{sql_timeout(300)}s'")
         print(f"""> CREATE TABLE t ({
             ", ".join(
                 ", ".join([
@@ -1517,9 +1548,9 @@ class FilterSubqueries(Generator):
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
 
-        # TODO: Slow optimization, possibly due to https://github.com/MaterializeInc/database-issues/issues/8777
-        print("$ set-sql-timeout duration=3600s")
-        print("> SET statement_timeout = '3600s'")
+        # TODO: Slow optimization, possibly due to https://linear.app/materializeinc/issue/STG-42/use-equivalences-more-broadly
+        print(f"$ set-sql-timeout duration={sql_timeout(3600)}s")
+        print(f"> SET statement_timeout = '{sql_timeout(3600)}s'")
 
         cls.store_explain_and_run(
             f"SELECT * FROM t1 AS a1 WHERE {' AND '.join(f'f1 IN (SELECT * FROM t1 WHERE f1 = a1.f1 AND f1 <= {i})' for i in cls.all())}"
@@ -1557,7 +1588,7 @@ class Rows(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("> SET statement_timeout='60s'")
+        print(f"> SET statement_timeout='{sql_timeout(60)}s'")
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print(f"> INSERT INTO t1 SELECT * FROM generate_series(1, {cls.COUNT})")
 
@@ -1636,7 +1667,7 @@ class RowsJoinLargeRetraction(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("> SET statement_timeout='60s'")
+        print(f"> SET statement_timeout='{sql_timeout(60)}s'")
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print(f"> INSERT INTO t1 SELECT * FROM generate_series(1, {cls.COUNT});")
 
@@ -1687,7 +1718,8 @@ class PostgresSources(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("> SET statement_timeout='300s'")
+        print(f"$ set-sql-timeout duration={sql_timeout(300)}s")
+        print(f"> SET statement_timeout='{sql_timeout(300)}s'")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -1727,7 +1759,8 @@ class PostgresSources(Generator):
 class PostgresTables(Generator):
     @classmethod
     def body(cls) -> None:
-        print("> SET statement_timeout='300s'")
+        print(f"$ set-sql-timeout duration={sql_timeout(300)}s")
+        print(f"> SET statement_timeout='{sql_timeout(300)}s'")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -1763,9 +1796,12 @@ class PostgresTables(Generator):
 
 
 class PostgresTablesOldSyntax(Generator):
+    MAX_COUNT = 8000  # Too long-running with count=16000
+
     @classmethod
     def body(cls) -> None:
-        print("> SET statement_timeout='300s'")
+        print(f"$ set-sql-timeout duration={sql_timeout(300)}s")
+        print(f"> SET statement_timeout='{sql_timeout(300)}s'")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -1795,7 +1831,6 @@ class PostgresTablesOldSyntax(Generator):
           """)
         print("> SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';")
         for i in cls.all():
-            print("$ set-sql-timeout duration=300s")
             cls.store_explain_and_run(f"SELECT * FROM t{i}")
             print(f"{i}")
 
@@ -1807,7 +1842,7 @@ class MySqlSources(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-sql-timeout duration=300s")
+        print(f"$ set-sql-timeout duration={sql_timeout(300)}s")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -1818,7 +1853,14 @@ class MySqlSources(Generator):
             f"$ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}"
         )
         print("$ mysql-execute name=mysql")
-        print(f"SET GLOBAL max_connections={cls.COUNT * 2 + 2}")
+        # Each source can hold several upstream connections at once: every worker
+        # opens its snapshot connection up front while the leader samples and
+        # locks, so with this test's one-worker clusters a source holds the
+        # leader's LOCK TABLES connection plus one worker connection during the
+        # snapshot, and one replication connection at steady state. Budget four
+        # per source for headroom so every source can be mid-snapshot at the same
+        # time, plus two for testdrive's own admin sessions.
+        print(f"SET GLOBAL max_connections={cls.COUNT * 4 + 2}")
         print("DROP DATABASE IF EXISTS public;")
         print("CREATE DATABASE public;")
         print("USE public;")
@@ -1853,7 +1895,7 @@ class SqlServerSources(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-sql-timeout duration=300s")
+        print(f"$ set-sql-timeout duration={sql_timeout(300)}s")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -2032,7 +2074,7 @@ SERVICES = [
         sanity_restart=False,
         external_metadata_store=True,
         metadata_store="cockroach",
-        listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth_https.json",
+        listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/no_auth_https.json",
         support_external_clusterd=True,
     ),
     Mz(app_password=""),
@@ -2126,7 +2168,7 @@ def setup(c: Composition, workers: int) -> None:
                 WORKERS 1
             )
         );
-        GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO materialize;
+        GRANT ALL PRIVILEGES ON CLUSTER single_worker_cluster TO materialize;
         GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO "{ADMIN_USER}";
         GRANT ALL PRIVILEGES ON CLUSTER quickstart TO "{ADMIN_USER}";
 
@@ -2281,6 +2323,7 @@ def run_scenarios(
         if find_limit:
             good_count = None
             bad_count = None
+            first_failure = None
             while True:
                 print(
                     f"--- Running scenario {scenario.__name__} with count {scenario.COUNT}"
@@ -2297,6 +2340,12 @@ def run_scenarios(
                     print(
                         f"Failed scenario {scenario.__name__} with count {scenario.COUNT}: {e}"
                     )
+                    if first_failure is None:
+                        first_failure = TestFailureDetails(
+                            message=str(e),
+                            details=traceback.format_exc(),
+                            test_class_name_override=f"{scenario.__name__} with count {scenario.COUNT}",
+                        )
                     i = 0
                     while True:
                         try:
@@ -2310,7 +2359,7 @@ def run_scenarios(
                             i += 1
                             print(
                                 re.sub(
-                                    r"mzp_[a-z1-9]*",
+                                    r"mzp_[a-z0-9]*",
                                     "[REDACTED]",
                                     traceback.format_exc(),
                                 )
@@ -2320,21 +2369,18 @@ def run_scenarios(
                     setup(c, workers)
 
                     bad_count = scenario.COUNT
-                    previous_count = scenario.COUNT
                     scenario.COUNT = (
                         scenario.COUNT // 2
                         if good_count is None
                         else (good_count + bad_count) // 2
                     )
-                    if scenario.COUNT >= bad_count:
-                        if not good_count:
-                            failures.append(
-                                TestFailureDetails(
-                                    message=str(e),
-                                    details=traceback.format_exc(),
-                                    test_class_name_override=f"{scenario.__name__} with count {previous_count}",
-                                )
-                            )
+                    # Never bisect below 1. A COUNT=0 run is degenerate, it
+                    # either fails with a meaningless syntax error or trivially
+                    # succeeds, hiding a scenario that fails at every count.
+                    # Report the original failure instead.
+                    if scenario.COUNT < 1 or scenario.COUNT >= bad_count:
+                        if good_count is None:
+                            failures.append(first_failure)
                         break
                     continue
                 else:

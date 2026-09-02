@@ -61,6 +61,23 @@ export async function loginOrThrow(request: { payload: LoginRequest }) {
   return responseText;
 }
 
+export async function hasActiveSession(): Promise<boolean> {
+  const { authApiBasePath } = getApiClient();
+
+  try {
+    const response = await fetch(`${authApiBasePath}/api/sql`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ queries: [{ query: "SELECT 1", params: [] }] }),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function logout(logoutParams: {
   apiClient: SelfManagedApiClient;
 }) {

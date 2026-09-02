@@ -49,5 +49,5 @@ INSERT INTO t1 SELECT * FROM t1;
 interval
 
 > SELECT * FROM t1;
-"1 year 2 months 3 days 04:05:06.789123"
-"1 year 2 months 3 days 04:05:06.789123"
+"1 year 2 mons 3 days 04:05:06.789123"
+"1 year 2 mons 3 days 04:05:06.789123"

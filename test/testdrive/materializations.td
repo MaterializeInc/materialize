@@ -496,3 +496,15 @@ c    d
 "Dataflow: materialize.public.test7" AccumulableErrorCheck
 "Dataflow: materialize.public.test7" "ArrangeAccumulable [val: empty]"
 "Dataflow: materialize.public.test7" ReduceAccumulable
+"Dataflow: materialize.public.test1" "Arrange errors"
+"Dataflow: materialize.public.test1" "Distinct errors"
+"Dataflow: materialize.public.test2" "Arrange errors"
+"Dataflow: materialize.public.test2" "Distinct errors"
+"Dataflow: materialize.public.test4" "Arrange errors"
+"Dataflow: materialize.public.test4" "Distinct errors"
+"Dataflow: materialize.public.test6" "Arrange errors"
+"Dataflow: materialize.public.test6" "Distinct errors"
+"Dataflow: materialize.public.test7" "Arrange bundle err"
+"Dataflow: materialize.public.test7" "Arrange errors"
+"Dataflow: materialize.public.test7" "Distinct errors"
+"Dataflow: materialize.public.test7" "Distinct errors[[]]"

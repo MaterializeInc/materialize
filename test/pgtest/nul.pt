@@ -1,0 +1,107 @@
+# Test that parameter values containing NUL characters are rejected,
+# like PostgreSQL does.
+
+# Binary-format text parameter containing "foo\0bar".
+send
+Parse {"query": "SELECT $1::text"}
+Bind {"binary_values": [[102, 111, 111, 0, 98, 97, 114]], "param_formats": [1]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"22021"},{"typ":"M","value":"invalid byte sequence for encoding \"UTF8\": 0x00"}]}
+ReadyForQuery {"status":"I"}
+
+# Text-format text parameter containing "foo\0bar".
+send
+Parse {"query": "SELECT $1::text"}
+Bind {"values": ["foo\u0000bar"]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"22021"},{"typ":"M","value":"invalid byte sequence for encoding \"UTF8\": 0x00"}]}
+ReadyForQuery {"status":"I"}
+
+# Text-format parameters of non-string types also reject NUL bytes.
+send
+Parse {"query": "SELECT $1::int4"}
+Bind {"values": ["1\u00002"]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"22021"},{"typ":"M","value":"invalid byte sequence for encoding \"UTF8\": 0x00"}]}
+ReadyForQuery {"status":"I"}
+
+# NUL-free parameters still work.
+send
+Parse {"query": "SELECT $1::text"}
+Bind {"binary_values": [[102, 111, 111]], "param_formats": [1]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["foo"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# COPY FROM rejects NUL bytes produced by hex escapes in the text format.
+# PostgreSQL reports 22021 here. Materialize wraps all COPY decode errors
+# in a bad-copy-format error, so the code is 22P04.
+send
+Query {"query": "CREATE TABLE nul_copy (v text)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY nul_copy FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text"]}
+
+send
+CopyData "foo\\x00bar"
+CopyDone
+----
+
+until err_field_typs=C
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"C","value":"22P04"}]}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "DROP TABLE nul_copy"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}

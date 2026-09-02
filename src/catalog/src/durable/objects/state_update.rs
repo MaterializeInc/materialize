@@ -40,7 +40,6 @@ use mz_ore::collections::HashSet;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::Diff;
 use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::adt::numeric::{Dec, Numeric};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 #[cfg(test)]
@@ -149,6 +148,8 @@ impl StateUpdate {
             source_references,
             system_gid_mapping,
             system_configurations,
+            cluster_system_configurations,
+            replica_system_configurations,
             default_privileges,
             system_privileges,
             storage_collection_metadata,
@@ -156,6 +157,7 @@ impl StateUpdate {
             txn_wal_shard,
             audit_log_updates,
             upper: _,
+            ..
         } = txn_batch;
         let databases = from_batch(databases, StateUpdateKind::Database);
         let schemas = from_batch(schemas, StateUpdateKind::Schema);
@@ -177,6 +179,14 @@ impl StateUpdate {
             from_batch(system_gid_mapping, StateUpdateKind::SystemObjectMapping);
         let system_configurations =
             from_batch(system_configurations, StateUpdateKind::SystemConfiguration);
+        let cluster_system_configurations = from_batch(
+            cluster_system_configurations,
+            StateUpdateKind::ClusterSystemConfiguration,
+        );
+        let replica_system_configurations = from_batch(
+            replica_system_configurations,
+            StateUpdateKind::ReplicaSystemConfiguration,
+        );
         let default_privileges = from_batch(default_privileges, StateUpdateKind::DefaultPrivilege);
         let source_references = from_batch(source_references, StateUpdateKind::SourceReferences);
         let system_privileges = from_batch(system_privileges, StateUpdateKind::SystemPrivilege);
@@ -204,6 +214,8 @@ impl StateUpdate {
             .chain(source_references)
             .chain(system_object_mappings)
             .chain(system_configurations)
+            .chain(cluster_system_configurations)
+            .chain(replica_system_configurations)
             .chain(default_privileges)
             .chain(system_privileges)
             .chain(storage_collection_metadata)
@@ -244,6 +256,14 @@ pub enum StateUpdateKind {
         proto::ServerConfigurationKey,
         proto::ServerConfigurationValue,
     ),
+    ClusterSystemConfiguration(
+        proto::ClusterSystemConfigurationKey,
+        proto::ClusterSystemConfigurationValue,
+    ),
+    ReplicaSystemConfiguration(
+        proto::ReplicaSystemConfigurationKey,
+        proto::ReplicaSystemConfigurationValue,
+    ),
     SystemObjectMapping(proto::GidMappingKey, proto::GidMappingValue),
     SystemPrivilege(proto::SystemPrivilegesKey, proto::SystemPrivilegesValue),
     StorageCollectionMetadata(
@@ -277,6 +297,12 @@ impl StateUpdateKind {
             StateUpdateKind::Setting(_, _) => Some(CollectionType::Setting),
             StateUpdateKind::SourceReferences(_, _) => Some(CollectionType::SourceReferences),
             StateUpdateKind::SystemConfiguration(_, _) => Some(CollectionType::SystemConfiguration),
+            StateUpdateKind::ClusterSystemConfiguration(_, _) => {
+                Some(CollectionType::ClusterSystemConfiguration)
+            }
+            StateUpdateKind::ReplicaSystemConfiguration(_, _) => {
+                Some(CollectionType::ReplicaSystemConfiguration)
+            }
             StateUpdateKind::SystemObjectMapping(_, _) => Some(CollectionType::SystemGidMapping),
             StateUpdateKind::SystemPrivilege(_, _) => Some(CollectionType::SystemPrivileges),
             StateUpdateKind::StorageCollectionMetadata(_, _) => {
@@ -317,35 +343,6 @@ impl StateUpdateKindJson {
             .find_map(|(field, datum)| if field == "kind" { Some(datum) } else { None })
             .expect("kind field must exist");
         datum.unwrap_str()
-    }
-
-    pub(crate) fn audit_log_id(&self) -> u64 {
-        assert!(self.is_audit_log(), "unexpected update kind: {self:?}");
-        let row = self.0.row();
-        let mut iter = row.unpack_first().unwrap_map().iter();
-        let key = iter
-            .find_map(|(field, datum)| if field == "key" { Some(datum) } else { None })
-            .expect("key field must exist")
-            .unwrap_map();
-        let event = key
-            .iter()
-            .find_map(|(field, datum)| if field == "event" { Some(datum) } else { None })
-            .expect("event field must exist")
-            .unwrap_map();
-        let (event_version, versioned_datum) = event.iter().next().expect("event cannot be empty");
-        match event_version {
-            "V1" => {
-                let versioned_map = versioned_datum.unwrap_map();
-                let id = versioned_map
-                    .iter()
-                    .find_map(|(field, datum)| if field == "id" { Some(datum) } else { None })
-                    .expect("event field must exist")
-                    .unwrap_numeric();
-                let mut cx = Numeric::context();
-                cx.try_into_u64(id.into_inner()).expect("invalid id")
-            }
-            version => unimplemented!("unsupported event version: {version}"),
-        }
     }
 
     /// Returns true if this is an update kind that is always deserializable, even before migrations. Otherwise, returns false.
@@ -528,6 +525,22 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     system_configuration,
                 ))
             }
+            StateUpdateKind::ClusterSystemConfiguration(key, value) => {
+                let cluster_system_configuration = into_durable(key, value)?;
+                Some(
+                    memory::objects::StateUpdateKind::ClusterSystemConfiguration(
+                        cluster_system_configuration,
+                    ),
+                )
+            }
+            StateUpdateKind::ReplicaSystemConfiguration(key, value) => {
+                let replica_system_configuration = into_durable(key, value)?;
+                Some(
+                    memory::objects::StateUpdateKind::ReplicaSystemConfiguration(
+                        replica_system_configuration,
+                    ),
+                )
+            }
             StateUpdateKind::SystemObjectMapping(key, value) => {
                 let system_object_mapping = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::SystemObjectMapping(
@@ -666,6 +679,16 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                     value,
                 })
             }
+            StateUpdateKind::ClusterSystemConfiguration(key, value) => {
+                proto::StateUpdateKind::ClusterSystemConfiguration(
+                    proto::ClusterSystemConfiguration { key, value },
+                )
+            }
+            StateUpdateKind::ReplicaSystemConfiguration(key, value) => {
+                proto::StateUpdateKind::ReplicaSystemConfiguration(
+                    proto::ReplicaSystemConfiguration { key, value },
+                )
+            }
             StateUpdateKind::SystemObjectMapping(key, value) => {
                 proto::StateUpdateKind::GidMapping(proto::GidMapping { key, value })
             }
@@ -743,6 +766,12 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                 key,
                 value,
             }) => StateUpdateKind::SystemConfiguration(key, value),
+            proto::StateUpdateKind::ClusterSystemConfiguration(
+                proto::ClusterSystemConfiguration { key, value },
+            ) => StateUpdateKind::ClusterSystemConfiguration(key, value),
+            proto::StateUpdateKind::ReplicaSystemConfiguration(
+                proto::ReplicaSystemConfiguration { key, value },
+            ) => StateUpdateKind::ReplicaSystemConfiguration(key, value),
             proto::StateUpdateKind::GidMapping(proto::GidMapping { key, value }) => {
                 StateUpdateKind::SystemObjectMapping(key, value)
             }
@@ -860,55 +889,6 @@ mod tests {
             let json_kind: StateUpdateKindJson = kind.into();
             let kind = json_kind.kind().to_string();
             assert_eq!(expected, kind);
-        }
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn audit_log_id_test() {
-        let test_cases = [
-            (
-                StateUpdateKind::AuditLog(
-                    proto::AuditLogKey {
-                        event: proto::AuditLogEvent::V1(proto::AuditLogEventV1 {
-                            id: 1,
-                            event_type: proto::audit_log_event_v1::EventType::Create,
-                            object_type: proto::audit_log_event_v1::ObjectType::Cluster,
-                            user: None,
-                            occurred_at: proto::EpochMillis { millis: 4 },
-                            details: proto::audit_log_event_v1::Details::ResetAllV1(
-                                proto::Empty {},
-                            ),
-                        }),
-                    },
-                    (),
-                ),
-                1,
-            ),
-            (
-                StateUpdateKind::AuditLog(
-                    proto::AuditLogKey {
-                        event: proto::AuditLogEvent::V1(proto::AuditLogEventV1 {
-                            id: 4,
-                            event_type: proto::audit_log_event_v1::EventType::Drop,
-                            object_type: proto::audit_log_event_v1::ObjectType::Database,
-                            user: None,
-                            occurred_at: proto::EpochMillis { millis: 7 },
-                            details: proto::audit_log_event_v1::Details::ResetAllV1(
-                                proto::Empty {},
-                            ),
-                        }),
-                    },
-                    (),
-                ),
-                4,
-            ),
-        ];
-
-        for (kind, expected) in test_cases {
-            let json_kind: StateUpdateKindJson = kind.into();
-            let id = json_kind.audit_log_id();
-            assert_eq!(expected, id);
         }
     }
 

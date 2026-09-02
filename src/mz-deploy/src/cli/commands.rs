@@ -16,8 +16,7 @@
 //! ## Commands
 //!
 //! - **[`new_project`]** — Scaffold a new mz-deploy project directory.
-//! - **[`compile`]** — Parse and validate the project, optionally type-checking
-//!   against a Docker container.
+//! - **[`compile`]** — Parse, validate, and type-check the project locally.
 //! - **[`explain`]** — Show the EXPLAIN plan for a materialized view or index.
 //! - **[`stage`]** — Deploy the project to a staging environment.
 //! - **[`wait`]** — Check hydration status of a staged deployment.

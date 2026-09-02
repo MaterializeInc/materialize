@@ -11,7 +11,6 @@ use std::fmt;
 
 use itertools::Itertools;
 use mz_expr_derive::sqlfunc;
-use mz_lowertest::MzReflect;
 use mz_repr::{Datum, DatumMap, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
@@ -27,8 +26,7 @@ use crate::{Eval, EvalError};
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastMapToString {
     pub ty: SqlScalarType,
@@ -103,8 +101,7 @@ fn map_length<'a>(a: DatumMap<'a>) -> Result<i32, EvalError> {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct MapBuildFromRecordList {
     pub value_type: SqlScalarType,

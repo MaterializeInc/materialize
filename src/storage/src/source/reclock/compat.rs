@@ -13,7 +13,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use differential_dataflow::lattice::Lattice;
@@ -153,12 +153,29 @@ where
             "{operator}({id}) {worker_id}/{worker_count} initializing PersistHandle"
         );
 
+        // Own the operator name: the snapshot stream below outlives this call.
+        let operator = operator.to_string();
+
         use futures::stream;
         let events = stream::once(async move {
+            // Bracket the snapshot read. It is the first thing polled and the
+            // point that wedges if the blob store can't serve a batch part, so a
+            // "reading" with no matching "read" pins the stall to the read here.
+            tracing::info!(
+                ?as_of,
+                "{operator}({id}) {worker_id}/{worker_count} reading remap snapshot"
+            );
+            let snapshot_start = Instant::now();
             let updates = read_handle
                 .snapshot_and_fetch(as_of.clone())
                 .await
                 .expect("since <= as_of asserted");
+            tracing::info!(
+                ?as_of,
+                update_count = updates.len(),
+                elapsed = ?snapshot_start.elapsed(),
+                "{operator}({id}) {worker_id}/{worker_count} read remap snapshot"
+            );
             let snapshot = stream::once(std::future::ready(ListenEvent::Updates(updates)));
 
             let listener = read_handle

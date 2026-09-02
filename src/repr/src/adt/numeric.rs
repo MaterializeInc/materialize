@@ -18,12 +18,13 @@ use std::sync::LazyLock;
 
 use anyhow::bail;
 use dec::{Context, Decimal};
-use mz_lowertest::MzReflect;
 use mz_ore::cast;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 #[cfg(any(test, feature = "proptest"))]
-use proptest_derive::Arbitrary;
+use proptest::arbitrary::Arbitrary;
+#[cfg(any(test, feature = "proptest"))]
+use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.numeric.rs"));
@@ -112,10 +113,8 @@ pub mod str_serde {
     PartialOrd,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
-#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct NumericMaxScale(pub(crate) u8);
 
 impl NumericMaxScale {
@@ -125,6 +124,18 @@ impl NumericMaxScale {
     /// Consumes the newtype wrapper, returning the inner `u8`.
     pub fn into_u8(self) -> u8 {
         self.0
+    }
+}
+
+#[cfg(any(test, feature = "proptest"))]
+impl Arbitrary for NumericMaxScale {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<NumericMaxScale>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        (0..=NUMERIC_DATUM_MAX_PRECISION)
+            .prop_map(NumericMaxScale)
+            .boxed()
     }
 }
 
@@ -156,8 +167,15 @@ impl RustType<ProtoNumericMaxScale> for NumericMaxScale {
         }
     }
 
+    // NOTE: `from_proto` is a trust boundary for durable and protocol state, so it
+    // enforces the same domain as `TryFrom<i64>` rather than trusting the wire.
     fn from_proto(max_scale: ProtoNumericMaxScale) -> Result<Self, TryFromProtoError> {
-        Ok(NumericMaxScale(max_scale.value.into_rust()?))
+        NumericMaxScale::try_from(i64::from(max_scale.value)).map_err(|e| {
+            TryFromProtoError::InvalidFieldError(format!(
+                "ProtoNumericMaxScale::value {}: {e}",
+                max_scale.value
+            ))
+        })
     }
 }
 
@@ -399,6 +417,14 @@ pub fn twos_complement_be_to_numeric(
 pub fn twos_complement_be_to_numeric_inner<D: Dec<N>, const N: usize>(
     input: &mut [u8],
 ) -> Result<Decimal<N>, anyhow::Error> {
+    if input.is_empty() {
+        // An empty byte string is not a valid two's-complement integer. Our own
+        // encoder never emits one (zero is the single byte `0x00`), so this only
+        // arises from untrusted input. One example is an Avro `decimal` field
+        // whose unscaled value was encoded as zero-length `bytes`. Reject it
+        // rather than indexing `input[0]` below and panicking.
+        bail!("cannot parse a numeric value from an empty byte string");
+    }
     let is_neg = if (input[0] & 0x80) != 0 {
         // byte-level negate all negative values, guaranteeing all bytes are
         // readable as unsigned.
@@ -467,6 +493,21 @@ fn test_twos_complement_roundtrip() {
     inner("-999999999999999999999999999999999999999");
     inner("-7.2e35");
     inner("-7.2e-35");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+fn test_twos_complement_empty_is_error() {
+    // An empty byte string is not a valid two's-complement integer and used to
+    // panic with an out-of-bounds index. It only arrives from untrusted input
+    // (e.g. an Avro `decimal` encoded as zero-length `bytes`), so it must be a
+    // clean error, not a panic. Regression test for that fix.
+    for scale in [0u8, 1, 38] {
+        assert!(twos_complement_be_to_numeric(&mut [], scale).is_err());
+    }
+    assert!(
+        twos_complement_be_to_numeric_inner::<Numeric, NUMERIC_DATUM_WIDTH_USIZE>(&mut []).is_err()
+    );
 }
 
 #[mz_ore::test]

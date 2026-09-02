@@ -10,7 +10,77 @@
 # This is a separate mzimage so that we don't have to re-install the apt things
 # every time we get a CI builder with a cold cache.
 
-FROM gcr.io/distroless/cc-debian13:nonroot-28078d2e5e77671d2046dcc9e2c75334e31efa4d
-USER nonroot
-ENV HOME=/home/nonroot
+# Debian packages for the distroless final image, which has no package manager.
+# Installing them explicitly pulls current security-patched builds.
+# The digest pin is bumped by dependabot, which also busts the layer cache.
+FROM debian:13-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS apt-deps
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates eatmydata liblzma5 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Statically-linked `tini`, the PID 1 init for all distroless prod images.
+# Distroless ships no init, so without this each leaf binary would run as PID 1
+# and have to forward signals and reap zombies (e.g. ssh tunnel subprocesses)
+# itself.
+MZFROM tini-static AS tini
+
+# The `materialize` user (uid/gid 999), built here because the distroless final
+# image has no shell to run `useradd`. uid 999 matches the orchestrator's
+# hardcoded runAsUser/fsGroup, so no UID gate is needed.
+FROM debian:13-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS useradd
+RUN groupadd --system --gid=999 materialize \
+    && useradd --system --gid=999 --uid=999 --create-home materialize \
+    && mkdir /mzdata /scratch \
+    && chown materialize:materialize /mzdata /scratch
+
+# `debug-nonroot` adds a busybox shell (`/busybox/sh`), kept intentionally so
+# entrypoint.sh and `kubectl exec` keep working. A later step can drop to the
+# shell-less variant. The digest pin is bumped by dependabot.
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:0501a0f4bf6e8b6b2b72d6cbd7271d851c834053d2ae825595be0359fbb0e1ad
+
+# Ensure any Rust binaries that crash print a backtrace.
+ENV RUST_BACKTRACE=1
+# Disable backtrace collection in Rust libraries, such as `anyhow`. Collecting
+# backtraces at runtime can be expensive and is known to cause deadlocks
+# (database-issues#9159).
+ENV RUST_LIB_BACKTRACE=0
+
+# libeatmydata disables fsync for faster CI runs. No-op unless
+# LD_PRELOAD=libeatmydata.so is set before process start.
+COPY --from=apt-deps /usr/lib/*/libeatmydata.so /usr/lib/
+COPY --from=tini /output/tini /usr/bin/tini
+
+# liblzma (xz), dynamically linked by environmentd and clusterd. The distroless
+# base does not ship it.
+COPY --from=apt-deps /usr/lib/*/liblzma.so.5* /usr/lib/
+
+# The distroless base ships a CA bundle frozen at its build time. Copy a
+# current one from the apt stage instead.
+COPY --from=apt-deps /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+# FoundationDB client library, dynamically linked by environmentd and clusterd.
+# NOTE: this tag is coupled to two other pins and all three must move
+# together: the same COPY in `debian-base` (both prod bases must ship an
+# identical libfdb_c.so, since environmentd and clusterd share one FoundationDB
+# cluster during a rolling upgrade) and the
+# `foundationdb` crate's `fdb-7_3` API feature in the root Cargo.toml. A
+# dependabot bump here that is not matched in the other two is a bug, not a
+# routine update.
+COPY --from=foundationdb/foundationdb:7.3.71 /usr/lib/libfdb_c.so /usr/lib/
+
+# Replace the base image's glibc example nsswitch.conf, whose `compat`
+# backend segfaults the statically-linked `ssh` (see comments in the file).
+COPY nsswitch.conf /etc/nsswitch.conf
+
+# Run as `materialize` (uid/gid 999). The static `ssh` resolves the uid via the
+# `files` nsswitch backend against the copied /etc/passwd.
+COPY --from=useradd /etc/passwd /etc/passwd
+COPY --from=useradd /etc/group /etc/group
+COPY --from=useradd --chown=999:999 /home/materialize /home/materialize
+# Empty Docker volumes inherit the ownership of their image mountpoints. The
+# process orchestrator needs to create directories beneath both paths.
+COPY --from=useradd --chown=999:999 /mzdata /mzdata
+COPY --from=useradd --chown=999:999 /scratch /scratch
+
+USER materialize
+ENV HOME=/home/materialize
 ENTRYPOINT []

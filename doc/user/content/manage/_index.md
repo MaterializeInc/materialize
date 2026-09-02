@@ -6,6 +6,15 @@ menu:
   main:
     identifier: "manage"
     weight: 50
+aliases:
+  - /self-managed/v25.2/manage/
+  - /self-managed/v25.2/manage/operational-guidelines/
+  - /self-managed/v25.2/manage/terraform/
+  - /self-managed/v25.2/manage/terraform/get-started/
+  - /self-managed/v25.2/manage/terraform/manage-resources/
+  - /self-managed/v25.2/manage/terraform/manage-cloud-modules/
+  - /self-managed/v25.2/manage/terraform/appendix-secret-stores/
+  - /self-managed/v25.2/administration/usage/
 ---
 
 This section contains various resources for managing Materialize.

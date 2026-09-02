@@ -65,7 +65,7 @@ class FeatureFlagPostExecutionInconsistencyIgnoreFilter(
         if query_template.uses_join() and (
             query_template.has_where_condition() or query_template.has_row_selection()
         ):
-            return YesIgnore("database-issues#4972: evaluation order")
+            return YesIgnore("STG-54: evaluation order")
 
         if (
             query_template.count_joins() >= 2
@@ -96,7 +96,7 @@ class FeatureFlagPostExecutionInconsistencyIgnoreFilter(
         if query_template.uses_join() and (
             query_template.has_where_condition() or query_template.has_row_selection()
         ):
-            return YesIgnore("database-issues#4972: evaluation order")
+            return YesIgnore("STG-54: evaluation order")
 
         return super()._shall_ignore_error_mismatch(
             error, query_template, contains_aggregation

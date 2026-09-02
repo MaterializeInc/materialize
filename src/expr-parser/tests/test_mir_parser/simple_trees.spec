@@ -66,7 +66,7 @@ roundtrip OK
 
 # Map + Scalar functions (part 2)
 roundtrip
-Map (mz_environment_id(), abs(#0), ltrim("testltrim", #1), greatest(1, 2, 3))
+Map (abs(#0), ltrim("testltrim", #1), greatest(1, 2, 3))
   Map (42, "best", #0)
     Constant // { types: "()" }
       - ()

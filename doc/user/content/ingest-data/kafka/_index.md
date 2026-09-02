@@ -7,6 +7,8 @@ menu:
     parent: 'ingest-data'
     identifier: 'kafka'
     weight: 20
+aliases:
+  - /self-managed/v25.2/ingest-data/kafka/
 ---
 
 Materialize provides native connector for Kafka message broker. To ingest data

@@ -258,7 +258,7 @@ struct ClustersTemplate<'a> {
 /// Handler for the clusters overview page.
 ///
 /// Displays a table of all cluster replicas with links to their HTTP endpoints.
-pub(crate) async fn handle_clusters(client: AuthedClient) -> impl IntoResponse {
+pub(crate) async fn handle_clusters(mut client: AuthedClient) -> impl IntoResponse {
     // Look up names from the catalog
     let catalog = client.client.catalog_snapshot("clusters_page").await;
 

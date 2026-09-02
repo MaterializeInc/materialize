@@ -25,12 +25,15 @@ if [[ "${BUILDKITE_BRANCH:-}" == "main" || "$CURRENT_GIT_BRANCH" == "main" ]]; t
   exit 0
 fi
 
-if [[ "${1:-}" == --offline ]]; then
+if [[ "${MZ_LINT_OFFLINE:-}" == 1 ]]; then
   echo "Skipping Slack link check in offline mode."
   exit 0
 fi
 
-COMMON_ANCESTOR=$(git merge-base HEAD FETCH_HEAD)
+# Use the remote-tracking ref, not FETCH_HEAD: FETCH_HEAD is a plain file that a
+# concurrently-running check (check-protobuf) rewrites with its own fetch, while
+# git updates remote-tracking refs atomically.
+COMMON_ANCESTOR=$(git merge-base HEAD "$MZ_REPO_REF/$MZ_REPO_PULL_REQUEST_BASE_BRANCH")
 
 # Look for added lines containing Slack links in the diff against main.
 SLACK_LINES=$(git diff "$COMMON_ANCESTOR" HEAD -U0 | grep -E '^\+.*materializeinc\.slack\.com' || true)

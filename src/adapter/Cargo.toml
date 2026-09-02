@@ -29,10 +29,10 @@ hex.workspace = true
 humantime.workspace = true
 imbl.workspace = true
 http.workspace = true
-hyper-tls = "0.5.0"
 ipnet.workspace = true
 itertools.workspace = true
 launchdarkly-server-sdk.workspace = true
+launchdarkly-sdk-transport.workspace = true
 maplit.workspace = true
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
@@ -42,6 +42,7 @@ mz-catalog = { path = "../catalog" }
 mz-cloud-provider = { path = "../cloud-provider", default-features = false }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-cluster-client = { path = "../cluster-client" }
+mz-cluster-controller = { path = "../cluster-controller" }
 mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
 mz-controller = { path = "../controller" }

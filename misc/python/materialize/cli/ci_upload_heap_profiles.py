@@ -63,16 +63,17 @@ def main() -> int:
                 capture_output=True,
             )
 
-    services = json.loads(
-        subprocess.run(
-            mzcompose + ["ps", "--format", "json"], text=True, capture_output=True
-        ).stdout
-    )
+    # `docker compose ps --format json` emits newline-delimited JSON (one
+    # object per service), not a single JSON array.
+    ps_output = subprocess.run(
+        mzcompose + ["ps", "--format", "json"], text=True, capture_output=True
+    ).stdout
+    services = [json.loads(line) for line in ps_output.splitlines() if line.strip()]
     for service in services:
         image = service["Image"].rsplit(":", 1)[0]
         ghcr_prefix = "ghcr.io/materializeinc/"
         if image.startswith(ghcr_prefix):
-            image.removeprefix(ghcr_prefix)
+            image = image.removeprefix(ghcr_prefix)
         if image == "materialize/clusterd":
             threads.append(
                 Thread(

@@ -26,10 +26,10 @@ pub enum Format {
     Binary,
 }
 
-impl TryFrom<i16> for Format {
+impl TryFrom<u16> for Format {
     type Error = io::Error;
 
-    fn try_from(value: i16) -> Result<Self, Self::Error> {
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(Format::Text),
             1 => Ok(Format::Binary),

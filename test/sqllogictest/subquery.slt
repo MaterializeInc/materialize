@@ -763,3 +763,179 @@ Return
 Target cluster: quickstart
 
 EOF
+
+# FROM-less correlated existence subqueries collapse to a plain Filter, closing
+# database-issues#2613 (semijoin) and database-issues#2969 (antijoin). Gated by
+# the `enable_simplify_from_less_existence` feature flag (default on, kept as a
+# fail-safe kill switch). The `NOT EXISTS` rewrite must be null-safe
+# (`IS NOT TRUE`, not `NOT`), so a row whose predicate evaluates to NULL is
+# preserved.
+statement ok
+CREATE TABLE fl (f1 int)
+
+statement ok
+INSERT INTO fl VALUES (0), (1), (2), (NULL)
+
+# With the flag OFF, the rows are correct but the plans retain the semijoin
+# (database-issues#2613) and antijoin (database-issues#2969) structure.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_simplify_from_less_existence TO false;
+----
+COMPLETE 0
+
+query I rowsort
+SELECT f1 FROM fl WHERE NOT EXISTS (SELECT 1 WHERE f1 > 0)
+----
+0
+NULL
+
+query I rowsort
+SELECT f1 FROM fl WHERE 1 IN (SELECT 1 WHERE f1 > 1)
+----
+2
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT f1 FROM fl WHERE NOT EXISTS (SELECT 1 WHERE f1 > 0)
+----
+Explained Query:
+  With
+    cte l0 =
+      Distinct project=[#0{f1}]
+        ReadStorage materialize.public.fl
+  Return
+    Project (#0{f1})
+      Join on=(#0{f1} = #1{f1}) type=differential
+        ArrangeBy keys=[[#0{f1}]]
+          ReadStorage materialize.public.fl
+        ArrangeBy keys=[[#0{f1}]]
+          Union
+            Negate
+              Filter (#0{f1} > 0)
+                Get l0
+            Get l0
+
+Source materialize.public.fl
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT f1 FROM fl WHERE 1 IN (SELECT 1 WHERE f1 > 1)
+----
+Explained Query:
+  Project (#0{f1})
+    Join on=(#0{f1} = #1{f1}) type=differential
+      ArrangeBy keys=[[#0{f1}]]
+        ReadStorage materialize.public.fl
+      ArrangeBy keys=[[#0{f1}]]
+        Distinct project=[#0{f1}]
+          Filter (#0{f1} > 1)
+            ReadStorage materialize.public.fl
+
+Source materialize.public.fl
+
+Target cluster: quickstart
+
+EOF
+
+# With the flag ON (the default), the same queries collapse to a plain
+# Filter and the rows are unchanged.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_simplify_from_less_existence TO true;
+----
+COMPLETE 0
+
+# database-issues#2969: NOT EXISTS keeps the NULL row (predicate is NULL) and
+# the FALSE row (f1 = 0), matching an empty subquery.
+query I rowsort
+SELECT f1 FROM fl WHERE NOT EXISTS (SELECT 1 WHERE f1 > 0)
+----
+0
+NULL
+
+# database-issues#2613: 1 IN keeps only the row where the predicate is TRUE.
+query I rowsort
+SELECT f1 FROM fl WHERE 1 IN (SELECT 1 WHERE f1 > 1)
+----
+2
+
+# The NOT EXISTS plan is a plain Filter using the null-safe `IS NOT TRUE`, with
+# no antijoin (no Union/Negate).
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT f1 FROM fl WHERE NOT EXISTS (SELECT 1 WHERE f1 > 0)
+----
+Explained Query:
+  Filter ((#0{f1} > 0)) IS NOT TRUE
+    ReadStorage materialize.public.fl
+
+Source materialize.public.fl
+  filter=(((#0{f1} > 0)) IS NOT TRUE)
+
+Target cluster: quickstart
+
+EOF
+
+# The 1 IN plan is a plain Filter, with no semijoin.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT f1 FROM fl WHERE 1 IN (SELECT 1 WHERE f1 > 1)
+----
+Explained Query:
+  Filter ((#0{f1} > 1)) IS TRUE
+    ReadStorage materialize.public.fl
+
+Source materialize.public.fl
+  filter=(((#0{f1} > 1)) IS TRUE)
+
+Target cluster: quickstart
+
+EOF
+
+# A window function in a FROM-less quantified subquery must not be inlined into
+# the outer Filter by the collapse. `x IN/= ANY/= ALL (SELECT <expr>)` normalizes
+# to an EXISTS with `<expr>` in a Filter predicate, but a window function run over
+# the whole outer relation (row_number() = 1, 2, 3, ...) differs from its
+# single-row subquery value (always 1). All three `1` rows satisfy `f1 = 1`, so
+# the correct answer keeps all three. The buggy inlined form keeps only the one
+# row that row_number() numbers 1.
+statement ok
+CREATE TABLE flw (f1 int)
+
+statement ok
+INSERT INTO flw VALUES (1), (1), (1), (NULL)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_simplify_from_less_existence TO true;
+----
+COMPLETE 0
+
+query I rowsort
+SELECT f1 FROM flw WHERE f1 IN (SELECT row_number() OVER ())
+----
+1
+1
+1
+
+query I rowsort
+SELECT f1 FROM flw WHERE f1 = ANY (SELECT row_number() OVER ())
+----
+1
+1
+1
+
+query I rowsort
+SELECT f1 FROM flw WHERE f1 = ALL (SELECT row_number() OVER ())
+----
+1
+1
+1
+
+# Restore the default so later files see production behavior.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_simplify_from_less_existence;
+----
+COMPLETE 0

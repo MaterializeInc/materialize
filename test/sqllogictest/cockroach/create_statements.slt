@@ -1,0 +1,146 @@
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on July 6, 2026 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/create_statements
+#
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE t (
+  a INT REFERENCES t,
+  FAMILY "primary" (a, rowid)
+)
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE v (
+  "'" INT REFERENCES t, s STRING UNIQUE REFERENCES v (s),
+  FAMILY "primary" ("'", s, rowid)
+)
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE c (
+	a INT NOT NULL,
+	b INT NULL,
+	INDEX c_a_b_idx (a ASC, b ASC),
+	FAMILY fam_0_a_rowid (a, rowid),
+	FAMILY fam_1_b (b)
+)
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+COMMENT ON TABLE c IS 'table'
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+COMMENT ON COLUMN c.a IS 'column'
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+COMMENT ON INDEX c_a_b_idx IS 'index'
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTTT colnames
+SELECT
+  regexp_replace(create_statement, '\n', ' ', 'g'),
+  regexp_replace(create_nofks, '\n', ' ', 'g'),
+  alter_statements,
+  validate_statements
+FROM
+  crdb_internal.create_statements
+WHERE
+  database_name = 'test'
+AND
+  schema_name NOT IN ('pg_catalog', 'pg_extension', 'crdb_internal', 'information_schema')
+----
+regexp_replace                                                                                                                                                                                                                                                                                                                                                                                regexp_replace                                                                                                                                                                                                                                                                                                                                                                                alter_statements                                                                                                                                                                           validate_statements
+CREATE TABLE public.t (   a INT8 NULL,   rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),   CONSTRAINT t_pkey PRIMARY KEY (rowid ASC),   CONSTRAINT t_a_fkey FOREIGN KEY (a) REFERENCES public.t(rowid) )                                                                                                                                                                              CREATE TABLE public.t (   a INT8 NULL,   rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),   CONSTRAINT t_pkey PRIMARY KEY (rowid ASC) )                                                                                                                                                                                                                                                {"ALTER TABLE public.t ADD CONSTRAINT t_a_fkey FOREIGN KEY (a) REFERENCES public.t(rowid)"}                                                                                                {"ALTER TABLE public.t VALIDATE CONSTRAINT t_a_fkey"}
+CREATE TABLE public.v (   "'" INT8 NULL,   s STRING NULL,   rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),   CONSTRAINT v_pkey PRIMARY KEY (rowid ASC),   CONSTRAINT "v_'_fkey" FOREIGN KEY ("'") REFERENCES public.t(rowid),   CONSTRAINT v_s_fkey FOREIGN KEY (s) REFERENCES public.v(s),   UNIQUE INDEX v_s_key (s ASC) )                                                         CREATE TABLE public.v (   "'" INT8 NULL,   s STRING NULL,   rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),   CONSTRAINT v_pkey PRIMARY KEY (rowid ASC),   UNIQUE INDEX v_s_key (s ASC) )                                                                                                                                                                                             {"ALTER TABLE public.v ADD CONSTRAINT \"v_'_fkey\" FOREIGN KEY (\"'\") REFERENCES public.t(rowid)","ALTER TABLE public.v ADD CONSTRAINT v_s_fkey FOREIGN KEY (s) REFERENCES public.v(s)"}  {"ALTER TABLE public.v VALIDATE CONSTRAINT \"v_'_fkey\"","ALTER TABLE public.v VALIDATE CONSTRAINT v_s_fkey"}
+CREATE TABLE public.c (   a INT8 NOT NULL,   b INT8 NULL,   rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),   CONSTRAINT c_pkey PRIMARY KEY (rowid ASC),   INDEX c_a_b_idx (a ASC, b ASC),   FAMILY fam_0_a_rowid (a, rowid),   FAMILY fam_1_b (b) ); COMMENT ON TABLE public.c IS 'table'; COMMENT ON COLUMN public.c.a IS 'column'; COMMENT ON INDEX public.c@c_a_b_idx IS 'index'  CREATE TABLE public.c (   a INT8 NOT NULL,   b INT8 NULL,   rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),   CONSTRAINT c_pkey PRIMARY KEY (rowid ASC),   INDEX c_a_b_idx (a ASC, b ASC),   FAMILY fam_0_a_rowid (a, rowid),   FAMILY fam_1_b (b) ); COMMENT ON TABLE public.c IS 'table'; COMMENT ON COLUMN public.c.a IS 'column'; COMMENT ON INDEX public.c@c_a_b_idx IS 'index'  {}                                                                                                                                                                                         {}
+
+query T noticetrace
+CREATE UNLOGGED TABLE unlogged_tbl (col int PRIMARY KEY)
+----
+NOTICE: UNLOGGED TABLE will behave as a regular table in CockroachDB
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SHOW CREATE TABLE unlogged_tbl
+----
+unlogged_tbl  CREATE TABLE public.unlogged_tbl (
+                col INT8 NOT NULL,
+                CONSTRAINT unlogged_tbl_pkey PRIMARY KEY (col ASC)
+              )
+
+statement error pgcode 22023 Expected one of PARTITION or RETAIN, found identifier "foo"
+CREATE TABLE a (b INT) WITH (foo=100);
+
+statement error Expected one of PARTITION or RETAIN, found identifier "fillfactor"
+CREATE TABLE a (b INT) WITH (fillfactor=true);
+
+statement error Expected one of PARTITION or RETAIN, found identifier "toast_tuple_target"
+CREATE TABLE a (b INT) WITH (toast_tuple_target=100);
+
+query T noticetrace
+CREATE TABLE a (b INT) WITH (fillfactor=99.9)
+----
+NOTICE: storage parameter "fillfactor" is ignored
+
+query T noticetrace
+CREATE INDEX a_idx ON a(b) WITH (fillfactor=50)
+----
+NOTICE: storage parameter "fillfactor" is ignored
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP TABLE a CASCADE;
+
+query T noticetrace
+CREATE TABLE a (b INT) WITH (autovacuum_enabled=off)
+----
+NOTICE: storage parameter "autovacuum_enabled = 'off'" is ignored
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP TABLE a CASCADE;
+
+query T noticetrace
+CREATE TABLE a (b INT) WITH (autovacuum_enabled=on)
+----
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP TABLE a CASCADE;
+
+statement error Expected one of PARTITION or RETAIN, found identifier "autovacuum_enabled"
+CREATE TABLE a (b INT) WITH (autovacuum_enabled='11')

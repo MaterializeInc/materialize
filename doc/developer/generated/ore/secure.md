@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/secure.rs
-revision: b69d9bb412
+revision: 07cec92c1c
 ---
 
 # ore::secure
@@ -28,7 +28,7 @@ Downstream crates should import these from `mz_ore::secure` rather than adding a
 A `String` wrapper that:
 - Is zeroed from memory when dropped (`ZeroizeOnDrop`)
 - Redacts its contents in `Debug` and `Display` output
-- Does **not** implement `Clone` (prevents untracked copies of secrets)
+- Implements `Clone`; clones also carry `ZeroizeOnDrop`, so copies are zeroed independently on drop
 
 Use `unsecure()` to access the inner `&str` when the plaintext is needed.
 

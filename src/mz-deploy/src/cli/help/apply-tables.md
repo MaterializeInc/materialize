@@ -1,8 +1,8 @@
 # apply tables — Create missing tables
 
 Reads table definitions from the project and creates any that don't
-exist in the database. Existing tables are skipped. Associated indexes,
-grants, and comments are applied for newly created tables.
+exist in the database. Existing tables are skipped. Associated grants and
+comments are applied for newly created tables.
 
 ## Usage
 
@@ -17,8 +17,7 @@ grants, and comments are applied for newly created tables.
 4. Creates missing schemas if needed.
 5. For each table that does not exist:
    - Executes the `CREATE TABLE` statement.
-   - Applies associated `CREATE INDEX`, `GRANT`, and `COMMENT`
-     statements.
+   - Applies associated `GRANT` and `COMMENT` statements.
 6. Reconciles grants on tables that already exist.
 
 The command is **idempotent** — running it multiple times produces the

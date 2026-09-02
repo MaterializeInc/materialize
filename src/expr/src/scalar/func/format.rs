@@ -17,7 +17,6 @@ use std::fmt;
 
 use aho_corasick::AhoCorasickBuilder;
 use enum_iterator::Sequence;
-use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
@@ -415,8 +414,7 @@ impl DateTimeToken {
     Clone,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
 enum OrdinalMode {
     /// No ordinal suffix.
@@ -466,8 +464,7 @@ impl OrdinalMode {
     Clone,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
 enum WordCaps {
     /// All of the letters should be capitalized.
@@ -491,8 +488,7 @@ enum WordCaps {
     Clone,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
 enum DateTimeField {
     Hour12,
@@ -543,8 +539,7 @@ enum DateTimeField {
     Ord,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
 enum DateTimeFormatNode {
     /// A field whose value will be computed from the input timestamp.
@@ -847,8 +842,7 @@ impl DateTimeFormatNode {
     Ord,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
 pub struct DateTimeFormat(Vec<DateTimeFormatNode>);
 

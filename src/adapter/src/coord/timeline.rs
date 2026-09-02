@@ -143,15 +143,7 @@ impl Coordinator {
         timestamp: Timestamp,
     ) -> impl Future<Output = ()> + Send + 'static {
         let now = self.now().into();
-
-        let upper_bound = upper_bound(&now);
-        if timestamp > upper_bound {
-            error!(
-                %now,
-                "Setting local read timestamp to {timestamp}, which is more than \
-                the desired upper bound {upper_bound}."
-            );
-        }
+        check_runaway_write_ts(&now, timestamp);
 
         let oracle = self.get_local_timestamp_oracle();
 
@@ -279,8 +271,38 @@ impl Coordinator {
         became_empty
     }
 
+    /// Downgrades the [`EpochMilliseconds`](Timeline::EpochMilliseconds) timeline's read holds
+    /// to `read_ts`.
+    ///
+    /// `read_ts` must not exceed the local oracle's read frontier, i.e. it must come from the
+    /// oracle's `read_ts()` or from a write that was already applied with `apply_write`.
+    /// Downgrading past the oracle's read frontier could let compaction pass timestamps the
+    /// oracle can still serve reads at.
+    pub(crate) fn downgrade_local_read_holds(&mut self, read_ts: Timestamp) {
+        let TimelineState { read_holds, .. } = self
+            .global_timelines
+            .get_mut(&Timeline::EpochMilliseconds)
+            .expect("no realtime timeline");
+        read_holds.downgrade(read_ts);
+    }
+
+    /// Advances all timelines other than [`EpochMilliseconds`](Timeline::EpochMilliseconds) to
+    /// their objects' uppers and downgrades their read holds accordingly.
+    ///
+    /// The `EpochMilliseconds` oracle is advanced by group commits, so it is not touched here.
+    /// Its read holds are downgraded separately via [`Self::downgrade_local_read_holds`].
     #[instrument(level = "debug")]
-    pub(crate) async fn advance_timelines(&mut self) {
+    pub(crate) async fn advance_custom_timelines(&mut self) {
+        // Common case: only the EpochMilliseconds timeline exists, nothing to do.
+        if !self
+            .global_timelines
+            .keys()
+            .any(|timeline| *timeline != Timeline::EpochMilliseconds)
+        {
+            return;
+        }
+
+        // Take the map so we can call `&self` methods while mutating the timeline states.
         let global_timelines = std::mem::take(&mut self.global_timelines);
         for (
             timeline,
@@ -290,9 +312,12 @@ impl Coordinator {
             },
         ) in global_timelines
         {
-            // Timeline::EpochMilliseconds is advanced in group commits and doesn't need to be
-            // manually advanced here.
-            if timeline != Timeline::EpochMilliseconds && !self.read_only_controllers {
+            if timeline == Timeline::EpochMilliseconds {
+                self.global_timelines
+                    .insert(timeline, TimelineState { oracle, read_holds });
+                continue;
+            }
+            if !self.read_only_controllers {
                 // For non realtime sources, we define now as the largest timestamp, not in
                 // advance of any object's upper. This is the largest timestamp that is closed
                 // to writes.
@@ -313,7 +338,7 @@ impl Coordinator {
                         now,
                     );
                 }
-            };
+            }
             let read_ts = oracle.read_ts().await;
             read_holds.downgrade(read_ts);
             self.global_timelines
@@ -322,13 +347,40 @@ impl Coordinator {
     }
 }
 
-/// Convenience function for calculating the current upper bound that we want to
-/// prevent the global timestamp from exceeding.
-fn upper_bound(now: &mz_repr::Timestamp) -> mz_repr::Timestamp {
+/// The highest timestamp the `EpochMilliseconds` write timeline may be advanced to
+/// while the wall clock reads `now`.
+///
+/// A write above this is a runaway: the oracle is monotone and durable, so every later
+/// write and strict-serializable read on the timeline blocks until the wall clock catches
+/// up, across restarts. Group commit stays under it by allocating from the oracle, which
+/// clamps to the clock. A caller that chooses its own write timestamp has to be checked
+/// against it, see `GroupCommitter::commit_timestamped`.
+pub(crate) fn write_ts_upper_bound(now: &mz_repr::Timestamp) -> mz_repr::Timestamp {
     const TIMESTAMP_INTERVAL_MS: u64 = 5000;
     const TIMESTAMP_INTERVAL_UPPER_BOUND: u64 = 2;
 
     now.saturating_add(TIMESTAMP_INTERVAL_MS * TIMESTAMP_INTERVAL_UPPER_BOUND)
+}
+
+/// Reports a write timestamp that is further ahead of `now` than
+/// [`write_ts_upper_bound`] allows, the signal that the `EpochMilliseconds` timeline has
+/// run away (e.g. after a wall-clock regression, or from a durably poisoned oracle).
+///
+/// This is a detector, not a guard: the timestamp has already been chosen, and every
+/// caller that can still refuse one checks the bound itself. It logs rather than fails,
+/// because every way left to reach it is a condition this process inherited. A durable
+/// runaway is re-applied to the oracle on every boot, and a backwards clock step is what
+/// the group committer's throttle waits out, so failing here would turn a stalled
+/// timeline into a crash loop.
+pub(crate) fn check_runaway_write_ts(now: &mz_repr::Timestamp, timestamp: mz_repr::Timestamp) {
+    let upper_bound = write_ts_upper_bound(now);
+    if timestamp > upper_bound {
+        error!(
+            %now,
+            "setting local write timestamp to {timestamp}, which is more than \
+            the desired upper bound {upper_bound}"
+        );
+    }
 }
 
 /// Return the set of ids in a timedomain and verify timeline correctness.

@@ -12,6 +12,38 @@ mode cockroach
 # Start from a pristine server
 reset-server
 
+# --- mz_internal.mz_comments lockdown -----------------------------------------
+
+# Lock down: 4 columns, canonical order, types, and nullability.
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_comments' AND s.name = 'mz_internal'
+ORDER BY c.position
+----
+id  text  false
+object_type  text  false
+object_sub_id  integer  true
+comment  text  false
+
+# mz_comments must continue to be addressable by its persistent OID.
+query I
+SELECT oid FROM mz_objects
+WHERE name = 'mz_comments'
+  AND schema_id IN (SELECT id FROM mz_schemas WHERE name = 'mz_internal')
+----
+16766
+
+# Locks down the BuiltinTable → BuiltinMaterializedView conversion:
+# information_schema must report mz_comments as a MATERIALIZED VIEW.
+query T
+SELECT table_type FROM information_schema.tables
+WHERE table_schema = 'mz_internal' AND table_name = 'mz_comments'
+----
+MATERIALIZED VIEW
+
 statement ok
 CREATE TABLE a ( x int8, y text, z jsonb );
 
@@ -321,6 +353,19 @@ SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id
 cluster NULL careful_now
 cluster-replica NULL second_replicator
 
+# ClusterReplica (ClusterReplicaId): the MV picks `replica_id` and drops
+# `cluster_id`. That must match what `mz_cluster_replicas.id` holds.
+query T
+SELECT id = (
+    SELECT id FROM mz_cluster_replicas
+    WHERE name = 'r2'
+      AND cluster_id = (SELECT id FROM mz_clusters WHERE name = 'comment_cluster')
+)
+FROM mz_internal.mz_comments
+WHERE comment = 'second_replicator'
+----
+true
+
 query IT
 SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
@@ -534,6 +579,16 @@ SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments WHERE id
 database NULL this_is_my_db
 schema NULL this_is_my_schema
 
+# Schema (ResolvedSchema): the MV drops the `database` part and keeps the
+# inner SchemaSpecifier::Id(SchemaId). That must match what `mz_schemas.id`
+# holds.
+query T
+SELECT id = (SELECT id FROM mz_schemas WHERE name = 'comment_on_schema')
+FROM mz_internal.mz_comments
+WHERE comment = 'this_is_my_schema'
+----
+true
+
 query IT
 SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
@@ -697,3 +752,39 @@ DROP TABLE public.pg_namespace
 
 statement ok
 DROP TABLE has_comment
+
+# --- mz_comments NOT NULL invariants ------------------------------------------
+
+statement ok
+CREATE TABLE not_null_t (x int)
+
+statement ok
+COMMENT ON TABLE not_null_t IS 'not_null_check'
+
+query I
+SELECT count(*)
+FROM mz_internal.mz_comments
+WHERE id IS NULL OR object_type IS NULL OR comment IS NULL
+----
+0
+
+statement ok
+DROP TABLE not_null_t
+
+# --- mz_comments PUBLIC SELECT permission preserved ---------------------------
+
+# A non-superuser role can SELECT from mz_comments. (PUBLIC_SELECT access must
+# survive the conversion to BuiltinMaterializedView.)
+statement ok
+CREATE ROLE r_reader LOGIN
+
+simple conn=mz_system,user=mz_system
+GRANT r_reader TO materialize
+----
+COMPLETE 0
+
+simple conn=reader,user=r_reader
+SELECT count(*) >= 0 FROM mz_internal.mz_comments
+----
+t
+COMPLETE 1

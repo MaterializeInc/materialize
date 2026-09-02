@@ -100,7 +100,7 @@ impl Coordinator {
     ) -> Result<SecretStage, AdapterError> {
         // No dependencies.
         let validity = PlanValidity::new(
-            self.catalog().transient_revision(),
+            self.catalog(),
             BTreeSet::new(),
             None,
             None,
@@ -150,8 +150,21 @@ impl Coordinator {
             session,
             catalog_state: self.catalog().state(),
         };
-        style.prep_scalar_expr(secret_as)?;
-        let evaled = secret_as.eval(&[], &temp_storage)?;
+        // Preparing and evaluating the secret expression can fail with an error
+        // that embeds the value being evaluated (e.g. a `bytea` parse error quotes
+        // its input). That value is the secret itself, so we discard the underlying
+        // error and surface a vague message, to avoid including the secret in the
+        // statement log (or some other log file somewhere). We wrap both calls,
+        // rather than just the ones that leak today, so a future error added to
+        // either is covered by default.
+        let secret_eval_err =
+            || AdapterError::Unstructured(anyhow::anyhow!("could not evaluate secret value"));
+        style
+            .prep_scalar_expr(secret_as)
+            .map_err(|_| secret_eval_err())?;
+        let evaled = secret_as
+            .eval(&[], &temp_storage)
+            .map_err(|_| secret_eval_err())?;
 
         if evaled == Datum::Null {
             coord_bail!("secret value can not be null");
@@ -177,10 +190,9 @@ impl Coordinator {
         // `SecretsReader::read_string` will panic if the secret contains
         // invalid UTF-8.
         if std::str::from_utf8(payload).is_err() {
-            // Intentionally produce a vague error message (rather than
-            // including the invalid bytes, for example), to avoid including
-            // secret material in the error message, which might end up in a log
-            // file somewhere.
+            // Similarly to above, intentionally produce a vague error message
+            // (rather than  including the invalid bytes, for example), to avoid
+            // including secret material in the error message.
             coord_bail!("secret value must be valid UTF-8");
         }
 
@@ -262,7 +274,7 @@ impl Coordinator {
         // delete of the secret, the persisted secret is in an unknown state (but will be cleaned up
         // if needed at next envd boot), but we will still return success.
         let validity = PlanValidity::new(
-            self.catalog().transient_revision(),
+            self.catalog(),
             BTreeSet::new(),
             None,
             None,
@@ -304,13 +316,22 @@ impl Coordinator {
         // secret is unknown, and if the rotate ensure'd after the delete (i.e.,
         // the secret is persisted to the secret store but not the catalog), the
         // secret will be cleaned up during next envd boot.
+        //
+        // ROTATE KEYS is a read-modify-write of the connection's `create_sql`
+        // (see `rotate_keys_ensure` below: it re-reads the entry, rewrites the
+        // PUBLIC KEY options, and writes the result back via `Op::UpdateItem`).
+        // Arm the `create_sql`-hash check so a concurrent `ALTER CONNECTION SET`
+        // committing inside the off-thread window fails ROTATE with
+        // `ConcurrentDependencyMutation` instead of being silently clobbered by
+        // the blind write at the end.
         let validity = PlanValidity::new(
-            self.catalog().transient_revision(),
+            self.catalog(),
             BTreeSet::from_iter(std::iter::once(id)),
             None,
             None,
             ctx.session().role_metadata().clone(),
-        );
+        )
+        .with_dependency_hash_check(self.catalog());
         let stage = SecretStage::RotateKeysEnsure(RotateKeysSecretEnsure { validity, id });
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
@@ -376,6 +397,13 @@ impl Coordinator {
                     name: entry.name,
                     to_item,
                 }];
+
+                // Pause between the secret-store write and the catalog write so a concurrent ALTER
+                // CONNECTION SET can commit. Runs in the off-thread ensure task, not the
+                // coordinator main loop, so the pause won't freeze the coordinator (which would
+                // block that SET).
+                fail::fail_point!("rotate_keys_between_ensure_and_finish");
+
                 let stage = SecretStage::RotateKeysFinish(RotateKeysSecretFinish { validity, ops });
                 Ok(Box::new(stage))
             }

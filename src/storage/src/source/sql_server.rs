@@ -32,7 +32,7 @@ use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::core::Partition;
 use timely::dataflow::operators::vec::{Map, ToStream};
 use timely::dataflow::{Scope, StreamVec};
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::RawSourceCreationConfig;
@@ -56,6 +56,20 @@ struct SourceOutputInfo {
     partition_index: u64,
     /// The basis for the resumption LSN when snapshotting.
     initial_lsn: Lsn,
+}
+
+impl SourceOutputInfo {
+    /// The [`Lsn`] this output resumes reading from, or the provided fallback [`Lsn`].
+    ///
+    /// Panics if `resume_upper` is empty, which would mean the output has no
+    /// resumption point at all.
+    fn resume_lsn_or(&self, fallback: Lsn) -> Lsn {
+        match self.resume_upper.as_option() {
+            Some(lsn) if *lsn != Lsn::minimum() => *lsn,
+            Some(_) => fallback,
+            None => panic!("resume_upper has at least one value"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, thiserror::Error)]

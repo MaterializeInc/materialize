@@ -14,9 +14,12 @@
 //!
 //! 1. **External references** — if the database is not in
 //!    `in_project_databases`, emit the name verbatim.
-//! 2. **Dirty schemas** — if `(database, schema)` is in `dirty_schemas`,
-//!    rewrite the database component to `<database>__<profile_name>`.
-//!    Otherwise emit `<database>.<schema>.<object>` (production reference).
+//! 2. **Overlaid objects** — if the fully qualified object is in
+//!    `overlay_objects`, rewrite the database component to
+//!    `<database>__<profile_name>`. Otherwise emit
+//!    `<database>.<schema>.<object>` (production reference). Routing by object,
+//!    not by schema, keeps a non-overlaid object that happens to share a schema
+//!    with an overlaid one pointing at production, where it actually exists.
 //!
 //! Unqualified / partially qualified names are fully qualified using the
 //! transformer's `fqn` context before the rule is applied.
@@ -29,8 +32,8 @@ use std::collections::BTreeSet;
 
 use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 
-use crate::project::SchemaQualifier;
 use crate::project::ir::compiled::FullyQualifiedName;
+use crate::project::ir::object_id::ObjectId;
 use crate::project::resolve::normalize::transformers::{ClusterTransformer, NameTransformer};
 use mz_repr::namespaces::is_system_schema;
 
@@ -40,8 +43,8 @@ use mz_repr::namespaces::is_system_schema;
 ///
 /// 1. If the referenced database is not in `in_project_databases`, leave
 ///    the name verbatim (external dependency).
-/// 2. If `(database, schema)` is in `dirty_schemas`, rewrite the database
-///    component to `<database>__<profile_name>`. Otherwise emit
+/// 2. If the fully qualified object is in `overlay_objects`, rewrite the
+///    database component to `<database>__<profile_name>`. Otherwise emit
 ///    `<database>.<schema>.<object>` (production reference).
 ///
 /// Unqualified / partially qualified names are fully qualified using
@@ -50,7 +53,7 @@ pub(crate) struct OverlayTransformer<'a> {
     pub(crate) fqn: &'a FullyQualifiedName,
     pub(crate) profile_name: &'a str,
     pub(crate) in_project_databases: &'a BTreeSet<String>,
-    pub(crate) dirty_schemas: &'a BTreeSet<SchemaQualifier>,
+    pub(crate) overlay_objects: &'a BTreeSet<ObjectId>,
     pub(crate) target_cluster: &'a str,
 }
 
@@ -98,9 +101,16 @@ impl<'a> NameTransformer for OverlayTransformer<'a> {
             return UnresolvedItemName(vec![database, schema, object]);
         }
 
-        // Step 2: dirty check — rewrite to overlay db if dirty, else prod.
-        let qualifier = SchemaQualifier::new(db_str.clone(), schema.to_string());
-        let final_db_str = if self.dirty_schemas.contains(&qualifier) {
+        // Step 2: object check — rewrite to the overlay db only when the
+        // referenced object is itself overlaid. A non-overlaid object that
+        // shares a schema with an overlaid one stays at its production address,
+        // which is where it actually exists.
+        let referenced = ObjectId::new(
+            database.as_str().to_string(),
+            schema.as_str().to_string(),
+            object.as_str().to_string(),
+        );
+        let final_db_str = if self.overlay_objects.contains(&referenced) {
             format!("{}__{}", db_str, self.profile_name)
         } else {
             db_str
@@ -149,15 +159,19 @@ mod tests {
         fqn: &'a FullyQualifiedName,
         profile_name: &'a str,
         in_project_databases: &'a BTreeSet<String>,
-        dirty_schemas: &'a BTreeSet<SchemaQualifier>,
+        overlay_objects: &'a BTreeSet<ObjectId>,
     ) -> OverlayTransformer<'a> {
         OverlayTransformer {
             fqn,
             profile_name,
             in_project_databases,
-            dirty_schemas,
+            overlay_objects,
             target_cluster: "quickstart_dev",
         }
+    }
+
+    fn obj(database: &str, schema: &str, object: &str) -> ObjectId {
+        ObjectId::new(database.to_string(), schema.to_string(), object.to_string())
     }
 
     // External reference: database not in in_project_databases → verbatim.
@@ -165,8 +179,8 @@ mod tests {
     fn external_reference_unchanged() {
         let fqn = make_fqn("mydb", "public", "ctx");
         let in_project = BTreeSet::from(["mydb".to_string()]);
-        let dirty: BTreeSet<SchemaQualifier> = BTreeSet::new();
-        let t = make_transformer(&fqn, "alice", &in_project, &dirty);
+        let overlay: BTreeSet<ObjectId> = BTreeSet::new();
+        let t = make_transformer(&fqn, "alice", &in_project, &overlay);
 
         let input = make_name(&["external_db", "analytics", "events"]);
         let result = t.transform_name(&input);
@@ -181,8 +195,8 @@ mod tests {
     fn in_project_clean_schema_routes_to_prod() {
         let fqn = make_fqn("mydb", "public", "ctx");
         let in_project = BTreeSet::from(["mydb".to_string()]);
-        let dirty: BTreeSet<SchemaQualifier> = BTreeSet::new();
-        let t = make_transformer(&fqn, "alice", &in_project, &dirty);
+        let overlay: BTreeSet<ObjectId> = BTreeSet::new();
+        let t = make_transformer(&fqn, "alice", &in_project, &overlay);
 
         let input = make_name(&["mydb", "public", "orders"]);
         let result = t.transform_name(&input);
@@ -192,16 +206,13 @@ mod tests {
         assert_eq!(result.0[2].as_str(), "orders");
     }
 
-    // In-project DB, schema IS dirty → db becomes db__profile.
+    // In-project DB, object IS overlaid → db becomes db__profile.
     #[mz_ore::test]
-    fn in_project_dirty_schema_routes_to_overlay() {
+    fn in_project_overlaid_object_routes_to_overlay() {
         let fqn = make_fqn("mydb", "public", "ctx");
         let in_project = BTreeSet::from(["mydb".to_string()]);
-        let dirty = BTreeSet::from([SchemaQualifier::new(
-            "mydb".to_string(),
-            "public".to_string(),
-        )]);
-        let t = make_transformer(&fqn, "alice", &in_project, &dirty);
+        let overlay = BTreeSet::from([obj("mydb", "public", "orders")]);
+        let t = make_transformer(&fqn, "alice", &in_project, &overlay);
 
         let input = make_name(&["mydb", "public", "orders"]);
         let result = t.transform_name(&input);
@@ -211,39 +222,32 @@ mod tests {
         assert_eq!(result.0[2].as_str(), "orders");
     }
 
-    // Sparse overlay: in-project DB that has SOME schema dirty, but this
-    // reference targets a non-dirty schema → routes to prod (not overlay).
+    // A non-overlaid object that shares a schema with an overlaid one routes
+    // to production, not the overlay (the overlay never creates it).
     #[mz_ore::test]
-    fn in_project_dirty_db_with_non_dirty_schema() {
-        let fqn = make_fqn("mydb", "public", "ctx");
+    fn non_overlaid_object_in_overlaid_schema_routes_to_prod() {
+        let fqn = make_fqn("mydb", "reports", "summary");
         let in_project = BTreeSet::from(["mydb".to_string()]);
-        // "mydb.analytics" is dirty, but NOT "mydb.public"
-        let dirty = BTreeSet::from([SchemaQualifier::new(
-            "mydb".to_string(),
-            "analytics".to_string(),
-        )]);
-        let t = make_transformer(&fqn, "alice", &in_project, &dirty);
+        // `summary` is overlaid; `legacy_table` (same schema) is not.
+        let overlay = BTreeSet::from([obj("mydb", "reports", "summary")]);
+        let t = make_transformer(&fqn, "alice", &in_project, &overlay);
 
-        let input = make_name(&["mydb", "public", "orders"]);
+        let input = make_name(&["mydb", "reports", "legacy_table"]);
         let result = t.transform_name(&input);
 
-        // "public" is not dirty → production reference, no overlay rewrite
         assert_eq!(result.0[0].as_str(), "mydb");
-        assert_eq!(result.0[1].as_str(), "public");
-        assert_eq!(result.0[2].as_str(), "orders");
+        assert_eq!(result.0[1].as_str(), "reports");
+        assert_eq!(result.0[2].as_str(), "legacy_table");
     }
 
     // Unqualified (1-part) name: fqn database + schema used, then
-    // routed to overlay if schema is dirty.
+    // routed to overlay if the resolved object is overlaid.
     #[mz_ore::test]
     fn unqualified_name_resolved_via_fqn_then_routed_to_overlay() {
         let fqn = make_fqn("mydb", "public", "ctx");
         let in_project = BTreeSet::from(["mydb".to_string()]);
-        let dirty = BTreeSet::from([SchemaQualifier::new(
-            "mydb".to_string(),
-            "public".to_string(),
-        )]);
-        let t = make_transformer(&fqn, "alice", &in_project, &dirty);
+        let overlay = BTreeSet::from([obj("mydb", "public", "orders")]);
+        let t = make_transformer(&fqn, "alice", &in_project, &overlay);
 
         // 1-part: just "orders"
         let input = make_name(&["orders"]);
@@ -259,8 +263,8 @@ mod tests {
     fn transform_cluster_rewrites_to_target() {
         let fqn = make_fqn("mydb", "public", "ctx");
         let in_project = BTreeSet::from(["mydb".to_string()]);
-        let dirty: BTreeSet<SchemaQualifier> = BTreeSet::new();
-        let t = make_transformer(&fqn, "alice", &in_project, &dirty);
+        let overlay: BTreeSet<ObjectId> = BTreeSet::new();
+        let t = make_transformer(&fqn, "alice", &in_project, &overlay);
 
         let input = Ident::new("prod").expect("valid identifier");
         let out = t.transform_cluster(&input);
@@ -272,16 +276,13 @@ mod tests {
     }
 
     // Schema-qualified (2-part) name: fqn database prepended, then
-    // routed to overlay if the explicit schema is dirty.
+    // routed to overlay if the resolved object is overlaid.
     #[mz_ore::test]
     fn schema_qualified_name_resolved_via_fqn_then_routed_to_overlay() {
         let fqn = make_fqn("mydb", "public", "ctx");
         let in_project = BTreeSet::from(["mydb".to_string()]);
-        let dirty = BTreeSet::from([SchemaQualifier::new(
-            "mydb".to_string(),
-            "analytics".to_string(),
-        )]);
-        let t = make_transformer(&fqn, "alice", &in_project, &dirty);
+        let overlay = BTreeSet::from([obj("mydb", "analytics", "summary")]);
+        let t = make_transformer(&fqn, "alice", &in_project, &overlay);
 
         // 2-part: "analytics.summary" — fqn database prepended
         let input = make_name(&["analytics", "summary"]);

@@ -1,0 +1,51 @@
+# libFuzzer dictionary for the strconv_parse_timestamp target, resolved by
+# `dict_for` in test/cargo-fuzz/mzcompose.py.
+#
+# The interesting inputs sit on the two boundaries of `CheckedTimestamp`'s
+# accepted range, and neither is reachable by mutation alone. `HIGH_DATE` is the
+# single date `262142-12-31`, and reaching it means mutating a 6-digit ASCII
+# integer onto one exact value while a late time-of-day is already in place.
+# There is no coverage gradient to climb: the range check yields one edge for
+# "accepted" and one for "rejected", both saturated within the first few
+# executions. Spelling the boundary dates as tokens is what puts the arithmetic
+# just past them within reach.
+#
+# Measured on the un-parameterized version of this target, 13M executions
+# reached `parse_timestamp` successfully 395,498 times and `round_to_precision`
+# returned `Err` zero times, i.e. neither end of the date range was ever
+# approached.
+
+# The range boundaries: `HIGH_DATE` is exactly `chrono::NaiveDate::MAX`, and the
+# low bound is PostgreSQL's 4713 BC.
+"262142-12-31"
+"262143-01-01"
+"4713-12-31"
+"4714-01-01"
+" BC"
+
+# Times that round *up* across the day boundary, one per precision. The 7th
+# fractional digit drives the microsecond nudge, and it is also what makes the
+# renderer carry a full second into the seconds field. The shorter forms drive
+# the rounding branch that only a precision below 6 reaches, where a single `.5`
+# is enough to round up a whole second.
+"23:59:59.9999995"
+"23:59:59.99999"
+"23:59:59.9995"
+"23:59:59.5"
+
+# Leap seconds. chrono stores a parsed `:60` as a sub-second of one second or
+# more, a representation that is unconstructable at any second-of-minute other
+# than `:59`, so anything rebuilding a `NaiveTime` from its parts trips on it.
+":60"
+"23:59:60"
+"00:00:60"
+
+# Separators and forms the parser keys off, so a mutated token still lands in a
+# plausible position.
+"-"
+":"
+"."
+" "
+"T"
+"epoch"
+"infinity"

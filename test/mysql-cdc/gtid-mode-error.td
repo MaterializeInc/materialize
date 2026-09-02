@@ -56,7 +56,12 @@ SET GLOBAL enforce_gtid_consistency = WARN;
 
 # Force the source to reconnect by cycling the cluster replication factor,
 # which causes the replication reader to restart and re-validate MySQL settings.
+# The controller drops the replica asynchronously and would otherwise coalesce
+# this 0->1 cycle into a no-op (the reader would keep running and never
+# re-validate); wait for the drop to land so RF=1 starts a fresh reader.
 > ALTER CLUSTER gtid_cluster SET (REPLICATION FACTOR 0)
+> SELECT count(*) FROM mz_cluster_replicas cr JOIN mz_clusters c ON c.id = cr.cluster_id WHERE c.name = 'gtid_cluster'
+0
 > ALTER CLUSTER gtid_cluster SET (REPLICATION FACTOR 1)
 
 # The source should now be stalled due to the invalid enforce_gtid_consistency setting.

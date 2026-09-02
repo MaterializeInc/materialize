@@ -51,9 +51,9 @@ use mz_repr::{
     SqlColumnType, SqlRelationType, SqlScalarType, Timestamp, VersionedRelationDesc,
 };
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
-    RawDataType, SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName,
-    Value, WithOptionValue,
+    AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, CreateSinkOption,
+    CreateSinkOptionName, QualifiedReplica, RawDataType, SelectStatement,
+    TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::AwsConnection;
@@ -118,15 +118,15 @@ pub use side_effecting_func::SideEffectingFunc;
 pub use statement::ddl::{
     AlterSourceAddSubsourceOptionExtracted, MySqlConfigOptionExtracted, PgConfigOptionExtracted,
     PlannedAlterRoleOption, PlannedRoleAttributes, PlannedRoleVariable,
-    SqlServerConfigOptionExtracted,
+    SqlServerConfigOptionExtracted, validate_metric_sink_desc, validate_metric_sink_prefix,
 };
 pub use statement::{
     StatementClassification, StatementContext, StatementDesc, describe, plan, plan_copy_from,
     resolve_cluster_for_materialized_view,
 };
+pub use with_options::TryFromValue;
 
 use self::statement::ddl::ClusterAlterOptionExtracted;
-use self::with_options::TryFromValue;
 
 /// Instructions for executing a SQL query.
 #[derive(Debug, EnumKind)]
@@ -147,6 +147,7 @@ pub enum Plan {
     CreateMaterializedView(CreateMaterializedViewPlan),
     CreateNetworkPolicy(CreateNetworkPolicyPlan),
     CreateIndex(CreateIndexPlan),
+    CreateMetricSink(CreateMetricSinkPlan),
     CreateType(CreateTypePlan),
     Comment(CommentPlan),
     DiscardTemp,
@@ -280,6 +281,7 @@ impl Plan {
             StatementKind::CreateSchema => &[PlanKind::CreateSchema],
             StatementKind::CreateSecret => &[PlanKind::CreateSecret],
             StatementKind::CreateSink => &[PlanKind::CreateSink],
+            StatementKind::CreateMetricSink => &[PlanKind::CreateMetricSink],
             StatementKind::CreateSource | StatementKind::CreateSubsource => {
                 &[PlanKind::CreateSource]
             }
@@ -349,6 +351,7 @@ impl Plan {
             Plan::CreateView(_) => "create view",
             Plan::CreateMaterializedView(_) => "create materialized view",
             Plan::CreateIndex(_) => "create index",
+            Plan::CreateMetricSink(_) => "create metric sink",
             Plan::CreateType(_) => "create type",
             Plan::CreateNetworkPolicy(_) => "create network policy",
             Plan::Comment(_) => "comment",
@@ -360,6 +363,7 @@ impl Plan {
                 ObjectType::MaterializedView => "drop materialized view",
                 ObjectType::Source => "drop source",
                 ObjectType::Sink => "drop sink",
+                ObjectType::MetricSink => "drop metric sink",
                 ObjectType::Index => "drop index",
                 ObjectType::Type => "drop type",
                 ObjectType::Role => "drop roles",
@@ -400,6 +404,7 @@ impl Plan {
                 ObjectType::MaterializedView => "alter materialized view",
                 ObjectType::Source => "alter source",
                 ObjectType::Sink => "alter sink",
+                ObjectType::MetricSink => "alter metric sink",
                 ObjectType::Index => "alter index",
                 ObjectType::Type => "alter type",
                 ObjectType::Role => "alter role",
@@ -435,6 +440,7 @@ impl Plan {
                 ObjectType::MaterializedView => "alter materialized view owner",
                 ObjectType::Source => "alter source owner",
                 ObjectType::Sink => "alter sink owner",
+                ObjectType::MetricSink => "alter metric sink owner",
                 ObjectType::Index => "alter index owner",
                 ObjectType::Type => "alter type owner",
                 ObjectType::Role => "alter role owner",
@@ -566,6 +572,7 @@ pub struct CreateClusterPlan {
     pub name: String,
     pub variant: CreateClusterVariant,
     pub workload_class: Option<String>,
+    pub if_not_exists: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -587,6 +594,9 @@ pub struct CreateClusterManagedPlan {
     pub compute: ComputeReplicaConfig,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
     pub schedule: ClusterSchedule,
+    /// The user-configured autoscaling policy, or `None` if autoscaling is
+    /// disabled for the cluster.
+    pub auto_scaling_strategy: Option<AutoScalingStrategy>,
 }
 
 #[derive(Debug)]
@@ -594,6 +604,7 @@ pub struct CreateClusterReplicaPlan {
     pub cluster_id: ClusterId,
     pub name: String,
     pub config: ReplicaConfig,
+    pub if_not_exists: bool,
 }
 
 /// Configuration of introspection for a cluster replica.
@@ -618,6 +629,10 @@ pub struct ComputeReplicaIntrospectionConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ComputeReplicaConfig {
     pub introspection: Option<ComputeReplicaIntrospectionConfig>,
+    /// Whether arrangements on this replica request dictionary compression. The
+    /// gating feature flag decides whether a replica honors this value at
+    /// creation time.
+    pub arrangement_compression: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -651,6 +666,25 @@ impl Default for ClusterSchedule {
         // (Has to be consistent with `impl Default for ClusterScheduleOptionValue`.)
         ClusterSchedule::Manual
     }
+}
+
+/// The user-configured autoscaling policy of a managed cluster.
+///
+/// Extensible: future strategies are added as additional optional sub-policies,
+/// so the block as a whole can grow without changing existing ones.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+pub struct AutoScalingStrategy {
+    pub on_hydration: Option<OnHydration>,
+}
+
+/// The `ON HYDRATION` autoscaling sub-policy: while objects are un-hydrated, run
+/// an extra replica at `hydration_size` to accelerate hydration.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+pub struct OnHydration {
+    pub hydration_size: String,
+    /// How long the burst replica lingers after the steady-state replicas
+    /// hydrate. `None` falls back to the system default at the controller.
+    pub linger_duration: Option<Duration>,
 }
 
 #[derive(Debug)]
@@ -779,6 +813,13 @@ pub struct AlterNetworkPolicyPlan {
 pub struct CreateIndexPlan {
     pub name: QualifiedItemName,
     pub index: Index,
+    pub if_not_exists: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateMetricSinkPlan {
+    pub name: QualifiedItemName,
+    pub metric_sink: MetricSink,
     pub if_not_exists: bool,
 }
 
@@ -1263,6 +1304,27 @@ pub struct AlterSinkPlan {
     pub sink: Sink,
     pub with_snapshot: bool,
     pub in_cluster: ClusterId,
+    /// The with-option edit requested by the `ALTER SINK`. Sequencing must
+    /// re-apply it to the catalog's `create_sql` (via
+    /// [`apply_sink_option_edits`]) because the `create_sql` may have changed
+    /// since planning, for example due to a schema swap.
+    pub set_options: Vec<CreateSinkOption<Aug>>,
+    pub reset_options: Vec<CreateSinkOptionName>,
+}
+
+/// Applies the option edits of an `ALTER SINK ... SET/RESET (...)` to the
+/// with-options of a `CREATE SINK` statement.
+pub fn apply_sink_option_edits<T: mz_sql_parser::ast::AstInfo>(
+    with_options: &mut Vec<CreateSinkOption<T>>,
+    set_options: &[CreateSinkOption<T>],
+    reset_options: &[CreateSinkOptionName],
+) where
+    CreateSinkOption<T>: Clone,
+{
+    with_options.retain(|o| {
+        set_options.iter().all(|s| s.name != o.name) && !reset_options.contains(&o.name)
+    });
+    with_options.extend(set_options.iter().cloned());
 }
 
 #[derive(Debug, Clone)]
@@ -1816,7 +1878,7 @@ impl TryFrom<&str> for NetworkPolicyRuleDirection {
 pub struct PolicyAddress(pub IpNet);
 impl std::fmt::Display for PolicyAddress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", &self.0.to_string())
+        write!(f, "{}", self.0)
     }
 }
 impl From<String> for PolicyAddress {
@@ -1838,7 +1900,7 @@ impl Serialize for PolicyAddress {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&format!("{}", &self.0))
+        serializer.serialize_str(&format!("{}", self.0))
     }
 }
 
@@ -1928,6 +1990,18 @@ pub struct Index {
     pub keys: Vec<mz_expr::MirScalarExpr>,
     pub compaction_window: Option<CompactionWindow>,
     pub cluster_id: ClusterId,
+}
+
+#[derive(Clone, Debug)]
+pub struct MetricSink {
+    /// Parse-able SQL that defines this metric sink.
+    pub create_sql: String,
+    /// Collection we read into this metric sink.
+    pub from: GlobalId,
+    pub cluster_id: ClusterId,
+    /// Prepended to every metric name this sink publishes, so that the families it registers
+    /// cannot collide with another sink's or with the platform's own.
+    pub prefix: String,
 }
 
 #[derive(Clone, Debug)]
@@ -2057,12 +2131,16 @@ pub struct PlanClusterOption {
     pub availability_zones: AlterOptionParameter<Vec<String>>,
     pub introspection_debugging: AlterOptionParameter<bool>,
     pub introspection_interval: AlterOptionParameter<OptionalDuration>,
+    pub arrangement_compression: AlterOptionParameter<bool>,
     pub managed: AlterOptionParameter<bool>,
     pub replicas: AlterOptionParameter<Vec<(String, ReplicaConfig)>>,
     pub replication_factor: AlterOptionParameter<u32>,
     pub size: AlterOptionParameter,
     pub schedule: AlterOptionParameter<ClusterSchedule>,
     pub workload_class: AlterOptionParameter<Option<String>>,
+    /// The autoscaling policy block. `Set(None)` disables autoscaling (an empty
+    /// `AUTO SCALING STRATEGY = ()` or `RESET (AUTO SCALING STRATEGY)`).
+    pub auto_scaling_strategy: AlterOptionParameter<Option<AutoScalingStrategy>>,
 }
 
 impl Default for PlanClusterOption {
@@ -2071,12 +2149,14 @@ impl Default for PlanClusterOption {
             availability_zones: AlterOptionParameter::Unchanged,
             introspection_debugging: AlterOptionParameter::Unchanged,
             introspection_interval: AlterOptionParameter::Unchanged,
+            arrangement_compression: AlterOptionParameter::Unchanged,
             managed: AlterOptionParameter::Unchanged,
             replicas: AlterOptionParameter::Unchanged,
             replication_factor: AlterOptionParameter::Unchanged,
             size: AlterOptionParameter::Unchanged,
             schedule: AlterOptionParameter::Unchanged,
             workload_class: AlterOptionParameter::Unchanged,
+            auto_scaling_strategy: AlterOptionParameter::Unchanged,
         }
     }
 }
@@ -2086,21 +2166,29 @@ pub enum AlterClusterPlanStrategy {
     None,
     For(Duration),
     UntilReady {
-        on_timeout: OnTimeoutAction,
+        /// `None` when the `ALTER` omits `ON TIMEOUT`. The executing path
+        /// supplies the implicit action.
+        on_timeout: Option<OnTimeoutAction>,
         timeout: Duration,
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Serialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord
+)]
 pub enum OnTimeoutAction {
+    /// Cut over to the target shape even though it has not hydrated.
     Commit,
+    /// Drop the target replicas and keep the pre-reconfiguration set.
     Rollback,
-}
-
-impl Default for OnTimeoutAction {
-    fn default() -> Self {
-        Self::Commit
-    }
 }
 
 impl TryFrom<&str> for OnTimeoutAction {
@@ -2139,13 +2227,13 @@ impl TryFrom<ClusterAlterOptionExtracted> for AlterClusterPlanStrategy {
                         None => Err(PlanError::UntilReadyTimeoutRequired)?,
                     },
                     on_timeout: match extracted.on_timeout {
-                        Some(v) => OnTimeoutAction::try_from(v.as_str()).map_err(|e| {
+                        Some(v) => Some(OnTimeoutAction::try_from(v.as_str()).map_err(|e| {
                             PlanError::InvalidOptionValue {
                                 option_name: "ON TIMEOUT".into(),
                                 err: Box::new(e),
                             }
-                        })?,
-                        None => OnTimeoutAction::default(),
+                        })?),
+                        None => None,
                     },
                 }
             }

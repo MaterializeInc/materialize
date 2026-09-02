@@ -24,7 +24,7 @@ Source defined as t0
 
 
 # Rewrite possible, one column
-apply pipeline=flat_map_elimination
+apply pipeline=FlatMapElimination
 FlatMap wrap1(42)
   Get t0
 ----
@@ -32,7 +32,7 @@ Map (42)
   Get t0
 
 # Rewrite possible, two columns
-apply pipeline=flat_map_elimination
+apply pipeline=FlatMapElimination
 FlatMap wrap2(0, 7)
   Get t0
 ----
@@ -40,7 +40,7 @@ Map (0, 7)
   Get t0
 
 # Rewrite possible, three columns
-apply pipeline=flat_map_elimination
+apply pipeline=FlatMapElimination
 FlatMap wrap3(17, 42, 15)
   Get t0
 ----
@@ -48,7 +48,7 @@ Map (17, 42, 15)
   Get t0
 
 # Rewrite possible, bigger wrap width than input
-apply pipeline=flat_map_elimination
+apply pipeline=FlatMapElimination
 FlatMap wrap3(17, 42)
   Get t0
 ----
@@ -56,7 +56,7 @@ Map (17, 42)
   Get t0
 
 # Produces more than one row, must not rewrite these
-apply pipeline=flat_map_elimination
+apply pipeline=FlatMapElimination
 FlatMap wrap1(0, 1, 2)
   Get t0
 ----
@@ -64,7 +64,7 @@ FlatMap wrap1(0, 1, 2)
   Get t0
 
 # Produces more than one row, must not rewrite these
-apply pipeline=flat_map_elimination
+apply pipeline=FlatMapElimination
 FlatMap wrap2(0, 1, 2, 3)
   Get t0
 ----
@@ -72,7 +72,7 @@ FlatMap wrap2(0, 1, 2, 3)
   Get t0
 
 # Produces more than one row, must not rewrite these
-apply pipeline=flat_map_elimination
+apply pipeline=FlatMapElimination
 FlatMap wrap3(0, 1, 2, 3)
   Get t0
 ----
@@ -85,7 +85,7 @@ FlatMap wrap3(0, 1, 2, 3)
 
 # Rewrite possible for `unnest_array`
 # Example SQL: select unnest(array[f1]) from t1 where f1 = 5;
-apply pipeline=flat_map_elimination
+apply pipeline=FlatMapElimination
 FlatMap unnest_array({5})
   Get t0
 ----
@@ -94,7 +94,7 @@ Map (5)
 
 # Rewrite possible for `unnest_list`
 # Example SQL: select unnest(list[f1]) from t1 where f1 = 5;
-apply pipeline=flat_map_elimination
+apply pipeline=FlatMapElimination
 FlatMap unnest_list([5])
   Get t0
 ----
@@ -102,7 +102,7 @@ Map (5)
   Get t0
 
 # Rewrite not possible: unnest_array(-) argument is not reduced to a literal
-apply pipeline=flat_map_elimination
+apply pipeline=FlatMapElimination
 FlatMap unnest_array(array[5])
   Get t0
 ----
@@ -110,7 +110,7 @@ FlatMap unnest_array(array[5])
   Get t0
 
 # Rewrite not possible: unnest_list(-) argument is not reduced to a literal
-apply pipeline=flat_map_elimination
+apply pipeline=FlatMapElimination
 FlatMap unnest_list(list[5])
   Get t0
 ----
@@ -118,7 +118,7 @@ FlatMap unnest_list(list[5])
   Get t0
 
 # Rewrite not possible: unnest_array(-) argument is not a singleton
-apply pipeline=flat_map_elimination
+apply pipeline=FlatMapElimination
 FlatMap unnest_array({5, 6})
   Get t0
 ----
@@ -126,7 +126,7 @@ FlatMap unnest_array({5, 6})
   Get t0
 
 # Rewrite not possible: unnest_list(-) argument is not a singleton
-apply pipeline=flat_map_elimination
+apply pipeline=FlatMapElimination
 FlatMap unnest_list([5, 6])
   Get t0
 ----
@@ -134,20 +134,20 @@ FlatMap unnest_list([5, 6])
   Get t0
 
 # generate_series can produce 0, 1, or more rows, based on its arguments
-apply pipeline=flat_map_elimination
+apply pipeline=FlatMapElimination
 FlatMap generate_series(5, 2, 1)
   Get t0
 ----
 Constant <empty>
 
-apply pipeline=flat_map_elimination
+apply pipeline=FlatMapElimination
 FlatMap generate_series(5, 5, 1)
   Get t0
 ----
 Map (5)
   Get t0
 
-apply pipeline=flat_map_elimination
+apply pipeline=FlatMapElimination
 FlatMap generate_series(5, 6, 1)
   Get t0
 ----

@@ -13,8 +13,8 @@
 pub mod replication;
 #[cfg(feature = "replication")]
 pub use replication::{
-    available_replication_slots, drop_replication_slots, fetch_max_lsn, get_max_wal_senders,
-    get_timeline_id, get_wal_level, validate_no_rls_policies,
+    available_replication_slots, drop_replication_slots, fetch_max_lsn, get_is_in_recovery,
+    get_max_wal_senders, get_timeline_id, get_wal_level, validate_no_rls_policies,
 };
 #[cfg(feature = "schemas")]
 pub mod desc;

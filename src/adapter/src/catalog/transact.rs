@@ -12,9 +12,13 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::sync::atomic;
 use std::time::Duration;
 
 use itertools::Itertools;
+use mz_adapter_types::cluster_state::{
+    BurstAudit, BurstFinishCause, ExpectedClusterState, ReconfigurationAudit,
+};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{
@@ -22,23 +26,28 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use mz_audit_log::{
-    CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, IdNameV1,
-    ObjectType, SchedulingDecisionsWithReasonsV2, VersionedEvent,
+    AlterClusterReconfigurationV1, BurstFinishCauseV1, ClusterHydrationBurstV1,
+    ClusterReplicaLoggingV1, CreateOrDropClusterReplicaReasonV1, EventDetails, EventType,
+    HydrationBurstLifecycleV1, IdFullNameV1, IdNameV1, ObjectType, ReconfigurationLifecycleV1,
+    RefreshDecisionWithReasonV2, SchedulingDecisionV1, SchedulingDecisionsWithReasonsV2,
+    VersionedEvent,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
-use mz_catalog::durable::{NetworkPolicy, Snapshot, Transaction};
+use mz_catalog::durable::{DryRunTransaction, NetworkPolicy, Snapshot, Transaction};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterConfig, DataSourceDesc, DefaultPrivileges, SourceReferences,
-    StateDiff, StateUpdate, StateUpdateKind, TemporaryItem,
+    CatalogEntry, CatalogItem, ClusterConfig, ClusterVariant, DataSourceDesc, DefaultPrivileges,
+    ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget, SourceReferences,
 };
+use mz_cluster_controller::ctx::RefreshWindowDecision;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::HashSet;
-use mz_ore::instrument;
+use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist_types::ShardId;
+use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap, merge_mz_acl_items};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
@@ -64,6 +73,7 @@ use mz_sql_parser::ast::{QualifiedReplica, Value};
 use mz_storage_client::storage_collections::StorageCollections;
 use serde::{Deserialize, Serialize};
 use tracing::{info, trace};
+use uuid::Uuid;
 
 use crate::AdapterError;
 use crate::catalog::state::LocalExpressionCache;
@@ -73,9 +83,9 @@ use crate::catalog::{
     is_reserved_role_name, object_type_to_audit_object_type,
     system_object_type_to_audit_object_type,
 };
+use crate::config::{ScopedParameters, ScopedParametersScope};
 use crate::coord::ConnMeta;
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
-use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::util::ResultExt;
 
 /// A manually injected audit event.
@@ -148,6 +158,7 @@ pub enum Op {
     },
     CreateClusterReplica {
         cluster_id: ClusterId,
+        replica_id: ReplicaId,
         name: String,
         config: ReplicaConfig,
         owner_id: RoleId,
@@ -204,7 +215,10 @@ pub enum Op {
     },
     UpdatePrivilege {
         target_id: SystemObjectId,
-        privilege: MzAclItem,
+        /// The ACL changes to apply to `target_id`, applied as a single durable write. A bulk
+        /// `GRANT`/`REVOKE` touching one object for many grantees lands here as one op rather
+        /// than one op per grantee.
+        privileges: Vec<MzAclItem>,
         variant: UpdatePrivilegeVariant,
     },
     UpdateDefaultPrivilege {
@@ -221,6 +235,12 @@ pub enum Op {
         id: ClusterId,
         name: String,
         config: ClusterConfig,
+        /// Writer-declared reconfiguration lifecycle transition to audit for
+        /// this write, alongside the record carried in `config`.
+        reconfiguration_audit: Option<ReconfigurationAudit>,
+        /// Writer-declared hydration-burst lifecycle transition to audit for
+        /// this write, alongside the record carried in `config`.
+        burst_audit: Option<BurstAudit>,
     },
     UpdateClusterReplicaConfig {
         cluster_id: ClusterId,
@@ -244,6 +264,20 @@ pub enum Op {
         name: String,
     },
     ResetAllSystemConfiguration,
+    /// Persists the durable cache of scoped (per-cluster and per-replica)
+    /// system parameters towards `scoped`. The handler diffs against the current
+    /// durable contents: it upserts changed/added entries and removes entries
+    /// the update no longer serves.
+    ///
+    /// `prune_scope` bounds removals to the objects the update was evaluated
+    /// for: a row is removed only when its owning object is in `prune_scope`, so
+    /// an object created after the update's evaluation snapshot, and the override
+    /// it folded into its own create transaction, survives a concurrent
+    /// full-state reconcile.
+    UpdateScopedSystemParameters {
+        scoped: ScopedParameters,
+        prune_scope: ScopedParametersScope,
+    },
     /// Injects audit events into the catalog.
     ///
     /// This is a nonstandard path used for manually appending audit events at the current time.
@@ -251,6 +285,16 @@ pub enum Op {
     /// audit events.
     InjectAuditEvents {
         events: Vec<InjectedAuditEvent>,
+    },
+    /// Precondition, not a mutation. Aborts the whole transaction unless
+    /// `cluster_id`'s current managed config still equals `expected`. Running
+    /// the check inside the transaction makes it inseparable from the commit it
+    /// guards, giving a compare-and-append over the cluster's config. A purely
+    /// internal op for conditional cluster-config writes, never emitted by SQL
+    /// DDL.
+    CheckClusterState {
+        cluster_id: ClusterId,
+        expected: ExpectedClusterState,
     },
 }
 
@@ -314,9 +358,22 @@ pub enum ReplicaCreateDropReason {
     /// - ALTERing various options on a managed cluster,
     /// - CREATE/DROP CLUSTER REPLICA on an unmanaged cluster.
     Manual,
-    /// The automated cluster scheduling initiated the replica create or drop, e.g., a
-    /// materialized view is needing a refresh on a SCHEDULE ON REFRESH cluster.
-    ClusterScheduling(Vec<SchedulingDecision>),
+    /// The cluster controller's graceful-reconfiguration strategy created the replica while
+    /// converging a cluster onto an in-flight `reconfiguration` target (a background
+    /// `ALTER CLUSTER`).
+    GracefulReconfiguration,
+    /// The cluster controller's hydration-burst strategy created the transient burst replica
+    /// it runs while a cluster's objects are not yet hydrated.
+    HydrationBurst,
+    /// The cluster controller's on-refresh strategy created the replica for a refresh window on
+    /// a `SCHEDULE = ON REFRESH` cluster. Audited as the `schedule` reason, carrying the tick's
+    /// window decision (which MVs needed a refresh or compaction time, and the hydration-time
+    /// estimate) as the `scheduling_policies` detail.
+    OnRefresh(RefreshWindowDecision),
+    /// The cluster controller dropped the replica because the cluster's configuration no longer
+    /// calls for it. The uniform reason on every controller-emitted drop (e.g. a
+    /// replication-factor decrease).
+    Retired,
 }
 
 impl ReplicaCreateDropReason {
@@ -326,19 +383,53 @@ impl ReplicaCreateDropReason {
         CreateOrDropClusterReplicaReasonV1,
         Option<SchedulingDecisionsWithReasonsV2>,
     ) {
-        let (reason, scheduling_policies) = match self {
+        match self {
             ReplicaCreateDropReason::Manual => (CreateOrDropClusterReplicaReasonV1::Manual, None),
-            ReplicaCreateDropReason::ClusterScheduling(scheduling_decisions) => (
+            ReplicaCreateDropReason::GracefulReconfiguration => {
+                (CreateOrDropClusterReplicaReasonV1::Reconfiguration, None)
+            }
+            ReplicaCreateDropReason::HydrationBurst => {
+                (CreateOrDropClusterReplicaReasonV1::HydrationBurst, None)
+            }
+            ReplicaCreateDropReason::OnRefresh(decision) => (
                 CreateOrDropClusterReplicaReasonV1::Schedule,
-                Some(scheduling_decisions),
+                Some(refresh_window_decision_to_audit_log(decision)),
             ),
-        };
-        (
-            reason,
-            scheduling_policies
-                .as_ref()
-                .map(SchedulingDecision::reasons_to_audit_log_reasons),
-        )
+            ReplicaCreateDropReason::Retired => (CreateOrDropClusterReplicaReasonV1::Retired, None),
+        }
+    }
+}
+
+/// Convert the controller's on-refresh window decision into the audit log's
+/// `scheduling_policies` detail: ids as strings and the hydration-time estimate
+/// as an interval string.
+fn refresh_window_decision_to_audit_log(
+    decision: RefreshWindowDecision,
+) -> SchedulingDecisionsWithReasonsV2 {
+    let mut hydration_time_estimate_str = String::new();
+    strconv::format_interval(
+        &mut hydration_time_estimate_str,
+        Interval::from_duration(&decision.hydration_time_estimate)
+            .expect("the estimate originated as a planned Interval"),
+    );
+    SchedulingDecisionsWithReasonsV2 {
+        on_refresh: RefreshDecisionWithReasonV2 {
+            // The controller produces a create (and so this detail) only for
+            // an open window; there is no "off" decision to record (a
+            // window-close is a `retired` drop with no detail).
+            decision: SchedulingDecisionV1::On,
+            objects_needing_refresh: decision
+                .objects_needing_refresh
+                .iter()
+                .map(|id| id.to_string())
+                .collect(),
+            objects_needing_compaction: decision
+                .objects_needing_compaction
+                .iter()
+                .map(|id| id.to_string())
+                .collect(),
+            hydration_time_estimate: hydration_time_estimate_str,
+        },
     }
 }
 
@@ -367,6 +458,204 @@ enum TransactInnerMode {
 impl Catalog {
     fn should_audit_log_item(item: &CatalogItem) -> bool {
         !item.is_temporary()
+    }
+
+    /// The cluster config's `reconfiguration` record, if any.
+    fn reconfiguration_record_of(
+        config: &ClusterConfig,
+    ) -> Option<&mz_catalog::memory::objects::ReconfigurationState> {
+        match &config.variant {
+            ClusterVariant::Managed(managed) => managed.reconfiguration.as_ref(),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
+
+    /// The cluster config's `burst` record, if any.
+    fn burst_record_of(config: &ClusterConfig) -> Option<&mz_catalog::memory::objects::BurstState> {
+        match &config.variant {
+            ClusterVariant::Managed(managed) => managed.burst.as_ref(),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
+
+    /// Whether a cluster config write moves the burst lifecycle: a record
+    /// appears or disappears. Unlike reconfiguration there is no status field,
+    /// so presence transitions are the whole lifecycle. Bookkeeping rewrites of
+    /// an existing record (the hydration stamp and its reset) move nothing.
+    ///
+    /// Every such movement is an audit-log transition, so a write performing
+    /// one must declare the matching intent.
+    fn burst_lifecycle_moved(old_config: &ClusterConfig, new_config: &ClusterConfig) -> bool {
+        matches!(
+            (
+                Self::burst_record_of(old_config),
+                Self::burst_record_of(new_config),
+            ),
+            (None, Some(_)) | (Some(_), None)
+        )
+    }
+
+    /// Whether a cluster config write moves the reconfiguration lifecycle: a
+    /// status change, a fresh record, or the drop of an in-progress record.
+    ///
+    /// Every such movement is an audit-log transition, so a write performing
+    /// one must declare the matching intent. Status-preserving copies (a write
+    /// carrying a record forward, re-targets that stay in progress with a
+    /// declared `Started`) and drops of already-settled records move nothing.
+    fn reconfiguration_lifecycle_moved(
+        old_config: &ClusterConfig,
+        new_config: &ClusterConfig,
+    ) -> bool {
+        match (
+            Self::reconfiguration_record_of(old_config),
+            Self::reconfiguration_record_of(new_config),
+        ) {
+            (None, Some(_)) => true,
+            (Some(old), Some(new)) => old.status != new.status,
+            (Some(old), None) => old.is_in_progress(),
+            (None, None) => false,
+        }
+    }
+
+    /// Builds a reconfiguration lifecycle audit event from the writer-declared
+    /// audit intent and the record in `config`.
+    ///
+    /// The intent must cohere with the record it rides along with: the durable
+    /// `status` and the audited transition are two views of one decision, so a
+    /// mismatch is a writer bug and fails the transaction rather than commit an
+    /// event that contradicts the state. The valid pairings are tabulated on
+    /// [`mz_catalog::memory::objects::ReconfigurationStatus`].
+    fn reconfiguration_audit_details(
+        config: &ClusterConfig,
+        cluster_id: ClusterId,
+        cluster_name: &str,
+        audit: ReconfigurationAudit,
+    ) -> Result<AlterClusterReconfigurationV1, AdapterError> {
+        let record = Self::reconfiguration_record_of(config);
+        let Some(record) = record else {
+            return Err(AdapterError::Internal(format!(
+                "reconfiguration audit transition {audit:?} for cluster {cluster_name} \
+                 without a reconfiguration record"
+            )));
+        };
+        // The one mirror match from the write-side vocabulary to the audit-log
+        // vocabulary. `forced` exists only on the intent: the durable status
+        // reads `Finalized` for both a hydrated and a forced cut-over.
+        let (transition, forced) = match audit {
+            ReconfigurationAudit::Started => (ReconfigurationLifecycleV1::Started, None),
+            ReconfigurationAudit::Cancelled => (ReconfigurationLifecycleV1::Cancelled, None),
+            ReconfigurationAudit::Finalized { forced } => {
+                (ReconfigurationLifecycleV1::Finalized, Some(forced))
+            }
+            ReconfigurationAudit::TimedOut => (ReconfigurationLifecycleV1::TimedOut, None),
+            ReconfigurationAudit::ResourceExhausted => {
+                (ReconfigurationLifecycleV1::ResourceExhausted, None)
+            }
+        };
+        let coherent = matches!(
+            (audit, record.status),
+            (
+                ReconfigurationAudit::Started,
+                ReconfigurationStatus::InProgress
+            ) | (
+                ReconfigurationAudit::Cancelled,
+                ReconfigurationStatus::Cancelled
+            ) | (
+                ReconfigurationAudit::Finalized { .. },
+                ReconfigurationStatus::Finalized
+            ) | (
+                ReconfigurationAudit::TimedOut,
+                ReconfigurationStatus::TimedOut
+            ) | (
+                ReconfigurationAudit::ResourceExhausted,
+                ReconfigurationStatus::ResourceExhausted
+            )
+        );
+        if !coherent {
+            return Err(AdapterError::Internal(format!(
+                "reconfiguration audit transition {audit:?} for cluster {cluster_name} \
+                 contradicts the written record status {:?}",
+                record.status
+            )));
+        }
+        let ReconfigurationState {
+            target,
+            deadline,
+            on_timeout: _,
+            status: _,
+        } = record;
+        let ReconfigurationTarget {
+            size,
+            replication_factor,
+            availability_zones,
+            logging,
+            // The append-only audit payload records the target shape's size,
+            // replication factor, availability zones, and logging. Arrangement
+            // compression is intentionally not part of it.
+            arrangement_compression: _,
+        } = target;
+        Ok(AlterClusterReconfigurationV1 {
+            cluster_id: cluster_id.to_string(),
+            cluster_name: cluster_name.to_string(),
+            transition,
+            forced,
+            target_size: size.clone(),
+            target_replication_factor: *replication_factor,
+            target_availability_zones: availability_zones.clone(),
+            target_logging: ClusterReplicaLoggingV1 {
+                log_logging: logging.log_logging,
+                interval: logging.interval,
+            },
+            deadline: Some((*deadline).into()),
+        })
+    }
+
+    /// Builds a hydration-burst lifecycle audit event from the writer-declared
+    /// audit intent and the `burst` record it rides along with.
+    ///
+    /// A `started` intent reads the record from the new config (the write that
+    /// armed the burst carries it). A `finished` intent reads it from the old
+    /// config, since the same write cleared it. A missing record on the
+    /// respective side means the intent contradicts the write, a writer bug
+    /// that fails the transaction.
+    fn burst_audit_details(
+        old_config: &ClusterConfig,
+        new_config: &ClusterConfig,
+        cluster_id: ClusterId,
+        cluster_name: &str,
+        audit: BurstAudit,
+    ) -> Result<ClusterHydrationBurstV1, AdapterError> {
+        let (transition, finish_cause, record) = match audit {
+            BurstAudit::Started => (
+                HydrationBurstLifecycleV1::Started,
+                None,
+                Self::burst_record_of(new_config),
+            ),
+            BurstAudit::Finished { cause } => {
+                let cause = match cause {
+                    BurstFinishCause::LingerElapsed => BurstFinishCauseV1::LingerElapsed,
+                    BurstFinishCause::NoLongerWarranted => BurstFinishCauseV1::NoLongerWarranted,
+                };
+                (
+                    HydrationBurstLifecycleV1::Finished,
+                    Some(cause),
+                    Self::burst_record_of(old_config),
+                )
+            }
+        };
+        let Some(record) = record else {
+            return Err(AdapterError::Internal(format!(
+                "burst audit transition {audit:?} for cluster {cluster_name} \
+                 without a burst record on the corresponding side of the write"
+            )));
+        };
+        Ok(ClusterHydrationBurstV1 {
+            cluster_id: cluster_id.to_string(),
+            cluster_name: cluster_name.to_string(),
+            transition,
+            finish_cause,
+            burst_size: record.burst_size.clone(),
+        })
     }
 
     /// Gets [`CatalogItemId`]s of temporary items to be created, checks for name collisions
@@ -456,11 +745,13 @@ impl Catalog {
             .transaction()
             .await
             .unwrap_or_terminate("starting catalog transaction");
+        // Empty progress may have overtaken the timestamp chosen before opening the transaction.
+        let commit_ts = std::cmp::max(oracle_write_ts, tx.upper());
 
         let new_state = Self::transact_inner(
             TransactInnerMode::Commit,
             storage_collections,
-            oracle_write_ts,
+            commit_ts,
             session,
             ops,
             temporary_ids,
@@ -476,7 +767,7 @@ impl Catalog {
         // process if this fails, because we have to restart envd due to
         // indeterminate catalog state, which we only reconcile during catalog
         // init.
-        tx.commit(oracle_write_ts)
+        tx.commit(commit_ts)
             .await
             .unwrap_or_terminate("catalog storage transaction commit must succeed");
 
@@ -485,6 +776,13 @@ impl Catalog {
         drop(storage);
         if let Some(new_state) = new_state {
             self.transient_revision += 1;
+            // Publish the new revision before returning. Everything that can
+            // reveal this transaction's effects (responses, notices, builtin
+            // table writes) happens after `transact` returns, so any session
+            // that has observed such evidence is guaranteed to see this bump
+            // and refresh its cached catalog snapshot.
+            self.shared_transient_revision
+                .store(self.transient_revision, atomic::Ordering::SeqCst);
             self.state = new_state;
         }
 
@@ -534,10 +832,11 @@ impl Catalog {
         } else {
             // First statement: fresh transaction from durable storage, which
             // is in sync with the real catalog state.
-            storage
+            let tx = storage
                 .transaction()
                 .await
-                .unwrap_or_terminate("starting catalog transaction")
+                .unwrap_or_terminate("starting catalog transaction");
+            DryRunTransaction::new(tx)
         };
 
         // Process only the new ops against the accumulated state in dry-run mode.
@@ -551,7 +850,7 @@ impl Catalog {
             &mut builtin_table_updates,
             &mut catalog_updates,
             &mut audit_events,
-            &mut tx,
+            tx.transaction_mut(),
             base_state,
         )
         .await?;
@@ -606,7 +905,8 @@ impl Catalog {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
-                    | CatalogItem::Connection(_) => {}
+                    | CatalogItem::Connection(_)
+                    | CatalogItem::MetricSink(_) => {}
                 }
             }
         }
@@ -682,7 +982,7 @@ impl Catalog {
         let mut updates = Vec::new();
 
         for op in ops {
-            let temporary_item_updates = Self::transact_op(
+            Self::transact_op(
                 oracle_write_ts,
                 session,
                 op,
@@ -696,22 +996,7 @@ impl Catalog {
             )
             .await?;
 
-            // Temporary items are not stored in the durable catalog, so they need to be handled
-            // separately for updating state and builtin tables.
-            // TODO(jkosh44) Some more thought needs to be given as to how temporary tables work
-            // in a multi-subscriber catalog world.
-            let upper = tx.upper();
-            let temporary_item_updates =
-                temporary_item_updates
-                    .into_iter()
-                    .map(|(item, diff)| StateUpdate {
-                        kind: StateUpdateKind::TemporaryItem(item),
-                        ts: upper,
-                        diff,
-                    });
-
             let mut op_updates: Vec<_> = tx.get_and_commit_op_updates();
-            op_updates.extend(temporary_item_updates);
             if !op_updates.is_empty() {
                 // Clone the cache so each apply_updates call has access to cached expressions.
                 // The cache uses `remove` semantics, so we need a fresh clone for each call.
@@ -751,7 +1036,7 @@ impl Catalog {
                 }
             }
             TransactInnerMode::DryRun => {
-                debug_assert!(
+                mz_ore::soft_assert_no_log!(
                     storage_collections.is_none(),
                     "dry-run mode must not prepare storage state"
                 );
@@ -781,10 +1066,6 @@ impl Catalog {
     /// Performs the transaction operation described by `op`. This function prepares the changes in
     /// `tx`, but does not update `state`. `state` will be updated when applying the durable
     /// changes.
-    ///
-    /// Optionally returns a builtin table update for any builtin table updates than cannot be
-    /// derived from the durable catalog state, and temporary item diffs. These are all very weird
-    /// scenarios and ideally in the future don't exist.
     #[instrument]
     async fn transact_op(
         oracle_write_ts: mz_repr::Timestamp,
@@ -797,10 +1078,21 @@ impl Catalog {
         storage_collections_to_create: &mut BTreeSet<GlobalId>,
         storage_collections_to_drop: &mut BTreeSet<GlobalId>,
         storage_collections_to_register: &mut BTreeMap<GlobalId, ShardId>,
-    ) -> Result<Vec<(TemporaryItem, StateDiff)>, AdapterError> {
-        let mut temporary_item_updates = Vec::new();
-
+    ) -> Result<(), AdapterError> {
         match op {
+            Op::CheckClusterState {
+                cluster_id,
+                expected,
+            } => {
+                // Precondition only. Returning `Err` here aborts `transact_inner`
+                // before `tx.commit`, so the compare-and-append holds atomically
+                // with the write it guards.
+                if !crate::catalog::cluster_state::cluster_matches_expected(
+                    state, cluster_id, &expected,
+                ) {
+                    return Err(AdapterError::ClusterStateChanged { cluster_id });
+                }
+            }
             Op::AlterRetainHistory { id, value, window } => {
                 let entry = state.get_entry(&id);
                 if id.is_system() {
@@ -842,7 +1134,7 @@ impl Catalog {
                     )?;
                 }
 
-                tx.update_item(id, new_entry.into())?;
+                tx.update_item(id, state.durable_item(new_entry)?)?;
 
                 Self::log_update(state, &id);
             }
@@ -892,7 +1184,7 @@ impl Catalog {
                     )?;
                 }
 
-                tx.update_item(id, new_entry.into())?;
+                tx.update_item(id, state.durable_item(new_entry)?)?;
 
                 Self::log_update(state, &id);
             }
@@ -1015,7 +1307,7 @@ impl Catalog {
                     )?;
                 }
 
-                tx.update_item(id, new_entry.into())?;
+                tx.update_item(id, state.durable_item(new_entry)?)?;
                 storage_collections_to_register.insert(new_global_id, shard_id);
             }
             Op::AlterMaterializedViewApplyReplacement { id, replacement_id } => {
@@ -1313,6 +1605,7 @@ impl Catalog {
             }
             Op::CreateClusterReplica {
                 cluster_id,
+                replica_id,
                 name,
                 config,
                 owner_id,
@@ -1324,8 +1617,16 @@ impl Catalog {
                     )));
                 }
                 let cluster = state.get_cluster(cluster_id);
-                let id =
-                    tx.insert_cluster_replica(cluster_id, &name, config.clone().into(), owner_id)?;
+                // The replica id is allocated out-of-band by the durable
+                // allocator before the transaction, mirroring cluster and item
+                // ids. Nothing allocates a replica id in-apply.
+                tx.insert_cluster_replica_with_id(
+                    cluster_id,
+                    replica_id,
+                    &name,
+                    config.clone().into(),
+                    owner_id,
+                )?;
                 if let ReplicaLocation::Managed(ManagedReplicaLocation {
                     size,
                     billed_as,
@@ -1338,7 +1639,7 @@ impl Catalog {
                         mz_audit_log::CreateClusterReplicaV4 {
                             cluster_id: cluster_id.to_string(),
                             cluster_name: cluster.name.clone(),
-                            replica_id: Some(id.to_string()),
+                            replica_id: Some(replica_id.to_string()),
                             replica_name: name.clone(),
                             logical_size: size.clone(),
                             billed_as: billed_as.clone(),
@@ -1396,7 +1697,10 @@ impl Catalog {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
-                    | CatalogItem::Connection(_) => (),
+                    | CatalogItem::Connection(_)
+                    // Metric sinks write to the replica's metrics registry, never to persist,
+                    // so there is no storage collection to create.
+                    | CatalogItem::MetricSink(_) => (),
                 }
 
                 let system_user = session.map_or(false, |s| s.user().is_system_user());
@@ -1447,25 +1751,24 @@ impl Catalog {
                             ErrorKind::InvalidTemporarySchema,
                         )));
                     }
-                    let oid = tx.allocate_oid(&temporary_oids)?;
+                    let owner_session =
+                        temporary_item_owner_session(state, session, &item, &name.item)?;
 
                     let schema_id = name.qualifiers.schema_spec.clone().into();
                     let item_type = item.typ();
                     let (create_sql, global_id, versions) = item.to_serialized();
-
-                    let item = TemporaryItem {
+                    tx.insert_user_item(
                         id,
-                        oid,
                         global_id,
                         schema_id,
-                        name: name.item.clone(),
+                        &name.item,
                         create_sql,
-                        conn_id: item.conn_id().cloned(),
                         owner_id,
-                        privileges: privileges.clone(),
-                        extra_versions: versions,
-                    };
-                    temporary_item_updates.push((item, StateDiff::Addition));
+                        privileges.clone(),
+                        &temporary_oids,
+                        versions,
+                        Some(owner_session),
+                    )?;
 
                     info!(
                         "create temporary {} {} ({})",
@@ -1510,6 +1813,7 @@ impl Catalog {
                         privileges.clone(),
                         &temporary_oids,
                         versions,
+                        None,
                     )?;
                     info!(
                         "create {} {} ({})",
@@ -1580,7 +1884,8 @@ impl Catalog {
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::Secret(_)
-                        | CatalogItem::Connection(_) => EventDetails::IdFullNameV1(IdFullNameV1 {
+                        | CatalogItem::Connection(_)
+                        | CatalogItem::MetricSink(_) => EventDetails::IdFullNameV1(IdFullNameV1 {
                             id: id.to_string(),
                             name,
                         }),
@@ -1709,17 +2014,8 @@ impl Catalog {
                 tx.drop_comments(&delta.comments)?;
 
                 // Drop any items.
-                let (durable_items_to_drop, temporary_items_to_drop): (BTreeSet<_>, BTreeSet<_>) =
-                    delta
-                        .items
-                        .iter()
-                        .map(|id| id)
-                        .partition(|id| !state.get_entry(*id).item().is_temporary());
-                tx.remove_items(&durable_items_to_drop)?;
-                temporary_item_updates.extend(temporary_items_to_drop.into_iter().map(|id| {
-                    let entry = state.get_entry(&id);
-                    (entry.clone().into(), StateDiff::Retraction)
-                }));
+                let items_to_drop: BTreeSet<_> = delta.items.iter().copied().collect();
+                tx.remove_items(&items_to_drop)?;
 
                 for item_id in delta.items {
                     let entry = state.get_entry(&item_id);
@@ -1994,15 +2290,19 @@ impl Catalog {
             }
             Op::UpdatePrivilege {
                 target_id,
-                privilege,
+                privileges,
                 variant,
             } => {
-                let update_privilege_fn = |privileges: &mut PrivilegeMap| match variant {
-                    UpdatePrivilegeVariant::Grant => {
-                        privileges.grant(privilege);
-                    }
-                    UpdatePrivilegeVariant::Revoke => {
-                        privileges.revoke(&privilege);
+                let update_privilege_fn = |target_privileges: &mut PrivilegeMap| {
+                    for privilege in &privileges {
+                        match variant {
+                            UpdatePrivilegeVariant::Grant => {
+                                target_privileges.grant(privilege.clone());
+                            }
+                            UpdatePrivilegeVariant::Revoke => {
+                                target_privileges.revoke(privilege);
+                            }
+                        }
                     }
                 };
                 match &target_id {
@@ -2040,27 +2340,22 @@ impl Catalog {
                             let entry = state.get_entry(id);
                             let mut new_entry = entry.clone();
                             update_privilege_fn(&mut new_entry.privileges);
-                            if !new_entry.item().is_temporary() {
-                                tx.update_item(*id, new_entry.into())?;
-                            } else {
-                                temporary_item_updates
-                                    .push((entry.clone().into(), StateDiff::Retraction));
-                                temporary_item_updates
-                                    .push((new_entry.into(), StateDiff::Addition));
-                            }
+                            tx.update_item(*id, state.durable_item(new_entry)?)?;
                         }
                         ObjectId::Role(_) | ObjectId::ClusterReplica(_) => {}
                     },
                     SystemObjectId::System => {
                         let mut system_privileges = PrivilegeMap::clone(&state.system_privileges);
                         update_privilege_fn(&mut system_privileges);
-                        let new_privilege =
-                            system_privileges.get_acl_item(&privilege.grantee, &privilege.grantor);
-                        tx.set_system_privilege(
-                            privilege.grantee,
-                            privilege.grantor,
-                            new_privilege.map(|new_privilege| new_privilege.acl_mode),
-                        )?;
+                        for privilege in &privileges {
+                            let new_privilege = system_privileges
+                                .get_acl_item(&privilege.grantee, &privilege.grantor);
+                            tx.set_system_privilege(
+                                privilege.grantee,
+                                privilege.grantor,
+                                new_privilege.map(|new_privilege| new_privilege.acl_mode),
+                            )?;
+                        }
                     }
                 }
                 let object_type = state.get_system_object_type(&target_id);
@@ -2068,21 +2363,24 @@ impl Catalog {
                     SystemObjectId::System => "SYSTEM".to_string(),
                     SystemObjectId::Object(id) => id.to_string(),
                 };
-                CatalogState::add_to_audit_log(
-                    &state.system_configuration,
-                    oracle_write_ts,
-                    session,
-                    tx,
-                    audit_events,
-                    variant.into(),
-                    system_object_type_to_audit_object_type(&object_type),
-                    EventDetails::UpdatePrivilegeV1(mz_audit_log::UpdatePrivilegeV1 {
-                        object_id: object_id_str,
-                        grantee_id: privilege.grantee.to_string(),
-                        grantor_id: privilege.grantor.to_string(),
-                        privileges: privilege.acl_mode.to_string(),
-                    }),
-                )?;
+                // One audit event per grantee, even though the batch is a single durable write.
+                for privilege in &privileges {
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        variant.into(),
+                        system_object_type_to_audit_object_type(&object_type),
+                        EventDetails::UpdatePrivilegeV1(mz_audit_log::UpdatePrivilegeV1 {
+                            object_id: object_id_str.clone(),
+                            grantee_id: privilege.grantee.to_string(),
+                            grantor_id: privilege.grantor.to_string(),
+                            privileges: privilege.acl_mode.to_string(),
+                        }),
+                    )?;
+                }
             }
             Op::UpdateDefaultPrivilege {
                 privilege_object,
@@ -2275,21 +2573,10 @@ impl Catalog {
                             }))
                         })?;
 
-                    if !to_entry.item().is_temporary() {
-                        tx.update_item(*id, to_entry.into())?;
-                    } else {
-                        temporary_item_updates
-                            .push((dependent_item.clone().into(), StateDiff::Retraction));
-                        temporary_item_updates.push((to_entry.into(), StateDiff::Addition));
-                    }
+                    tx.update_item(*id, state.durable_item(to_entry)?)?;
                     updates.push(*id);
                 }
-                if !new_entry.item().is_temporary() {
-                    tx.update_item(id, new_entry.into())?;
-                } else {
-                    temporary_item_updates.push((entry.clone().into(), StateDiff::Retraction));
-                    temporary_item_updates.push((new_entry.into(), StateDiff::Addition));
-                }
+                tx.update_item(id, state.durable_item(new_entry)?)?;
 
                 updates.push(id);
                 for id in updates {
@@ -2323,11 +2610,15 @@ impl Catalog {
                 let database = state.get_database(&database_id);
                 let database_name = &database.name;
 
-                let mut updates = Vec::new();
+                let mut updates: Vec<CatalogItemId> = Vec::new();
                 let mut items_to_update = BTreeMap::new();
+                // An item can be reached more than once: once as a member of
+                // the schema and again for each object in the schema it
+                // depends on. Skip items that were already rewritten.
+                let mut seen: BTreeSet<CatalogItemId> = BTreeSet::new();
 
-                let mut update_item = |id| {
-                    if items_to_update.contains_key(id) {
+                let mut update_item = |id: &CatalogItemId| {
+                    if !seen.insert(*id) {
                         return Ok(());
                     }
 
@@ -2349,19 +2640,22 @@ impl Catalog {
                         })?;
 
                     // Queue updates for Catalog storage and Builtin Tables.
-                    if !new_entry.item().is_temporary() {
-                        items_to_update.insert(*id, new_entry.into());
-                    } else {
-                        temporary_item_updates.push((entry.clone().into(), StateDiff::Retraction));
-                        temporary_item_updates.push((new_entry.into(), StateDiff::Addition));
-                    }
-                    updates.push(id);
+                    items_to_update.insert(*id, state.durable_item(new_entry)?);
+                    updates.push(*id);
 
                     Ok::<_, AdapterError>(())
                 };
 
-                // Update all of the items in the schema.
-                for (_name, item_id) in &schema.items {
+                // Update all of the items in the schema. A schema holds items,
+                // types, and functions in separate maps, and any of them may be
+                // referenced by another object's create_sql via a schema-qualified
+                // name, so all three must be rewritten.
+                for (_name, item_id) in schema
+                    .items
+                    .iter()
+                    .chain(schema.types.iter())
+                    .chain(schema.functions.iter())
+                {
                     // Update the item itself.
                     update_item(item_id)?;
 
@@ -2409,7 +2703,7 @@ impl Catalog {
                 tx.update_schema(schema_id, new_schema.into())?;
 
                 for id in updates {
-                    Self::log_update(state, id);
+                    Self::log_update(state, &id);
                 }
             }
             Op::UpdateOwner { id, new_owner } => {
@@ -2502,13 +2796,7 @@ impl Catalog {
                             new_owner,
                         );
                         new_entry.owner_id = new_owner;
-                        if !new_entry.item().is_temporary() {
-                            tx.update_item(*id, new_entry.into())?;
-                        } else {
-                            temporary_item_updates
-                                .push((entry.clone().into(), StateDiff::Retraction));
-                            temporary_item_updates.push((new_entry.into(), StateDiff::Addition));
-                        }
+                        tx.update_item(*id, state.durable_item(new_entry)?)?;
                     }
                     ObjectId::NetworkPolicy(id) => {
                         let mut policy = state.get_network_policy(id).clone();
@@ -2543,8 +2831,59 @@ impl Catalog {
                     }),
                 )?;
             }
-            Op::UpdateClusterConfig { id, name, config } => {
+            Op::UpdateClusterConfig {
+                id,
+                name,
+                mut config,
+                reconfiguration_audit,
+                mut burst_audit,
+            } => {
                 let mut cluster = state.get_cluster(id).clone();
+                // A write that invalidates the in-flight burst (policy removed
+                // or re-sized, cluster turned off) retires the record here, in
+                // the same transaction. Retiring at this chokepoint rather
+                // than in each sequencer path means no writer can forget, so a
+                // committed config never carries a record it does not warrant.
+                // Writes that declare a burst intent manage the record
+                // themselves.
+                if burst_audit.is_none() {
+                    if let ClusterVariant::Managed(managed) = &mut config.variant {
+                        if managed.has_unwarranted_burst_record() {
+                            managed.burst = None;
+                            burst_audit = Some(BurstAudit::Finished {
+                                cause: BurstFinishCause::NoLongerWarranted,
+                            });
+                        }
+                    }
+                }
+                // Writes that declare no reconfiguration intent must not move
+                // the reconfiguration lifecycle, or the audit log would
+                // silently lose the transition. Writer bug, fails the
+                // transaction.
+                if reconfiguration_audit.is_none()
+                    && Self::reconfiguration_lifecycle_moved(&cluster.config, &config)
+                {
+                    return Err(AdapterError::Internal(format!(
+                        "cluster {name} reconfiguration record moved without a declared \
+                         audit intent"
+                    )));
+                }
+                // The same contract for the burst lifecycle: a record appearing
+                // or disappearing without a declared intent would silently lose
+                // the started/finished audit transition.
+                if burst_audit.is_none() && Self::burst_lifecycle_moved(&cluster.config, &config) {
+                    return Err(AdapterError::Internal(format!(
+                        "cluster {name} burst record moved without a declared audit intent"
+                    )));
+                }
+                let reconfiguration_event = reconfiguration_audit
+                    .map(|audit| Self::reconfiguration_audit_details(&config, id, &name, audit))
+                    .transpose()?;
+                let burst_event = burst_audit
+                    .map(|audit| {
+                        Self::burst_audit_details(&cluster.config, &config, id, &name, audit)
+                    })
+                    .transpose()?;
                 cluster.config = config;
                 tx.update_cluster(id, cluster.into())?;
                 info!("update cluster {}", name);
@@ -2562,6 +2901,32 @@ impl Catalog {
                         name,
                     }),
                 )?;
+
+                if let Some(details) = reconfiguration_event {
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::Cluster,
+                        EventDetails::AlterClusterReconfigurationV1(details),
+                    )?;
+                }
+
+                if let Some(details) = burst_event {
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Alter,
+                        ObjectType::Cluster,
+                        EventDetails::ClusterHydrationBurstV1(details),
+                    )?;
+                }
             }
             Op::UpdateClusterReplicaConfig {
                 replica_id,
@@ -2582,10 +2947,33 @@ impl Catalog {
                 )?;
             }
             Op::UpdateItem { id, name, to_item } => {
+                // A non-temporary item must not depend on a temporary one.
+                // Temporary objects are session-scoped and disappear with
+                // their session, so a longer-lived item referencing one would
+                // be left with a dangling reference. `Op::CreateItem` enforces
+                // it; mirror it here so ALTER paths (e.g. ALTER SINK ... SET
+                // FROM) cannot repoint a persistent item at a temporary one.
+                if !to_item.is_temporary() {
+                    if let Some(temp_id) =
+                        to_item
+                            .uses()
+                            .iter()
+                            .find(|id| match state.try_get_entry(*id) {
+                                Some(entry) => entry.item().is_temporary(),
+                                None => temporary_ids.contains(id),
+                            })
+                    {
+                        let temp_item = state.get_entry(temp_id);
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::InvalidTemporaryDependency(temp_item.name().item.clone()),
+                        )));
+                    }
+                }
+
                 let mut entry = state.get_entry(&id).clone();
                 entry.name = name.clone();
                 entry.item = to_item.clone();
-                tx.update_item(id, entry.into())?;
+                tx.update_item(id, state.durable_item(entry)?)?;
 
                 if Self::should_audit_log_item(&to_item) {
                     let mut full_name = Self::full_name_detail(
@@ -2691,6 +3079,79 @@ impl Catalog {
                     EventDetails::ResetAllV1,
                 )?;
             }
+            Op::UpdateScopedSystemParameters {
+                scoped,
+                prune_scope,
+            } => {
+                // Diff `scoped` against the durable cache and persist only the
+                // delta: upsert changed/added entries, then remove entries the
+                // update no longer serves. A removal for a still-live object is
+                // bounded by `prune_scope` so this update does not delete a row
+                // for an object it was not evaluated for (e.g. one created after
+                // the update's snapshot, whose override rode its own create
+                // transaction). Rows whose owning object is no longer live are
+                // always pruned regardless of `prune_scope`, because nothing else
+                // garbage collects them and ids are never reused, so this lazily
+                // reclaims orphans left by dropped objects.
+                let live_clusters: BTreeSet<ClusterId> =
+                    tx.get_clusters().map(|cluster| cluster.id).collect();
+                let live_replicas: BTreeSet<ReplicaId> = tx
+                    .get_cluster_replicas()
+                    .map(|replica| replica.replica_id)
+                    .collect();
+
+                // Cluster-coherent scope.
+                let existing_cluster: BTreeMap<(ClusterId, String), String> = tx
+                    .get_cluster_system_configurations()
+                    .map(|c| ((c.cluster_id, c.name), c.value))
+                    .collect();
+                let mut desired_cluster: BTreeSet<(ClusterId, String)> = BTreeSet::new();
+                for (cluster_id, values) in &scoped.cluster {
+                    if !live_clusters.contains(cluster_id) {
+                        continue;
+                    }
+                    for (name, value) in values {
+                        desired_cluster.insert((*cluster_id, name.clone()));
+                        if existing_cluster.get(&(*cluster_id, name.clone())) != Some(value) {
+                            tx.upsert_cluster_system_config(*cluster_id, name, value.clone())?;
+                        }
+                    }
+                }
+                for (cluster_id, name) in existing_cluster.into_keys() {
+                    if (!live_clusters.contains(&cluster_id)
+                        || prune_scope.clusters.contains(&cluster_id))
+                        && !desired_cluster.contains(&(cluster_id, name.clone()))
+                    {
+                        tx.remove_cluster_system_config(cluster_id, &name);
+                    }
+                }
+
+                // Replica-local scope.
+                let existing_replica: BTreeMap<(ReplicaId, String), String> = tx
+                    .get_replica_system_configurations()
+                    .map(|r| ((r.replica_id, r.name), r.value))
+                    .collect();
+                let mut desired_replica: BTreeSet<(ReplicaId, String)> = BTreeSet::new();
+                for (replica_id, values) in &scoped.replica {
+                    if !live_replicas.contains(replica_id) {
+                        continue;
+                    }
+                    for (name, value) in values {
+                        desired_replica.insert((*replica_id, name.clone()));
+                        if existing_replica.get(&(*replica_id, name.clone())) != Some(value) {
+                            tx.upsert_replica_system_config(*replica_id, name, value.clone())?;
+                        }
+                    }
+                }
+                for (replica_id, name) in existing_replica.into_keys() {
+                    if (!live_replicas.contains(&replica_id)
+                        || prune_scope.replicas.contains(&replica_id))
+                        && !desired_replica.contains(&(replica_id, name.clone()))
+                    {
+                        tx.remove_replica_system_config(replica_id, &name);
+                    }
+                }
+            }
             Op::InjectAuditEvents { events } => {
                 for event in events {
                     let id = tx.allocate_audit_log_id()?;
@@ -2707,7 +3168,7 @@ impl Catalog {
                 }
             }
         };
-        Ok(temporary_item_updates)
+        Ok(())
     }
 
     fn log_update(state: &CatalogState, id: &CatalogItemId) {
@@ -2784,6 +3245,36 @@ impl Catalog {
     }
 }
 
+/// Resolves the session UUID that durably owns a temporary item being
+/// created. The durable owner is the session that created the item.
+///
+/// The connection -> session mapping is registered lazily in
+/// `catalog_transact_inner`, so we defensively verify that the registered
+/// mapping matches the creating session.
+fn temporary_item_owner_session(
+    state: &CatalogState,
+    session: Option<&ConnMeta>,
+    item: &CatalogItem,
+    item_name: &str,
+) -> Result<Uuid, AdapterError> {
+    let session = session.ok_or_else(|| {
+        AdapterError::Internal("temporary items must have an owner session".to_string())
+    })?;
+    let owner_session = session.uuid();
+    soft_assert_or_log!(
+        Some(session.conn_id()) == item.conn_id(),
+        "temporary item connection must match the creating session"
+    );
+    if state.temporary_namespaces.uuid_for_conn(session.conn_id()) != Some(owner_session) {
+        return Err(AdapterError::Internal(format!(
+            "connection {} has no temporary namespace while creating temporary item {}",
+            session.conn_id(),
+            item_name,
+        )));
+    }
+    Ok(owner_session)
+}
+
 /// Prepare the given transaction for replacing a catalog item with a new version.
 ///
 /// The new version gets a new `CatalogItemId`, which requires rewriting the `create_sql` of all
@@ -2802,14 +3293,16 @@ fn tx_replace_item(
 
     // Rewrite dependent objects to point to the new ID.
     for use_id in new_entry.referenced_by() {
+        let dependent = state.get_entry(use_id);
+
         // The dependent might be dropped in the same tx, so check.
         if tx.get_item(use_id).is_none() {
             continue;
         }
 
-        let mut dependent = state.get_entry(use_id).clone();
+        let mut dependent = dependent.clone();
         dependent.item = dependent.item.replace_item_refs(id, new_id);
-        tx.update_item(*use_id, dependent.into())?;
+        tx.update_item(*use_id, state.durable_item(dependent)?)?;
     }
 
     // Move comments to the new ID.
@@ -2832,7 +3325,8 @@ fn tx_replace_item(
         owner_id,
         privileges,
         extra_versions,
-    } = new_entry.into();
+        ephemeral_owner_session,
+    } = state.durable_item(new_entry)?;
 
     tx.remove_item(id)?;
     tx.insert_item(
@@ -2845,6 +3339,7 @@ fn tx_replace_item(
         owner_id,
         privileges,
         extra_versions,
+        ephemeral_owner_session,
     )?;
 
     Ok(())
@@ -3072,6 +3567,8 @@ impl ObjectsToDrop {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_catalog::memory::objects::{CatalogItem, Table, TableDataSource};
     use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
@@ -3083,9 +3580,451 @@ mod tests {
         ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
     };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+    use mz_sql::session::vars::{MAX_CONNECTIONS, OwnedVarInput, SystemVars};
 
     use crate::catalog::{Catalog, Op};
     use crate::session::DEFAULT_DATABASE_NAME;
+
+    #[mz_ore::test]
+    fn test_reconfiguration_audit_details() {
+        use std::time::Duration;
+
+        use mz_adapter_types::cluster_state::ReconfigurationAudit;
+        use mz_audit_log::ReconfigurationLifecycleV1;
+        use mz_catalog::memory::objects::{
+            ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
+            ReconfigurationStatus, ReconfigurationTarget,
+        };
+        use mz_controller::clusters::ReplicaLogging;
+        use mz_controller_types::ClusterId;
+        use mz_repr::Timestamp;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+
+        let cluster_id = ClusterId::user(1).expect("valid id");
+        let logging = ReplicaLogging {
+            log_logging: false,
+            interval: None,
+        };
+        let managed = |reconfiguration: Option<ReconfigurationState>| ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: "small".into(),
+                availability_zones: Vec::new(),
+                logging: logging.clone(),
+                arrangement_compression: false,
+                replication_factor: 1,
+                optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration,
+                burst: None,
+            }),
+            workload_class: None,
+        };
+        let record = |status| ReconfigurationState {
+            target: ReconfigurationTarget {
+                size: "large".into(),
+                replication_factor: 2,
+                availability_zones: vec!["az1".into(), "az2".into()],
+                logging: ReplicaLogging {
+                    log_logging: true,
+                    interval: Some(Duration::from_secs(5)),
+                },
+                arrangement_compression: false,
+            },
+            deadline: Timestamp::from(400u64),
+            on_timeout: mz_sql::plan::OnTimeoutAction::Rollback,
+            status,
+        };
+
+        let details = Catalog::reconfiguration_audit_details(
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+            cluster_id,
+            "c",
+            ReconfigurationAudit::Started,
+        )
+        .expect("record supplies audit details");
+        assert_eq!(details.cluster_id, cluster_id.to_string());
+        assert_eq!(details.cluster_name, "c");
+        assert_eq!(details.transition, ReconfigurationLifecycleV1::Started);
+        assert_eq!(details.forced, None);
+        assert_eq!(details.target_size, "large");
+        assert_eq!(details.target_replication_factor, 2);
+        assert_eq!(
+            details.target_availability_zones,
+            vec!["az1".to_string(), "az2".to_string()]
+        );
+        assert_eq!(details.target_logging.log_logging, true);
+        assert_eq!(
+            details.target_logging.interval,
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(details.deadline, Some(400));
+
+        // The `forced` bit exists only on the intent. The durable status reads
+        // `Finalized` for both a hydrated and a forced cut-over, and the event
+        // preserves the distinction.
+        let forced = Catalog::reconfiguration_audit_details(
+            &managed(Some(record(ReconfigurationStatus::Finalized))),
+            cluster_id,
+            "c",
+            ReconfigurationAudit::Finalized { forced: true },
+        )
+        .expect("a coherent finalize supplies audit details");
+        assert_eq!(forced.transition, ReconfigurationLifecycleV1::Finalized);
+        assert_eq!(forced.forced, Some(true));
+
+        // A declared transition that contradicts the written record's status is
+        // a writer bug and must fail the transaction.
+        let incoherent = Catalog::reconfiguration_audit_details(
+            &managed(Some(record(ReconfigurationStatus::TimedOut))),
+            cluster_id,
+            "c",
+            ReconfigurationAudit::ResourceExhausted,
+        );
+        assert!(incoherent.is_err());
+
+        let missing = Catalog::reconfiguration_audit_details(
+            &managed(None),
+            cluster_id,
+            "c",
+            ReconfigurationAudit::Started,
+        );
+        assert!(missing.is_err());
+    }
+
+    #[mz_ore::test]
+    fn test_reconfiguration_lifecycle_moved() {
+        use std::time::Duration;
+
+        use mz_catalog::memory::objects::{
+            ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
+            ReconfigurationStatus, ReconfigurationTarget,
+        };
+        use mz_controller::clusters::ReplicaLogging;
+        use mz_repr::Timestamp;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+
+        let managed = |reconfiguration: Option<ReconfigurationState>| ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: "small".into(),
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: None,
+                },
+                arrangement_compression: false,
+                replication_factor: 1,
+                optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration,
+                burst: None,
+            }),
+            workload_class: None,
+        };
+        let unmanaged = ClusterConfig {
+            variant: ClusterVariant::Unmanaged,
+            workload_class: None,
+        };
+        let record = |status| ReconfigurationState {
+            target: ReconfigurationTarget {
+                size: "large".into(),
+                replication_factor: 2,
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: Some(Duration::from_secs(1)),
+                },
+                arrangement_compression: false,
+            },
+            deadline: Timestamp::from(400u64),
+            on_timeout: mz_sql::plan::OnTimeoutAction::Rollback,
+            status,
+        };
+
+        // Lifecycle movements: these writes must declare an audit intent.
+        // A fresh record appears.
+        assert!(Catalog::reconfiguration_lifecycle_moved(
+            &managed(None),
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+        ));
+        // The status changes.
+        assert!(Catalog::reconfiguration_lifecycle_moved(
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+            &managed(Some(record(ReconfigurationStatus::Finalized))),
+        ));
+        // An in-progress record is dropped, e.g. by converting the cluster to
+        // unmanaged (which the sequencer refuses, and this guard backstops).
+        assert!(Catalog::reconfiguration_lifecycle_moved(
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+            &unmanaged,
+        ));
+
+        // Not movements: no record at all, a status-preserving copy (a write
+        // that carries the record forward), and dropping a settled record.
+        assert!(!Catalog::reconfiguration_lifecycle_moved(
+            &managed(None),
+            &managed(None),
+        ));
+        assert!(!Catalog::reconfiguration_lifecycle_moved(
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+            &managed(Some(record(ReconfigurationStatus::InProgress))),
+        ));
+        assert!(!Catalog::reconfiguration_lifecycle_moved(
+            &managed(Some(record(ReconfigurationStatus::Cancelled))),
+            &unmanaged,
+        ));
+    }
+
+    #[mz_ore::test]
+    fn test_burst_lifecycle_moved() {
+        use std::time::Duration;
+
+        use mz_catalog::memory::objects::{
+            BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged,
+        };
+        use mz_controller::clusters::ReplicaLogging;
+        use mz_repr::Timestamp;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+
+        let managed = |burst: Option<BurstState>| ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: "small".into(),
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: None,
+                },
+                arrangement_compression: false,
+                replication_factor: 1,
+                optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration: None,
+                burst,
+            }),
+            workload_class: None,
+        };
+        let unmanaged = ClusterConfig {
+            variant: ClusterVariant::Unmanaged,
+            workload_class: None,
+        };
+        let record = |steady_hydrated_at| BurstState {
+            burst_size: "large".into(),
+            linger_duration: Duration::from_secs(60),
+            steady_hydrated_at,
+        };
+
+        // Lifecycle movements: these writes must declare an audit intent.
+        // A fresh record appears.
+        assert!(Catalog::burst_lifecycle_moved(
+            &managed(None),
+            &managed(Some(record(None))),
+        ));
+        // The record is cleared.
+        assert!(Catalog::burst_lifecycle_moved(
+            &managed(Some(record(None))),
+            &managed(None),
+        ));
+        // The record is dropped by converting the cluster to unmanaged (which
+        // the sequencer refuses, and this guard backstops).
+        assert!(Catalog::burst_lifecycle_moved(
+            &managed(Some(record(None))),
+            &unmanaged,
+        ));
+
+        // Not movements: no record at all, and the bookkeeping rewrites (the
+        // hydration stamp and its reset) that keep the record present.
+        assert!(!Catalog::burst_lifecycle_moved(
+            &managed(None),
+            &managed(None)
+        ));
+        assert!(!Catalog::burst_lifecycle_moved(
+            &managed(Some(record(None))),
+            &managed(Some(record(Some(Timestamp::from(100u64))))),
+        ));
+        assert!(!Catalog::burst_lifecycle_moved(
+            &managed(Some(record(Some(Timestamp::from(100u64))))),
+            &managed(Some(record(None))),
+        ));
+    }
+
+    #[mz_ore::test]
+    fn test_has_unwarranted_burst_record() {
+        use std::time::Duration;
+
+        use mz_catalog::memory::objects::{BurstState, ClusterVariantManaged};
+        use mz_controller::clusters::ReplicaLogging;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+        use mz_sql::plan::{AutoScalingStrategy, OnHydration};
+
+        let managed = |replication_factor: u32,
+                       strategy: Option<AutoScalingStrategy>,
+                       burst: Option<BurstState>| ClusterVariantManaged {
+            size: "small".into(),
+            availability_zones: Vec::new(),
+            logging: ReplicaLogging {
+                log_logging: false,
+                interval: None,
+            },
+            arrangement_compression: false,
+            replication_factor,
+            optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+            schedule: Default::default(),
+            auto_scaling_strategy: strategy,
+            reconfiguration: None,
+            burst,
+        };
+        let policy = |hydration_size: &str| AutoScalingStrategy {
+            on_hydration: Some(OnHydration {
+                hydration_size: hydration_size.into(),
+                linger_duration: None,
+            }),
+        };
+        let record = || BurstState {
+            burst_size: "large".into(),
+            linger_duration: Duration::from_secs(60),
+            steady_hydrated_at: None,
+        };
+
+        // No record: nothing to retire, with or without a policy.
+        assert!(!managed(1, None, None).has_unwarranted_burst_record());
+        assert!(!managed(1, Some(policy("large")), None).has_unwarranted_burst_record());
+
+        // A record backed by a matching, active policy is warranted.
+        assert!(!managed(1, Some(policy("large")), Some(record())).has_unwarranted_burst_record());
+
+        // Unwarranted: policy removed, policy re-sized, or cluster turned off.
+        assert!(managed(1, None, Some(record())).has_unwarranted_burst_record());
+        assert!(
+            managed(
+                1,
+                Some(AutoScalingStrategy { on_hydration: None }),
+                Some(record())
+            )
+            .has_unwarranted_burst_record()
+        );
+        assert!(managed(1, Some(policy("xlarge")), Some(record())).has_unwarranted_burst_record());
+        assert!(managed(0, Some(policy("large")), Some(record())).has_unwarranted_burst_record());
+    }
+
+    #[mz_ore::test]
+    fn test_replica_create_drop_reason_into_audit_log() {
+        use std::time::Duration;
+
+        use mz_audit_log::{CreateOrDropClusterReplicaReasonV1, SchedulingDecisionV1};
+        use mz_cluster_controller::ctx::RefreshWindowDecision;
+        use mz_repr::GlobalId;
+
+        use crate::catalog::ReplicaCreateDropReason;
+
+        // `OnRefresh` audits the `schedule` word and converts the controller's
+        // window decision into the `scheduling_policies` detail blob: ids as
+        // strings, the hydration-time estimate as an interval string, and the
+        // decision hardcoded `on` (the controller produces a create, and so
+        // this detail, only for an open window).
+        let (reason, scheduling_policies) =
+            ReplicaCreateDropReason::OnRefresh(RefreshWindowDecision {
+                objects_needing_refresh: vec![GlobalId::User(1)],
+                objects_needing_compaction: vec![GlobalId::User(2), GlobalId::User(3)],
+                hydration_time_estimate: Duration::from_secs(995),
+            })
+            .into_audit_log();
+        assert_eq!(reason, CreateOrDropClusterReplicaReasonV1::Schedule);
+        let blob = scheduling_policies.expect("on-refresh create carries the detail");
+        assert_eq!(blob.on_refresh.decision, SchedulingDecisionV1::On);
+        assert_eq!(blob.on_refresh.objects_needing_refresh, vec!["u1"]);
+        assert_eq!(blob.on_refresh.objects_needing_compaction, vec!["u2", "u3"]);
+        assert_eq!(blob.on_refresh.hydration_time_estimate, "00:16:35");
+
+        // `Retired` is the uniform word for every controller drop, with no
+        // blob.
+        let (reason, scheduling_policies) = ReplicaCreateDropReason::Retired.into_audit_log();
+        assert_eq!(reason, CreateOrDropClusterReplicaReasonV1::Retired);
+        assert!(scheduling_policies.is_none());
+    }
+
+    #[mz_ore::test]
+    fn test_burst_audit_details() {
+        use std::time::Duration;
+
+        use mz_adapter_types::cluster_state::{BurstAudit, BurstFinishCause};
+        use mz_audit_log::{BurstFinishCauseV1, HydrationBurstLifecycleV1};
+        use mz_catalog::memory::objects::{
+            BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged,
+        };
+        use mz_controller::clusters::ReplicaLogging;
+        use mz_controller_types::ClusterId;
+        use mz_repr::optimize::OptimizerFeatureOverrides;
+
+        let cluster_id = ClusterId::user(1).expect("valid id");
+        let managed = |burst: Option<BurstState>| ClusterConfig {
+            variant: ClusterVariant::Managed(ClusterVariantManaged {
+                size: "small".into(),
+                availability_zones: Vec::new(),
+                logging: ReplicaLogging {
+                    log_logging: false,
+                    interval: None,
+                },
+                arrangement_compression: false,
+                replication_factor: 1,
+                optimizer_feature_overrides: OptimizerFeatureOverrides::default(),
+                schedule: Default::default(),
+                auto_scaling_strategy: None,
+                reconfiguration: None,
+                burst,
+            }),
+            workload_class: None,
+        };
+        let record = || BurstState {
+            burst_size: "large".into(),
+            linger_duration: Duration::from_secs(60),
+            steady_hydrated_at: None,
+        };
+
+        // A started intent reads the armed record from the new config.
+        let started = Catalog::burst_audit_details(
+            &managed(None),
+            &managed(Some(record())),
+            cluster_id,
+            "c",
+            BurstAudit::Started,
+        )
+        .expect("armed record supplies audit details");
+        assert_eq!(started.transition, HydrationBurstLifecycleV1::Started);
+        assert_eq!(started.finish_cause, None);
+        assert_eq!(started.burst_size, "large");
+
+        // A finished intent reads the cleared record from the old config and
+        // carries the writer-declared cause.
+        let finished = Catalog::burst_audit_details(
+            &managed(Some(record())),
+            &managed(None),
+            cluster_id,
+            "c",
+            BurstAudit::Finished {
+                cause: BurstFinishCause::LingerElapsed,
+            },
+        )
+        .expect("cleared record supplies audit details");
+        assert_eq!(finished.transition, HydrationBurstLifecycleV1::Finished);
+        assert_eq!(
+            finished.finish_cause,
+            Some(BurstFinishCauseV1::LingerElapsed)
+        );
+        assert_eq!(finished.burst_size, "large");
+
+        // An intent without a record on the corresponding side contradicts the
+        // write and must fail the transaction.
+        let incoherent = Catalog::burst_audit_details(
+            &managed(None),
+            &managed(None),
+            cluster_id,
+            "c",
+            BurstAudit::Started,
+        );
+        assert!(incoherent.is_err());
+    }
 
     #[mz_ore::test]
     fn test_update_privilege_owners() {
@@ -3317,6 +4256,351 @@ mod tests {
             let all_t2 = state_all_at_once.try_get_entry(&id_t2).expect("all t2");
             assert_eq!(inc_t2.name(), all_t2.name());
             assert_eq!(inc_t2.owner_id, all_t2.owner_id);
+
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    /// Exercises the diff-and-prune semantics of the
+    /// `Op::UpdateScopedSystemParameters` apply handler over the cluster scope.
+    /// Covers four behaviors: upsert of a desired row, the bounded-prune
+    /// protection that spares a live cluster outside `prune_scope`, removal of a
+    /// stale in-scope row, and the orphan-prune that reclaims a row whose owning
+    /// cluster was dropped even though that id is absent from `prune_scope`.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn test_transact_update_scoped_system_parameters_prune() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant};
+        use mz_controller_types::ClusterId;
+
+        use crate::catalog::DropObjectInfo;
+        use crate::config::{ScopedParameters, ScopedParametersScope};
+
+        Catalog::with_debug(|mut catalog| async move {
+            let param = "max_query_result_size".to_string();
+            let value = "1MB".to_string();
+
+            // Allocate and create two live clusters, A and B, the same way
+            // production code does.
+            let commit_ts = catalog.current_upper().await;
+            let cluster_a = catalog
+                .allocate_user_cluster_id(commit_ts)
+                .await
+                .expect("allocate cluster A");
+            let commit_ts = catalog.current_upper().await;
+            let cluster_b = catalog
+                .allocate_user_cluster_id(commit_ts)
+                .await
+                .expect("allocate cluster B");
+
+            let make_cluster_op = |id: ClusterId, name: &str| Op::CreateCluster {
+                id,
+                name: name.to_string(),
+                introspection_sources: Vec::new(),
+                owner_id: MZ_SYSTEM_ROLE_ID,
+                config: ClusterConfig {
+                    variant: ClusterVariant::Unmanaged,
+                    workload_class: None,
+                },
+            };
+
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![
+                        make_cluster_op(cluster_a, "test_cluster_a"),
+                        make_cluster_op(cluster_b, "test_cluster_b"),
+                    ],
+                )
+                .await
+                .expect("create clusters");
+
+            // Reads the durable cluster system configuration rows.
+            async fn rows(catalog: &Catalog) -> BTreeSet<(ClusterId, String, String)> {
+                let mut storage = catalog.storage().await;
+                let tx = storage.transaction().await.expect("open transaction");
+                tx.get_cluster_system_configurations()
+                    .map(|c| (c.cluster_id, c.name, c.value))
+                    .collect()
+            }
+
+            let scope_with = |ids: &[ClusterId]| ScopedParametersScope {
+                clusters: ids.iter().copied().collect(),
+                replicas: BTreeSet::new(),
+            };
+            let cluster_scoped = |id: ClusterId| {
+                let mut cluster = BTreeMap::new();
+                let mut overrides = BTreeMap::new();
+                overrides.insert(param.clone(), value.clone());
+                cluster.insert(id, overrides);
+                ScopedParameters {
+                    cluster,
+                    replica: BTreeMap::new(),
+                }
+            };
+            let empty_scoped = || ScopedParameters {
+                cluster: BTreeMap::new(),
+                replica: BTreeMap::new(),
+            };
+
+            // Behavior 1: upsert. A is live and in scope, so the row is created.
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateScopedSystemParameters {
+                        scoped: cluster_scoped(cluster_a),
+                        prune_scope: scope_with(&[cluster_a]),
+                    }],
+                )
+                .await
+                .expect("upsert A");
+            assert!(
+                rows(&catalog)
+                    .await
+                    .contains(&(cluster_a, param.clone(), value.clone())),
+                "upsert must create the row for A"
+            );
+
+            // Set up an additional row for B so the prune cases have something to
+            // act on.
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateScopedSystemParameters {
+                        scoped: cluster_scoped(cluster_b),
+                        prune_scope: scope_with(&[cluster_b]),
+                    }],
+                )
+                .await
+                .expect("upsert B");
+            assert!(
+                rows(&catalog)
+                    .await
+                    .contains(&(cluster_b, param.clone(), value.clone())),
+                "setup must create the row for B"
+            );
+
+            // Behavior 2: bounded prune. Running with empty `scoped` and a scope
+            // that excludes the live cluster B must leave B's row intact, because
+            // the update was not authoritative for B.
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateScopedSystemParameters {
+                        scoped: empty_scoped(),
+                        prune_scope: scope_with(&[cluster_a]),
+                    }],
+                )
+                .await
+                .expect("bounded prune");
+            assert!(
+                rows(&catalog)
+                    .await
+                    .contains(&(cluster_b, param.clone(), value.clone())),
+                "a live cluster outside prune_scope must keep its row"
+            );
+
+            // Behavior 3: stale in-scope prune. A is live and in scope but not
+            // desired, so its row is removed.
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateScopedSystemParameters {
+                        scoped: empty_scoped(),
+                        prune_scope: scope_with(&[cluster_a]),
+                    }],
+                )
+                .await
+                .expect("stale in-scope prune");
+            assert!(
+                !rows(&catalog)
+                    .await
+                    .iter()
+                    .any(|(id, _, _)| *id == cluster_a),
+                "a live in-scope undesired row must be removed"
+            );
+
+            // Behavior 4: orphan prune. Re-create A's row, drop cluster A, then run
+            // the update with a scope that does NOT contain A. The sync loop only
+            // ever places live ids in prune_scope, so the orphan must still be
+            // reclaimed because its owning cluster is no longer live.
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateScopedSystemParameters {
+                        scoped: cluster_scoped(cluster_a),
+                        prune_scope: scope_with(&[cluster_a]),
+                    }],
+                )
+                .await
+                .expect("re-create A row");
+            assert!(
+                rows(&catalog)
+                    .await
+                    .contains(&(cluster_a, param.clone(), value.clone())),
+                "re-created row for A must exist"
+            );
+
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::DropObjects(vec![DropObjectInfo::Cluster(cluster_a)])],
+                )
+                .await
+                .expect("drop cluster A");
+
+            // B is the only live cluster the sync loop would have evaluated, so
+            // only B appears in prune_scope. A's id is deliberately absent.
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateScopedSystemParameters {
+                        scoped: cluster_scoped(cluster_b),
+                        prune_scope: scope_with(&[cluster_b]),
+                    }],
+                )
+                .await
+                .expect("orphan prune");
+            assert!(
+                !rows(&catalog)
+                    .await
+                    .iter()
+                    .any(|(id, _, _)| *id == cluster_a),
+                "orphan row for a dropped cluster must be removed even when absent from prune_scope"
+            );
+
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    /// Registers a `MAX_CONNECTIONS` callback that records every value it sees.
+    /// The initial fire from `register_callback` is cleared out, so callers
+    /// only observe notifications that happen afterwards.
+    fn record_max_connections(catalog: &mut Catalog) -> Arc<Mutex<Vec<u32>>> {
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&observed);
+        catalog.system_config_mut().register_callback(
+            &MAX_CONNECTIONS,
+            Arc::new(move |vars: &SystemVars| {
+                recorder
+                    .lock()
+                    .expect("recorder lock")
+                    .push(vars.max_connections())
+            }),
+        );
+        observed.lock().expect("recorder lock").clear();
+        observed
+    }
+
+    fn set_max_connections_op(value: u32) -> Op {
+        Op::UpdateSystemConfiguration {
+            name: MAX_CONNECTIONS.name.to_string(),
+            value: OwnedVarInput::Flat(value.to_string()),
+        }
+    }
+
+    // The commit-boundary firing now lives in
+    // `Coordinator::apply_catalog_implications`, so it is not observable from a
+    // bare `Catalog`. The tests below stay here to guard the speculative path:
+    // `Catalog::transact` itself must never notify.
+
+    /// A dry-run transaction is never committed, so it must not notify.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn test_system_config_callback_not_fired_on_dry_run() {
+        Catalog::with_debug(|mut catalog| async move {
+            let observed = record_max_connections(&mut catalog);
+            let before = catalog.system_config().max_connections();
+
+            // The clone carries the registered callbacks, so the dry run
+            // genuinely *could* fire them. That's what makes this test worth
+            // anything.
+            let base_state = catalog.state().clone();
+            let oracle_write_ts = catalog.current_upper().await;
+            let (dry_run_state, _snapshot) = catalog
+                .transact_incremental_dry_run(
+                    &base_state,
+                    vec![set_max_connections_op(before + 1)],
+                    None,
+                    None,
+                    oracle_write_ts,
+                )
+                .await
+                .expect("dry run");
+
+            assert_eq!(dry_run_state.system_config().max_connections(), before + 1);
+            assert_eq!(catalog.system_config().max_connections(), before);
+            assert!(
+                observed.lock().expect("recorder lock").is_empty(),
+                "a dry run must not notify callbacks"
+            );
+
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    /// A transaction that fails after applying a system-config op to the
+    /// candidate state must not notify, since nothing ever gets committed.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn test_system_config_callback_not_fired_on_rollback() {
+        Catalog::with_debug(|mut catalog| async move {
+            let observed = record_max_connections(&mut catalog);
+            let before = catalog.system_config().max_connections();
+
+            let oracle_write_ts = catalog.current_upper().await;
+            let result = catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![
+                        set_max_connections_op(before + 1),
+                        // `transact_op` rejects this while parsing, after the
+                        // first op already applied to the candidate state.
+                        Op::UpdateSystemConfiguration {
+                            name: MAX_CONNECTIONS.name.to_string(),
+                            value: OwnedVarInput::Flat("not a number".to_string()),
+                        },
+                    ],
+                )
+                .await;
+
+            assert!(result.is_err(), "the second op must abort the transaction");
+            assert_eq!(catalog.system_config().max_connections(), before);
+            assert!(
+                observed.lock().expect("recorder lock").is_empty(),
+                "an aborted transaction must not notify callbacks"
+            );
 
             catalog.expire().await;
         })

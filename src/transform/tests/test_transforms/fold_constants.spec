@@ -19,7 +19,7 @@ DefSource name=t0
 Source defined as t0
 
 # Map
-apply pipeline=fold_constants
+apply pipeline=FoldConstants
 Map (#1 + 5)
   Constant // { types: "(bigint, bigint)" }
     - (1, 2)
@@ -32,7 +32,7 @@ Constant
 # TODO: add more cases
 
 # TopK with a literal limit
-apply pipeline=fold_constants
+apply pipeline=FoldConstants
 TopK group_by=[#0] order_by=[#1 asc] limit=3 offset=1
   Constant // { types: "(bigint, bigint)" }
     - (1, 4)
@@ -60,7 +60,7 @@ Constant
 # --------------
 
 # Skipped: TopK with a non-literal limit expression
-apply pipeline=fold_constants
+apply pipeline=FoldConstants
 TopK group_by=[#0] order_by=[#1 asc] limit=#1 offset=1
   Constant // { types: "(bigint, bigint)" }
     - (1, 1)
@@ -74,7 +74,7 @@ TopK group_by=[#0] order_by=[#1 asc nulls_last] limit=#1 offset=1
     - (1, 3)
 
 # Skipped: TopK with a negative limit expression
-apply pipeline=fold_constants
+apply pipeline=FoldConstants
 TopK group_by=[#0] order_by=[#1 asc] limit=-1 offset=1
   Constant // { types: "(bigint, bigint)" }
     - (1, 1)

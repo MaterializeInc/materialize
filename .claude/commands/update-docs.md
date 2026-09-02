@@ -3,6 +3,13 @@
 Refresh `doc/developer/generated/` to reflect source changes since each doc was last written.
 Do **not** modify any source files.
 
+This workflow is the recurring documentation agent. It is the **only** sanctioned
+way to edit `doc/developer/generated/`. The read-only guard in `AGENTS.md`
+(`CLAUDE.md`) that forbids other sessions from touching that tree does **not**
+apply here — running this command *is* that exception. Edits, creations, and
+deletions under `doc/developer/generated/` are expected and in scope. Stay within
+that directory: do not change source files or anything outside the generated tree.
+
 ## Procedure
 
 ### 1. Detect stale docs

@@ -49,8 +49,7 @@ async fn test_version_step() {
     let mut persist_state = persist_openable_state
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .expect("failed to open persist catalog")
-        .0;
+        .expect("failed to open persist catalog");
     persist_state.mark_bootstrap_complete().await;
 
     assert_eq!(
@@ -111,8 +110,7 @@ async fn test_version_step() {
     let _persist_state = persist_openable_state
         .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .expect("failed to open savepoint persist catalog")
-        .0;
+        .expect("failed to open savepoint persist catalog");
 
     assert_eq!(
         Some(first_version.clone()),
@@ -141,8 +139,7 @@ async fn test_version_step() {
     let mut persist_state = persist_openable_state
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .expect("failed to open persist catalog")
-        .0;
+        .expect("failed to open persist catalog");
     persist_state.mark_bootstrap_complete().await;
 
     assert_eq!(

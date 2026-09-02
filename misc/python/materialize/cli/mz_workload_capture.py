@@ -40,6 +40,50 @@ def to_sql_string(q: bytes | SQL | Composable | LiteralString, conn) -> str:
     return q
 
 
+def parse_mz_list(text: str) -> list[str]:
+    """Parse a Materialize `list` text literal like `{a,"b,c"}` into its
+    elements.
+
+    Handles quoting and backslash escaping so schema names containing commas or
+    quotes survive, and returns `[]` for the empty list `{}` (a naive
+    `text[1:-1].split(",")` would yield `[""]`).
+    """
+    assert text.startswith("{") and text.endswith(
+        "}"
+    ), f"Unexpected search path: {text}"
+    inner = text[1:-1]
+    if inner == "":
+        return []
+    elements: list[str] = []
+    i = 0
+    n = len(inner)
+    while i < n:
+        if inner[i] == '"':
+            i += 1
+            buf: list[str] = []
+            while i < n:
+                if inner[i] == "\\" and i + 1 < n:
+                    buf.append(inner[i + 1])
+                    i += 2
+                elif inner[i] == '"':
+                    i += 1
+                    break
+                else:
+                    buf.append(inner[i])
+                    i += 1
+            elements.append("".join(buf))
+            if i < n and inner[i] == ",":
+                i += 1
+        else:
+            j = inner.find(",", i)
+            if j == -1:
+                elements.append(inner[i:])
+                break
+            elements.append(inner[i:j])
+            i = j + 1
+    return elements
+
+
 VERBOSE = False
 
 
@@ -52,20 +96,37 @@ def query(
         print(f"\n> {to_sql_string(sql, conn)}")
 
     cancel_timer: threading.Timer | None = None
+    # The timer fires conn.cancel() on a background thread. Guard it with a flag
+    # so a timeout firing just as the query completes can't cancel whatever the
+    # connection runs next: threading.Timer.cancel() only helps if the callback
+    # has not started yet.
+    cancel_lock = threading.Lock()
+    done = False
+
+    def cancel_if_running() -> None:
+        with cancel_lock:
+            if not done:
+                conn.cancel()
 
     try:
         if timeout is not None:
-            cancel_timer = threading.Timer(timeout, conn.cancel)
+            cancel_timer = threading.Timer(timeout, cancel_if_running)
             cancel_timer.start()
 
         with conn.cursor() as cur:
             cur.execute(sql)
-            return cur.fetchall()
+            rows = cur.fetchall()
+        with cancel_lock:
+            done = True
+        return rows
     except psycopg.errors.QueryCanceled:
         if VERBOSE:
             print("Too slow")
         return []
     except KeyboardInterrupt:
+        # NOTE: Ctrl-C cancels the in-flight query and, unless verbose, re-runs
+        # it once with no timeout so a slow-but-wanted result can still be
+        # captured. A second Ctrl-C during that re-run aborts for real.
         conn.cancel()
         if VERBOSE:
             raise
@@ -112,13 +173,23 @@ def attach_source_statistics_internal(
         del source["messages_total"]
     if "messages_second" in source:
         del source["messages_second"]
+    # Real time when the subscribe starts. The historical burst streams every
+    # update through the current frontier (well past end_time), so once the
+    # progress frontier reaches this point the burst is done: an active source
+    # would already have hit the data break below, and an idle one can stop here
+    # instead of blocking ~60s of real time per source.
+    subscribe_start = time.time()
     with conn.cursor() as cur:
         cur.execute("SET CLUSTER = mz_catalog_server")
+        # mz_source_statistics_with_history has one row per (id, replica_id).
+        # Aggregate across replicas with max() so the counters don't interleave.
+        # Replicas ingest redundantly, so the furthest-along value is the
+        # source's progress (summing would multiply it by the replica count).
         sql = SQL("""
             SUBSCRIBE (
                 SELECT
-                    messages_received,
-                    bytes_received
+                    max(messages_received),
+                    max(bytes_received)
                 FROM mz_internal.mz_source_statistics_with_history
                 WHERE id = {}
             )
@@ -137,7 +208,7 @@ def attach_source_statistics_internal(
             if mz_diff == -1:
                 continue
             if mz_progress:
-                if mz_timestamp / 1000 > end_time + 60:
+                if mz_timestamp / 1000 > subscribe_start:
                     break
                 continue
             if "bytes_total" not in source:
@@ -182,7 +253,12 @@ def attach_avg_column_sizes(
         for col in obj["columns"]
     ]
 
-    query_sql = SQL("SELECT {} FROM {}.{}.{} LIMIT 100").format(
+    # LIMIT must be inside the subquery so it samples 100 rows before
+    # aggregating. Applied to the aggregate result it would be a no-op that
+    # still scans the whole table.
+    query_sql = SQL(
+        "SELECT {} FROM (SELECT * FROM {}.{}.{} LIMIT 100) AS sample"
+    ).format(
         SQL(", ").join(avg_exprs),
         Identifier(db),
         Identifier(schema),
@@ -482,7 +558,6 @@ def main() -> int:
             workload["databases"][db][schema]["views"][view] = obj
 
     with timed("Fetching materialized views"):
-        time.time()
         for mv_id, mv, schema, db in query(
             conn,
             "SELECT mz_materialized_views.id, mz_materialized_views.name, mz_schemas.name, mz_databases.name FROM mz_materialized_views JOIN mz_schemas ON mz_materialized_views.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
@@ -571,15 +646,12 @@ def main() -> int:
                 "SELECT sql, cluster_name, database_name, search_path, statement_type, finished_status, params, transaction_isolation, session_id, transaction_id, began_at, finished_at - began_at, result_size FROM mz_internal.mz_recent_activity_log WHERE began_at > {} ORDER BY began_at ASC"
             ).format(Literal(datetime.fromtimestamp(start_time, tz=timezone.utc))),
         ):
-            assert (
-                search_path[0] == "{" and search_path[-1] == "}"
-            ), f"Unexpected search path: {search_path}"
             workload["queries"].append(
                 {
                     "sql": sql,
                     "cluster": cluster,
                     "database": database,
-                    "search_path": search_path[1:-1].split(","),
+                    "search_path": parse_mz_list(search_path),
                     "statement_type": statement_type,
                     "finished_status": finished_status,
                     "params": params,
@@ -632,7 +704,6 @@ def main() -> int:
     if args.output == "-":
         yaml.dump(workload, sys.stdout, Dumper=yaml.CSafeDumper)
     else:
-        time.time()
         with timed(f"Writing workload to {args.output}"):
             with open(args.output, "w") as f:
                 yaml.dump(workload, f, Dumper=yaml.CSafeDumper)

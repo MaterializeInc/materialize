@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,16 +9,16 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/discard
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/discard
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
-
-# not supported yet
-halt
 
 mode cockroach
 
@@ -38,23 +38,33 @@ SHOW SEARCH_PATH
 ----
 public
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SET timezone = 'Europe/Amsterdam'; SHOW TIMEZONE
 ----
 Europe/Amsterdam
 
+statement ok
+DISCARD ALL;
+
 query T
-DISCARD ALL; SHOW TIMEZONE
+SHOW TIMEZONE
 ----
 UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SET TIME ZONE 'Europe/Amsterdam'; SHOW TIME ZONE
 ----
 Europe/Amsterdam
 
+statement ok
+DISCARD ALL
+
 query T
-DISCARD ALL; SHOW TIME ZONE
+SHOW TIME ZONE
 ----
 UTC
 
@@ -70,5 +80,143 @@ DEALLOCATE a
 statement ok
 BEGIN
 
-statement error DISCARD ALL cannot run inside a transaction block
+statement error DISCARD ALL cannot be run inside a transaction block
 DISCARD ALL
+
+statement ok
+ROLLBACK
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE SEQUENCE discard_seq_test START WITH 10
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT nextval('discard_seq_test')
+----
+10
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT lastval()
+----
+10
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT currval('discard_seq_test')
+----
+10
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DISCARD SEQUENCES
+
+statement error pgcode 55000 function "lastval" does not exist
+SELECT lastval()
+
+statement error pgcode 55000 function "currval" does not exist
+SELECT currval('discard_seq_test')
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE SEQUENCE discard_seq_test_2 START WITH 10
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT nextval('discard_seq_test_2')
+----
+10
+
+statement ok
+DISCARD ALL
+
+statement error pgcode 55000 function "lastval" does not exist
+SELECT lastval()
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE SEQUENCE S2 CACHE 10
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT nextval('s2')
+----
+1
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DISCARD SEQUENCES
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT nextval('s2')
+----
+11
+
+statement ok
+SET experimental_enable_temp_tables=on
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT count(*) FROM [SHOW SCHEMAS] WHERE schema_name LIKE 'pg_temp_%'
+----
+0
+
+statement ok
+DISCARD TEMP;
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT count(*) FROM [SHOW SCHEMAS] WHERE schema_name LIKE 'pg_temp_%'
+----
+0
+
+statement ok
+CREATE TEMP TABLE test (a int);
+
+statement ok
+CREATE TEMP TABLE test2 (a uuid);
+
+# Not supported by Materialize.
+onlyif cockroach
+query T rowsort
+SELECT table_name FROM [SHOW TABLES FROM pg_temp]
+----
+test
+test2
+
+statement ok
+DISCARD TEMP;
+
+# Not supported by Materialize.
+onlyif cockroach
+query T rowsort
+SELECT table_name FROM [SHOW TABLES FROM pg_temp]
+----
+
+# Not supported by Materialize.
+onlyif cockroach
+#Ensure temp schema is not deleted
+query I
+SELECT count(*) FROM [SHOW SCHEMAS] WHERE schema_name LIKE 'pg_temp_%'
+----
+1
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+UNLISTEN temp

@@ -32,7 +32,7 @@ use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
     Blob, BlobMetadata, CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData,
 };
-use mz_persist::metrics::{ColumnarMetrics, S3BlobMetrics};
+use mz_persist::metrics::{BlobHedgeMetrics, ColumnarMetrics, S3BlobMetrics};
 use mz_persist::retry::RetryStream;
 use mz_persist_types::Codec64;
 use mz_postgres_client::metrics::PostgresClientMetrics;
@@ -110,6 +110,8 @@ pub struct Metrics {
 
     /// Metrics for S3-backed blob implementation
     pub s3_blob: S3BlobMetrics,
+    /// Metrics for hedged blob gets
+    pub blob_hedge: BlobHedgeMetrics,
     /// Metrics for Postgres-backed consensus implementation
     pub postgres_consensus: PostgresClientMetrics,
 
@@ -168,6 +170,7 @@ impl Metrics {
             semaphore: SemaphoreMetrics::new(cfg.clone(), registry.clone()),
             sink: SinkMetrics::new(registry),
             s3_blob,
+            blob_hedge: BlobHedgeMetrics::new(registry),
             postgres_consensus: PostgresClientMetrics::new(registry, "mz_persist"),
             _vecs: vecs,
             _uptime: uptime,
@@ -408,6 +411,7 @@ impl MetricsVecs {
             init_state: self.cmd_metrics("init_state"),
             add_rollup: self.cmd_metrics("add_rollup"),
             remove_rollups: self.cmd_metrics("remove_rollups"),
+            upgrade_version: self.cmd_metrics("upgrade_version"),
             register: self.cmd_metrics("register"),
             compare_and_append: self.cmd_metrics("compare_and_append"),
             compare_and_append_noop:             registry.register(metric!(
@@ -619,6 +623,7 @@ pub struct CmdsMetrics {
     pub(crate) init_state: CmdMetrics,
     pub(crate) add_rollup: CmdMetrics,
     pub(crate) remove_rollups: CmdMetrics,
+    pub(crate) upgrade_version: CmdMetrics,
     pub(crate) register: CmdMetrics,
     pub(crate) compare_and_append: CmdMetrics,
     pub(crate) compare_and_append_noop: IntCounter,
@@ -2299,6 +2304,7 @@ pub struct WatchMetrics {
     pub(crate) wait_resolved_via_watch: IntCounter,
     pub(crate) wait_resolved_via_sleep: IntCounter,
     pub(crate) notify_sent: IntCounter,
+    pub(crate) notify_upper_sent: IntCounter,
     pub(crate) notify_noop: IntCounter,
     pub(crate) notify_recv: IntCounter,
     pub(crate) notify_lagged: IntCounter,
@@ -2328,6 +2334,10 @@ impl WatchMetrics {
             notify_sent: registry.register(metric!(
                 name: "mz_persist_watch_notify_sent",
                 help: "count of watch notifications sent to a non-empty broadcast channel",
+            )),
+            notify_upper_sent: registry.register(metric!(
+                name: "mz_persist_watch_notify_upper_sent",
+                help: "count of strict shard upper advances signaled to upper waiters",
             )),
             notify_noop: registry.register(metric!(
                 name: "mz_persist_watch_notify_noop",

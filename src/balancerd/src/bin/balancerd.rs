@@ -15,14 +15,14 @@
 use std::error::Error;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use domain::resolv::StubResolver;
 use jsonwebtoken::DecodingKey;
 use mz_balancerd::{
-    BUILD_INFO, BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver,
-    SniResolver,
+    BUILD_INFO, BalancerConfig, BalancerResolver, BalancerService, CancellationResolver,
+    FronteggResolver, SniTemplate, TenantDnsResolver,
 };
 use mz_frontegg_auth::{
     Authenticator, AuthenticatorConfig, DEFAULT_REFRESH_DROP_FACTOR,
@@ -32,9 +32,10 @@ use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::retry::Retry;
 use mz_ore::tracing::TracingHandle;
 use mz_server_core::TlsCliArgs;
-use tracing::{Instrument, info_span, warn};
+use tracing::{Instrument, info, info_span, warn};
 
 #[derive(Debug, clap::Parser)]
 #[clap(about = "Balancer service", long_about = None)]
@@ -167,10 +168,29 @@ pub struct ServiceArgs {
     /// Set startup defaults for dynconfig
     #[clap(long, value_parser = parse_key_val::<String, String>, value_delimiter = ',')]
     default_config: Option<Vec<(String, String)>>,
+    /// How long to wait for the static resolver address to become resolvable.
+    /// During upgrades the target service may not be immediately available, so
+    /// balancerd retries DNS resolution with exponential backoff until this
+    /// timeout is reached.
+    #[clap(
+        long,
+        env = "STATIC_RESOLVER_ADDR_TIMEOUT",
+        value_parser = humantime::parse_duration,
+        default_value = "30s"
+    )]
+    static_resolver_addr_timeout: Duration,
 }
 
 fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
+
+    // Pin the rustls crypto provider to aws-lc-rs. The LaunchDarkly SDK uses
+    // hyper-rustls, so building its client resolves the process-default rustls
+    // provider. The workspace also links rustls' `ring` feature (pulled by
+    // other hyper-rustls chains), and with both provider features enabled
+    // rustls cannot choose a default on its own and panics. The call is
+    // idempotent, so ignore the result.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     // Mirror the tokio Runtime configuration in our production binaries.
     let ncpus_useful = usize::max(1, std::cmp::min(num_cpus::get(), num_cpus::get_physical()));
@@ -245,13 +265,15 @@ pub async fn run(
             if !cancellation_resolver_dir.is_dir() {
                 anyhow::bail!("{cancellation_resolver_dir:?} is not a directory");
             }
+
             (
-                Resolver::MultiTenant(
-                    FronteggResolver {
+                BalancerResolver::MultiTenant {
+                    dns: Arc::new(TenantDnsResolver::new()?),
+                    frontegg: FronteggResolver {
                         auth,
                         addr_template,
                     },
-                    match args.pgwire_sni_resolver_template {
+                    sni: match args.pgwire_sni_resolver_template {
                         None => None,
                         Some(template) => {
                             let (template, port) = template
@@ -265,31 +287,62 @@ pub async fn run(
                                     )
                                 })
                                 .expect("invalid port for pgwire_sni_resolver_template");
-                            Some(SniResolver {
-                                resolver: StubResolver::new(),
-                                template,
-                                port,
-                            })
+                            Some(SniTemplate { template, port })
                         }
                     },
-                ),
+                },
                 CancellationResolver::Directory(cancellation_resolver_dir),
             )
         }
         (Some(addr), None) => {
-            // As a typo-check, verify that the passed address resolves to at least one IP. This
-            // result isn't recorded anywhere: we re-resolve on each request in case DNS changes.
-            // Here only to cause startup to crash if mistyped.
-            let mut addrs = tokio::net::lookup_host(&addr)
+            // Verify that the passed address resolves to at least one IP as a
+            // typo-check. This result isn't recorded anywhere: we re-resolve on
+            // each request in case DNS changes. During upgrades the target
+            // service may not be immediately available, so retry with
+            // exponential backoff.
+            let timeout = args.static_resolver_addr_timeout;
+            Retry::default()
+                .initial_backoff(Duration::from_millis(250))
+                .clamp_backoff(Duration::from_secs(2))
+                .max_duration(timeout)
+                .retry_async(|state| {
+                    let addr = &addr;
+                    async move {
+                        match tokio::net::lookup_host(addr).await {
+                            Ok(mut addrs) => {
+                                if addrs.next().is_some() {
+                                    if state.i > 0 {
+                                        info!("resolved {addr} after {} attempts", state.i + 1);
+                                    }
+                                    Ok(())
+                                } else {
+                                    let msg = format!("{addr} did not resolve to any addresses");
+                                    if state.next_backoff.is_some() {
+                                        warn!("{msg}, retrying...");
+                                    }
+                                    Err(anyhow::anyhow!("{msg}"))
+                                }
+                            }
+                            Err(e) => {
+                                let msg = format!(
+                                    "could not resolve {addr}: {}",
+                                    e.display_with_causes()
+                                );
+                                if state.next_backoff.is_some() {
+                                    warn!("{msg}, retrying...");
+                                }
+                                Err(anyhow::anyhow!("{msg}"))
+                            }
+                        }
+                    }
+                })
                 .await
-                .unwrap_or_else(|_| panic!("could not resolve {addr}"));
-            let Some(_resolved) = addrs.next() else {
-                panic!("{addr} did not resolve to any addresses");
-            };
-            drop(addrs);
+                .with_context(|| {
+                    format!("static resolver address {addr} did not resolve within {timeout:?}")
+                })?;
 
             (
-                Resolver::Static(addr.clone()),
+                BalancerResolver::Static(addr.clone()),
                 CancellationResolver::Static(addr),
             )
         }

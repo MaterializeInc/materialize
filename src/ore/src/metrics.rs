@@ -41,6 +41,7 @@
 //! }
 //! ```
 
+use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
@@ -73,6 +74,8 @@ macro_rules! metric {
         $(, const_labels: { $($cl_key:expr => $cl_value:expr ),* })?
         $(, var_labels: [ $($vl_name:expr),* ])?
         $(, buckets: $bk_name:expr)?
+        $(, visibility: $visibility:expr)?
+        $(, tags: [ $($tag:expr),* $(,)? ])?
         $(,)?
     ) => {{
         let const_labels = (&[
@@ -94,6 +97,14 @@ macro_rules! metric {
         };
         // Set buckets if passed
         $(mk_opts.buckets = Some($bk_name);)*
+        // `visibility` is documentation metadata for the metrics catalog
+        // (`bin/gen-metrics-catalog`).
+        // It has no runtime effect; we only type-check it here so a bad value is
+        // a compile error rather than silently ignored.
+        $(let _: $crate::metrics::MetricVisibility = $visibility;)?
+        // `tags` is documentation metadata for the metrics catalog.
+        // It has no runtime effect.
+        $($(let _: $crate::metrics::MetricTag = $tag;)*)?
         mk_opts
     }}
 }
@@ -106,6 +117,44 @@ pub struct MakeCollectorOpts {
     /// Buckets to be used with Histogram and HistogramVec. Must be set to create Histogram types
     /// and must not be set for other types.
     pub buckets: Option<Vec<f64>>,
+}
+
+/// This is documentation metadata: it is set via the optional `visibility:`
+/// field of [`metric!`] and consumed by the metrics catalog
+/// (`bin/gen-metrics-catalog`), which reads it from the source tree to produce
+/// the user-facing metrics reference. It has no effect on the metric at
+/// runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MetricVisibility {
+    /// A metric we use for internal development.
+    #[default]
+    Internal,
+    /// A metric we want customers to build dashboards and
+    /// alerts on. We do not guarantee stability for this group
+    /// of metrics.
+    Public,
+}
+
+/// A tag categorizing a metric in the user-facing metrics catalog.
+///
+/// It is set via the optional `tags:` field of [`metric!`] and
+/// consumed by the metrics catalog (`bin/gen-metrics-catalog`).
+/// It has no effect on the metric at runtime.
+///
+/// A metric may carry many tags, or none (the default). A tag names the
+/// grouping the metric is presented under in user-facing documentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MetricTag {
+    /// SQL Control plane metrics (client connections, availability, catalog).
+    Environment,
+    /// Metrics for compute objects (indexes, materialized views).
+    Compute,
+    /// Metrics for sources.
+    Source,
+    /// Metrics for sinks.
+    Sink,
 }
 
 /// The materialize metrics registry.
@@ -238,6 +287,44 @@ impl MetricsRegistry {
         self.inner
             .register(Box::new(collector))
             .expect("registering pre-defined metrics collector");
+    }
+
+    /// Register a pre-defined collector and return a handle that unregisters it on drop.
+    ///
+    /// Use this for collectors with a bounded lifetime (e.g. a metric sink that is torn down with
+    /// its dataflow), so the collector's series stop being scraped once the owner drops the handle.
+    /// The returned value is opaque: the caller only needs to hold it for as long as the collector
+    /// should stay registered, then drop it.
+    ///
+    /// `prometheus::Registry::unregister` matches a collector by the id of its `Desc`s, not by
+    /// object identity, so the guard keeps a clone of the collector and hands it back to
+    /// `unregister` on drop.
+    ///
+    /// If a collector with the same descriptor id is already registered this soft-panics and
+    /// returns a handle that owns no registration. A duplicate registration is a logic error, but
+    /// panicking here would run on a worker thread and could crash the process, so it degrades to
+    /// missing series rather than taking down the whole scrape. The contract is that a caller
+    /// replacing a collector must drop the old handle before registering the new one: doing so
+    /// unregisters the old descriptor id first, so the re-registration succeeds cleanly.
+    pub fn register_collector_with_dropper<C>(&self, collector: C) -> Box<dyn Any + Send + Sync>
+    where
+        C: 'static + prometheus::core::Collector + Clone + Send + Sync,
+    {
+        match self.inner.register(Box::new(collector.clone())) {
+            Ok(()) => {
+                // `prometheus::Registry` is `Arc`-backed, so this clone is cheap and shares the
+                // same underlying registry the collector was registered into.
+                let registry = self.inner.clone();
+                Box::new(scopeguard::guard(collector, move |c| {
+                    let _ = registry.unregister(Box::new(c));
+                }))
+            }
+            Err(e) => {
+                crate::soft_panic_or_log!("collector already registered: {e}");
+                // Nothing was registered, so the handle must not unregister anything on drop.
+                Box::new(())
+            }
+        }
     }
 
     /// Registers a metric postprocessor.
@@ -911,12 +998,12 @@ pub fn register_runtime_metrics(
     }
 }
 
-/// Returns the `(name, help, source)` of every Tokio runtime metric registered
-/// by [`register_runtime_metrics`].
+/// Returns the `(name, help, labels, source)` of every Tokio runtime metric
+/// registered by [`register_runtime_metrics`].
 #[cfg(feature = "async")]
-pub fn describe_runtime_metrics() -> Vec<(String, String, &'static str)> {
+pub fn describe_runtime_metrics() -> Vec<(String, String, Vec<String>, &'static str)> {
     // A current-thread runtime is enough to enumerate the metrics; we only read
-    // their names and help text, never their values.
+    // their names, help text, and labels, never their values.
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("building a current-thread runtime");
@@ -925,7 +1012,18 @@ pub fn describe_runtime_metrics() -> Vec<(String, String, &'static str)> {
     registry
         .gather()
         .into_iter()
-        .map(|mf| (mf.name().to_owned(), mf.help().to_owned(), file!()))
+        .map(|mf| {
+            // Every series in a family shares the same label keys, so the first
+            // metric's labels are representative.
+            let mut labels: Vec<String> = mf
+                .get_metric()
+                .first()
+                .map(|m| m.get_label().iter().map(|l| l.name().to_owned()).collect())
+                .unwrap_or_default();
+            labels.sort();
+            labels.dedup();
+            (mf.name().to_owned(), mf.help().to_owned(), labels, file!())
+        })
         .collect()
 }
 
@@ -1067,5 +1165,47 @@ mod tests {
         let wall_counter = wall_metric[0].get_counter();
         // We filtered wall time to < 10ms, so our wall time metric should be filtered out.
         assert_eq!(wall_counter.value(), 0.0);
+    }
+
+    #[crate::test]
+    fn collector_drop_handle_unregisters() {
+        use prometheus::IntGauge;
+
+        let registry = MetricsRegistry::new();
+        let gauge = IntGauge::new("mz_test_guarded", "help").unwrap();
+        gauge.set(7);
+        let before = registry.gather().len();
+
+        let handle = registry.register_collector_with_dropper(gauge.clone());
+        assert_eq!(registry.gather().len(), before + 1);
+
+        // Dropping the handle unregisters the collector, so its series stops being scraped.
+        drop(handle);
+        assert_eq!(registry.gather().len(), before);
+    }
+
+    #[crate::test]
+    fn register_drop_then_reregister() {
+        use prometheus::IntGauge;
+
+        // Two collectors sharing a descriptor id: re-registering the second while the first is
+        // still registered would collide. This locks in the contract that dropping the old handle
+        // first clears the id so the re-registration succeeds cleanly, the ordering a caller
+        // replacing a collector (e.g. a metric sink re-rendered on reconciliation) must uphold.
+        let registry = MetricsRegistry::new();
+        let old = IntGauge::new("mz_test_reregister", "help").unwrap();
+        let new = IntGauge::new("mz_test_reregister", "help").unwrap();
+        let before = registry.gather().len();
+
+        let handle = registry.register_collector_with_dropper(old);
+        assert_eq!(registry.gather().len(), before + 1);
+
+        // Drop old before registering new, matching the required ordering.
+        drop(handle);
+        let handle = registry.register_collector_with_dropper(new);
+        assert_eq!(registry.gather().len(), before + 1);
+
+        drop(handle);
+        assert_eq!(registry.gather().len(), before);
     }
 }

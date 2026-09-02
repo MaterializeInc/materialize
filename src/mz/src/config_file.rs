@@ -15,8 +15,6 @@
 
 //! Configuration file management.
 
-use std::fs::OpenOptions;
-use std::io::Read;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::{collections::BTreeMap, str::FromStr};
@@ -84,24 +82,17 @@ impl ConfigFile {
     }
 
     /// Loads a configuration file from the specified path.
+    ///
+    /// A missing file loads as an empty configuration. Loading never creates
+    /// the file or its parent directory, and never requires write access, so
+    /// commands that only read the configuration work when `mz.toml` lives on
+    /// a read-only mount. The first mutation creates whatever is missing.
     pub async fn load(path: PathBuf) -> Result<ConfigFile, Error> {
-        // Create the parent directory if it doesn't exist
-        if let Some(parent) = path.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).await?;
-            }
-        }
-
-        // Create the file if it doesn't exist
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)?;
-
-        let mut buffer = String::new();
-        file.read_to_string(&mut buffer)?;
+        let buffer = match fs::read_to_string(&path).await {
+            Ok(buffer) => buffer,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(e.into()),
+        };
 
         let parsed = toml_edit::de::from_str(&buffer)?;
         let editable = buffer.parse()?;
@@ -111,6 +102,50 @@ impl ConfigFile {
             parsed,
             editable,
         })
+    }
+
+    /// Writes `contents` to the configuration file, creating the parent
+    /// directory if it doesn't exist.
+    async fn write(&self, contents: String) -> Result<(), Error> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        fs::write(&self.path, contents).await?;
+
+        Ok(())
+    }
+
+    /// Errors unless the configuration file can be written, creating the file
+    /// and its parent directory if they are missing.
+    ///
+    /// Commands that cause external side effects before mutating the
+    /// configuration, such as creating an app password or writing to the
+    /// keychain, must call this beforehand. Otherwise an unwritable
+    /// configuration file fails the command only after those side effects have
+    /// happened, leaving them unrecorded.
+    ///
+    /// Creating what is missing is what makes the check conclusive: whether a
+    /// missing file can be written depends on the parent hierarchy, which no
+    /// amount of probing establishes as reliably as performing the creation
+    /// that the later write needs anyway.
+    pub async fn ensure_writable(&self) -> Result<(), Error> {
+        let result = async {
+            if let Some(parent) = self.path.parent() {
+                fs::create_dir_all(parent).await?;
+            }
+            fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&self.path)
+                .await?;
+
+            Ok::<(), std::io::Error>(())
+        };
+
+        result
+            .await
+            .map_err(|e| Error::ConfigFileNotWritable(self.path.clone(), e))
     }
 
     /// Loads a profile from the configuration file.
@@ -161,7 +196,7 @@ impl ConfigFile {
         editable["profile"] = editable.entry("profile").or_insert(value(name)).clone();
 
         // TODO: I don't know why it creates an empty [profiles] table
-        fs::write(&self.path, editable.to_string()).await?;
+        self.write(editable.to_string()).await?;
 
         Ok(())
     }
@@ -209,7 +244,7 @@ impl ConfigFile {
             .ok_or(Error::ProfilesMissing)?;
         profiles.remove(name);
 
-        fs::write(&self.path, editable.to_string()).await?;
+        self.write(editable.to_string()).await?;
 
         Ok(())
     }
@@ -290,7 +325,7 @@ impl ConfigFile {
             Some(value) => editable["profiles"][profile_name][name] = toml_edit::value(value),
         }
 
-        fs::write(&self.path, editable.to_string()).await?;
+        self.write(editable.to_string()).await?;
 
         Ok(())
     }
@@ -324,7 +359,7 @@ impl ConfigFile {
             }
             Some(value) => editable[name] = toml_edit::value(value),
         }
-        fs::write(&self.path, editable.to_string()).await?;
+        self.write(editable.to_string()).await?;
         Ok(())
     }
 }
@@ -529,4 +564,108 @@ pub struct TomlProfile {
     pub admin_endpoint: Option<String>,
     /// A custom cloud endpoint used for development.
     pub cloud_endpoint: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::*;
+
+    /// Returns whether the file system enforces `path`'s permission bits for
+    /// this process, which is not the case when running as root.
+    fn permissions_are_enforced(path: &PathBuf) -> bool {
+        std::fs::OpenOptions::new().write(true).open(path).is_err()
+    }
+
+    /// Makes `path` read-only and returns whether the file system enforces
+    /// that for this process, which is not the case when running as root.
+    fn make_read_only(path: &PathBuf) -> bool {
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(path, permissions).unwrap();
+
+        if path.is_dir() {
+            let probe = path.join("probe");
+            let enforced = std::fs::write(&probe, "").is_err();
+            let _ = std::fs::remove_file(probe);
+            enforced
+        } else {
+            permissions_are_enforced(path)
+        }
+    }
+
+    /// Restores write access so that the temporary directory can be cleaned up.
+    fn make_writable(path: &PathBuf) {
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `mkdir`
+    async fn test_load_missing_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("missing").join("mz.toml");
+
+        let config = ConfigFile::load(path.clone()).await.unwrap();
+
+        assert!(config.profiles().is_none());
+        // Loading must not create anything on disk.
+        assert!(!path.exists());
+        assert!(!path.parent().unwrap().exists());
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `mkdir`
+    async fn test_load_read_only_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("mz.toml");
+        std::fs::write(&path, "profile = \"default\"\n").unwrap();
+        let enforced = make_read_only(&path);
+
+        let config = ConfigFile::load(path.clone()).await.unwrap();
+
+        assert_eq!(config.profile(), "default");
+        if enforced {
+            assert!(config.ensure_writable().await.is_err());
+        }
+
+        make_writable(&path);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `mkdir`
+    async fn test_missing_file_in_read_only_directory() {
+        let dir = TempDir::new().unwrap();
+        let parent = dir.path().join("materialize");
+        std::fs::create_dir(&parent).unwrap();
+        let enforced = make_read_only(&parent);
+
+        let config = ConfigFile::load(parent.join("mz.toml")).await.unwrap();
+
+        // A missing file is only writable if its parent hierarchy accepts it.
+        if enforced {
+            assert!(config.ensure_writable().await.is_err());
+        }
+
+        make_writable(&parent);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `mkdir`
+    async fn test_write_creates_parent_directory() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("materialize").join("mz.toml");
+
+        let config = ConfigFile::load(path.clone()).await.unwrap();
+        config.ensure_writable().await.unwrap();
+        // The writability check creates what the later write needs.
+        assert!(path.exists());
+
+        config.set_param("profile", Some("default")).await.unwrap();
+
+        assert_eq!(ConfigFile::load(path).await.unwrap().profile(), "default");
+    }
 }

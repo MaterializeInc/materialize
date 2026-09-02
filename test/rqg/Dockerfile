@@ -9,7 +9,7 @@
 
 # Build and run SQLsmith, a random query generator, ported for Materialize
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
 # Git dependencies
 RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \

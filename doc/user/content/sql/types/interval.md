@@ -19,8 +19,8 @@ Detail | Info
 **Size** | 16 bytes
 **Catalog name** | `pg_catalog.interval`
 **OID** | 1186
-**Min value** | -178956970 years -8 months -2147483648 days -2562047788:00:54.775808
-**Max value** | 178956970 years 7 months 2147483647 days 2562047788:00:54.775807
+**Min value** | -178956970 years -8 mons -2147483648 days -2562047788:00:54.775808
+**Max value** | 178956970 years 7 mons 2147483647 days 2562047788:00:54.775807
 
 ## Syntax
 
@@ -125,7 +125,7 @@ SELECT INTERVAL '1-2 3 4:5:6.7' AS interval_p;
 ```nofmt
             interval_f
 -----------------------------------
- 1 year 2 months 3 days 04:05:06.7
+ 1 year 2 mons 3 days 04:05:06.7
 ```
 
 ### PostgreSQL syntax
@@ -182,7 +182,7 @@ SELECT INTERVAL '1 day 2-3 4' MINUTE AS interval_w;
 ```nofmt
            interval_w
 ---------------------------------
- 2 years 3 months 1 day 00:04:00
+ 2 years 3 mons 1 day 00:04:00
 ```
 
 ### Interaction with timestamps

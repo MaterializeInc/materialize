@@ -124,3 +124,17 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
 
 $ kafka-verify-data format=json sink=materialize.public.sink key=false
 {"before": null, "after": {"created_post_name": "hundred", "created_post_value": 99}}
+
+# COMMIT INTERVAL only applies to Iceberg sinks.
+! ALTER SINK sink SET (COMMIT INTERVAL = '1s');
+contains: COMMIT INTERVAL option is not supported with KAFKA sinks
+
+! ALTER SINK sink RESET (COMMIT INTERVAL);
+contains: cannot RESET COMMIT INTERVAL: option is not set
+
+# Other sink options are not alterable.
+! ALTER SINK sink SET (SNAPSHOT = false);
+contains: ALTER SINK ... SET (SNAPSHOT) not yet supported
+
+! ALTER SINK sink RESET (SNAPSHOT);
+contains: ALTER SINK ... RESET (SNAPSHOT) not yet supported

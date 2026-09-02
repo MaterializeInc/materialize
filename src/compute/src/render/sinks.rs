@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use differential_dataflow::VecCollection;
+use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use mz_expr::{EvalError, MapFilterProject, permutation_for_arrangement};
 use mz_ore::soft_assert_or_log;
@@ -29,7 +30,7 @@ use timely::progress::Antichain;
 
 use crate::compute_state::SinkToken;
 use crate::logging::compute::LogDataflowErrors;
-use crate::render::context::Context;
+use crate::render::context::{Context, distinct_errs_collection};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::{RenderTimestamp, StartSignal};
 
@@ -66,8 +67,8 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
         let bundle = self
             .lookup_id(mz_expr::Id::Global(sink.from))
             .expect("Sink source collection not loaded");
-        let (ok_collection, mut err_collection) = if let Some(collection) = &bundle.collection {
-            collection.clone()
+        let (ok_collection, mut err_collection) = if let Some((oks, errs)) = &bundle.collection {
+            (oks.clone().into_vec(), errs.clone())
         } else {
             let (key, _arrangement) = bundle
                 .arranged
@@ -76,10 +77,11 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
                 .expect("Invariant violated: at least one collection must be present.");
             let unthinned_arity = sink.from_desc.arity();
             let (permutation, thinning) = permutation_for_arrangement(key, unthinned_arity);
-            let mut mfp = MapFilterProject::new(unthinned_arity);
+            let mut mfp = MapFilterProject::<LirScalarExpr>::new(unthinned_arity);
             mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
+            let mfp_plan = mfp.into_plan().expect("MFP planning failed");
             bundle.as_collection_core(
-                mfp,
+                mfp_plan,
                 Some((key.clone(), None)),
                 self.until.clone(),
                 &self.config_set,
@@ -128,6 +130,16 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
             err_collection = err_collection.concat(null_errs);
         }
 
+        // Normalize what the sink persists. A materialized view's error multiplicity is durable
+        // state another dataflow reads back verbatim, so leaving it at this dataflow's fan-out both
+        // multiplies across the object graph and makes the written value depend on plan shape.
+        // Placed after the null assertions so their errors, whose multiplicity follows the ok row's,
+        // are covered too. Only the persist-backed sink is re-importable: a subscribe or a one-shot
+        // copy is read once by a client, so neither pays for the arrangement.
+        if matches!(sink.connection, ComputeSinkConnection::MaterializedView(_)) {
+            err_collection = distinct_errs_collection(err_collection);
+        }
+
         let region_name = match sink.connection {
             ComputeSinkConnection::Subscribe(_) => format!("SubscribeSink({:?})", sink_id),
             ComputeSinkConnection::MaterializedView(_) => {
@@ -136,6 +148,7 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
             ComputeSinkConnection::CopyToS3Oneshot(_) => {
                 format!("CopyToS3OneshotSink({:?})", sink_id)
             }
+            ComputeSinkConnection::MetricSink(_) => format!("MetricSink({:?})", sink_id),
         };
         outer_scope.clone().region_named(&region_name, |inner| {
             let sink_render = get_sink_render_for(&sink.connection);
@@ -183,5 +196,6 @@ fn get_sink_render_for<'scope>(
         ComputeSinkConnection::Subscribe(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::MaterializedView(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::CopyToS3Oneshot(connection) => Box::new(connection.clone()),
+        ComputeSinkConnection::MetricSink(connection) => Box::new(connection.clone()),
     }
 }

@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,20 +9,18 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/json
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/json
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
 mode cockroach
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET unsafe_enable_table_keys = true
-----
-COMPLETE 0
 
 ## Basic creation
 
@@ -44,9 +42,9 @@ jsonb
 query T
 SELECT '1.00'::JSON
 ----
-1.00
+1
 
-statement error unexpected EOF
+statement error invalid input syntax for type jsonb: EOF while parsing an object at line 1 column 1: "\{"
 SELECT '{'::JSON
 
 query T
@@ -70,17 +68,17 @@ SELECT '[]'::JSON
 []
 
 query T
-SELECT '[1,2,3]'::JSON
+SELECT '[1, 2, 3]'::JSON
 ----
 [1,2,3]
 
 query T
-SELECT '[1,"hello",[[[true,false]]]]'::JSON
+SELECT '[1, "hello", [[[true, false]]]]'::JSON
 ----
 [1,"hello",[[[true,false]]]]
 
 query T
-SELECT '[1,"hello",{"a": ["foo",{"b": 3}]}]'::JSON
+SELECT '[1, "hello", {"a": ["foo", {"b": 3}]}]'::JSON
 ----
 [1,"hello",{"a":["foo",{"b":3}]}]
 
@@ -90,18 +88,18 @@ SELECT '{}'::JSON
 {}
 
 query T
-SELECT '{"a":"b","c":"d"}'::JSON
+SELECT '{"a": "b", "c": "d"}'::JSON
 ----
 {"a":"b","c":"d"}
 
 query T
-SELECT '{"a":1,"c":{"foo":"bar"}}'::JSON
+SELECT '{"a": 1, "c": {"foo": "bar"}}'::JSON
 ----
 {"a":1,"c":{"foo":"bar"}}
 
 # Only the final occurrence of a key in an object is kept.
 query T
-SELECT '{"a":1,"a":2}'::JSON
+SELECT '{"a": 1, "a": 2}'::JSON
 ----
 {"a":2}
 
@@ -110,52 +108,61 @@ SELECT NULL::JSON
 ----
 NULL
 
-statement error arrays of jsonb not allowed.*\nHINT:.*23468
-SELECT ARRAY['"hello"'::JSON]
-
-statement error arrays of jsonb not allowed.*\nHINT:.*23468
-SELECT '{}'::JSONB[]
-
-statement error arrays of jsonb not allowed.*\nHINT:.*23468
+# Not supported by Materialize.
+onlyif cockroach
+statement error arrays of JSON unsupported as column type.*\nHINT:.*\n.*23468
 CREATE TABLE x (y JSONB[])
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
-CREATE TABLE foo (bar JSON)
+CREATE TABLE foo (pk INT DEFAULT unique_rowid(), bar JSON)
 
+statement error unknown catalog item 'foo'
+CREATE VIEW x AS SELECT array_agg(bar) FROM foo
+
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
-INSERT INTO foo VALUES
-  ('{"a":"b"}'),
-  ('[1,2,3]'),
+INSERT INTO foo(bar) VALUES
+  ('{"a": "b"}'),
+  ('[1, 2, 3]'),
   ('"hello"'),
   ('1.000'),
   ('true'),
   ('false'),
   (NULL),
-  ('{"x":[1,2,3]}'),
-  ('{"x":{"y":"z"}}')
+  ('{"x": [1, 2, 3]}'),
+  ('{"x": {"y": "z"}}')
 
+# Not supported by Materialize.
+onlyif cockroach
 query T rowsort
 SELECT bar FROM foo
 ----
-{"a":"b"}
-[1,2,3]
+{"a": "b"}
+[1, 2, 3]
 "hello"
 1.000
 true
 false
 NULL
-{"x":[1,2,3]}
-{"x":{"y":"z"}}
+{"x": [1, 2, 3]}
+{"x": {"y": "z"}}
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT bar FROM foo WHERE bar->>'a' = 'b'
 ----
-{"a":"b"}
+{"a": "b"}
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT bar FROM foo WHERE bar ? 'a'
 ----
-{"a":"b"}
+{"a": "b"}
 
 query BBBBBBB
 VALUES (
@@ -170,51 +177,70 @@ VALUES (
 ----
 true  false  false  false  false  false  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT bar FROM foo WHERE bar ? 'hello'
 ----
 "hello"
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT bar FROM foo WHERE bar ? 'goodbye'
 ----
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT bar FROM foo WHERE bar ?| ARRAY['a','b']
 ----
-{"a":"b"}
+{"a": "b"}
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT bar FROM foo WHERE bar ?& ARRAY['a','b']
 ----
 
+# Not supported by Materialize.
+onlyif cockroach
 # ?| and ?& ignore NULLs.
 query T
-SELECT bar FROM foo WHERE bar ?| ARRAY['a',null]
+SELECT bar FROM foo WHERE bar ?| ARRAY['a', null]
 ----
-{"a":"b"}
+{"a": "b"}
 
-# TODO(justin):cockroach#29355
-# query T
-# SELECT bar FROM foo WHERE bar ?| ARRAY[null,null]::STRING[]
-# ----
-
+# Not supported by Materialize.
+onlyif cockroach
 query T
-SELECT bar FROM foo WHERE bar ?& ARRAY['a',null]
+SELECT bar FROM foo WHERE bar ?| ARRAY[null, null]::STRING[]
 ----
-{"a":"b"}
 
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT bar FROM foo WHERE bar ?& ARRAY['a', null]
+----
+{"a": "b"}
+
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT bar FROM foo WHERE bar->'a' = '"b"'::JSON
 ----
-{"a":"b"}
+{"a": "b"}
 
-statement error pgcode 0A000 can't order by column type jsonb.*\nHINT.*32706
+statement error pgcode 0A000 unknown catalog item 'foo'
 SELECT bar FROM foo ORDER BY bar
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pgcode 0A000 column k is of type jsonb and thus is not indexable
 CREATE TABLE pk (k JSON PRIMARY KEY)
 
+# Not supported by Materialize.
+onlyif cockroach
 query T rowsort
 SELECT bar->'a' FROM foo
 ----
@@ -228,30 +254,47 @@ NULL
 NULL
 NULL
 
-query T
+# Not supported by Materialize.
+onlyif cockroach
+query IT
 SELECT * from foo where bar->'x' = '[1]'
 ----
 
-query T
+# Not supported by Materialize.
+onlyif cockroach
+query IT
 SELECT * from foo where bar->'x' = '{}'
 ----
 
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT array_agg(bar ORDER BY pk) FROM foo
+----
+{"{\"a\": \"b\"}","[1, 2, 3]","\"hello\"",1.000,true,false,NULL,"{\"x\": [1, 2, 3]}","{\"x\": {\"y\": \"z\"}}"}
+
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DELETE FROM foo
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
-INSERT INTO foo VALUES ('{"a":{"c":"d"}}');
+INSERT INTO foo(bar) VALUES ('{"a": {"c": "d"}}');
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
-SELECT bar->'a'->'c',bar->'a'->>'c' FROM foo
+SELECT bar->'a'->'c', bar->'a'->>'c' FROM foo
 ----
 "d" d
 
 statement ok
-CREATE TABLE multiple (a JSON,b JSON)
+CREATE TABLE multiple (a JSON, b JSON)
 
 statement ok
-INSERT INTO multiple VALUES ('{"a":"b"}','[1,2,3,4,"foo"]')
+INSERT INTO multiple VALUES ('{"a":"b"}', '[1,2,3,4,"foo"]')
 
 query T
 SELECT a FROM multiple
@@ -265,7 +308,7 @@ SELECT b FROM multiple
 
 ## Comparisons
 
-# We opt to not expose <,>,<=,>= at this time,to avoid having to commit to
+# We opt to not expose <, >, <=, >= at this time, to avoid having to commit to
 # an ordering.
 query B
 SELECT '1'::JSON = '1'::JSON
@@ -288,64 +331,64 @@ SELECT '1.00'::JSON = '1'::JSON
 true
 
 query BB
-SELECT '"hello"'::JSON = '"hello"'::JSON,'"hello"'::JSON = '"goodbye"'::JSON
+SELECT '"hello"'::JSON = '"hello"'::JSON, '"hello"'::JSON = '"goodbye"'::JSON
 ----
 true false
 
 query B
-SELECT '"hello"'::JSON IN ('"hello"'::JSON,'1'::JSON,'[]'::JSON)
+SELECT '"hello"'::JSON IN ('"hello"'::JSON, '1'::JSON, '[]'::JSON)
 ----
 true
 
 query B
-SELECT 'false'::JSON IN ('"hello"'::JSON,'1'::JSON,'[]'::JSON)
+SELECT 'false'::JSON IN ('"hello"'::JSON, '1'::JSON, '[]'::JSON)
 ----
 false
 
 ## Operators
 
 query T
-SELECT '{"a":1}'::JSONB->'a'
+SELECT '{"a": 1}'::JSONB->'a'
 ----
 1
 
 query T
-SELECT pg_typeof('{"a":1}'::JSONB->'a')
+SELECT pg_typeof('{"a": 1}'::JSONB->'a')
 ----
 jsonb
 
 query T
-SELECT '{"a":1,"b":2}'::JSONB->'b'
+SELECT '{"a": 1, "b": 2}'::JSONB->'b'
 ----
 2
 
 query T
-SELECT '{"a":1,"b":{"c":3}}'::JSONB->'b'->'c'
+SELECT '{"a": 1, "b": {"c": 3}}'::JSONB->'b'->'c'
 ----
 3
 
 query TT
-SELECT '{"a":1,"b":2}'::JSONB->'c','{"c":1}'::JSONB->'a'
+SELECT '{"a": 1, "b": 2}'::JSONB->'c', '{"c": 1}'::JSONB->'a'
 ----
 NULL NULL
 
 query TT
-SELECT '2'::JSONB->'b','[1,2,3]'::JSONB->'0'
+SELECT '2'::JSONB->'b', '[1,2,3]'::JSONB->'0'
 ----
 NULL NULL
 
 query T
-SELECT '[1,2,3]'::JSONB->0
+SELECT '[1, 2, 3]'::JSONB->0
 ----
 1
 
 query T
-SELECT '[1,2,3]'::JSONB->3
+SELECT '[1, 2, 3]'::JSONB->3
 ----
 NULL
 
 query T
-SELECT '{"a":"b"}'::JSONB->>'a'
+SELECT '{"a": "b"}'::JSONB->>'a'
 ----
 b
 
@@ -360,164 +403,230 @@ SELECT '{"a":null}'::JSONB->>'a'
 NULL
 
 query T
-SELECT pg_typeof('{"a":1}'::JSONB->>'a')
+SELECT pg_typeof('{"a": 1}'::JSONB->>'a')
 ----
-string
+text
 
 query T
-SELECT '{"a":1,"b":2}'::JSONB->>'b'
+SELECT '{"a": 1, "b": 2}'::JSONB->>'b'
 ----
 2
 
 query TT
-SELECT '{"a":1,"b":2}'::JSONB->>'c','{"c":1}'::JSONB->>'a'
+SELECT '{"a": 1, "b": 2}'::JSONB->>'c', '{"c": 1}'::JSONB->>'a'
 ----
 NULL NULL
 
 query TT
-SELECT '2'::JSONB->>'b','[1,2,3]'::JSONB->>'0'
+SELECT '2'::JSONB->>'b', '[1,2,3]'::JSONB->>'0'
 ----
 NULL NULL
 
 query T
-SELECT '[1,2,3]'::JSONB->>0
+SELECT '[1, 2, 3]'::JSONB->>0
 ----
 1
 
 query T
-SELECT '[1,2,3]'::JSONB->>3
+SELECT '[1, 2, 3]'::JSONB->>3
 ----
 NULL
 
+query TTTT
+SELECT 'null'::jsonb->-2, 'null'::jsonb->-1, 'null'::jsonb->0, 'null'::jsonb->1
+----
+NULL  null  null  NULL
+
+query TTTT
+SELECT 'true'::jsonb->-2, 'true'::jsonb->-1, 'true'::jsonb->0, 'true'::jsonb->1
+----
+NULL  true  true  NULL
+
+query TTTT
+SELECT 'false'::jsonb->-2, 'false'::jsonb->-1, 'false'::jsonb->0, 'false'::jsonb->1
+----
+NULL  false  false  NULL
+
+query TTTT
+SELECT '"foo"'::jsonb->-2, '"foo"'::jsonb->-1, '"foo"'::jsonb->0, '"foo"'::jsonb->1
+----
+NULL  "foo"  "foo"  NULL
+
+query TTTT
+SELECT '123'::jsonb->-2, '123'::jsonb->-1, '123'::jsonb->0, '123'::jsonb->1
+----
+NULL  123  123  NULL
+
+query TTTT
+SELECT 'null'::jsonb->>-2, 'null'::jsonb->>-1, 'null'::jsonb->>0, 'null'::jsonb->>1
+----
+NULL  NULL  NULL  NULL
+
+query TTTT
+SELECT 'true'::jsonb->>-2, 'true'::jsonb->>-1, 'true'::jsonb->>0, 'true'::jsonb->>1
+----
+NULL  true  true  NULL
+
+query TTTT
+SELECT 'false'::jsonb->>-2, 'false'::jsonb->>-1, 'false'::jsonb->>0, 'false'::jsonb->>1
+----
+NULL  false  false  NULL
+
+query TTTT
+SELECT '"foo"'::jsonb->>-2, '"foo"'::jsonb->>-1, '"foo"'::jsonb->>0, '"foo"'::jsonb->>1
+----
+NULL  foo  foo  NULL
+
+query TTTT
+SELECT '123'::jsonb->>-2, '123'::jsonb->>-1, '123'::jsonb->>0, '123'::jsonb->>1
+----
+NULL  123  123  NULL
+
 query T
-SELECT '{"a":1}'::JSONB#>'{a}'::STRING[]
+SELECT '{"a": 1}'::JSONB#>'{a}'::STRING[]
 ----
 1
 
 query T
-SELECT '{"a":{"b":"c"}}'::JSONB#>'{a,b}'::STRING[]
+SELECT '{"a": {"b": "c"}}'::JSONB#>'{a,b}'::STRING[]
 ----
 "c"
 
 query T
-SELECT '{"a":["b"]}'::JSONB#>'{a,b}'::STRING[]
+SELECT '{"a": ["b"]}'::JSONB#>'{a,b}'::STRING[]
 ----
 NULL
 
 query T
-SELECT '{"a":["b"]}'::JSONB#>'{a,0}'::STRING[]
+SELECT '{"a": ["b"]}'::JSONB#>'{a,0}'::STRING[]
 ----
 "b"
 
 query T
-SELECT '{"a":1}'::JSONB#>>ARRAY['foo',null]
+SELECT '{"a": 1}'::JSONB#>>ARRAY['foo', null]
 ----
 NULL
 
 query T
-SELECT '{"a":1}'::JSONB#>>'{a}'::STRING[]
+SELECT '{"a": 1}'::JSONB#>>'{a}'::STRING[]
 ----
 1
 
 query T
-SELECT '{"a":{"b":"c"}}'::JSONB#>>'{a,b}'::STRING[]
+SELECT '{"a": {"b": "c"}}'::JSONB#>>'{a,b}'::STRING[]
 ----
 c
 
 query T
-SELECT '{"a":["b"]}'::JSONB#>>'{a,b}'::STRING[]
+SELECT '{"a": ["b"]}'::JSONB#>>'{a,b}'::STRING[]
 ----
 NULL
 
 query T
-SELECT '{"a":["b"]}'::JSONB#>>'{a,0}'::STRING[]
+SELECT '{"a": ["b"]}'::JSONB#>>'{a,0}'::STRING[]
 ----
 b
 
 query T
-SELECT '{"a":[null]}'::JSONB#>>'{a,0}'::STRING[]
+SELECT '{"a": [null]}'::JSONB#>>'{a,0}'::STRING[]
 ----
 NULL
 
 query BB
-SELECT '{"a":1}'::JSONB ? 'a','{"a":1}'::JSONB ? 'b'
+SELECT '{"a": 1}'::JSONB ? 'a', '{"a": 1}'::JSONB ? 'b'
 ----
 true false
 
 query BB
-SELECT '{"a":1,"b":1}'::JSONB ? 'a','{"a":1,"b":1}'::JSONB ? 'b'
+SELECT '{"a": 1, "b": 1}'::JSONB ? 'a', '{"a": 1, "b": 1}'::JSONB ? 'b'
 ----
 true true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BB
-SELECT '{"a":1}'::JSONB ?| ARRAY['a','b'],'{"b":1}'::JSONB ?| ARRAY['a','b']
+SELECT '{"a": 1}'::JSONB ?| ARRAY['a', 'b'], '{"b": 1}'::JSONB ?| ARRAY['a', 'b']
 ----
 true true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
-SELECT '{"c":1}'::JSONB ?| ARRAY['a','b']
+SELECT '{"c": 1}'::JSONB ?| ARRAY['a', 'b']
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query BB
-SELECT '{"a":1}'::JSONB ?& ARRAY['a','b'],'{"b":1}'::JSONB ?& ARRAY['a','b']
+SELECT '{"a": 1}'::JSONB ?& ARRAY['a', 'b'], '{"b": 1}'::JSONB ?& ARRAY['a', 'b']
 ----
 false false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
-SELECT '{"a":1,"b":1,"c":1}'::JSONB ?& ARRAY['a','b']
+SELECT '{"a": 1, "b": 1, "c": 1}'::JSONB ?& ARRAY['a', 'b']
 ----
 true
 
 ## Arrays do not `?` their stringified indices.
 query B
-SELECT '[1,2,3]'::JSONB ? '0'
+SELECT '[1, 2, 3]'::JSONB ? '0'
 ----
 false
 
 ## Arrays `?` string elements.
 query B
-SELECT '["foo","bar","baz"]'::JSONB ? 'foo'
+SELECT '["foo", "bar", "baz"]'::JSONB ? 'foo'
 ----
 true
 
 query B
-SELECT '["foo","bar","baz"]'::JSONB ? 'baz'
+SELECT '["foo", "bar", "baz"]'::JSONB ? 'baz'
 ----
 true
 
 query B
-SELECT '["foo","bar","baz"]'::JSONB ? 'gup'
+SELECT '["foo", "bar", "baz"]'::JSONB ? 'gup'
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
-SELECT '["foo","bar","baz"]'::JSONB ?| ARRAY['foo','gup']
+SELECT '["foo", "bar", "baz"]'::JSONB ?| ARRAY['foo', 'gup']
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
-SELECT '["foo","bar","baz"]'::JSONB ?| ARRAY['buh','gup']
+SELECT '["foo", "bar", "baz"]'::JSONB ?| ARRAY['buh', 'gup']
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
-SELECT '["foo","bar","baz"]'::JSONB ?& ARRAY['foo','bar']
+SELECT '["foo", "bar", "baz"]'::JSONB ?& ARRAY['foo', 'bar']
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
-SELECT '["foo","bar","baz"]'::JSONB ?& ARRAY['foo','buh']
+SELECT '["foo", "bar", "baz"]'::JSONB ?& ARRAY['foo', 'buh']
 ----
 false
 
 query T
-SELECT '{"a":1}'::JSONB - 'a'
+SELECT '{"a": 1}'::JSONB - 'a'
 ----
 {}
 
 query T
-SELECT '{"a":1}'::JSONB - 'b'
+SELECT '{"a": 1}'::JSONB - 'b'
 ----
 {"a":1}
 
@@ -532,34 +641,38 @@ SELECT '[1,2,3]'::JSONB - 1
 ----
 [1,3]
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pgcode 22023 cannot delete from scalar
 SELECT '3'::JSONB - 'b'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pgcode 22023 cannot delete from object using integer index
 SELECT '{}'::JSONB - 1
 
 query B
-SELECT '[1,2,3]'::JSONB <@ '[1,2]'::JSONB
+SELECT '[1, 2, 3]'::JSONB <@ '[1, 2]'::JSONB
 ----
 false
 
 query B
-SELECT '[1,2]'::JSONB <@ '[1,2,3]'::JSONB
+SELECT '[1, 2]'::JSONB <@ '[1, 2, 3]'::JSONB
 ----
 true
 
 query B
-SELECT '[1,2]'::JSONB @> '[1,2,3]'::JSONB
+SELECT '[1, 2]'::JSONB @> '[1, 2, 3]'::JSONB
 ----
 false
 
 query B
-SELECT '[1,2,3]'::JSONB @> '[1,2]'::JSONB
+SELECT '[1, 2, 3]'::JSONB @> '[1, 2]'::JSONB
 ----
 true
 
 query B
-SELECT '{"a":[1,2,3]}'::JSONB->'a' @> '2'::JSONB
+SELECT '{"a": [1, 2, 3]}'::JSONB->'a' @> '2'::JSONB
 ----
 true
 
@@ -567,13 +680,15 @@ statement ok
 CREATE TABLE x (j JSONB)
 
 statement ok
-INSERT INTO x VALUES ('{"a":[1,2,3]}')
+INSERT INTO x VALUES ('{"a": [1,2,3]}')
 
 query B
 SELECT true FROM x WHERE j->'a' @> '2'::JSONB
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE INVERTED INDEX ON x (j)
 
@@ -582,64 +697,76 @@ SELECT true FROM x WHERE j->'a' @> '2'::JSONB
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
-SELECT '{"foo":{"bar":1}}'::JSONB #- ARRAY['foo','bar']
+SELECT '{"foo": {"bar": 1}}'::JSONB #- ARRAY['foo', 'bar']
 ----
-{"foo":{}}
+{"foo": {}}
 
-statement error path element at position 1 is null
-SELECT '{"foo":{"bar":1}}'::JSONB #- ARRAY[null,'foo']
+statement error \[#\-\] not yet supported
+SELECT '{"foo": {"bar": 1}}'::JSONB #- ARRAY[null, 'foo']
 
-statement error path element at position 2 is null
-SELECT '{"foo":{"bar":1}}'::JSONB #- ARRAY['foo',null]
+statement error \[#\-\] not yet supported
+SELECT '{"foo": {"bar": 1}}'::JSONB #- ARRAY['foo', null]
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
-SELECT '{"foo":{"bar":1}}'::JSONB #- ARRAY['foo']
+SELECT '{"foo": {"bar": 1}}'::JSONB #- ARRAY['foo']
 ----
 {}
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
-SELECT '{"foo":{"bar":1}}'::JSONB #- ARRAY['bar']
+SELECT '{"foo": {"bar": 1}}'::JSONB #- ARRAY['bar']
 ----
-{"foo":{"bar":1}}
+{"foo": {"bar": 1}}
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
-SELECT '{"foo":{"bar":1},"one":1,"two":2}'::JSONB #- ARRAY['one']
+SELECT '{"foo": {"bar": 1}, "one": 1, "two": 2}'::JSONB #- ARRAY['one']
 ----
-{"foo":{"bar":1},"two":2}
+{"foo": {"bar": 1}, "two": 2}
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '{}'::JSONB #- ARRAY['foo']
 ----
 {}
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
-SELECT '{"foo":{"bar":1}}'::JSONB #- ARRAY['']
+SELECT '{"foo": {"bar": 1}}'::JSONB #- ARRAY['']
 ----
-{"foo":{"bar":1}}
+{"foo": {"bar": 1}}
 
 query T
-SELECT '{"a":"b"}'::JSONB::STRING
-----
-{"a":"b"}
-
-query T
-SELECT CAST('{"a":"b"}'::JSONB AS STRING)
+SELECT '{"a": "b"}'::JSONB::STRING
 ----
 {"a":"b"}
 
 query T
-SELECT '["1","2","3"]'::JSONB - '1'
+SELECT CAST('{"a": "b"}'::JSONB AS STRING)
+----
+{"a":"b"}
+
+query T
+SELECT '["1", "2", "3"]'::JSONB - '1'
 ----
 ["2","3"]
 
 query T
-SELECT '["1","2","1","2","3"]'::JSONB - '2'
+SELECT '["1", "2", "1", "2", "3"]'::JSONB - '2'
 ----
 ["1","1","3"]
 
 query T
-SELECT '["1","2","3"]'::JSONB - '4'
+SELECT '["1", "2", "3"]'::JSONB - '4'
 ----
 ["1","2","3"]
 
@@ -649,86 +776,110 @@ SELECT '[]'::JSONB - '1'
 []
 
 query T
-SELECT '["1","2","3"]'::JSONB - ''
+SELECT '["1", "2", "3"]'::JSONB - ''
 ----
 ["1","2","3"]
 
 query T
-SELECT '[1,"1",1.0]'::JSONB - '1'
+SELECT '[1, "1", 1.0]'::JSONB - '1'
 ----
-[1,1.0]
+[1,1]
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
-SELECT '[1,2,3]'::JSONB #- ARRAY['0']
+SELECT '[1, 2, 3]'::JSONB #- ARRAY['0']
 ----
-[2,3]
+[2, 3]
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
-SELECT '[1,2,3]'::JSONB #- ARRAY['3']
+SELECT '[1, 2, 3]'::JSONB #- ARRAY['3']
 ----
-[1,2,3]
+[1, 2, 3]
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '[]'::JSONB #- ARRAY['0']
 ----
 []
 
-statement error pgcode 22P02 a path element is not an integer:foo
+statement error pgcode 22P02 \[#\-\] not yet supported
 SELECT '["foo"]'::JSONB #- ARRAY['foo']
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
-SELECT '{"a":["foo"]}'::JSONB #- ARRAY['a','0']
+SELECT '{"a": ["foo"]}'::JSONB #- ARRAY['a', '0']
 ----
-{"a":[]}
+{"a": []}
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
-SELECT '{"a":["foo","bar"]}'::JSONB #- ARRAY['a','1']
+SELECT '{"a": ["foo", "bar"]}'::JSONB #- ARRAY['a', '1']
 ----
-{"a":["foo"]}
+{"a": ["foo"]}
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
-SELECT '{"a":[]}'::JSONB #- ARRAY['a','0']
+SELECT '{"a": []}'::JSONB #- ARRAY['a', '0']
 ----
-{"a":[]}
+{"a": []}
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '{"a":123,"b":456,"c":567}'::JSONB - array[]:::text[];
 ----
-{"a":123,"b":456,"c":567}
+{"a": 123, "b": 456, "c": 567}
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '{"a":123,"b":456,"c":567}'::JSONB - array['a','c'];
 ----
-{"b":456}
+{"b": 456}
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '{"a":123,"c":"asdf"}'::JSONB - array['a','c'];
 ----
 {}
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '{}'::JSONB - array['a','c'];
 ----
 {}
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
-SELECT '{"b":[],"c":{"a":"b"}}'::JSONB - array['a'];
+SELECT '{"b": [], "c": {"a": "b"}}'::JSONB - array['a'];
 ----
-{"b":[],"c":{"a":"b"}}
+{"b": [], "c": {"a": "b"}}
 
-# Regression test for cockroach#34756.
+# Not supported by Materialize.
+onlyif cockroach
+# Regression test for #34756.
 query T
-SELECT '{"b":[],"c":{"a":"b"}}'::JSONB - array['foo',NULL]
+SELECT '{"b": [], "c": {"a": "b"}}'::JSONB - array['foo', NULL]
 ----
-{"b":[],"c":{"a":"b"}}
+{"b": [], "c": {"a": "b"}}
 
-statement error pgcode 22P02 a path element is not an integer:foo
-SELECT '{"a":{"b":["foo"]}}'::JSONB #- ARRAY['a','b','foo']
+statement error pgcode 22P02 \[#\-\] not yet supported
+SELECT '{"a": {"b": ["foo"]}}'::JSONB #- ARRAY['a', 'b', 'foo']
 
 subtest single_family_jsonb
 
 statement ok
-CREATE TABLE json_family (a INT PRIMARY KEY,b JSONB,FAMILY fam0(a),FAMILY fam1(b))
+CREATE TABLE json_family (a INT PRIMARY KEY, b JSONB, FAMILY fam0(a), FAMILY fam1(b))
 
 statement ok
 INSERT INTO json_family VALUES(0,'{}')
@@ -737,11 +888,201 @@ statement ok
 INSERT INTO json_family VALUES(1,'{"a":123,"c":"asdf"}')
 
 query IT colnames
-SELECT a,b FROM json_family ORDER BY a
+SELECT a, b FROM json_family ORDER BY a
 ----
-a  b
+a b
 0  {}
 1  {"a":123,"c":"asdf"}
 
 statement ok
 DROP TABLE json_family
+
+# Regression tests for #49143. Correctly handle cases where the -> operator
+# results in NULL when both arguments are non-NULL.
+subtest regression_49143
+
+statement ok
+CREATE TABLE t49143 (k INT PRIMARY KEY, j JSON);
+INSERT INTO t49143 VALUES
+  (0, '[]'),
+  (1, '[1]'),
+  (2, '[2]'),
+  (3, '[[1, 2], [3, 4]]'),
+  (4, '[[5, 6], [7, 8]]'),
+  (5, '{}'),
+  (6, '{"a": 1}'),
+  (7, '{"b": 1}'),
+  (8, '{"b": 2}'),
+  (9, '{"b": [1, 2]}'),
+  (10, '{"b": [3, 4]}');
+
+query T
+SELECT j FROM t49143 WHERE NOT (j->0 = '2') ORDER BY k
+----
+[1]
+[[1,2],[3,4]]
+[[5,6],[7,8]]
+
+query T
+SELECT j FROM t49143 WHERE NOT (j->'b' = '1') ORDER BY k
+----
+{"b":2}
+{"b":[1,2]}
+{"b":[3,4]}
+
+query T
+SELECT j FROM t49143 WHERE NOT (j -> 0 @> '[1]') ORDER BY k
+----
+[1]
+[2]
+[[5,6],[7,8]]
+
+query T
+SELECT j FROM t49143 WHERE NOT (j -> 'b' @> '[1]') ORDER BY k
+----
+{"b":1}
+{"b":2}
+{"b":[3,4]}
+
+# Regression tests for #57165 (wrong type conversion in the vectorized engine).
+subtest regression_57165
+
+statement ok
+CREATE TABLE t57165(j JSON, s STRING);
+INSERT INTO t57165 VALUES ('{"foo": "bar"}', 'foo'), ('{"bar": "foo"}', 'bar')
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SELECT j - 'foo' AS a, j - 'bar' AS b FROM t57165 ORDER BY rowid
+----
+{}              {"foo": "bar"}
+{"bar": "foo"}  {}
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SELECT '{"foo": "bar"}' - s AS a, '{"bar": "foo"}' - s AS b FROM t57165 ORDER BY rowid
+----
+{}              {"bar": "foo"}
+{"foo": "bar"}  {}
+
+query T
+SELECT j - s FROM t57165
+----
+{}
+{}
+
+query T
+SELECT ARRAY['"hello"'::JSON]
+----
+{"\"hello\""}
+
+query T
+SELECT '{}'::JSONB[]
+----
+{}
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT json_valid('{"hello": {}}')
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT json_valid('{"foo": {"bar": 1, "one": 1, "two": 2')
+----
+false
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT json_valid('[{"bar": 1}, {"bar": 2}]')
+----
+true
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT json_valid(NULL)
+----
+NULL
+
+# Regression tests for #81647 (false negatives for ? operator in some cases).
+subtest regression_81647
+
+statement ok
+CREATE TABLE t81647(j JSON);
+INSERT INTO t81647 VALUES ('["a", "b"]')
+
+query TBTB
+SELECT j, j ? 'a', j-1, (j-1) ? 'a' FROM t81647
+----
+["a","b"]  true  ["a"]  true
+
+#
+# Test JSONB subscripting.
+#
+
+# Constant folding.
+query TTT
+SELECT
+  ('{"a": {"b": {"c": 1}}}'::jsonb)['a'],
+  ('{"a": {"b": {"c": 1}}}'::jsonb)['a']['b']['c'],
+  ('[1, "2", null]'::jsonb)[1]
+----
+{"b":{"c":1}}  1  "2"
+
+# Referencing subscript which does not exist.
+query TTTT
+SELECT
+  ('{"a": 1}'::jsonb)['b'],
+  ('{"a": {"b": {"c": 1}}}'::jsonb)['c']['b']['c'],
+  ('[1, "2", null]'::jsonb)[4],
+  ('{"a": 1}'::jsonb)[NULL]
+----
+NULL  NULL  NULL  NULL
+
+# Error cases.
+statement error jsonb subscript type must be coercible to integer or text
+SELECT ('{"a": 1}'::jsonb)[now()]
+
+statement error jsonb subscript does not support slices
+SELECT ('{"a": 1}'::jsonb)['a':'b']
+
+# Not supported by Materialize.
+onlyif cockroach
+# Check it works from a JSON table.
+statement ok
+CREATE TABLE json_subscript_test (
+  id SERIAL PRIMARY KEY,
+  j JSONB,
+  extract_field TEXT,
+  extract_int_field INT
+);
+INSERT INTO json_subscript_test (j, extract_field, extract_int_field) VALUES
+  ('{"other_field": 2}', 'other_field', 1),
+  ('{"field": {"field": 2}}', 'field', 0),
+  ('[1, 2, 3]', 'nothing_to_fetch', 1)
+
+# Not supported by Materialize.
+onlyif cockroach
+# Test subscripts with fields using other columns.
+query TTITTTT
+SELECT j, extract_field, extract_int_field, j['field'], j[extract_field], j[extract_field][extract_field], j[extract_int_field]
+FROM json_subscript_test ORDER BY id
+----
+{"other_field": 2}       other_field       1  NULL          2             NULL  NULL
+{"field": {"field": 2}}  field             0  {"field": 2}  {"field": 2}  2     NULL
+[1, 2, 3]                nothing_to_fetch  1  NULL          NULL          NULL  2
+
+# Not supported by Materialize.
+onlyif cockroach
+# Test use in a WHERE clause.
+query T
+SELECT j FROM json_subscript_test WHERE j['other_field'] = '2' ORDER BY id
+----
+{"other_field": 2}

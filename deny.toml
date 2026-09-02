@@ -69,8 +69,6 @@ skip = [
 
     { name = "hyper-tls", version = "0.5.0" },
 
-    { name = "hyper-timeout", version = "0.4.1" },
-
     { name = "memmap2", version = "0.5.4" },
 
     { name = "async-channel", version = "1.9.0" },
@@ -104,10 +102,8 @@ skip = [
     { name = "socket2", version = "0.5.10" },
     # Used by azure_core
     { name = "quick-xml", version = "0.31.0" },
-    # Used by reqsign (via iceberg); opendal pulls quick-xml 0.38
-    { name = "quick-xml", version = "0.37.5" },
-    # Used by opendal via iceberg
-    { name = "quick-xml", version = "0.38.4" },
+    # reqsign-aws (via iceberg) is ahead of opendal, which pulls 0.39.
+    { name = "quick-xml", version = "0.41.0" },
     # Used by sentry
     { name = "reqwest", version = "0.13.3" },
     # Conflicts between `bon` in apache-avro and `derive_builder` in iceberg
@@ -120,25 +116,47 @@ skip = [
     { name = "typed-builder", version = "0.20.1" },
     { name = "typed-builder-macro", version = "0.20.1" },
     # chrono-tz
-    { name = "phf", version = "0.11.3" },
-    { name = "phf_shared", version = "0.11.3" },
-    { name = "phf_generator", version = "0.11.2" },
-    { name = "phf_codegen", version = "0.11.3" },
+    { name = "phf", version = "0.12.1" },
+    { name = "phf_shared", version = "0.12.1" },
+    { name = "phf_generator", version = "0.12.1" },
+    { name = "phf_codegen", version = "0.12.1" },
     # duckdb
     { name = "fallible-iterator", version = "0.3.0" },
     # arrow
     { name = "hashbrown", version = "0.16.1" },
+    { name = "hashbrown", version = "0.17.1" },
+    # duckdb pins arrow 57 while the workspace is on 58, so mz-testdrive links
+    # both majors. They never meet: duckdb's arrow stays inside duckdb's own API.
+    { name = "arrow", version = "57.1.0" },
+    { name = "arrow-arith", version = "57.1.0" },
+    { name = "arrow-array", version = "57.2.0" },
+    { name = "arrow-buffer", version = "57.3.0" },
+    { name = "arrow-cast", version = "57.2.0" },
+    { name = "arrow-data", version = "57.2.0" },
+    { name = "arrow-ord", version = "57.2.0" },
+    { name = "arrow-row", version = "57.1.0" },
+    { name = "arrow-schema", version = "57.2.0" },
+    { name = "arrow-select", version = "57.2.0" },
+    { name = "arrow-string", version = "57.1.0" },
+    # opendal 0.57 and reqsign 3.x (both via iceberg) are on the next generation
+    # of the RustCrypto crates, while the rest of the workspace is still on the
+    # current one.
+    { name = "base64", version = "0.23.1" },
+    { name = "block-buffer", version = "0.12.1" },
+    { name = "const-oid", version = "0.10.2" },
+    { name = "crypto-common", version = "0.2.2" },
+    { name = "digest", version = "0.11.3" },
+    { name = "hmac", version = "0.13.0" },
+    { name = "md-5", version = "0.11.0" },
+    { name = "sha1", version = "0.11.0" },
+    { name = "sha2", version = "0.11.0" },
+    # Held back by mz-timely-util; iceberg and the persist crates use 0.13.
+    { name = "lz4_flex", version = "0.12.1" },
     # Used by dynfmt; iceberg/typetag pulls in v0.4.
     { name = "erased-serde", version = "0.3.26" },
     # gcp_auth → hyper-rustls → rustls-native-certs pulls newer versions
     # while native-tls still pulls older versions.
     { name = "core-foundation", version = "0.10.1" },
-    { name = "security-framework", version = "3.7.0" },
-    { name = "openssl-probe", version = "0.2.1" },
-    # reqsign (via iceberg-storage-opendal / opendal) pins older deps
-    # than the workspace.
-    { name = "jsonwebtoken", version = "9.3.1" },
-    { name = "quick-xml", version = "0.37.5" },
     # aws-lc-rs (via jsonwebtoken 10) and ring pull different `untrusted`.
     { name = "untrusted", version = "0.7.1" },
     # Held back by lazy_static 1.4.0 (used by num-bigint-dig).
@@ -150,6 +168,14 @@ skip = [
     { name = "hashlink", version = "0.9.1" },
     # held back by owo-colors 4.3 (mz-deploy terminal styling)
     { name = "supports-color", version = "2.1.0" },
+
+    # Pulled by launchdarkly-server-sdk 3.x via launchdarkly-sdk-transport /
+    # eventsource-client (proxy/timeout/rustls stack and the SDK's RNG path).
+    # NB: tower 0.4.13 is already skipped above (mz-deploy).
+    { name = "rand", version = "0.10.1" },
+    { name = "rand_core", version = "0.10.1" },
+    { name = "getrandom", version = "0.4.2" },
+    { name = "cpufeatures", version = "0.3.0" },
 ]
 
 [[bans.deny]]
@@ -200,22 +226,29 @@ wrappers = [
     "buildid",
     "cookie_store",
     "deadpool-postgres",
-    "domain",
     "eventsource-client",
     "fail",
     "globset",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
+    "launchdarkly-sdk-transport",
     "native-tls",
-    "opendal",
+    "opendal-core",
+    "opendal-layer-retry",
+    "opendal-service-gcs",
+    "opendal-service-s3",
     "os_info",
     "postgres",
     "pprof",
     "prost-build",
     # TODO(guswynn): switch to tracing in rdkafka
     "rdkafka",
-    "reqsign",
+    "reqsign-aws-core",
+    "reqsign-aws-v4",
+    "reqsign-core",
+    "reqsign-google",
     "reqwest",
+    "rustls",
     "sqlparser",
     "tokio-postgres",
     "tokio-tungstenite",
@@ -226,13 +259,6 @@ wrappers = [
     "zopfli",
 ]
 
-# We prefer the system's native TLS or OpenSSL to Rustls, since they are more
-# mature and more widely used. `gcp_auth` only ships with rustls-based TLS,
-# so allow it through.
-[[bans.deny]]
-name = "rustls"
-wrappers = ["hyper-rustls", "tokio-rustls"]
-
 # once_cell is going to be added to std, and doesn't use macros
 # Unfortunately, its heavily used, so we have lots of exceptions.
 [[bans.deny]]
@@ -240,11 +266,9 @@ name = "lazy_static"
 wrappers = [
     "dynfmt",
     "findshlibs",
-    "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
     "num-bigint-dig",
     "prometheus",
-    "rayon-core",
     "sharded-slab",
 ]
 
@@ -290,6 +314,22 @@ ignore = [
     # Allows private key leakage through timing information
     # rsa is required through iceberg-storage-opendal
     "RUSTSEC-2023-0071",
+    # `quick-xml` pulled in as transitive dependency: Quadratic run time when
+    # checking a start tag for duplicate attribute names. Not used to parse
+    # untrusted XML.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+    # `bitmaps` is unmaintained
+    "RUSTSEC-2026-0247",
+    # `aws-sdk-s3` and `launchdarkly-server-sdk` both require `lru ^0.16.3` in their latest releases
+    "RUSTSEC-2026-0253",
+    # `h2` unbounded empty DATA frames, only patched in `h2 >=0.4.16`. Our
+    # `h2 0.4` is patched, but `h2 0.3` is also in the tree via `hyper 0.14`,
+    # which `mz-aws-util` keeps to override the DNS resolver of the AWS SDK
+    # (`aws-smithy-runtime/connector-hyper-0-14-x`). The `h2 0.3` line has no
+    # patched release, so this cannot be resolved by a version bump. That
+    # client only talks to AWS endpoints, and the advisory is low severity.
+    "RUSTSEC-2026-0258",
 ]
 
 # Must be manually kept in sync with about.toml.

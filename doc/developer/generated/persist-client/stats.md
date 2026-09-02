@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/stats.rs
-revision: 51f1c1c12c
+revision: 5a4a36c4fd
 ---
 
 # persist-client::stats

@@ -1,6 +1,6 @@
 ---
 source: src/testdrive/src/action/postgres/verify_slot.rs
-revision: 12fbe31d24
+revision: 253293ef87
 ---
 
 # testdrive::action::postgres::verify_slot

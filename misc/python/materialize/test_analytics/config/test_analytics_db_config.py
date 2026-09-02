@@ -22,7 +22,7 @@ def create_test_analytics_config(c: Composition) -> MzDbConfig:
     if app_password is not None:
         try:
             hostname = get_cloud_hostname(c, app_password=app_password)
-        except ui.CommandFailureCausedUIError as e:
+        except ui.UIError as e:
             # TODO: Remove when database-issues#8592 is fixed
             print(f"Failed to get cloud hostname ({e}), using fallback value")
             hostname = "7vifiksqeftxc6ld3r6zvc8n2.lb.us-east-1.aws.materialize.cloud"

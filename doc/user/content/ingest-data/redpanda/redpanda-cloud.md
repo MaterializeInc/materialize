@@ -283,9 +283,6 @@ SOURCE`](/sql/create-source/) command to your Redpanda Cloud cluster and start
 ingesting data from your target topic. By default, the source will be created in
 the active cluster; to use a different cluster, use the `IN CLUSTER` clause.
 
-```mzsql
-CREATE SOURCE rp_source
-  -- The topic you want to read from.
-  FROM KAFKA CONNECTION redpanda_cloud (TOPIC '<topic-name>')
-  FORMAT JSON;
-```
+{{< include-headless-with file="/headless/kafka-create-source-syntax"
+source="rp_source" connection="redpanda_cloud" topic="<topic-name>"
+table="rp_table" format="FORMAT JSON" >}}

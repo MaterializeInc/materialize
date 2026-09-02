@@ -12,8 +12,6 @@ import string
 import threading
 from textwrap import dedent
 
-import numpy as np
-
 from materialize.mzcompose.composition import Composition
 from materialize.zippy.framework import (
     Action,
@@ -53,20 +51,6 @@ class KafkaStart(Action):
 
     def run(self, c: Composition, state: State) -> None:
         c.up("redpanda")
-
-
-class KafkaStop(Action):
-    """Stop the Kafka instance."""
-
-    @classmethod
-    def requires(cls) -> set[type[Capability]]:
-        return {KafkaRunning}
-
-    def withholds(self) -> set[type[Capability]]:
-        return {KafkaRunning}
-
-    def run(self, c: Composition, state: State) -> None:
-        c.kill("redpanda")
 
 
 class CreateTopicParameterized(ActionFactory):
@@ -139,8 +123,10 @@ class Ingest(Action):
     def __init__(self, capabilities: Capabilities) -> None:
         self.topic = random.choice(capabilities.get(TopicExists))
         self.delta = random.randint(1, 10000)
-        # This gives 67% pads of up to 10 bytes, 25% of up to 100 bytes and outliers up to 256 bytes
-        self.pad = min(np.random.zipf(1.6, 1)[0], 256) * random.choice(
+        # Heavy-tailed pad sizes: mostly up to 10 bytes, some up to 100 bytes
+        # and outliers up to 256 bytes. int(paretovariate(0.6)) approximates a
+        # zipf(1.6) sample while staying reproducible under random.seed().
+        self.pad = min(int(random.paretovariate(0.6)), 256) * random.choice(
             string.ascii_letters
         )
         super().__init__(capabilities)
@@ -167,7 +153,17 @@ class KafkaInsert(Ingest):
             """)
 
         if self.parallel():
-            threading.Thread(target=c.testdrive, args=[testdrive_str]).start()
+            mz_service = state.mz_service
+
+            def ingest() -> None:
+                try:
+                    c.testdrive(testdrive_str, mz_service=mz_service)
+                except Exception as e:
+                    state.background_errors.append(e)
+
+            thread = threading.Thread(target=ingest)
+            thread.start()
+            state.background_threads.append(thread)
         else:
             c.testdrive(testdrive_str, mz_service=state.mz_service)
 

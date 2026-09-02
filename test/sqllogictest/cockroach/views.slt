@@ -31,21 +31,31 @@ INSERT INTO t VALUES (1, 99), (2, 98), (3, 97)
 statement ok
 CREATE VIEW v1 AS SELECT a, b FROM t
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pgcode 42P07 relation "v1" already exists
 CREATE VIEW v1 AS SELECT a, b FROM t
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pgcode 42P07 relation "t" already exists
 CREATE VIEW t AS SELECT a, b FROM t
 
 statement ok
 CREATE VIEW v2 (x, y) AS SELECT a, b FROM t
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pgcode 42601 CREATE VIEW specifies 1 column name, but data source has 2 columns
 CREATE VIEW v3 (x) AS SELECT a, b FROM t
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pgcode 42601 CREATE VIEW specifies 3 column names, but data source has 2 columns
 CREATE VIEW v4 (x, y, z) AS SELECT a, b FROM t
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pgcode 42P01 relation "dne" does not exist
 CREATE VIEW v5 AS SELECT a, b FROM dne
 
@@ -79,6 +89,8 @@ x y
 2 98
 3 97
 
+# Not supported by Materialize.
+onlyif cockroach
 query II colnames
 SELECT * FROM v7
 ----
@@ -111,6 +123,8 @@ SELECT y FROM v2
 98
 97
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT x FROM v7
 ----
@@ -140,9 +154,13 @@ SELECT * FROM v1 AS v1 INNER JOIN v2 AS v2 ON v1.a = v2.x
 2 98 2 98
 3 97 3 97
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pgcode 42809 "v1" is not a table
 DROP TABLE v1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pgcode 42809 "t" is not a view
 DROP VIEW t
 
@@ -156,9 +174,13 @@ DROP VIEW v6
 statement ok
 DROP VIEW v2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP VIEW v1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pgcode 42P01 relation "v1" does not exist
 DROP VIEW v1
 
@@ -188,37 +210,57 @@ DROP VIEW s3
 statement ok
 DROP VIEW s1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP TABLE t
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check for memory leak (materialize#10466)
 statement ok
 CREATE VIEW foo AS SELECT catalog_name, schema_name, sql_path FROM information_schema.schemata
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pq: relation "foo" already exists
 CREATE VIEW foo AS SELECT catalog_name, schema_name, sql_path FROM information_schema.schemata
 
+# Not supported by Materialize.
+onlyif cockroach
 # Ensure views work with dates/timestamps (materialize#12420)
 statement ok
 CREATE TABLE t (d DATE, t TIMESTAMP)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE VIEW dt AS SELECT d, t FROM t WHERE d > DATE '1988-11-12' AND t < TIMESTAMP '2017-01-01'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT * FROM dt
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE VIEW dt2 AS SELECT d, t FROM t WHERE d > d + INTERVAL '10h'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SELECT * FROM dt2
 
+# Not supported by Materialize.
+onlyif cockroach
 # Ensure that creating a view doesn't leak any session-level settings that
 # could affect subsequent AS OF SYSTEM TIME queries (materialize#13547).
 statement ok
 CREATE VIEW v AS SELECT d, t FROM t
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error pq: AS OF SYSTEM TIME must be provided on a top-level statement
 CREATE TABLE t2 AS SELECT d, t FROM t AS OF SYSTEM TIME '2017-02-13 21:30:00'
 
@@ -291,6 +333,8 @@ SELECT sum ("QuotedCaps15951". a) FROM "QuotedCaps15951" GROUP BY b ORDER BY b
 statement ok
 CREATE VIEW w AS WITH a AS (SELECT 1 AS x) SELECT x FROM a
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT create_statement FROM [SHOW CREATE w]
 ----
@@ -299,6 +343,8 @@ CREATE VIEW w (x) AS WITH a AS (SELECT 1 AS x) SELECT x FROM a
 statement ok
 CREATE VIEW w2 AS WITH t AS (SELECT x FROM w) SELECT x FROM t
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT create_statement FROM [SHOW CREATE w2]
 ----
@@ -307,6 +353,8 @@ CREATE VIEW w2 (x) AS WITH t AS (SELECT x FROM test.public.w) SELECT x FROM t
 statement ok
 CREATE VIEW w3 AS (WITH t AS (SELECT x FROM w) SELECT x FROM t)
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT create_statement FROM [SHOW CREATE w3]
 ----
@@ -317,14 +365,20 @@ CREATE VIEW w3 (x) AS (WITH t AS (SELECT x FROM test.public.w) SELECT x FROM t)
 statement ok
 CREATE TABLE t (a INT PRIMARY KEY, b INT)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE VIEW crud_view AS SELECT a, b FROM [INSERT INTO t (a, b) VALUES (100, 100) RETURNING a, b]
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT SELECT ON crud_view TO testuser
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 query error user testuser does not have INSERT privilege on relation t
 SELECT * FROM crud_view
 

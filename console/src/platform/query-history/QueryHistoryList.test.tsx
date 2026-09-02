@@ -66,9 +66,15 @@ const useFetchQueryHistoryUsersColumns: Array<Column> = [
   buildColumn({ name: "email" }),
 ];
 
+// The schema defaults `dateRange` to a window ending at `new Date()`, so handlers must
+// reuse the same parsed filters the component is rendered with in order to match.
+const PARSED_DEFAULT_SCHEMA_VALUES = queryHistoryListSchema.parse(
+  DEFAULT_SCHEMA_VALUES,
+);
+
 const DEFAULT_FETCH_QUERY_LIST_HANDLER = buildSqlQueryHandlerV2({
   queryKey: queryHistoryQueryKeys.list({
-    filters: queryHistoryListSchema.parse(DEFAULT_SCHEMA_VALUES),
+    filters: PARSED_DEFAULT_SCHEMA_VALUES,
     isRedacted: false,
     isV0_132_0: false,
   }),
@@ -94,9 +100,13 @@ const DEFAULT_FETCH_QUERY_HISTORY_USERS_HANDLER = buildSqlQueryHandlerV2({
   }),
 });
 
-const PARSED_DEFAULT_SCHEMA_VALUES = queryHistoryListSchema.parse(
-  DEFAULT_SCHEMA_VALUES,
-);
+const buildMaxSampleRateHandler = (rate: string) =>
+  buildSqlQueryHandlerV2({
+    queryKey: queryHistoryQueryKeys.statementLoggingMaxSampleRate(),
+    results: mapKyselyToTabular({
+      rows: [{ statement_logging_max_sample_rate: rate }],
+    }),
+  });
 
 const ALL_COLUMNS = COLUMNS.map(({ key }) => key);
 
@@ -127,6 +137,7 @@ describe("QueryHistoryList", () => {
     server.use(DEFAULT_FETCH_QUERY_LIST_HANDLER);
     server.use(DEFAULT_FETCH_CLUSTER_LIST_HANDLER);
     server.use(DEFAULT_FETCH_QUERY_HISTORY_USERS_HANDLER);
+    server.use(buildMaxSampleRateHandler("0.99"));
   });
 
   afterEach(() => {
@@ -385,6 +396,47 @@ describe("QueryHistoryList", () => {
     );
     // Expect empty state
     expect(await screen.findByText("No results found.")).toBeVisible();
+  });
+
+  it("Should show the filter-oriented empty state when sampling is enabled", async () => {
+    await renderComponent(
+      <QueryHistoryList
+        initialFilters={PARSED_DEFAULT_SCHEMA_VALUES}
+        initialColumns={DEFAULT_COLUMNS}
+      />,
+      {
+        initializeState: ({ set }) =>
+          setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment),
+      },
+    );
+
+    expect(await screen.findByText("No results found.")).toBeVisible();
+    expect(
+      screen.queryByText("Statement logging is turned off."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("Should show a sampling disabled empty state when the max sample rate is zero", async () => {
+    server.use(buildMaxSampleRateHandler("0"));
+
+    await renderComponent(
+      <QueryHistoryList
+        initialFilters={PARSED_DEFAULT_SCHEMA_VALUES}
+        initialColumns={DEFAULT_COLUMNS}
+      />,
+      {
+        initializeState: ({ set }) =>
+          setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment),
+      },
+    );
+
+    expect(
+      await screen.findByText("Statement logging is turned off."),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/ALTER SYSTEM SET statement_logging_max_sample_rate/),
+    ).toBeVisible();
+    expect(screen.queryByText("No results found.")).not.toBeInTheDocument();
   });
 
   // TODO (robinclowers): Fix and renenable this https://github.com/MaterializeInc/console/issues/2482

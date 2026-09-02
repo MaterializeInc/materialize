@@ -168,8 +168,8 @@ export class TestContext {
 
     // Navigate to the home page && wait for that to load.
     await context.goto(CONSOLE_ADDR);
-    // We assume the first page is the onboarding survey
-    await page.waitForSelector("[data-testid=onboarding-survey]");
+    // We assume the first page is the enable region page
+    await page.waitForSelector("[data-testid=enable-region]");
     return context;
   }
 
@@ -353,6 +353,16 @@ export class TestContext {
                 `Retrying disable region for ${region.id}, attempt ${attempts}`,
               );
               return;
+            }
+            if (
+              e.message.includes("unexpected number of bytes") ||
+              e.message.includes("socket hang up") ||
+              e.message.includes("ECONNRESET")
+            ) {
+              console.log(
+                `Retrying disable region for ${region.id} after transient network error, attempt ${attempts}`,
+              );
+              throw e;
             }
             // If we get any other error, we should not retry
             throw new AbortError(e.message);

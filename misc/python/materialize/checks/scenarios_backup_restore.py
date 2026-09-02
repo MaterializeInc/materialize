@@ -26,6 +26,9 @@ class BackupAndRestoreAfterManipulate(Scenario):
     """
 
     def actions(self) -> list[Action]:
+        # Restart Mz through StartMz instead of Restore(restart_mz=True) so
+        # that the restarted instance uses the same service definition as the
+        # one it was originally started with.
         return [
             StartMz(self),
             Initialize(self),
@@ -33,7 +36,8 @@ class BackupAndRestoreAfterManipulate(Scenario):
             Manipulate(self, phase=2),
             Backup(),
             KillMz(),
-            Restore(),
+            Restore(restart_mz=False),
+            StartMz(self),
             Validate(self),
         ]
 
@@ -48,7 +52,8 @@ class BackupAndRestoreBeforeManipulate(Scenario):
             Manipulate(self, phase=1),
             Backup(),
             KillMz(),
-            Restore(),
+            Restore(restart_mz=False),
+            StartMz(self),
             Manipulate(self, phase=2),
             Validate(self),
         ]
@@ -86,18 +91,22 @@ class BackupAndRestoreMulti(Scenario):
             Initialize(self),
             Backup(),
             KillMz(),
-            Restore(),
+            Restore(restart_mz=False),
+            StartMz(self),
             Manipulate(self, phase=1),
             Backup(),
             KillMz(),
-            Restore(),
+            Restore(restart_mz=False),
+            StartMz(self),
             Manipulate(self, phase=2),
             Backup(),
             KillMz(),
-            Restore(),
+            Restore(restart_mz=False),
+            StartMz(self),
             Validate(self),
             Backup(),
             KillMz(),
-            Restore(),
+            Restore(restart_mz=False),
+            StartMz(self),
             Validate(self),
         ]

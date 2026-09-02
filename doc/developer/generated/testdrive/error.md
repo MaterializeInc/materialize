@@ -1,6 +1,6 @@
 ---
 source: src/testdrive/src/error.rs
-revision: 887cfdaaf0
+revision: 77eaa4e85e
 ---
 
 # testdrive::error

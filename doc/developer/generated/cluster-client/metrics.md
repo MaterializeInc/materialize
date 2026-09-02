@@ -1,6 +1,6 @@
 ---
 source: src/cluster-client/src/metrics.rs
-revision: c151574dec
+revision: 03de4421ba
 ---
 
 # mz_cluster_client::metrics

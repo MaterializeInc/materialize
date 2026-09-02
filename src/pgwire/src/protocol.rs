@@ -20,7 +20,7 @@ use byteorder::{ByteOrder, NetworkEndian};
 use csv_core::ReadRecordResult;
 use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::Itertools;
-use mz_adapter::client::RecordFirstRowStream;
+use mz_adapter::client::{RecordFirstRowStream, redact_sql_for_logging};
 use mz_adapter::session::{
     EndTransactionAction, InProgressRows, LifecycleTimestamps, PortalRefMut, PortalState, Session,
     SessionConfig, TransactionStatus,
@@ -66,8 +66,7 @@ use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::time::{self};
 use tokio_metrics::TaskMetrics;
-use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{Instrument, debug, debug_span, warn};
+use tracing::{Instrument, debug, debug_span, info, warn};
 use uuid::Uuid;
 
 use crate::codec::{
@@ -540,6 +539,10 @@ where
     };
 
     let system_vars = adapter_client.get_system_vars().await;
+    // Startup parameters that were successfully applied. They additionally
+    // become the session's default values below, once role defaults have been
+    // applied too.
+    let mut applied_params = vec![];
     for (name, value) in params {
         let settings = match name.as_str() {
             "options" => match &options {
@@ -560,14 +563,17 @@ where
             // (silently ignore errors on set), but erroring the connection
             // might be the better behavior. We maybe need to support more
             // options sent by psql and drivers before we can safely do this.
-            if let Err(err) = session
+            match session
                 .vars_mut()
                 .set(&system_vars, key, VarInput::Flat(val), LOCAL)
             {
-                session.add_notice(AdapterNotice::BadStartupSetting {
-                    name: key.clone(),
-                    reason: err.to_string(),
-                });
+                Ok(()) => applied_params.push((key.clone(), val.clone())),
+                Err(err) => {
+                    session.add_notice(AdapterNotice::BadStartupSetting {
+                        name: key.clone(),
+                        reason: err.to_string(),
+                    });
+                }
             }
         }
     }
@@ -588,6 +594,24 @@ where
         Ok(adapter_client) => adapter_client,
         Err(e) => return conn.send(e.into_response(Severity::Fatal)).await,
     };
+
+    // Make the startup parameters the session's default values, so that RESET
+    // and DISCARD ALL restore them rather than the server defaults. This
+    // matches PostgreSQL, where client-supplied startup parameters take
+    // precedence over role defaults (which startup registration applied) both
+    // as the current value and as the reset value. Connection poolers rely on
+    // this. For example, pgbouncer's default server_reset_query is DISCARD
+    // ALL, which must not rebind a pooled connection to the default database.
+    for (key, val) in applied_params {
+        if let Err(err) = adapter_client
+            .session()
+            .vars_mut()
+            .set_default(&key, VarInput::Flat(&val))
+        {
+            // Unexpected, since the same value was accepted by set() above.
+            mz_ore::soft_panic_or_log!("failed to apply startup parameter as default: {err:?}");
+        }
+    }
 
     let mut buf = vec![BackendMessage::AuthenticationOk];
     for var in adapter_client.session().vars().notify_set() {
@@ -619,7 +643,7 @@ where
 
     select! {
         r = machine.run() => {
-            // Errors produced internally (like MAX_REQUEST_SIZE being exceeded) should send an
+            // Errors produced internally (like a malformed frame header) should send an
             // error to the client informing them why the connection was closed. We still want to
             // return the original error up the stack, though, so we skip error checking during conn
             // operations.
@@ -922,6 +946,10 @@ where
         // only a few message types seem useful.
         let message_name = message.as_ref().map(|m| m.name()).unwrap_or_default();
 
+        if let Some(message) = &message {
+            self.maybe_log_message_arrival(message).await;
+        }
+
         let start = message.as_ref().map(|_| Instant::now());
         let next_state = match message {
             Some(FrontendMessage::Query { sql }) => {
@@ -980,17 +1008,28 @@ where
                 // trigger an eager commit of the current implicit transaction,
                 // see: <https://git.postgresql.org/gitweb/?p=postgresql.git&a=commitdiff&h=f92944137>.
                 //
-                // In Materialize, however, we eagerly commit every statement outside of an explicit
-                // transaction when using the extended query protocol. This allows us to eliminate
-                // the possibility of a multiple statement implicit transaction, which in turn
-                // allows us to apply single-statement optimizations to queries issued in implicit
-                // transactions in the extended query protocol.
+                // In Materialize we instead eagerly commit every implicit transaction that
+                // cannot take on further statements of the same pipeline, which keeps the
+                // single-statement optimizations available to queries issued in the extended
+                // query protocol. The ones that can stay open, so that the pipeline commits
+                // or rolls back as a unit. See `TransactionStatus::may_span_pipeline`.
                 //
                 // We don't immediately commit here to allow users to page through the portal if
                 // necessary. Committing the transaction would destroy the portal before the next
                 // Execute command has a chance to resume it. So we instead mark the transaction
                 // for commit the next time that `ensure_transaction` is called.
-                if self.adapter_client.session().transaction().is_implicit() {
+                let (is_implicit, may_span_pipeline) = {
+                    let txn = self.adapter_client.session().transaction();
+                    (txn.is_implicit(), txn.may_span_pipeline())
+                };
+                // Ordered so that only a write reads the flag, keeping the catalog
+                // snapshot off the read path.
+                let spans_pipeline = may_span_pipeline
+                    && self
+                        .adapter_client
+                        .extended_protocol_implicit_transaction_enabled()
+                        .await;
+                if is_implicit && !spans_pipeline {
                     self.txn_needs_commit = true;
                 }
                 state
@@ -1005,10 +1044,17 @@ where
             Some(FrontendMessage::Sync) => self.sync().await?,
             Some(FrontendMessage::Terminate) => State::Done,
 
+            // Accept but ignore stray COPY subprotocol messages, mirroring
+            // PostgreSQL. Clients stream COPY data optimistically, so when a
+            // COPY statement fails before COPY mode is entered, its pipelined
+            // CopyData/CopyDone/CopyFail arrive here. Draining instead would
+            // discard unrelated messages until the next Sync, hanging simple
+            // protocol clients that never send one.
             Some(FrontendMessage::CopyData(_))
             | Some(FrontendMessage::CopyDone)
-            | Some(FrontendMessage::CopyFail(_))
-            | Some(FrontendMessage::Password { .. })
+            | Some(FrontendMessage::CopyFail(_)) => State::Ready,
+
+            Some(FrontendMessage::Password { .. })
             | Some(FrontendMessage::RawAuthentication(_))
             | Some(FrontendMessage::SASLInitialResponse { .. })
             | Some(FrontendMessage::SASLResponse(_)) => State::Drain,
@@ -1149,6 +1195,98 @@ where
             .with_label_values(&[message_type])
             .observe(start.elapsed().as_secs_f64());
         Ok(())
+    }
+
+    /// Logs an arriving frontend message at info level, when
+    /// `enable_statement_arrival_logging` is on. Runs before the message is
+    /// processed, so a message whose processing crashes the process still
+    /// appears in the log. The `kind` field says which message it is, and
+    /// thereby also whether the statement came in through the simple protocol
+    /// (`query`) or the extended protocol (`parse`, `bind`, `execute`, ...).
+    /// The prepared statement and portal names, together with the connection
+    /// id, allow connecting a `bind` or `execute` back to the `parse` that
+    /// carried the SQL text.
+    ///
+    /// SQL text is parsed and logged with its literals redacted, the same
+    /// redaction the statement log applies. This means a statement that
+    /// crashes the parser is not captured, an accepted limitation. Bind
+    /// parameter values are data that redaction cannot reach, so only their
+    /// count is logged. Authentication payloads are never logged. COPY data
+    /// is logged as its length only, and only when it arrives as a stray
+    /// message in the ready state: messages consumed by the COPY subprotocol
+    /// or the post-error drain loop don't pass through here at all.
+    async fn maybe_log_message_arrival(&mut self, message: &FrontendMessage) {
+        if !self
+            .adapter_client
+            .statement_arrival_logging_enabled()
+            .await
+        {
+            return;
+        }
+        let session = self.adapter_client.session();
+        let conn_id = session.conn_id();
+        let session_uuid = session.uuid();
+        let kind = message.name();
+        match message {
+            FrontendMessage::Query { sql } => {
+                info!(
+                    %conn_id, %session_uuid, kind, sql = %redact_sql_for_logging(sql),
+                    "statement arrival"
+                );
+            }
+            FrontendMessage::Parse { name, sql, .. } => {
+                info!(
+                    %conn_id, %session_uuid, kind, name, sql = %redact_sql_for_logging(sql),
+                    "statement arrival"
+                );
+            }
+            FrontendMessage::Bind {
+                portal_name,
+                statement_name,
+                raw_params,
+                ..
+            } => {
+                info!(
+                    %conn_id, %session_uuid, kind, portal_name, statement_name,
+                    num_params = raw_params.len(),
+                    "statement arrival"
+                );
+            }
+            // COPY payloads would flood the log. Log only their length.
+            FrontendMessage::CopyData(data) => {
+                info!(%conn_id, %session_uuid, kind, len = data.len(), "statement arrival");
+            }
+            // Authentication payloads must never be logged.
+            FrontendMessage::Password { .. }
+            | FrontendMessage::RawAuthentication(_)
+            | FrontendMessage::SASLInitialResponse { .. }
+            | FrontendMessage::SASLResponse(_) => {
+                info!(%conn_id, %session_uuid, kind, "statement arrival");
+            }
+            // CopyFail carries a client-supplied free-text error message,
+            // which we don't log.
+            FrontendMessage::CopyFail(_) => {
+                info!(%conn_id, %session_uuid, kind, "statement arrival");
+            }
+            // Log the full Debug representation for all other variants, which
+            // carry only object names or no payload.
+            FrontendMessage::DescribeStatement { .. }
+            | FrontendMessage::DescribePortal { .. }
+            | FrontendMessage::Execute { .. }
+            | FrontendMessage::Flush
+            | FrontendMessage::Sync
+            | FrontendMessage::CloseStatement { .. }
+            | FrontendMessage::ClosePortal { .. }
+            | FrontendMessage::Terminate
+            | FrontendMessage::CopyDone => {
+                // WARNING: When adding a variant here, consider whether its payload is sensitive or
+                // bulky!
+                //
+                // (The field must not be named `message`, that name is
+                // reserved for the event text in tracing.)
+                info!(%conn_id, %session_uuid, kind, contents = ?message, "statement arrival");
+            }
+        }
     }
 
     fn parse_sql<'b>(&self, sql: &'b str) -> Result<Vec<StatementParseResult<'b>>, ErrorResponse> {
@@ -1314,15 +1452,53 @@ where
     }
 
     /// End a transaction and report to the user if an error occurred.
+    ///
+    /// The parameters this changes must be announced, exactly as an explicit
+    /// `COMMIT`/`ROLLBACK` announces them. Otherwise a `SET LOCAL` outside an
+    /// explicit transaction announces its new value and never its revert, and a
+    /// client that caches parameters keeps the reverted value.
     #[instrument(level = "debug")]
     async fn end_transaction(&mut self, action: EndTransactionAction) -> Result<(), io::Error> {
         self.txn_needs_commit = false;
-        let resp = self.adapter_client.end_transaction(action).await;
-        if let Err(err) = resp {
-            self.send(BackendMessage::ErrorResponse(
-                err.into_response(Severity::Error),
-            ))
-            .await?;
+        match self.adapter_client.end_transaction(action).await {
+            Ok(
+                ExecuteResponse::TransactionCommitted { params }
+                | ExecuteResponse::TransactionRolledBack { params },
+            ) => {
+                self.send_parameter_statuses(params).await?;
+            }
+            Ok(_) => {}
+            Err(err) => {
+                self.send(BackendMessage::ErrorResponse(
+                    err.into_response(Severity::Error),
+                ))
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Announces changed parameters, restricted to those the client is told
+    /// about at startup.
+    #[instrument(level = "debug")]
+    async fn send_parameter_statuses(
+        &mut self,
+        params: BTreeMap<&'static str, String>,
+    ) -> Result<(), io::Error> {
+        let notify_set: mz_ore::collections::HashSet<String> = self
+            .adapter_client
+            .session()
+            .vars()
+            .notify_set()
+            .map(|v| v.name().to_string())
+            .collect();
+
+        for (name, value) in params
+            .into_iter()
+            .filter(|(name, _value)| notify_set.contains(*name))
+        {
+            self.send(BackendMessage::ParameterStatus(name, value))
+                .await?;
         }
         Ok(())
     }
@@ -1406,12 +1582,18 @@ where
                         }
                     },
                     Err(err) => {
-                        let msg = format!("unable to decode parameter: {}", err);
-                        return self
-                            .send_error_and_get_state(ErrorResponse::error(
+                        // NUL characters get the same SQLSTATE that PostgreSQL
+                        // reports for them.
+                        let (code, msg) = if err.is::<mz_pgrepr::NulCharacterError>() {
+                            (SqlState::CHARACTER_NOT_IN_REPERTOIRE, err.to_string())
+                        } else {
+                            (
                                 SqlState::INVALID_PARAMETER_VALUE,
-                                msg,
-                            ))
+                                format!("unable to decode parameter: {}", err),
+                            )
+                        };
+                        return self
+                            .send_error_and_get_state(ErrorResponse::error(code, msg))
                             .await;
                     }
                 },
@@ -2062,7 +2244,7 @@ where
                         row_desc,
                         portal_name,
                         InProgressRows::new(RecordFirstRowStream::new(
-                            Box::new(UnboundedReceiverStream::new(rx)),
+                            rx,
                             execute_started,
                             &self.adapter_client,
                             Some(instance_id),
@@ -2119,7 +2301,7 @@ where
                                 format,
                                 row_desc,
                                 RecordFirstRowStream::new(
-                                    Box::new(UnboundedReceiverStream::new(rx)),
+                                    rx,
                                     execute_started,
                                     &self.adapter_client,
                                     Some(instance_id),
@@ -2232,22 +2414,7 @@ where
             }
             ExecuteResponse::TransactionCommitted { params }
             | ExecuteResponse::TransactionRolledBack { params } => {
-                let notify_set: mz_ore::collections::HashSet<String> = self
-                    .adapter_client
-                    .session()
-                    .vars()
-                    .notify_set()
-                    .map(|v| v.name().to_string())
-                    .collect();
-
-                // Only report on parameters that are in the notify set.
-                for (name, value) in params
-                    .into_iter()
-                    .filter(|(name, _v)| notify_set.contains(*name))
-                {
-                    let msg = BackendMessage::ParameterStatus(name, value);
-                    self.send(msg).await?;
-                }
+                self.send_parameter_statuses(params).await?;
                 command_complete!()
             }
 
@@ -2260,6 +2427,7 @@ where
             | ExecuteResponse::CreatedConnection { .. }
             | ExecuteResponse::CreatedDatabase { .. }
             | ExecuteResponse::CreatedIndex { .. }
+            | ExecuteResponse::CreatedMetricSink { .. }
             | ExecuteResponse::CreatedIntrospectionSubscribe
             | ExecuteResponse::CreatedMaterializedView { .. }
             | ExecuteResponse::CreatedRole
@@ -2370,6 +2538,7 @@ where
                 .map(|ty| mz_pgrepr::Type::from(&ty.scalar_type))
                 .zip_eq(result_formats)
                 .collect(),
+            self.adapter_client.session().vars().text_encode_settings(),
         );
 
         let mut total_sent_rows = 0;
@@ -2410,9 +2579,14 @@ where
                     batch = rows.remaining.recv() => match batch {
                         None => FetchResult::Rows(None),
                         Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
-                        Some(PeekResponseUnary::Error(err)) => FetchResult::Error(err),
+                        Some(PeekResponseUnary::Error(err)) => {
+                            FetchResult::Error(err.into_response(Severity::Error))
+                        }
                         Some(PeekResponseUnary::DependencyDropped(dep)) => {
-                            FetchResult::Error(dep.query_terminated_error())
+                            FetchResult::Error(
+                                dep.to_concurrent_dependency_drop()
+                                    .into_response(Severity::Error),
+                            )
                         }
                         Some(PeekResponseUnary::Canceled) => FetchResult::Canceled,
                     },
@@ -2484,12 +2658,10 @@ where
                     self.send(notice.into_response()).await?;
                     self.conn.flush().await?;
                 }
-                FetchResult::Error(text) => {
+                FetchResult::Error(err) => {
+                    let text = err.message.clone();
                     return self
-                        .send_error_and_get_state(ErrorResponse::error(
-                            SqlState::INTERNAL_ERROR,
-                            text.clone(),
-                        ))
+                        .send_error_and_get_state(err)
                         .await
                         .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
                 }
@@ -2632,8 +2804,12 @@ where
             }
         }
 
+        // Unlike `COPY TO <external destination>`, which is encoded in the
+        // dataflow layer, `COPY TO STDOUT` runs in the session and so honors
+        // the session's encoding settings, matching PostgreSQL.
+        let text_settings = self.adapter_client.session().vars().text_encode_settings();
         let encode_fn = |row: &RowRef, typ: &SqlRelationType, out: &mut Vec<u8>| {
-            mz_pgcopy::encode_copy_format(&row_format, row, typ, out)
+            mz_pgcopy::encode_copy_format(&row_format, row, typ, out, text_settings)
         };
 
         let typ = row_desc.typ();
@@ -2668,11 +2844,10 @@ where
                 e = self.conn.wait_closed() => return Err(e),
                 batch = stream.recv() => match batch {
                     None => break,
-                    Some(PeekResponseUnary::Error(text)) => {
-                        let err =
-                            ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone());
+                    Some(PeekResponseUnary::Error(err)) => {
+                        let text = err.to_string();
                         return self
-                            .send_error_and_get_state(err)
+                            .send_error_and_get_state(err.into_response(Severity::Error))
                             .await
                             .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
                     }
@@ -2844,9 +3019,6 @@ where
             }
         };
 
-        // Enable copy mode on the codec to skip aggregate buffer size checks.
-        self.conn.set_copy_mode(true);
-
         // Batch size for splitting raw data across parallel workers (~32MB).
         const BATCH_SIZE: usize = 32 * 1024 * 1024;
         let max_copy_from_row_size = self
@@ -2937,7 +3109,6 @@ where
                     );
                     // Drop the writer to signal cancellation to the background tasks.
                     drop(writer);
-                    self.conn.set_copy_mode(false);
                     return self
                         .send_error_and_get_state(ErrorResponse::error(
                             SqlState::QUERY_CANCELED,
@@ -2955,7 +3126,6 @@ where
                         },
                     );
                     drop(writer);
-                    self.conn.set_copy_mode(false);
                     return self
                         .send_error_and_get_state(ErrorResponse::error(
                             SqlState::PROTOCOL_VIOLATION,
@@ -2965,7 +3135,6 @@ where
                 }
                 None => {
                     drop(writer);
-                    self.conn.set_copy_mode(false);
                     return Ok(State::Done);
                 }
             }
@@ -2991,7 +3160,6 @@ where
                             },
                         );
                         drop(writer);
-                        self.conn.set_copy_mode(false);
                         return self
                             .send_error_and_get_state(ErrorResponse::error(
                                 SqlState::PROTOCOL_VIOLATION,
@@ -3001,7 +3169,6 @@ where
                     }
                     None => {
                         drop(writer);
-                        self.conn.set_copy_mode(false);
                         return Ok(State::Done);
                     }
                 }
@@ -3014,13 +3181,10 @@ where
                 StatementEndedExecutionReason::Errored { error: msg.clone() },
             );
             drop(writer);
-            self.conn.set_copy_mode(false);
             return self
                 .send_error_and_get_state(ErrorResponse::error(code, msg))
                 .await;
         }
-
-        self.conn.set_copy_mode(false);
 
         // Drop all senders to signal EOF to the background batch builders.
         // If copy_err is set, a worker already failed — dropping the senders
@@ -3243,7 +3407,7 @@ fn is_txn_exit_stmt(stmt: Option<&Statement<Raw>>) -> bool {
 enum FetchResult {
     Rows(Option<Box<dyn RowIterator + Send + Sync>>),
     Canceled,
-    Error(String),
+    Error(ErrorResponse),
     Notice(AdapterNotice),
 }
 

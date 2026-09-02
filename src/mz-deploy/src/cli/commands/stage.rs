@@ -17,9 +17,7 @@ use crate::cli::CliError;
 use crate::cli::executor::{self, DeploymentExecutor};
 use crate::cli::{git, progress};
 use crate::client::DeploymentMode;
-use crate::client::{
-    Client, ClusterConfig, ClusterOptions, DeploymentKind, PendingStatement, ReplacementMvRecord,
-};
+use crate::client::{Client, ClusterConfig, DeploymentKind, PendingStatement, ReplacementMvRecord};
 use crate::config::Settings;
 use crate::log;
 use crate::project::SchemaQualifier;
@@ -33,7 +31,23 @@ use crate::project::ir::object_id::ObjectId;
 use crate::project::resolve::normalize::{self, NormalizingVisitor};
 use crate::verbose;
 use mz_ore::option::OptionExt;
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::{CreateClusterStatement, Ident};
 use std::collections::BTreeSet;
+
+/// Reject a stage name long enough that appending the staging suffix
+/// `_<stage_name>` to a schema or cluster identifier would exceed the
+/// identifier length limit and panic during deploy.
+fn validate_stage_name(stage_name: &str) -> Result<(), CliError> {
+    // The suffix is appended to existing identifiers, so reserve headroom for
+    // the base name rather than letting the suffix consume the whole limit.
+    if stage_name.len() + 1 > Ident::MAX_LENGTH / 2 {
+        return Err(CliError::InvalidEnvironmentName {
+            name: stage_name.to_string(),
+        });
+    }
+    Ok(())
+}
 use std::fmt;
 use std::path::Path;
 use std::time::Instant;
@@ -189,6 +203,8 @@ pub async fn run(
     allow_dirty: bool,
     no_rollback: bool,
     dry_run: bool,
+    redeploy_schemas: &[String],
+    redeploy_all: bool,
 ) -> Result<(), CliError> {
     let profile = settings.connection();
     let directory = &settings.directory;
@@ -202,6 +218,7 @@ pub async fn run(
         .owned()
         .or_else(|| git::get_git_commit(directory).map(|sha| sha.chars().take(7).collect()))
         .unwrap_or_else(executor::generate_random_env_name);
+    validate_stage_name(&stage_name)?;
 
     let planned_project = super::compile::run(settings, true).await?;
     let staging_suffix = format!("_{}", stage_name);
@@ -215,7 +232,16 @@ pub async fn run(
         crate::cli::commands::setup::validate_connection(&client, settings.emulator()).await?;
     crate::cli::commands::setup::require_deployer(role)?;
 
-    let Some(analysis) = analyze_project_changes(&client, &planned_project, &stage_name).await?
+    let forced_dirty_schemas = resolve_redeploy_schemas(&planned_project, redeploy_schemas)?;
+
+    let Some(analysis) = analyze_project_changes(
+        &client,
+        &planned_project,
+        &stage_name,
+        forced_dirty_schemas,
+        redeploy_all,
+    )
+    .await?
     else {
         return Ok(());
     };
@@ -230,7 +256,13 @@ pub async fn run(
     .await?;
 
     if !dry_run {
-        record_stage_metadata(
+        // Metadata is written before any resources are created, so a failure
+        // partway through can leave deployment rows behind that block
+        // re-staging under the same name. Roll them back on failure, unless
+        // --no-rollback asks to preserve state for debugging. The rollback runs
+        // a suffix-matching CASCADE drop, so honoring the flag here also avoids
+        // dropping resources the operator asked to keep.
+        if let Err(e) = record_stage_metadata(
             &client,
             directory,
             &stage_name,
@@ -240,7 +272,16 @@ pub async fn run(
             &analysis.replacement_mvs,
             &planned_project.replacement_schemas,
         )
-        .await?;
+        .await
+        {
+            if no_rollback {
+                progress::error("Deployment failed (skipping rollback due to --no-rollback flag)");
+            } else {
+                progress::error("Deployment failed, rolling back...");
+                rollback_staging_resources(&client, &stage_name).await;
+            }
+            return Err(e);
+        }
     }
 
     if dry_run {
@@ -319,6 +360,58 @@ pub async fn run(
     Ok(())
 }
 
+/// Parse one `--redeploy-schema` value, which must be fully qualified as
+/// `database.schema`. Reuses the SQL parser so reserved-word components quote
+/// correctly.
+fn parse_qualified_schema(raw: &str) -> Result<SchemaQualifier, CliError> {
+    let unqualified = || {
+        CliError::Message(format!(
+            "invalid --redeploy-schema '{}': expected a qualified 'database.schema' name",
+            raw
+        ))
+    };
+    let name = mz_sql_parser::parser::parse_item_name(raw).map_err(|_| unqualified())?;
+    let [database, schema] = name.0.as_slice() else {
+        return Err(unqualified());
+    };
+    Ok(SchemaQualifier::new(
+        database.as_str().to_string(),
+        schema.as_str().to_string(),
+    ))
+}
+
+/// Resolve `--redeploy-schema` values into `SchemaQualifier`s, validating each
+/// against the project's schemas.
+fn resolve_redeploy_schemas(
+    planned_project: &Project,
+    redeploy_schemas: &[String],
+) -> Result<BTreeSet<SchemaQualifier>, CliError> {
+    if redeploy_schemas.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+
+    let objects: Vec<_> = planned_project.iter_objects().collect();
+    let project_schemas = SchemaQualifier::collect_from(&objects);
+
+    let mut resolved = BTreeSet::new();
+    for raw in redeploy_schemas {
+        let sq = parse_qualified_schema(raw)?;
+        if !project_schemas.contains(&sq) {
+            let available = project_schemas
+                .iter()
+                .map(|s| format!("{}.{}", s.database, s.schema))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(CliError::Message(format!(
+                "--redeploy-schema '{}.{}' is not a schema in this project; available: {}",
+                sq.database, sq.schema, available
+            )));
+        }
+        resolved.insert(sq);
+    }
+    Ok(resolved)
+}
+
 /// Produces the stage deployment plan by diffing against current production snapshot.
 ///
 /// Handles incremental-vs-full mode, applies stage-specific object filtering,
@@ -327,6 +420,8 @@ async fn analyze_project_changes<'a>(
     client: &Client,
     planned_project: &'a Project,
     stage_name: &str,
+    forced_dirty_schemas: BTreeSet<SchemaQualifier>,
+    redeploy_all: bool,
 ) -> Result<Option<StageAnalysis<'a>>, CliError> {
     progress::stage_start("Analyzing project changes");
     let analyze_start = Instant::now();
@@ -345,6 +440,12 @@ async fn analyze_project_changes<'a>(
     let new_snapshot = deployment_snapshot::build_snapshot_from_planned(planned_project)?;
     let production_snapshot = deployment_snapshot::load_from_database(client, None).await?;
 
+    let dirty_schemas = if redeploy_all {
+        new_snapshot.schemas.keys().cloned().collect()
+    } else {
+        forced_dirty_schemas
+    };
+
     let change_set = if production_snapshot.objects.is_empty() {
         None
     } else {
@@ -352,6 +453,7 @@ async fn analyze_project_changes<'a>(
             &production_snapshot,
             &new_snapshot,
             planned_project,
+            &dirty_schemas,
         ))
     };
 
@@ -855,9 +957,11 @@ async fn create_staging_clusters(
         if executor.is_dry_run() {
             // Config is unused in dry-run mode; provide a placeholder.
             let placeholder = ClusterConfig::Managed {
-                options: ClusterOptions {
-                    size: String::new(),
-                    replication_factor: 1,
+                create_stmt: CreateClusterStatement {
+                    name: Ident::new_unchecked(""),
+                    options: Vec::new(),
+                    features: Vec::new(),
+                    if_not_exists: false,
                 },
                 grants: Vec::new(),
             };
@@ -909,12 +1013,14 @@ async fn create_staging_clusters(
 /// Log verbose details about a newly created staging cluster.
 fn log_cluster_creation(staging_cluster: &str, prod_cluster: &str, config: &ClusterConfig) {
     match config {
-        ClusterConfig::Managed { options, grants } => {
+        ClusterConfig::Managed {
+            create_stmt,
+            grants,
+        } => {
             verbose!(
-                "  Created managed cluster '{}' (size: {}, replication_factor: {}, {} grant(s), cloned from '{}')",
+                "  Created managed cluster '{}' ({}, {} grant(s), cloned from '{}')",
                 staging_cluster,
-                options.size,
-                options.replication_factor,
+                create_stmt.to_ast_string_simple(),
                 grants.len(),
                 prod_cluster
             );
@@ -1272,6 +1378,27 @@ mod tests {
     use crate::project::ir::object_id::ObjectId;
     use std::collections::{BTreeMap, BTreeSet};
 
+    #[mz_ore::test]
+    fn parse_qualified_schema_requires_two_parts() {
+        // Fully qualified parses to (database, schema).
+        let sq = parse_qualified_schema("app.core").expect("qualified name parses");
+        assert_eq!(
+            sq,
+            SchemaQualifier::new("app".to_string(), "core".to_string())
+        );
+
+        // A reserved-word component is handled via the SQL parser.
+        let sq = parse_qualified_schema("app.\"select\"").expect("quoted keyword parses");
+        assert_eq!(
+            sq,
+            SchemaQualifier::new("app".to_string(), "select".to_string())
+        );
+
+        // Unqualified (1-part) and over-qualified (3-part) are rejected.
+        assert!(parse_qualified_schema("core").is_err());
+        assert!(parse_qualified_schema("app.core.orders").is_err());
+    }
+
     /// Parse SQL strings into a compiled::DatabaseObject.
     ///
     /// The first CREATE statement becomes the main statement.
@@ -1542,6 +1669,7 @@ mod tests {
             &old_snapshot,
             &new_snapshot,
             &planned_project,
+            &BTreeSet::new(),
         );
 
         // The view should be in objects_to_deploy
@@ -1629,6 +1757,7 @@ mod tests {
             &old_snapshot,
             &new_snapshot,
             &planned_project,
+            &BTreeSet::new(),
         );
 
         assert!(
@@ -2037,5 +2166,12 @@ mod tests {
             staging_snapshot.schemas.is_empty(),
             "Override should not create entries for schemas with no objects"
         );
+    }
+
+    #[mz_ore::test]
+    fn test_validate_stage_name_length() {
+        assert!(validate_stage_name("prod").is_ok());
+        assert!(validate_stage_name(&"a".repeat(Ident::MAX_LENGTH / 2 - 1)).is_ok());
+        assert!(validate_stage_name(&"a".repeat(Ident::MAX_LENGTH)).is_err());
     }
 }

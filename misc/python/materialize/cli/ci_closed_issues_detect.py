@@ -20,7 +20,7 @@ from typing import IO
 import requests
 
 from materialize import buildkite, spawn
-from materialize.linear import LINEAR_CLOSED_STATE_TYPES
+from materialize.linear import LINEAR_CLOSED_STATE_TYPES, LINEAR_STALE_STATE_NAMES
 
 ISSUE_RE = re.compile(
     r"""
@@ -29,8 +29,6 @@ ISSUE_RE = re.compile(
     | ( cloud\# | cloud/issues/ ) (?P<cloud>[0-9]+)
     | ( incidents-and-escalations\# | incidents-and-escalations/issues/ ) (?P<incidentsandescalations>[0-9]+)
     | ( database-issues\# | database-issues/issues/ ) (?P<databaseissues>[0-9]+)
-    | ( terraform-aws-materialize\# | terraform-aws-materialize/issues/ ) (?P<terraformawsmaterialize>[0-9]+)
-    | ( terraform-google-materialize\# | terraform-google-materialize/issues/ ) (?P<terraformgooglematerialize>[0-9]+)
     | ( materialize-terraform-self-managed\# | materialize-terraform-self-managed/issues/ ) (?P<materializeterraformselfmanaged>[0-9]+)
     # Linear issue identifiers like linear#SEC-308 or full Linear URLs
     | (linear\# | linear\.app/\S+/issue/) (?P<linear>[A-Z][A-Z0-9]+-[0-9]+)
@@ -47,8 +45,6 @@ GROUP_REPO = {
     "cloud": "MaterializeInc/cloud",
     "incidentsandescalations": "MaterializeInc/incidents-and-escalations",
     "databaseissues": "MaterializeInc/database-issues",
-    "terraformawsmaterialize": "MaterializeInc/terraform-aws-materialize",
-    "terraformgooglematerialize": "MaterializeInc/terraform-google-materialize",
     "materializeterraformselfmanaged": "MaterializeInc/materialize-terraform-self-managed",
     "linear": "linear",
     "ambiguous": None,
@@ -107,9 +103,10 @@ COMMENT_RE = re.compile(r"#|//")
 
 IGNORE_FILENAME_RE = re.compile(
     r"""
-    ( .*\.(svg|png|jpg|jpeg|avro|ico|woff)
+    ( .*\.(svg|png|jpg|jpeg|avif|avro|ico|woff)
     | doc/developer/design/20230223_stabilize_with_mutually_recursive.md
     | \.(agents|claude)/skills/.*
+    | test/sqllogictest/cockroach/.*
     )
     """,
     re.VERBOSE,
@@ -255,7 +252,7 @@ def is_issue_closed_on_linear(identifier: str) -> bool:
     query($teamKey: String!, $number: Float!) {
       issues(filter: { number: { eq: $number }, team: { key: { eq: $teamKey } } }) {
         nodes {
-          state { type }
+          state { type name }
         }
       }
     }
@@ -275,7 +272,10 @@ def is_issue_closed_on_linear(identifier: str) -> bool:
     if not nodes:
         return False
 
-    return nodes[0]["state"]["type"] in LINEAR_CLOSED_STATE_TYPES
+    state = nodes[0]["state"]
+    if state["type"] not in LINEAR_CLOSED_STATE_TYPES:
+        return False
+    return state["name"].lower() not in LINEAR_STALE_STATE_NAMES
 
 
 def filter_changed_lines(issue_refs: list[IssueRef]) -> list[IssueRef]:
@@ -286,7 +286,10 @@ def filter_changed_lines(issue_refs: list[IssueRef]) -> list[IssueRef]:
         if issue_ref.text is not None
         and any(
             (issue_ref.filename, issue_ref.line_number + i) in changed_lines
-            for i in range(issue_ref.text.count("\n"))
+            # text is stripped, so an N-line comment block has N-1 newlines.
+            # range(count + 1) covers all N lines, including a single-line ref
+            # (0 newlines) and the last line of a multi-line block.
+            for i in range(issue_ref.text.count("\n") + 1)
         )
     ]
 

@@ -16,10 +16,35 @@ Check compilation with `cargo check`.
 Do not use `cargo build` or `cargo run` to build or run Materialize.
 Use `bin/environmentd --build-only` to build without running.
 
+`mz_environmentd::Config` is constructed in three places, one of them in a
+separate crate: `src/environmentd/src/environmentd/main.rs` (production),
+`src/environmentd/src/test_util.rs` (TestHarness), and
+`src/sqllogictest/src/runner.rs` (crate `mz-sqllogictest`). Adding a field means
+updating all three. `cargo check -p mz-environmentd` does NOT cover the
+sqllogictest constructor, so a missing field there compiles environmentd fine
+but breaks `mz-sqllogictest`, cascading in CI to clippy, doc-tests, and the
+environmentd image build (failing every mzcompose job). It looks like infra but
+is not. Verify with `cargo check -p mz-sqllogictest --all-targets`, not only
+`-p mz-environmentd`.
+
 ## Running locally
 
 Start Materialize using `bin/environmentd --optimized`.
 Pass `--reset` to delete data from prior runs (clears the mzdata directory and resets Postgres schemas), useful when testing catalog changes or starting fresh.
+
+`--reset` runs `DROP SCHEMA ... CASCADE` (consensus, tsoracle, storage) against
+the shared CockroachDB at `localhost:26257`. That persist consensus and
+timestamp-oracle state is global, not per-worktree: every local `environmentd`
+across all worktrees shares it (mzdata only holds the blob and environment-id).
+Resetting while another instance runs wipes its state unrecoverably. Before
+`--reset`, check for another instance with `ss -ltnp | grep 6875` and
+`pgrep -af environmentd`. If one exists, reuse it, or point yours at a different
+metadata backend with `--postgres <url>` (`bin/environmentd`, env `MZDEV_POSTGRES`)
+instead of the shared default. That can be a dedicated instance you spin up
+yourself, or a shared-but-different Postgres/CockroachDB you and others already
+point at deliberately, which avoids both the reset hazard and the cost of
+spinning up a fresh CRDB per instance. Prefer unit tests or `bin/mzcompose` (own
+containerized CRDB) over a second bare-metal instance when neither applies.
 
 Access Materialize using psql:
 * `psql -p 6875 -h localhost -U materialize` for regular access.

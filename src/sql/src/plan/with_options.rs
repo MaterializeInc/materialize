@@ -16,12 +16,12 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::bytes::ByteSize;
 use mz_repr::{CatalogItemId, RelationVersionSelector, strconv};
 use mz_sql_parser::ast::{
-    ClusterAlterOptionValue, ClusterScheduleOptionValue, ConnectionDefaultAwsPrivatelink, Expr,
-    Ident, KafkaBroker, KafkaMatchingBrokerRule, NetworkPolicyRuleDefinition, RefreshOptionValue,
-    ReplicaDefinition,
+    ClusterAlterOptionValue, ClusterAutoScalingStrategyOptionValue, ClusterScheduleOptionValue,
+    ConnectionDefaultAwsPrivatelink, Expr, Ident, KafkaBroker, KafkaMatchingBrokerRule,
+    NetworkPolicyRuleDefinition, RefreshOptionValue, ReplicaDefinition,
 };
-use mz_storage_types::connections::IcebergCatalogType;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
+use mz_storage_types::connections::{IcebergAccessDelegation, IcebergCatalogType};
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{AstInfo, UnresolvedItemName, Value, WithOptionValue};
@@ -65,6 +65,33 @@ impl TryFromValue<WithOptionValue<Aug>> for IcebergCatalogType {
 impl ImpliedValue for IcebergCatalogType {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide an iceberg catalog type")
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for IcebergAccessDelegation {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        match String::try_from_value(v)? {
+            s if s.eq_ignore_ascii_case("vended-credentials") => {
+                Ok(IcebergAccessDelegation::VendedCredentials)
+            }
+            _ => sql_bail!("invalid iceberg access delegation, expected 'vended-credentials'"),
+        }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::Value(Value::String(
+            self.as_header_value().to_string(),
+        )))
+    }
+
+    fn name() -> String {
+        "iceberg access delegation".to_string()
+    }
+}
+
+impl ImpliedValue for IcebergAccessDelegation {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an iceberg access delegation")
     }
 }
 
@@ -711,6 +738,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             | WithOptionValue::ClusterAlterStrategy(_)
             | WithOptionValue::Refresh(_)
             | WithOptionValue::ClusterScheduleOptionValue(_)
+            | WithOptionValue::ClusterAutoScalingStrategyOptionValue(_)
             | WithOptionValue::NetworkPolicyRules(_) => sql_bail!(
                 "incompatible value types: cannot convert {} to {}",
                 match v {
@@ -732,6 +760,8 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
                     WithOptionValue::KafkaMatchingBrokerRule(_) => "matching broker rule",
                     WithOptionValue::Refresh(_) => "refresh option values",
                     WithOptionValue::ClusterScheduleOptionValue(_) => "cluster schedule",
+                    WithOptionValue::ClusterAutoScalingStrategyOptionValue(_) =>
+                        "cluster auto scaling strategy",
                     WithOptionValue::NetworkPolicyRules(_) => "network policy rules",
                 },
                 V::name()
@@ -983,6 +1013,30 @@ impl TryFromValue<WithOptionValue<Aug>> for ClusterScheduleOptionValue {
 
     fn name() -> String {
         "cluster schedule option value".to_string()
+    }
+}
+
+impl ImpliedValue for ClusterAutoScalingStrategyOptionValue {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an auto scaling strategy option value")
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for ClusterAutoScalingStrategyOptionValue {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        if let WithOptionValue::ClusterAutoScalingStrategyOptionValue(r) = v {
+            Ok(r)
+        } else {
+            sql_bail!("cannot use value `{}` for an auto scaling strategy", v)
+        }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::ClusterAutoScalingStrategyOptionValue(self))
+    }
+
+    fn name() -> String {
+        "auto scaling strategy option value".to_string()
     }
 }
 

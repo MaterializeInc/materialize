@@ -572,6 +572,15 @@ CREATE TABLE postgres_execute (f1 INTEGER);
 
 If any of the statements fail, the entire test will fail. Any result sets returned from the server are ignored and not checked for correctness.
 
+Two connection names are built in and can be used without a prior `$ postgres-connect` registration: `mz_system` connects as the `mz_system` user via the internal SQL address (e.g. for `ALTER SYSTEM SET`), and `materialize` connects as the `materialize` user via the external SQL address. The connection is established on first use and is then cached like a named connection created by `$ postgres-connect`, so repeated uses share a session. An explicit `$ postgres-connect` with the same name takes precedence.
+
+```
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_tables = 1000;
+```
+
+With `background=true` (only valid for URL connections), the statements execute in the background while the test continues. The task is joined at the end of the file, and a failure or a task that does not complete within the default timeout fails the test.
+
 #### `$ postgres-connect name=.... url=...`
 
 Creates a named psql connection that can be used by multiple `$ postgres-execute` statements
@@ -639,6 +648,8 @@ BEGIN TRANSACTION INSERT INTO t1 VALUES (1); INSERT INTO t2 VALUES (2); COMMIT;
 ```
 
 The output of the queries is not validated in any way. An error during execution will cause the test to fail.
+
+Transient SQL Server errors (deadlock victim, agent still starting) are retried by re-executing the failed line in its entirety. With `split-lines=false` the whole body is one query, so a retry re-executes all of it. Keep each line (or, with `split-lines=false`, the body) a single statement or safe to re-execute.
 
 ## Connecting to DuckDB
 
@@ -796,6 +807,29 @@ The schema to use
 
 For data that contains a key, the schema of the key
 
+##### `confluent-wire-format=(true|false)`
+
+For `format=avro`, whether to frame each message with the Confluent Schema
+Registry wire format (a magic byte followed by a 4-byte schema ID). Defaults to
+`true`, unless `glue-schema-version-id` is set (in which case it defaults to
+`false`, and setting it to `true` is an error). Set to `false` to emit a bare
+Avro datum with no framing.
+
+##### `references=subject[,subject...]`
+
+For `format=avro` with `confluent-wire-format`, a comma-separated list of
+Confluent Schema Registry subjects that the schema references. Transitive
+references are resolved automatically. Not supported with
+`glue-schema-version-id`. `key-references` is the equivalent for the key schema.
+
+##### `glue-schema-version-id=UUID`
+
+For `format=avro`, frame each message with the AWS Glue Schema Registry wire
+format (header byte `0x03`, a compression byte, then the given 16-byte
+schema-version UUID) instead of the Confluent format. Mutually exclusive with
+`confluent-wire-format=true` and with `references`. `key-glue-schema-version-id`
+is the equivalent for the key schema.
+
 ##### `key-terminator=str`
 
 For data provided as `format=bytes key-format=bytes`, the separator between the key and the data in the test
@@ -826,7 +860,7 @@ Sets the variable named VAR to the ID of the key schema with which data was
 written. The variable is only set if the format of the key was Confluent Avro
 or Protobuf.
 
-#### `kafka-verify-data format=avro [sink=... | topic=...] [sort-messages=true] [partial-search=usize]`
+#### `kafka-verify-data format=avro [sink=... | topic=...] [sort-messages=true] [partial-search=usize] [exhaustive=bool]`
 
 Obtains the data from the specified `sink` or `topic` and compares it to the expected data recorded in the test.
 
@@ -836,6 +870,17 @@ be ordered according to the following rules:
  - earlier timestamps sort first
  - deletes sort before inserts
  - as all items are sorted as strings, "10" sorts before "2"
+
+The action consumes exactly as many messages as the test expects and stops. Consecutive
+`$ kafka-verify-data` commands on the same topic resume where the previous one stopped, so a topic
+is verified in chunks. At the end of the test file, testdrive verifies that no records remain after
+the final `$ kafka-verify-data` for each topic. This catches extra or duplicated records that the
+chunked verification would otherwise miss.
+
+Set `exhaustive=false` to exempt a topic from that end-of-file check. Use it when the topic
+legitimately keeps records this command does not verify, for example a topic written by more than one
+sink, a topic that also serves as a sink's progress topic, or a topic whose later records are checked
+by other means.
 
 It is possible to call `$ kafka-verify-data` multiple times on the same topic in case the test needs to check
 that the data arrives in some partial order. For example, to make sure that all of timestamp `1` arrived
@@ -855,7 +900,9 @@ If `partial-search=usize` is specified, up to `partial-search` records will be r
 compared to the provided records. The records do not have to match starting at the beginning of the sink but
 once one record matches, the following must all match.  There are permitted to be records remaining in the
 topic after the matching is complete.  Note that if the topic is not required to have `partial-search`
-elements in it but there will be an attempt to read up to this number with a blocking read.
+elements in it but there will be an attempt to read up to this number with a blocking read. A final
+`$ kafka-verify-data` with `partial-search` disables the end-of-file check for that topic because
+remaining records are explicitly permitted.
 
 #### `kafka-verify-topic [sink=... | topic=...] [await-value-schema=false] [await-key-schema=false]`
 
@@ -919,6 +966,56 @@ defined at the schema registry. Also waits for the kafka topic to exist.
 
 This action is useful to fortify tests that expect an external party, e.g.
 Debezium, to upload a particular schema.
+
+## Actions on AWS Glue Schema Registry
+
+#### `$ glue-create-schema name=... [registry=...] [set-version-id-var=VAR] [schema=...] [data-format=avro] [compatibility=backward]`
+
+Register a schema in AWS Glue Schema Registry and, optionally, stash the
+returned schema-version UUID in a testdrive variable.
+
+The schema definition is taken from the `schema` argument when present (typically
+a `${...}` reference to a schema defined with `$ set`), otherwise from the
+command body.
+
+The recommended pattern keeps each schema body in exactly one place: define it
+once as a pretty-printed `$ set` variable, then reference that variable both here
+(to register the schema) and in `kafka-ingest` (to frame records with the
+returned version id):
+
+```
+$ set my-schema={
+    "type": "record", "name": "row",
+    "fields": [{"name": "a", "type": "long"}]
+  }
+
+$ glue-create-schema registry=my-registry name=my-schema set-version-id-var=my-version-id schema=${my-schema}
+
+$ kafka-ingest format=avro topic=my-topic glue-schema-version-id=${my-version-id} schema=${my-schema}
+{"a": 1}
+```
+
+Arguments:
+
+* The required `name` argument is the schema name.
+* The optional `registry` argument is the registry name. Omit it to target
+  Glue's implicit default registry (`default-registry`).
+* The optional `set-version-id-var` argument names a testdrive variable to
+  receive the returned `SchemaVersionId`. Omit it when the schema is referenced
+  only by name (e.g. a negative test that registers a schema just to be
+  rejected).
+* The optional `schema` argument supplies the schema definition; if absent, the
+  command body is used.
+* The optional `data-format` argument is one of `avro` (default), `json`, or
+  `protobuf`.
+* The optional `compatibility` argument defaults to `backward`.
+
+Registering a name that already exists registers a *new version* of that schema
+rather than failing — which is how schema-evolution tests register v2 atop v1.
+
+This action talks to whatever AWS Glue endpoint testdrive's AWS client is
+configured for (e.g. moto in CI, or real AWS); see the `Testdrive` mzcompose
+service's `aws_*` parameters.
 
 ## Actions on REST services
 

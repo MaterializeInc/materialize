@@ -63,7 +63,7 @@ pub struct LocalExpressions {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GlobalExpressions {
     pub global_mir: DataflowDescription<OptimizedMirRelationExpr>,
-    pub physical_plan: DataflowDescription<mz_compute_types::plan::Plan>,
+    pub physical_plan: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
     pub dataflow_metainfos: DataflowMetainfo<Arc<OptimizerNotice>>,
     pub optimizer_features: OptimizerFeatures,
 }

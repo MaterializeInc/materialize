@@ -52,7 +52,7 @@ const COPY_FROM_STDIN_MAX_WORKERS: usize = 8;
 impl Coordinator {
     pub(crate) async fn sequence_copy_from(
         &mut self,
-        ctx: ExecuteContext,
+        mut ctx: ExecuteContext,
         plan: plan::CopyFromPlan,
         target_cluster: TargetCluster,
     ) {
@@ -69,17 +69,16 @@ impl Coordinator {
         // CopyData/CopyDone exchange. URL/S3 sources stage a one-shot ingestion
         // server-side and fall through to the rest of this function.
         if let CopyFromSource::Stdin = plan.source {
-            let (tx, _, session, ctx_extra) = ctx.into_parts();
-            tx.send(
-                Ok(ExecuteResponse::CopyFrom {
-                    target_id: plan.target_id,
-                    target_name: plan.target_name,
-                    columns: plan.columns,
-                    params: plan.params,
-                    ctx_extra,
-                }),
-                session,
-            );
+            // The statement-logging obligation moves into the response, pgwire carries it onward.
+            // `ctx` stays intact so `retire` can wait out any response barriers safely.
+            let ctx_extra = std::mem::take(ctx.extra_mut());
+            ctx.retire(Ok(ExecuteResponse::CopyFrom {
+                target_id: plan.target_id,
+                target_name: plan.target_name,
+                columns: plan.columns,
+                params: plan.params,
+                ctx_extra,
+            }));
             return;
         }
 
@@ -177,7 +176,9 @@ impl Coordinator {
                             .retire(Err(AdapterError::Unstructured(anyhow::anyhow!("{err}"))));
                     }
                 }
-                mz_storage_types::oneshot_sources::ContentSource::Http { url }
+                mz_storage_types::oneshot_sources::ContentSource::Http {
+                    url: mz_ore::url::SensitiveUrl(url),
+                }
             }
             CopyFromSource::AwsS3 {
                 uri,
@@ -361,11 +362,9 @@ impl Coordinator {
                 session: &session_meta,
                 catalog_state,
             };
-            let mut optimizer = optimize::view::Optimizer::new_with_prep_no_limit(
-                optimizer_config.clone(),
-                None,
-                prep,
-            );
+            let mut optimizer =
+                optimize::view::Optimizer::new_with_prep(optimizer_config.clone(), None, prep)
+                    .without_fold_constants_limit();
 
             let hir = mz_sql::plan::plan_copy_from(
                 &pcx,

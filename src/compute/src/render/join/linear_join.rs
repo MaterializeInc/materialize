@@ -16,26 +16,27 @@ use std::time::{Duration, Instant};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
-use differential_dataflow::trace::TraceReader;
+use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, BatchVal};
+use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
-use mz_compute_types::dyncfgs::{
-    ENABLE_COLUMN_PAGED_BATCHER, ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING,
-};
+use mz_compute_types::dyncfgs::{ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_dyncfg::ConfigSet;
 use mz_expr::Eval;
-use mz_repr::fixed_length::ToDatumIter;
+use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, Col2ValPagedBatcher, columnar_exchange};
+use mz_timely_util::columnar::{
+    Col2ValBatcher, Col2ValColBatcher, Col2ValPagedBatcher, columnar_exchange,
+};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::OkErr;
 
-use crate::extensions::arrange::MzArrangeCore;
+use crate::extensions::arrange::{ArrangementBatcher, MzArrangeCore};
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
@@ -103,9 +104,11 @@ impl LinearJoinSpec {
     ) -> VecCollection<'s, T, I::Item, Diff>
     where
         T: Lattice + timely::progress::Timestamp,
-        Tr1: TraceReader<Time = T, Diff = Diff> + Clone + 'static,
-        Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = T, Diff = Diff> + Clone + 'static,
-        L: FnMut(Tr1::Key<'_>, Tr1::Val<'_>, Tr2::Val<'_>) -> I + 'static,
+        Tr1: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+        Tr2: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+        BatchCursor<Tr1>: Cursor<Time = T, Diff = Diff>,
+        for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = BatchKey<'a, Tr1>, Time = T, Diff = Diff>,
+        L: FnMut(BatchKey<'_, Tr1>, BatchVal<'_, Tr1>, BatchVal<'_, Tr2>) -> I + 'static,
         I: IntoIterator<Item: Data> + 'static,
     {
         use LinearJoinImpl::*;
@@ -387,22 +390,28 @@ where
             let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
                 columnar_exchange::<Row, Row, T, Diff>,
             );
-            let arranged = if ENABLE_COLUMN_PAGED_BATCHER.get(&self.config_set) {
-                keyed.mz_arrange_core::<
+            let arranged = match ArrangementBatcher::from_config(&self.config_set) {
+                ArrangementBatcher::ColumnarPaged => keyed.mz_arrange_core::<
                     _,
                     batcher::ColumnChunker<_>,
                     Col2ValPagedBatcher<_, _, _, _>,
                     RowRowColPagedBuilder<_, _>,
                     RowRowSpine<_, _>,
-                >(exchange, "JoinStage")
-            } else {
-                keyed.mz_arrange_core::<
+                >(exchange, "JoinStage"),
+                ArrangementBatcher::Columnar => keyed.mz_arrange_core::<
+                    _,
+                    batcher::ColumnChunker<_>,
+                    Col2ValColBatcher<_, _, _, _>,
+                    RowRowColPagedBuilder<_, _>,
+                    RowRowSpine<_, _>,
+                >(exchange, "JoinStage"),
+                ArrangementBatcher::Columnation => keyed.mz_arrange_core::<
                     _,
                     batcher::Chunker<_>,
                     Col2ValBatcher<_, _, _, _>,
                     RowRowBuilder<_, _>,
                     RowRowSpine<_, _>,
-                >(exchange, "JoinStage")
+                >(exchange, "JoinStage"),
             };
             joined = JoinedFlavor::Local(arranged);
         }
@@ -479,11 +488,12 @@ where
         Option<VecCollection<'s, T, DataflowErrorSer, Diff>>,
     )
     where
-        Tr1: TraceReader<Time = T, Diff = Diff> + Clone + 'static,
-        Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = T, Diff = Diff> + Clone + 'static,
-        for<'a> Tr1::Key<'a>: ToDatumIter,
-        for<'a> Tr1::Val<'a>: ToDatumIter,
-        for<'a> Tr2::Val<'a>: ToDatumIter,
+        Tr1: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+        Tr2: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+        for<'a> BatchCursor<Tr1>:
+            Cursor<Key<'a>: ExtendDatums, Val<'a>: ExtendDatums, Time = T, Diff = Diff>,
+        for<'a> BatchCursor<Tr2>:
+            Cursor<Key<'a> = BatchKey<'a, Tr1>, Val<'a>: ExtendDatums, Time = T, Diff = Diff>,
     {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
@@ -496,9 +506,9 @@ where
                     let temp_storage = RowArena::new();
 
                     let mut datums_local = datums.borrow();
-                    key.extend_datums(&mut datums_local, None);
-                    old.extend_datums(&mut datums_local, None);
-                    new.extend_datums(&mut datums_local, None);
+                    key.extend_datums(&temp_storage, &mut datums_local, None);
+                    old.extend_datums(&temp_storage, &mut datums_local, None);
+                    new.extend_datums(&temp_storage, &mut datums_local, None);
 
                     closure
                         .apply(&mut datums_local, &temp_storage, &mut row_builder)
@@ -524,9 +534,9 @@ where
                     let temp_storage = RowArena::new();
 
                     let mut datums_local = datums.borrow();
-                    key.extend_datums(&mut datums_local, None);
-                    old.extend_datums(&mut datums_local, None);
-                    new.extend_datums(&mut datums_local, None);
+                    key.extend_datums(&temp_storage, &mut datums_local, None);
+                    old.extend_datums(&temp_storage, &mut datums_local, None);
+                    new.extend_datums(&temp_storage, &mut datums_local, None);
 
                     closure
                         .apply(&mut datums_local, &temp_storage, &mut row_builder)

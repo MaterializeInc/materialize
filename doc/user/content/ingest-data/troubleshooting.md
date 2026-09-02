@@ -10,6 +10,7 @@ menu:
 aliases:
   - /ops/diagnosing-using-sql/
   - /ops/troubleshooting/
+  - /self-managed/v25.2/ingest-data/troubleshooting/
 ---
 
 As you wire up data ingestion in Materialize, you might run into some snags or
@@ -63,7 +64,7 @@ cannot serve queries. That is, queries issued to the snapshotting source (and
 its subsources) will return after the snapshotting completes (unless the user
 breaks out of the query).
 
-{{< include-md file="shared-content/snapshotting-cluster-size-postgres.md" >}}
+{{% include-headless "/headless/snapshotting-cluster-size-postgres" %}}
 
 To determine whether your source has completed ingesting the initial snapshot,
 you can query the [`mz_source_statistics`](/reference/system-catalog/mz_internal/#mz_source_statistics)
@@ -85,18 +86,53 @@ monitor its progress. See [Monitoring data ingestion](/ingest-data/monitoring-da
 
 ## How do I speed up the snapshotting process?
 
-{{< include-md file="shared-content/snapshotting-cluster-size-postgres.md" >}}
+{{% include-headless "/headless/snapshotting-cluster-size-postgres" %}}
 
 To speed up the snapshotting process, you can scale up the [size of the cluster
 ](/sql/alter-cluster/#alter-cluster-size) used for snapshotting, then scale it
 back down once the snapshot completes.
 
-{{< include-md file="shared-content/resize-cluster-for-snapshotting.md" >}}
+{{% include-headless "/headless/resize-cluster-for-snapshotting" %}}
 
 For upsert sources, a larger cluster can not only speed up snapshotting, but may
 also be necessary to support increased memory usage during the process. For more
 information, see [Use a larger cluster for upsert source
 snapshotting](/ingest-data/#use-a-larger-cluster-for-upsert-source-snapshotting).
+
+## Is the upstream database overloaded?
+
+Snapshotting can put significant load on the upstream database (see [Impact
+on upstream system](/concepts/snapshotting/#impact-on-upstream-system)).
+
+Check the upstream database when a snapshot progresses more slowly than
+expected, when applications sharing the database slow down while
+it runs, or when the source reports upstream connection errors or timeouts.
+The relevant metrics are in your cloud provider's monitoring console, or in
+OS tools like `iostat` and the database's activity views for self-hosted
+databases. Look for:
+
+- **Read IOPS or throughput** flat at a provisioned cap.
+- **CPU** pinned at the instance's limit for the duration of the snapshot.
+- **Network throughput** at the instance type's cap.
+- **Connections** near the database's limit. For PostgreSQL and MySQL
+  sources, snapshotting opens connections in proportion to the source
+  cluster's workers.
+
+Also watch disk usage on the upstream database during a long-running
+snapshot: CDC database sources must retain their change log until Materialize
+consumes it (see [Impact on upstream
+system](/concepts/snapshotting/#impact-on-upstream-system)).
+
+If the database is overloaded, you can upsize the source database or cancel
+the snapshot by dropping the source, and retry:
+
+- on a smaller source cluster to spread the load over a longer window.
+- with more IOPS, throughput, or instance capacity provisioned for the
+  database.
+- during off-peak hours when the database is less busy, as recommended in the
+  [ingestion best practices](/ingest-data/#scheduling).
+- with a smaller [volume of data to
+  sync](/ingest-data/#limit-the-volume-of-data).
 
 ## Adding a new subsource to an existing source blocks replication. Should I just create a new source instead?
 

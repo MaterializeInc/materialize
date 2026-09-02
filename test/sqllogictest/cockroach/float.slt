@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,41 +9,47 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/float
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/float
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
 mode cockroach
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET unsafe_enable_table_keys = true
-----
-COMPLETE 0
-
 # -0 and 0 should not be possible in a unique index.
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE p (f float null, unique index (f))
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO p VALUES (NULL), ('NaN'::float), ('Inf'::float), ('-Inf'::float), ('0'::float), (1), (-1)
 
 # -0 and 0 should both equate to zero with or without an index.
 
-statement error duplicate key value
+statement error unknown catalog item 'p'
 INSERT INTO p VALUES ('-0'::float)
 
+# Not supported by Materialize.
+onlyif cockroach
 query R
 SELECT * FROM p WHERE f = 'NaN'
 ----
 NaN
 
+# Not supported by Materialize.
+onlyif cockroach
 query RBBB
-SELECT f, f IS NaN, f = 'NaN', isnan(f) FROM p@{FORCE_INDEX=primary} ORDER BY 1
+SELECT f, f IS NaN, f = 'NaN', isnan(f) FROM p@{FORCE_INDEX=p_pkey} ORDER BY 1
 ----
 NULL  NULL   NULL   NULL
 NaN   true   true   true
@@ -53,6 +59,8 @@ NaN   true   true   true
 1     false  false  false
 +Inf  false  false  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query RBBB
 SELECT f, f IS NaN, f = 'NaN', isnan(f) FROM p@{FORCE_INDEX=p_f_key} ORDER BY 1
 ----
@@ -64,8 +72,10 @@ NaN   true   true   true
 1     false  false  false
 +Inf  false  false  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query RB
-select f, f > 'NaN' from p@{FORCE_INDEX=primary} where f > 'NaN' ORDER BY f
+select f, f > 'NaN' from p@{FORCE_INDEX=p_pkey} where f > 'NaN' ORDER BY f
 ----
 -Inf  true
 -1    true
@@ -73,6 +83,8 @@ select f, f > 'NaN' from p@{FORCE_INDEX=primary} where f > 'NaN' ORDER BY f
 1     true
 +Inf  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query RB
 select f, f > 'NaN' from p@{FORCE_INDEX=p_f_key} where f > 'NaN' ORDER BY f
 ----
@@ -95,10 +107,28 @@ SELECT * FROM i WHERE f = 0
 0
 
 statement ok
-CREATE INDEX ON i (f)
+CREATE INDEX i_f_asc ON i (f)
 
 query R rowsort
 SELECT * FROM i WHERE f = 0
+----
+0
+
+statement ok
+CREATE INDEX i_f_desc ON i (f DESC)
+
+# Not supported by Materialize.
+onlyif cockroach
+query R rowsort
+SELECT * FROM i@i_f_asc;
+----
+-0
+0
+
+# Not supported by Materialize.
+onlyif cockroach
+query R rowsort
+SELECT * FROM i@i_f_desc;
 ----
 -0
 0
@@ -115,10 +145,10 @@ CREATE TABLE vals(f FLOAT);
 query RT rowsort
 SELECT f, f::string FROM vals
 ----
-0                     0
-123.456789012346      123.456789012346
-1.23456789012346e+22  1.23456789012346e+22
-0.000123456789012346  0.000123456789012346
+0  0
+0.00012345678901234567  0.00012345678901234567
+123.45678901234568  123.45678901234568
+12345678901234568000000  1.2345678901234568e+22
 
 statement ok
 SET extra_float_digits = 3
@@ -126,10 +156,10 @@ SET extra_float_digits = 3
 query RT rowsort
 SELECT f, f::string FROM vals
 ----
-0                       0
-123.45678901234568      123.45678901234568
-1.2345678901234568e+22  1.2345678901234568e+22
+0  0
 0.00012345678901234567  0.00012345678901234567
+123.45678901234568  123.45678901234568
+12345678901234568000000  1.2345678901234568e+22
 
 statement ok
 SET extra_float_digits = -8
@@ -137,10 +167,10 @@ SET extra_float_digits = -8
 query RT rowsort
 SELECT f, f::string FROM vals
 ----
-0             0
-123.4568      123.4568
-1.234568e+22  1.234568e+22
-0.0001234568  0.0001234568
+0  0
+0.00012345678901234567  0.00012345678901234567
+123.45678901234568  123.45678901234568
+12345678901234568000000  1.2345678901234568e+22
 
 statement ok
 SET extra_float_digits = -15
@@ -148,13 +178,89 @@ SET extra_float_digits = -15
 query RT rowsort
 SELECT f, f::string FROM vals
 ----
-0       0
-100     1e+02
-1e+22   1e+22
-0.0001  0.0001
+0  0
+0.00012345678901234567  0.00012345678901234567
+123.45678901234568  123.45678901234568
+12345678901234568000000  1.2345678901234568e+22
 
 statement ok
 DROP TABLE vals
 
 statement ok
 RESET extra_float_digits
+
+# Test that floating point numbers are compared with 15 decimal digits
+# precision.
+query FFF
+SELECT -0.1234567890123456, 123456789012345.6, 1234567.890123456
+----
+-0.1234567890123456  123456789012345.6  1234567.890123456
+
+# Regression test to make sure `IS NAN` does not coerce NaN to a string.
+statement error Expected NULL, NOT NULL, TRUE, NOT TRUE, FALSE, NOT FALSE, UNKNOWN, NOT UNKNOWN after IS, found identifier "nan"
+SELECT ROW() IS NAN
+
+statement error Expected NULL, NOT NULL, TRUE, NOT TRUE, FALSE, NOT FALSE, UNKNOWN, NOT UNKNOWN after IS, found identifier "nan"
+SELECT ROW() IS NOT NAN
+
+statement error Expected NULL, NOT NULL, TRUE, NOT TRUE, FALSE, NOT FALSE, UNKNOWN, NOT UNKNOWN after IS, found identifier "nan"
+SELECT 'NaN'::string IS NAN
+
+# Not supported by Materialize.
+onlyif cockroach
+query BB
+SELECT 'nan'::float IS NAN, 'nan'::float IS NOT NAN
+----
+true  false
+
+# Not supported by Materialize.
+onlyif cockroach
+query BB
+SELECT 'nan'::decimal IS NAN, 'nan'::decimal IS NOT NAN
+----
+true  false
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE t87605 (col2 FLOAT8 NULL)
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+insert into t87605 values (1.234567890123456e+13), (1.234567890123456e+6)
+
+# Not supported by Materialize.
+onlyif cockroach
+# Regression test for issue #87605.
+# The floor division operator `//` should not be folded away.
+query F
+SELECT ((col2::FLOAT8 // 1.0:::FLOAT8::FLOAT8)::FLOAT8) FROM t87605@[0] ORDER BY 1
+----
+1.234567e+06
+1.2345678901234e+13
+
+# Regression test for issue #89961.
+
+statement ok
+CREATE TABLE t89961 (a float PRIMARY KEY, INDEX (a DESC))
+
+statement ok
+INSERT INTO t89961 VALUES ('NaN')
+
+# We use st_makepointm because it is sensitive to different NaN encodings. The
+# following two queries should have the same result.
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT st_makepointm(a, 1.234567890123456e+07, -0.6571774097533073)::string FROM t89961@t89961_pkey
+----
+0101000040010000000000F87FDCE9D6DC298C67412DEF51EB9807E5BF
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT st_makepointm(a, 1.234567890123456e+07, -0.6571774097533073)::string FROM t89961@t89961_a_idx;
+----
+0101000040010000000000F87FDCE9D6DC298C67412DEF51EB9807E5BF

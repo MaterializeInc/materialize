@@ -20,15 +20,39 @@ external server is required.
 
 The `materialize-agent` MCP server lets AI agents query business-facing data
 products over HTTP. You can connect an MCP-compatible client (such as Claude
-Code, Claude Desktop, or Cursor) to the MCP server and ask the agent to discover
+Code, Claude Cowork, or Cursor) to the MCP server and ask the agent to discover
 and query your data products using either natural language or SQL:
 
-- *Via `materialize-agent`: What data products can I query?*
 - *SELECT * FROM mcp_product_performance LIMIT 5;*
 - *What's the `total_revenue` for product 42?*
 - *Perform a Pareto analysis on my products.*
 
+## Connection methods
+
+There are two ways to authenticate to the `materialize-agent` MCP server. Your
+method determines whether you need to set up a dedicated agent query
+environment:
+
+- **OAuth**: Starting in v26.30, your MCP client can sign you in through your
+  browser. The agent connects as **your user role** with your existing
+  privileges. You can **skip the environment setup** and go to [Method 1:
+  OAuth](#method-1-oauth). Available for **Cloud** and for **Self-Managed**
+  using [SSO](/security/self-managed/sso/).
+
+- **Token-based**: You provide Base64-encoded credentials (the MCP token) to the
+  client. The agent connects as a dedicated, least-privilege **service account**
+  (i.e., a separate login role acting as a service account). [Set up the agent
+  query environment and data
+  products](#set-up-the-agent-query-environment-and-data-products) first and
+  then go to [Method 2: Token-based
+  authentication](#method-2-token-based-authentication). Available for
+  **Cloud**, **Self-Managed**, and the **Emulator**
+
 ## Set up the agent query environment and data products
+
+*This setup is required only for the **token-based** connection method. If
+you're using OAuth, you can skip to [Connect to the MCP
+server](#connect-to-the-mcp-server).*
 
 {{< note >}}
 
@@ -229,9 +253,193 @@ exists.
      For objects that already exist, use [`GRANT SELECT ON <object> TO
      mcp_agent`](/sql/grant-privilege/).
 
-## Create the specific agent role
+## Connect to the MCP server
 
-For your specific agent, create the role with which the agent will connect.
+Connect using [OAuth](#method-1-oauth) or [token-based
+authentication](#method-2-token-based-authentication), as described in
+[Connection methods](#connection-methods).
+
+### Method 1: OAuth
+
+*Available starting in v26.30*
+
+{{< note >}}
+
+The OAuth method is available for **Cloud** and for **Self-Managed** using
+[SSO](/security/self-managed/sso/).
+{{< /note >}}
+
+With OAuth, the agent connects as **your user role** with your existing
+privileges. It is **not** confined to a dedicated [agent query
+environment](#set-up-the-agent-query-environment-and-data-products) and can read
+anything your user can. You do **not** need to set up the agent query
+environment to connect this way.
+
+{{< tip >}}
+
+If you have [set up the agent query environment and data
+products](#set-up-the-agent-query-environment-and-data-products), you can
+optionally grant the `mcp_agent` functional role to your user. This grants
+access to the curated data products if your user does not already have the
+necessary privileges.
+
+```mzsql
+GRANT mcp_agent TO <your_user>;
+```
+
+{{< /tip >}}
+
+To limit what the agent can reach, set
+[`restrict_to_user_objects`](/integrations/mcp-server/mcp-agent-tools/#restrict-to-user-objects)
+on your role (this excludes the system catalog only). For a confined,
+least-privilege agent, use a token-based [service
+account](#method-2-token-based-authentication) instead.
+
+#### Step 1. Get your MCP server URL
+
+To connect, the MCP-compatible client needs the `materialize-agent` MCP server
+URL: `<baseURL>/api/mcp/agent`.
+
+{{< tabs >}}
+
+{{< tab "Cloud" >}}
+
+1. Log in to the [Materialize Console](https://console.materialize.com/).
+
+1. Click the **Connect** link (lower-left corner) to open the **Connect** modal
+   and click on the **MCP Server** tab.
+
+1. In the **Connect your client** section, click on the **Agent** tab.
+
+   You can find your `materialize-agent` MCP server URL
+   `<baseURL>/api/mcp/agent` as part of the code block.
+
+   If using Claude Code as your MCP-compatible client, you can copy the code
+   block wholesale for the next step.
+
+{{< /tab >}}
+
+{{< tab "Self-Managed" >}}
+
+Self-Managed deployments using OAuth require SSO, which uses TLS. Your
+identity provider may also need additional configuration for MCP clients, such
+as a pre-registered OAuth client if your IdP does not support anonymous
+dynamic client registration. See [Connecting MCP
+clients](/security/self-managed/sso/#connecting-mcp-clients).
+
+Get your MCP server URL from the Materialize Console:
+
+1. Log in via the Materialize Console.
+
+1. Click the **Connect** link (lower-left corner) to open the **Connect** modal
+   and click on the **MCP Server** tab.
+
+1. In the **Connect your client** section, click on the **Agent** tab.
+
+   You can find your `materialize-agent` MCP server URL
+   `<baseURL>/api/mcp/agent` as part of the code block.
+
+   If using Claude Code as your MCP-compatible client, you can copy the code
+   block wholesale for the next step.
+
+{{< /tab >}}
+{{< /tabs >}}
+
+#### Step 2. Configure your MCP client
+
+In the following, replace `<baseURL>` with the MCP server URL from [Step
+1](#step-1-get-your-mcp-server-url). For Cloud, the base URL has the format
+`https://<region-id>.materialize.cloud`.
+
+{{< tabs >}}
+{{< tab "Claude Code" >}}
+
+1. Add the `materialize-agent` MCP server as [local-scoped
+   server](https://code.claude.com/docs/en/mcp#local-scope) (i.e., the
+   configurations are stored in `~/.claude.json`):
+
+   ```sh
+   claude mcp add --transport http "materialize-agent" \
+     "<baseURL>/api/mcp/agent"
+   ```
+
+   For Self-Managed deployments using OAuth with a pre-registered OIDC
+   client, add `--client-id` and `--callback-port`:
+
+   ```sh
+   claude mcp add --transport http "materialize-agent" \
+     "<baseURL>/api/mcp/agent" \
+     --client-id <YOUR_CLIENT_ID> --callback-port 8080
+   ```
+
+   The `--callback-port` value must match the port in the
+   `http://localhost:<port>/callback` redirect URI registered on the OIDC
+   client. See [Connecting MCP
+   clients](/security/self-managed/sso/#connecting-mcp-clients) for
+   the full IdP configuration.
+
+1. Restart Claude Code. On first connection, your browser opens to complete
+   sign-in and connect.
+
+1. Upon successful connection, you can [Start querying](#start-querying).
+
+{{< /tab >}}
+
+{{< tab "Claude Cowork/Chrome" >}}
+
+To configure Claude Cowork/Chrome, add a custom connector. The exact steps
+depend on your Claude plan; for example:
+
+- **Organization settings** → **Connectors** → **Add** → **Custom** → **Web**,
+  or
+- **Customize** → **Connectors** → **+** → **Add custom connector**.
+
+Refer to the [Add a custom
+connector](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp#h_3d1a65aded)
+section of the [Get started with custom connectors using Remote
+MCP](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp#h_3d1a65aded)
+guide to get the exact steps for your plan. For the **Remote MCP server URL**
+field, enter your `materialize-agent` MCP server URL.
+
+For additional information, including network requirements and security and
+privacy concerns, see the [Get started with custom connectors using Remote
+MCP](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp)
+article.
+
+{{< /tab >}}
+
+{{< tab "Cursor" >}}
+
+1. Add the `materialize-agent` MCP server entry to your local MCP settings
+   file (`~/.cursor/mcp.json`).
+   - When merging into an existing `mcpServers` object, remember to add commas
+     between entries.
+   - If the `mcpServers` field does not already exist, add it as well.
+
+   ```json {hl_lines="3-5"}
+   {
+     "mcpServers": {
+       "materialize-agent": {
+         "url": "<baseURL>/api/mcp/agent"
+       }
+     }
+   }
+   ```
+
+1. Restart Cursor. On first connection, your browser opens to complete sign-in
+   and connect.
+
+1. Upon successful connection, you can [Start querying](#start-querying).
+
+{{< /tab >}}
+{{< /tabs >}}
+
+### Method 2: Token-based authentication
+
+#### Step 1. Create the specific agent role
+
+For your specific agent, create the dedicated role with which the agent will
+connect.
 
 {{< tabs >}}
 
@@ -383,14 +591,12 @@ For your specific agent, create the role with which the agent will connect.
 
 {{< /tabs >}}
 
-## Connect to the MCP server
-
-### Step 1. Get connection details
+#### Step 2. Get connection details
 
 When connecting to the MCP server, the MCP-compatible client needs:
 
 - The Base64-encoded `user:password` credentials (i.e., the MCP token) of your
-  [agent](#create-the-specific-agent-role).
+  [agent](#step-1-create-the-specific-agent-role).
 
 - The `materialize-agent` MCP server URL: `<baseURL>/api/mcp/agent`.
 
@@ -401,18 +607,18 @@ When connecting to the MCP server, the MCP-compatible client needs:
 1. Log in to the Materialize Console.
 
 1. Go to **App Passwords** and for the [service account created
-   `my_agent`](#create-the-specific-agent-role), click
+   `my_agent`](#step-1-create-the-specific-agent-role), click
    **Connect**.
 
 1. Click on the **MCP Server** tab.
 
 1. In the **Get your MCP token** section[^1],
-   - If using [`my_agent`](#create-the-specific-agent-role), use the **MCP
+   - If using [`my_agent`](#step-1-create-the-specific-agent-role), use the **MCP
      Token** that was returned when you created the service account. You can
      skip to the next step.
 
    - Otherwise, you can:
-     - [Create a different service account](#create-the-specific-agent-role) and
+     - [Create a different service account](#step-1-create-the-specific-agent-role) and
        use the generated MCP token; or
 
      - Use an existing service account, Base64 encoding the `role:password` to
@@ -491,7 +697,7 @@ When connecting to the MCP server, the MCP-compatible client needs:
 
 {{< /tabs >}}
 
-### Step 2. Configure your MCP client
+#### Step 3. Configure your MCP client
 
 {{< warning >}}
 When saving your credentials or other sensitive information in a config file, do
@@ -517,32 +723,55 @@ When saving your credentials or other sensitive information in a config file, do
 
 {{< /tab >}}
 
-{{< tab "Claude Desktop" >}}
+{{< tab "Claude Cowork" >}}
 
-1. Add the `materialize-agent` MCP server entry to your Claude Desktop
+Claude Cowork's `claude_desktop_config.json` does not connect to a remote MCP
+server directly. Use the
+[`mcp-remote`](https://www.npmjs.com/package/mcp-remote) bridge, which runs
+locally and forwards requests to the `materialize-agent` MCP server over HTTP.
+`mcp-remote` is invoked with `npx` and requires [Node.js](https://nodejs.org/).
+
+{{< note >}}
+[`mcp-remote`](https://github.com/geelen/mcp-remote) is a third-party,
+community-maintained tool. It is not maintained by Anthropic or Materialize.
+Your MCP token is passed to it on each launch. The configuration below pins a
+specific version rather than pulling the latest release. Review the tool and
+update the pinned version as appropriate for your environment.
+{{< /note >}}
+
+1. Add the `materialize-agent` MCP server entry to your Claude Cowork
    configuration (`claude_desktop_config.json`).
    - When merging into an existing `mcpServers` object, remember to add commas
      between entries.
    - If the `mcpServers` field does not already exist, add it as well.
-   - For older Claude Desktop versions, you may need to include the transport
-     `"type": "http",` as well as part of the `materialize-agent` entry.
 
-   ```json {hl_lines="3-8"}
+   ```json {hl_lines="3-14"}
    {
      "mcpServers": {
        "materialize-agent": {
-         "url": "<baseURL>/api/mcp/agent",
-         "headers": {
-           "Authorization": "Basic <mcp-token>"
+         "command": "npx",
+         "args": [
+           "-y", "mcp-remote@0.1.38",
+           "<baseURL>/api/mcp/agent",
+           "--header", "Authorization:${AUTH_HEADER}"
+         ],
+         "env": {
+           "AUTH_HEADER": "Basic <mcp-token>"
          }
        }
      }
    }
    ```
 
+   The `Authorization` header value is passed through the `AUTH_HEADER`
+   environment variable. This avoids a known `mcp-remote` issue where a space in
+   a `--header` argument (such as the space in `Basic <mcp-token>`) is
+   mishandled on some platforms. The colon in `"Authorization:${AUTH_HEADER}"`
+   has no trailing space.
+
    {{% include-headless "/headless/mcp-endpoint-config-replacements" %}}
 
-1. Restart Claude Desktop to pick up the new setting.
+1. Restart Claude Cowork to pick up the new setting.
 
 {{< /tab >}}
 
@@ -595,14 +824,6 @@ curl -X POST <baseURL>/api/mcp/agent \
 
 ## Start querying
 
-Once connected to the MCP server, you can query your curated data products using
-either natural language or SQL:
-
-- *Via `materialize-agent`: What data products can I query?*
-- *SELECT * FROM mcp_product_performance LIMIT 5;*
-- *What's the `total_revenue` for product 42?*
-- *Perform a Pareto analysis on my products.*
-
 {{< warning >}}
 
 By default, the [`query` tool](/integrations/mcp-server/mcp-agent-tools/#query)
@@ -617,9 +838,24 @@ configuration](/integrations/mcp-server/mcp-agent-config/).
 
 {{< /warning >}}
 
+{{< tip >}}
+Because the `query` tool can join across objects, consider maintaining an
+[ontology table](/architecture-patterns/ontology/): a curated catalog of the
+join relationships in your schema that the agent can query to confirm exact join
+keys before writing multi-table SQL.
+{{< /tip >}}
+
+Once connected to the MCP server, you can query your curated data products using
+either natural language or SQL:
+
+- *Via `materialize-agent`: What data products can I query?*
+- *SELECT * FROM mcp_product_performance LIMIT 5;*
+- *What's the `total_revenue` for product 42?*
+- *Perform a Pareto analysis on my products.*
 
 ## Related pages
 
+- [Use an ontology table](/architecture-patterns/ontology/)
 - [`materialize-agent` MCP Server available
   tools](/integrations/mcp-server/mcp-agent-tools/)
 - [`materialize-agent` MCP Server

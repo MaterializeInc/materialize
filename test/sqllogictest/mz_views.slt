@@ -1,0 +1,266 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_catalog.mz_views. It is a BuiltinMaterializedView
+# over mz_internal.mz_catalog_raw (see MZ_VIEWS in
+# src/catalog/src/builtin/mz_catalog.rs) with two union branches, user views and
+# builtin views, and it derives every column from the durable catalog JSON
+# through parse_catalog_id, parse_catalog_privileges, redact_sql and
+# parse_catalog_create_sql (src/expr/src/scalar/func/impls/jsonb.rs).
+#
+# Before that it was a BuiltinTable populated by pack_view_update in the
+# adapter, so the values pinned here are a compatibility surface. The
+# `definition` column in particular is what pg_views.definition exposes.
+#
+# Assertions filter by object name rather than counting rows, so the file also
+# holds under --auto-index-selects, which creates extra views.
+
+mode cockroach
+
+# Stable object ids, so create_sql can name dependencies by id.
+reset-server
+
+# --- user_views branch --------------------------------------------------------
+
+# `t` is the first object created after the reset, so it is u1 and the
+# definitions below can name it.
+statement ok
+CREATE TABLE t (a int, b text NOT NULL)
+
+statement ok
+CREATE VIEW v AS SELECT a, b FROM t WHERE a > 42
+
+query T
+SELECT schema_id = (SELECT id FROM mz_schemas WHERE name = 'public' AND database_id IS NOT NULL)
+FROM mz_views WHERE name = 'v'
+----
+true
+
+query T
+SELECT owner_id = (SELECT id FROM mz_roles WHERE name = 'materialize')
+FROM mz_views WHERE name = 'v'
+----
+true
+
+# definition is the view's query rendered stably, with the trailing semicolon
+# PostgreSQL puts in pg_views.definition.
+query T multiline
+SELECT definition FROM mz_views WHERE name = 'v'
+----
+SELECT "a", "b" FROM [u1 AS "materialize"."public"."t"] WHERE "a" > 42;
+EOF
+
+query T multiline
+SELECT create_sql FROM mz_views WHERE name = 'v'
+----
+CREATE VIEW "materialize"."public"."v" AS SELECT "a", "b" FROM [u1 AS "materialize"."public"."t"] WHERE "a" > 42
+EOF
+
+# Redaction replaces literals but keeps structure and resolves quoting.
+query T multiline
+SELECT redacted_create_sql FROM mz_views WHERE name = 'v'
+----
+CREATE VIEW materialize.public.v AS SELECT a, b FROM [u1 AS materialize.public.t] WHERE a > '<REDACTED>'
+EOF
+
+# --- Cross-check against the in-memory catalog --------------------------------
+
+# The oid column is read out of the durable JSON, while a regclass cast resolves
+# the name through the in-memory catalog. Two independent paths that must agree.
+#
+# NB create_sql cannot be compared against SHOW CREATE VIEW the same way: SHOW
+# humanizes item ids back to names and pretty-prints, so it is deliberately not
+# the stored string.
+query T
+SELECT oid = 'v'::regclass::oid FROM mz_views WHERE name = 'v'
+----
+true
+
+# definition must be a fixed point: consumers re-issue it as the body of a new
+# view, so planning it again and rendering it again has to reproduce it exactly.
+# This goes out through the planner and back through the durable catalog, so it
+# is an end-to-end check on the rendering rather than a self-comparison.
+statement ok
+CREATE VIEW v_roundtrip AS SELECT "a", "b" FROM [u1 AS "materialize"."public"."t"] WHERE "a" > 42;
+
+query T
+SELECT (SELECT definition FROM mz_views WHERE name = 'v')
+     = (SELECT definition FROM mz_views WHERE name = 'v_roundtrip')
+----
+true
+
+# --- Temporary views ----------------------------------------------------------
+
+# Temporary items are durable catalog items tagged with their owning session,
+# parented to a sentinel schema id shared by every session. The MV maps that
+# sentinel to schema_id '0', which is what the old SchemaSpecifier::Temporary
+# populator printed (src/sql/src/names.rs).
+
+statement ok
+CREATE TEMP VIEW tv AS SELECT a FROM t
+
+query TTT
+SELECT id LIKE 'u%', schema_id, create_sql IS NOT NULL FROM mz_views WHERE name = 'tv'
+----
+true  0  true
+
+query T multiline
+SELECT definition FROM mz_views WHERE name = 'tv'
+----
+SELECT "a" FROM [u1 AS "materialize"."public"."t"];
+EOF
+
+# Two sessions may each hold a temporary view of the same name: name uniqueness
+# is scoped by the owning session. Both rows show up here, since mz_views
+# reports every item and per-session visibility lives in name resolution, not in
+# this MV.
+simple conn=other
+CREATE TEMP VIEW tv AS SELECT 1 AS other;
+----
+COMPLETE 0
+
+query I
+SELECT count(*) FROM mz_views WHERE name = 'tv'
+----
+2
+
+query T
+SELECT array_agg(DISTINCT schema_id) FROM mz_views WHERE name = 'tv'
+----
+{0}
+
+# --- builtin_views branch -----------------------------------------------------
+
+query TTT
+SELECT id LIKE 's%', owner_id, create_sql IS NOT NULL
+FROM mz_views WHERE name = 'mz_objects'
+----
+true  s1  true
+
+query T
+SELECT schema_id = (SELECT id FROM mz_schemas WHERE name = 'mz_catalog' AND database_id IS NULL)
+FROM mz_views WHERE name = 'mz_objects'
+----
+true
+
+# Exactly once: the user and builtin branches must not both claim a row.
+query I
+SELECT count(*) FROM mz_views WHERE name = 'mz_objects'
+----
+1
+
+# Every builtin view the catalog generates must be reported.
+query T
+SELECT array_agg(name ORDER BY name) FROM (
+  SELECT name FROM mz_internal.mz_builtin_views
+  EXCEPT
+  SELECT name FROM mz_views WHERE id LIKE 's%'
+)
+----
+NULL
+
+# ...and nothing else: every builtin row traces back to the reporter.
+query T
+SELECT array_agg(name ORDER BY name) FROM (
+  SELECT name FROM mz_views WHERE id LIKE 's%'
+  EXCEPT
+  SELECT name FROM mz_internal.mz_builtin_views
+)
+----
+NULL
+
+# --- Generated reporter views ---------------------------------------------------
+
+# The builtin branch reads mz_internal.mz_builtin_views, a generated constant
+# view that lists every builtin view, including itself and the other generated
+# mz_builtin_* views. The generated views are listed with a short placeholder
+# instead of their real SQL: mz_builtin_views cannot textually contain itself,
+# and the other reporters embed metadata about every builtin object, so
+# re-embedding their SQL would produce enormous rows.
+
+# The placeholder rows are exactly the generated views, and nothing else is
+# elided.
+query T
+SELECT name FROM mz_views WHERE definition LIKE '%definition elided%' AND id LIKE 's%' ORDER BY name
+----
+mz_builtin_materialized_views
+mz_builtin_sources
+mz_builtin_tables
+mz_builtin_views
+
+query T multiline
+SELECT definition FROM mz_views WHERE name = 'mz_builtin_views'
+----
+SELECT '<generated builtin view mz_internal.mz_builtin_views: definition elided>';
+EOF
+
+query T multiline
+SELECT create_sql FROM mz_views WHERE name = 'mz_builtin_views'
+----
+CREATE VIEW "mz_internal"."mz_builtin_views" AS SELECT '<generated builtin view mz_internal.mz_builtin_views: definition elided>'
+EOF
+
+# The placeholder must stay parseable: redact_sql errors on unparseable input,
+# and an error would poison the whole materialized view, not just this row.
+query T multiline
+SELECT redacted_create_sql FROM mz_views WHERE name = 'mz_builtin_views'
+----
+CREATE VIEW mz_internal.mz_builtin_views AS SELECT '<REDACTED>'
+EOF
+
+# --- Robustness over the whole catalog ----------------------------------------
+
+# The MV runs parse_catalog_create_sql over every Item row in the catalog, in
+# its WHERE clause, so a single item whose create_sql the parser rejects makes
+# the entire relation unreadable rather than dropping one row. Create one item
+# of every kind reachable here and confirm the relation still resolves.
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT count(*) FROM t
+
+statement ok
+CREATE INDEX t_idx ON t (a)
+
+statement ok
+CREATE TYPE ty AS LIST (ELEMENT TYPE = int4)
+
+statement ok
+CREATE SECRET sec AS 'hunter2'
+
+statement ok
+CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
+
+statement ok
+CREATE TABLE lg_tbl FROM SOURCE lg (REFERENCE counter)
+
+query T
+SELECT count(*) > 0 FROM mz_views
+----
+true
+
+# --- NOT NULL invariants ------------------------------------------------------
+
+# The MV declares ASSERT NOT NULL for every column.
+query I
+SELECT count(*)
+FROM mz_views
+WHERE id IS NULL
+   OR oid IS NULL
+   OR schema_id IS NULL
+   OR name IS NULL
+   OR definition IS NULL
+   OR owner_id IS NULL
+   OR privileges IS NULL
+   OR create_sql IS NULL
+   OR redacted_create_sql IS NULL
+----
+0
+
+statement ok
+DROP TABLE t CASCADE

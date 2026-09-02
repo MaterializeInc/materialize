@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,46 +9,58 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/inet
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/inet
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
-
-# not supported yet
-halt
 
 mode cockroach
 
 # Basic IPv4 tests
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '192.168.1.2/24':::INET;
 ----
 192.168.1.2/24
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '192.168.1.2/32':::INET;
 ----
 192.168.1.2
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '192.168.1.2':::INET;
 ----
 192.168.1.2
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '192.168.1.2/24':::INET;
 ----
 192.168.1.2/24
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '0.0.0.0':::INET;
 ----
 0.0.0.0
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '::/0'::inet::text::inet;
 ----
@@ -56,26 +68,36 @@ SELECT '::/0'::inet::text::inet;
 
 # Basic IPv6 tests
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '::ffff:192.168.1.2':::INET;
 ----
 ::ffff:192.168.1.2
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '::ffff:192.168.1.2/120':::INET;
 ----
 ::ffff:192.168.1.2/120
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '::ffff':::INET;
 ----
 ::ffff
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2001:4f8:3:ba:2e0:81ff:fe22:d1f1/120':::INET;
 ----
 2001:4f8:3:ba:2e0:81ff:fe22:d1f1/120
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2001:4f8:3:ba:2e0:81ff:fe22:d1f1':::INET;
 ----
@@ -83,12 +105,16 @@ SELECT '2001:4f8:3:ba:2e0:81ff:fe22:d1f1':::INET;
 
 # Test casting
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '192.168.1.2/24'::INET;
 ----
 192.168.1.2/24
 
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '192.168.1.200/10':::INET
 ----
@@ -96,16 +122,22 @@ SELECT '192.168.1.200/10':::INET
 
 # Test for less than 4 octets with mask
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '192.168.1/10':::INET
 ----
 192.168.1.0/10
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '192.168/10':::INET
 ----
 192.168.0.0/10
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '192/10':::INET
 ----
@@ -113,6 +145,8 @@ SELECT '192/10':::INET
 
 # Test for preservation of masked bits
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '255/10':::INET
 ----
@@ -120,23 +154,25 @@ SELECT '255/10':::INET
 
 # Test that less than 4 octets requires a mask
 
-statement error could not parse
+statement error Expected a data type name, found colon
 SELECT '192':::INET
 
-statement error could not parse
+statement error Expected a data type name, found colon
 SELECT '19.0':::INET
 
 # Test that the mask can't be larger than the provided octet bits
 
-statement error could not parse
+statement error Expected a data type name, found colon
 SELECT '19.0/32':::INET
 
-statement error could not parse
+statement error Expected a data type name, found colon
 SELECT '19/32':::INET
 
-statement error could not parse
+statement error Expected a data type name, found colon
 SELECT '19/16':::INET
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '19/15':::INET
 ----
@@ -144,15 +180,17 @@ SELECT '19/15':::INET
 
 # Misc tests
 
-statement error could not parse
+statement error Expected a data type name, found colon
 SELECT '192.168/24/1':::INET
 
-statement error could not parse
+statement error Expected a data type name, found colon
 SELECT '':::INET
 
-statement error could not parse
+statement error Expected a data type name, found colon
 SELECT '0':::INET
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '0.0.0.0':::INET
 ----
@@ -160,21 +198,29 @@ SELECT '0.0.0.0':::INET
 
 # Testing equivilance
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '::ffff:192.168.0.1/24'::INET = '::ffff:192.168.0.1/24'::INET
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '::ffff:192.168.0.1/24'::INET = '::ffff:192.168.0.1/25'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '::ffff:192.168.0.1/24'::INET = '::ffff:192.168.0.1'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '::ffff:192.168.0.1'::INET = '::ffff:192.168.0.1'::INET
 ----
@@ -182,26 +228,36 @@ true
 
 # Ensure IPv4-mapped IPv6 is not equal to its mapped IPv4
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '::ffff:192.168.0.1'::INET = '192.168.0.1'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.0.1'::INET = '192.168.0.1'::INET
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.0.1/0'::INET = '192.168.0.1'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.0.1/0'::INET = '192.168.0.1/0'::INET
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.0.1/0'::INET = '192.168.0.1/0'::INET
 ----
@@ -209,26 +265,36 @@ true
 
 # Testing basic comparisons
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.0.2/24'::INET < '192.168.0.1/25'::INET
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '1.2.3.4':::INET < '1.2.3.5':::INET
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.0.1/0'::INET > '192.168.0.1/0'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.0.0'::INET > '192.168.0.1/0'::INET
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '::ffff:1.2.3.4':::INET > '1.2.3.4':::INET
 ----
@@ -236,156 +302,218 @@ true
 
 # Testing contains/contained by logic
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.200.95/17'::INET >> '192.168.162.1'::INET
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.200.95/8'::INET >> '192.168.2.1/8'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '2001:0db8:0000:0000:0500:5000:0000:0001/50'::INET >> '2001:0db8:0000:0000:0500:5000:0000:0001/50'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '2001:0db8:0500:0000:0500:5000:0000:0001/50'::INET >> '2001:0db8:0000:0000:0000:0000:0000:0001/100'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.200.95/8'::INET >>= '192.168.2.1/8'::INET
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.200.95/17'::INET >>= '192.168.2.1/24'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.200.95/8'::INET >>= '192.168.2.1/8'::INET
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '2001:0db8:0500:0000:0500:5000:0000:0001/50'::INET >>= '2001:0db8:0000:0000:0000:0000:0000:0001/100'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '2001:0db8:0000:0000:0500:5000:0000:0001/50'::INET >>= '2001:0db8:0000:0000:0500:5000:0000:0001/50'::INET
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.200.95'::INET << '192.168.2.1/8'::INET
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.200.95/8'::INET << '192.168.2.1/8'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.200.95'::INET <<= '192.168.2.1/8'::INET
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.200.95/8'::INET <<= '192.168.2.1/8'::INET
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '2001:0db8:0000:0000:0500:5000:0000:0001/50'::INET << '2001:0db8:0000:0000:0000:0000:0000:0001/100'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '2001:0db8:0000:0000:0500:5000:0000:0001/50'::INET << '2001:0db8:0000:0000:0500:5000:0000:0001/50'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '2001:0db8:0000:0000:0500:5000:0000:0001/50'::INET <<= '2001:0db8:0000:0000:0000:0000:0000:0001/100'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '2001:0db8:0000:0000:0500:5000:0000:0001/50'::INET <<= '2001:0db8:0000:0000:0500:5000:0000:0001/50'::INET
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.200.95/16'::INET && '192.168.2.1/24'::INET
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.200.95/17'::INET && '192.168.2.1/24'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '2001:0db8:0500:0000:0500:5000:0000:0001/50'::INET && '2001:0db8:0000:0000:0000:0000:0000:0001/100'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '2001:0db8:0000:0000:0500:5000:0000:0001/50'::INET && '2001:0db8:0000:0000:0000:0000:0000:0001/100'::INET
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '2001:0db8:0500:0000:0500:5000:0000:0001/50'::INET >> '192.168.2.1/8'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '2001:0db8:0500:0000:0500:5000:0000:0001/50'::INET >>= '192.168.2.1/8'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '2001:0db8:0500:0000:0500:5000:0000:0001/50'::INET << '192.168.2.1/8'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '2001:0db8:0500:0000:0500:5000:0000:0001/50'::INET <<= '192.168.2.1/8'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '2001:0db8:0500:0000:0500:5000:0000:0001/50'::INET && '192.168.2.1/8'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.2.1/8'::INET >> '2001:0db8:0500:0000:0500:5000:0000:0001/50'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.2.1/8'::INET >>= '2001:0db8:0500:0000:0500:5000:0000:0001/50'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.2.1/8'::INET << '2001:0db8:0500:0000:0500:5000:0000:0001/50'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.2.1/8'::INET <<= '2001:0db8:0500:0000:0500:5000:0000:0001/50'::INET
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '192.168.2.1/8'::INET && '2001:0db8:0500:0000:0500:5000:0000:0001/50'::INET
 ----
@@ -393,157 +521,213 @@ false
 
 # Binary operations
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT ~'192.168.1.2/10':::INET
 ----
 63.87.254.253/10
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT ~'192.168.1.2/0':::INET
 ----
 63.87.254.253/0
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT ~'2001:4f8:3:ba::/64':::INET
 ----
 dffe:fb07:fffc:ff45:ffff:ffff:ffff:ffff/64
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '255.255.255.250/2':::INET & '0.5.0.5/17':::INET
 ----
 0.5.0.0/17
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '0000:0564:0000:0aab:0000:0000:0060:0005/23':::INET & 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:0005/123':::INET
 ----
 0:564:0:aab::60:5/123
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '192.168.1.2/1':::INET | '192.168.1.3/17':::INET
 ----
 192.168.1.3/17
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '6e32:8a01:373b:c9ce:8ed5:9f7f:dc7e:5cfc/99':::INET | 'c33e:9867:5c98:f0a2:2b2:abf9:c7a5:67d':::INET
 ----
 ef3e:9a67:7fbb:f9ee:8ef7:bfff:dfff:5efd
 
-statement error pq: cannot AND inet values of different sizes
+statement error Expected a data type name, found colon
 SELECT '0000:0564:0000:0aab:0000:0000:0060:0005/23':::INET & '192.168.1.2/1':::INET
 
-statement error pq: cannot OR inet values of different sizes
+statement error Expected a data type name, found colon
 SELECT '0000:0564:0000:0aab:0000:0000:0060:0005/23':::INET | '192.168.1.2/1':::INET
 
 # Addition and Subtraction
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '192.168.1.2':::INET + 184836468
 ----
 203.172.98.118
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '0.0.0.5':::INET - 5
 ----
 0.0.0.0
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '203.172.98.118/23':::INET - 184836468
 ----
 192.168.1.2/23
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '0.0.0.5':::INET - -5
 ----
 0.0.0.10
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '::4104:4066:5de7:b1fa':::INET - 4684658846864486648
 ----
 ::ffff:192.168.1.2
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '::4104:4066:5de7:b1fa/121':::INET + -4684658846864486648
 ----
 ::ffff:192.168.1.2/121
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '::4104:4066:5de7:b1fa/101':::INET + 2
 ----
 ::4104:4066:5de7:b1fc/101
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '::5/128':::INET - -2
 ----
 ::7
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT '203.172.98.118/17':::INET - '192.168.1.2/1':::INET
 ----
 184836468
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT '::4104:4066:5de7:b1fa/79':::INET - '::ffff:192.168.1.2/44':::INET
 ----
 4684658846864486648
 
-statement error pq: result out of range
+statement error Expected a data type name, found colon
 SELECT '255.255.0.5':::INET + 2000000000
 
-statement error pq: result out of range
+statement error Expected a data type name, found colon
 SELECT '0.0.0.5':::INET - 10
 
-statement error pq: result out of range
+statement error Expected a data type name, found colon
 SELECT '::5/128':::INET - 10
 
-statement error pq: result out of range
+statement error Expected a data type name, found colon
 SELECT 'ff00:5::/128':::INET - '::ff00:5/128':::INET
 
 # Edge case: postgres compatibility
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '0.0.0.0.':::INET
 ----
 0.0.0.0
 
-statement error could not parse
+statement error Expected a data type name, found colon
 SELECT '.0.0.0.0.':::INET
 
-statement error could not parse
+statement error Expected a data type name, found colon
 SELECT '0.0.0.0.0':::INET
 
 # Test storage round-trip
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE u (ip inet PRIMARY KEY,
                 ip2 inet)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO u VALUES ('192.168.0.1', '192.168.0.1')
 
-statement error duplicate key value
+statement error unknown catalog item 'u'
 INSERT INTO u VALUES ('192.168.0.1', '192.168.0.2')
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO u VALUES ('192.168.0.2', '192.168.0.2')
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO u VALUES ('192.168.0.5/24', '192.168.0.5')
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO u VALUES ('192.168.0.1/31', '192.168.0.1')
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO u VALUES ('192.168.0.0', '192.168.0.1')
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO u VALUES ('192.0.0.0', '127.0.0.1')
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO u (ip) VALUES ('::1')
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO u (ip) VALUES ('::ffff:1.2.3.4')
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SELECT * FROM u ORDER BY ip
 ----
@@ -556,15 +740,21 @@ SELECT * FROM u ORDER BY ip
 ::1             NULL
 ::ffff:1.2.3.4  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE arrays (ips INET[])
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO arrays VALUES
     (ARRAY[]),
     (ARRAY['192.168.0.1/10', '::1']),
     (ARRAY['192.168.0.1', '192.168.0.1/10', '::1', '::ffff:1.2.3.4'])
 
+# Not supported by Materialize.
+onlyif cockroach
 query T rowsort
 SELECT * FROM arrays
 ----
@@ -580,36 +770,50 @@ SELECT * FROM arrays
 # CIDR. The input string is not always equal to the output string, e.g.
 # abbrev('10.0/16'::inet) => '10.0.0.0/16'
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT abbrev('10.1.0.0/16'::INET)
 ----
 10.1.0.0/16
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT abbrev('192.168.0.1/16'::INET)
 ----
 192.168.0.1/16
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT abbrev('192.168.0.1'::INET)
 ----
 192.168.0.1
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT abbrev('192.168.0.1/32'::INET)
 ----
 192.168.0.1
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT abbrev('10.0/16'::INET)
 ----
 10.0.0.0/16
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT abbrev('::ffff:192.168.0.1'::INET)
 ----
 ::ffff:192.168.0.1
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT abbrev('::ffff:192.168.0.1/24'::INET)
 ----
@@ -617,36 +821,50 @@ SELECT abbrev('::ffff:192.168.0.1/24'::INET)
 
 # Test broadcast
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT broadcast('10.1.0.0/16'::INET)
 ----
 10.1.255.255/16
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT broadcast('192.168.0.1/16'::INET)
 ----
 192.168.255.255/16
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT broadcast('192.168.0.1'::INET)
 ----
 192.168.0.1
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT broadcast('192.168.0.1/32'::INET)
 ----
 192.168.0.1
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT broadcast('::ffff:192.168.0.1'::INET)
 ----
 ::ffff:192.168.0.1
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT broadcast('::ffff:1.2.3.1/20'::INET)
 ----
 0:fff:ffff:ffff:ffff:ffff:ffff:ffff/20
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT broadcast('2001:4f8:3:ba::/64'::INET)
 ----
@@ -654,31 +872,43 @@ SELECT broadcast('2001:4f8:3:ba::/64'::INET)
 
 # Test family
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT family('10.1.0.0/16'::INET)
 ----
 4
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT family('192.168.0.1/16'::INET)
 ----
 4
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT family('192.168.0.1'::INET)
 ----
 4
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT family('::ffff:192.168.0.1'::INET)
 ----
 6
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT family('::ffff:1.2.3.1/20'::INET)
 ----
 6
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT family('2001:4f8:3:ba::/64'::INET)
 ----
@@ -686,31 +916,43 @@ SELECT family('2001:4f8:3:ba::/64'::INET)
 
 # Test host
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT host('10.1.0.0/16'::INET)
 ----
 10.1.0.0
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT host('192.168.0.1/16'::INET)
 ----
 192.168.0.1
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT host('192.168.0.1'::INET)
 ----
 192.168.0.1
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT host('192.168.0.1/32'::INET)
 ----
 192.168.0.1
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT host('::ffff:192.168.0.1'::INET)
 ----
 ::ffff:192.168.0.1
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT host('::ffff:192.168.0.1/24'::INET)
 ----
@@ -718,21 +960,29 @@ SELECT host('::ffff:192.168.0.1/24'::INET)
 
 # Test hostmask
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT hostmask('192.168.1.2'::INET)
 ----
 0.0.0.0
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT hostmask('192.168.1.2/16'::INET)
 ----
 0.0.255.255
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT hostmask('192.168.1.2/10'::INET)
 ----
 0.63.255.255
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT hostmask('2001:4f8:3:ba::/64'::INET)
 ----
@@ -740,26 +990,36 @@ SELECT hostmask('2001:4f8:3:ba::/64'::INET)
 
 # Test masklen
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT masklen('192.168.1.2'::INET)
 ----
 32
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT masklen('192.168.1.2/16'::INET)
 ----
 16
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT masklen('192.168.1.2/10'::INET)
 ----
 10
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT masklen('2001:4f8:3:ba::/64'::INET)
 ----
 64
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT masklen('2001:4f8:3:ba::'::INET)
 ----
@@ -767,46 +1027,64 @@ SELECT masklen('2001:4f8:3:ba::'::INET)
 
 # Test netmask
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT netmask('192.168.1.2'::INET)
 ----
 255.255.255.255
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT netmask('192.168.1.2/16'::INET)
 ----
 255.255.0.0
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT netmask('192.168.1.2/10'::INET)
 ----
 255.192.0.0
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT netmask('192.168.1.2/0'::INET)
 ----
 0.0.0.0
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT netmask('2001:4f8:3:ba::/64'::INET)
 ----
 ffff:ffff:ffff:ffff::
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT netmask('2001:4f8:3:ba::/0'::INET)
 ----
 ::
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT netmask('2001:4f8:3:ba:2e0:81ff:fe22:d1f1/128'::INET)
 ----
 ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT netmask('::ffff:1.2.3.1/120'::INET)
 ----
 ffff:ffff:ffff:ffff:ffff:ffff:ffff:ff00
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT netmask('::ffff:1.2.3.1/20'::INET)
 ----
@@ -814,41 +1092,51 @@ ffff:f000::
 
 # Test set_masklen
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT set_masklen('10.1.0.0/16'::INET, 10)
 ----
 10.1.0.0/10
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT set_masklen('192.168.0.1/16'::INET, 32)
 ----
 192.168.0.1
 
-statement error invalid mask length
+statement error function "set_masklen" does not exist
 SELECT set_masklen('192.168.0.1'::INET, 100)
 
-statement error invalid mask length
+statement error function "set_masklen" does not exist
 SELECT set_masklen('192.168.0.1'::INET, 33)
 
-statement error invalid mask length
+statement error function "set_masklen" does not exist
 SELECT set_masklen('192.168.0.1'::INET, -1)
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT set_masklen('192.168.0.1'::INET, 0)
 ----
 192.168.0.1/0
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT set_masklen('::ffff:192.168.0.1'::INET, 100)
 ----
 ::ffff:192.168.0.1/100
 
-statement error invalid mask length
+statement error function "set_masklen" does not exist
 SELECT set_masklen('::ffff:192.168.0.1'::INET, -1)
 
-statement error invalid mask length
+statement error function "set_masklen" does not exist
 SELECT set_masklen('::ffff:192.168.0.1'::INET, 129)
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT set_masklen('::ffff:192.168.0.1/24'::INET, 0)
 ----
@@ -859,31 +1147,57 @@ SELECT set_masklen('::ffff:192.168.0.1/24'::INET, 0)
 # the prefix length, whereas abbrev omit it when the prefix length is the
 # total bits size (32 for IPv4, 128 for IPv6).
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT text('10.1.0.0/16'::INET)
 ----
 10.1.0.0/16
 
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT '192.168.0.1'::INET::TEXT
+----
+192.168.0.1/32
+
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT text('192.168.0.1/16'::INET)
 ----
 192.168.0.1/16
 
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT '192.168.0.1/16'::INET::TEXT
+----
+192.168.0.1/16
+
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT text('192.168.0.1'::INET)
 ----
 192.168.0.1/32
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT text('192.168.0.1/32'::INET)
 ----
 192.168.0.1/32
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT text('::ffff:192.168.0.1'::INET)
 ----
 ::ffff:192.168.0.1/128
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT text('::ffff:192.168.0.1/24'::INET)
 ----
@@ -891,13 +1205,56 @@ SELECT text('::ffff:192.168.0.1/24'::INET)
 
 # Test inet_same_family
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT text('::ffff:192.168.0.1/24'::INET)
 ----
 ::ffff:192.168.0.1/24
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify the inet datum gets serialized correctly for distsql.
 query T
 SELECT host(max('192.168.0.2/24'::INET)) FROM (VALUES (1)) AS t(x)
 ----
 192.168.0.2
+
+subtest regression_68578
+
+# Not supported by Materialize.
+onlyif cockroach
+# These address formats are valid in pg, even though they are not valid in Go.
+# This test ensures that they remain recognized even when Go does not support them any more.
+query TTT
+SELECT '127.001.002.003'::INET, '127.001.002.003/016'::INET, '010.001.002.003'::INET
+----
+127.1.2.3 127.1.2.3/16 10.1.2.3
+
+subtest end
+
+# Test inet
+
+query error function "inet" does not exist
+SELECT inet('some_invalid_value')
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT inet('::111')
+----
+::111
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT inet('192.168.0.2')
+----
+192.168.0.2
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT inet('::ffff:192.168.0.1/24')
+----
+::ffff:192.168.0.1/24

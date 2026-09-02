@@ -173,6 +173,10 @@ fn print_skill_hint() {
 }
 
 /// Common scaffolding logic shared by `new` and `init`.
+///
+/// Idempotent: files that already exist are left untouched, and the git commit
+/// is skipped when there is nothing staged. The commit sets an explicit author
+/// and committer so it does not depend on the user's git identity.
 fn scaffold(project_dir: &Path, name: &str, opts: &ScaffoldOpts) -> Result<(), CliError> {
     create_dir(project_dir, "models/materialize/public")?;
     create_dir(project_dir, "clusters")?;
@@ -222,34 +226,85 @@ fn scaffold(project_dir: &Path, name: &str, opts: &ScaffoldOpts) -> Result<(), C
             return Err(CliError::Message("git add failed".to_string()));
         }
 
-        let status = Command::new("git")
-            .args([
-                "commit",
-                "--author",
-                "Materialize Inc <noreply@materialize.com>",
-                "-m",
-                "Initial commit",
-            ])
+        let nothing_staged = Command::new("git")
+            .args(["diff", "--cached", "--quiet"])
             .current_dir(project_dir)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
-            .map_err(|e| CliError::Message(format!("failed to run git commit: {}", e)))?;
+            .map_err(|e| CliError::Message(format!("failed to run git diff: {}", e)))?
+            .success();
 
-        if !status.success() {
-            return Err(CliError::Message("git commit failed".to_string()));
+        if !nothing_staged {
+            let status = Command::new("git")
+                .args([
+                    "commit",
+                    "--author",
+                    "Materialize Inc <noreply@materialize.com>",
+                    "-m",
+                    "Initial commit",
+                ])
+                .env("GIT_COMMITTER_NAME", "Materialize Inc")
+                .env("GIT_COMMITTER_EMAIL", "noreply@materialize.com")
+                .current_dir(project_dir)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map_err(|e| CliError::Message(format!("failed to run git commit: {}", e)))?;
+
+            if !status.success() {
+                return Err(CliError::Message("git commit failed".to_string()));
+            }
         }
     }
 
     Ok(())
 }
 
+/// Writes a scaffold file, leaving any file that already exists untouched.
 fn add_file(project_dir: &Path, file: &str, content: &str) -> Result<(), CliError> {
-    fs::write(project_dir.join(file), content)
+    let path = project_dir.join(file);
+    if path.exists() {
+        return Ok(());
+    }
+    fs::write(&path, content)
         .map_err(|e| CliError::Message(format!("failed to write {}: {}", file, e)))
 }
 
 fn create_dir(project_dir: &Path, path: &str) -> Result<(), CliError> {
     fs::create_dir_all(project_dir.join(path))
         .map_err(|e| CliError::Message(format!("failed to create directories: {}", e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Scaffolding the same directory twice succeeds — including the git path,
+    /// where the second run has nothing to commit. Regression for `init`
+    /// failing with "git commit failed" on an already-committed project.
+    #[cfg_attr(miri, ignore)] // spawns the `git` binary
+    #[mz_ore::test]
+    fn scaffold_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = ScaffoldOpts { init_git: true };
+        scaffold(dir.path(), "proj", &opts).expect("first scaffold should succeed");
+        scaffold(dir.path(), "proj", &opts).expect("second scaffold should be idempotent");
+        assert!(dir.path().join("project.toml").exists());
+    }
+
+    /// Re-scaffolding never overwrites a file the user already has.
+    #[cfg_attr(miri, ignore)] // touches the filesystem
+    #[mz_ore::test]
+    fn scaffold_preserves_existing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let custom = "mz_version = \"cloud\"\ndependencies = [\"app.public.foo\"]\n";
+        fs::write(dir.path().join("project.toml"), custom).unwrap();
+
+        scaffold(dir.path(), "proj", &ScaffoldOpts { init_git: false })
+            .expect("scaffold should succeed over an existing project.toml");
+
+        let contents = fs::read_to_string(dir.path().join("project.toml")).unwrap();
+        assert_eq!(contents, custom, "existing project.toml must be preserved");
+    }
 }

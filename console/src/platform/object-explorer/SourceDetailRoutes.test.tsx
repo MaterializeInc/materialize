@@ -318,6 +318,11 @@ describe("SourceDetailRoutes", () => {
       expect(screen.getByText("100,000 rows")).toBeVisible();
       expect(screen.getByText("17,000")).toBeVisible();
       expect(screen.getByText("17%")).toBeVisible();
+      expect(
+        screen.getByText(
+          "Snapshot progress and row counts are estimates, based on table statistics.",
+        ),
+      ).toBeVisible();
     });
   });
 

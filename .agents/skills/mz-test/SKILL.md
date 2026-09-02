@@ -13,6 +13,16 @@ description: >
 
 # Testing Materialize
 
+## Cluster sizes
+
+mzcompose-based tests and `bin/environmentd` take their cluster replica sizes
+from `cluster_replica_size_map()` in
+`misc/python/materialize/mzcompose/__init__.py`, named
+`scale=<n>,workers=<w>[,mem=<n>GiB]`, e.g.
+`CREATE CLUSTER c SIZE 'scale=1,workers=1'`. Plain sizes like `'1'` fail there
+with "unknown cluster replica size". The emulator image run directly knows only
+cloud-style sizes (`25cc`, `50cc`, ...).
+
 ## Unit tests
 
 Run unit tests with `cargo test`.
@@ -36,13 +46,43 @@ Use a bash timeout of at least 600000ms (10 min) for test commands.
 Run sqllogictest files with:
 
 ```
-bin/sqllogictest --optimized -- PATH
+bin/sqllogictest -- PATH [PATH ...]
 ```
 
 `PATH` is relative to the repo root, usually a file in `test/sqllogictest/`.
+sqllogictest accepts a list of files, not just one, and runs them in order.
+Prefer batching files into one invocation: each invocation bootstraps a fresh
+catalog and cluster, which is slow, so batching amortizes that startup cost
+across files instead of paying it per file. It also matches how CI drives the
+suite, so goldens generated one-file-per-process can diverge from CI's batched
+context.
 Rewrite expected results with `bin/sqllogictest -- --rewrite-results PATH`.
-For large test files, `--optimized` significantly improves execution speed at the cost of longer compile time.
+
+When a plan changes only because of nondeterministic IDs in the output,
+normalize it with sqllogictest's `replace` directive rather than running files
+isolated to dodge the ID noise. Treat catalog-bloat plan drift as a real signal
+to investigate, not ID text noise.
+
+Add `--optimized` when running many or large files: it significantly improves execution speed at the cost of a longer one-time compile.
+For a single small file, skip `--optimized`, since the extra compile time outweighs the runtime savings.
 You can use `-v` for printing each query before it is run, e.g. to figure out where we are crashing.
+
+## When sqllogictest gives InconsistentViewOutcome
+
+CI runs many SLTs with `--auto-index-selects`, which wraps most successful
+`SELECT`s in an indexed view and checks that the view returns the same rows as
+the one-shot query. A query that behaves differently when wrapped fails this
+check even though a normal run passes.
+
+You can exempt a file from that mode by adding its path to both configs in
+`test/sqllogictest/mzcompose.py`:
+
+* `compileFastSltConfig` (the `sqllogictest-fast` PR job): add to
+  `tests_without_views`.
+* `compileSlowSltConfig` (the Nightly `slow-tests` job): add to
+  `tests_no_auto_index_selects`.
+
+The file still runs, just without the indexed-view wrapping.
 
 ## Testdrive
 
@@ -53,6 +93,17 @@ bin/mzcompose --find testdrive run default -- FILENAME.td
 ```
 
 `FILENAME.td` is a file in `test/testdrive/`, relative to that directory (not the repo root).
+
+`mz_system` and `materialize` are built-in testdrive connections, so
+`$ postgres-execute connection=mz_system` (e.g. for `ALTER SYSTEM SET`) works
+without a prior registration. Any other connection name must first be
+registered:
+
+```
+$ postgres-connect name=conn1 url=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
+```
+
+Using an unregistered name fails with `connection 'conn1' not found`.
 
 Some compositions (e.g. platform-checks, upgrade, pg-cdc multi-version) run the
 same `.td` file against multiple Materialize versions. When a change alters
@@ -114,6 +165,11 @@ Other useful commands:
 Many tests expect to start with fresh state.
 Run `bin/mzcompose --find NAME down` between test runs, not just at the end of a session.
 
+Instead of manually building with `cargo build`, use `bin/mzcompose` directly.
+It implicitly builds in the `target-xcompile` directory when no prebuilt image
+is available from Docker Hub/GHCR, so a manual build beforehand is wasted work
+that mzcompose never uses.
+
 mzcompose builds optimized binaries by default, which are nearly as fast to run as release and much faster to link than debug builds.
 
 * `--release` builds full release binaries, which can be slow.
@@ -142,6 +198,9 @@ If a flake cannot be reproduced locally, suggest the user trigger CI runs manual
 Removing the "Target Branch" generates a random identifier, allowing parallel runs.
 10-20 runs to reproduce a flake is fine.
 
+To check whether a failure is already known and chronic in CI, see the
+mz-debug-ci skill's `bin/ci-failures` search.
+
 ## Additional logging for flaky tests
 
 Add logging through `log_filter` in the test's `mzcompose.py`:
@@ -149,7 +208,7 @@ Add logging through `log_filter` in the test's `mzcompose.py`:
 ```python
 Materialized(
     additional_system_parameter_defaults={
-        # TODO: Remove when database-issues#NNNN is fixed
+        # TODO: Remove when SQL-NNN is fixed
         "log_filter": "mz_storage::source::postgres=trace"
     },
 )
@@ -165,7 +224,8 @@ Determine the right framework based on what you're testing:
 * **SQL correctness, types, functions** (no external systems, no concurrency): sqllogictest (`.slt` in `test/sqllogictest/`).
   Use `mode cockroach`, test NULLs and edge cases.
   Do NOT modify files in `test/sqllogictest/sqlite` or `test/sqllogictest/cockroach` (upstream).
-  When adding new tests to slt files, prefer adding them to an existing slt file rather than creating new slt files, if you are able to quickly find an existing slt file where the new tests fit naturally.
+  Do NOT drive data-dependent assertions with a `LOAD GENERATOR COUNTER` source plus `mz_unsafe.mz_sleep(...)` to wait for ingestion: the counter emits rows over wall-clock time, so the check races ingestion and flakes in CI. Use a plain `CREATE TABLE` with deterministic `INSERT`s.
+  When a statically-monotonic operator needs a `FROM SOURCE` load generator (whose row timing is nondeterministic), split coverage: test the plan shape with `EXPLAIN PHYSICAL PLAN` over the `FROM SOURCE` table (no data, non-flaky), and test runtime row correctness with a one-shot `SELECT` over a plain `CREATE TABLE` + `INSERT`.
 * **Sources/sinks, Kafka, catalog, pgwire** (external systems): testdrive (`.td` in `test/testdrive/`).
   Frameworks like `pg-cdc`, `mysql-cdc`, `sql-server-cdc`, `kafka-*` have targeted setups but also run testdrive files.
 * **Raw pgwire messages** (COPY, extended protocol): pgtest (`.pt` in `test/pgtest/`).
@@ -180,7 +240,19 @@ Determine the right framework based on what you're testing:
 * **Performance micro-benchmarks**: Feature Benchmark scenarios in `misc/python/materialize/feature_benchmark/scenarios`.
   See `doc/developer/feature-benchmark.md`.
 
-In most cases, appending to an existing `.slt` or `.td` file is sufficient.
 For functional issues, aim for at least two different test frameworks that can independently detect the regression.
 
 Read `doc/developer/guide-testing.md` for more detail on test frameworks.
+
+### Extend an existing file, do not create a new one
+
+It is preferred to extend an existing mzcompose-based test, a `.td` file or `.slt` file when appropriate. Write the smallest test that fails without the fix.
+
+A panic is caught by CI automatically. Just run the statement that panics. Do not add an assertion on the panic message.
+
+## Prove a regression test is red before you call it done
+
+A regression test that has never failed proves nothing. Whenever the test is meant to demonstrate a bug, verify both directions before reporting:
+
+1. With the fix removed run the test and confirm it fails, for the expected reason. Read the failure output.
+2. Restore the fix, run the test again, and confirm it passes.

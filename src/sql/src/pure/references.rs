@@ -16,7 +16,9 @@ use mz_repr::RelationDesc;
 use mz_sql_parser::ast::{ExternalReferences, Ident, IdentError, UnresolvedItemName};
 use mz_sql_server_util::SqlServerError;
 use mz_sql_server_util::desc::SqlServerTableRaw;
-use mz_storage_types::sources::load_generator::{LoadGenerator, LoadGeneratorOutput};
+use mz_storage_types::sources::load_generator::{
+    LOAD_GENERATOR_DATABASE_NAME, LoadGenerator, LoadGeneratorOutput,
+};
 use mz_storage_types::sources::{ExternalReferenceResolutionError, SourceReferenceResolver};
 
 use crate::names::{FullItemName, RawDatabaseSpecifier};
@@ -169,10 +171,7 @@ impl ReferenceMetadata {
                 name, namespace, ..
             } => {
                 let name = FullItemName {
-                    database: RawDatabaseSpecifier::Name(
-                        mz_storage_types::sources::load_generator::LOAD_GENERATOR_DATABASE_NAME
-                            .to_owned(),
-                    ),
+                    database: RawDatabaseSpecifier::Name(LOAD_GENERATOR_DATABASE_NAME.to_owned()),
                     schema: namespace.to_string(),
                     item: name.to_string(),
                 };
@@ -190,11 +189,18 @@ pub(super) struct RetrievedSourceReferences {
     resolver: SourceReferenceResolver,
 }
 
-/// The name of the fake database that we use for non-Postgres sources
-/// to fit the model of a 3-layer catalog used to resolve references
-/// in the `SourceReferenceResolver`. This isn't actually stored in
-/// the catalog since the `ReferenceMetadata::external_reference`
-/// method only includes the database name for Postgres sources.
+/// The name of the fake database used to fit references into the 3-layer catalog
+/// model of the [`SourceReferenceResolver`] for source types whose
+/// [`ReferenceMetadata::external_reference`] stores no database component
+/// (MySQL and Kafka). Because those references are never fully qualified with a
+/// database, the resolver's database name is never matched against and this
+/// placeholder is never stored in the catalog.
+///
+/// Note: this is *not* usable for every non-Postgres source. SQL Server and load
+/// generators do store a database in their external reference (the real upstream
+/// database and the synthetic `mz_load_generators`, respectively), so their
+/// resolvers must be built with that same database for the stored reference to
+/// resolve. See the resolver construction in [`SourceReferenceClient`].
 pub(crate) static DATABASE_FAKE_NAME: &str = "database";
 
 impl<'a> SourceReferenceClient<'a> {
@@ -339,11 +345,27 @@ impl<'a> SourceReferenceClient<'a> {
                 )
             })
             .collect();
+        // The resolver's database must match the database that each source type
+        // embeds in its `ReferenceMetadata::external_reference()`, otherwise the
+        // fully-qualified reference we store (and print in `SHOW CREATE TABLE`)
+        // won't resolve when fed back in. Postgres and SQL Server store the real
+        // upstream database; load generators store the synthetic
+        // `mz_load_generators` database. MySQL and Kafka store no database
+        // component, so the resolver's database is never matched against and the
+        // fake name is fine.
         let resolver = match self {
             SourceReferenceClient::Postgres { database, .. } => {
                 SourceReferenceResolver::new(database, &reference_names)
             }
-            _ => SourceReferenceResolver::new(DATABASE_FAKE_NAME, &reference_names),
+            SourceReferenceClient::SqlServer { database, .. } => {
+                SourceReferenceResolver::new(&database, &reference_names)
+            }
+            SourceReferenceClient::LoadGenerator { .. } => {
+                SourceReferenceResolver::new(LOAD_GENERATOR_DATABASE_NAME, &reference_names)
+            }
+            SourceReferenceClient::MySql { .. } | SourceReferenceClient::Kafka { .. } => {
+                SourceReferenceResolver::new(DATABASE_FAKE_NAME, &reference_names)
+            }
         }?;
 
         Ok(RetrievedSourceReferences {

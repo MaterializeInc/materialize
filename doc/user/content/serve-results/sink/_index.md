@@ -8,6 +8,14 @@ menu:
     name: "Sink results"
     identifier: 'sink'
     weight: 40
+aliases:
+  - /self-managed/v25.2/serve-results/sink/
+  - /self-managed/v25.2/serve-results/sink/s3/
+  - /self-managed/v25.2/serve-results/sink/s3_compatible/
+  - /self-managed/v25.2/serve-results/sink/census/
+  - /self-managed/v25.2/serve-results/sink/kafka/
+  - /self-managed/v25.2/serve-results/sink/snowflake/
+  - /self-managed/v25.2/serve-results/sink/sink-troubleshooting/
 ---
 
 A [sink](/concepts/sinks/) describes the external system you want Materialize to

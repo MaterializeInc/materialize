@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,18 +9,22 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/orms
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/orms
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
-# not supported yet
-halt
-
 mode cockroach
+
+# TODO(mjibson): The fakedist-disk config produces an error. When fixed,
+# remove this config line. See #38985.
+# LogicTest: local fakedist 3node-tenant
 
 ## This test file contains various complex queries that ORMs issue during
 ## startup or general use.
@@ -39,21 +43,20 @@ SELECT a.attname, format_type(a.atttypid, a.atttypmod), pg_get_expr(d.adbin, d.a
     AND a.attnum > 0 AND NOT a.attisdropped
     ORDER BY a.attnum
 ----
-id     bigint  NULL            false  20  -1
-name   text    NULL            false  25  -1
-rowid  bigint  unique_rowid()  true   20  -1
+id  integer  NULL  false  23  -1
+name  text  NULL  false  25  -1
 
 
-# materialize#12115
-# Skipped until database-issues#7510 is solved
-#query TT
-#SELECT t.typname enum_name, array_agg(e.enumlabel ORDER BY enumsortorder) enum_value
-#    FROM pg_type t
-#    JOIN pg_enum e ON t.oid = e.enumtypid
-#    JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
-#    WHERE n.nspname = 'public'
-#    GROUP BY 1
-#----
+# Ordered aggregations are possible.
+# #12115
+query TT
+SELECT t.typname enum_name, array_agg(e.enumlabel ORDER BY enumsortorder) enum_value
+    FROM pg_type t
+    JOIN pg_enum e ON t.oid = e.enumtypid
+    JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+    WHERE n.nspname = 'public'
+    GROUP BY 1
+----
 
 
 ## 12207
@@ -91,9 +94,8 @@ GROUP BY i.relname,
          ix.indkey
 ORDER BY i.relname
 ----
-name              primary  unique  indkey  column_indexes  column_names  definition
-customers_id_idx  false    false   2       {1,2}           {name,id}     CREATE INDEX customers_id_idx ON test.public.customers (id ASC)
-primary           true     true    1       {1,2}           {name,id}     CREATE UNIQUE INDEX "primary" ON test.public.customers (name ASC)
+name primary unique indkey column_indexes column_names definition
+
 
 
 query TT colnames
@@ -104,9 +106,11 @@ JOIN   pg_attribute a ON a.attrelid = i.indrelid
                      WHERE  i.indrelid = '"a"'::regclass
                      AND    i.indisprimary
 ----
-attname  data_type
-rowid    bigint
+attname data_type
 
+
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE b (id INT, a_id INT, FOREIGN KEY (a_id) REFERENCES a (id))
 
@@ -125,14 +129,18 @@ AND t1.relname ='b'
 AND t3.nspname = ANY (current_schemas(false))
 ORDER BY c.conname
 ----
-a  a_id  id  fk_a_id_ref_a  a  a
 
+
+# Not supported by Materialize.
+onlyif cockroach
 # Default value columns in Rails produce these kinds of queries:
 query O
 SELECT 'decimal(18,2)'::regtype::oid
 ----
 1700
 
+# Not supported by Materialize.
+onlyif cockroach
 # NOTE: Before 19.2, this returned 25 (oid.T_text), but due to updates to the
 # type system to more correctly handle OIDs, this now returns 1043
 # (oid.T_varchar), which is what PG returns.
@@ -141,6 +149,8 @@ SELECT 'character varying'::regtype::oid
 ----
 1043
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE INDEX b_idx ON b(a_id);
 
@@ -156,4 +166,253 @@ AND i.relname = 'b_idx'
 AND t.relname = 'b'
 AND i.relnamespace IN (SELECT oid FROM pg_namespace WHERE nspname = ANY (current_schemas(false)))
 ----
-1
+0
+
+statement ok
+CREATE TABLE c (a INT, b INT, PRIMARY KEY (a, b))
+
+# ActiveRecord query for determining primary key cols.
+query T
+SELECT
+    a.attname
+FROM
+    (
+        SELECT
+            indrelid, indkey, generate_subscripts(indkey, 1) AS idx
+        FROM
+            pg_index
+        WHERE
+            indrelid = '"c"'::REGCLASS AND indisprimary
+    )
+        AS i
+    JOIN pg_attribute AS a ON
+            a.attrelid = i.indrelid AND a.attnum = i.indkey[i.idx]
+ORDER BY
+    i.idx
+----
+
+
+statement ok
+CREATE TABLE metatest (a INT PRIMARY KEY)
+
+# ActiveRecord query that needs apply join.
+query TTTBTITT
+SELECT a.attname,
+  format_type(a.atttypid, a.atttypmod),
+  pg_get_expr(d.adbin, d.adrelid),
+  a.attnotnull,
+  a.atttypid,
+  a.atttypmod,
+  (SELECT c.collname
+   FROM pg_collation c, pg_type t
+   WHERE c.oid = a.attcollation
+   AND t.oid = a.atttypid
+   AND a.attcollation <> t.typcollation),
+   col_description(a.attrelid, a.attnum) AS comment
+FROM pg_attribute a LEFT JOIN pg_attrdef d
+ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+WHERE a.attrelid = '"metatest"'::regclass
+AND a.attnum > 0 AND NOT a.attisdropped
+ORDER BY a.attnum
+----
+a  integer  NULL  true  23  -1  NULL  NULL
+
+# Navicat metadata query.
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTBBB
+SELECT
+    attname AS name,
+    attrelid AS tid,
+    COALESCE(
+        (
+            SELECT
+                attnum = ANY conkey
+            FROM
+                pg_constraint
+            WHERE
+                contype = 'p' AND conrelid = attrelid
+        ),
+        false
+    )
+        AS primarykey,
+    NOT (attnotnull) AS allownull,
+    (
+        SELECT
+            seq.oid
+        FROM
+            pg_class AS seq
+            LEFT JOIN pg_depend AS dep
+            ON seq.oid = dep.objid
+        WHERE
+            (
+                seq.relkind = 'S'::CHAR
+                AND dep.refobjsubid = attnum
+            )
+            AND dep.refobjid = attrelid
+    )
+    IS NOT NULL
+        AS autoincrement
+FROM
+    pg_attribute
+WHERE
+    (
+        attisdropped = false
+        AND attrelid
+            = (
+                    SELECT
+                        tbl.oid
+                    FROM
+                        pg_class AS tbl
+                        LEFT JOIN pg_namespace AS sch
+                        ON tbl.relnamespace = sch.oid
+                    WHERE
+                        (
+                            tbl.relkind = 'r'::"char"
+                            AND tbl.relname = 'metatest'
+                        )
+                        AND sch.nspname = 'public'
+                )
+    )
+    AND attname = 'a';
+----
+a  110  true  false  false
+
+# Hibernate query.
+
+query TTTOBIIITTOT rowsort
+SELECT * FROM (SELECT n.nspname, c.relname, a.attname, a.atttypid, a.attnotnull OR ((t.typtype = 'd') AND t.typnotnull) AS attnotnull, a.atttypmod, a.attlen, row_number() OVER (PARTITION BY a.attrelid ORDER BY a.attnum) AS attnum, pg_get_expr(def.adbin, def.adrelid) AS adsrc, dsc.description, t.typbasetype, t.typtype FROM pg_catalog.pg_namespace AS n JOIN pg_catalog.pg_class AS c ON (c.relnamespace = n.oid) JOIN pg_catalog.pg_attribute AS a ON (a.attrelid = c.oid) JOIN pg_catalog.pg_type AS t ON (a.atttypid = t.oid) LEFT JOIN pg_catalog.pg_attrdef AS def ON ((a.attrelid = def.adrelid) AND (a.attnum = def.adnum)) LEFT JOIN pg_catalog.pg_description AS dsc ON ((c.oid = dsc.objoid) AND (a.attnum = dsc.objsubid)) LEFT JOIN pg_catalog.pg_class AS dc ON ((dc.oid = dsc.classoid) AND (dc.relname = 'pg_class')) LEFT JOIN pg_catalog.pg_namespace AS dn ON ((dc.relnamespace = dn.oid) AND (dn.nspname = 'pg_catalog')) WHERE (((c.relkind IN ('r', 'v', 'f', 'm')) AND (a.attnum > 0)) AND (NOT a.attisdropped)) AND (n.nspname LIKE 'public')) AS c;
+----
+public  a  id  23  false  -1  NULL  1  NULL  NULL  0  b
+public  a  name  25  false  -1  NULL  2  NULL  NULL  0  b
+public  c  a  23  true  -1  NULL  1  NULL  NULL  0  b
+public  c  b  23  true  -1  NULL  2  NULL  NULL  0  b
+public  customers  id  23  false  -1  NULL  2  NULL  NULL  0  b
+public  customers  name  25  true  -1  NULL  1  NULL  NULL  0  b
+public  metatest  a  23  true  -1  NULL  1  NULL  NULL  0  b
+
+
+# Not supported by Materialize.
+onlyif cockroach
+# Regression test for windower not using EncDatum.Fingerprint.
+statement ok
+SELECT
+	array_agg(t_pk.table_name ORDER BY t_pk.table_name)
+FROM
+	information_schema.statistics AS i
+	LEFT JOIN (
+			SELECT
+				array_agg(c.column_name) AS table_primary_key_columns,
+				c.table_name
+			FROM
+				information_schema.columns AS c
+			GROUP BY
+				c.table_name
+		)
+			AS t_pk ON i.table_name = t_pk.table_name
+GROUP BY
+	t_pk.table_primary_key_columns
+
+# Regression test for pgcli's foreign key query.
+query TTTTTT
+SELECT
+  s_p.nspname AS parentschema,
+  t_p.relname AS parenttable,
+  unnest(
+    (
+      SELECT
+        array_agg(attname ORDER BY i)
+      FROM
+        (
+          SELECT
+            unnest(confkey) AS attnum,
+            generate_subscripts(confkey, 1) AS i
+        )
+          AS x
+        JOIN pg_catalog.pg_attribute AS c USING (attnum)
+      WHERE
+        c.attrelid = fk.confrelid
+    )
+  )
+    AS parentcolumn,
+  s_c.nspname AS childschema,
+  t_c.relname AS childtable,
+  unnest(
+    (
+      SELECT
+        array_agg(attname ORDER BY i)
+      FROM
+        (
+          SELECT
+            unnest(conkey) AS attnum,
+            generate_subscripts(conkey, 1) AS i
+        )
+          AS x
+        JOIN pg_catalog.pg_attribute AS c USING (attnum)
+      WHERE
+        c.attrelid = fk.conrelid
+    )
+  )
+    AS childcolumn
+FROM
+  pg_catalog.pg_constraint AS fk
+  JOIN pg_catalog.pg_class AS t_p ON t_p.oid = fk.confrelid
+  JOIN pg_catalog.pg_namespace AS s_p ON
+      s_p.oid = t_p.relnamespace
+  JOIN pg_catalog.pg_class AS t_c ON t_c.oid = fk.conrelid
+  JOIN pg_catalog.pg_namespace AS s_c ON
+      s_c.oid = t_c.relnamespace
+WHERE
+  fk.contype = 'f';
+----
+
+
+# Regression test for #66576
+
+statement ok
+CREATE TABLE regression_66576 ()
+
+# Not supported by Materialize.
+onlyif cockroach
+query TOTTBTITIT
+SELECT
+  typname,
+  typnamespace,
+  typtype,
+  typcategory,
+  typnotnull,
+  typelem,
+  typlen,
+  typbasetype,
+  typtypmod,
+  typdefaultbin
+FROM pg_type WHERE typname = 'regression_66576'
+----
+regression_66576  105  c  C  false  0  -1  0  -1  NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT reltype FROM pg_class WHERE relname = 'regression_65576'
+----
+
+let $oid
+SELECT reltype FROM pg_class WHERE relname = 'regression_66576'
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT typname FROM pg_type WHERE oid = $oid
+----
+regression_66576
+
+let $oid
+SELECT typrelid FROM pg_type WHERE typname = 'regression_66576'
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT relname FROM pg_class WHERE oid = $oid
+----
+regression_66576

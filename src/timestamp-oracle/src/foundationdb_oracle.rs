@@ -283,6 +283,10 @@ where
         mz_foundationdb::init_network();
 
         let db = Arc::new(Database::new(None)?);
+        // In tests, bound transactions so an unresponsive server fails fast
+        // instead of hanging until the harness terminates the process.
+        #[cfg(test)]
+        mz_foundationdb::set_test_transaction_timeout(&db);
         let metrics = Arc::clone(&config.metrics);
         let prefix = fdb_config.prefix;
         let directory = DirectoryLayer::default();
@@ -343,6 +347,10 @@ where
         mz_foundationdb::init_network();
 
         let db = Arc::new(Database::new(None)?);
+        // In tests, bound transactions so an unresponsive server fails fast
+        // instead of hanging until the harness terminates the process.
+        #[cfg(test)]
+        mz_foundationdb::set_test_transaction_timeout(&db);
         let metrics = Arc::clone(&config.metrics);
         let prefix = fdb_config.prefix;
         let directory = DirectoryLayer::default();
@@ -617,7 +625,6 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
-    #[ignore] // TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/10076 is fixed
     async fn test_fdb_timestamp_oracle() -> Result<(), anyhow::Error> {
         let config = FdbTimestampOracleConfig::new_for_test();
 
@@ -636,6 +643,10 @@ mod tests {
         })
         .await?;
 
+        // The network must be stopped before the process exits, otherwise the
+        // FoundationDB client can segfault during teardown. All oracles (and their
+        // `Database` handles) created above have been dropped by now, so the
+        // network thread join does not block.
         mz_foundationdb::shutdown_network();
 
         Ok(())

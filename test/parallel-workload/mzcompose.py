@@ -42,6 +42,7 @@ from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.parallel_workload.parallel_workload import parse_common_args, run
 from materialize.parallel_workload.settings import (
     ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
+    COCKROACH_SCENARIOS,
     Complexity,
     Scenario,
 )
@@ -102,11 +103,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     complexity = Complexity(args.complexity)
     sanity_restart = False
 
-    external = scenario in (
-        Scenario.ZeroDowntimeDeploy,
-        Scenario.BackupRestore,
-        Scenario.Kill,
-    )
+    external = scenario in COCKROACH_SCENARIOS
 
     if external:
         service_names.append("cockroach")

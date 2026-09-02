@@ -33,12 +33,6 @@ class Keyspace(Enum):
     EXISTING = 3
 
 
-class Target(Enum):
-    KAFKA = 1
-    POSTGRES = 2
-    PRINT = 3
-
-
 class Definition:
     def generate(self, fields: list[Field]) -> Iterator[RowList]:
         raise NotImplementedError
@@ -48,7 +42,6 @@ class Insert(Definition):
     def __init__(self, count: Records, record_size: RecordSize):
         self.count = count.value
         self.record_size = record_size
-        self.current_key = 0
 
     def max_key(self) -> int:
         if self.count < 1:
@@ -63,19 +56,17 @@ class Insert(Definition):
                 f'Unexpected count {self.count}, doesn\'t make sense to generate "ALL" values'
             )
 
-        for i in range(self.count):
-            if self.current_key >= self.count:
-                break
-
+        # Keys restart at 0 on every call so that a workload cycling through
+        # insert and delete phases inserts the same keys again in each cycle.
+        for key in range(self.count):
             values = [
                 (
-                    field.data_type.numeric_value(self.current_key)
+                    field.data_type.numeric_value(key)
                     if field.is_key
                     else field.data_type.random_value(rng, self.record_size)
                 )
                 for field in fields
             ]
-            self.current_key += 1
 
             yield RowList(
                 [
@@ -90,6 +81,8 @@ class Insert(Definition):
 
 class Upsert(Definition):
     def __init__(self, keyspace: Keyspace, count: Records, record_size: RecordSize):
+        if keyspace not in (Keyspace.SINGLE_VALUE, Keyspace.LARGE):
+            raise ValueError(f"Unsupported keyspace {keyspace}")
         self.keyspace = keyspace
         self.count = count.value
         self.record_size = record_size
@@ -101,14 +94,14 @@ class Upsert(Definition):
             )
 
         for i in range(self.count):
-            values = [
-                (
-                    field.data_type.numeric_value(0)
-                    if field.is_key
-                    else field.data_type.random_value(rng, self.record_size)
-                )
-                for field in fields
-            ]
+            values = []
+            for field in fields:
+                if not field.is_key:
+                    values.append(field.data_type.random_value(rng, self.record_size))
+                elif self.keyspace == Keyspace.SINGLE_VALUE:
+                    values.append(field.data_type.numeric_value(0))
+                else:
+                    values.append(field.data_type.random_value(rng, self.record_size))
 
             yield RowList(
                 [

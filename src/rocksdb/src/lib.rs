@@ -598,7 +598,7 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
     F: for<'a> Fn(&'a [u8], ValueIterator<'a, O, V>) -> V + Send + Sync + Copy + 'static,
     IM: Deref<Target = RocksDBInstanceMetrics> + Send + 'static,
 {
-    if options.cleanup_on_new && instance_path.exists() {
+    if options.cleanup_on_new {
         // We require that cleanup of the DB succeeds. Otherwise, we could open a DB with old,
         // incorrect data. Because of races with dataflow shutdown, we retry a few times here.
         // 1s with a 2x backoff is ~30s after 5 tries.
@@ -607,8 +607,21 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
             // Large DB's could take multiple seconds to run.
             .initial_backoff(std::time::Duration::from_secs(1));
 
+        // NOTE: With an in-memory `Env`, state from a previous incarnation of
+        // this instance can exist even though `instance_path` does not exist
+        // on the host filesystem, so cleanup must not be gated on a host
+        // filesystem check. `DB::destroy` on the host filesystem errors if the
+        // directory does not exist, so create it first, like `DB::open` does.
+        // Destroying an empty directory succeeds.
+        if let Err(e) = std::fs::create_dir_all(&instance_path) {
+            tracing::warn!(
+                "failed to create rocksdb dir on creation {}: {}",
+                instance_path.display(),
+                e.display_with_causes(),
+            );
+        }
         let destroy_result = retry.retry(|_rs| {
-            if let Err(e) = DB::destroy(&RocksDBOptions::default(), &*instance_path) {
+            if let Err(e) = DB::destroy(&destroy_options(&options.env), &*instance_path) {
                 tracing::warn!(
                     "failed to cleanup rocksdb dir on creation {}: {}",
                     instance_path.display(),
@@ -671,7 +684,7 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
     while let Some(cmd) = cmd_rx.blocking_recv() {
         match cmd {
             Command::Shutdown { done_sender } => {
-                shutdown_and_cleanup(db, &instance_path);
+                shutdown_and_cleanup(db, &instance_path, &options.env);
                 drop(write_buffer_handle);
                 let _ = done_sender.send(());
                 return;
@@ -909,17 +922,29 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
             }
         }
     }
-    shutdown_and_cleanup(db, &instance_path);
+    shutdown_and_cleanup(db, &instance_path, &options.env);
 }
 
-fn shutdown_and_cleanup(db: DB, instance_path: &PathBuf) {
+/// Options that direct `DB::destroy` at the given `Env`.
+///
+/// `DB::destroy` resolves paths through the `Env` in its options. Destroying
+/// with default options only ever touches the host filesystem, which misses
+/// state written through a different `Env`, like the in-memory `Env` used by
+/// replicas without a scratch directory.
+fn destroy_options(env: &Env) -> RocksDBOptions {
+    let mut options = RocksDBOptions::default();
+    options.set_env(env);
+    options
+}
+
+fn shutdown_and_cleanup(db: DB, instance_path: &PathBuf, env: &Env) {
     // Gracefully cleanup if the `RocksDBInstance` has gone away.
     db.cancel_all_background_work(true);
     drop(db);
     tracing::info!("dropped rocksdb at {}", instance_path.display());
 
     // Note that we don't retry, as we already may race here with a source being restarted.
-    if let Err(e) = DB::destroy(&RocksDBOptions::default(), &*instance_path) {
+    if let Err(e) = DB::destroy(&destroy_options(env), &*instance_path) {
         tracing::warn!(
             "failed to cleanup rocksdb dir at {}: {}",
             instance_path.display(),

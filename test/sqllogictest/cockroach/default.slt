@@ -1,0 +1,225 @@
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on July 6, 2026 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/default
+#
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+statement error DEFAULT expression does not support casting from boolean to integer
+CREATE TABLE t (a INT PRIMARY KEY DEFAULT false)
+
+statement error DEFAULT expression does not allow subqueries
+CREATE TABLE t (a INT PRIMARY KEY DEFAULT (SELECT 1))
+
+statement error column "b" does not exist
+CREATE TABLE t (a INT PRIMARY KEY DEFAULT b)
+
+# Not supported by Materialize.
+onlyif cockroach
+# Issue #14308: support tables with DEFAULT NULL columns.
+statement ok
+CREATE TABLE null_default (ts TIMESTAMP PRIMARY KEY NULL DEFAULT NULL)
+
+# Aggregate function calls in CHECK are not ok.
+statement error aggregate functions are not allowed in DEFAULT
+CREATE TABLE bad (a INT DEFAULT count(1))
+
+# Window function calls in CHECK are not ok.
+statement error window functions are not allowed in DEFAULT
+CREATE TABLE bad (a INT DEFAULT count(1) OVER ())
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE t (
+  a INT PRIMARY KEY DEFAULT 42,
+  b TIMESTAMP DEFAULT now(),
+  c FLOAT DEFAULT random(),
+  d DATE DEFAULT now()
+)
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTBTTTB colnames
+SHOW COLUMNS FROM t
+----
+column_name  data_type  is_nullable  column_default  generation_expression  indices   is_hidden
+a            INT8       false        42              ·                      {t_pkey}  false
+b            TIMESTAMP  true         now()           ·                      {t_pkey}  false
+c            FLOAT8     true         random()        ·                      {t_pkey}  false
+d            DATE       true         now()           ·                      {t_pkey}  false
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+COMMENT ON COLUMN t.a IS 'a'
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTBTTTBT colnames
+SHOW COLUMNS FROM t WITH COMMENT
+----
+column_name  data_type  is_nullable  column_default  generation_expression  indices   is_hidden  comment
+a            INT8       false        42              ·                      {t_pkey}  false      a
+b            TIMESTAMP  true         now()           ·                      {t_pkey}  false      NULL
+c            FLOAT8     true         random()        ·                      {t_pkey}  false      NULL
+d            DATE       true         now()           ·                      {t_pkey}  false      NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+INSERT INTO t VALUES (DEFAULT, DEFAULT, DEFAULT, DEFAULT)
+
+# Not supported by Materialize.
+onlyif cockroach
+query IBBB
+SELECT a, b <= now(), c >= 0.0, d <= now() FROM t
+----
+42 true true true
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+TRUNCATE TABLE t
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+INSERT INTO t DEFAULT VALUES
+
+# Not supported by Materialize.
+onlyif cockroach
+query IBBB
+SELECT a, b <= now(), c >= 0.0, d <= now() FROM t
+----
+42 true true true
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+INSERT INTO t (a) VALUES (1)
+
+# Not supported by Materialize.
+onlyif cockroach
+query IBBB
+SELECT a, b <= now(), c >= 0.0, d <= now() FROM t WHERE a = 1
+----
+1 true true true
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+INSERT INTO t VALUES (2)
+
+# Not supported by Materialize.
+onlyif cockroach
+query IBBB
+SELECT a, b <= now(), c >= 0.0, d <= now() FROM t WHERE a = 2
+----
+2 true true true
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+UPDATE t SET (b, c) = ('2015-09-18 00:00:00', -1.0)
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+UPDATE t SET b = DEFAULT WHERE a = 1
+
+# Not supported by Materialize.
+onlyif cockroach
+query IBBB
+SELECT a, b <= now(), c = -1.0, d <= now() FROM t WHERE a = 1
+----
+1 true true true
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+UPDATE t SET (b, c) = (DEFAULT, DEFAULT) WHERE a = 2
+
+# Not supported by Materialize.
+onlyif cockroach
+query IBBB
+SELECT a, b <= now(), c >= 0.0, d <= now() FROM t WHERE a = 2
+----
+2 true true true
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+UPDATE t SET b = DEFAULT, c = DEFAULT, d = DEFAULT
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+UPDATE t SET (b) = (DEFAULT), (c) = (DEFAULT), (d) = (DEFAULT)
+
+# Not supported by Materialize.
+onlyif cockroach
+# Test a table without a default and with a null default
+statement ok
+CREATE TABLE v (
+  a INT PRIMARY KEY,
+  b TIMESTAMP NULL DEFAULT NULL,
+  c INT
+)
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+UPDATE v SET a = DEFAULT
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+UPDATE v SET (a, c) = (DEFAULT, DEFAULT)
+
+# Not supported by Materialize.
+onlyif cockroach
+query TTBTTTB colnames
+SHOW COLUMNS FROM v
+----
+column_name  data_type  is_nullable  column_default  generation_expression  indices   is_hidden
+a            INT8       false        NULL            ·                      {v_pkey}  false
+b            TIMESTAMP  true         NULL            ·                      {v_pkey}  false
+c            INT8       true         NULL            ·                      {v_pkey}  false
+
+# Regression test for #34901: verify that builtins can be used in default value
+# expressions without a "memory budget exceeded" error while backfilling
+statement ok
+CREATE TABLE t34901 (x STRING)
+
+statement ok
+INSERT INTO t34901 VALUES ('a')
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE t34901 ADD COLUMN y STRING DEFAULT (concat('b', 'c'))
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SELECT * FROM t34901
+----
+a  bc

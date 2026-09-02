@@ -97,8 +97,18 @@ regex:.*FOR SCHEMAS.*unsupported
 >[version<2600700] SHOW CREATE TABLE accounts
 materialize.public.accounts "CREATE TABLE materialize.public.accounts (id pg_catalog.int8 NOT NULL, org_id pg_catalog.int8 NOT NULL, balance pg_catalog.int8 NOT NULL, UNIQUE (id)) FROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts) WITH (DETAILS = '1a040a021002');"
 
->[version>=2600700] SHOW CREATE TABLE accounts
+>[2600700<=version<2603000] SHOW CREATE TABLE accounts
 materialize.public.accounts "CREATE TABLE\n    materialize.public.accounts\n        (\n            id pg_catalog.int8 NOT NULL,\n            org_id pg_catalog.int8 NOT NULL,\n            balance pg_catalog.int8 NOT NULL,\n            UNIQUE (id)\n        )\nFROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts)\nWITH (DETAILS = '1a040a021002');"
+
+>[version>=2603000] SHOW CREATE TABLE accounts
+materialize.public.accounts "CREATE TABLE materialize.public.accounts\nFROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts);"
+
+# Regression test for database-issues#10010 and SQL-392: the full statement
+# printed by `SHOW CREATE TABLE` (fully-qualified `REFERENCE`, no column list)
+# must round-trip back into a `CREATE TABLE`.
+>[version>=2603000] CREATE TABLE accounts_roundtrip FROM SOURCE auction_house (REFERENCE mz_load_generators.auction.accounts);
+
+>[version>=2603000] DROP TABLE accounts_roundtrip;
 
 > SHOW SOURCES
 auction_house           load-generator ${arg.single-replica-cluster}    ""
@@ -112,6 +122,30 @@ users                   ""
 
 > SELECT count(*) FROM bids
 255
+
+# CTFS: omitting REFERENCE for a multi-output source is ambiguous, since
+# Materialize cannot determine which upstream table you mean.
+! CREATE TABLE ambiguous_tbl FROM SOURCE auction_house;
+contains:is ambiguous
+
+# CTFS: multiple tables can reference the same external table.
+> CREATE TABLE bids_2 FROM SOURCE auction_house (REFERENCE bids);
+
+> SELECT count(*) FROM bids_2
+255
+
+> DROP TABLE bids_2;
+
+# CTFS: EXCLUDE COLUMNS has no effect on load generator tables; the
+# "excluded" column is still ingested.
+> CREATE TABLE accounts_exclude FROM SOURCE auction_house (REFERENCE accounts) WITH (EXCLUDE COLUMNS (balance));
+
+> SHOW COLUMNS FROM accounts_exclude
+balance false bigint ""
+id false bigint ""
+org_id false bigint ""
+
+> DROP TABLE accounts_exclude;
 
 ! CREATE SOURCE auction_house
   IN CLUSTER ${arg.single-replica-cluster}
@@ -157,8 +191,11 @@ $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 >[version<2600700] SHOW CREATE TABLE accounts
 materialize.public.accounts "CREATE TABLE materialize.public.accounts (id pg_catalog.int8 NOT NULL, org_id pg_catalog.int8 NOT NULL, balance pg_catalog.int8 NOT NULL, UNIQUE (id)) FROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts) WITH (<DETAILS>);"
 
->[version>=2600700] SHOW CREATE TABLE accounts
+>[2600700<=version<2603000] SHOW CREATE TABLE accounts
 materialize.public.accounts "CREATE TABLE\n    materialize.public.accounts\n        (\n            id pg_catalog.int8 NOT NULL,\n            org_id pg_catalog.int8 NOT NULL,\n            balance pg_catalog.int8 NOT NULL,\n            UNIQUE (id)\n        )\nFROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts)\nWITH (<DETAILS>);"
+
+>[version>=2603000] SHOW CREATE TABLE accounts
+materialize.public.accounts "CREATE TABLE materialize.public.accounts\nFROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts);"
 
 # CLOCK load generator source
 
@@ -223,7 +260,7 @@ contains:invalid TICK INTERVAL: cannot convert negative interval to duration
 ! CREATE SOURCE counter5
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (TICK INTERVAL '2147483647d')
-contains: out of range integral type conversion
+contains: interval is too large to convert to duration
 
 # Query automatically generated progress topic
 $ set-regex match=\d+ replacement=<NUMBER>

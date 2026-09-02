@@ -972,6 +972,31 @@ SELECT round(6e38, 39)
 ----
 600000000000000000000000000000000000000
 
+# A scale above the value's fractional digits cannot change it, so it clamps to
+# what the datum holds rather than overflowing.
+query R
+SELECT round(123::numeric, 38)
+----
+123
+
+query R
+SELECT round(5::numeric, 2147483647)
+----
+5
+
+# `extract` hands `round` a numeric that never passed through a row, so its
+# exponent is zero where an equal value read from a row carries a positive one.
+query R
+SELECT round(extract(epoch FROM DATE '2000-01-01'), 2147483647)
+----
+946684800
+
+# The infinities carry an exponent of zero too, but a scale cannot change them.
+query RR
+SELECT round(sum(f1), 2), round(-sum(f1), 2) FROM (VALUES ('999999999999999999999999999999999999999'::numeric), ('999999999999999999999999999999999999999')) t (f1)
+----
+Infinity  -Infinity
+
 query R
 SELECT round(19.87, -1)
 ----

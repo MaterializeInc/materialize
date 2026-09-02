@@ -5,6 +5,8 @@ menu:
   main:
     parent: cli-reference
     weight: 1
+aliases:
+  - /self-managed/v25.2/integrations/cli/reference/profile/
 ---
 
 The `mz profile` command manages [authentication profiles] for `mz`.

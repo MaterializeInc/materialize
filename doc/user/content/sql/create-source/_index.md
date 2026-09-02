@@ -6,14 +6,31 @@ menu:
   main:
     parent: commands
     identifier: 'create-source'
+aliases:
+  - /self-managed/v25.2/sql/create-source/
+  - /self-managed/v25.2/sql/create-source/kafka/
+  - /self-managed/v25.2/sql/create-source/mysql/
+  - /self-managed/v25.2/sql/create-source/postgres/
+  - /self-managed/v25.2/sql/create-source/sql-server/
+  - /self-managed/v25.2/sql/create-source/load-generator/
+  - /self-managed/v25.2/sql/create-source/webhook/
 ---
 
 {{% include-headless "/headless/source-definition" %}}
+
+{{% include-headless "/headless/source-upstream-prereq" %}}
 
 ## Syntax summary
 
 <!--"Docs Note: Using include-example shortcode instead of include-syntax since only want the code snippet on this page."
 -->
+
+### New syntax
+
+The new `CREATE SOURCE` syntax allows Materialize to handle certain upstream
+schema changes, specifically adding or dropping columns, without downtime. It is
+used in conjunction with the new [`CREATE TABLE ... FROM
+SOURCE`](/sql/create-table/) syntax.
 
 {{< tabs >}}
 
@@ -23,25 +40,11 @@ menu:
 
 For details, see [CREATE SOURCE: PostgreSQL (New Syntax)](/sql/create-source/postgres-v2/).
 {{< /tab >}}
-
-{{< tab "PostgreSQL (Legacy)" >}}
-
-{{% include-example file="examples/create_source_postgres_legacy" example="syntax" %}}
-
-For details, see [CREATE SOURCE: PostgreSQL (Legacy)](/sql/create-source/postgres/).
-{{< /tab >}}
 {{< tab "MySQL (New)" >}}
 
 {{% include-example file="examples/create_source_mysql" example="syntax" %}}
 
 For details, see [CREATE SOURCE: MySQL (New Syntax)](/sql/create-source/mysql-v2/).
-{{< /tab >}}
-
-{{< tab "MySQL (Legacy)" >}}
-
-{{% include-example file="examples/create_source_mysql_legacy" example="syntax" %}}
-
-For details, see [CREATE SOURCE: MySQL (Legacy)](/sql/create-source/mysql/).
 {{< /tab >}}
 
 {{< tab "SQL Server (New)" >}}
@@ -53,6 +56,44 @@ For details, see [CREATE SOURCE: SQL Server (New Syntax)](/sql/create-source/sql
 
 {{< /tab >}}
 
+{{< tab "Kafka/Redpanda (New)" >}}
+
+{{% include-example file="examples/create_source_kafka_v2" example="syntax" %}}
+
+For details, see [CREATE SOURCE: Kafka/Redpanda (New Syntax)](/sql/create-source/kafka-v2/).
+{{< /tab >}}
+
+
+{{< tab "Webhook" >}}
+
+{{% include-example file="examples/create_source_webhook" example="syntax" %}}
+
+For details, see [CREATE SOURCE: Webhook](/sql/create-source/webhook/).
+{{< /tab >}}
+
+{{< /tabs >}}
+
+### Legacy syntax
+
+The legacy `CREATE SOURCE` syntax requires downtime to handle upstream schema
+changes. Prefer the [new syntax](#new-syntax) for new sources where available.
+
+{{< tabs >}}
+
+{{< tab "PostgreSQL (Legacy)" >}}
+
+{{% include-example file="examples/create_source_postgres_legacy" example="syntax" %}}
+
+For details, see [CREATE SOURCE: PostgreSQL (Legacy)](/sql/create-source/postgres/).
+{{< /tab >}}
+
+{{< tab "MySQL (Legacy)" >}}
+
+{{% include-example file="examples/create_source_mysql_legacy" example="syntax" %}}
+
+For details, see [CREATE SOURCE: MySQL (Legacy)](/sql/create-source/mysql/).
+{{< /tab >}}
+
 {{< tab "SQL Server (Legacy)" >}}
 
 {{% include-example file="examples/create_source_sql_server_legacy" example="syntax"
@@ -62,7 +103,7 @@ For details, see [CREATE SOURCE: SQL Server(Legacy)](/sql/create-source/sql-serv
 
 {{< /tab >}}
 
-{{< tab "Kafka/Redpanda" >}}
+{{< tab "Kafka/Redpanda (Legacy)" >}}
 
 {{< tabs >}}
 
@@ -103,7 +144,7 @@ example="syntax-protobuf" %}}
 
 {{< /tabs >}}
 
-For details, see [CREATE SOURCE: Kafka/Redpanda](/sql/create-source/kafka/).
+For details, see [CREATE SOURCE: Kafka/Redpanda (Legacy Syntax)](/sql/create-source/kafka/).
 {{< /tab >}}
 
 {{< tab "Webhook" >}}
@@ -125,7 +166,7 @@ The privileges required to execute `CREATE SOURCE` are:
 
 The following guides step you through setting up sources:
 
-{{< include-md file="shared-content/multilink-box-native-connectors.md" >}}
+{{% include-headless "/headless/ingest-connectors-table" %}}
 
 ## Best practices
 

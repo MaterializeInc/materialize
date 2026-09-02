@@ -21,6 +21,7 @@ corepack enable
 retry yarn install --immutable --network-timeout 30000
 
 npx vercel@latest pull --yes --environment="$VERCEL_ENVIRONMENT" --token="$VERCEL_TOKEN"
+bin/apply-vercel-csp.js --sentry-release="$SENTRY_RELEASE"
 npx vercel@latest build --token="$VERCEL_TOKEN"
 
 deployment_url="$(npx vercel@latest deploy --prebuilt --token="$VERCEL_TOKEN")"

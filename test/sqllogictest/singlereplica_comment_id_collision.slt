@@ -1,0 +1,217 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for SQL-531.
+#
+# Replica ids and catalog-item ids come from separate allocators that both
+# render as `u<N>`, so a cluster replica and a catalog item can share one id
+# string. `mz_comments.id` is unambiguous only with `object_type`. The
+# `mz_show_*` views must match `object_type` inside the `LEFT JOIN ... ON`, not
+# in a trailing `WHERE`. A `WHERE` predicate drops the base row when the only
+# comment on the colliding id belongs to the other object type.
+#
+# Each block checks the id collision it relies on before asserting view output,
+# so the test fails loudly if allocation order changes.
+
+mode cockroach
+
+# ----------------------------------------------------------------------------
+# Bug 1: SHOW CLUSTER REPLICAS must not drop replicas when a catalog item's
+# comment collides with the replica id.
+# ----------------------------------------------------------------------------
+
+reset-server
+
+# The bootstrap quickstart replica is u1.
+query T
+SELECT r.id
+FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id
+WHERE c.name = 'quickstart'
+----
+u1
+
+# The first user item lands on u1, colliding with the replica id.
+statement ok
+CREATE TABLE t (a int)
+
+query T
+SELECT id FROM mz_tables WHERE name = 't'
+----
+u1
+
+statement ok
+COMMENT ON TABLE t IS 'boom'
+
+# Pre-fix: 0 rows, the replica vanished because the table's comment row
+# (object_type='table') failed the trailing WHERE.
+query TT
+SELECT cluster, replica FROM mz_internal.mz_show_cluster_replicas
+WHERE cluster = 'quickstart'
+----
+quickstart  r1
+
+# ----------------------------------------------------------------------------
+# Bug 2: SHOW OBJECTS must not drop objects when a colliding replica has a
+# comment and the object itself does not.
+# ----------------------------------------------------------------------------
+
+reset-server
+
+# A user cluster's replica lands on u2 (replica allocator), owned by the test
+# user so it can be commented.
+statement ok
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))
+
+statement ok
+COMMENT ON CLUSTER REPLICA c.r1 IS 'replica_note'
+
+# Two tables from the item allocator. The second lands on u2 and collides with
+# cluster c's replica id. Neither table has a comment of its own.
+statement ok
+CREATE TABLE t1 (a int)
+
+statement ok
+CREATE TABLE t2 (a int)
+
+# Confirm the collision this block depends on: replica id == table t2 id.
+query T
+SELECT (
+    SELECT r.id FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id
+    WHERE c.name = 'c'
+) = (SELECT id FROM mz_tables WHERE name = 't2')
+----
+true
+
+# Pre-fix: t2 vanished because the replica's comment row
+# (object_type='cluster-replica') failed `= objs.type ('table')` and IS NULL.
+query TTT
+SELECT name, type, comment FROM mz_internal.mz_show_all_objects WHERE name = 't2'
+----
+t2  table  (empty)
+
+# The non-colliding table is unaffected.
+query TTT
+SELECT name, type, comment FROM mz_internal.mz_show_all_objects WHERE name = 't1'
+----
+t1  table  (empty)
+
+# The replica comment is attributed to the replica, not the colliding table.
+query TT
+SELECT replica, comment FROM mz_internal.mz_show_cluster_replicas
+WHERE cluster = 'c'
+----
+r1  replica_note
+
+# ----------------------------------------------------------------------------
+# Both the object and the colliding replica are commented: each view shows only
+# its own comment, and neither base row is dropped.
+# ----------------------------------------------------------------------------
+
+reset-server
+
+statement ok
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))
+
+statement ok
+CREATE TABLE t1 (a int)
+
+statement ok
+CREATE TABLE t2 (a int)
+
+query T
+SELECT (
+    SELECT r.id FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id
+    WHERE c.name = 'c'
+) = (SELECT id FROM mz_tables WHERE name = 't2')
+----
+true
+
+statement ok
+COMMENT ON TABLE t2 IS 'table_note'
+
+statement ok
+COMMENT ON CLUSTER REPLICA c.r1 IS 'replica_note'
+
+query TTT
+SELECT name, type, comment FROM mz_internal.mz_show_all_objects WHERE name = 't2'
+----
+t2  table  table_note
+
+query TT
+SELECT replica, comment FROM mz_internal.mz_show_cluster_replicas
+WHERE cluster = 'c'
+----
+r1  replica_note
+
+# ----------------------------------------------------------------------------
+# MCP views: on an id collision these must not show the wrong object's comment
+# as the description, and must not duplicate the data-product row. The comment
+# joins are LEFT JOINs into a COALESCE (not a WHERE), so a collision never drops
+# rows. Without an object_type predicate it shows the wrong comment instead, or
+# doubles the row when both comments exist.
+# ----------------------------------------------------------------------------
+
+reset-server
+
+# User cluster c: replica u2, commented.
+statement ok
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))
+
+statement ok
+COMMENT ON CLUSTER REPLICA c.r1 IS 'replica_note'
+
+# First item u1 (throwaway), then a materialized view at u2 that collides with
+# cluster c's replica id. The MV has no comment of its own.
+statement ok
+CREATE TABLE seed (a int)
+
+statement ok
+CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT * FROM seed
+
+# Confirm the collision this block depends on: replica id == MV id.
+query T
+SELECT (
+    SELECT r.id FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id
+    WHERE c.name = 'c'
+) = (SELECT id FROM mz_materialized_views WHERE name = 'mv')
+----
+true
+
+# Pre-fix: description would be the replica's comment 'replica_note' (wrong
+# object). Post-fix: the MV has no comment of its own, so NULL, and exactly one
+# row (no duplication).
+query TT
+SELECT object_name, description FROM mz_internal.mz_mcp_data_products
+WHERE object_name = '"materialize"."public"."mv"'
+----
+"materialize"."public"."mv"  NULL
+
+query TT
+SELECT object_name, description FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."public"."mv"'
+----
+"materialize"."public"."mv"  NULL
+
+# With the MV commented and the replica also commented on the same id, the
+# data product shows only the MV's own comment, exactly once. Pre-fix this
+# would duplicate the row (both comments join) and/or show 'replica_note'.
+statement ok
+COMMENT ON MATERIALIZED VIEW mv IS 'mv_note'
+
+query TT
+SELECT object_name, description FROM mz_internal.mz_mcp_data_products
+WHERE object_name = '"materialize"."public"."mv"'
+----
+"materialize"."public"."mv"  mv_note
+
+query TT
+SELECT object_name, description FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."public"."mv"'
+----
+"materialize"."public"."mv"  mv_note

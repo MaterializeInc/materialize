@@ -1,6 +1,6 @@
 ---
 source: src/compute-types/src/config.rs
-revision: 4267863081
+revision: fca741734d
 ---
 
 # compute-types::config

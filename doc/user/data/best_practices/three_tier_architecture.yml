@@ -17,7 +17,7 @@ rows:
         materialized views are available across all clusters.
 
         {{< tip >}}
-        {{< include-md file="shared-content/stacked-view-consideration.md" >}}
+        {{< include-md file="content/headless/stacked-view-consideration.md" >}}
         {{< /tip >}}
 
       - Indexes, **only as needed**, to make transformation fast (such as

@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,24 +9,28 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/custom_escape_character
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/custom_escape_character
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
-
-# not supported yet
-halt
 
 mode cockroach
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '%' LIKE 't%' ESCAPE CASE WHEN (SELECT '-A' SIMILAR TO '--A' ESCAPE '-') THEN 't' ELSE 'f' END
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '%' LIKE 't%' ESCAPE CASE WHEN (SELECT 'A' SIMILAR TO '-A' ESCAPE '') THEN 't' ELSE 'f' END
 ----
@@ -73,48 +77,64 @@ SELECT 'A' LIKE 'AA' ESCAPE 'AA'
 query error invalid escape string
 SELECT '春A' LIKE '春春_' ESCAPE '春春'
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT 'A' SIMILAR TO '\A' ESCAPE '\'
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '\A' SIMILAR TO '\A' ESCAPE ''
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '%A' SIMILAR TO '_A' ESCAPE '%'
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '%A' SIMILAR TO '%A' ESCAPE '%'
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '123A_' SIMILAR TO '%A_' ESCAPE '_'
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '123A_' SIMILAR TO '%A__' ESCAPE '_'
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '春A' SIMILAR TO '春春_' ESCAPE '春'
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT '春A_春春' SIMILAR TO '%_春_%' ESCAPE '春'
 ----
 true
 
-query error invalid escape string
+query error Expected end of statement, found TO
 SELECT 'A' SIMILAR TO 'AA' ESCAPE 'AA'
 
-query error invalid escape string
+query error Expected end of statement, found TO
 SELECT '春A' SIMILAR TO '春春_' ESCAPE '春春'

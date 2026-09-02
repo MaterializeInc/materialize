@@ -24,7 +24,6 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
-use mz_lowertest::MzReflect;
 use mz_ore::Overflowing;
 #[cfg(any(test, feature = "proptest"))]
 use mz_ore::cast::CastFrom;
@@ -1616,8 +1615,7 @@ impl fmt::Display for Datum<'_> {
     Ord,
     PartialOrd,
     Hash,
-    EnumKind,
-    MzReflect
+    EnumKind
 )]
 #[enum_kind(SqlScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum SqlScalarType {
@@ -1913,10 +1911,10 @@ impl RustType<ProtoScalarType> for SqlScalarType {
                         .map(|x| *x)
                         .into_rust_if_some("ProtoList::element_type")?,
                 ),
-                custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
+                custom_id: x.custom_id.map(|id| id.into_rust()).transpose()?,
             }),
             Record(x) => Ok(SqlScalarType::Record {
-                custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
+                custom_id: x.custom_id.map(|id| id.into_rust()).transpose()?,
                 fields: x.fields.into_rust()?,
             }),
             Map(x) => Ok(SqlScalarType::Map {
@@ -1925,7 +1923,7 @@ impl RustType<ProtoScalarType> for SqlScalarType {
                         .map(|x| *x)
                         .into_rust_if_some("ProtoMap::value_type")?,
                 ),
-                custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
+                custom_id: x.custom_id.map(|id| id.into_rust()).transpose()?,
             }),
             MzTimestamp(()) => Ok(SqlScalarType::MzTimestamp),
             Range(x) => Ok(SqlScalarType::Range {
@@ -2777,7 +2775,7 @@ impl<'a, E> OutputDatumType<'a, E> for Vec<u8> {
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::Bytes(temp_storage.push_bytes(self)))
+        Ok(Datum::Bytes(temp_storage.push_owned_bytes(self)))
     }
 }
 
@@ -3137,7 +3135,7 @@ where
     S: AsRef<str>,
 {
     fn as_column_type() -> SqlColumnType {
-        SqlScalarType::Char { length: None }.nullable(false)
+        SqlScalarType::VarChar { max_length: None }.nullable(false)
     }
 }
 
@@ -3742,6 +3740,86 @@ impl SqlScalarType {
         }
     }
 
+    /// Computes the least upper bound of two SQL scalar types, or an error if
+    /// they are incompatible. Compatible types are equal, share a base type and
+    /// differ only in modifiers (which are then dropped), or are structured
+    /// types with pairwise compatible components.
+    ///
+    /// NOTE: Structured types must recurse rather than fall through to the
+    /// `base_eq` arm. `base_eq` ignores record field nullability, so returning
+    /// either side verbatim can declare a field non-nullable where the other
+    /// side puts a null.
+    pub fn sql_union(&self, other: &SqlScalarType) -> Result<SqlScalarType, anyhow::Error> {
+        use SqlScalarType::*;
+        match (self, other) {
+            (scalar_type, other_scalar_type) if scalar_type == other_scalar_type => {
+                Ok(scalar_type.clone())
+            }
+            (
+                Record { fields, custom_id },
+                Record {
+                    fields: other_fields,
+                    custom_id: other_custom_id,
+                },
+            ) if custom_id == other_custom_id && fields.len() == other_fields.len() => {
+                let mut union_fields = Vec::with_capacity(fields.len());
+                for ((name, typ), (other_name, other_typ)) in
+                    fields.iter().zip_eq(other_fields.iter())
+                {
+                    if name != other_name {
+                        bail!("Can't union types: {:?} and {:?}", self, other);
+                    }
+                    union_fields.push((name.clone(), typ.sql_union(other_typ)?));
+                }
+                Ok(Record {
+                    fields: union_fields.into(),
+                    custom_id: *custom_id,
+                })
+            }
+            (
+                List {
+                    element_type,
+                    custom_id,
+                },
+                List {
+                    element_type: other_element_type,
+                    custom_id: other_custom_id,
+                },
+            ) if custom_id == other_custom_id => Ok(List {
+                element_type: Box::new(element_type.sql_union(other_element_type)?),
+                custom_id: *custom_id,
+            }),
+            (
+                Map {
+                    value_type,
+                    custom_id,
+                },
+                Map {
+                    value_type: other_value_type,
+                    custom_id: other_custom_id,
+                },
+            ) if custom_id == other_custom_id => Ok(Map {
+                value_type: Box::new(value_type.sql_union(other_value_type)?),
+                custom_id: *custom_id,
+            }),
+            (Array(element_type), Array(other_element_type)) => {
+                Ok(Array(Box::new(element_type.sql_union(other_element_type)?)))
+            }
+            (
+                Range { element_type },
+                Range {
+                    element_type: other_element_type,
+                },
+            ) => Ok(Range {
+                element_type: Box::new(element_type.sql_union(other_element_type)?),
+            }),
+            (scalar_type, other_scalar_type) if scalar_type.base_eq(other_scalar_type) => {
+                Ok(scalar_type.without_modifiers())
+            }
+            _ => bail!("Can't union types: {:?} and {:?}", self, other),
+        }
+    }
+
     /// Determines equality among scalar types that acknowledges custom OIDs,
     /// but ignores other embedded values.
     ///
@@ -3975,6 +4053,12 @@ impl SqlScalarType {
                 Datum::Float32(OrderedFloat(f32::MAX)),
                 Datum::Float32(OrderedFloat(f32::EPSILON)),
                 Datum::Float32(OrderedFloat(f32::NAN)),
+                // NOTE: -NaN and -0.0 have distinct bit patterns from NaN and
+                // 0.0 but compare equal under `OrderedFloat`. Orderings that
+                // look at the representation (e.g. arrow's total order, where
+                // -NaN < -Infinity) can disagree with `OrderedFloat` on them.
+                Datum::Float32(OrderedFloat(-f32::NAN)),
+                Datum::Float32(OrderedFloat(-0.0)),
                 Datum::Float32(OrderedFloat(f32::INFINITY)),
                 Datum::Float32(OrderedFloat(f32::NEG_INFINITY)),
             ])
@@ -3989,6 +4073,9 @@ impl SqlScalarType {
                 Datum::Float64(OrderedFloat(f64::MAX)),
                 Datum::Float64(OrderedFloat(f64::EPSILON)),
                 Datum::Float64(OrderedFloat(f64::NAN)),
+                // See the FLOAT32 note on -NaN and -0.0.
+                Datum::Float64(OrderedFloat(-f64::NAN)),
+                Datum::Float64(OrderedFloat(-0.0)),
                 Datum::Float64(OrderedFloat(f64::INFINITY)),
                 Datum::Float64(OrderedFloat(f64::NEG_INFINITY)),
             ])
@@ -4025,6 +4112,13 @@ impl SqlScalarType {
             Row::pack_slice(&[
                 Datum::Time(NaiveTime::from_hms_micro_opt(0, 0, 0, 0).unwrap()),
                 Datum::Time(NaiveTime::from_hms_micro_opt(23, 59, 59, 999_999).unwrap()),
+                // Leap second: chrono represents it as a fractional part of
+                // one second or more. `TIME '23:59:60'` is the largest value
+                // parsing admits, since fractional leap seconds are rejected,
+                // and it encodes to exactly PostgreSQL's 24:00:00 bound. A
+                // fractional leap second here would leave the type's
+                // PostgreSQL wire domain.
+                Datum::Time(NaiveTime::from_hms_micro_opt(23, 59, 59, 1_000_000).unwrap()),
             ])
         });
         static TIMESTAMP: LazyLock<Row> = LazyLock::new(|| {
@@ -4147,6 +4241,13 @@ impl SqlScalarType {
                 Datum::String("."),
                 Datum::String("2015-09-18T23:56:04.123Z"),
                 Datum::String(&"x".repeat(100)),
+                // Persist stats truncate string bounds to 100 bytes: cover a
+                // string past that limit, one whose truncated upper bound
+                // cannot be incremented (every char is char::MAX), and one
+                // with a multibyte char straddling the truncation boundary.
+                Datum::String(&"x".repeat(101)),
+                Datum::String(&"\u{10FFFF}".repeat(101)),
+                Datum::String(&format!("{}\u{1F600}", "x".repeat(99))),
                 // Valid timezone.
                 Datum::String("JAPAN"),
                 Datum::String("1,2,3"),
@@ -4189,8 +4290,31 @@ impl SqlScalarType {
                 // JSON doesn't support NaN or Infinite numbers.
                 !(n.0.is_nan() || n.0.is_infinite())
             }));
-            // TODO: Add List, Map.
-            Row::pack_slice(&datums)
+            let mut row = Row::default();
+            let mut packer = row.packer();
+            for datum in datums {
+                packer.push(datum);
+            }
+            // Maps, including ones with disjoint key sets. Persist keeps
+            // per-key statistics for JSON maps, so a collection mixing maps
+            // where a key is present in one and absent in another exercises
+            // the absent-key handling in stats and their consumers.
+            packer.push_dict([("x", Datum::String("a"))]);
+            packer.push_dict([("y", Datum::String("b"))]);
+            packer.push_dict([("x", Datum::True), ("y", Datum::JsonNull)]);
+            packer.push_dict(std::iter::empty::<(&str, Datum)>());
+            // JSON map keys are not truncated in persist stats, unlike SQL
+            // string columns, so cover one past the string truncation limit.
+            let long_key = "k".repeat(101);
+            packer.push_dict([(long_key.as_str(), Datum::True)]);
+            packer.push_dict_with(|packer| {
+                packer.push(Datum::String("nested"));
+                packer.push_dict([("x", Datum::String("a"))]);
+            });
+            // Lists, including a heterogeneous one.
+            packer.push_list([Datum::True, Datum::JsonNull, Datum::String("a")]);
+            packer.push_list(std::iter::empty::<Datum>());
+            row
         });
         static UUID: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
@@ -4720,7 +4844,7 @@ impl Arbitrary for ReprScalarType {
 ///
 /// It is important that any new variants for this enum be added to the `Arbitrary` instance
 /// and the `union` method.
-#[derive(Clone, Debug, EnumKind, Serialize, Deserialize, MzReflect)]
+#[derive(Clone, Debug, EnumKind, Serialize, Deserialize)]
 #[enum_kind(ReprScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum ReprScalarType {
     Bool,

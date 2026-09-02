@@ -1,12 +1,12 @@
 ---
 source: src/auth/src/hash.rs
-revision: ed294863cf
+revision: 1f130f6b31
 ---
 
 # mz-auth::hash
 
 Implements PBKDF2-SHA-256 password hashing and SCRAM-SHA-256 authentication primitives via `aws-lc-rs`.
-Sensitive fields (`HashOpts.salt`, `PasswordHash.salt`/`hash`, `ScramSha256Hash` fields) are zeroized on drop via `mz_ore::secure::Zeroize`, and stack-local buffers use `mz_ore::secure::Zeroizing<>` wrappers to prevent secrets from lingering in memory.
+Sensitive fields (`HashOpts.salt`, `PasswordHash.salt`/`hash`, `ScramSha256Hash` fields) are zeroized on drop via `mz_ore::secure::Zeroize`, and stack-local buffers use `mz_ore::secure::Zeroizing<>` wrappers to prevent secrets from lingering in memory. Intermediate HMAC tag buffers for the client key and server key are kept in `Zeroizing` wrappers via `hmac::sign_to_buffer`, preventing the tag from being left unzeroized on the stack; `scram256_hash_inner` now returns `Result<ScramSha256Hash, HashError>` and callers `scram256_hash` and `scram256_verify` propagate that error.
 
 ## Key types
 

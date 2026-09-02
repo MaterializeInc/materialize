@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,16 +9,21 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/conditional
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/conditional
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
 mode cockroach
 
+# Not supported by Materialize.
+onlyif cockroach
 query II
 SELECT IF(1 = 2, NULL, 1), IF(2 = 2, NULL, 2)
 ----
@@ -29,6 +34,8 @@ SELECT NULLIF(1, 2), NULLIF(2, 2), NULLIF(NULL, NULL)
 ----
 1  NULL  NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query IIII
 SELECT
     IFNULL(1, 2),
@@ -38,9 +45,13 @@ SELECT
 ----
 1  2  1  2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t (a) AS VALUES (1), (2), (3)
 
+# Not supported by Materialize.
+onlyif cockroach
 query IT
 SELECT
     a,
@@ -58,6 +69,8 @@ ORDER BY
 2  two
 3  other
 
+# Not supported by Materialize.
+onlyif cockroach
 query IT
 SELECT
     a,
@@ -75,6 +88,8 @@ ORDER BY
 2  two
 3  other
 
+# Not supported by Materialize.
+onlyif cockroach
 query III
 SELECT a, NULLIF(a, 2), IF(a = 2, NULL, a) FROM t ORDER BY a
 ----
@@ -128,3 +143,17 @@ SELECT
     END
 ----
 one  one  three  four  two
+
+subtest regression_95560
+
+# Not supported by Materialize.
+onlyif cockroach
+# Regression test for #95560. COALESCE should only evaluate arguments to the
+# right of the first non-NULL argument, and an error (in this case a "division
+# by zero" error) should not occur from a branch that should never be evaluated.
+statement ok
+CREATE TABLE t95560a (a INT);
+INSERT INTO t95560a VALUES (1);
+CREATE TABLE t95560b (b INT);
+INSERT INTO t95560b VALUES (0);
+SELECT coalesce(a, (SELECT (a/b)::INT FROM t95560b)) FROM t95560a;

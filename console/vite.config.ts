@@ -158,6 +158,11 @@ export default defineConfig({
               secure: false,
               ws: true,
             },
+            // OAuth discovery for MCP clients pointed at /api/mcp.
+            "/.well-known/oauth-protected-resource": {
+              target: `https://127.0.0.1:${devServerProxyPort}`,
+              secure: false,
+            },
           }
         : {
             "/api/": {
@@ -166,6 +171,10 @@ export default defineConfig({
             "/api/experimental/": {
               target: `ws://127.0.0.1:${devServerProxyPort}`,
               ws: true,
+            },
+            // OAuth discovery for MCP clients pointed at /api/mcp.
+            "/.well-known/oauth-protected-resource": {
+              target: `http://127.0.0.1:${devServerProxyPort}`,
             },
           },
   },

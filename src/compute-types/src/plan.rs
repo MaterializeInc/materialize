@@ -15,20 +15,24 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use columnar::Columnar;
 use mz_expr::{
-    CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr,
-    OptimizedMirRelationExpr, TableFunc,
+    CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MfpPlan,
+    OptimizedMirRelationExpr, SafeMfpPlan, TableFunc,
 };
+use mz_ore::metric;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::raw::IntCounterVec;
 use mz_ore::soft_assert_eq_no_log;
 use mz_ore::str::Indent;
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
 use mz_repr::optimize::OptimizerFeatures;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, StableRow, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::dataflows::DataflowDescription;
 use crate::plan::join::JoinPlan;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
+use crate::plan::scalar::LirScalarExpr;
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::plan::transform::{Transform, TransformConfig};
@@ -39,21 +43,53 @@ pub mod interpret;
 pub mod join;
 pub mod reduce;
 pub mod render_plan;
+pub mod scalar;
 pub mod threshold;
 pub mod top_k;
 pub mod transform;
+
+/// Metrics collected during MIR to LIR lowering.
+#[derive(Debug, Clone)]
+pub struct LoweringMetrics {
+    /// Counts non-`None` results of `MapFilterProject::literal_constraints` during lowering,
+    /// labeled by the call site (`"get"` or `"mfp"`).
+    literal_constraints: IntCounterVec,
+}
+
+impl LoweringMetrics {
+    /// Registers the lowering metrics into `registry`.
+    pub fn register_into(registry: &MetricsRegistry) -> Self {
+        Self {
+            literal_constraints: registry.register(metric!(
+                name: "mz_optimizer_lowering_literal_constraints_total",
+                help: "How often the MFP-based literal-constraint detector succeeded, by call site.",
+                var_labels: ["case"],
+            )),
+        }
+    }
+
+    /// Records that a `literal_constraints` call at `case` produced a usable constraint.
+    pub fn inc_literal_constraints(&self, case: &str) {
+        self.literal_constraints.with_label_values(&[case]).inc();
+    }
+}
 
 /// The forms in which an operator's output is available.
 ///
 /// These forms may include "raw", meaning as a streamed collection, but also any
 /// number of "arranged" representations.
 ///
-/// Each arranged representation is described by a `KeyValRowMapping`, or rather
-/// at the moment by its three fields in a triple. These fields explain how to form
-/// a "key" by applying some expressions to each row, how to select "values" from
-/// columns not explicitly captured by the key, and how to return to the original
-/// row from the concatenation of key and value. Further explanation is available
-/// in the documentation for `KeyValRowMapping`.
+/// Each arranged representation is described by a `(to_key, permutation, thinning)`
+/// triple, built by `permutation_for_arrangement`. `to_key` (length `K`) are the key
+/// expressions over a row. `permutation` (length `A`, the raw/unthinned arity) maps
+/// each row column to its position in the `(key, value)` concatenation. `thinning`
+/// (length `M`) lists the row columns that form the value, in value order, so a value
+/// datum at concatenation position `c >= K` came from row column `thinning[c - K]`.
+///
+/// This triple is unrelated to `KeyValRowMapping`'s `(to_key, to_val, to_row)` fields
+/// despite the visual resemblance: `permutation` here plays the role of
+/// `KeyValRowMapping::to_row`, and `thinning` plays the role of
+/// `KeyValRowMapping::to_val`. Do not assume the same field order.
 #[derive(
     Clone,
     Debug,
@@ -68,10 +104,9 @@ pub mod transform;
 pub struct AvailableCollections {
     /// Whether the collection exists in unarranged form.
     pub raw: bool,
-    /// The list of available arrangements, presented as a `KeyValRowMapping`,
-    /// but here represented by a triple `(to_key, to_val, to_row)` instead.
-    /// The documentation for `KeyValRowMapping` explains these fields better.
-    pub arranged: Vec<(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)>,
+    /// The list of available arrangements, each a `(to_key, permutation, thinning)`
+    /// triple. See the struct-level documentation for field semantics.
+    pub arranged: Vec<(Vec<LirScalarExpr>, Vec<usize>, Vec<usize>)>,
 }
 
 impl AvailableCollections {
@@ -84,7 +119,7 @@ impl AvailableCollections {
     }
 
     /// Represent a collection that is arranged in the specified ways.
-    pub fn new_arranged(arranged: Vec<(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)>) -> Self {
+    pub fn new_arranged(arranged: Vec<(Vec<LirScalarExpr>, Vec<usize>, Vec<usize>)>) -> Self {
         assert!(
             !arranged.is_empty(),
             "Invariant violated: at least one collection must exist"
@@ -96,7 +131,7 @@ impl AvailableCollections {
     }
 
     /// Get some arrangement, if one exists.
-    pub fn arbitrary_arrangement(&self) -> Option<&(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)> {
+    pub fn arbitrary_arrangement(&self) -> Option<&(Vec<LirScalarExpr>, Vec<usize>, Vec<usize>)> {
         assert!(
             self.raw || !self.arranged.is_empty(),
             "Invariant violated: at least one collection must exist"
@@ -172,22 +207,83 @@ impl std::fmt::Display for LirId {
     }
 }
 
+/// Version of the stable LIR serialization format.
+///
+/// Bump this when the serialized representation of [`LirRelationExpr`] or
+/// anything it transitively contains changes. The schema snapshot test in
+/// `tests/lir_schema.rs` enforces that the traced schema matches the
+/// checked-in `tests/snapshots/lir_v{LIR_VERSION}.json`.
+pub const LIR_VERSION: u64 = 1;
+
+pub use constant_rows_serde::ConstantRows;
+
+/// Serializes `LirRelationNode::Constant`'s rows through the named
+/// [`ConstantRows`] mirror enum instead of std `Result`.
+///
+/// The stable LIR schema registry maps each container name to a single
+/// format, and `Result` would clash with the differently instantiated
+/// `Result` in `LirScalarExpr::Literal`. The mirror has the same variant
+/// order as `Result`, so the encoded bytes are unchanged.
+mod constant_rows_serde {
+    use mz_expr::{EvalError, StableEvalError, StableEvalErrorRef};
+    use mz_repr::{Diff, StableRow, Timestamp};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    /// The serialized form of `LirRelationNode::Constant`'s rows.
+    #[derive(Debug, Serialize, Deserialize)]
+    pub enum ConstantRows {
+        /// See `Result::Ok`.
+        Ok(Vec<(StableRow, Timestamp, Diff)>),
+        /// See `Result::Err`.
+        Err(StableEvalError),
+    }
+
+    /// Borrowing mirror of [`ConstantRows`], to serialize without cloning.
+    #[derive(Serialize)]
+    #[serde(rename = "ConstantRows")]
+    enum ConstantRowsRef<'a> {
+        Ok(&'a Vec<(StableRow, Timestamp, Diff)>),
+        Err(StableEvalErrorRef<'a>),
+    }
+
+    pub fn serialize<S: Serializer>(
+        rows: &Result<Vec<(StableRow, Timestamp, Diff)>, EvalError>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let mirror = match rows {
+            Ok(rows) => ConstantRowsRef::Ok(rows),
+            Err(err) => ConstantRowsRef::Err(StableEvalErrorRef(err)),
+        };
+        mirror.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Result<Vec<(StableRow, Timestamp, Diff)>, EvalError>, D::Error> {
+        Ok(match ConstantRows::deserialize(deserializer)? {
+            ConstantRows::Ok(rows) => Ok(rows),
+            ConstantRows::Err(err) => Err(err.0),
+        })
+    }
+}
+
 /// A rendering plan with as much conditional logic as possible removed.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct Plan {
+pub struct LirRelationExpr {
     /// A dataflow-local identifier.
     pub lir_id: LirId,
     /// The underlying operator.
-    pub node: PlanNode,
+    pub node: LirRelationNode,
 }
 
-/// The actual AST node of the `Plan`.
+/// The actual AST node of the `LirRelationExpr`.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub enum PlanNode {
+pub enum LirRelationNode {
     /// A collection containing a pre-determined collection.
     Constant {
         /// Explicit update triples for the collection.
-        rows: Result<Vec<(Row, Timestamp, Diff)>, EvalError>,
+        #[serde(with = "constant_rows_serde")]
+        rows: Result<Vec<(StableRow, Timestamp, Diff)>, EvalError>,
     },
     /// A reference to a bound collection.
     ///
@@ -220,10 +316,10 @@ pub enum PlanNode {
         /// The local identifier to be used, available to `body` as `Id::Local(id)`.
         id: LocalId,
         /// The collection that should be bound to `id`.
-        value: Box<Plan>,
+        value: Box<LirRelationExpr>,
         /// The collection that results, which is allowed to contain `Get` stages
         /// that reference `Id::Local(id)`.
-        body: Box<Plan>,
+        body: Box<LirRelationExpr>,
     },
     /// Binds `values` to `ids`, evaluates them potentially recursively, and returns `body`.
     ///
@@ -235,12 +331,12 @@ pub enum PlanNode {
         /// The local identifiers to be used, available to `body` as `Id::Local(id)`.
         ids: Vec<LocalId>,
         /// The collection that should be bound to `id`.
-        values: Vec<Plan>,
+        values: Vec<LirRelationExpr>,
         /// Maximum number of iterations. See further info on the MIR `LetRec`.
         limits: Vec<Option<LetRecLimit>>,
         /// The collection that results, which is allowed to contain `Get` stages
         /// that reference `Id::Local(id)`.
-        body: Box<Plan>,
+        body: Box<LirRelationExpr>,
     },
     /// Map, Filter, and Project operators.
     ///
@@ -249,12 +345,12 @@ pub enum PlanNode {
     /// and sometimes reduce stages are not able to absorb this operator.
     Mfp {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<LirRelationExpr>,
         /// Linear operator to apply to each record.
-        mfp: MapFilterProject,
+        mfp: MfpPlan<LirScalarExpr>,
         /// Whether the input is from an arrangement, and if so,
         /// whether we can seek to a specific value therein
-        input_key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        input_key_val: Option<(Vec<LirScalarExpr>, Option<StableRow>)>,
     },
     /// A variable number of output records for each input record.
     ///
@@ -271,15 +367,15 @@ pub enum PlanNode {
     FlatMap {
         /// The particular arrangement of the input we expect to use,
         /// if any
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Vec<LirScalarExpr>>,
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<LirRelationExpr>,
         /// Expressions that for each row prepare the arguments to `func`.
-        exprs: Vec<MirScalarExpr>,
+        exprs: Vec<LirScalarExpr>,
         /// The variable-record emitting function.
         func: TableFunc,
         /// Linear operator to apply to each record produced by `func`.
-        mfp_after: MapFilterProject,
+        mfp_after: MfpPlan<LirScalarExpr>,
     },
     /// A multiway relational equijoin, with fused map, filter, and projection.
     ///
@@ -288,7 +384,7 @@ pub enum PlanNode {
     /// strategy we will use, and any pushed down per-record work.
     Join {
         /// An ordered list of inputs that will be joined.
-        inputs: Vec<Plan>,
+        inputs: Vec<LirRelationExpr>,
         /// Detailed information about the implementation of the join.
         ///
         /// This includes information about the implementation strategy, but also
@@ -300,9 +396,9 @@ pub enum PlanNode {
     Reduce {
         /// The particular arrangement of the input we expect to use,
         /// if any
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Vec<LirScalarExpr>>,
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<LirRelationExpr>,
         /// A plan for changing input records into key, value pairs.
         key_val_plan: KeyValPlan,
         /// A plan for performing the reduce.
@@ -313,10 +409,9 @@ pub enum PlanNode {
         plan: ReducePlan,
         /// An MFP that must be applied to results. The projection part of this
         /// MFP must preserve the key for the reduction; otherwise, the results
-        /// become undefined. Additionally, the MFP must be free from temporal
-        /// predicates so that it can be readily evaluated.
-        /// TODO(ggevay): should we wrap this in [`mz_expr::SafeMfpPlan`]?
-        mfp_after: MapFilterProject,
+        /// become undefined. Additionally, the MFP is guaranteed to be free from
+        /// temporal predicates so that it can be readily evaluated.
+        mfp_after: SafeMfpPlan<LirScalarExpr>,
         /// Strategy for forming the internal input arrangement built by `Reduce`
         /// (materialized via `key_val_plan`).
         ///
@@ -335,7 +430,7 @@ pub enum PlanNode {
     /// Key-based "Top K" operator, retaining the first K records in each group.
     TopK {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<LirRelationExpr>,
         /// A plan for performing the Top-K.
         ///
         /// The implementation of reduction has several different strategies based
@@ -347,14 +442,14 @@ pub enum PlanNode {
         /// Set by the lowering from the input's `has_future_updates` flag. The
         /// renderer applies it to the per-row input stream at the top of
         /// `render_topk`, covering all three `TopKPlan` arms uniformly. See
-        /// `PlanNode::Reduce::temporal_bucketing_strategy` for the underlying
+        /// `LirRelationNode::Reduce::temporal_bucketing_strategy` for the underlying
         /// convention.
         temporal_bucketing_strategy: ArrangementStrategy,
     },
     /// Inverts the sign of each update.
     Negate {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<LirRelationExpr>,
     },
     /// Filters records that accumulate negatively.
     ///
@@ -362,7 +457,7 @@ pub enum PlanNode {
     /// resources proportional to the number of records with non-zero accumulation.
     Threshold {
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<LirRelationExpr>,
         /// A plan for performing the threshold.
         ///
         /// The implementation of reduction has several different strategies based
@@ -378,7 +473,7 @@ pub enum PlanNode {
     /// implementing the "distinct" operator.
     Union {
         /// The input collections
-        inputs: Vec<Plan>,
+        inputs: Vec<LirRelationExpr>,
         /// Whether to consolidate the output, e.g., cancel negated records.
         consolidate_output: bool,
         /// Per-input bucketing strategies. Lockstep with `inputs`: index `i` is the
@@ -387,7 +482,7 @@ pub enum PlanNode {
         /// Set by the lowering from each input's `has_future_updates` flag. Only
         /// consolidating Unions (`consolidate_output: true`) carry non-`Direct`
         /// entries, because bucketing only pays off ahead of a consolidating
-        /// downstream operator. See `PlanNode::Reduce::temporal_bucketing_strategy`
+        /// downstream operator. See `LirRelationNode::Reduce::temporal_bucketing_strategy`
         /// for the underlying convention.
         temporal_bucketing_strategies: Vec<ArrangementStrategy>,
     },
@@ -396,14 +491,14 @@ pub enum PlanNode {
     /// This operator does not change the logical contents of `input`, but ensures
     /// that certain arrangements are available in the results. This operator can
     /// be important for e.g. the `Join` stage which benefits from multiple arrangements
-    /// or to cap a `Plan` so that indexes can be exported.
+    /// or to cap a `LirRelationExpr` so that indexes can be exported.
     ArrangeBy {
         /// The key that must be used to access the input.
-        input_key: Option<Vec<MirScalarExpr>>,
+        input_key: Option<Vec<LirScalarExpr>>,
         /// The input collection.
-        input: Box<Plan>,
+        input: Box<LirRelationExpr>,
         /// The MFP that must be applied to the input.
-        input_mfp: MapFilterProject,
+        input_mfp: MfpPlan<LirScalarExpr>,
         /// A list of arrangement keys, and possibly a raw collection,
         /// that will be added to those of the input. Does not include
         /// any other existing arrangements.
@@ -413,15 +508,15 @@ pub enum PlanNode {
     },
 }
 
-impl PlanNode {
+impl LirRelationNode {
     /// Iterates through references to child expressions.
-    pub fn children(&self) -> impl Iterator<Item = &Plan> {
+    pub fn children(&self) -> impl Iterator<Item = &LirRelationExpr> {
         let mut first = None;
         let mut second = None;
         let mut rest = None;
         let mut last = None;
 
-        use PlanNode::*;
+        use LirRelationNode::*;
         match self {
             Constant { .. } | Get { .. } => (),
             Let { value, body, .. } => {
@@ -454,13 +549,13 @@ impl PlanNode {
     }
 
     /// Iterates through mutable references to child expressions.
-    pub fn children_mut(&mut self) -> impl Iterator<Item = &mut Plan> {
+    pub fn children_mut(&mut self) -> impl Iterator<Item = &mut LirRelationExpr> {
         let mut first = None;
         let mut second = None;
         let mut rest = None;
         let mut last = None;
 
-        use PlanNode::*;
+        use LirRelationNode::*;
         match self {
             Constant { .. } | Get { .. } => (),
             Let { value, body, .. } => {
@@ -493,21 +588,21 @@ impl PlanNode {
     }
 }
 
-impl PlanNode {
-    /// Attach an `lir_id` to a `PlanNode` to make a complete `Plan`.
-    pub fn as_plan(self, lir_id: LirId) -> Plan {
-        Plan { lir_id, node: self }
+impl LirRelationNode {
+    /// Attach an `lir_id` to a `LirRelationNode` to make a complete `LirRelationExpr`.
+    pub fn as_plan(self, lir_id: LirId) -> LirRelationExpr {
+        LirRelationExpr { lir_id, node: self }
     }
 }
 
-impl Plan {
-    /// Pretty-print this [Plan] to a string.
+impl LirRelationExpr {
+    /// Pretty-print this [LirRelationExpr] to a string.
     pub fn pretty(&self) -> String {
         let config = ExplainConfig::default();
         self.debug_explain(&config, None)
     }
 
-    /// Pretty-print this [Plan] to a string using a custom
+    /// Pretty-print this [LirRelationExpr] to a string using a custom
     /// [ExplainConfig] and an optionally provided [ExprHumanizer].
     /// This is intended for debugging and tests, not users.
     pub fn debug_explain(
@@ -531,12 +626,16 @@ pub enum GetPlan {
     /// Simply pass input arrangements on to the next stage.
     PassArrangements,
     /// Using the supplied key, optionally seek the row, and apply the MFP.
-    Arrangement(Vec<MirScalarExpr>, Option<Row>, MapFilterProject),
+    Arrangement(
+        Vec<LirScalarExpr>,
+        Option<StableRow>,
+        MfpPlan<LirScalarExpr>,
+    ),
     /// Scan the input collection (unarranged) and apply the MFP.
-    Collection(MapFilterProject),
+    Collection(MfpPlan<LirScalarExpr>),
 }
 
-impl Plan {
+impl LirRelationExpr {
     /// Convert the dataflow description into one that uses render plans.
     #[mz_ore::instrument(
         target = "optimizer",
@@ -546,12 +645,12 @@ impl Plan {
     pub fn finalize_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         features: &OptimizerFeatures,
+        metrics: Option<&LoweringMetrics>,
     ) -> Result<DataflowDescription<Self>, String> {
-        // First, we lower the dataflow description from MIR to LIR.
-        let mut dataflow = Self::lower_dataflow(desc, features)?;
-
-        // Subsequently, we perform plan refinements for the dataflow.
-        Self::refine_source_mfps(&mut dataflow);
+        // First, we lower the dataflow description from MIR to LIR. Lowering
+        // also moves common parts of the MFPs pushed onto each source's reads into the source
+        // itself (see `Context::refine_source_mfps`).
+        let mut dataflow = Self::lower_dataflow(desc, features, metrics)?;
 
         // Note: `consolidate_output` for `Union` and per-input
         // `temporal_bucketing_strategies` are decided at lowering time (see the
@@ -563,8 +662,6 @@ impl Plan {
         // available.
 
         if dataflow.is_single_time() {
-            Self::refine_single_time_operator_selection(&mut dataflow);
-
             // The relaxation of the `must_consolidate` flag performs an LIR-based
             // analysis and transform under checked recursion. By a similar argument
             // made in `from_mir`, we do not expect the recursion limit to be hit.
@@ -591,6 +688,118 @@ impl Plan {
 
             let config = TransformConfig { monotonic_ids };
             Self::refine_single_time_consolidation(&mut dataflow, &config)?;
+
+            // For non-recursive delta joins in single-time dataflows, only the delta path for the
+            // first relation produces updates: the other paths discard updates at the as-of, which
+            // is the only time present. We keep just that path and, where the first input's
+            // arrangement existed solely to seed it, drop the arrangement and consume the input as a
+            // raw collection. This requires rewriting the path's initial closure to address the raw
+            // row layout rather than the arranged `(key, value)` layout.
+            for build_desc in dataflow.objects_to_build.iter_mut() {
+                // Worklist of plan nodes. `LetRec` bodies are explored but `LetRec` values are not,
+                // which excludes recursive (WMR) joins from this transform.
+                let mut todo = vec![&mut build_desc.plan];
+                while let Some(expr) = todo.pop() {
+                    match &mut expr.node {
+                        // TODO: also handle binary differential joins, which can likewise shed a
+                        // bespoke arrangement on their first input.
+                        LirRelationNode::Join {
+                            inputs,
+                            plan: JoinPlan::Delta(plan),
+                        } => {
+                            // Only the first relation's path survives at a single time.
+                            plan.path_plans.truncate(1);
+
+                            let source_relation = plan.path_plans[0].source_relation;
+                            // Replace the source input's bespoke arrangement with a raw collection,
+                            // but only when the surviving path's source is fed by an `ArrangeBy`
+                            // that exists solely to build that arrangement. A source backed directly
+                            // by an arranged import has no `ArrangeBy` node here, so this guard skips
+                            // it and the path keeps reading it arranged.
+                            if let Some(source_key) = plan.path_plans[0].source_key.clone() {
+                                if let LirRelationNode::ArrangeBy { forms, .. } =
+                                    &mut inputs[source_relation].node
+                                {
+                                    // Drop arrangement forms other than the source key, which the
+                                    // remaining path no longer needs.
+                                    forms.arranged.retain(|(key, _, _)| key == &source_key);
+                                    if let Some((to_key, permutation, thinning)) =
+                                        forms.arranged.pop()
+                                    {
+                                        // Make the input a raw collection and unset the source key.
+                                        // Clearing every arrangement form is safe: `truncate(1)`
+                                        // already dropped the sibling paths that were the only other
+                                        // consumers, and this `ArrangeBy` is private to this join
+                                        // input. What remains is the input's raw collection.
+                                        forms.raw = true;
+                                        forms.arranged.clear();
+                                        plan.path_plans[0].source_key = None;
+
+                                        // The initial closure addresses the arranged `(key, value)`
+                                        // layout: columns `[0, K)` are key datums and columns
+                                        // `[K, K + M)` are the thinned value datums. We rewrite it to
+                                        // address the raw row instead.
+                                        //
+                                        // `to_key` (length `K`) are the key expressions over a row.
+                                        // `permutation` (length `A`, the raw arity) maps each row
+                                        // column to its position in the `(key, value)` concatenation.
+                                        // `thinning` (length `M`) lists the row columns that form the
+                                        // value.
+                                        let key_len = to_key.len();
+                                        let row_arity = permutation.len();
+                                        let closure = &mut plan.path_plans[0].initial_closure;
+
+                                        // Step 1: rewrite `ready_equivalences`, which reference the
+                                        // arranged layout. A key column becomes its defining
+                                        // expression. A value column becomes the row column it was
+                                        // projected from.
+                                        for class in closure.ready_equivalences.iter_mut() {
+                                            for expr in class.iter_mut() {
+                                                let mut todo = vec![expr];
+                                                while let Some(expr) = todo.pop() {
+                                                    if let LirScalarExpr::Column(c, _) = expr {
+                                                        if let Some(key_expr) = to_key.get(*c) {
+                                                            *expr = key_expr.clone();
+                                                        } else {
+                                                            *c = thinning[*c - key_len];
+                                                        }
+                                                    } else {
+                                                        todo.extend(expr.children_mut());
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Step 2: rewrite the `before` MFP. Starting from a raw row,
+                                        // materialize the key datums and project to the arranged
+                                        // `(key, value)` layout the original MFP expects, then apply
+                                        // it.
+                                        let (m, f, p) = closure.before.as_map_filter_project();
+                                        let mfp = MapFilterProject::new(row_arity)
+                                            .map(to_key)
+                                            .project(
+                                                (row_arity..row_arity + key_len).chain(thinning),
+                                            )
+                                            .map(m)
+                                            .filter(f)
+                                            .project(p);
+                                        closure.before =
+                                            mfp.into_plan().unwrap().into_nontemporal().unwrap();
+                                    }
+                                }
+                            }
+
+                            todo.extend(inputs.iter_mut());
+                        }
+                        LirRelationNode::LetRec { body, .. } => {
+                            todo.push(body);
+                        }
+                        x => {
+                            todo.extend(x.children_mut());
+                        }
+                    }
+                }
+            }
         }
 
         soft_assert_eq_no_log!(dataflow.check_invariants(), Ok(()));
@@ -611,121 +820,14 @@ impl Plan {
     fn lower_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         features: &OptimizerFeatures,
+        metrics: Option<&LoweringMetrics>,
     ) -> Result<DataflowDescription<Self>, String> {
-        let context = lowering::Context::new(desc.debug_name.clone(), features);
+        let context = lowering::Context::new(desc.debug_name.clone(), features, metrics);
         let dataflow = context.lower(desc)?;
 
         mz_repr::explain::trace_plan(&dataflow);
 
         Ok(dataflow)
-    }
-
-    /// Refines the source instance descriptions for sources imported by `dataflow` to
-    /// push down common MFP expressions.
-    #[mz_ore::instrument(
-        target = "optimizer",
-        level = "debug",
-        fields(path.segment = "refine_source_mfps")
-    )]
-    fn refine_source_mfps(dataflow: &mut DataflowDescription<Self>) {
-        // Extract MFPs from Get operators for sources, and extract what we can for the source.
-        // For each source, we want to find `&mut MapFilterProject` for each `Get` expression.
-        for (source_id, source_import) in dataflow.source_imports.iter_mut() {
-            let source = &mut source_import.desc;
-            let mut identity_present = false;
-            let mut mfps = Vec::new();
-            for build_desc in dataflow.objects_to_build.iter_mut() {
-                let mut todo = vec![&mut build_desc.plan];
-                while let Some(expression) = todo.pop() {
-                    let node = &mut expression.node;
-                    if let PlanNode::Get { id, plan, .. } = node {
-                        if *id == mz_expr::Id::Global(*source_id) {
-                            match plan {
-                                GetPlan::Collection(mfp) => mfps.push(mfp),
-                                GetPlan::PassArrangements => {
-                                    identity_present = true;
-                                }
-                                GetPlan::Arrangement(..) => {
-                                    panic!("Surprising `GetPlan` for imported source: {:?}", plan);
-                                }
-                            }
-                        }
-                    } else {
-                        todo.extend(node.children_mut());
-                    }
-                }
-            }
-
-            // Direct exports of sources are possible, and prevent pushdown.
-            identity_present |= dataflow
-                .index_exports
-                .values()
-                .any(|(x, _)| x.on_id == *source_id);
-            identity_present |= dataflow.sink_exports.values().any(|x| x.from == *source_id);
-
-            if !identity_present && !mfps.is_empty() {
-                // Extract a common prefix `MapFilterProject` from `mfps`.
-                let common = MapFilterProject::extract_common(&mut mfps[..]);
-                // Apply common expressions to the source's `MapFilterProject`.
-                let mut mfp = if let Some(mfp) = source.arguments.operators.take() {
-                    MapFilterProject::compose(mfp, common)
-                } else {
-                    common
-                };
-                mfp.optimize();
-                source.arguments.operators = Some(mfp);
-            }
-        }
-        mz_repr::explain::trace_plan(dataflow);
-    }
-
-    /// Refines the plans of objects to be built as part of `dataflow` to take advantage
-    /// of monotonic operators if the dataflow refers to a single-time, i.e., is for a
-    /// one-shot SELECT query.
-    #[mz_ore::instrument(
-        target = "optimizer",
-        level = "debug",
-        fields(path.segment = "refine_single_time_operator_selection")
-    )]
-    fn refine_single_time_operator_selection(dataflow: &mut DataflowDescription<Self>) {
-        // We should only reach here if we have a one-shot SELECT query, i.e.,
-        // a single-time dataflow.
-        assert!(dataflow.is_single_time());
-
-        // Upgrade single-time plans to monotonic.
-        for build_desc in dataflow.objects_to_build.iter_mut() {
-            let mut todo = vec![&mut build_desc.plan];
-            while let Some(expression) = todo.pop() {
-                let node = &mut expression.node;
-                match node {
-                    PlanNode::Reduce { plan, .. } => {
-                        // Upgrade non-monotonic hierarchical plans to monotonic with mandatory consolidation.
-                        match plan {
-                            ReducePlan::Hierarchical(hierarchical) => {
-                                hierarchical.as_monotonic(true);
-                            }
-                            _ => {
-                                // Nothing to do for other plans, and doing nothing is safe for future variants.
-                            }
-                        }
-                        todo.extend(node.children_mut());
-                    }
-                    PlanNode::TopK { top_k_plan, .. } => {
-                        top_k_plan.as_monotonic(true);
-                        todo.extend(node.children_mut());
-                    }
-                    PlanNode::LetRec { body, .. } => {
-                        // Only the non-recursive `body` is restricted to a single time.
-                        todo.push(body);
-                    }
-                    _ => {
-                        // Nothing to do for other expressions, and doing nothing is safe for future expressions.
-                        todo.extend(node.children_mut());
-                    }
-                }
-            }
-        }
-        mz_repr::explain::trace_plan(dataflow);
     }
 
     /// Refines the plans of objects to be built as part of a single-time `dataflow` to relax
@@ -755,11 +857,11 @@ impl Plan {
     }
 }
 
-impl CollectionPlan for PlanNode {
+impl CollectionPlan for LirRelationNode {
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         match self {
-            PlanNode::Constant { rows: _ } => (),
-            PlanNode::Get {
+            LirRelationNode::Constant { rows: _ } => (),
+            LirRelationNode::Get {
                 id,
                 keys: _,
                 plan: _,
@@ -769,11 +871,11 @@ impl CollectionPlan for PlanNode {
                 }
                 Id::Local(_) => (),
             },
-            PlanNode::Let { id: _, value, body } => {
+            LirRelationNode::Let { id: _, value, body } => {
                 value.depends_on_into(out);
                 body.depends_on_into(out);
             }
-            PlanNode::LetRec {
+            LirRelationNode::LetRec {
                 ids: _,
                 values,
                 limits: _,
@@ -784,8 +886,8 @@ impl CollectionPlan for PlanNode {
                 }
                 body.depends_on_into(out);
             }
-            PlanNode::Join { inputs, plan: _ }
-            | PlanNode::Union {
+            LirRelationNode::Join { inputs, plan: _ }
+            | LirRelationNode::Union {
                 inputs,
                 consolidate_output: _,
                 temporal_bucketing_strategies: _,
@@ -794,26 +896,26 @@ impl CollectionPlan for PlanNode {
                     input.depends_on_into(out);
                 }
             }
-            PlanNode::Mfp {
+            LirRelationNode::Mfp {
                 input,
                 mfp: _,
                 input_key_val: _,
             }
-            | PlanNode::FlatMap {
+            | LirRelationNode::FlatMap {
                 input_key: _,
                 input,
                 exprs: _,
                 func: _,
                 mfp_after: _,
             }
-            | PlanNode::ArrangeBy {
+            | LirRelationNode::ArrangeBy {
                 input_key: _,
                 input,
                 input_mfp: _,
                 forms: _,
                 strategy: _,
             }
-            | PlanNode::Reduce {
+            | LirRelationNode::Reduce {
                 input_key: _,
                 input,
                 key_val_plan: _,
@@ -821,13 +923,13 @@ impl CollectionPlan for PlanNode {
                 mfp_after: _,
                 temporal_bucketing_strategy: _,
             }
-            | PlanNode::TopK {
+            | LirRelationNode::TopK {
                 input,
                 top_k_plan: _,
                 temporal_bucketing_strategy: _,
             }
-            | PlanNode::Negate { input }
-            | PlanNode::Threshold {
+            | LirRelationNode::Negate { input }
+            | LirRelationNode::Threshold {
                 input,
                 threshold_plan: _,
             } => {
@@ -837,7 +939,7 @@ impl CollectionPlan for PlanNode {
     }
 }
 
-impl CollectionPlan for Plan {
+impl CollectionPlan for LirRelationExpr {
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         self.node.depends_on_into(out);
     }

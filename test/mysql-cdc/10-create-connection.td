@@ -41,7 +41,12 @@ name       type
 ------------------------------
 mysq   mysql
 
->[version>=2600700] SHOW CREATE CONNECTION mysq
+>[version>=2603200] SHOW CREATE CONNECTION mysq
+name   create_sql
+---------------------------------
+materialize.public.mysq "CREATE CONNECTION materialize.public.mysq\nTO MYSQL (HOST = mysql, PASSWORD = SECRET materialize.public.mysqlpass, USER = 'root');"
+
+>[2600700<=version<2603200] SHOW CREATE CONNECTION mysq
 name   create_sql
 ---------------------------------
 materialize.public.mysq "CREATE CONNECTION materialize.public.mysq\nTO MYSQL (HOST = mysql, PASSWORD = SECRET materialize.public.mysqlpass, USER = root);"

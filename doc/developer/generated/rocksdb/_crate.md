@@ -1,6 +1,6 @@
 ---
 source: src/rocksdb/src/lib.rs
-revision: 07858c9fd7
+revision: 7ffd40e1ab
 ---
 
 # mz-rocksdb
@@ -13,7 +13,7 @@ The public API consists of `multi_get` (batch key lookup), `multi_update` (batch
 Batches are split into chunks sized by the dynamic `batch_size` config, and individual RocksDB errors that are `TryAgain` are retried up to `retry_max_duration`.
 
 Key types:
-* `InstanceOptions<O, V, F>` — fixed startup options including bincode serializer, WAL flag, optional merge operator, and cleanup behavior.
+* `InstanceOptions<O, V, F>` — fixed startup options including a possibly shared RocksDB `Env`, bincode serializer, WAL flag, optional merge operator, and cleanup behavior. Cleanup routes `DB::destroy` through the instance `Env` so that in-memory environments (used by replicas without a scratch directory) are properly cleaned.
 * `RocksDBSharedMetrics` / `RocksDBInstanceMetrics` — user-supplied Prometheus metrics for latency, throughput, and batch sizes.
 * `ValueIterator` — iterates over existing and new operand values during a merge operation.
 * `Error` — covers RocksDB errors, decode failures, thread shutdown, and cleanup timeouts.

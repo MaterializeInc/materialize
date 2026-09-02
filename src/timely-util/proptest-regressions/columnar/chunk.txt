@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 79f9e0f3cf01ba590155d536a36d67864533c44d17ad3c38da58886159837681 # shrinks to input = [((0, 0), 0, 1)], cuts = [], probe_keys = {}, spill = false
+cc 6a70b97870c5a545462247056ceac3dd0c69f0ff2fb855502d3ed8d87201c8ea # shrinks to inputs = [[((0, 3), 3, -2), ((0, 4), 0, 3), ((3, 3), 1, 2)]], cuts = [4, 0]

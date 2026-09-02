@@ -60,12 +60,17 @@
 //! type, we can specialize and render the dataflow to compute those aggregations in the correct order, and
 //! return the output arrangement directly and avoid the extra collation arrangement.
 
+use std::fmt::Display;
+
+use mz_expr::explain::{HumanizeDisplay, HumanizedExpr, HumanizerMode};
 use mz_expr::{
-    AggregateExpr, AggregateFunc, MapFilterProject, MirScalarExpr, permutation_for_arrangement,
+    AggregateExpr, AggregateFunc, MapFilterProject, MirScalarExpr, UnmaterializableFunc,
+    permutation_for_arrangement,
 };
 use mz_ore::soft_assert_or_log;
 use serde::{Deserialize, Serialize};
 
+use crate::plan::scalar::LirScalarExpr;
 use crate::plan::{AvailableCollections, bucketing_of_expected_group_size};
 
 /// This enum represents the three potential types of aggregations.
@@ -134,6 +139,88 @@ pub enum ReducePlan {
     Basic(BasicPlan),
 }
 
+/// All reduce plans depend on a notion of aggregation.
+///
+/// We could use `mz_expr::AggregateExpr`, but it explicitly names
+/// `MirScalarExpr`, while LIR aggregates contain `LirScalarExpr`. This
+/// duplication exists because the old MzReflect test framework could not
+/// accommodate type parameters. TODO: with that framework gone, this will
+/// be resolved shortly by parameterizing over the scalar expression type.
+///
+/// We don't build a separate `AggregateFunc`, since we'd only eliminate one variant
+/// and need to duplicate the evaluation code.
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash
+)]
+pub struct LirAggregateExpr {
+    /// Names the aggregation function.
+    pub func: AggregateFunc,
+    /// An expression which extracts from each row the input to `func`.
+    pub expr: LirScalarExpr,
+    /// Should the aggregation be applied only to distinct results in each group.
+    #[serde(default)]
+    pub distinct: bool,
+}
+
+impl LirAggregateExpr {
+    /// Translates an aggregate from MIR to LIR.
+    ///
+    /// Panics on unmaterializable functions.
+    pub fn from_mir(mir: AggregateExpr) -> Self {
+        Self::try_from(mir).expect("no unmaterializable functions in aggregates")
+    }
+
+    /// Determines whether this aggregate is `COUNT(*)`.
+    pub fn is_count_asterisk(&self) -> bool {
+        self.func == AggregateFunc::Count && self.expr.is_literal_true() && !self.distinct
+    }
+}
+
+impl TryFrom<AggregateExpr> for LirAggregateExpr {
+    type Error = Vec<UnmaterializableFunc>;
+
+    fn try_from(mir: AggregateExpr) -> Result<Self, Self::Error> {
+        let func = mir.func;
+        let expr = LirScalarExpr::try_from(&mir.expr)?;
+        let distinct = mir.distinct;
+
+        Ok(LirAggregateExpr {
+            func,
+            expr,
+            distinct,
+        })
+    }
+}
+
+impl HumanizeDisplay for LirAggregateExpr {
+    fn humanize<'a, M: HumanizerMode>(
+        e: &HumanizedExpr<'a, Self, M>,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        if e.expr.is_count_asterisk() {
+            return write!(f, "count(*)");
+        }
+
+        write!(
+            f,
+            "{}({}",
+            e.child(&e.expr.func),
+            if e.expr.distinct { "distinct " } else { "" }
+        )?;
+
+        e.child(&e.expr.expr).fmt(f)?;
+        write!(f, ")")
+    }
+}
+
 /// Plan for computing a set of accumulable aggregations.
 ///
 /// We fuse all of the accumulable aggregations together
@@ -146,14 +233,14 @@ pub enum ReducePlan {
 pub struct AccumulablePlan {
     /// All of the aggregations we were asked to compute, stored
     /// in order.
-    pub full_aggrs: Vec<AggregateExpr>,
+    pub full_aggrs: Vec<LirAggregateExpr>,
     /// All of the non-distinct accumulable aggregates.
     /// Each element represents:
     /// (index of the datum among inputs, aggregation expr)
     /// These will all be rendered together in one dataflow fragment.
-    pub simple_aggrs: Vec<(usize, AggregateExpr)>,
+    pub simple_aggrs: Vec<(usize, LirAggregateExpr)>,
     /// Same as above but for all of the `DISTINCT` accumulable aggregations.
-    pub distinct_aggrs: Vec<(usize, AggregateExpr)>,
+    pub distinct_aggrs: Vec<(usize, LirAggregateExpr)>,
 }
 
 /// Plan for computing a set of hierarchical aggregations.
@@ -271,7 +358,7 @@ pub enum BasicPlan {
     /// reduction. Each element represents the:
     /// `(index of the set of the input we are aggregating over,
     ///   the aggregation function)`
-    Multiple(Vec<AggregateExpr>),
+    Multiple(Vec<LirAggregateExpr>),
 }
 
 /// Plan for rendering a single basic aggregation, with possibly fusing a `FlatMap UnnestList` with
@@ -279,7 +366,7 @@ pub enum BasicPlan {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SingleBasicPlan {
     /// The aggregation that we should perform.
-    pub expr: AggregateExpr,
+    pub expr: LirAggregateExpr,
     /// Whether we fused a `FlatMap UnnestList` with this aggregation.
     pub fused_unnest_list: bool,
 }
@@ -340,7 +427,7 @@ impl ReducePlan {
         let mut aggregates = aggregates.into_iter();
         if let Some(aggregate) = aggregates.next() {
             let typ = reduction_type(&aggregate.func);
-            aggregates_list.push(aggregate);
+            aggregates_list.push(LirAggregateExpr::from_mir(aggregate));
 
             for aggregate in aggregates {
                 assert_eq!(
@@ -348,7 +435,7 @@ impl ReducePlan {
                     reduction_type(&aggregate.func),
                     "Multiple reduction types detected"
                 );
-                aggregates_list.push(aggregate);
+                aggregates_list.push(LirAggregateExpr::from_mir(aggregate));
             }
             ReducePlan::create_inner(
                 typ,
@@ -369,7 +456,7 @@ impl ReducePlan {
     /// actually of the correct reduction type.
     fn create_inner(
         typ: ReductionType,
-        aggregates_list: Vec<AggregateExpr>,
+        aggregates_list: Vec<LirAggregateExpr>,
         monotonic: bool,
         expected_group_size: Option<u64>,
         fused_unnest_list: bool,
@@ -381,6 +468,7 @@ impl ReducePlan {
             aggregates_list.len() > 0,
             "error: tried to render a reduce dataflow with no aggregates"
         );
+
         match typ {
             ReductionType::Accumulable => {
                 let mut simple_aggrs = vec![];
@@ -441,7 +529,7 @@ impl ReducePlan {
     /// that key a single arrangement.
     pub fn keys(&self, key_arity: usize, arity: usize) -> AvailableCollections {
         let key = (0..key_arity)
-            .map(MirScalarExpr::column)
+            .map(LirScalarExpr::column)
             .collect::<Vec<_>>();
         let (permutation, thinning) = permutation_for_arrangement(&key, arity);
         AvailableCollections::new_arranged(vec![(key, permutation, thinning)])
@@ -516,9 +604,9 @@ impl ReducePlan {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct KeyValPlan {
     /// Extracts the columns used as the key.
-    pub key_plan: mz_expr::SafeMfpPlan,
+    pub key_plan: mz_expr::SafeMfpPlan<LirScalarExpr>,
     /// Extracts the columns used to feed the aggregations.
-    pub val_plan: mz_expr::SafeMfpPlan,
+    pub val_plan: mz_expr::SafeMfpPlan<LirScalarExpr>,
 }
 
 impl KeyValPlan {
@@ -546,9 +634,13 @@ impl KeyValPlan {
         }
 
         key_mfp.optimize();
-        let key_plan = key_mfp.into_plan().unwrap().into_nontemporal().unwrap();
+        let key_plan = crate::plan::scalar::safe_mfp_mir_to_lir(
+            key_mfp.into_plan().unwrap().into_nontemporal().unwrap(),
+        );
         val_mfp.optimize();
-        let val_plan = val_mfp.into_plan().unwrap().into_nontemporal().unwrap();
+        let val_plan = crate::plan::scalar::safe_mfp_mir_to_lir(
+            val_mfp.into_plan().unwrap().into_nontemporal().unwrap(),
+        );
 
         Self { key_plan, val_plan }
     }

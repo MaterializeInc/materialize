@@ -114,6 +114,9 @@ struct Args {
     /// Whether we skip coordinator and catalog consistency checks.
     #[clap(long, default_value_t = ConsistencyCheckLevel::default(), value_enum)]
     consistency_checks: ConsistencyCheckLevel,
+    /// How long a single consistency check may take before the test file fails.
+    #[clap(long, value_parser = humantime::parse_duration, default_value = "10min", value_name = "DURATION")]
+    consistency_check_timeout: Duration,
     /// Whether to run statement logging consistency checks (adds a few seconds at the end of every
     /// test file).
     #[clap(long, action = ArgAction::SetTrue)]
@@ -274,6 +277,20 @@ struct Args {
     )]
     aws_secret_access_key: String,
 
+    // === Fivetran options. ===
+    /// Address of the Fivetran Destination that testdrive will interact with.
+    #[clap(
+        long,
+        value_name = "FIVETRAN_DESTINATION_URL",
+        default_value = "http://localhost:6874"
+    )]
+    fivetran_destination_url: String,
+    #[clap(
+        long,
+        value_name = "FIVETRAN_DESTINATION_FILES_PATH",
+        default_value = "/tmp"
+    )]
+    fivetran_destination_files_path: String,
     /// A map from size name to resource allocations for cluster replicas.
     #[clap(long, env = "CLUSTER_REPLICA_SIZES")]
     cluster_replica_sizes: String,
@@ -285,6 +302,14 @@ struct Args {
 #[tokio::main]
 async fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
+
+    // Pin the rustls crypto provider to aws-lc-rs. The LaunchDarkly SDK uses
+    // hyper-rustls, so building its client resolves the process-default rustls
+    // provider. The workspace also links rustls' `ring` feature (pulled by
+    // other hyper-rustls chains), and with both provider features enabled
+    // rustls cannot choose a default on its own and panics. The call is
+    // idempotent, so ignore the result.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from(args.log_filter))
@@ -413,6 +438,7 @@ async fn main() {
         initial_backoff: args.initial_backoff,
         backoff_factor: args.backoff_factor,
         consistency_checks: args.consistency_checks,
+        consistency_check_timeout: args.consistency_check_timeout,
         check_statement_logging: args.check_statement_logging,
         rewrite_results: args.rewrite_results,
 
@@ -446,6 +472,10 @@ async fn main() {
         // === AWS options. ===
         aws_config,
         aws_account,
+
+        // === Fivetran options. ===
+        fivetran_destination_url: args.fivetran_destination_url,
+        fivetran_destination_files_path: args.fivetran_destination_files_path,
     };
 
     if args.junit_report.is_some() && args.rewrite_results {

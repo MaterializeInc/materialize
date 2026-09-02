@@ -11,7 +11,6 @@ use std::fmt;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Utc};
 use mz_expr_derive::sqlfunc;
-use mz_lowertest::MzReflect;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::numeric::Numeric;
@@ -43,8 +42,7 @@ fn cast_date_to_string(a: Date) -> String {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastDateToTimestamp(pub Option<TimestampPrecision>);
 
@@ -91,8 +89,7 @@ impl fmt::Display for CastDateToTimestamp {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastDateToTimestampTz(pub Option<TimestampPrecision>);
 
@@ -139,7 +136,7 @@ pub fn extract_date_inner(units: DateTimeUnits, date: NaiveDate) -> Result<Numer
         DateTimeUnits::Millennium => Ok(Numeric::from(date.millennium())),
         DateTimeUnits::Century => Ok(Numeric::from(date.century())),
         DateTimeUnits::Decade => Ok(Numeric::from(date.decade())),
-        DateTimeUnits::Year => Ok(Numeric::from(date.year())),
+        DateTimeUnits::Year => Ok(Numeric::from(date.extract_year())),
         DateTimeUnits::Quarter => Ok(Numeric::from(date.quarter())),
         DateTimeUnits::Week => Ok(Numeric::from(date.iso_week_number())),
         DateTimeUnits::Month => Ok(Numeric::from(date.month())),
@@ -174,8 +171,7 @@ pub fn extract_date_inner(units: DateTimeUnits, date: NaiveDate) -> Result<Numer
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ExtractDate(pub DateTimeUnits);
 

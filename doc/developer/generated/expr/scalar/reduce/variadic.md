@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/reduce/variadic.rs
-revision: ed05cf7584
+revision: 90083b87c2
 ---
 
 # mz-expr::scalar::reduce::variadic
@@ -28,7 +28,7 @@ If the function is `Coalesce`, control is handed off to `simplify_coalesce` and 
 
 - **Constant folding** — if all arguments are literals, evaluate and replace with a literal.
 - **Null propagation** — if the function propagates nulls and any argument is `NULL`, replace with a typed `NULL`.
-- **Error propagation** — if any argument is a literal error, propagate that error.
+- **Error propagation** — if any argument is a literal error, replace the call with that error. (`Coalesce`, which is non-strict, already bailed out earlier.)
 
 ### Per-function specializations
 

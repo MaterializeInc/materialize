@@ -308,13 +308,20 @@ def get_baseline_and_other_endpoints(
     use_balancerd = args.use_balancerd
     baseline_endpoint: Endpoint | None = None
     other_endpoints: list[Endpoint] = []
-    for i, specified_target in enumerate(args.target):
+    # --materialize-url is appended once per remote target, so index it by the
+    # number of remote targets seen so far rather than the overall target
+    # position (which is wrong as soon as targets are mixed, e.g. HEAD + remote).
+    remote_target_index = 0
+    for specified_target in args.target:
         endpoint: Endpoint | None = None
 
         if specified_target == TARGET_MATERIALIZE_LOCAL:
             endpoint = MaterializeLocal()
         elif specified_target == TARGET_MATERIALIZE_REMOTE:
-            endpoint = MaterializeRemote(materialize_url=args.materialize_url[i])
+            endpoint = MaterializeRemote(
+                materialize_url=args.materialize_url[remote_target_index]
+            )
+            remote_target_index += 1
         elif specified_target == TARGET_POSTGRES:
             endpoint = PostgresContainer(composition=c)
         elif specified_target == TARGET_HEAD:
@@ -330,6 +337,21 @@ def get_baseline_and_other_endpoints(
                 resolved_target = resolve_ancestor_image_tag(
                     ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS
                 )
+
+                if resolved_target is None:
+                    # No comparable ancestor image exists. The common case is
+                    # an accepted regression that landed on main and demands a
+                    # baseline newer than any published release (see
+                    # ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS); only
+                    # release images share HEAD's build profile, so there is
+                    # nothing fair to measure against until that release ships.
+                    # Drop the target and keep benchmarking the remaining ones,
+                    # so the measurements still reach test analytics.
+                    print(
+                        f"Skipping target {specified_target}: no ancestor image could be resolved"
+                    )
+                    continue
+
             endpoint = MaterializeContainer(
                 composition=c,
                 specified_target=specified_target,
@@ -377,7 +399,7 @@ def report_regression_result(
     outcome: ComparisonOutcome,
 ) -> None:
     if baseline_endpoint is None:
-        print("No regression detection because '--regression-against' param is not set")
+        print("No regression detection because there is no baseline endpoint")
         return
 
     baseline_desc = endpoint_name_to_description(baseline_endpoint.try_load_version())
@@ -403,7 +425,7 @@ def report_assessment(regression_assessment: RegressionAssessment):
     print("+++ Assessment of regressions")
 
     if not regression_assessment.has_comparison_target():
-        print("No comparison was performed because not baseline was specified")
+        print("No comparison was performed because there is no baseline endpoint")
         return
 
     assert regression_assessment.baseline_endpoint is not None

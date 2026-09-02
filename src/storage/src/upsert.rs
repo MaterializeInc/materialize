@@ -55,7 +55,7 @@ use types::{
     upsert_bincode_opts,
 };
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fuzzing"))]
 pub mod memory;
 pub(crate) mod rocksdb;
 // TODO(aljoscha): Move next to upsert module, rename to upsert_types.
@@ -194,7 +194,7 @@ mod columnar_upsert_key {
         const SLICE_COUNT: usize = 1;
         #[inline(always)]
         fn get_byte_slice(&self, index: usize) -> (u64, &'a [u8]) {
-            debug_assert!(index < Self::SLICE_COUNT);
+            mz_ore::soft_assert_no_log!(index < Self::SLICE_COUNT);
             (
                 u64::cast_from(align_of::<UpsertKey>()),
                 bytemuck::cast_slice(self.0),
@@ -296,7 +296,27 @@ macro_rules! upsert_source_time_unit {
 }
 upsert_source_time_unit!(GtidPartition, Lsn);
 
-/// Pager for the upsert-v2 source stash.
+/// Storage's leg of the process-wide chunk spill gate, used by the chunked
+/// upsert-v2 stash flavor.
+///
+/// In that flavor the source stash and feedback arrangement spill through the
+/// process buffer pool ([`mz_timely_util::columnar::chunk`]): committed chunk
+/// bodies land in the pool once compute's config handler has installed and
+/// budgeted it (storage and compute run in the same `clusterd` process).
+///
+/// The gate is process-wide with one leg per subsystem, and chunks spill
+/// while either leg is set. Storage sets its leg from
+/// `enable_upsert_paged_spill`, so that flag alone cannot veto spilling
+/// enabled by compute's leg. The gate is consulted at every chunk commit, so
+/// flips apply to running dataflows.
+pub mod upsert_stash_spill {
+    /// Enable or disable spilling of upsert chunk bodies to the buffer pool.
+    pub fn set_enabled(enabled: bool) {
+        mz_timely_util::columnar::chunk::set_storage_spill_enabled(enabled);
+    }
+}
+
+/// Pager for the paged upsert-v2 stash flavor.
 ///
 /// This draws from the same process-wide [`TieredPolicy`] budget pool as the
 /// compute column-paged batcher — there is one budget and one underlying
@@ -305,6 +325,9 @@ upsert_source_time_unit!(GtidPartition, Lsn);
 /// `enable_column_paged_batcher_spill`. The shared pool's budget / backend /
 /// codec are configured by compute's `apply_tiered_config` (storage and compute
 /// run in the same `clusterd` process).
+///
+/// Flipping the flag takes effect on dataflows created after the change: the
+/// paged flavor captures the pager once at operator construction.
 ///
 /// [`TieredPolicy`]: mz_timely_util::column_pager::policy::TieredPolicy
 pub mod upsert_stash_pager {
@@ -554,7 +577,9 @@ where
     let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
     let rocksdb_instance_metrics = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
 
-    let env = instance_context.rocksdb_env.clone();
+    let env = instance_context
+        .rocksdb_env()
+        .expect("failed to create rocksdb env");
 
     // A closure that will initialize and return a configured RocksDB instance
     let rocksdb_init_fn = move || async move {
@@ -617,6 +642,7 @@ pub(crate) fn upsert_v2<'scope, T, FromTime>(
     previous_token: Option<Vec<PressOnDropButton>>,
     source_config: crate::source::SourceExportCreationConfig,
     backpressure_metrics: Option<BackpressureMetrics>,
+    stash_flavor: upsert_continual_feedback_v2::UpsertStashFlavor,
 ) -> (
     VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
     StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
@@ -643,10 +669,12 @@ where
     tracing::info!(
         worker_id = %source_config.worker_id,
         source_id = %source_config.id,
+        ?stash_flavor,
         "rendering upsert source (btreemap backend)"
     );
 
     upsert_continual_feedback_v2::upsert_inner(
+        stash_flavor,
         thin_input,
         upsert_envelope.key_indices,
         resume_upper,
@@ -967,6 +995,76 @@ async fn drain_staged_input<S, T, FromTime, E>(
                 .await;
         }
     }
+}
+
+/// A no-op-ish error emitter for the fuzzing hook. With the in-memory backend
+/// and the well-formed inputs the fuzzer builds, `multi_get`/`multi_put` never
+/// error, so reaching this is itself a finding.
+#[cfg(feature = "fuzzing")]
+struct PanicErrorEmitter;
+
+#[cfg(feature = "fuzzing")]
+#[async_trait::async_trait(?Send)]
+impl<T> UpsertErrorEmitter<T> for PanicErrorEmitter {
+    async fn emit(&mut self, context: String, e: anyhow::Error) {
+        panic!("unexpected upsert state error during fuzzing: {context}: {e}");
+    }
+}
+
+/// Fuzzing hook: run a single `drain_staged_input` over `commands` (each a
+/// `(timestamp, key, order, value)`, where `value == None` is a delete) against
+/// a fresh empty in-memory state, draining everything strictly below
+/// `drain_to`. Returns the emitted output updates and the final finalized value
+/// of each key in `all_keys`. Exposed only for fuzzing. Not a stable public
+/// API.
+#[cfg(feature = "fuzzing")]
+pub async fn fuzz_drain_staged_input(
+    parts: &types::FuzzUpsertParts,
+    source_config: &crate::source::SourceExportCreationConfig,
+    commands: Vec<(u64, UpsertKey, u64, Option<UpsertValue>)>,
+    drain_to: u64,
+    all_keys: &[UpsertKey],
+) -> (Vec<(UpsertValue, u64, Diff)>, Vec<Option<UpsertValue>>) {
+    let mut state = parts.state();
+    let mut stash: Vec<(u64, UpsertKey, Reverse<u64>, Option<UpsertValue>)> = commands
+        .into_iter()
+        .map(|(ts, key, order, value)| (ts, key, Reverse(order), value))
+        .collect();
+    let mut commands_state = indexmap::IndexMap::new();
+    let mut output = Vec::new();
+    let mut multi_get_scratch = Vec::new();
+    let mut emitter = PanicErrorEmitter;
+
+    drain_staged_input(
+        &mut stash,
+        &mut commands_state,
+        &mut output,
+        &mut multi_get_scratch,
+        DrainStyle::ToUpper(&Antichain::from_elem(drain_to)),
+        &mut emitter,
+        &mut state,
+        source_config,
+    )
+    .await;
+
+    let bincode_opts = types::upsert_bincode_opts();
+    let mut results = vec![types::UpsertValueAndSize::default(); all_keys.len()];
+    state
+        .multi_get(all_keys.iter().copied(), results.iter_mut())
+        .await
+        .expect("multi_get in fuzz hook should not error");
+    let final_state = results
+        .into_iter()
+        .map(|r| match r.value {
+            None => None,
+            Some(mut sv) => {
+                sv.ensure_decoded(bincode_opts, GlobalId::User(0), None);
+                sv.into_decoded().finalized
+            }
+        })
+        .collect();
+
+    (output, final_state)
 }
 
 // Created a struct to hold the configs for upserts.

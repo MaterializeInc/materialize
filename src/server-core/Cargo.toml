@@ -17,7 +17,6 @@ openssl.workspace = true
 schemars.workspace = true
 scopeguard.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 socket2.workspace = true
 tokio-stream.workspace = true
 proxy-header.workspace = true
@@ -28,6 +27,9 @@ mz-ore = { path = "../ore", default-features = false, features = ["async", "netw
 tokio.workspace = true
 tokio-metrics.workspace = true
 uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [features]
 default = []

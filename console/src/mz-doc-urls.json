@@ -228,6 +228,7 @@
   "/docs/ingest-data/postgres/faq/": "https://materialize.com/docs/ingest-data/postgres/faq/",
   "/docs/sql/fetch/": "https://materialize.com/docs/sql/fetch/",
   "/docs/transform-data/idiomatic-materialize-sql/first-value/": "https://materialize.com/docs/transform-data/idiomatic-materialize-sql/first-value/",
+  "/docs/ingest-data/fivetran/": "https://materialize.com/docs/ingest-data/fivetran/",
   "/docs/sql/types/float/": "https://materialize.com/docs/sql/types/float/",
   "/docs/integrations/fdw/": "https://materialize.com/docs/integrations/fdw/",
   "/docs/free-trial-faqs/": "https://materialize.com/docs/free-trial-faqs/",

@@ -50,13 +50,22 @@ export const buildMaterializationLagQuery = ({
             .as("objects"),
         )
         .leftJoin(
-          qb.selectFrom("mz_hydration_statuses").selectAll().as("hs"),
+          // Scope to the requested objects. Otherwise this scans hydration for
+          // every object in the environment and only the join discards the rest.
+          qb
+            .selectFrom("mz_hydration_statuses")
+            .selectAll()
+            .where("object_id", "in", objectIds)
+            .as("hs"),
           "hs.object_id",
           "objects.id",
         )
         .leftJoin(
           // Get the latest lag values for each object.
           // We use a temporal filter of 5 minutes because the lag values for all objects are updated every minute.
+          // Scope to the requested objects so the per-object Top-1 reads via the
+          // object_id index instead of computing latest-lag for every object in
+          // the environment and discarding all but these in the join.
           qb
             .selectFrom("mz_wallclock_global_lag_recent_history")
             .select(["object_id", "lag"])
@@ -68,6 +77,7 @@ export const buildMaterializationLagQuery = ({
               ">=",
               sql<Date>`mz_now()`,
             )
+            .where("object_id", "in", objectIds)
             .as("ml"),
           "ml.object_id",
           "objects.id",

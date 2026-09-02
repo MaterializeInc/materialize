@@ -76,16 +76,15 @@ pub fn extract_avro_header(buf: &[u8]) -> Result<(Uuid, &[u8])> {
     Ok((uuid, &buf[HEADER_LEN..]))
 }
 
-/// Frame `payload` with the Glue Avro header, producing a buffer suitable
-/// to publish to Kafka. The header is laid down using the uncompressed
-/// framing (`compression = 0x00`).
-pub fn prepend_avro_header(schema_version_id: Uuid, payload: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(HEADER_LEN + payload.len());
-    out.push(HEADER_VERSION);
-    out.push(COMPRESSION_NONE);
-    out.extend_from_slice(schema_version_id.as_bytes());
-    out.extend_from_slice(payload);
-    out
+/// Write the Glue Avro header to `buf`, using the uncompressed framing
+/// (`compression = 0x00`). Callers append the serialized record payload
+/// directly after the header, so the framed record needs only a single
+/// allocation.
+pub fn write_avro_header(buf: &mut Vec<u8>, schema_version_id: Uuid) {
+    buf.reserve(HEADER_LEN);
+    buf.push(HEADER_VERSION);
+    buf.push(COMPRESSION_NONE);
+    buf.extend_from_slice(schema_version_id.as_bytes());
 }
 
 #[cfg(test)]
@@ -97,11 +96,18 @@ mod tests {
         Uuid::parse_str("12345678-1234-5678-1234-567812345678").unwrap()
     }
 
+    fn framed(uuid: Uuid, payload: &[u8]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        write_avro_header(&mut buf, uuid);
+        buf.extend_from_slice(payload);
+        buf
+    }
+
     #[mz_ore::test]
     fn roundtrip() {
         let uuid = fixture_uuid();
         let payload = b"avro-bytes-here";
-        let framed = prepend_avro_header(uuid, payload);
+        let framed = framed(uuid, payload);
         assert_eq!(framed.len(), HEADER_LEN + payload.len());
         let (parsed_uuid, rest) = extract_avro_header(&framed).unwrap();
         assert_eq!(parsed_uuid, uuid);
@@ -111,7 +117,7 @@ mod tests {
     #[mz_ore::test]
     fn header_byte_layout() {
         let uuid = fixture_uuid();
-        let framed = prepend_avro_header(uuid, &[]);
+        let framed = framed(uuid, &[]);
         assert_eq!(framed[0], HEADER_VERSION);
         assert_eq!(framed[1], COMPRESSION_NONE);
         assert_eq!(&framed[2..HEADER_LEN], uuid.as_bytes());
@@ -127,7 +133,7 @@ mod tests {
 
     #[mz_ore::test]
     fn rejects_wrong_header_version() {
-        let mut buf = prepend_avro_header(fixture_uuid(), b"payload");
+        let mut buf = framed(fixture_uuid(), b"payload");
         buf[0] = 0x02;
         let err = extract_avro_header(&buf).unwrap_err();
         assert!(
@@ -139,7 +145,7 @@ mod tests {
 
     #[mz_ore::test]
     fn rejects_compressed_payload() {
-        let mut buf = prepend_avro_header(fixture_uuid(), b"payload");
+        let mut buf = framed(fixture_uuid(), b"payload");
         buf[1] = 0x05; // zlib
         let err = extract_avro_header(&buf).unwrap_err();
         assert!(
@@ -152,7 +158,7 @@ mod tests {
     #[mz_ore::test]
     fn empty_payload_is_legal() {
         let uuid = fixture_uuid();
-        let framed = prepend_avro_header(uuid, &[]);
+        let framed = framed(uuid, &[]);
         let (parsed_uuid, rest) = extract_avro_header(&framed).unwrap();
         assert_eq!(parsed_uuid, uuid);
         assert!(rest.is_empty());

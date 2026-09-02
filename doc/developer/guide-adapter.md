@@ -1,13 +1,70 @@
 # Adapter Guide
 
-General guidance for working on the adapter layer (`src/adapter/`), the
-coordinator, pgwire frontend, and related crates. This is a living document -
-add to it as you discover invariants, pitfalls, or non-obvious design
-decisions.
+General guidance for working on and reviewing the adapter layer
+(`src/adapter/`), the coordinator, pgwire frontend, and related crates. This is
+a living document: add to it as you discover invariants, pitfalls, or
+non-obvious design decisions.
 
 ## Architecture & Key Concepts
 
-<!-- TODO: fill in -->
+### Catalog changes and their implications
+
+A DDL or system change flows through three conceptual phases:
+
+1. The sequencer (`src/adapter/src/coord/sequencer/`) decides *what to write
+   durably*. It builds a `Vec<catalog::Op>` and calls one of the
+   `catalog_transact*` entry points. It should not reach into controllers or
+   mutate downstream in-memory state directly.
+2. `catalog_transact` (via `catalog_transact_inner`) commits the ops durably and
+   applies them to the in-memory `CatalogState`, producing the committed catalog
+   diff.
+3. The implications phase (`apply_catalog_implications` in
+   `src/adapter/src/coord/catalog_implications.rs`) derives downstream effects
+   from that committed diff and applies them: in-memory coordinator state,
+   compute/storage controller commands, builtin-table updates. The flow is
+   `StateUpdateKind -> ParsedStateUpdate -> CatalogImplication`.
+
+The guiding principle: the sequencer decides durable writes, and applying the
+catalog implications is when we update everything downstream of those writes.
+Implications are derived from the committed diff, not from the input ops and not
+from sequencer closures.
+
+Why derive from the diff? So a side effect fires identically whether this node
+applied the change or whether it is following a catalog change made by another
+writer. This is the same distributed stance as "No local-only assumptions"
+below, and a more scalable multi-`environmentd` coordinator depends on it (PR
+#29673, `database-issues#8488`). No code applies another node's diff today, but
+the framework is built so that capability is achievable.
+
+Two contracts on the implications phase:
+
+- It is treated as infallible. `catalog_transact_with_context` does
+  `.expect("cannot fail to apply catalog implications")`, because a committed
+  catalog with unapplied downstream effects cannot be recovered in-process and
+  is left to restart and bootstrap.
+- It requires consolidated updates: at most one addition and one retraction per
+  item. See the `apply_catalog_implications` doc comment.
+
+#### Legacy paths being migrated away from
+
+The migration into the implications framework is incremental and unfinished.
+These older patterns still exist and are legacy. Do not add new side-effect
+logic to them. Extend the implications framework instead.
+
+- `catalog_transact_with_side_effects` runs a sequencer-provided side-effect
+  closure. It carries a `TODO(aljoscha)` to migrate its call sites to
+  `catalog_transact_with_context`.
+- The op-scan plus the block guarded by "No error returns are allowed after this
+  point" in `catalog_transact_inner` (for example `update_compute_config` /
+  `update_storage_config`) is keyed off the input ops, so it cannot fire for a
+  follower observing a committed diff. It is not where new controller pushes
+  belong, even though existing system-config pushes happen there today.
+- Several `StateUpdateKind`s are not yet represented as implications.
+  `parse_state_update` returns `None` for them via its catch-all arm (this
+  covers the environment-wide and cluster-scoped system-config kinds, among
+  others; the replica-scoped kind is represented as a `ParsedStateUpdateKind`).
+  Representing a new kind may require extending `ParsedStateUpdate` /
+  `ParsedStateUpdateKind` first.
 
 ## Correctness Invariants
 
@@ -34,12 +91,17 @@ This means:
 
 #### Why the batching oracle is correct
 
-`BatchingTimestampOracle` collects multiple `read_ts` requests that arrive
-concurrently and serves them all with a single call to the backing oracle.
-Because the backing oracle is called *during* all of their real-time intervals
-(after all requests arrived, before any have returned), the returned timestamp
-is within bounds for every request. Batching can only push timestamps later,
-never earlier. See the comment on the `BatchingTimestampOracle` struct.
+`BatchingTimestampOracle` drains the queued `read_ts` requests and serves each
+collected batch with one call to the backing oracle. That call occurs during
+every collected request's real-time interval, after each request arrived and
+before any returns. Its timestamp is therefore within bounds for every request.
+Batching can only push timestamps later, never earlier.
+
+Coalescing is opportunistic. A request that overlaps a backing call but arrives
+after the queue is drained waits for a later call. A serial await loop
+guarantees that its calls cannot coalesce. When exactly one round trip is
+required, use one explicit shared call only if it occurs within every
+operation's real-time bounds and satisfies every caller's contract.
 
 #### Why caching an oracle result is not correct
 
@@ -118,6 +180,123 @@ The current implementation rejects bounded-staleness queries whose timeline
 is not `EpochMilliseconds`, in `determine_timestamp_for_inner`. The freshness
 math is currently scoped to that timeline.
 
+### System-session replanning does not grant authority
+
+Some DDL paths reconstruct and mutate a stored definition by replanning it with
+a system session. The initial authorization check only sees dependencies in the
+submitted statement, so it cannot authorize retained dependencies discovered
+during replanning. Before reading secrets, performing external I/O, or
+persisting the result, authorize the final dependency set against the invoking
+session. Check the final set rather than the union of old and new dependencies,
+so a caller can remove a dependency they are no longer authorized to use.
+
+This rule applies when reconstructing or mutating a definition. Executing a
+fixed connection does not authorize its dependencies separately. For example,
+standalone `VALIDATE CONNECTION` is delegated by `USAGE` on the connection and
+its containing schema, without requiring `USAGE` on referenced secrets.
+
+### The catalog is the source of truth for state that gets rebuilt from it
+
+If a reconcile or refresh path rebuilds downstream state (for example a
+controller's per-replica configuration) from the catalog working copy, then the
+values it must preserve have to already be in that working copy. Do not leave
+authoritative state only in a controller or in-process structure while a
+working-copy-driven rebuild can run. The two diverge, and the next rebuild
+silently clears the out-of-band state.
+
+Running the side effect inside the implications phase is necessary but not
+sufficient. If an implication sources a value from a fresh evaluation and pushes
+it straight to a controller without that value also being in the catalog (and
+therefore in the diff a rebuild reads), a later rebuild from the working copy
+will still drop it.
+
+Concrete shape of the bug. A create-time implication evaluates a per-replica
+controller override and pushes it into a controller's per-replica layer, but
+does not write it into the catalog working copy. A later reconcile rebuilds the
+complete per-replica map from the working copy, which lacks the new replica, and
+the controller clears every replica absent from that map, reverting the
+override. The override only reappears on the next periodic sync that reconciles
+the replica into the working copy. For render-frozen settings that window is a
+correctness gap, not just a delay. The fix is to make the catalog the source of
+truth: write the value through the create transaction so the diff, and any later
+rebuild, include it.
+
+### A compare-and-append must be enforced by the transaction, not by a check before it
+
+A decision computed against a snapshot of catalog state and applied later (for
+example a background task that reads state, computes ops off the coordinator
+loop, then submits them for the loop to transact) must carry the precondition it
+was derived from, and that precondition must be enforced as part of the same
+transaction that applies it. Reading the current in-memory catalog, comparing it
+to the expected state, and then calling `catalog_transact` is not a
+compare-and-append. It is a time-of-check to time-of-use gap.
+
+- It is safe today only by the fragile accident that the coordinator loop does
+  not yield between the check and the durable commit. Any await later inserted
+  between them, or any move of the check off the coordinator loop, reopens
+  the race.
+- It does not hold across writers. Another `environmentd` that commits a
+  conflicting change to the durable store between this node's in-memory check and
+  its durable commit is not detected. The durable layer does not re-validate a
+  per-object precondition, so the stale write lands and clobbers. This is the
+  same distributed stance as "No local-only assumptions" above.
+
+If you need conflict detection, evaluate the precondition atomically with the
+commit, a real compare-and-append against the durable store. A check that merely
+precedes the write on the coordinator loop is not that, even when it reads the
+right state.
+
+### Catalog mutations must bump the transient revision or stay invisible
+
+Sessions cache catalog snapshots and reuse them while
+`Catalog::transient_revision` is unchanged (see
+`doc/developer/design/20260709_session_catalog_snapshot_cache.md`). Only
+`Catalog::transact` bumps the revision. So when adding a new way to mutate
+the Coordinator's in-memory catalog, either route it through `transact` or
+keep the change invisible to session-visible catalog reads (name resolution,
+planning). Otherwise sessions serve stale catalogs where today they would see
+the change.
+
+### Group commits and generation handover
+
+At runtime, one group committer per `environmentd` serializes txns-shard operations:
+
+```text
+append / register / forget -> FIFO group committer -> table-write worker -> txns shard
+```
+
+FIFO ordering prevents an append from overtaking table registration or forgetting. Bootstrap is
+the only local exception because it runs before the process serves.
+
+Each runtime command uses this protocol:
+
+```text
+shared oracle write timestamp -> advance catalog upper -> compare-and-append txns shard
+                                                       | conflict -> retry
+                                                       ` success  -> apply write to oracle
+```
+
+The successful timestamp is applied to the oracle only after the txns write is durable.
+
+On `environmentd` bootstrap in read/write mode:
+
+```text
+catalog fence -> set up and register tables -> txns write advances table uppers
+              -> snapshot and reset system tables -> start serving
+```
+
+The snapshots cannot complete until the txns write has advanced the table uppers. Therefore:
+
+```text
+pre-fence write before barrier -> ordered before the snapshot
+pre-fence write after barrier  -> `InvalidUppers` -> retry at a fresh timestamp
+                                -> catalog advance observes the fence -> old generation exits
+```
+
+A system-table write before the barrier is included in the reset. A user-table write remains
+visible to later reads. The retry's `advance_to` is above the stale catalog handle's cached upper,
+so its catalog check is durable. An `advance_upper` no-op only checks an already-observed fence.
+
 ## Rejected Optimizations
 
 This section records specific optimizations that have been attempted and found
@@ -148,3 +327,32 @@ real, but the solution must maintain strict serializability. Correct alternative
 might include: reducing oracle round-trip latency, colocating the oracle,
 using the batching oracle's existing mechanism to serve more callers per batch,
 or relaxing the isolation level for queries that opt in.
+
+### Session records in the durable catalog
+
+**What:** Write a durable catalog record (`StateUpdateKind::Session`) on every
+session connect and delete it on close, so that `mz_sessions` becomes a
+materialized view over `mz_catalog_raw` and cleanup logic has a durable
+session inventory.
+
+**Why it was rejected:** Connection lifecycle events are far more frequent
+than DDL, and the catalog shard has a single writer. Every connect became a
+timestamp oracle round-trip plus a compare-and-append against the catalog
+shard, serialized on the coordinator loop. Startup could not respond before
+the record was durable (otherwise temp DDL could race its own session
+record), so connect latency was coupled to catalog commit latency, and
+connection churn queued real DDL behind session commits. Batching session ops
+into shared catalog transactions and bounding the flush rate reduced the
+commit count but kept both couplings.
+
+The durable records also bought nothing for garbage collection in the
+single-envd world. Cleanup at promotion deletes all ephemeral rows, justified
+by the deploy-generation fence alone, and graceful session close knows the
+session UUID from in-memory connection metadata.
+
+**The general lesson:** high-frequency per-connection state belongs in builtin
+tables written through group commit, which is fire-and-forget from the
+coordinator loop, batched with all other builtin writes, and never touches
+the catalog shard. Reserve durable catalog writes for state that must be
+transactional with DDL. See
+`doc/developer/design/20260706_sql_150_durable_temporary_objects.md`.

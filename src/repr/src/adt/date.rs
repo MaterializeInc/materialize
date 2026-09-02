@@ -54,7 +54,11 @@ impl RustType<ProtoDate> for Date {
     }
 
     fn from_proto(proto: ProtoDate) -> Result<Self, TryFromProtoError> {
-        Ok(Date { days: proto.days })
+        // Go through `from_pg_epoch` so out-of-range days are rejected here.
+        // Pushing them into a `Row` succeeds, but `read_datum` would later
+        // panic when reconstructing the date.
+        Date::from_pg_epoch(proto.days)
+            .map_err(|err| TryFromProtoError::InvalidFieldError(err.to_string()))
     }
 }
 

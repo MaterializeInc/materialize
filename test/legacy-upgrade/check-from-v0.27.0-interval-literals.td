@@ -9,10 +9,10 @@
 
 
 > SELECT * FROM postgres_interval1;
-"1 year 2 months 3 days 14:42:07.8"
+"1 year 2 mons 3 days 14:42:07.8"
 
 > SELECT * FROM postgres_interval2;
-"1 year 2 months 3 days 14:42:07.8"
+"1 year 2 mons 3 days 14:42:07.8"
 
 > SELECT * FROM interval_second;
 00:02:03
@@ -27,7 +27,7 @@
 "123 days"
 
 > SELECT * FROM interval_month;
-"10 years 3 months"
+"10 years 3 mons"
 
 > SELECT * FROM interval_year;
 "123 years"

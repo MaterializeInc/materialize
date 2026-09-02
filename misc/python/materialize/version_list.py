@@ -109,6 +109,25 @@ def get_compatible_upgrade_from_versions() -> list[MzVersion]:
         return sorted(published_versions_within_one_major_version)
 
 
+def keep_latest_patch_per_minor(versions: list[MzVersion]) -> list[MzVersion]:
+    """Thin a version list down to the latest patch of each (major, minor).
+
+    A linear upgrade path that steps through every version grows unbounded as
+    releases accumulate, eventually exceeding the test's time budget. Keeping
+    only the latest patch of each minor preserves coverage of every minor
+    boundary, no minor is skipped, while dropping the redundant intra-minor
+    patch hops that dominate the runtime. The latest patch is the version a
+    user on that minor would actually upgrade from.
+    """
+    latest_per_minor: dict[tuple[int, int], MzVersion] = {}
+    for version in versions:
+        key = (version.major, version.minor)
+        current = latest_per_minor.get(key)
+        if current is None or version > current:
+            latest_per_minor[key] = version
+    return sorted(latest_per_minor.values())
+
+
 BAD_SELF_MANAGED_VERSIONS = {
     MzVersion.parse_mz("v0.130.0"),
     MzVersion.parse_mz("v0.130.1"),
@@ -393,6 +412,7 @@ def get_published_minor_mz_versions(
     include_filter: Callable[[MzVersion], bool] | None = None,
     exclude_current_minor_version: bool = False,
     max_version: MzVersion | None = None,
+    include_release_candidates: bool = False,
 ) -> list[MzVersion]:
     """
     Get the latest patch version for every minor version.
@@ -402,7 +422,9 @@ def get_published_minor_mz_versions(
     """
 
     # sorted in descending order
-    all_versions = get_all_mz_versions(newest_first=True)
+    all_versions = get_all_mz_versions(
+        newest_first=True, include_release_candidates=include_release_candidates
+    )
     minor_versions: dict[str, MzVersion] = {}
 
     version = MzVersion.parse_cargo()
@@ -443,6 +465,7 @@ def get_published_minor_mz_versions(
 
 def get_all_mz_versions(
     newest_first: bool = True,
+    include_release_candidates: bool = False,
 ) -> list[MzVersion]:
     """
     Get all mz versions based on git tags. Versions known to be invalid are excluded.
@@ -455,8 +478,7 @@ def get_all_mz_versions(
             version_type=MzVersion, newest_first=newest_first
         )
         if version not in INVALID_VERSIONS
-        # Exclude release candidates
-        and not version.prerelease
+        and (include_release_candidates or not version.prerelease)
     ]
 
 

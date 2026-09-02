@@ -1,6 +1,6 @@
 ---
 source: src/compute-types/src/plan/transform.rs
-revision: 82048ca795
+revision: e926ec3a86
 ---
 
 # compute-types::plan::transform

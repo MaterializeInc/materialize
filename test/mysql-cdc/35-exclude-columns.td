@@ -85,8 +85,17 @@ $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 >[version<2600700] SHOW CREATE TABLE t1;
 materialize.public.t1 "CREATE TABLE materialize.public.t1 (f1 pg_catalog.int4, f4 pg_catalog.varchar(64)) FROM SOURCE materialize.public.da (REFERENCE = public.t1) WITH (EXCLUDE COLUMNS = (f2, f3), <DETAILS>);"
 
->[version>=2600700] SHOW CREATE TABLE t1;
+>[2600700<=version<2603000] SHOW CREATE TABLE t1;
 materialize.public.t1 "CREATE TABLE materialize.public.t1 (f1 pg_catalog.int4, f4 pg_catalog.varchar(64))\nFROM SOURCE materialize.public.da (REFERENCE = public.t1)\nWITH (\n    EXCLUDE COLUMNS = (f2, f3),\n    <DETAILS>\n);"
+
+>[version>=2603000] SHOW CREATE TABLE t1;
+materialize.public.t1 "CREATE TABLE materialize.public.t1\nFROM SOURCE materialize.public.da (REFERENCE = public.t1)\nWITH (EXCLUDE COLUMNS = (f2, f3));"
+
+# Regression test for SQL-392: the full `SHOW CREATE TABLE` output (no derived
+# column list, bare `EXCLUDE COLUMNS`, `REFERENCE = ...`) must round-trip.
+>[version>=2603000] CREATE TABLE t1_roundtrip FROM SOURCE da (REFERENCE = public.t1) WITH (EXCLUDE COLUMNS = (f2, f3));
+
+>[version>=2603000] DROP TABLE t1_roundtrip;
 
 ! SELECT f2 FROM t1;
 contains:column "f2" does not exist

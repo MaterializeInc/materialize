@@ -16,6 +16,7 @@ import random
 import time
 
 from materialize import buildkite
+from materialize.data_ingest import definition
 from materialize.data_ingest.executor import (
     KafkaExecutor,
     MySqlExecutor,
@@ -115,8 +116,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "sql-server",
     )
 
-    # TODO: Reenable KafkaRoundtripExecutor when database-issues#8657 is fixed
-    # TODO: Reenable SqlServerExecutor when database-issues#9618 is fixed
+    # TODO: Reenable KafkaRoundtripExecutor when https://linear.app/materializeinc/issue/SS-303 is fixed
+    # TODO: Reenable SqlServerExecutor when https://linear.app/materializeinc/issue/SS-291 is fixed
     executor_classes = [MySqlExecutor, KafkaExecutor]
 
     with c.override(
@@ -191,6 +192,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         for i, workload_class in enumerate(workloads):
             random.seed(args.seed)
+            # Row values come from a separate rng, seed it too so that runs
+            # with the same seed are fully reproducible.
+            definition.rng.seed(args.seed)
             print(f"--- Testing workload {workload_class.__name__}")
             workload = workload_class(args.azurite, c, mz_service, deploy_generation)
             execute_workload(

@@ -16,7 +16,6 @@ aws-credential-types.workspace = true
 aws-sigv4.workspace = true
 aws-types.workspace = true
 chrono.workspace = true
-indexmap.workspace = true
 itertools.workspace = true
 maplit.workspace = true
 mz-cloud-resources = { path = "../cloud-resources" }
@@ -36,7 +35,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 url.workspace = true
-uuid = { workspace = true, features = ["v4"] }
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
@@ -51,9 +49,3 @@ mz-mysql-util = { path = ".", features = ["proptest"] }
 proptest.workspace = true
 proptest-derive.workspace = true
 tokio.workspace = true
-
-[package.metadata.cargo-udeps.ignore]
-# The self-dep above activates the `proptest` feature for tests so that
-# `cfg(test)`-gated `Arbitrary` derives can find `mz-repr`'s proptest impls.
-# cargo-udeps doesn't recognize feature-activation as usage.
-development = ["mz-mysql-util"]

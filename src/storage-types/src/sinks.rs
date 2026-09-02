@@ -186,6 +186,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<StorageSinkConnection, R>
 
 impl<C: ConnectionAccess> StorageSinkConnection<C> {
     /// returns an option to not constrain ourselves in the future
+    ///
+    /// NOTE: `mz_sinks` digs this out of `create_sql` instead. Note the iceberg
+    /// case reports the catalog connection, not the optional AWS one.
     pub fn connection_id(&self) -> Option<CatalogItemId> {
         use StorageSinkConnection::*;
         match self {
@@ -198,6 +201,9 @@ impl<C: ConnectionAccess> StorageSinkConnection<C> {
     }
 
     /// Returns the name of the sink connection.
+    ///
+    /// NOTE: `mz_sinks.type` comes from `create_sql`, not from here, so the two
+    /// sets of strings have to stay identical.
     pub fn name(&self) -> &'static str {
         use StorageSinkConnection::*;
         match self {
@@ -458,6 +464,12 @@ pub enum KafkaSinkFormatType<C: ConnectionAccess = InlinedConnection> {
     Avro {
         schema: String,
         compatibility_level: Option<mz_ccsr::CompatibilityLevel>,
+        /// The registry schema name to publish under. `None` means derive it
+        /// from the topic (`{topic}-key` / `{topic}-value`). Only ever `Some`
+        /// for Glue, where the user may override the name. Confluent always
+        /// uses the topic-derived subject.
+        #[serde(default)]
+        schema_name: Option<String>,
         /// Wire-format dispatch and the registry to publish to. Sinks
         /// require a registry
         wire_format: WireFormat<C>,
@@ -479,6 +491,8 @@ impl<C: ConnectionAccess> KafkaSinkFormatType<C> {
 }
 
 impl<C: ConnectionAccess> KafkaSinkFormat<C> {
+    /// NOTE: the `mz_sinks` `format` column reimplements this in SQL, in
+    /// `parse_catalog_create_sql`. Change both or they drift.
     pub fn get_format_name<'a>(&'a self) -> Cow<'a, str> {
         // For legacy reasons, if the key-format is none or the key & value formats are
         // both the same (either avro or json), we return the value format name,
@@ -510,15 +524,18 @@ impl<C: ConnectionAccess> KafkaSinkFormat<C> {
                 KafkaSinkFormatType::Avro {
                     schema,
                     compatibility_level: _,
+                    schema_name,
                     wire_format,
                 },
                 KafkaSinkFormatType::Avro {
                     schema: other_schema,
                     compatibility_level: _,
+                    schema_name: other_schema_name,
                     wire_format: other_wire_format,
                 },
             ) => {
                 if schema != other_schema
+                    || schema_name != other_schema_name
                     || wire_format.alter_compatible(id, other_wire_format).is_err()
                 {
                     tracing::warn!(
@@ -547,15 +564,18 @@ impl<C: ConnectionAccess> KafkaSinkFormat<C> {
                 Some(KafkaSinkFormatType::Avro {
                     schema,
                     compatibility_level: _,
+                    schema_name,
                     wire_format,
                 }),
                 Some(KafkaSinkFormatType::Avro {
                     schema: other_schema,
                     compatibility_level: _,
+                    schema_name: other_schema_name,
                     wire_format: other_wire_format,
                 }),
             ) => {
                 if schema != other_schema
+                    || schema_name != other_schema_name
                     || wire_format.alter_compatible(id, other_wire_format).is_err()
                 {
                     tracing::warn!(
@@ -602,10 +622,12 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkFormatType, R>
             KafkaSinkFormatType::Avro {
                 schema,
                 compatibility_level,
+                schema_name,
                 wire_format,
             } => KafkaSinkFormatType::Avro {
                 schema,
                 compatibility_level,
+                schema_name,
                 wire_format: wire_format.into_inline_connection(r),
             },
             KafkaSinkFormatType::Json => KafkaSinkFormatType::Json,

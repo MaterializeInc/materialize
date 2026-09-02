@@ -14,7 +14,9 @@ import { Navigate } from "react-router-dom";
 
 import ErrorBox from "~/components/ErrorBox";
 import { RegionSelectorForm } from "~/components/RegionSelectorForm";
+import TextLink from "~/components/TextLink";
 import { User } from "~/external-library-wrappers/frontegg";
+import docUrls from "~/mz-doc-urls.json";
 import CreateEnvironmentButton from "~/platform/environment-not-ready/CreateEnvironmentButton";
 import useCreateEnvironment from "~/platform/environment-not-ready/useCreateEnvironment";
 import { homePagePath } from "~/platform/routeHelpers";
@@ -59,6 +61,30 @@ const EnableRegionContent = ({ user }: { user: User }) => {
         <VStack spacing={4} align="flex-start">
           <Text as="h1" textStyle="heading-lg">
             Welcome to Materialize
+          </Text>
+          <Text
+            textStyle="text-base"
+            fontSize="16px"
+            color={colors.foreground.secondary}
+          >
+            To get started, enable a region. A region is a dedicated Materialize
+            environment that runs in the cloud provider region you choose.
+          </Text>
+          <Text
+            textStyle="text-base"
+            fontSize="16px"
+            color={colors.foreground.secondary}
+          >
+            Every new region starts with a default <code>25cc</code> quickstart
+            cluster for trying out Materialize. This cluster accrues a{" "}
+            <TextLink
+              href={docUrls["/docs/administration/billing/"]}
+              target="_blank"
+              rel="noopener"
+            >
+              baseline cost
+            </TextLink>{" "}
+            from the moment the region is enabled, until you drop it.
           </Text>
           <Text
             as="h4"
@@ -159,6 +185,7 @@ const EnableRegion = ({ user }: { user: User }) => {
       w="full"
       alignItems="center"
       justifyContent="center"
+      data-testid="enable-region"
     >
       <EnableRegionContent user={user} />
     </VStack>

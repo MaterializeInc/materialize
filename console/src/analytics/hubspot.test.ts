@@ -17,8 +17,6 @@ import {
 import { getStore } from "~/jotai";
 
 import {
-  ONBOARDING_SURVEY_API_ENDPOINT,
-  submitOnboardingSurvey,
   TRACK_SIGNUP_API_ENDPOINT,
   trackSignupInHubspot,
   trackSignUpInHubspotActions,
@@ -34,22 +32,6 @@ const trackSignupSuccessHandler = http.post(TRACK_SIGNUP_API_ENDPOINT, () => {
 const trackSignupErrorHandler = http.post(TRACK_SIGNUP_API_ENDPOINT, () => {
   return HttpResponse.error();
 });
-
-const onboardingSurveySuccessHandlerSpy = vi.fn();
-
-const onboardingSurveySuccessHandler = http.post(
-  ONBOARDING_SURVEY_API_ENDPOINT,
-  () => {
-    onboardingSurveySuccessHandlerSpy();
-    return HttpResponse.json({ ok: true });
-  },
-);
-const onboardingSurveyErrorHandler = http.post(
-  ONBOARDING_SURVEY_API_ENDPOINT,
-  () => {
-    return HttpResponse.error();
-  },
-);
 
 describe("trackSignupInHubspot", () => {
   beforeEach(() => {
@@ -114,71 +96,6 @@ describe("trackSignupInHubspot", () => {
       ),
     ).rejects.toThrowError();
     expect(trackSignupSuccessHandlerSpy).not.toHaveBeenCalled();
-  });
-});
-
-describe("submitOnboardingSurvey", () => {
-  beforeEach(() => {
-    vi.resetAllMocks();
-  });
-
-  it("successfully calls the hubspot api", async () => {
-    server.use(onboardingSurveySuccessHandler);
-    await submitOnboardingSurvey({
-      email: "someuser@example.com",
-      organizationId: "9e8b1bc8-fa08-4870-a21f-22ac01cc3808",
-      userId: "some-user-id",
-      roleDescription: "Other",
-      materializeUseCase: "Other",
-      projectDescription: "Other",
-      primaryDataSource: "Other",
-    });
-    expect(onboardingSurveySuccessHandlerSpy).toHaveBeenCalledOnce();
-  });
-
-  it("retries if the the call fails initially", async () => {
-    server.use(
-      http.post(
-        TRACK_SIGNUP_API_ENDPOINT,
-        () => {
-          return HttpResponse.error();
-        },
-        { once: true },
-      ),
-      onboardingSurveySuccessHandler,
-    );
-    await submitOnboardingSurvey(
-      {
-        email: "someuser@example.com",
-        organizationId: "9e8b1bc8-fa08-4870-a21f-22ac01cc3808",
-        userId: "some-user-id",
-        roleDescription: "Other",
-        materializeUseCase: "Other",
-        projectDescription: "Other",
-        primaryDataSource: "Other",
-      },
-      { retryDelay: 10 },
-    );
-    expect(onboardingSurveySuccessHandlerSpy).toHaveBeenCalledOnce();
-  });
-
-  it("fails after 3 tries", async () => {
-    server.use(onboardingSurveyErrorHandler);
-    await expect(() =>
-      submitOnboardingSurvey(
-        {
-          email: "someuser@example.com",
-          organizationId: "9e8b1bc8-fa08-4870-a21f-22ac01cc3808",
-          userId: "some-user-id",
-          roleDescription: "Other",
-          materializeUseCase: "Other",
-          projectDescription: "Other",
-          primaryDataSource: "Other",
-        },
-        { retryDelay: 10 },
-      ),
-    ).rejects.toThrowError();
-    expect(onboardingSurveySuccessHandlerSpy).not.toHaveBeenCalled();
   });
 });
 

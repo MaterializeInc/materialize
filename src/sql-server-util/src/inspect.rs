@@ -591,6 +591,12 @@ pub async fn ensure_database_cdc_enabled(client: &mut Client) -> Result<(), SqlS
 pub async fn get_latest_restore_history_id(
     client: &mut Client,
 ) -> Result<Option<i32>, SqlServerError> {
+    // Azure SQL Database does not expose `msdb`, so restore history is
+    // unavailable and restore detection does not apply.
+    if !client.engine_edition().await?.has_restore_history() {
+        return Ok(None);
+    }
+
     static LATEST_RESTORE_ID_QUERY: &str = "SELECT TOP 1 restore_history_id \
         FROM msdb.dbo.restorehistory \
         WHERE destination_database_name = DB_NAME() \
@@ -771,10 +777,111 @@ pub async fn ensure_snapshot_isolation_enabled(client: &mut Client) -> Result<()
     Ok(())
 }
 
+/// The engine edition of a SQL Server instance, as reported by
+/// `SERVERPROPERTY('EngineEdition')`.
+///
+/// Materialize adjusts some CDC setup and monitoring behavior based on the
+/// edition. Azure SQL Database in particular has no SQL Server Agent and no
+/// accessible `msdb`, so the agent and restore-history checks do not apply
+/// there.
+///
+/// See: <https://learn.microsoft.com/en-us/sql/t-sql/functions/serverproperty-transact-sql?view=sql-server-ver17>
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineEdition {
+    /// Personal or Desktop Engine (1).
+    PersonalOrDesktop,
+    /// Standard, Web, or Business Intelligence (2).
+    Standard,
+    /// Enterprise, Enterprise Eval, or Developer (3).
+    Enterprise,
+    /// Express and Express-derived editions (4).
+    Express,
+    /// Azure SQL Database (5).
+    AzureSqlDatabase,
+    /// Azure Synapse Analytics (6).
+    AzureSynapseAnalytics,
+    /// Azure SQL Managed Instance (8).
+    AzureSqlManagedInstance,
+    /// Azure SQL Edge (9).
+    AzureSqlEdge,
+    /// Azure Synapse serverless SQL pool (11).
+    AzureSynapseServerlessSqlPool,
+    /// An edition not otherwise recognized, carrying the raw
+    /// `SERVERPROPERTY('EngineEdition')` value.
+    Other(i32),
+}
+
+impl EngineEdition {
+    /// Whether this edition runs a SQL Server Agent that hosts the CDC capture
+    /// and cleanup jobs. Azure SQL Database uses an internal scheduler instead
+    /// and does not expose `sys.dm_server_services`.
+    pub fn has_sql_server_agent(&self) -> bool {
+        !matches!(self, EngineEdition::AzureSqlDatabase)
+    }
+
+    /// Whether `msdb.dbo.restorehistory` is queryable. Azure SQL Database does
+    /// not expose `msdb`, so restore history is unavailable there.
+    pub fn has_restore_history(&self) -> bool {
+        !matches!(self, EngineEdition::AzureSqlDatabase)
+    }
+}
+
+impl From<i32> for EngineEdition {
+    fn from(value: i32) -> Self {
+        match value {
+            1 => EngineEdition::PersonalOrDesktop,
+            2 => EngineEdition::Standard,
+            3 => EngineEdition::Enterprise,
+            4 => EngineEdition::Express,
+            5 => EngineEdition::AzureSqlDatabase,
+            6 => EngineEdition::AzureSynapseAnalytics,
+            8 => EngineEdition::AzureSqlManagedInstance,
+            9 => EngineEdition::AzureSqlEdge,
+            11 => EngineEdition::AzureSynapseServerlessSqlPool,
+            other => EngineEdition::Other(other),
+        }
+    }
+}
+
+/// Returns the [`EngineEdition`] of the SQL Server instance the `client` is
+/// connected to.
+///
+/// tiberius does not surface the engine edition, so we query
+/// `SERVERPROPERTY('EngineEdition')`, which is returned as a `sql_variant` and
+/// cast to an integer.
+///
+/// See: <https://learn.microsoft.com/en-us/sql/t-sql/functions/serverproperty-transact-sql?view=sql-server-ver17>
+pub async fn get_engine_edition(client: &mut Client) -> Result<EngineEdition, SqlServerError> {
+    static ENGINE_EDITION_QUERY: &str = "SELECT CAST(SERVERPROPERTY('EngineEdition') AS INT);";
+    let result = client.simple_query(ENGINE_EDITION_QUERY).await?;
+
+    match &result[..] {
+        [row] => {
+            let raw = row.try_get::<i32, _>(0)?.ok_or_else(|| {
+                SqlServerError::InvariantViolated(
+                    "SERVERPROPERTY('EngineEdition') returned NULL".to_string(),
+                )
+            })?;
+            Ok(EngineEdition::from(raw))
+        }
+        other => Err(SqlServerError::InvariantViolated(format!(
+            "expected one row, got {other:?}"
+        ))),
+    }
+}
+
 /// Ensure the SQL Server Agent is running.
+///
+/// Azure SQL Database has no SQL Server Agent (CDC is driven by an internal
+/// scheduler and `sys.dm_server_services` is unavailable), so the check is
+/// skipped for that edition.
 ///
 /// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-dynamic-management-views/sys-dm-server-services-transact-sql?view=azuresqldb-current&viewFallbackFrom=sql-server-ver17>
 pub async fn ensure_sql_server_agent_running(client: &mut Client) -> Result<(), SqlServerError> {
+    if !client.engine_edition().await?.has_sql_server_agent() {
+        return Ok(());
+    }
+
     static AGENT_STATUS_QUERY: &str = "SELECT status_desc FROM sys.dm_server_services WHERE servicename LIKE 'SQL Server Agent%';";
     let result = client.simple_query(AGENT_STATUS_QUERY).await?;
 
@@ -1019,8 +1126,33 @@ pub async fn validate_source_privileges(
 
 #[cfg(test)]
 mod tests {
-    use super::DDLEvent;
+    use super::{DDLEvent, EngineEdition};
     use std::sync::Arc;
+
+    #[mz_ore::test]
+    fn test_engine_edition_mapping() {
+        assert_eq!(EngineEdition::from(2), EngineEdition::Standard);
+        assert_eq!(EngineEdition::from(3), EngineEdition::Enterprise);
+        assert_eq!(EngineEdition::from(5), EngineEdition::AzureSqlDatabase);
+        assert_eq!(
+            EngineEdition::from(8),
+            EngineEdition::AzureSqlManagedInstance
+        );
+        // Unrecognized values are preserved rather than dropped.
+        assert_eq!(EngineEdition::from(42), EngineEdition::Other(42));
+
+        // Only Azure SQL Database lacks an agent and `msdb` restore history.
+        assert!(!EngineEdition::AzureSqlDatabase.has_sql_server_agent());
+        assert!(!EngineEdition::AzureSqlDatabase.has_restore_history());
+        for edition in [
+            EngineEdition::Enterprise,
+            EngineEdition::AzureSqlManagedInstance,
+            EngineEdition::Other(42),
+        ] {
+            assert!(edition.has_sql_server_agent());
+            assert!(edition.has_restore_history());
+        }
+    }
 
     #[mz_ore::test]
     fn test_ddl_event_is_compatible() {

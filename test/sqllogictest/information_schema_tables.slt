@@ -98,11 +98,11 @@ BASE TABLE
 materialize
 mz_catalog
 mz_audit_events
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_aws_privatelink_connections
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_base_types
@@ -138,7 +138,7 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_default_privileges
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_egress_ips
@@ -150,7 +150,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_iceberg_sinks
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_index_columns
@@ -162,15 +162,15 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_kafka_connections
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_kafka_sinks
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_kafka_sources
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_list_types
@@ -230,7 +230,7 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_sinks
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_sources
@@ -238,7 +238,7 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_ssh_tunnel_connections
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_storage_usage
@@ -246,11 +246,11 @@ VIEW
 materialize
 mz_catalog
 mz_system_privileges
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_tables
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_timezone_abbreviations
@@ -266,7 +266,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_views
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_activity_log_thinned
@@ -278,7 +278,7 @@ BASE TABLE
 materialize
 mz_internal
 mz_aws_connections
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_aws_privatelink_connection_status_history
@@ -297,12 +297,28 @@ mz_builtin_sources
 VIEW
 materialize
 mz_internal
+mz_builtin_tables
+VIEW
+materialize
+mz_internal
+mz_builtin_views
+VIEW
+materialize
+mz_internal
 mz_catalog_raw
 SOURCE
 materialize
 mz_internal
+mz_cluster_auto_scaling_strategies
+MATERIALIZED VIEW
+materialize
+mz_internal
 mz_cluster_deployment_lineage
 VIEW
+materialize
+mz_internal
+mz_cluster_reconfigurations
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_cluster_replica_history
@@ -345,12 +361,16 @@ mz_cluster_schedules
 MATERIALIZED VIEW
 materialize
 mz_internal
+mz_cluster_system_parameters
+MATERIALIZED VIEW
+materialize
+mz_internal
 mz_cluster_workload_classes
 MATERIALIZED VIEW
 materialize
 mz_internal
 mz_comments
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_compute_dependencies
@@ -374,6 +394,14 @@ SOURCE
 materialize
 mz_internal
 mz_console_cluster_utilization_overview
+VIEW
+materialize
+mz_internal
+mz_console_cluster_utilization_overview_24h
+VIEW
+materialize
+mz_internal
+mz_console_cluster_utilization_overview_3h
 VIEW
 materialize
 mz_internal
@@ -402,7 +430,7 @@ MATERIALIZED VIEW
 materialize
 mz_internal
 mz_kafka_source_tables
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_license_keys
@@ -433,8 +461,12 @@ mz_mcp_data_products
 VIEW
 materialize
 mz_internal
+mz_metric_sinks
+MATERIALIZED VIEW
+materialize
+mz_internal
 mz_mysql_source_tables
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_network_policies
@@ -473,8 +505,16 @@ mz_object_global_ids
 BASE TABLE
 materialize
 mz_internal
+mz_object_graph_edges
+VIEW
+materialize
+mz_internal
 mz_object_history
 VIEW
+materialize
+mz_internal
+mz_object_hydration_history
+BASE TABLE
 materialize
 mz_internal
 mz_object_lifetimes
@@ -513,16 +553,20 @@ mz_optimizer_notices
 BASE TABLE
 materialize
 mz_internal
+mz_overridden_system_parameters
+MATERIALIZED VIEW
+materialize
+mz_internal
 mz_pending_cluster_replicas
 MATERIALIZED VIEW
 materialize
 mz_internal
 mz_postgres_source_tables
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_postgres_sources
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_prepared_statement_history
@@ -551,6 +595,14 @@ materialize
 mz_internal
 mz_replacements
 BASE TABLE
+materialize
+mz_internal
+mz_replica_hydration_history
+BASE TABLE
+materialize
+mz_internal
+mz_replica_system_parameters
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_session_history
@@ -734,7 +786,7 @@ VIEW
 materialize
 mz_internal
 mz_sql_server_source_tables
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_sql_text
@@ -894,6 +946,10 @@ VIEW
 materialize
 mz_introspection
 mz_cluster_prometheus_metrics
+SOURCE
+materialize
+mz_introspection
+mz_cluster_replica_resource_usage
 SOURCE
 materialize
 mz_introspection

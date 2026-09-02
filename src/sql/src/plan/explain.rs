@@ -158,6 +158,11 @@ fn id_gen(expr: &HirRelationExpr) -> impl Iterator<Item = LocalId> + use<> {
     expr.visit_pre(&mut |expr| {
         match expr {
             HirRelationExpr::Let { id, .. } => max_id = std::cmp::max(max_id, id.into()),
+            HirRelationExpr::LetRec { bindings, .. } => {
+                for (_, id, _, _) in bindings {
+                    max_id = std::cmp::max(max_id, id.into());
+                }
+            }
             _ => (),
         };
     });

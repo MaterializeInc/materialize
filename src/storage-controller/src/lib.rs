@@ -35,6 +35,7 @@ use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_controller_types::dyncfgs::{
     ENABLE_0DT_DEPLOYMENT_SOURCES, WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
+use mz_dyncfg::ConfigUpdates;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -58,7 +59,8 @@ use mz_storage_client::client::{
 use mz_storage_client::controller::{
     BoxFuture, CollectionDescription, DataSource, ExportDescription, ExportState,
     IntrospectionType, MonotonicAppender, PersistEpoch, Response, StorageController,
-    StorageMetadata, StorageTxn, StorageWriteOp, WallclockLag, WallclockLagHistogramPeriod,
+    StorageMetadata, StorageTxn, StorageWriteOp, TableRegistration, WallclockLag,
+    WallclockLagHistogramPeriod,
 };
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
@@ -241,6 +243,33 @@ pub struct Controller {
 ///
 /// With better parallelism during startup this would likely be unnecessary, but empirically we see
 /// some nice speedups with this relatively simple function.
+/// What `create_collections_for_bootstrap` opens per collection: a write handle for collections
+/// the controller writes directly, or just a recent, linearized upper for txns-managed tables,
+/// whose writes go through the table-write worker (which opens its own handles per
+/// registration).
+enum WriteHandleOrUpper {
+    Handle(WriteHandle<SourceData, (), Timestamp, StorageDiff>),
+    Upper(Antichain<Timestamp>),
+}
+
+impl WriteHandleOrUpper {
+    fn upper(&self) -> Antichain<Timestamp> {
+        match self {
+            Self::Handle(handle) => handle.upper().clone(),
+            Self::Upper(upper) => upper.clone(),
+        }
+    }
+
+    /// Returns the write handle, panicking for the `Upper` variant. Only call for data sources
+    /// that are never tables.
+    fn expect_handle(self, context: &str) -> WriteHandle<SourceData, (), Timestamp, StorageDiff> {
+        match self {
+            Self::Handle(handle) => handle,
+            Self::Upper(_) => panic!("write handle required: {context}"),
+        }
+    }
+}
+
 fn warm_persist_state_in_background(
     client: PersistClient,
     shard_ids: impl Iterator<Item = ShardId> + Send + 'static,
@@ -303,6 +332,16 @@ impl StorageController for Controller {
                 .parameters
                 .user_storage_managed_collections_batch_duration,
         );
+    }
+
+    fn update_replica_dyncfg_overrides(
+        &mut self,
+        mut overrides: BTreeMap<StorageInstanceId, BTreeMap<ReplicaId, ConfigUpdates>>,
+    ) {
+        for (id, instance) in self.instances.iter_mut() {
+            let instance_overrides = overrides.remove(id).unwrap_or_default();
+            instance.update_replica_dyncfg_overrides(instance_overrides);
+        }
     }
 
     /// Get the current configuration
@@ -384,6 +423,8 @@ impl StorageController for Controller {
         let target_replicas: Option<BTreeSet<ReplicaId>> =
             target_replica_ids.map(|ids| ids.into_iter().collect());
 
+        let instance = self.instances.get(target_cluster_id);
+
         let mut all_hydrated = true;
         for (collection_id, collection_state) in self.collections.iter() {
             if collection_id.is_transient() || exclude_collections.contains(collection_id) {
@@ -395,7 +436,23 @@ impl StorageController for Controller {
                         continue;
                     }
                     match &target_replicas {
-                        Some(target_replicas) => !state.hydrated_on.is_disjoint(target_replicas),
+                        Some(target_replicas) => {
+                            // Not scheduled on any target replica means it can
+                            // never hydrate there, so it does not count (see
+                            // the trait docs). If the instance is unknown (the
+                            // cluster is being dropped concurrently) the
+                            // scheduled set is empty and every ingestion is
+                            // skipped. Readiness callers gate on replica health
+                            // separately, which covers that window.
+                            let scheduled_on = instance
+                                .map(|i| i.get_active_replicas_for_object(collection_id))
+                                .unwrap_or_default();
+                            if scheduled_on.is_disjoint(target_replicas) {
+                                true
+                            } else {
+                                !state.hydrated_on.is_disjoint(target_replicas)
+                            }
+                        }
                         None => {
                             // Not target replicas, so check that it's hydrated
                             // on at least one replica.
@@ -576,6 +633,8 @@ impl StorageController for Controller {
         let mut source_status_updates = vec![];
         let mut sink_status_updates = vec![];
 
+        // NOTE: mz_source_statuses and mz_sink_statuses rely on per-replica `paused` meaning
+        // "replica dropped"
         let make_update = |id, object_type| StatusUpdate {
             id,
             status: Status::Paused,
@@ -819,14 +878,34 @@ impl StorageController for Controller {
                     // but for now, it's helpful to have this mapping written down somewhere
                     debug!("mapping GlobalId={} to shard ({})", id, metadata.data_shard);
 
-                    let write = this
-                        .open_data_handles(
-                            &id,
-                            metadata.data_shard,
-                            metadata.relation_desc.clone(),
-                            persist_client,
-                        )
-                        .await;
+                    // Tables are written through the txns table-write worker, which opens its
+                    // own write handles per registration, so opening one here would be pure
+                    // overhead (an extra persist open per table on the startup path). The
+                    // controller only needs a recent upper for them.
+                    let write = if matches!(description.data_source, DataSource::Table) {
+                        let diagnostics = Diagnostics {
+                            shard_name: id.to_string(),
+                            handle_purpose: format!("controller data for {}", id),
+                        };
+                        let upper = persist_client
+                            .recent_upper::<SourceData, (), Timestamp, StorageDiff>(
+                                metadata.data_shard,
+                                diagnostics,
+                            )
+                            .await
+                            .expect("invalid persist usage");
+                        WriteHandleOrUpper::Upper(upper)
+                    } else {
+                        let write = this
+                            .open_data_handles(
+                                &id,
+                                metadata.data_shard,
+                                metadata.relation_desc.clone(),
+                                persist_client,
+                            )
+                            .await;
+                        WriteHandleOrUpper::Handle(write)
+                    };
 
                     Ok::<_, StorageError>((id, description, write, metadata))
                 }
@@ -856,7 +935,6 @@ impl StorageController for Controller {
         // `DataSource::IngestionExport` is added as a new collection, but is
         // not executed directly.
         let mut new_collections = BTreeSet::new();
-        let mut table_registers = Vec::with_capacity(to_register.len());
 
         // Reorder in dependency order.
         to_register.sort_by_key(|(id, ..)| *id);
@@ -922,7 +1000,14 @@ impl StorageController for Controller {
                 // environmentd/controller deletes a collection. We exit
                 // gracefully, which means we'll get restarted and get to try
                 // again.
-                if dependency_since.is_empty() {
+                //
+                // We only do this when our own upper is not empty. An empty
+                // upper means the collection is sealed and no-one can write to
+                // it anymore, so an empty dependency since cannot hurt us. And
+                // a sealed collection is durable state rather than a race, so
+                // halting on it would wedge bootstrap forever instead of
+                // resolving on the next attempt.
+                if dependency_since.is_empty() && !write_frontier.is_empty() {
                     halt!(
                         "dependency since frontier is empty while dependent upper \
                         is not empty (dependent id={id}, write_frontier={:?}, dependency_read_holds={:?}), \
@@ -953,7 +1038,7 @@ impl StorageController for Controller {
                     mz_ore::soft_assert_or_log!(
                         write_frontier.elements() == &[Timestamp::MIN]
                             || write_frontier.is_empty()
-                            || PartialOrder::less_than(&dependency_since, write_frontier),
+                            || PartialOrder::less_than(&dependency_since, &write_frontier),
                         "dependency since has advanced past dependent ({id}) upper \n
                             dependent ({id}): upper {:?} \n
                             dependency since {:?} \n
@@ -982,7 +1067,7 @@ impl StorageController for Controller {
                     self.register_introspection_collection(
                         id,
                         *typ,
-                        write,
+                        write.expect_handle("introspection collections are not tables"),
                         persist_client.clone(),
                     )?;
                 }
@@ -999,8 +1084,12 @@ impl StorageController for Controller {
                     // NOTE: Maybe this shouldn't be in the collection manager,
                     // and collection manager should only be responsible for
                     // built-in introspection collections?
-                    self.collection_manager
-                        .register_append_only_collection(id, write, false, None);
+                    self.collection_manager.register_append_only_collection(
+                        id,
+                        write.expect_handle("webhook collections are not tables"),
+                        false,
+                        None,
+                    );
                 }
                 DataSource::IngestionExport {
                     ingestion_id,
@@ -1059,9 +1148,9 @@ impl StorageController for Controller {
                 DataSource::Table => {
                     debug!(
                         ?data_source, meta = ?metadata,
-                        "registering {id} with persist table worker",
+                        "not registering {id} with the txns shard here; the caller does that \
+                         through the group committer",
                     );
-                    table_registers.push((id, write));
                 }
                 DataSource::Progress | DataSource::Other => {
                     debug!(
@@ -1133,36 +1222,6 @@ impl StorageController for Controller {
             // Sources and sinks only have statistics in the collection when
             // there is a replica that is reporting them. No need to initialize
             // here.
-        }
-
-        // Register the tables all in one batch.
-        if !table_registers.is_empty() {
-            let register_ts = register_ts
-                .expect("caller should have provided a register_ts when creating a table");
-
-            if self.read_only {
-                // In read-only mode, we use a special read-only table worker
-                // that allows writing to migrated tables and will continually
-                // bump their shard upper so that it tracks the txn shard upper.
-                // We do this, so that they remain readable at a recent
-                // timestamp, which in turn allows dataflows that depend on them
-                // to (re-)hydrate.
-                //
-                // We only want to register migrated tables, though, and leave
-                // existing tables out/never write to them in read-only mode.
-                table_registers
-                    .retain(|(id, _write_handle)| migrated_storage_collections.contains(id));
-
-                self.persist_table_worker
-                    .register(register_ts, table_registers)
-                    .await
-                    .expect("table worker unexpectedly shut down");
-            } else {
-                self.persist_table_worker
-                    .register(register_ts, table_registers)
-                    .await
-                    .expect("table worker unexpectedly shut down");
-            }
         }
 
         self.append_shard_mappings(new_collections.into_iter(), Diff::ONE);
@@ -1374,7 +1433,6 @@ impl StorageController for Controller {
         new_collection: GlobalId,
         new_desc: RelationDesc,
         expected_version: RelationVersion,
-        register_ts: Timestamp,
     ) -> Result<(), StorageError> {
         let data_shard = {
             let Controller {
@@ -1403,20 +1461,6 @@ impl StorageController for Controller {
             existing.collection_metadata.data_shard.clone()
         };
 
-        let persist_client = self
-            .persist
-            .open(self.persist_location.clone())
-            .await
-            .expect("invalid persist location");
-        let write_handle = self
-            .open_data_handles(
-                &existing_collection,
-                data_shard,
-                new_desc.clone(),
-                &persist_client,
-            )
-            .await;
-
         let collection_meta = CollectionMetadata {
             persist_location: self.persist_location.clone(),
             data_shard,
@@ -1437,14 +1481,65 @@ impl StorageController for Controller {
         // in-memory data structures.
         self.collections.insert(new_collection, collection_state);
 
-        self.persist_table_worker
-            .register(register_ts, vec![(new_collection, write_handle)])
-            .await
-            .expect("table worker unexpectedly shut down");
-
         self.append_shard_mappings([new_collection].into_iter(), Diff::ONE);
 
         Ok(())
+    }
+
+    async fn register_table_collections(
+        &mut self,
+        register_ts: Timestamp,
+        ids: Vec<GlobalId>,
+    ) -> Result<(), StorageError> {
+        let mut tables = self.table_registrations(ids)?;
+
+        // A read-only deployment only writes its migrated builtin tables.
+        if self.read_only {
+            tables.retain(|table| self.migrated_storage_collections.contains(&table.id));
+        }
+        if tables.is_empty() {
+            return Ok(());
+        }
+
+        match self
+            .persist_table_worker
+            .register(register_ts, tables)
+            .await
+        {
+            Ok(res) => res,
+            Err(_recv) => Err(StorageError::ShuttingDown("persist_table_worker")),
+        }
+    }
+
+    fn table_registrations(
+        &self,
+        ids: Vec<GlobalId>,
+    ) -> Result<Vec<TableRegistration>, StorageError> {
+        // The storage data source decides which table catalog items use txn-wal.
+        let mut tables = Vec::with_capacity(ids.len());
+        for id in ids {
+            let collection = self.collection(id)?;
+            if matches!(collection.data_source, DataSource::Table) {
+                let metadata = &collection.collection_metadata;
+                tables.push(TableRegistration {
+                    id,
+                    data_shard: metadata.data_shard,
+                    relation_desc: metadata.relation_desc.clone(),
+                });
+            }
+        }
+        Ok(tables)
+    }
+
+    fn txns_table_ids(&self, ids: Vec<GlobalId>) -> Result<Vec<GlobalId>, StorageError> {
+        let mut tables = Vec::with_capacity(ids.len());
+        for id in ids {
+            let collection = self.collection(id)?;
+            if matches!(collection.data_source, DataSource::Table) {
+                tables.push(id);
+            }
+        }
+        Ok(tables)
     }
 
     fn export(&self, id: GlobalId) -> Result<&ExportState, StorageError> {
@@ -1584,7 +1679,7 @@ impl StorageController for Controller {
         // If the write frontier of the sink is strictly larger than its read hold, it must have at
         // least written out its snapshot, and we can skip reading it; otherwise assume we may have
         // to replay from the beginning.
-        // TODO(database-issues#10002): unify this with run_export, if possible
+        // TODO(STG-26): unify this with run_export, if possible
         let with_snapshot = new_description.sink.with_snapshot
             && !PartialOrder::less_than(&new_description.sink.as_of, &cur_export.write_frontier);
 
@@ -1729,27 +1824,11 @@ impl StorageController for Controller {
         Ok(())
     }
 
-    // Dropping a table takes roughly the following flow:
-    //
-    // First determine if this is a TableWrites table or a source-fed table (an IngestionExport):
-    //
-    // If this is a TableWrites table:
-    //   1. We remove the table from the persist table write worker.
-    //   2. The table removal is awaited in an async task.
-    //   3. A message is sent to the storage controller that the table has been removed from the
-    //      table write worker.
-    //   4. The controller drains all table drop messages during `process`.
-    //   5. `process` calls `drop_sources` with the dropped tables.
-    //
-    // If this is an IngestionExport table:
-    //   1. We validate the ids and then call drop_sources_unvalidated to proceed dropping.
     fn drop_tables(
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
-        ts: Timestamp,
     ) -> Result<(), StorageError> {
-        // Collect tables by their data_source
         let (table_write_ids, data_source_ids): (Vec<_>, Vec<_>) = identifiers
             .into_iter()
             .partition(|id| match self.collections[id].data_source {
@@ -1758,21 +1837,13 @@ impl StorageController for Controller {
                 _ => panic!("identifier is not a table: {}", id),
             });
 
-        // Drop table write tables
         if table_write_ids.len() > 0 {
-            let drop_notif = self
-                .persist_table_worker
-                .drop_handles(table_write_ids.clone(), ts);
             let tx = self.pending_table_handle_drops_tx.clone();
-            mz_ore::task::spawn(|| "table-cleanup".to_string(), async move {
-                drop_notif.await;
-                for identifier in table_write_ids {
-                    let _ = tx.send(identifier);
-                }
-            });
+            for identifier in table_write_ids {
+                let _ = tx.send(identifier);
+            }
         }
 
-        // Drop source-fed tables
         if data_source_ids.len() > 0 {
             self.validate_collection_ids(data_source_ids.iter().cloned())?;
             self.drop_sources_unvalidated(storage_metadata, data_source_ids)?;
@@ -2108,6 +2179,12 @@ impl StorageController for Controller {
         Ok(self
             .persist_table_worker
             .append(write_ts, advance_to, commands))
+    }
+
+    fn table_write_handle(&self) -> Arc<dyn mz_storage_client::controller::TableWriteHandle> {
+        Arc::new(persist_handles::TableWriteWorkerHandle(
+            self.persist_table_worker.clone(),
+        ))
     }
 
     fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
@@ -2751,7 +2828,10 @@ where
                 )
                 .await
                 .expect("txns schema shouldn't change");
-            persist_handles::PersistTableWriteWorker::new_read_only_mode(txns_write)
+            persist_handles::PersistTableWriteWorker::new_read_only_mode(
+                txns_write,
+                txns_client.clone(),
+            )
         } else {
             let mut txns = TxnsHandle::open(
                 Timestamp::MIN,
@@ -2763,7 +2843,7 @@ where
             )
             .await;
             txns.upgrade_version().await;
-            persist_handles::PersistTableWriteWorker::new_txns(txns)
+            persist_handles::PersistTableWriteWorker::new_txns(txns, txns_client.clone())
         };
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
 
@@ -3056,13 +3136,7 @@ where
         Ok(())
     }
 
-    /// Opens a write and critical since handles for the given `shard`.
-    ///
-    /// `since` is an optional `since` that the read handle will be forwarded to if it is less than
-    /// its current since.
-    ///
-    /// This will `halt!` the process if we cannot successfully acquire a critical handle with our
-    /// current epoch.
+    /// Opens a write handle and synchronizes its cached upper.
     async fn open_data_handles(
         &self,
         id: &GlobalId,
@@ -3085,14 +3159,7 @@ where
             .await
             .expect("invalid persist usage");
 
-        // N.B.
-        // Fetch the most recent upper for the write handle. Otherwise, this may be behind
-        // the since of the since handle. Its vital this happens AFTER we create
-        // the since handle as it needs to be linearized with that operation. It may be true
-        // that creating the write handle after the since handle already ensures this, but we
-        // do this out of an abundance of caution.
-        //
-        // Note that this returns the upper, but also sets it on the handle to be fetched later.
+        // Synchronize the cached upper before it initializes collection state.
         write.fetch_recent_upper().await;
 
         write
@@ -3114,6 +3181,10 @@ where
         // In read-only mode we create a new shard for all migrated storage collections. So we
         // "trick" the write task into thinking that it's not in read-only mode so something is
         // advancing this new shard.
+        //
+        // This is the storage-side of forcing writes to a self-owned replacement shard while
+        // read-only. Migrated builtin MVs need the same treatment on their own write path; see
+        // `ComputeController::allow_writes_in_read_only`.
         let force_writable = self.read_only && self.migrated_storage_collections.contains(&id);
         if force_writable {
             assert!(id.is_system(), "unexpected non-system global id: {id:?}");

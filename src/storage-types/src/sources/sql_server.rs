@@ -12,7 +12,7 @@
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
-use mz_dyncfg::Config;
+use mz_dyncfg::{Config, ParameterScope};
 use mz_ore::future::InTask;
 use mz_proto::RustType;
 use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, SqlScalarType};
@@ -33,17 +33,22 @@ include!(concat!(
     "/mz_storage_types.sources.sql_server.rs"
 ));
 
+/// Environment-scoped because source purification reads it in `environmentd`
+/// (`mz_sql::pure`) as well as the source dataflow on the replica, and the
+/// purification read has no replica in scope.
 pub const MAX_LSN_WAIT: Config<Duration> = Config::new(
     "sql_server_max_lsn_wait",
     Duration::from_secs(30),
     "Maximum amount of time we'll wait for SQL Server to report an LSN (in other words for \
     CDC to be fully enabled)",
+    ParameterScope::Environment,
 );
 
 pub const SNAPSHOT_PROGRESS_REPORT_INTERVAL: Config<Duration> = Config::new(
     "sql_server_snapshot_progress_report_interval",
     Duration::from_secs(2),
     "Interval at which we'll report progress for currently running snapshots.",
+    ParameterScope::Replica,
 );
 
 pub const CDC_CLEANUP_CHANGE_TABLE: Config<bool> = Config::new(
@@ -51,6 +56,7 @@ pub const CDC_CLEANUP_CHANGE_TABLE: Config<bool> = Config::new(
     false,
     "When enabled we'll notify SQL Server that it can cleanup the change tables \
     as the source makes progress and commits data.",
+    ParameterScope::Environment,
 );
 
 /// Maximum number of deletes that we'll make from a single SQL Server change table.
@@ -64,6 +70,7 @@ pub const CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES: Config<u32> = Config::new(
     // TODO(sql_server2): Call the cleanup function iteratively.
     1_000_000,
     "Maximum number of entries that can be deleted by using a single statement.",
+    ParameterScope::Environment,
 );
 
 pub static SQL_SERVER_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {

@@ -268,7 +268,7 @@ async fn test_client_errors() -> Result<(), anyhow::Error> {
     let client = mz_ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
 
     // Get-by-id-specific errors.
-    match client.get_schema_by_id(i32::max_value()).await {
+    match client.get_schema_by_id(i32::MAX).await {
         Err(GetByIdError::SchemaNotFound) => (),
         res => panic!("expected GetError::SchemaNotFound, got {:?}", res),
     }

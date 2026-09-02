@@ -37,7 +37,6 @@ class Dnsmasq(Service):
         self,
         name: str = "dnsmasq",
         mzbuild: str = "dnsmasq",
-        command: list[str] | None = None,
         depends_on: list[str] = [],
         networks: (
             dict[str, dict[str, list[str]]]

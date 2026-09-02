@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,21 +9,18 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/as_of
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/as_of
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
-# not supported yet
-halt
-
 mode cockroach
-
-# Unlikely to support the SELECT ... AS OF SYSTEM TIME syntax exactly.
-halt
 
 statement ok
 CREATE TABLE t (i INT)
@@ -31,66 +28,171 @@ CREATE TABLE t (i INT)
 statement ok
 INSERT INTO t VALUES (2)
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify strings can be parsed as intervals.
 query I
 SELECT * FROM t AS OF SYSTEM TIME '-1us'
 ----
 2
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify a forced interval type works.
 query I
 SELECT * FROM t AS OF SYSTEM TIME INTERVAL '-1us'
 ----
 2
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that we can use computed expressions.
 query I
-SELECT * FROM t AS OF SYSTEM TIME -( ('1000' || 'us')::INTERVAL )
+SELECT * FROM t AS OF SYSTEM TIME -( parse_interval('1000' || 'us') )
 ----
 2
 
-statement error pq: AS OF SYSTEM TIME: only constant expressions or experimental_follower_read_timestamp are allowed
+statement error Expected end of statement, found TIME
 SELECT * FROM t AS OF SYSTEM TIME cluster_logical_timestamp()
 
-statement error pq: subqueries are not allowed in AS OF SYSTEM TIME
+statement error Expected end of statement, found TIME
 SELECT * FROM t AS OF SYSTEM TIME (SELECT '-1h'::INTERVAL)
 
-statement error pq: relation "t" does not exist
+statement error pgcode 3D000 Expected end of statement, found TIME
 SELECT * FROM t AS OF SYSTEM TIME '-1h'
 
-statement error pq: experimental_follower_read_timestamp\(\): experimental_follower_read_timestamp is only available in ccl distribution
-SELECT * FROM t AS OF SYSTEM TIME experimental_follower_read_timestamp()
+query T noticetrace
+SELECT pg_sleep(5) -- we need to sleep so that the 4.8s elapses and the SELECT * FROM t returns something.
+----
 
-statement error pq: unknown signature: experimental_follower_read_timestamp\(string\) \(desired <timestamptz>\)
-SELECT * FROM t AS OF SYSTEM TIME experimental_follower_read_timestamp('boom')
+# Notices print twice -- once during planning and once during execution.
+# There's no nice way of reducing this to once without some hacks -- so left as is.
+skipif config 3node-tenant-default-configs
+query T noticetrace
+SELECT * FROM t AS OF SYSTEM TIME follower_read_timestamp()
+----
+NOTICE: follower reads disabled because you are running a non-CCL distribution
+NOTICE: follower reads disabled because you are running a non-CCL distribution
 
-statement error pq: AS OF SYSTEM TIME: only constant expressions or experimental_follower_read_timestamp are allowed
+statement error Expected end of statement, found TIME
+SELECT * FROM t AS OF SYSTEM TIME follower_read_timestamp('boom')
+
+statement error Expected end of statement, found TIME
 SELECT * FROM t AS OF SYSTEM TIME now()
 
-statement error cannot specify timestamp in the future
+statement error Expected end of statement, found TIME
 SELECT * FROM t AS OF SYSTEM TIME '10s'
+
+statement error Expected end of statement, found TIME
+SELECT * FROM t AS OF SYSTEM TIME interval '1 microsecond'
 
 # Verify that the TxnTimestamp used to generate now() and current_timestamp() is
 # set to the historical timestamp.
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT * FROM (SELECT now()) AS OF SYSTEM TIME '2018-01-01'
 ----
 2018-01-01 00:00:00 +0000 UTC
 
+# Verify that timezones are not truncated
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT * FROM (SELECT now()) AS OF SYSTEM TIME '2018-01-01 00:00:00-1:00'
+----
+2018-01-01 01:00:00 +0000 UTC
+
 # Verify that zero intervals indistinguishable from zero cause an error.
 
-statement error pq: AS OF SYSTEM TIME: interval value '0.1us' too small, must be <= -1µs
+statement error Expected end of statement, found TIME
 SELECT * FROM t AS OF SYSTEM TIME '0.1us'
 
-statement error pq: AS OF SYSTEM TIME: interval value '0,0' too small, must be <= -1µs
-SELECT * FROM t AS OF SYSTEM TIME '0,0'
+statement error Expected end of statement, found TIME
+SELECT * FROM t AS OF SYSTEM TIME '0-0'
 
-statement error pq: AS OF SYSTEM TIME: interval value '0.000000000,0' too small, must be <= -1µs
-SELECT * FROM t AS OF SYSTEM TIME '0.000000000,0'
-
-statement error pq: AS OF SYSTEM TIME: interval value '-0.1us' too small, must be <= -1µs
+statement error Expected end of statement, found TIME
 SELECT * FROM t AS OF SYSTEM TIME '-0.1us'
 
-statement error pq: AS OF SYSTEM TIME: zero timestamp is invalid
+statement error Expected end of statement, found TIME
 SELECT * FROM t AS OF SYSTEM TIME '0'
+
+# Not supported by Materialize.
+onlyif cockroach
+# Verify we can explain a statement that has AS OF.
+statement ok
+EXPLAIN SELECT * FROM t AS OF SYSTEM TIME '-1us'
+
+skipif config 3node-tenant-default-configs
+# Regression test for out of bounds error during the type-checking of AOST with
+# a placeholder (#56488).
+statement error Expected end of statement, found TIME
+SELECT * FROM t AS OF SYSTEM TIME $1
+
+skipif config 3node-tenant-default-configs
+statement error pgcode XXC01 function "with_min_timestamp" does not exist
+SELECT with_min_timestamp('2020-01-15 15:16:17')
+
+skipif config 3node-tenant-default-configs
+statement error pgcode XXC01 function "with_min_timestamp" does not exist
+SELECT with_min_timestamp(statement_timestamp())
+
+skipif config 3node-tenant-default-configs
+statement error pgcode XXC01 function "with_max_staleness" does not exist
+SELECT with_max_staleness('1s')
+
+skipif config 3node-tenant-default-configs
+statement error pgcode XXC01 Expected end of statement, found TIME
+SELECT * FROM t AS OF SYSTEM TIME with_min_timestamp('2020-01-15 15:16:17')
+
+skipif config 3node-tenant-default-configs
+statement error pgcode XXC01 Expected end of statement, found TIME
+SELECT * FROM t AS OF SYSTEM TIME with_min_timestamp(statement_timestamp())
+
+skipif config 3node-tenant-default-configs
+statement error pgcode XXC01 Expected end of statement, found TIME
+SELECT * FROM t AS OF SYSTEM TIME with_max_staleness('1s'::interval)
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * from t
+
+statement error Expected transaction mode, found AS
+SET TRANSACTION AS OF system time '-1s'
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO t VALUES(1)
+
+statement error Expected transaction mode, found AS
+SET TRANSACTION AS OF system time '-1s'
+
+statement ok
+ROLLBACK
+
+# Verify that an expression that requires normalization does not result in an
+# internal error.
+statement error Expected end of statement, found TIME
+SELECT * FROM t AS OF SYSTEM TIME ('' BETWEEN '' AND '')
+
+# Check that AOST in multi-stmt implicit transaction has the proper error.
+statement error Expected end of statement, found TIME
+insert into t values(1); select * from t as of system time '-1s';
+
+statement error Expected end of statement, found TIME
+select * from t as of system time '-1s'; select * from t as of system time '-2s';
+
+# Not supported by Materialize.
+onlyif cockroach
+# Specifying the AOST in the first statement (and no others) is allowed.
+statement ok
+select * from t as of system time '-1s'; select * from t;

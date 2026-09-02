@@ -19,6 +19,10 @@ pub(crate) struct Modifiers {
     /// An optional expression that evaluates to a boolean indicating whether the function is
     /// monotone with respect to its arguments. Defined for unary and binary functions.
     is_monotone: Option<Expr>,
+    /// Optional expression evaluating to a boolean: whether `is_monotone`'s
+    /// endpoint-sampling guarantee still holds when an operand may be infinite.
+    /// Set `false` for multiplication and division. Applies to binary functions.
+    is_infinity_monotone: Option<Expr>,
     /// The SQL name for the function. Applies to all functions.
     sqlname: Option<SqlName>,
     /// Whether the function preserves uniqueness. Applies to unary functions.
@@ -874,6 +878,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         mut introduces_nulls,
         is_associative,
         is_eliminable_cast,
+        is_infinity_monotone: _,
         test: _,
     } = modifiers;
 
@@ -1000,7 +1005,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         #[derive(
             Ord, PartialOrd, Clone,
             Debug, Eq, PartialEq, serde::Serialize,
-            serde::Deserialize, Hash, mz_lowertest::MzReflect,
+            serde::Deserialize, Hash,
         )]
         #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
         pub struct #struct_name;
@@ -1040,6 +1045,10 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
             }
         }
 
+        impl crate::func::FuncName for #struct_name {
+            const NAME: &'static str = stringify!(#fn_name);
+        }
+
         #func
     };
     Ok(result)
@@ -1076,6 +1085,7 @@ fn binary_func(
         mut introduces_nulls,
         is_associative,
         is_eliminable_cast,
+        is_infinity_monotone,
         test: _,
     } = modifiers;
 
@@ -1141,6 +1151,14 @@ fn binary_func(
         quote! {
             fn is_monotone(&self) -> (bool, bool) {
                 #is_monotone
+            }
+        }
+    });
+
+    let is_infinity_monotone_fn = is_infinity_monotone.map(|is_infinity_monotone| {
+        quote! {
+            fn is_infinity_monotone(&self) -> bool {
+                #is_infinity_monotone
             }
         }
     });
@@ -1212,7 +1230,7 @@ fn binary_func(
         #[derive(
             Ord, PartialOrd, Clone,
             Debug, Eq, PartialEq, serde::Serialize,
-            serde::Deserialize, Hash, mz_lowertest::MzReflect,
+            serde::Deserialize, Hash,
         )]
         #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
         pub struct #struct_name;
@@ -1257,6 +1275,7 @@ fn binary_func(
             #introduces_nulls_fn
             #is_infix_op_fn
             #is_monotone_fn
+            #is_infinity_monotone_fn
             #negate_fn
             #propagates_nulls_fn
         }
@@ -1265,6 +1284,10 @@ fn binary_func(
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 f.write_str(#name)
             }
+        }
+
+        impl crate::func::FuncName for #struct_name {
+            const NAME: &'static str = stringify!(#fn_name);
         }
 
         #func
@@ -1308,6 +1331,7 @@ fn variadic_func(
         mut introduces_nulls,
         is_associative,
         is_eliminable_cast,
+        is_infinity_monotone: _,
         test: _,
     } = modifiers;
 
@@ -1564,6 +1588,12 @@ fn variadic_func(
         }
     };
 
+    let funcname_impl = quote! {
+        impl crate::func::FuncName for #struct_name {
+            const NAME: &'static str = stringify!(#fn_name);
+        }
+    };
+
     let result = if has_self {
         // External struct: generate method impl + trait impl + Display.
         quote! {
@@ -1572,6 +1602,7 @@ fn variadic_func(
             }
             #trait_impl
             #display_impl
+            #funcname_impl
         }
     } else {
         // Unit struct: generate struct + trait impl + Display + original function.
@@ -1579,13 +1610,14 @@ fn variadic_func(
             #[derive(
                 Ord, PartialOrd, Clone,
                 Debug, Eq, PartialEq, serde::Serialize,
-                serde::Deserialize, Hash, mz_lowertest::MzReflect,
+                serde::Deserialize, Hash,
             )]
             #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
             pub struct #struct_name;
 
             #trait_impl
             #display_impl
+            #funcname_impl
 
             #func
         }

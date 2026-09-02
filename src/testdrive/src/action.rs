@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::LazyLock;
 use std::time::Duration;
 use std::{env, fs};
@@ -21,7 +22,7 @@ use aws_credential_types::provider::ProvideCredentials;
 use aws_types::SdkConfig;
 use futures::future::FutureExt;
 use itertools::Itertools;
-use mz_adapter::catalog::{Catalog, ConnCatalog};
+use mz_adapter::catalog::{Catalog, ConnCatalog, DebugAwsContext};
 use mz_adapter::session::Session;
 use mz_build_info::BuildInfo;
 use mz_catalog::config::ClusterReplicaSizeMap;
@@ -48,6 +49,7 @@ use rdkafka::ClientConfig;
 use rdkafka::producer::Producer;
 use regex::{Captures, Regex};
 use semver::Version;
+use tokio_postgres::CancelToken;
 use tokio_postgres::error::{DbError, SqlState};
 use tracing::info;
 use url::Url;
@@ -63,6 +65,8 @@ pub mod consistency;
 
 mod duckdb;
 mod file;
+mod fivetran;
+mod glue;
 mod http;
 mod kafka;
 mod mysql;
@@ -81,6 +85,10 @@ mod sql;
 mod sql_server;
 mod version_check;
 mod webhook;
+
+pub(crate) async fn verify_kafka_topics_exhausted(state: &State) -> Result<(), anyhow::Error> {
+    kafka::verify_topics_exhausted(state).await
+}
 
 /// User-settable configuration parameters.
 #[derive(Debug, Clone)]
@@ -117,6 +125,8 @@ pub struct Config {
     pub backoff_factor: f64,
     /// Should we skip coordinator and catalog consistency checks.
     pub consistency_checks: consistency::Level,
+    /// How long a single consistency check may take before the test file fails.
+    pub consistency_check_timeout: Duration,
     /// Whether to run statement logging consistency checks (adds a few seconds at the end of every
     /// test file).
     pub check_statement_logging: bool,
@@ -188,6 +198,12 @@ pub struct Config {
     pub aws_config: SdkConfig,
     /// The ID of the AWS account that `aws_config` configures.
     pub aws_account: String,
+
+    // === Fivetran options. ===
+    /// Address of the Fivetran Destination that is currently running.
+    pub fivetran_destination_url: String,
+    /// Directory that is accessible to the Fivetran Destination.
+    pub fivetran_destination_files_path: String,
 }
 
 pub struct MaterializeState {
@@ -204,6 +220,16 @@ pub struct MaterializeState {
     pgclient: tokio_postgres::Client,
     environment_id: EnvironmentId,
     bootstrap_args: BootstrapArgs,
+    // The AWS environment context, queried once from the running environmentd at
+    // startup, the same way environment_id is. The builtin AWS connection views
+    // fold these values into their optimized expressions, so the catalog copy
+    // opened for the consistency check must resolve them the same way. Queried
+    // at startup rather than at check time because a check-time query runs after
+    // arbitrary test state and is less reliable, while startup runs against a
+    // clean session on the currently connected version.
+    aws_account_id: Option<String>,
+    aws_external_id_prefix: Option<String>,
+    aws_connection_role_arn: Option<String>,
 }
 
 pub struct State {
@@ -222,6 +248,7 @@ pub struct State {
     initial_backoff: Duration,
     backoff_factor: f64,
     consistency_checks: consistency::Level,
+    consistency_check_timeout: Duration,
     check_statement_logging: bool,
     consistency_checks_adhoc_skip: bool,
     regex: Option<Regex>,
@@ -248,6 +275,8 @@ pub struct State {
     kafka_default_partitions: usize,
     kafka_producer: rdkafka::producer::FutureProducer<MzClientContext>,
     kafka_topics: BTreeMap<String, usize>,
+    /// Topics whose final `kafka-verify-data` must consume the complete topic.
+    kafka_verify_topics: BTreeSet<String>,
 
     // === AWS state. ===
     aws_account: String,
@@ -258,6 +287,13 @@ pub struct State {
     mysql_clients: BTreeMap<String, mysql_async::Conn>,
     postgres_clients: BTreeMap<String, tokio_postgres::Client>,
     sql_server_clients: BTreeMap<String, mz_sql_server_util::Client>,
+    /// Tasks spawned by `postgres-execute background=true`. Joined at the end
+    /// of the file so their failures fail the test.
+    background_tasks: Vec<BackgroundTask>,
+
+    // === Fivetran state. ===
+    fivetran_destination_url: String,
+    fivetran_destination_files_path: String,
 
     // === Rewrite state. ===
     rewrite_results: bool,
@@ -273,6 +309,47 @@ pub struct Rewrite {
     pub content: String,
     pub start: usize,
     pub end: usize,
+}
+
+/// A query spawned by `postgres-execute background=true`, retained so it can be
+/// joined at the end of the file.
+///
+/// Aborting `handle` stops the Rust task from awaiting the query's response,
+/// but it does not stop the query on the server. The tokio-postgres connection
+/// driver waits for every pending response before it closes the connection, so
+/// dropping the client leaves the SQL running until Materialize replies. To
+/// actually stop a query that overran its deadline we send an out-of-band
+/// cancel request through `cancel_token`, the same mechanism psql uses for
+/// Ctrl-C, before aborting the task.
+pub(crate) struct BackgroundTask {
+    desc: String,
+    handle: task::JoinHandle<Result<(), anyhow::Error>>,
+    cancel_token: CancelToken,
+    /// Connection URL, used to rebuild the TLS connector that the cancel
+    /// request opens its own connection with.
+    url: String,
+}
+
+/// Best-effort cancellation of the in-progress query on the connection
+/// `cancel_token` was derived from. Opens a fresh connection to send the cancel
+/// request. Cancellation is inherently racy and the caller aborts the task
+/// regardless, so failures are logged rather than propagated.
+async fn cancel_background_query(cancel_token: &CancelToken, url: &str, timeout: Duration) {
+    let tls = match tokio_postgres::Config::from_str(url)
+        .map_err(anyhow::Error::from)
+        .and_then(|config| make_tls(&config).map_err(anyhow::Error::from))
+    {
+        Ok(tls) => tls,
+        Err(e) => {
+            tracing::warn!("could not build TLS connector to cancel background query: {e}");
+            return;
+        }
+    };
+    match tokio::time::timeout(timeout, cancel_token.cancel_query(tls)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!("cancel request for background query failed: {e}"),
+        Err(_) => tracing::warn!("cancel request for background query timed out"),
+    }
 }
 
 impl State {
@@ -343,6 +420,14 @@ impl State {
             "testdrive.materialize-user".into(),
             self.materialize.user.clone(),
         );
+        self.cmd_vars.insert(
+            "testdrive.fivetran-destination-url".into(),
+            self.fivetran_destination_url.clone(),
+        );
+        self.cmd_vars.insert(
+            "testdrive.fivetran-destination-files-path".into(),
+            self.fivetran_destination_files_path.clone(),
+        );
 
         for (key, value) in env::vars() {
             self.cmd_vars.insert(format!("env.{}", key), value);
@@ -392,6 +477,11 @@ impl State {
                 &self.persist_clients,
             )
             .await?;
+            let aws_context = DebugAwsContext {
+                aws_account_id: self.materialize.aws_account_id.clone(),
+                aws_external_id_prefix: self.materialize.aws_external_id_prefix.clone(),
+                aws_connection_role_arn: self.materialize.aws_connection_role_arn.clone(),
+            };
             let catalog = Catalog::open_debug_read_only_persist_catalog_config(
                 persist_client,
                 SYSTEM_TIME.clone(),
@@ -400,6 +490,7 @@ impl State {
                 build_info,
                 bootstrap_args,
                 enable_expression_cache_override,
+                Some(aws_context),
             )
             .await?;
             let res = f(catalog.for_session(&Session::dummy()));
@@ -422,6 +513,41 @@ impl State {
     /// the consistency checks should be skipped for this current run.
     pub fn clear_skip_consistency_checks(&mut self) -> bool {
         std::mem::replace(&mut self.consistency_checks_adhoc_skip, false)
+    }
+
+    /// Joins all tasks spawned by `postgres-execute background=true`,
+    /// returning one error per task that failed or did not complete within the
+    /// default timeout. Must be called before the end of the file so that
+    /// background failures fail the test.
+    pub(crate) async fn join_background_tasks(&mut self) -> Vec<anyhow::Error> {
+        let mut errors = Vec::new();
+        for BackgroundTask {
+            desc,
+            mut handle,
+            cancel_token,
+            url,
+        } in self.background_tasks.drain(..)
+        {
+            // Poll the handle by reference so it survives a timeout. Dropping a
+            // `JoinHandle` only detaches the task, it does not stop it, and a
+            // detached background query would keep running SQL against the same
+            // Materialize instance while later files execute.
+            match tokio::time::timeout(self.default_timeout, &mut handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => errors.push(e.context(format!("background query failed: {desc}"))),
+                Err(_) => {
+                    // Aborting `handle` alone leaves the query running on the
+                    // server. Cancel it first so it cannot overlap consistency
+                    // checks or later files, then abort and reap the task.
+                    cancel_background_query(&cancel_token, &url, self.default_timeout).await;
+                    handle.abort_and_wait().await;
+                    errors.push(anyhow!(
+                        "background query did not complete before the end of the file: {desc}"
+                    ));
+                }
+            }
+        }
+        errors
     }
 
     pub async fn reset_materialize(&self) -> Result<(), anyhow::Error> {
@@ -851,8 +977,15 @@ impl Run for PosCommand {
                     }
                     "duckdb-execute" => duckdb::run_execute(builtin, state).await,
                     "duckdb-query" => duckdb::run_query(builtin, state).await,
+                    "fivetran-destination" => {
+                        fivetran::run_destination_command(builtin, state).await
+                    }
                     "file-append" => file::run_append(builtin, state).await,
                     "file-delete" => file::run_delete(builtin, state).await,
+                    "glue-create-schema" => glue::run_create_schema(builtin, state).await,
+                    "glue-verify-compatibility" => {
+                        glue::run_verify_compatibility(builtin, state).await
+                    }
                     "http-request" => http::run_request(builtin, state).await,
                     "kafka-add-partitions" => kafka::run_add_partitions(builtin, state).await,
                     "kafka-create-topic" => kafka::run_create_topic(builtin, state).await,
@@ -939,6 +1072,14 @@ impl Run for PosCommand {
                         SqlExpectedError::Regex(subst_re(s, &state.cmd_vars)?)
                     }
                     SqlExpectedError::Timeout => SqlExpectedError::Timeout,
+                };
+                sql.expected_detail = match sql.expected_detail {
+                    Some(s) => Some(subst(&s, &state.cmd_vars)?),
+                    None => None,
+                };
+                sql.expected_hint = match sql.expected_hint {
+                    Some(s) => Some(subst(&s, &state.cmd_vars)?),
+                    None => None,
                 };
                 sql::run_fail_sql(sql, state).await
             }
@@ -1111,6 +1252,7 @@ pub async fn create_state(
         initial_backoff: config.initial_backoff,
         backoff_factor: config.backoff_factor,
         consistency_checks: config.consistency_checks,
+        consistency_check_timeout: config.consistency_check_timeout,
         check_statement_logging: config.check_statement_logging,
         consistency_checks_adhoc_skip: false,
         regex: None,
@@ -1142,6 +1284,7 @@ pub async fn create_state(
         kafka_default_partitions: config.kafka_default_partitions,
         kafka_producer,
         kafka_topics,
+        kafka_verify_topics: BTreeSet::new(),
 
         // === AWS state. ===
         aws_account: config.aws_account.clone(),
@@ -1152,6 +1295,11 @@ pub async fn create_state(
         mysql_clients: BTreeMap::new(),
         postgres_clients: BTreeMap::new(),
         sql_server_clients: BTreeMap::new(),
+        background_tasks: Vec::new(),
+
+        // === Fivetran state. ===
+        fivetran_destination_url: config.fivetran_destination_url.clone(),
+        fivetran_destination_files_path: config.fivetran_destination_files_path.clone(),
 
         rewrites: Vec::new(),
         rewrite_pos_start: 0,
@@ -1221,6 +1369,27 @@ async fn create_materialize_state(
         .parse()
         .context("parsing environment ID")?;
 
+    // Tolerate the functions not existing: upgrade tests run testdrive against an
+    // older environmentd whose catalog predates them. A version without them has
+    // no context-folding views either, so no context is the correct fold.
+    let (aws_account_id, aws_external_id_prefix, aws_connection_role_arn) = match pg_query_one(
+        &pgclient,
+        pg_sql!(
+            "SELECT mz_aws_account_id(), mz_aws_external_id_prefix(), \
+                 mz_aws_connection_role_arn()"
+        ),
+        &[],
+    )
+    .await
+    {
+        Ok(row) => (
+            row.get::<_, Option<String>>(0),
+            row.get::<_, Option<String>>(1),
+            row.get::<_, Option<String>>(2),
+        ),
+        Err(_) => (None, None, None),
+    };
+
     let bootstrap_args = BootstrapArgs {
         cluster_replica_size_map: config.materialize_cluster_replica_sizes.clone(),
         default_cluster_replica_size: "ABC".to_string(),
@@ -1241,6 +1410,9 @@ async fn create_materialize_state(
         pgclient,
         environment_id,
         bootstrap_args,
+        aws_account_id,
+        aws_external_id_prefix,
+        aws_connection_role_arn,
     };
 
     Ok(materialize_state)

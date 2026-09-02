@@ -5,15 +5,19 @@ description: >
   paths, timestamp oracle. Trigger: questions about these subsystems —
   "how does coordinator work", "what are read holds", "explain peek path",
   "how does timestamp selection work", "why does this query block". Also
-  edits in src/adapter/, src/pgwire/, src/timestamp-oracle/.
+  when editing OR reviewing code in src/adapter/, src/pgwire/,
+  src/timestamp-oracle/ (reviewing a PR, diff, or commit that touches these
+  paths counts).
 ---
 
 # Adapter Guide Skill
 
-When working on the adapter layer or related crates, always read and follow the
-guidance in `doc/developer/guide-adapter.md` before making changes. That
-document contains correctness invariants, architectural notes, and a list of
-optimizations that have been tried and rejected for correctness reasons.
+When working on or reviewing the adapter layer or related crates, always read
+and follow the guidance in `doc/developer/guide-adapter.md`. That document
+contains correctness invariants, architectural notes, a list of optimizations
+that have been tried and rejected for correctness reasons, and a checklist for
+reviewing adapter changes. Read it before making changes and before reviewing
+them.
 
 Read `doc/developer/guide-adapter.md` now.
 

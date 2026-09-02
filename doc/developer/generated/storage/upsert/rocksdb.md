@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/upsert/rocksdb.rs
-revision: e757b4d11b
+revision: 7ffd40e1ab
 ---
 
 # mz-storage::upsert::rocksdb

@@ -19,9 +19,6 @@ class Orchestratord(Service):
         self,
         name: str = "orchestratord",
         mzbuild: str = "orchestratord",
-        https_resolver_template: str | None = None,
-        frontegg_resolver_template: str | None = None,
-        static_resolver_addr: str | None = None,
     ) -> None:
         config: ServiceConfig = {
             "mzbuild": mzbuild,

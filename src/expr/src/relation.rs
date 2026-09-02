@@ -21,7 +21,6 @@ use std::time::Instant;
 use bytesize::ByteSize;
 use columnation::{Columnation, CopyRegion};
 use itertools::Itertools;
-use mz_lowertest::MzReflect;
 use mz_ore::cast::{CastFrom, CastInto};
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
@@ -97,7 +96,7 @@ pub trait CollectionPlan {
 /// one. This is because the reason for the manual implementation is not to change the semantics
 /// from the derived one, but to avoid stack overflows.
 #[allow(clippy::derived_hash_with_manual_eq)]
-#[derive(Clone, Debug, Ord, PartialOrd, Serialize, Deserialize, MzReflect, Hash)]
+#[derive(Clone, Debug, Ord, PartialOrd, Serialize, Deserialize, Hash)]
 pub enum MirRelationExpr {
     /// A constant relation containing specified rows.
     ///
@@ -117,7 +116,6 @@ pub enum MirRelationExpr {
     /// The runtime memory footprint of this operator is zero.
     Get {
         /// The identifier for the collection to load.
-        #[mzreflect(ignore)]
         id: Id,
         /// Schema of the collection.
         typ: ReprRelationType,
@@ -126,7 +124,6 @@ pub enum MirRelationExpr {
         /// how downstream dataflow operations will use this index is also recorded. This is filled
         /// by `prune_and_annotate_dataflow_index_imports`. Note that this is not used by the
         /// lowering to LIR, but is used only by EXPLAIN.
-        #[mzreflect(ignore)]
         access_strategy: AccessStrategy,
     },
     /// Introduce a temporary dataflow.
@@ -134,7 +131,6 @@ pub enum MirRelationExpr {
     /// The runtime memory footprint of this operator is zero.
     Let {
         /// The identifier to be used in `Get` variants to retrieve `value`.
-        #[mzreflect(ignore)]
         id: LocalId,
         /// The collection to be bound to `id`.
         value: Box<MirRelationExpr>,
@@ -158,7 +154,6 @@ pub enum MirRelationExpr {
     /// The runtime memory footprint of this operator is zero.
     LetRec {
         /// The identifiers to be used in `Get` variants to retrieve each `value`.
-        #[mzreflect(ignore)]
         ids: Vec<LocalId>,
         /// The collections to be bound to each `id`.
         values: Vec<MirRelationExpr>,
@@ -166,7 +161,6 @@ pub enum MirRelationExpr {
         /// (Whether we error or just stop is configured by `LetRecLimit::return_at_limit`.)
         /// The per-`LetRec` limit that the user specified is initially copied to each binding to
         /// accommodate slicing and merging of `LetRec`s in MIR transforms (e.g., `NormalizeLets`).
-        #[mzreflect(ignore)]
         limits: Vec<Option<LetRecLimit>>,
         /// The result of the `Let`, evaluated with `id` bound to `value`.
         body: Box<MirRelationExpr>,
@@ -2426,8 +2420,7 @@ impl VisitChildren<Self> for MirRelationExpr {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ColumnOrder {
     /// The column index.
@@ -2474,8 +2467,7 @@ where
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct AggregateExpr {
     /// Names the aggregation function.
@@ -3213,8 +3205,7 @@ impl AggregateExpr {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub enum JoinImplementation {
     /// Perform a sequence of binary differential dataflow joins.
@@ -3252,12 +3243,7 @@ pub enum JoinImplementation {
     /// to represent it in MIR, because the fast path detection wants to match on this.
     ///
     /// Consists of (`<coll_id>`, `<index_id>`, `<index_key>`, `<constants>`)
-    IndexedFilter(
-        GlobalId,
-        GlobalId,
-        Vec<MirScalarExpr>,
-        #[mzreflect(ignore)] Vec<Row>,
-    ),
+    IndexedFilter(GlobalId, GlobalId, Vec<MirScalarExpr>, Vec<Row>),
     /// No implementation yet selected.
     Unimplemented,
 }
@@ -3308,8 +3294,7 @@ impl JoinImplementation {
     Clone,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub enum JoinInputCharacteristics {
     /// Old version, with `enable_join_prioritize_arranged` turned off.
@@ -3385,8 +3370,7 @@ impl JoinInputCharacteristics {
     Clone,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct JoinInputCharacteristicsV2 {
     /// An excellent indication that record count will not increase.
@@ -3463,8 +3447,7 @@ impl JoinInputCharacteristicsV2 {
     Clone,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct JoinInputCharacteristicsV1 {
     /// An excellent indication that record count will not increase.
@@ -3612,12 +3595,10 @@ impl RowSetFinishing {
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
     ) -> Result<(RowCollectionIter, usize), String> {
-        // How much additional memory is required to make a sorted view.
-        let sorted_view_mem = rows.entries().saturating_mul(std::mem::size_of::<usize>());
-        let required_memory = rows.byte_len().saturating_add(sorted_view_mem);
-
-        // Bail if creating the sorted view would require us to use too much memory.
-        if required_memory > usize::cast_from(max_result_size) {
+        // Bail if the already-materialized collection is larger than the cap.
+        // `byte_len` includes the per-row offset metadata, and finishing does
+        // not allocate any additional per-entry structure.
+        if rows.byte_len() > usize::cast_from(max_result_size) {
             let max_bytes = ByteSize::b(max_result_size);
             return Err(format!("result exceeds max size of {max_bytes}",));
         }
@@ -3725,12 +3706,10 @@ impl RowSetFinishingIncremental {
         rows: RowCollection,
         max_result_size: u64,
     ) -> Result<RowCollectionIter, String> {
-        // How much additional memory is required to make a sorted view.
-        let sorted_view_mem = rows.entries().saturating_mul(std::mem::size_of::<usize>());
-        let required_memory = rows.byte_len().saturating_add(sorted_view_mem);
-
-        // Bail if creating the sorted view would require us to use too much memory.
-        if required_memory > usize::cast_from(max_result_size) {
+        // Bail if the already-materialized collection is larger than the cap.
+        // `byte_len` includes the per-row offset metadata, and finishing does
+        // not allocate any additional per-entry structure.
+        if rows.byte_len() > usize::cast_from(max_result_size) {
             let max_bytes = ByteSize::b(max_result_size);
             return Err(format!("total result exceeds max size of {max_bytes}",));
         }
@@ -3888,8 +3867,7 @@ where
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct WindowFrame {
     /// ROWS, RANGE or GROUPS
@@ -3979,8 +3957,7 @@ impl WindowFrame {
     PartialOrd,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub enum WindowFrameUnits {
     /// Each row is treated as the unit of work for bounds
@@ -4015,7 +3992,6 @@ impl Display for WindowFrameUnits {
     PartialEq,
     Eq,
     Hash,
-    MzReflect,
     PartialOrd,
     Ord
 )]

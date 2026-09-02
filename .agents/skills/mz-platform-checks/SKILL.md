@@ -82,7 +82,7 @@ Both manipulate phases always run. validate() may run multiple times.
 ```python
 from materialize.checks.checks import disabled
 
-@disabled(ignore_reason="due to database-issues#12345")
+@disabled(ignore_reason="due to SQL-450")
 class MyBrokenCheck(Check):
     ...
 ```

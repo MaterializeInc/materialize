@@ -1,6 +1,6 @@
 ---
 source: src/txn-wal/src/operator.rs
-revision: 731fe69aa5
+revision: 5a4a36c4fd
 ---
 
 # mz-txn-wal::operator

@@ -190,6 +190,39 @@ Because the substitution is applied to actual output before both comparison and
 rewrite, the masked token is what gets recorded, so the file stays stable across
 runs.
 
+### `user` extension
+
+The `user <name>` directive, from CockroachDB's logic tests, switches the
+session user for all subsequent records. The role is created on first use and
+its connection is cached. `user root` (and `user materialize`) switches back
+to the default superuser. Roles created this way are dropped when the next
+file starts.
+
+### CockroachDB dialect support
+
+The files in [test/sqllogictest/cockroach](/test/sqllogictest/cockroach) are
+imported from CockroachDB (see the
+[README](/test/sqllogictest/cockroach/README.md) for provenance). To run them
+mostly unmodified, the runner handles some CockroachDB-isms:
+
+* A `query` without a `----` separator must succeed and return no rows. A
+  blank line only ends such a record when a new record (directive, comment,
+  or end of file) follows it, because hand-written files may contain blank
+  lines inside a query's SQL.
+* A statement record containing multiple SQL commands executes them one at a
+  time, reporting the first error.
+* A `CREATE TABLE` that fails to parse is retried with CockroachDB's inline
+  `INDEX`, `UNIQUE INDEX`, `INVERTED INDEX`, and `FAMILY` items stripped.
+  Constraints are kept.
+* `SET` or `RESET` of a configuration parameter Materialize does not
+  recognize is a no-op success.
+* `let $var` blocks are skipped, so records referencing the variable fail at
+  execution time. `skip_on_retry` is ignored. `statement notice` only checks
+  for success. The `retry` query option is ignored, `noticetrace` queries are
+  skipped entirely, and the `F` column type char is treated like `R`.
+* An expected-error pattern that is not a valid regex never matches, failing
+  that record rather than aborting the whole run.
+
 ### modes
 
 We have extended sqllogictest to have the concept of the "mode." There are two

@@ -56,18 +56,22 @@ use mz_sql_parser::ast::{Ident, RawItemName, UnresolvedItemName};
 /// system catalogs are outside any database.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ObjectId {
-    database: Option<String>,
-    schema: String,
-    object: String,
+    database: Option<Ident>,
+    schema: Ident,
+    object: Ident,
 }
 
 impl ObjectId {
     /// Create a user-object ObjectId with the given database, schema, and object names.
+    ///
+    /// The arguments are raw (unquoted) identifier values — e.g. file stems or
+    /// catalog names. They are stored as [`Ident`]s, which compare on the raw
+    /// value and only quote when rendered (see the [`std::fmt::Display`] impl).
     pub fn new(database: String, schema: String, object: String) -> Self {
         Self {
-            database: Some(database),
-            schema,
-            object,
+            database: Some(Ident::new_unchecked(database)),
+            schema: Ident::new_unchecked(schema),
+            object: Ident::new_unchecked(object),
         }
     }
 
@@ -76,15 +80,15 @@ impl ObjectId {
     pub fn new_system(schema: String, object: String) -> Self {
         Self {
             database: None,
-            schema,
-            object,
+            schema: Ident::new_unchecked(schema),
+            object: Ident::new_unchecked(object),
         }
     }
 
     /// Get the database name, or `None` for system-schema objects.
     #[inline]
     pub fn database(&self) -> Option<&str> {
-        self.database.as_deref()
+        self.database.as_ref().map(Ident::as_str)
     }
 
     /// Get the database name, panicking if this is a system-schema oid.
@@ -94,24 +98,27 @@ impl ObjectId {
     /// because they are not project objects.
     #[inline]
     pub fn expect_database(&self) -> &str {
-        self.database.as_deref().unwrap_or_else(|| {
-            panic!(
-                "system-schema ObjectId '{}' used in user-object context",
-                self
-            )
-        })
+        self.database
+            .as_ref()
+            .map(Ident::as_str)
+            .unwrap_or_else(|| {
+                panic!(
+                    "system-schema ObjectId '{}' used in user-object context",
+                    self
+                )
+            })
     }
 
     /// Get the schema name.
     #[inline]
     pub fn schema(&self) -> &str {
-        &self.schema
+        self.schema.as_str()
     }
 
     /// Get the object name.
     #[inline]
     pub fn object(&self) -> &str {
-        &self.object
+        self.object.as_str()
     }
 
     /// Resolve an [`UnresolvedItemName`] into an [`ObjectId`].
@@ -128,32 +135,31 @@ impl ObjectId {
     ) -> Self {
         match name.0.as_slice() {
             [object] => Self {
-                database: Some(default_database.to_string()),
-                schema: default_schema.to_string(),
-                object: object.to_string(),
+                database: Some(Ident::new_unchecked(default_database)),
+                schema: Ident::new_unchecked(default_schema),
+                object: object.clone(),
             },
             [schema, object] => {
-                let schema_str = schema.to_string();
-                let database = if is_system_schema(&schema_str) {
+                let database = if is_system_schema(schema.as_str()) {
                     None
                 } else {
-                    Some(default_database.to_string())
+                    Some(Ident::new_unchecked(default_database))
                 };
                 Self {
                     database,
-                    schema: schema_str,
-                    object: object.to_string(),
+                    schema: schema.clone(),
+                    object: object.clone(),
                 }
             }
             [database, schema, object] => Self {
-                database: Some(database.to_string()),
-                schema: schema.to_string(),
-                object: object.to_string(),
+                database: Some(database.clone()),
+                schema: schema.clone(),
+                object: object.clone(),
             },
             _ => Self {
-                database: Some(default_database.to_string()),
-                schema: default_schema.to_string(),
-                object: "unknown".to_string(),
+                database: Some(Ident::new_unchecked(default_database)),
+                schema: Ident::new_unchecked(default_schema),
+                object: Ident::new_unchecked("unknown"),
             },
         }
     }
@@ -178,10 +184,10 @@ impl ObjectId {
     pub fn to_unresolved_item_name(&self) -> UnresolvedItemName {
         let mut parts = Vec::with_capacity(3);
         if let Some(db) = &self.database {
-            parts.push(Ident::new(db).expect("valid database"));
+            parts.push(db.clone());
         }
-        parts.push(Ident::new(&self.schema).expect("valid schema"));
-        parts.push(Ident::new(&self.object).expect("valid object"));
+        parts.push(self.schema.clone());
+        parts.push(self.object.clone());
         UnresolvedItemName(parts)
     }
 
@@ -222,31 +228,26 @@ impl FromStr for ObjectId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split('.').collect();
-        match parts.as_slice() {
-            [database, schema, object]
-                if !database.is_empty() && !schema.is_empty() && !object.is_empty() =>
-            {
-                Ok(ObjectId {
-                    database: Some((*database).to_string()),
-                    schema: (*schema).to_string(),
-                    object: (*object).to_string(),
-                })
-            }
-            [schema, object]
-                if !schema.is_empty() && !object.is_empty() && is_system_schema(schema) =>
-            {
-                Ok(ObjectId {
-                    database: None,
-                    schema: (*schema).to_string(),
-                    object: (*object).to_string(),
-                })
-            }
-            _ => Err(format!(
+        let invalid = || {
+            format!(
                 "invalid object id '{}': expected format \
                  'database.schema.object' (or 'schema.object' for system catalogs)",
                 s
-            )),
+            )
+        };
+        let name = mz_sql_parser::parser::parse_item_name(s).map_err(|_| invalid())?;
+        match name.0.as_slice() {
+            [database, schema, object] => Ok(ObjectId {
+                database: Some(database.clone()),
+                schema: schema.clone(),
+                object: object.clone(),
+            }),
+            [schema, object] if is_system_schema(schema.as_str()) => Ok(ObjectId {
+                database: None,
+                schema: schema.clone(),
+                object: object.clone(),
+            }),
+            _ => Err(invalid()),
         }
     }
 }
@@ -378,5 +379,42 @@ mod tests {
         assert_eq!(id.database(), Some("other_db"));
         assert_eq!(id.schema(), "staging");
         assert_eq!(id.object(), "events");
+    }
+
+    /// A declared reserved-word dependency parses to its unquoted value.
+    #[mz_ore::test]
+    fn parse_quoted_reserved_word_three_parts() {
+        let id: ObjectId = "materialize.public.\"table\"".parse().unwrap();
+        assert_eq!(id.database(), Some("materialize"));
+        assert_eq!(id.schema(), "public");
+        assert_eq!(id.object(), "table");
+    }
+
+    /// Display re-quotes a keyword so a rendered id (e.g. in types.lock) re-parses.
+    #[mz_ore::test]
+    fn reserved_word_display_round_trips() {
+        let id: ObjectId = "materialize.public.\"table\"".parse().unwrap();
+        assert_eq!(id.to_string(), "materialize.public.\"table\"");
+        let reparsed: ObjectId = id.to_string().parse().unwrap();
+        assert_eq!(reparsed, id);
+    }
+
+    /// `from_item_name` and `ObjectId::new` produce equal ids for a keyword name —
+    /// the equality dependency resolution relies on.
+    #[mz_ore::test]
+    fn reserved_word_identity_matches_across_constructors() {
+        let name = UnresolvedItemName(vec![
+            Ident::new("materialize").unwrap(),
+            Ident::new("public").unwrap(),
+            Ident::new("table").unwrap(),
+        ]);
+        let from_ref = ObjectId::from_item_name(&name, "materialize", "public");
+        let from_stem = ObjectId::new(
+            "materialize".to_string(),
+            "public".to_string(),
+            "table".to_string(),
+        );
+        assert_eq!(from_ref, from_stem);
+        assert_eq!(from_ref.object(), "table");
     }
 }

@@ -202,14 +202,16 @@ impl RustType<ProtoPostgresColumnDesc> for PostgresColumnDesc {
     }
 
     fn from_proto(proto: ProtoPostgresColumnDesc) -> Result<Self, TryFromProtoError> {
+        let col_num_u32: u32 = proto
+            .col_num
+            .into_rust_if_some("ProtoPostgresColumnDesc::col_num")?;
+        // `col_num` is `u16` on the Rust side. Reject u32 values that don't fit
+        // instead of panicking. This is reachable from untrusted proto bytes.
+        let col_num = u16::try_from(col_num_u32)
+            .map_err(|e| TryFromProtoError::InvalidFieldError(e.to_string()))?;
         Ok(PostgresColumnDesc {
             name: proto.name,
-            col_num: {
-                let v: u32 = proto
-                    .col_num
-                    .into_rust_if_some("ProtoPostgresColumnDesc::col_num")?;
-                u16::try_from(v).expect("u16 must roundtrip")
-            },
+            col_num,
             type_oid: proto.type_oid,
             type_mod: proto.type_mod,
             nullable: proto.nullable,
@@ -257,14 +259,20 @@ impl RustType<ProtoPostgresKeyDesc> for PostgresKeyDesc {
     }
 
     fn from_proto(proto: ProtoPostgresKeyDesc) -> Result<Self, TryFromProtoError> {
+        // `cols` is `Vec<u16>` on the Rust side but `Vec<u32>` on the wire;
+        // a u32 value above 65535 used to panic via `.expect`, which is
+        // reachable from untrusted proto bytes.
+        let cols = proto
+            .cols
+            .into_iter()
+            .map(|c| {
+                u16::try_from(c).map_err(|e| TryFromProtoError::InvalidFieldError(e.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(PostgresKeyDesc {
             oid: proto.oid,
             name: proto.name,
-            cols: proto
-                .cols
-                .into_iter()
-                .map(|c| c.try_into().expect("values roundtrip"))
-                .collect(),
+            cols,
             is_primary: proto.is_primary,
             nulls_not_distinct: proto.nulls_not_distinct,
         })

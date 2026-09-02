@@ -1,1 +1,2 @@
 **/*.svg linguist-generated=true
+src/compute-types/tests/snapshots/*.json linguist-generated=true

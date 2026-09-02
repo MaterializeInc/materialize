@@ -6,6 +6,10 @@ menus:
   main:
     weight: 15
     identifier: 'serve-results'
+aliases:
+  - /self-managed/v25.2/serve-results/
+  - /self-managed/v25.2/serve-results/query-results/
+  - /self-managed/v25.2/serve-results/bi-tools/
 ---
 
 In Materialize, indexed views and materialized views maintain up-to-date query

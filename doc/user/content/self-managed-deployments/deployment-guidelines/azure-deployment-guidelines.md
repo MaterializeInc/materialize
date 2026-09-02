@@ -17,7 +17,7 @@ As a general guideline, we recommend:
 
 - ARM-based CPU.
 - A 1:8 ratio of vCPU to GiB memory.
-- An 8:1 ratio of GiB local instance storage to GiB memory when using swap.
+- At least a 2:1 ratio of GiB local instance storage to GiB memory when using swap.
 
 ### Recommended Azure VM Types with Local NVMe Disks
 
@@ -50,35 +50,32 @@ significantly degrade performance and is not supported.
 
 ### Swap support
 
-{{< tabs >}}
-{{< tab "New Terraform" >}}
-#### New Terraform
-
-The new Materialize [Terraform module](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/azure/examples/simple) supports configuring swap out of the box.
-
-{{< /tab >}}
-{{< tab "Legacy Terraform" >}}
-#### Legacy Terraform
-
-The Legacy Terraform provider, adds preliminary swap support in v0.6.1, via the [`swap_enabled`](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_swap_enabled) variable.
-With this change, the Terraform:
-  - Creates a node group for Materialize.
-  - Configures NVMe instance store volumes as swap using a daemonset.
-  - Enables swap at the Kubelet.
-
-See [Upgrade Notes](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#v061).
-
-{{< note >}}
-If deploying `v25.2`, Materialize clusters will not automatically use swap unless they are configured with a `memory_request` less than their `memory_limit`. In `v26`, this will be handled automatically.
-{{< /note >}}
-
-{{< /tab >}}
-{{< /tabs >}}
+The Materialize [Terraform module](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/azure/examples/simple) supports configuring swap out of the box.
 
 ## Recommended Azure Blob Storage
 
 Materialize writes **block** blobs on Azure. As a general guideline, we
 recommend **Premium block blob** storage accounts.
+
+## Recommended metadata database sizing
+
+{{< include-md file="content/headless/self-managed-deployments/metadata-database-sizing.md" >}}
+
+### Flexible Server SKUs
+
+For the Azure Database for PostgreSQL flexible server that backs the metadata
+database, we recommend:
+
+- The **Memory Optimized** tier (E-series), which provides the 1:8
+  vCore-to-memory ratio recommended for the metadata database.
+- **Zone-redundant high availability** for production.
+- **Premium SSD v2** storage, which includes 3,000 IOPS and 125 MB/s at any
+  size.
+
+| Deployment size | `sku_name` | vCores / memory | Storage | Provisioned IOPS | Continuously-active objects (~60% CPU) |
+|---|---|---|---|---|---|
+| Entry / small production | `MO_Standard_E4ds_v5` | 4 / 32 GiB | 128 GiB | 3,000 (included) | ~4,500 |
+| Recommended default | `MO_Standard_E16ds_v5` | 16 / 128 GiB | 512 GiB | 6,000 | ~18,000 |
 
 ## TLS
 
@@ -87,5 +84,8 @@ Certificate Authority (CA) rather than self-signed certificates.
 
 ## Upgrading guideline
 
-{{< include-md file="shared-content/self-managed/general-rules-for-upgrades.md"
->}}
+{{% include-headless "/headless/self-managed-deployments/general-rules-for-upgrades" %}}
+
+## Node pool resizing
+
+{{% include-headless "/headless/self-managed-deployments/resize-node-pool" %}}

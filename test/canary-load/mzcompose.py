@@ -24,7 +24,10 @@ from psycopg.errors import IdleInTransactionSessionTimeout, OperationalError
 from requests.exceptions import ConnectionError, ReadTimeout
 
 from materialize.cloudtest.util.jwt_key import fetch_jwt
-from materialize.mz_env_util import get_cloud_hostname
+from materialize.mz_env_util import (
+    connect_and_print_environment_id,
+    get_cloud_hostname,
+)
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -126,6 +129,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     host = get_cloud_hostname(
         c, region=REGION, environment=ENVIRONMENT, app_password=APP_PASSWORD
     )
+
+    connect_and_print_environment_id(host, USERNAME, APP_PASSWORD)
 
     with c.override(
         Testdrive(

@@ -249,3 +249,100 @@ WITH count AS (VALUES (9)) SELECT count(*) FROM count;
 ----
 count
 1
+
+# Regression tests for SQL-355: CTE `LocalId` allocation must be unique across
+# the whole statement. Ids used to be derived from the number of CTE names
+# currently in scope, so a shadowing CTE (which doesn't grow that count) could
+# collide with a CTE in a nested scope, and references would silently bind to
+# the wrong CTE.
+
+# `a` here used to resolve to `b`, returning 30.
+query I
+WITH a AS (SELECT 10 AS v)
+SELECT * FROM (
+  WITH a AS (SELECT 20 AS v)
+  SELECT * FROM (
+    WITH b AS (SELECT 30 AS v)
+    SELECT v FROM a
+  ) t2
+) t1;
+----
+20
+
+# Both the shadowing CTE and the colliding one referenced side by side.
+query II
+WITH a AS (SELECT 10 AS v)
+SELECT * FROM (
+  WITH a AS (SELECT 20 AS v)
+  SELECT * FROM (
+    WITH b AS (SELECT 30 AS v)
+    SELECT a.v, b.v FROM a, b
+  ) t2
+) t1;
+----
+20  30
+
+# Deeper shadowing chain: `a` is shadowed twice, so two ids collide with the
+# innermost WITH block's ids.
+query I
+WITH a AS (SELECT 1 AS v)
+SELECT * FROM (
+  WITH a AS (SELECT 2 AS v)
+  SELECT * FROM (
+    WITH a AS (SELECT 3 AS v)
+    SELECT * FROM (
+      WITH b AS (SELECT 4 AS v), c AS (SELECT 5 AS v)
+      SELECT a.v + b.v + c.v FROM a, b, c
+    ) t3
+  ) t2
+) t1;
+----
+12
+
+# WITH MUTUALLY RECURSIVE allocates ids the same way. The reference to `a`
+# inside the definition of `b` used to bind to `b` itself.
+query I
+WITH a AS (SELECT 1 AS v)
+SELECT * FROM (
+  WITH a AS (SELECT 2 AS v)
+  SELECT * FROM (
+    WITH MUTUALLY RECURSIVE b (v int) AS (SELECT v FROM a)
+    SELECT v FROM b
+  ) t2
+) t1;
+----
+2
+
+# Same, but with more than one binding in the WMR block. The bindings are
+# allocated ids in a separate pre-pass, so this exercises that both of them,
+# and the sibling reference between them, stay clear of the shadowed outer
+# `a`. `b` references the outer `a` (= 2), `c` references its sibling `b`.
+query I
+WITH a AS (SELECT 1 AS v)
+SELECT * FROM (
+  WITH a AS (SELECT 2 AS v)
+  SELECT * FROM (
+    WITH MUTUALLY RECURSIVE
+      b (v int) AS (SELECT v FROM a),
+      c (v int) AS (SELECT v + 10 FROM b)
+    SELECT v FROM c
+  ) t2
+) t1;
+----
+12
+
+# A colliding `Let` inside a correlated subquery used to trip an id-uniqueness
+# assertion in HIR-to-MIR lowering.
+query II rowsort
+WITH a AS (SELECT 10 AS v)
+SELECT * FROM (
+  WITH a AS (SELECT 20 AS v)
+  SELECT x.a, l.w FROM x, LATERAL(
+    WITH b AS (SELECT x.a + (SELECT v FROM a) AS w)
+    SELECT w FROM b
+  ) l
+) t;
+----
+1  21
+2  22
+3  23

@@ -1,6 +1,5 @@
 ---
 source: src/catalog/tests/debug.rs
-assertion_line: 235
 expression: test_trace
 ---
 Trace {
@@ -445,8 +444,12 @@ Trace {
                                             },
                                         ),
                                     },
+                                    arrangement_compression: false,
                                     optimizer_feature_overrides: [],
                                     schedule: Manual,
+                                    auto_scaling_strategy: None,
+                                    reconfiguration: None,
+                                    burst: None,
                                 },
                             ),
                         },
@@ -489,12 +492,13 @@ Trace {
                             location: Managed(
                                 ManagedLocation {
                                     size: "scale=1,workers=1",
-                                    availability_zone: None,
+                                    availability_zones: [],
                                     internal: false,
                                     billed_as: None,
                                     pending: false,
                                 },
                             ),
+                            arrangement_compression: false,
                         },
                         owner_id: System(
                             1,
@@ -1587,6 +1591,12 @@ Trace {
         values: [],
     },
     system_configurations: CollectionTrace {
+        values: [],
+    },
+    cluster_system_configurations: CollectionTrace {
+        values: [],
+    },
+    replica_system_configurations: CollectionTrace {
         values: [],
     },
     system_privileges: CollectionTrace {

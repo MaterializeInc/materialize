@@ -775,13 +775,17 @@ where
         }
     }
 
-    fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize) {
+    fn len(chunk: &Self::Chunk) -> usize {
+        chunk[..].len()
+    }
+
+    fn allocation(chunk: &Self::Chunk) -> (usize, usize, usize) {
         let (mut size, mut capacity, mut allocations) = (0, 0, 0);
         chunk.heap_size(|siz, cap| {
             size += siz;
             capacity += cap;
             allocations += 1;
         });
-        (chunk[..].len(), size, capacity, allocations)
+        (size, capacity, allocations)
     }
 }

@@ -91,18 +91,23 @@ use itertools::Itertools;
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
+use mz_adapter_types::dyncfgs::FRONTEND_READ_THEN_WRITE;
 use mz_adapter_types::dyncfgs::{
-    USER_ID_POOL_BATCH_SIZE, WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
+    ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS, USER_ID_POOL_BATCH_SIZE,
+    WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
 };
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
-use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC, MZ_AUDIT_EVENTS, MZ_STORAGE_USAGE_BY_SHARD};
+use mz_catalog::builtin::{
+    BUILTINS, BUILTINS_STATIC, MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY, MZ_OBJECT_HYDRATION_HISTORY,
+    MZ_REPLICA_HYDRATION_HISTORY, MZ_STORAGE_USAGE_BY_SHARD,
+};
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
-use mz_catalog::durable::{AuditLogIterator, OpenableDurableCatalogState};
+use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, ClusterVariantManaged, Connection,
-    DataSourceDesc, StateDiff, StateUpdate, StateUpdateKind, Table, TableDataSource,
+    DataSourceDesc, ReconfigurationTarget, Table, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
@@ -111,12 +116,13 @@ use mz_compute_client::controller::error::{
 };
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::Plan;
+use mz_compute_types::plan::LirRelationExpr;
 use mz_controller::clusters::{
     ClusterConfig, ClusterEvent, ClusterStatus, ProcessId, ReplicaLocation,
 };
 use mz_controller::{ControllerConfig, Readiness};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
+use mz_dyncfg::{ConfigUpdates, ParameterScope};
 use mz_expr::{MapFilterProject, MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
 use mz_orchestrator::OfflineReason;
@@ -125,7 +131,7 @@ use mz_ore::channel::trigger::Trigger;
 use mz_ore::future::TimeoutError;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_ore::task::{JoinHandle, spawn};
+use mz_ore::task::{AbortOnDropHandle, JoinHandle, spawn};
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::url::SensitiveUrl;
@@ -138,14 +144,14 @@ use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
-use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
+use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, SqlRelationType, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{CatalogCluster, EnvironmentId};
-use mz_sql::names::{QualifiedItemName, ResolvedIds, SchemaSpecifier};
+use mz_sql::names::{QualifiedItemName, ResolvedIds};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{
     self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, HirRelationExpr,
@@ -167,12 +173,13 @@ use mz_storage_types::sources::{IngestionDescription, SourceExport, Timeline};
 use mz_timestamp_oracle::{TimestampOracleConfig, WriteTimestamp};
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
+use semver::Version;
 use serde::Serialize;
 use thiserror::Error;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
-use tokio::sync::{OwnedMutexGuard, mpsc, oneshot, watch};
+use tokio::sync::{Notify, OwnedMutexGuard, Semaphore, mpsc, oneshot, watch};
 use tokio::time::{Interval, MissedTickBehavior};
 use tracing::{Instrument, Level, Span, debug, info, info_span, span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -182,14 +189,18 @@ use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyFrom};
 use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
-use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
+use crate::config::{
+    ClusterEvalContext, ReplicaEvalContext, ScopedParameters, ScopedParametersScope,
+    SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig,
+};
 use crate::coord::appends::{
-    BuiltinTableAppendNotify, DeferredOp, GroupCommitPermit, PendingWriteTxn,
+    BuiltinTableAppendCompletion, BuiltinTableAppendNotify, DeferredOp, GroupCommitPermit,
+    PendingWriteTxn,
 };
 use crate::coord::caught_up::CaughtUpCheckContext;
-use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
+use crate::coord::metric_sink::{CuratedMetricSink, InstalledMetricSink, PlannedMetricSink};
 use crate::coord::peek::PendingPeek;
 use crate::coord::statement_logging::StatementLogging;
 use crate::coord::timeline::{TimelineContext, TimelineState};
@@ -211,7 +222,7 @@ use crate::{AdapterNotice, ReadHolds, flags};
 
 pub(crate) mod appends;
 pub(crate) mod catalog_serving;
-pub(crate) mod cluster_scheduling;
+pub(crate) mod cluster_controller;
 pub(crate) mod consistency;
 pub(crate) mod id_bundle;
 pub(crate) mod in_memory_oracle;
@@ -228,13 +239,26 @@ mod caught_up;
 mod command_handler;
 mod ddl;
 pub(crate) mod group_sync;
+mod hydration_history;
 mod indexes;
 mod info_metrics;
 mod introspection;
 mod message_handler;
+mod metric_sink;
 mod privatelink_status;
 mod sql;
 mod validity;
+
+/// The oldest leader version against which a replacement-migrated builtin materialized view may
+/// write its new persist shard while this environment is still read-only.
+///
+/// Every builtin materialized view reads `mz_internal.mz_catalog_raw`, so its dataflow only makes
+/// progress up to the catalog shard's frontier. Holding that frontier at the current time is the
+/// leader's job, and leaders only started doing it in v26.17 (PR #35402). Write-enable such an MV
+/// against an older leader and it sits at a stale frontier and never reports caught up, which
+/// blocks promotion outright instead of merely leaving the collection cold at cut-over. We still
+/// support upgrading from before v26.17, so that leader is a real case, not a hypothetical.
+const MIN_LEADER_VERSION_FOR_MIGRATED_MV_WRITES: Version = Version::new(26, 17, 0);
 
 /// A pool of pre-allocated user IDs to avoid per-DDL persist writes.
 ///
@@ -309,6 +333,17 @@ impl IdPool {
     }
 }
 
+/// A row for `mz_object_arrangement_size_history`, prepared off-thread by the
+/// arrangement sizes snapshot task and stamped with a collection timestamp at
+/// write time.
+#[derive(Debug)]
+pub struct ArrangementSizeRecord {
+    pub replica_id: String,
+    pub object_id: String,
+    pub size: i64,
+    pub hydration_complete: bool,
+}
+
 #[derive(Debug)]
 pub enum Message {
     Command(OpenTelemetryContext, Command),
@@ -334,6 +369,19 @@ pub enum Message {
     },
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
+    /// Finalizes an applied group commit.
+    ///
+    /// Statement timestamps precede response retirement because retirement ends statement logging.
+    GroupCommitApplied {
+        /// Responses to retire after recording statement timestamps.
+        responses: Vec<crate::util::CompletedClientTransmitter>,
+        /// Statement executions associated with this commit.
+        statement_logging_ids: Vec<StatementLoggingId>,
+        /// Frontend-sequenced writes to complete after local timestamp bookkeeping.
+        internal_results: Vec<crate::coord::appends::InternalWriteResponder>,
+        /// The applied write timestamp.
+        write_ts: Timestamp,
+    },
     DeferredStatementReady,
     AdvanceTimelines,
     ClusterEvent(ClusterEvent),
@@ -352,7 +400,10 @@ pub enum Message {
     StorageUsagePrune(Vec<BuiltinTableUpdate>),
     ArrangementSizesSchedule,
     ArrangementSizesSnapshot,
+    ArrangementSizesWrite(Vec<ArrangementSizeRecord>),
     ArrangementSizesPrune(Vec<BuiltinTableUpdate>),
+    HydrationHistorySchedule,
+    HydrationHistoryRun,
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
@@ -376,6 +427,11 @@ pub enum Message {
         span: Span,
         stage: CreateIndexStage,
     },
+    CreateMetricSinkStageReady {
+        ctx: ExecuteContext,
+        span: Span,
+        stage: CreateMetricSinkStage,
+    },
     CreateViewStageReady {
         ctx: ExecuteContext,
         span: Span,
@@ -395,6 +451,10 @@ pub enum Message {
         span: Span,
         stage: IntrospectionSubscribeStage,
     },
+    MetricSinkStageReady {
+        span: Span,
+        stage: MetricSinkStage,
+    },
     SecretStageReady {
         ctx: ExecuteContext,
         span: Span,
@@ -412,13 +472,11 @@ pub enum Message {
     },
     DrainStatementLog,
     PrivateLinkVpcEndpointEvents(Vec<VpcEndpointEvent>),
-    CheckSchedulingPolicies,
 
-    /// Scheduling policy decisions about turning clusters On/Off.
-    /// `Vec<(policy name, Vec of decisions by the policy)>`
-    /// A cluster will be On if and only if there is at least one On decision for it.
-    /// Scheduling decisions for clusters that have `SCHEDULE = MANUAL` are ignored.
-    SchedulingDecisions(Vec<(&'static str, Vec<(ClusterId, SchedulingDecision)>)>),
+    /// One pull/apply call from the cluster controller task, answered on the main
+    /// coordinator message loop from the catalog and live controller signals.
+    /// See [`cluster_controller`].
+    ClusterControllerRequest(cluster_controller::ClusterControllerRequest),
 }
 
 impl Message {
@@ -435,6 +493,12 @@ impl Message {
                 Command::GetWebhook { .. } => "command-get_webhook",
                 Command::GetSystemVars { .. } => "command-get_system_vars",
                 Command::SetSystemVars { .. } => "command-set_system_vars",
+                Command::UpdateScopedSystemParameters { .. } => {
+                    "command-update_scoped_system_parameters"
+                }
+                Command::InstallScopedSystemParameterFrontend { .. } => {
+                    "command-install_scoped_system_parameter_frontend"
+                }
                 Command::Terminate { .. } => "command-terminate",
                 Command::RetireExecute { .. } => "command-retire_execute",
                 Command::CheckConsistency { .. } => "command-check_consistency",
@@ -457,12 +521,17 @@ impl Message {
                 Command::CopyToPreflight { .. } => "copy-to-preflight",
                 Command::ExecuteCopyTo { .. } => "execute-copy-to",
                 Command::ExecuteSideEffectingFunc { .. } => "execute-side-effecting-func",
+                Command::LookupConnection { .. } => "lookup-connection",
                 Command::RegisterFrontendPeek { .. } => "register-frontend-peek",
                 Command::UnregisterFrontendPeek { .. } => "unregister-frontend-peek",
                 Command::ExplainTimestamp { .. } => "explain-timestamp",
                 Command::FrontendStatementLogging(..) => "frontend-statement-logging",
                 Command::StartCopyFromStdin { .. } => "start-copy-from-stdin",
                 Command::InjectAuditEvents { .. } => "inject-audit-events",
+                Command::RegisterConnectionCancelWatch { .. } => "register-connection-cancel-watch",
+                Command::CreateInternalSubscribe { .. } => "create-internal-subscribe",
+                Command::AttemptWrite { .. } => "attempt-write",
+                Command::DropInternalSubscribe { .. } => "drop-internal-subscribe",
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,
@@ -480,6 +549,7 @@ impl Message {
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
             Message::TryDeferred { .. } => "try_deferred",
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
+            Message::GroupCommitApplied { .. } => "group_commit_applied",
             Message::AdvanceTimelines => "advance_timelines",
             Message::ClusterEvent(_) => "cluster_event",
             Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
@@ -491,7 +561,10 @@ impl Message {
             Message::StorageUsagePrune(_) => "storage_usage_prune",
             Message::ArrangementSizesSchedule => "arrangement_sizes_schedule",
             Message::ArrangementSizesSnapshot => "arrangement_sizes_snapshot",
+            Message::ArrangementSizesWrite(_) => "arrangement_sizes_write",
             Message::ArrangementSizesPrune(_) => "arrangement_sizes_prune",
+            Message::HydrationHistorySchedule => "hydration_history_schedule",
+            Message::HydrationHistoryRun => "hydration_history_run",
             Message::RetireExecute { .. } => "retire_execute",
             Message::ExecuteSingleStatementTransaction { .. } => {
                 "execute_single_statement_transaction"
@@ -499,6 +572,7 @@ impl Message {
             Message::PeekStageReady { .. } => "peek_stage_ready",
             Message::ExplainTimestampStageReady { .. } => "explain_timestamp_stage_ready",
             Message::CreateIndexStageReady { .. } => "create_index_stage_ready",
+            Message::CreateMetricSinkStageReady { .. } => "create_metric_sink_stage_ready",
             Message::CreateViewStageReady { .. } => "create_view_stage_ready",
             Message::CreateMaterializedViewStageReady { .. } => {
                 "create_materialized_view_stage_ready"
@@ -507,13 +581,13 @@ impl Message {
             Message::IntrospectionSubscribeStageReady { .. } => {
                 "introspection_subscribe_stage_ready"
             }
+            Message::MetricSinkStageReady { .. } => "metric_sink_stage_ready",
             Message::SecretStageReady { .. } => "secret_stage_ready",
             Message::ClusterStageReady { .. } => "cluster_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
             Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
-            Message::CheckSchedulingPolicies => "check_scheduling_policies",
-            Message::SchedulingDecisions { .. } => "scheduling_decision",
+            Message::ClusterControllerRequest(_) => "cluster_controller_request",
             Message::DeferredStatementReady => "deferred_statement_ready",
         }
     }
@@ -686,6 +760,7 @@ pub struct PeekStageCopyTo {
     optimizer: optimize::copy_to::Optimizer,
     global_lir_plan: optimize::copy_to::GlobalLirPlan,
     optimization_finished_at: EpochMillis,
+    target_replica: Option<ReplicaId>,
     source_ids: BTreeSet<GlobalId>,
 }
 
@@ -744,6 +819,31 @@ pub struct CreateIndexExplain {
 }
 
 #[derive(Debug)]
+pub enum CreateMetricSinkStage {
+    Optimize(CreateMetricSinkOptimize),
+    Finish(CreateMetricSinkFinish),
+}
+
+#[derive(Debug)]
+pub struct CreateMetricSinkOptimize {
+    validity: PlanValidity,
+    plan: plan::CreateMetricSinkPlan,
+    resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
+pub struct CreateMetricSinkFinish {
+    validity: PlanValidity,
+    item_id: CatalogItemId,
+    global_id: GlobalId,
+    plan: plan::CreateMetricSinkPlan,
+    resolved_ids: ResolvedIds,
+    global_mir_plan: optimize::metric_sink::GlobalMirPlan,
+    global_lir_plan: optimize::metric_sink::GlobalLirPlan,
+    optimizer_features: OptimizerFeatures,
+}
+
+#[derive(Debug)]
 pub enum CreateViewStage {
     Optimize(CreateViewOptimize),
     Finish(CreateViewFinish),
@@ -785,6 +885,7 @@ pub struct CreateViewExplain {
 pub enum ExplainTimestampStage {
     Optimize(ExplainTimestampOptimize),
     RealTimeRecency(ExplainTimestampRealTimeRecency),
+    LinearizeTimestamp(ExplainTimestampLinearizeTimestamp),
     Finish(ExplainTimestampFinish),
 }
 
@@ -805,7 +906,7 @@ pub struct ExplainTimestampRealTimeRecency {
 }
 
 #[derive(Debug)]
-pub struct ExplainTimestampFinish {
+pub struct ExplainTimestampLinearizeTimestamp {
     validity: PlanValidity,
     format: ExplainFormat,
     optimized_plan: OptimizedMirRelationExpr,
@@ -816,10 +917,32 @@ pub struct ExplainTimestampFinish {
 }
 
 #[derive(Debug)]
+pub struct ExplainTimestampFinish {
+    validity: PlanValidity,
+    format: ExplainFormat,
+    cluster_id: ClusterId,
+    source_ids: BTreeSet<GlobalId>,
+    when: QueryWhen,
+    real_time_recency_ts: Option<Timestamp>,
+    /// The timeline context derived in the preceding `LinearizeTimestamp`
+    /// stage, carried forward so it stays consistent with `oracle_read_ts`.
+    timeline_context: TimelineContext,
+    /// The linearized read timestamp, read off the coordinator loop in the
+    /// preceding `LinearizeTimestamp` stage. `None` when no linearized read is
+    /// needed.
+    oracle_read_ts: Option<Timestamp>,
+}
+
+#[derive(Debug)]
 pub enum ClusterStage {
     Alter(AlterCluster),
     WaitForHydrated(AlterClusterWaitForHydrated),
     Finalize(AlterClusterFinalize),
+    /// The foreground wait-shim over a controller-driven background
+    /// reconfiguration: poll the durable `reconfiguration` record until it
+    /// clears, then report success or timeout depending on whether the realized
+    /// config reached the target.
+    AwaitReconfiguration(AlterClusterAwaitReconfiguration),
 }
 
 #[derive(Debug)]
@@ -844,6 +967,16 @@ pub struct AlterClusterFinalize {
     plan: plan::AlterClusterPlan,
     new_config: ClusterVariantManaged,
     workload_class: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterAwaitReconfiguration {
+    validity: PlanValidity,
+    cluster_id: ClusterId,
+    /// The target shape the awaited `ALTER` wrote. Once the record becomes
+    /// terminal, the realized config matching this is what distinguishes a
+    /// cut-over from a failure. See `await_reconfiguration_stage`.
+    target: ReconfigurationTarget,
 }
 
 #[derive(Debug)]
@@ -951,6 +1084,7 @@ pub struct CreateMaterializedViewExplain {
 #[derive(Debug)]
 pub enum SubscribeStage {
     OptimizeMir(SubscribeOptimizeMir),
+    LinearizeTimestamp(SubscribeLinearizeTimestamp),
     TimestampOptimizeLir(SubscribeTimestampOptimizeLir),
     Finish(SubscribeFinish),
     Explain(SubscribeExplain),
@@ -970,6 +1104,20 @@ pub struct SubscribeOptimizeMir {
 }
 
 #[derive(Debug)]
+pub struct SubscribeLinearizeTimestamp {
+    validity: PlanValidity,
+    plan: plan::SubscribePlan,
+    timeline: TimelineContext,
+    optimizer: optimize::subscribe::Optimizer,
+    global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
+    dependency_ids: BTreeSet<GlobalId>,
+    replica_id: Option<ReplicaId>,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPLAIN for this statement.
+    explain_ctx: ExplainContext,
+}
+
+#[derive(Debug)]
 pub struct SubscribeTimestampOptimizeLir {
     validity: PlanValidity,
     plan: plan::SubscribePlan,
@@ -978,6 +1126,10 @@ pub struct SubscribeTimestampOptimizeLir {
     global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
     dependency_ids: BTreeSet<GlobalId>,
     replica_id: Option<ReplicaId>,
+    /// The linearized read timestamp, read off the coordinator loop in the
+    /// preceding `LinearizeTimestamp` stage. `None` when no linearized read is
+    /// needed.
+    oracle_read_ts: Option<Timestamp>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
@@ -1032,6 +1184,36 @@ pub struct IntrospectionSubscribeFinish {
     validity: PlanValidity,
     global_lir_plan: optimize::subscribe::GlobalLirPlan,
     read_holds: ReadHolds,
+    cluster_id: ComputeInstanceId,
+    replica_id: ReplicaId,
+}
+
+#[derive(Debug)]
+pub enum MetricSinkStage {
+    Optimize(MetricSinkOptimize),
+    Finish(MetricSinkFinish),
+}
+
+#[derive(Debug)]
+pub struct MetricSinkOptimize {
+    validity: PlanValidity,
+    definition: &'static CuratedMetricSink,
+    /// The transient id of the sink's compute export. Recorded in
+    /// [`Coordinator::metric_sinks`] once the finish stage ships the dataflow.
+    sink_id: GlobalId,
+    /// The planned `source_sql`, and the shape it produces.
+    expr: HirRelationExpr,
+    desc: RelationDesc,
+    cluster_id: ComputeInstanceId,
+    replica_id: ReplicaId,
+}
+
+#[derive(Debug)]
+pub struct MetricSinkFinish {
+    validity: PlanValidity,
+    definition: &'static CuratedMetricSink,
+    sink_id: GlobalId,
+    global_lir_plan: optimize::metric_sink::GlobalLirPlan,
     cluster_id: ComputeInstanceId,
     replica_id: ReplicaId,
 }
@@ -1151,7 +1333,6 @@ pub struct Config {
     pub controller_config: ControllerConfig,
     pub controller_envd_epoch: NonZeroI64,
     pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
-    pub audit_logs_iterator: AuditLogIterator,
     pub timestamp_oracle_url: Option<SensitiveUrl>,
     pub unsafe_mode: bool,
     pub all_features: bool,
@@ -1526,41 +1707,56 @@ impl Drop for ExecuteContextGuard {
     }
 }
 
-/// Bundle of state related to statement execution.
+/// Carries the session and statement state needed to retire an execution.
 ///
-/// This struct collects a bundle of state that needs to be threaded
-/// through various functions as part of statement execution.
-/// It is used to finalize execution, by calling `retire`. Finalizing execution
-/// involves sending the session back to the pgwire layer so that it
-/// may be used to process further commands. It also involves
-/// performing some work on the main coordinator thread
-/// (e.g., recording the time at which the statement finished
-/// executing). The state necessary to perform this work is bundled in
-/// the `ExecuteContextGuard` object.
+/// Dropping an unretired context fails the client synchronously. Shutdown can drop contexts from
+/// task queues, where spawning response-barrier work is no longer safe.
 #[derive(Debug)]
 pub struct ExecuteContext {
-    inner: Box<ExecuteContextInner>,
+    // `None` only after `retire`/`into_parts` consumed the context.
+    inner: Option<Box<ExecuteContextInner>>,
 }
 
 impl std::ops::Deref for ExecuteContext {
     type Target = ExecuteContextInner;
     fn deref(&self) -> &Self::Target {
-        &*self.inner
+        self.inner.as_ref().expect("only consumed by value")
     }
 }
 
 impl std::ops::DerefMut for ExecuteContext {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.inner
+        self.inner.as_mut().expect("only consumed by value")
     }
 }
 
-#[derive(Debug)]
+impl Drop for ExecuteContext {
+    fn drop(&mut self) {
+        let Some(inner) = self.inner.take() else {
+            return;
+        };
+        // Destructors cannot spawn response-barrier tasks during runtime shutdown. Send the error
+        // synchronously and let the statement guard report retirement.
+        tracing::warn!("execute context dropped without retirement, failing the client");
+        let ExecuteContextInner { tx, session, .. } = *inner;
+        tx.send(
+            Err(AdapterError::Internal(
+                "statement execution abandoned, outcome unknown (server shutting down)".into(),
+            )),
+            session,
+        );
+    }
+}
+
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct ExecuteContextInner {
     tx: ClientTransmitter<ExecuteResponse>,
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     session: Session,
     extra: ExecuteContextGuard,
+    #[derivative(Debug = "ignore")]
+    response_barriers: Vec<BuiltinTableAppendNotify>,
 }
 
 impl ExecuteContext {
@@ -1586,14 +1782,27 @@ impl ExecuteContext {
         session: Session,
         extra: ExecuteContextGuard,
     ) -> Self {
+        Self::from_parts_with_response_barriers(tx, internal_cmd_tx, session, extra, Vec::new())
+    }
+
+    pub fn from_parts_with_response_barriers(
+        tx: ClientTransmitter<ExecuteResponse>,
+        internal_cmd_tx: mpsc::UnboundedSender<Message>,
+        session: Session,
+        extra: ExecuteContextGuard,
+        response_barriers: Vec<BuiltinTableAppendNotify>,
+    ) -> Self {
         Self {
-            inner: ExecuteContextInner {
-                tx,
-                session,
-                extra,
-                internal_cmd_tx,
-            }
-            .into(),
+            inner: Some(
+                ExecuteContextInner {
+                    tx,
+                    session,
+                    extra,
+                    response_barriers,
+                    internal_cmd_tx,
+                }
+                .into(),
+            ),
         }
     }
 
@@ -1604,50 +1813,56 @@ impl ExecuteContext {
     /// the coordinator and the pgwire layer. As part of any such
     /// protocol, we must ensure that the `ExecuteContextGuard`
     /// (possibly wrapped in a new `ExecuteContext`) is passed back to the coordinator for
-    /// eventual retirement.
+    /// eventual retirement. The returned response barriers must stay attached
+    /// to the user-visible response path.
+    ///
+    /// The returned parts lose the `Drop` backstop that answers the client on shutdown, so they
+    /// must not be held across an await point. A bare `ClientTransmitter` panics when dropped
+    /// unsent.
     pub fn into_parts(
-        self,
+        mut self,
     ) -> (
         ClientTransmitter<ExecuteResponse>,
         mpsc::UnboundedSender<Message>,
         Session,
         ExecuteContextGuard,
+        Vec<BuiltinTableAppendNotify>,
     ) {
         let ExecuteContextInner {
             tx,
             internal_cmd_tx,
             session,
             extra,
-        } = *self.inner;
-        (tx, internal_cmd_tx, session, extra)
+            response_barriers,
+        } = *self.inner.take().expect("only consumed by value");
+        (tx, internal_cmd_tx, session, extra, response_barriers)
     }
 
     /// Retire the execution, by sending a message to the coordinator.
     #[instrument(level = "debug")]
-    pub fn retire(self, result: Result<ExecuteResponse, AdapterError>) {
-        let ExecuteContextInner {
-            tx,
-            internal_cmd_tx,
-            session,
-            extra,
-        } = *self.inner;
-        let reason = if extra.is_trivial() {
-            None
-        } else {
-            Some((&result).into())
-        };
-        tx.send(result, session);
-        if let Some(reason) = reason {
-            // Retire the guard to get the inner ExecuteContextExtra without triggering auto-retire
-            let extra = extra.defuse();
-            if let Err(e) = internal_cmd_tx.send(Message::RetireExecute {
-                otel_ctx: OpenTelemetryContext::obtain(),
-                data: extra,
-                reason,
-            }) {
-                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-            }
+    pub fn retire(mut self, result: Result<ExecuteResponse, AdapterError>) {
+        let response_barriers = std::mem::take(&mut self.response_barriers);
+        if response_barriers.is_empty() {
+            let (tx, internal_cmd_tx, session, extra, _) = self.into_parts();
+            retire_execution_context(tx, internal_cmd_tx, session, extra, result);
+            return;
         }
+        // Keep `self` intact across the wait: if shutdown drops this task, the context's `Drop`
+        // backstop answers the client. Barriers are empty on re-entry, so this terminates.
+        spawn(
+            || "execute_context::retire_after_response_barriers",
+            async move {
+                for barrier in response_barriers {
+                    barrier.await;
+                }
+                self.retire(result);
+            },
+        );
+    }
+
+    /// Delays sending this statement's response until `barrier` resolves.
+    pub(crate) fn delay_response_until(&mut self, barrier: BuiltinTableAppendCompletion) {
+        self.response_barriers.push(barrier.into_notify());
     }
 
     pub fn extra(&self) -> &ExecuteContextGuard {
@@ -1656,6 +1871,31 @@ impl ExecuteContext {
 
     pub fn extra_mut(&mut self) -> &mut ExecuteContextGuard {
         &mut self.extra
+    }
+}
+
+fn retire_execution_context(
+    tx: ClientTransmitter<ExecuteResponse>,
+    internal_cmd_tx: mpsc::UnboundedSender<Message>,
+    session: Session,
+    extra: ExecuteContextGuard,
+    result: Result<ExecuteResponse, AdapterError>,
+) {
+    let reason = if extra.is_trivial() {
+        None
+    } else {
+        Some((&result).into())
+    };
+    tx.send(result, session);
+    if let Some(reason) = reason {
+        let extra = extra.defuse();
+        if let Err(e) = internal_cmd_tx.send(Message::RetireExecute {
+            otel_ctx: OpenTelemetryContext::obtain(),
+            data: extra,
+            reason,
+        }) {
+            warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+        }
     }
 }
 
@@ -1701,6 +1941,7 @@ impl ClusterReplicaStatuses {
             .map(|process_id| {
                 let status = ClusterReplicaProcessStatus {
                     status: ClusterStatus::Offline(Some(OfflineReason::Initializing)),
+                    restart_count: 0,
                     time: time.clone(),
                 };
                 (u64::cast_from(process_id), status)
@@ -1849,9 +2090,19 @@ pub struct Coordinator {
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     /// Notification that triggers a group commit.
     group_commit_tx: appends::GroupCommitNotifier,
+    /// Wakes the cluster controller task to reconcile immediately instead of
+    /// waiting out its tick interval. Notified after catalog transactions that
+    /// change durable cluster state.
+    reconcile_now: Arc<Notify>,
+    group_committer_tx: mpsc::UnboundedSender<appends::TableWriteCmd>,
 
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<(ConnectionId, PendingReadTxn)>,
+
+    /// Signals that pending strict serializable reads should be re-checked
+    /// because the timestamp oracle may have advanced. Awaited below group commit
+    /// in [`Coordinator::serve`]; see that branch for the ordering rationale.
+    linearize_reads_notify: Arc<Notify>,
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
@@ -1891,11 +2142,26 @@ pub struct Coordinator {
     /// Each entry is a watch channel whose value is `false` until cancellation
     /// is requested for that connection, at which point it is set to `true`.
     ///
-    /// Consumers install/remove these watches while they have cancellable work
-    /// in flight.
+    /// Consumers install these watches while they have cancellable work in
+    /// flight, always as a fresh channel, so nobody can observe a cancellation
+    /// aimed at an earlier statement. An entry is removed when a statement
+    /// starts, when a stage runs uncancelable, and when the connection's state
+    /// is cleared.
     connection_cancel_watches: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
     /// Active introspection subscribes.
     introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
+    /// The last replica visited by the sequential hydration-history sweep.
+    hydration_history_replica_cursor: Option<ReplicaId>,
+    /// Hydration-history sweep owned by the coordinator while one is in flight.
+    hydration_history_sweep: Option<AbortOnDropHandle<()>>,
+    /// The curated metric sinks installed on each replica.
+    ///
+    /// Keyed replica-first so a replica's installs form one contiguous range: teardown on replica
+    /// drop is the only lookup that is not by exact key.
+    metric_sinks: BTreeMap<(ReplicaId, &'static str), InstalledMetricSink>,
+    /// Curated metric-sink plans, cached per definition so each is planned once rather than once
+    /// per replica. See [`Coordinator::plan_metric_sink`].
+    metric_sink_plans: BTreeMap<&'static str, PlannedMetricSink>,
 
     /// Locks that grant access to a specific object, populated lazily as objects are written to.
     write_locks: BTreeMap<CatalogItemId, Arc<tokio::sync::Mutex<()>>>,
@@ -1904,6 +2170,24 @@ pub struct Coordinator {
 
     /// Pending writes waiting for a group commit.
     pending_writes: Vec<PendingWriteTxn>,
+
+    /// Semaphore to limit concurrent OCC (optimistic concurrency control)
+    /// read-then-write operations.
+    ///
+    /// Each operation maintains a subscribe that continually receives and
+    /// consolidates updates. With N concurrent loops, every successful write
+    /// forces the other N-1 to redo work, so total work scales as `O(n^2)`.
+    /// The semaphore caps concurrency to keep that bounded.
+    ///
+    /// NOTE: The number of permits is read from `max_concurrent_occ_writes` at
+    /// coordinator startup. Runtime changes require an `environmentd` restart.
+    occ_write_semaphore: Arc<Semaphore>,
+
+    /// Whether frontend OCC read-then-write is enabled. Read once at startup
+    /// from the `FRONTEND_READ_THEN_WRITE` dyncfg and fixed for the lifetime of
+    /// this process. See the module-level docs on `frontend_read_then_write`
+    /// for why mixed-mode operation is not allowed.
+    frontend_read_then_write_enabled: bool,
 
     /// For the realtime timeline, an explicit SELECT or INSERT on a table will bump the
     /// table's timestamps, but there are cases where timestamps are not bumped but
@@ -1963,14 +2247,6 @@ pub struct Coordinator {
     /// a timestamp oracle backend is configured.
     timestamp_oracle_config: Option<TimestampOracleConfig>,
 
-    /// Periodically asks cluster scheduling policies to make their decisions.
-    check_cluster_scheduling_policies_interval: Interval,
-
-    /// This keeps the last On/Off decision for each cluster and each scheduling policy.
-    /// (Clusters that have been dropped or are otherwise out of scope for automatic scheduling are
-    /// periodically cleaned up from this Map.)
-    cluster_scheduling_decisions: BTreeMap<ClusterId, BTreeMap<&'static str, SchedulingDecision>>,
-
     /// When doing 0dt upgrades/in read-only mode, periodically ask all known
     /// clusters/collections whether they are caught up.
     caught_up_check_interval: Interval,
@@ -1982,6 +2258,16 @@ pub struct Coordinator {
     /// The metrics registry, handed to the catalog info-metrics background task
     /// so it can register and own its `*_info` series.
     catalog_info_metrics_registry: MetricsRegistry,
+
+    /// The shared system-parameter frontend, installed by the sync loop once it
+    /// initializes (and re-installed on reconnect). `None` until then, for
+    /// example before LaunchDarkly connects, where a newly-created object
+    /// resolves to the environment-wide value (the cold-cache fallback). Used to
+    /// resolve a new cluster's or replica's scoped overrides synchronously at
+    /// create time, so its first plan or first controller configuration is
+    /// correct rather than waiting for the next sync tick. See the scoped
+    /// feature flags design.
+    scoped_frontend: Option<Arc<SystemParameterFrontend>>,
 
     /// Tracks the state associated with the currently installed watchsets.
     installed_watch_sets: BTreeMap<WatchSetId, (ConnectionId, WatchSetResponse)>,
@@ -2013,6 +2299,217 @@ pub struct Coordinator {
 }
 
 impl Coordinator {
+    /// Persists the scoped system-parameter working copy and reconciles it into
+    /// the per-scope resolution boundaries.
+    ///
+    /// The system-parameter sync loop and the create-time fold
+    /// (`scoped_overrides_create_op`, folded into the create transaction) are the
+    /// only writers, both serialized on the coordinator loop. The diff is
+    /// persisted to the
+    /// durable cache (so values survive an `environmentd` restart and an LD
+    /// outage) via `Op::UpdateScopedSystemParameters`, which also updates the
+    /// in-memory working copy in [`CatalogState`] and the
+    /// `mz_cluster_system_parameters` / `mz_replica_system_parameters`
+    /// introspection relations. The `replica`-scoped overrides reach the compute
+    /// controller's per-replica dyncfg layer through the catalog implication for
+    /// the persisted change. The `cluster`-scoped layer is resolved at plan time
+    /// via [`CatalogState::cluster_scoped_optimizer_overrides`].
+    ///
+    /// [`CatalogState`]: crate::catalog::CatalogState
+    /// [`CatalogState::cluster_scoped_optimizer_overrides`]: crate::catalog::CatalogState::cluster_scoped_optimizer_overrides
+    pub(crate) async fn reconcile_scoped_system_parameters(
+        &mut self,
+        scoped: ScopedParameters,
+        prune_scope: ScopedParametersScope,
+    ) {
+        // Nothing changed: skip the durable write. This is the common case on
+        // most sync ticks.
+        if self.catalog().state().scoped_system_parameters() == &scoped {
+            return;
+        }
+
+        // Persist the diff and update the in-memory working copy + introspection
+        // through the catalog transaction, serialized on the coordinator loop
+        // with the create-time fold. The replica-scoped
+        // controller push is derived from this transaction's diff by the catalog
+        // implication. `prune_scope` bounds removals to the evaluated objects, so
+        // a concurrently-created object's override is not wiped. Best-effort: a
+        // failure here is logged and retried on the next sync tick.
+        if let Err(e) = self
+            .catalog_transact(
+                None,
+                vec![crate::catalog::Op::UpdateScopedSystemParameters {
+                    scoped,
+                    prune_scope,
+                }],
+            )
+            .await
+        {
+            tracing::warn!("failed to persist scoped system parameters: {e}");
+        }
+    }
+
+    /// Evaluates the scoped overrides for freshly-created objects from explicit
+    /// eval contexts and returns an [`Op::UpdateScopedSystemParameters`] to fold
+    /// into the same transaction that creates them.
+    ///
+    /// The objects are not yet in the catalog, so the contexts are built from
+    /// plan data and pre-allocated ids. Folding the op into the create
+    /// transaction makes its committed diff drive the replica-scoped controller
+    /// push, as a catalog implication, before `create_replica`. A new replica's
+    /// first configuration then carries its overrides rather than the env-wide
+    /// values. Render-frozen flags (e.g. the column-paged batcher, chosen at
+    /// arrangement-build time) make a later push too late, which is why this
+    /// happens in the create transaction rather than the next sync tick.
+    ///
+    /// Returns `None` when the shared frontend is not yet installed (e.g. before
+    /// LaunchDarkly connects), or when no override applies. The new objects then
+    /// resolve to the environment-wide value, and the periodic sync loop remains
+    /// the authoritative full-state reconciler.
+    ///
+    /// [`Op::UpdateScopedSystemParameters`]: crate::catalog::Op::UpdateScopedSystemParameters
+    fn scoped_overrides_create_op(
+        &self,
+        clusters: &[ClusterEvalContext],
+        replicas: &[ReplicaEvalContext],
+    ) -> Option<crate::catalog::Op> {
+        let frontend = self.scoped_frontend.clone()?;
+        let catalog = self.catalog();
+        let system_config = catalog.system_config();
+
+        // Partition the synced parameters by scope class, as the sync loop does,
+        // so we evaluate exactly the flags in use at each scope.
+        let replica_param_names: Vec<&'static str> = system_config
+            .iter_synced()
+            .filter(|var| var.scope() == ParameterScope::Replica)
+            .map(|var| var.name())
+            .collect();
+        let cluster_param_names: Vec<&'static str> = system_config
+            .iter_synced()
+            .filter(|var| var.scope() == ParameterScope::Cluster)
+            .map(|var| var.name())
+            .collect();
+
+        let params = SynchronizedParameters::new(system_config.clone());
+        let mut evaluated = ScopedParameters::default();
+        if !cluster_param_names.is_empty() && !clusters.is_empty() {
+            evaluated.cluster =
+                frontend.pull_cluster_overrides(&params, &cluster_param_names, clusters);
+        }
+        if !replica_param_names.is_empty() && !replicas.is_empty() {
+            evaluated.replica =
+                frontend.pull_replica_overrides(&params, &replica_param_names, replicas);
+        }
+        if evaluated.is_empty() {
+            return None;
+        }
+
+        // Prune only within the objects being created. They have no prior rows,
+        // so nothing is removed, and this op never touches another object whose
+        // override a concurrent reconcile may be writing.
+        let prune_scope = ScopedParametersScope {
+            clusters: clusters.iter().map(|cluster| cluster.cluster_id).collect(),
+            replicas: replicas.iter().map(|replica| replica.replica_id).collect(),
+        };
+        Some(crate::catalog::Op::UpdateScopedSystemParameters {
+            scoped: evaluated,
+            prune_scope,
+        })
+    }
+
+    /// Renders the replica-local scoped overrides in the catalog working copy as
+    /// per-replica [`ConfigUpdates`], grouped by cluster.
+    ///
+    /// Sparse: only replicas with an override are present. Parameters that are
+    /// not dyncfgs are skipped, as are values that fail to parse.
+    pub(crate) fn replica_dyncfg_overrides(
+        &self,
+    ) -> BTreeMap<ComputeInstanceId, BTreeMap<ReplicaId, ConfigUpdates>> {
+        let replica_overrides = &self.catalog().state().scoped_system_parameters().replica;
+
+        let dyncfgs = self.catalog().system_config().dyncfgs();
+        let mut instance_overrides: BTreeMap<
+            ComputeInstanceId,
+            BTreeMap<ReplicaId, ConfigUpdates>,
+        > = BTreeMap::new();
+        for cluster in self.catalog().clusters() {
+            for replica in cluster.replicas() {
+                let Some(values) = replica_overrides.get(&replica.replica_id) else {
+                    continue;
+                };
+                let mut updates = ConfigUpdates::default();
+                for (name, value) in values {
+                    let Some(entry) = dyncfgs.entry(name) else {
+                        // A replica-local parameter that is not a dyncfg has no
+                        // per-replica realization, so skip it.
+                        continue;
+                    };
+                    match entry.parse_val(value) {
+                        Ok(val) => updates.add_dynamic(name, val),
+                        Err(e) => {
+                            tracing::warn!(%name, %value, "cannot parse scoped override: {e}")
+                        }
+                    }
+                }
+                if !updates.updates.is_empty() {
+                    instance_overrides
+                        .entry(cluster.id)
+                        .or_default()
+                        .insert(replica.replica_id, updates);
+                }
+            }
+        }
+
+        instance_overrides
+    }
+
+    /// Resolves the replica-local scoped overrides from the catalog working copy
+    /// into the controllers' per-replica dyncfg layers, then re-pushes the
+    /// environment-wide configuration so replicas observe the new values.
+    /// Driven by the catalog implication for replica-scoped configuration
+    /// changes, and called once on bootstrap.
+    pub(crate) fn push_replica_dyncfg_overrides(&mut self) {
+        let instance_overrides = self.replica_dyncfg_overrides();
+
+        // Both controllers carry a per-replica dyncfg layer, because the two
+        // protocols realize configs in different worker `ConfigSet`s on
+        // `clusterd`. The compute worker's `handle_update_configuration`
+        // applies the pushed dyncfg updates to compute's own worker
+        // `ConfigSet`, to the shared persist client `ConfigSet`
+        // (`persist_clients.cfg()`) that the co-located storage server reads
+        // from the same `Arc`, and to `mz_metrics`, which covers
+        // persist-backed and process-global configs such as persist client
+        // tuning and `lgalloc`. Configs realized from the storage worker's own
+        // `ConfigSet` (read in its `UpdateConfiguration` handler) are reached
+        // only by the storage controller's layer. A third class is not pushed
+        // to a running replica at all but baked into its process configuration
+        // when the controller provisions it, which is why the overrides also go
+        // to the outer controller.
+        self.controller
+            .update_replica_dyncfg_overrides(instance_overrides);
+        // Re-push the env-wide configs so existing replicas pick up their
+        // (possibly changed) overrides. This also reverts a removed override:
+        // the per-replica layer no longer carries the key, so the replica
+        // falls back to the env-wide value, which both configs always include
+        // because they render the full dyncfg set.
+        let compute_config = crate::flags::compute_config(self.catalog().system_config());
+        self.controller.compute.update_configuration(compute_config);
+        let storage_config = crate::flags::storage_config(self.catalog().system_config());
+        self.controller.storage.update_parameters(storage_config);
+    }
+
+    /// Returns the cluster-coherent scoped optimizer-feature overrides for
+    /// `cluster_id`. See
+    /// [`CatalogState::cluster_scoped_optimizer_overrides`](crate::catalog::CatalogState::cluster_scoped_optimizer_overrides).
+    pub(crate) fn cluster_scoped_optimizer_overrides(
+        &self,
+        cluster_id: ClusterId,
+    ) -> OptimizerFeatureOverrides {
+        self.catalog()
+            .state()
+            .cluster_scoped_optimizer_overrides(cluster_id)
+    }
+
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
@@ -2021,10 +2518,10 @@ impl Coordinator {
         &mut self,
         boot_ts: Timestamp,
         migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
+        hydrate_migrated_mvs: bool,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
         cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
         uncached_local_exprs: BTreeMap<GlobalId, LocalExpressions>,
-        audit_logs_iterator: AuditLogIterator,
     ) -> Result<(), AdapterError> {
         let bootstrap_start = Instant::now();
         info!("startup: coordinator init: bootstrap beginning");
@@ -2078,6 +2575,16 @@ impl Coordinator {
             .update_orchestrator_scheduling_config(scheduling_config);
         self.controller.update_configuration(dyncfg_updates);
 
+        // Install the replica-local scoped overrides before creating any
+        // replica below. Parts of a replica's configuration (its `TimelyConfig`,
+        // its expiration offset) are resolved once, when the controller
+        // provisions the replica, and must see its overrides at that point. The
+        // push after the creation loop cannot serve this purpose, because those
+        // values are frozen by then.
+        let replica_dyncfg_overrides = self.replica_dyncfg_overrides();
+        self.controller
+            .update_replica_dyncfg_overrides(replica_dyncfg_overrides);
+
         // Skip the credit consumption check at bootstrap under DisableClusterCreation behavior:
         // this codepath validates existing replicas at startup, not cluster creation, so it
         // must not block startup. New cluster creation is still gated by the DDL-time check.
@@ -2089,7 +2596,7 @@ impl Coordinator {
         if enforce_credit_limit_at_bootstrap {
             self.validate_resource_limit_numeric(
                 Numeric::zero(),
-                self.current_credit_consumption_rate(),
+                self.current_credit_consumption_rate(None),
                 |system_vars| {
                     self.license_key
                         .max_credit_consumption_rate()
@@ -2131,6 +2638,19 @@ impl Coordinator {
                 )?;
             }
         }
+
+        // Now that the compute instances and their replicas exist, push the
+        // replica-local scoped overrides into the controllers so existing
+        // replicas observe them at startup. The scoped (per-cluster and
+        // per-replica) working copy was restored from the durable cache into
+        // `CatalogState` while opening the catalog, so the last-known values are
+        // in effect before the first parameter sync and through a sync outage.
+        // This must run after the creation loop above: the push iterates the
+        // controller's instances, so before they exist it is a no-op. It also
+        // runs before dataflows are rendered later in bootstrap, so render-frozen
+        // replica flags take effect. The cluster-coherent layer is read at plan
+        // time.
+        self.push_replica_dyncfg_overrides();
 
         info!(
             "startup: coordinator init: bootstrap: preamble complete in {:?}",
@@ -2286,11 +2806,16 @@ impl Coordinator {
                 }
                 CatalogItem::View(_) => (),
                 CatalogItem::MaterializedView(mview) => {
+                    // Each version receives a read policy when it is created. Bootstrap
+                    // must restore every policy because the oldest version owns the shared
+                    // Persist shard and capability changes reach it through each newer
+                    // version's primary link. A `NoPolicy` version would block that
+                    // propagation and pin compaction.
                     policies_to_set
                         .entry(policy.expect("materialized views have a compaction window"))
                         .or_insert_with(Default::default)
                         .storage_ids
-                        .insert(mview.global_id_writes());
+                        .extend(mview.global_ids());
 
                     let mut df_desc = self
                         .catalog()
@@ -2329,11 +2854,57 @@ impl Coordinator {
                     self.ship_dataflow(df_desc, mview.cluster_id, mview.target_replica)
                         .await;
 
-                    // If this is a replacement MV, it must remain read-only until the replacement
-                    // gets applied.
+                    // A pending `REPLACEMENT FOR` MV must stay read-only until
+                    // `ALTER ... APPLY REPLACEMENT` swaps it in. Unrelated to the
+                    // builtin-migration `Replacement` mechanism below.
                     if mview.replacement_target.is_none() {
-                        self.allow_writes(mview.cluster_id, mview.global_id_writes());
+                        let gid = mview.global_id_writes();
+                        if hydrate_migrated_mvs
+                            && migrated_storage_collections_0dt.contains(&entry.id())
+                        {
+                            // `migrated_storage_collections_0dt` is `Replacement`-migrated items
+                            // only, so this is a fresh shard we own: nothing else writes it, and
+                            // writing it while read-only hydrates the MV and its dependents before
+                            // cut-over. An `Evolution`-migrated MV reuses the leader's live shard
+                            // and must never reach here.
+                            //
+                            // A *new* builtin MV gets no such treatment: its shard allocation
+                            // lives only in this read-only savepoint, so the promoted leader
+                            // allocates a different shard and discards whatever we wrote.
+                            self.controller
+                                .compute
+                                .allow_writes_in_read_only(mview.cluster_id, gid)
+                                .unwrap_or_terminate("allow_writes cannot fail");
+                        } else {
+                            self.allow_writes(mview.cluster_id, gid);
+                        }
                     }
+                }
+                CatalogItem::MetricSink(metric_sink) => {
+                    let df_desc = self
+                        .catalog()
+                        .try_get_physical_plan(&metric_sink.global_id)
+                        .expect("added in `bootstrap_dataflow_plans`")
+                        .clone();
+
+                    let df_meta = self
+                        .catalog()
+                        .try_get_dataflow_metainfo(&metric_sink.global_id)
+                        .expect("added in `bootstrap_dataflow_plans`");
+
+                    if self.catalog().state().system_config().enable_mz_notices() {
+                        // Collect optimization hint updates.
+                        self.catalog().state().pack_optimizer_notices(
+                            &mut builtin_table_updates,
+                            df_meta.optimizer_notices.iter(),
+                            Diff::ONE,
+                        );
+                    }
+
+                    // No read policy to set: the export is a sink, not a readable collection, so
+                    // `ship_dataflow` has no index export to initialize a policy for.
+                    self.ship_dataflow(df_desc, metric_sink.cluster_id, None)
+                        .await;
                 }
                 CatalogItem::Sink(sink) => {
                     policies_to_set
@@ -2484,32 +3055,12 @@ impl Coordinator {
                 "coordinator init: bootstrap: stashing builtin table updates while in read-only mode"
             );
 
-            // TODO(jkosh44) Optimize deserializing the audit log in read-only mode.
-            let audit_join_start = Instant::now();
-            info!("startup: coordinator init: bootstrap: audit log deserialization beginning");
-            let audit_log_updates: Vec<_> = audit_logs_iterator
-                .map(|(audit_log, ts)| StateUpdate {
-                    kind: StateUpdateKind::AuditLog(audit_log),
-                    ts,
-                    diff: StateDiff::Addition,
-                })
-                .collect();
-            let audit_log_builtin_table_updates = self
-                .catalog()
-                .state()
-                .generate_builtin_table_updates(audit_log_updates);
-            builtin_table_updates.extend(audit_log_builtin_table_updates);
-            info!(
-                "startup: coordinator init: bootstrap: audit log deserialization complete in {:?}",
-                audit_join_start.elapsed()
-            );
             self.buffered_builtin_table_updates
                 .as_mut()
                 .expect("in read-only mode")
                 .append(&mut builtin_table_updates);
         } else {
-            self.bootstrap_tables(&entries, builtin_table_updates, audit_logs_iterator)
-                .await;
+            self.bootstrap_tables(&entries, builtin_table_updates).await;
         };
         info!(
             "startup: coordinator init: bootstrap: generate builtin updates complete in {:?}",
@@ -2606,6 +3157,9 @@ impl Coordinator {
         // Initialize unified introspection.
         self.bootstrap_introspection_subscribes().await;
 
+        // Install the curated metric sinks on every replica.
+        self.bootstrap_metric_sinks().await;
+
         info!(
             "startup: coordinator init: bootstrap: migrate builtin tables in read-only mode complete in {:?}",
             final_steps_start.elapsed()
@@ -2628,7 +3182,6 @@ impl Coordinator {
         &mut self,
         entries: &[CatalogEntry],
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
-        audit_logs_iterator: AuditLogIterator,
     ) {
         /// Smaller helper struct of metadata for bootstrapping tables.
         struct TableMetadata<'a> {
@@ -2674,38 +3227,22 @@ impl Coordinator {
         debug!("coordinator init: resetting system tables");
         let read_ts = self.get_local_read_ts().await;
 
-        // Filter out the 'mz_storage_usage_by_shard' table since we need to retain that info for
-        // billing purposes.
-        let mz_storage_usage_by_shard_schema: SchemaSpecifier = self
-            .catalog()
-            .resolve_system_schema(MZ_STORAGE_USAGE_BY_SHARD.schema)
-            .into();
-        let is_storage_usage_by_shard = |meta: &TableMetadata| -> bool {
-            meta.name.item == MZ_STORAGE_USAGE_BY_SHARD.name
-                && meta.name.qualifiers.schema_spec == mz_storage_usage_by_shard_schema
-        };
+        let retained_across_restarts = BTreeSet::from([
+            self.catalog()
+                .resolve_builtin_table(&MZ_STORAGE_USAGE_BY_SHARD),
+            self.catalog()
+                .resolve_builtin_table(&MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY),
+            self.catalog()
+                .resolve_builtin_table(&MZ_OBJECT_HYDRATION_HISTORY),
+            self.catalog()
+                .resolve_builtin_table(&MZ_REPLICA_HYDRATION_HISTORY),
+        ]);
 
         let mut retraction_tasks = Vec::new();
-        let mut system_tables: Vec<_> = table_metas
+        let system_tables: Vec<_> = table_metas
             .iter()
-            .filter(|meta| meta.id.is_system() && !is_storage_usage_by_shard(meta))
+            .filter(|meta| meta.id.is_system() && !retained_across_restarts.contains(&meta.id))
             .collect();
-
-        // Special case audit events because it's append only.
-        let (audit_events_idx, _) = system_tables
-            .iter()
-            .find_position(|table| {
-                table.id == self.catalog().resolve_builtin_table(&MZ_AUDIT_EVENTS)
-            })
-            .expect("mz_audit_events must exist");
-        let audit_events = system_tables.remove(audit_events_idx);
-        let audit_log_task = self.bootstrap_audit_log_table(
-            audit_events.id,
-            audit_events.name,
-            audit_events.table,
-            audit_logs_iterator,
-            read_ts,
-        );
 
         for system_table in system_tables {
             let table_id = system_table.id;
@@ -2753,19 +3290,6 @@ impl Coordinator {
             builtin_table_updates.push(retractions);
         }
 
-        let audit_join_start = Instant::now();
-        info!("startup: coordinator init: bootstrap: join audit log deserialization beginning");
-        let audit_log_updates = audit_log_task.await;
-        let audit_log_builtin_table_updates = self
-            .catalog()
-            .state()
-            .generate_builtin_table_updates(audit_log_updates);
-        builtin_table_updates.extend(audit_log_builtin_table_updates);
-        info!(
-            "startup: coordinator init: bootstrap: join audit log deserialization complete in {:?}",
-            audit_join_start.elapsed()
-        );
-
         // Now that the snapshots are complete, the appends must also be complete.
         table_fence_rx
             .await
@@ -2773,63 +3297,10 @@ impl Coordinator {
             .unwrap_or_terminate("cannot fail to append");
 
         info!("coordinator init: sending builtin table updates");
-        let (_builtin_updates_fut, write_ts) = self
-            .builtin_table_update()
-            .execute(builtin_table_updates)
-            .await;
-        info!(?write_ts, "our write ts");
-        if let Some(write_ts) = write_ts {
-            self.apply_local_write(write_ts).await;
-        }
-    }
-
-    /// Prepare updates to the audit log table. The audit log table append only and very large, so
-    /// we only need to find the events present in `audit_logs_iterator` but not in the audit log
-    /// table.
-    #[instrument]
-    fn bootstrap_audit_log_table<'a>(
-        &self,
-        table_id: CatalogItemId,
-        name: &'a QualifiedItemName,
-        table: &'a Table,
-        audit_logs_iterator: AuditLogIterator,
-        read_ts: Timestamp,
-    ) -> JoinHandle<Vec<StateUpdate>> {
-        let full_name = self.catalog().resolve_full_name(name, None);
-        debug!("coordinator init: reconciling audit log: {full_name} ({table_id})");
-        let current_contents_fut = self
-            .controller
-            .storage_collections
-            .snapshot(table.global_id_writes(), read_ts);
-        spawn(|| format!("snapshot-audit-log-{table_id}"), async move {
-            let current_contents = current_contents_fut
-                .await
-                .unwrap_or_terminate("cannot fail to fetch snapshot");
-            let contents_len = current_contents.len();
-            debug!("coordinator init: audit log table ({table_id}) size {contents_len}");
-
-            // Fetch the largest audit log event ID that has been written to the table.
-            let max_table_id = current_contents
-                .into_iter()
-                .filter(|(_, diff)| *diff == 1)
-                .map(|(row, _diff)| row.unpack_first().unwrap_uint64())
-                .sorted()
-                .rev()
-                .next();
-
-            // Filter audit log catalog updates to those that are not present in the table.
-            audit_logs_iterator
-                .take_while(|(audit_log, _)| match max_table_id {
-                    Some(id) => audit_log.event.sortable_id() > id,
-                    None => true,
-                })
-                .map(|(audit_log, ts)| StateUpdate {
-                    kind: StateUpdateKind::AuditLog(audit_log),
-                    ts,
-                    diff: StateDiff::Addition,
-                })
-                .collect::<Vec<_>>()
-        })
+        let builtin_updates_fut = self.builtin_table_update().execute(builtin_table_updates);
+        // Wait for the committer to apply the write, so the builtin tables are readable before
+        // we start serving. The committer allocates the timestamp and advances the oracle.
+        builtin_updates_fut.await;
     }
 
     /// Initializes all storage collections required by catalog objects in the storage controller.
@@ -2975,9 +3446,21 @@ impl Coordinator {
                     };
                 }
                 CatalogItem::MaterializedView(mv) => {
+                    // Applying a replacement preserves the ownership link established when the
+                    // replacement was created. The oldest collection owns the shard, each applied
+                    // replacement points to its predecessor, and a pending replacement starts by
+                    // pointing to its target's latest collection.
+                    //
+                    // NOTE: Versioned tables chain in the opposite direction because their latest
+                    // version owns the shard. Each chain matches its runtime replacement path.
+                    let mut primary = mv
+                        .replacement_target
+                        .map(|target_id| catalog.get_entry(&target_id).latest_global_id());
                     let collection_descs = mv.collection_descs().map(|(gid, _version, desc)| {
-                        let collection_desc =
+                        let mut collection_desc =
                             CollectionDescription::for_other(desc, mv.initial_as_of.clone());
+                        collection_desc.primary = primary;
+                        primary = Some(gid);
                         (gid, collection_desc)
                     });
 
@@ -3025,7 +3508,10 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
-                | CatalogItem::Connection(_) => (),
+                | CatalogItem::Connection(_)
+                // Nothing to bootstrap: a metric sink has no storage collection, it publishes
+                // into the replica's metrics registry.
+                | CatalogItem::MetricSink(_) => (),
             }
         }
 
@@ -3086,6 +3572,8 @@ impl Coordinator {
             })
             .collect();
 
+        let mut created_gids = Vec::new();
+
         while !pending.is_empty() {
             // Drain collections whose dependencies have all been registered already
             // (i.e., are not in `pending`).
@@ -3131,6 +3619,8 @@ impl Coordinator {
                 ready = mem::take(&mut pending).into_iter().collect();
             }
 
+            created_gids.extend(ready.iter().map(|(gid, _collection)| *gid));
+
             self.controller
                 .storage
                 .create_collections_for_bootstrap(
@@ -3142,6 +3632,13 @@ impl Coordinator {
                 .await
                 .unwrap_or_terminate("cannot fail to create collections");
         }
+
+        // Register txn-wal tables before the later system-table snapshot.
+        self.controller
+            .storage
+            .register_table_collections(register_ts, created_gids)
+            .await
+            .unwrap_or_terminate("cannot fail to register tables");
 
         if !self.controller.read_only() {
             self.apply_local_write(register_ts).await;
@@ -3214,7 +3711,15 @@ impl Coordinator {
         let optimizer_config = |catalog: &Catalog, cluster_id| {
             let system_config = catalog.system_config();
             let overrides = catalog.get_cluster(cluster_id).config.features();
-            OptimizerConfig::from(system_config).override_from(&overrides)
+            OptimizerConfig::from(system_config)
+                .override_from(&overrides)
+                // A cluster-scoped LaunchDarkly rule beats a manual `FEATURES`
+                // pin.
+                .override_from(
+                    &catalog
+                        .state()
+                        .cluster_scoped_optimizer_overrides(cluster_id),
+                )
         };
 
         for entry in ordered_catalog_entries {
@@ -3408,6 +3913,102 @@ impl Coordinator {
 
                     compute_instance.insert_collection(mv.global_id_writes());
                 }
+                CatalogItem::MetricSink(metric_sink) => {
+                    // Collect optimizer parameters.
+                    let compute_instance = instance_snapshots
+                        .entry(metric_sink.cluster_id)
+                        .or_insert_with(|| {
+                            self.instance_snapshot(metric_sink.cluster_id)
+                                .expect("compute instance exists")
+                        });
+                    let global_id = metric_sink.global_id;
+                    let optimizer_config = optimizer_config(&self.catalog, metric_sink.cluster_id);
+
+                    let (optimized_plan, physical_plan, metainfo) = match cached_global_exprs
+                        .remove(&global_id)
+                    {
+                        Some(global_expressions)
+                            if global_expressions.optimizer_features
+                                == optimizer_config.features =>
+                        {
+                            debug!("global expression cache hit for {global_id:?}");
+                            (
+                                global_expressions.global_mir,
+                                global_expressions.physical_plan,
+                                global_expressions.dataflow_metainfos,
+                            )
+                        }
+                        Some(_) | None => {
+                            // A transient id for the view the optimizer builds over `from` to
+                            // shape its rows (see `optimize::metric_sink::shape_metric_sink_source`).
+                            // The id only needs to be unique within this dataflow, so a cached plan
+                            // reusing a transient id from a previous boot is safe: build ids are
+                            // dataflow-local on the worker and never registered in the controller's
+                            // instance-global collections (only export ids are).
+                            let (_, view_id) = self.allocate_transient_id();
+
+                            let (optimized_plan, global_lir_plan) = {
+                                let mut optimizer = optimize::metric_sink::Optimizer::new(
+                                    self.owned_catalog(),
+                                    compute_instance.clone(),
+                                    view_id,
+                                    global_id,
+                                    optimizer_config.clone(),
+                                    self.optimizer_metrics(),
+                                );
+
+                                // MIR ⇒ MIR optimization (global)
+                                let metric_sink_plan = optimize::metric_sink::MetricSink::new(
+                                    self.catalog()
+                                        .resolve_full_name(entry.name(), None)
+                                        .to_string(),
+                                    optimize::metric_sink::MetricSinkFrom::Id(metric_sink.from),
+                                    metric_sink.prefix.clone(),
+                                    None,
+                                );
+                                let global_mir_plan = optimizer.optimize(metric_sink_plan)?;
+                                let optimized_plan = global_mir_plan.df_desc().clone();
+
+                                // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                                let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+
+                                (optimized_plan, global_lir_plan)
+                            };
+
+                            let (physical_plan, metainfo) = global_lir_plan.unapply();
+                            let metainfo = {
+                                // Pre-allocate a vector of transient GlobalIds for each notice.
+                                let notice_ids =
+                                    std::iter::repeat_with(|| self.allocate_transient_id())
+                                        .map(|(_item_id, gid)| gid)
+                                        .take(metainfo.optimizer_notices.len())
+                                        .collect::<Vec<_>>();
+                                // Return a metainfo with rendered notices.
+                                self.catalog()
+                                    .render_notices(metainfo, notice_ids, Some(global_id))
+                            };
+                            uncached_expressions.insert(
+                                global_id,
+                                GlobalExpressions {
+                                    global_mir: optimized_plan.clone(),
+                                    physical_plan: physical_plan.clone(),
+                                    dataflow_metainfos: metainfo.clone(),
+                                    optimizer_features: optimizer_config.features.clone(),
+                                },
+                            );
+                            (optimized_plan, physical_plan, metainfo)
+                        }
+                    };
+
+                    let catalog = self.catalog_mut();
+                    catalog.set_optimized_plan(global_id, optimized_plan);
+                    catalog.set_physical_plan(global_id, physical_plan);
+                    catalog.set_dataflow_metainfo(global_id, metainfo);
+
+                    // NOTE: No `insert_collection` for the export. A metric sink writes to the
+                    // metrics registry rather than to a readable collection, so no later dataflow
+                    // can import it.
+                }
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)
                 | CatalogItem::Log(_)
@@ -3440,6 +4041,7 @@ impl Coordinator {
             let gid = match entry.item() {
                 CatalogItem::Index(idx) => idx.global_id(),
                 CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
+                CatalogItem::MetricSink(metric_sink) => metric_sink.global_id,
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)
                 | CatalogItem::Log(_)
@@ -3556,9 +4158,11 @@ impl Coordinator {
 
             self.schedule_storage_usage_collection().await;
             self.schedule_arrangement_sizes_collection().await;
+            self.schedule_hydration_history_collection();
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
             self.spawn_catalog_info_metrics_task();
+            self.spawn_cluster_controller_task();
             flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
             // Report if the handling of a single message takes longer than this threshold.
@@ -3573,6 +4177,16 @@ impl Coordinator {
             let mut cmd_messages = Vec::with_capacity(MESSAGE_BATCH);
 
             let message_batch = self.metrics.message_batch.clone();
+
+            // A persisted `Notified` future for the linearize re-check signal.
+            // It must outlive a single loop iteration and be re-`set` only after
+            // it completes: a fresh `notified()` per iteration could drop a
+            // wakeup that arrives while a higher-priority branch wins the same
+            // poll, stranding pending reads. Keeping it pinned across iterations
+            // leaves it registered, so no wakeup is lost.
+            let linearize_reads_notify = Arc::clone(&self.linearize_reads_notify);
+            let linearize_reads_notified = linearize_reads_notify.notified();
+            tokio::pin!(linearize_reads_notified);
 
             loop {
                 // Before adding a branch to this select loop, please ensure that the branch is
@@ -3620,8 +4234,8 @@ impl Coordinator {
                         // and make it follow from all the Spans in the pending
                         // writes.
                         let user_write_spans = self.pending_writes.iter().flat_map(|x| match x {
-                            PendingWriteTxn::User{span, ..} => Some(span),
-                            PendingWriteTxn::System{..} => None,
+                            PendingWriteTxn::User { span, .. } => Some(span),
+                            PendingWriteTxn::System { .. } => None,
                         });
                         let span = match user_write_spans.exactly_one() {
                             Ok(span) => span.clone(),
@@ -3670,26 +4284,29 @@ impl Coordinator {
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     // Receive a single command.
                     _ = self.advance_timelines_interval.tick() => {
-                        let span = info_span!(parent: None, "coord::advance_timelines_interval");
-                        span.follows_from(Span::current());
-
-                        // Group commit sends an `AdvanceTimelines` message when
-                        // done, which is what downgrades read holds. In
-                        // read-only mode we send this message directly because
-                        // we're not doing group commits.
+                        // Writable keepalives use the committer to advance tables and read holds.
+                        // Its permit coalesces ticks behind a slow oracle. Read-only mode advances
+                        // timelines directly.
                         if self.controller.read_only() {
                             messages.push(Message::AdvanceTimelines);
                         } else {
-                            messages.push(Message::GroupCommitInitiate(span, None));
+                            self.group_commit_tx.notify();
                         }
                     },
-                    // `tick()` on `Interval` is cancel-safe:
-                    // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
-                    // Receive a single command.
-                    _ = self.check_cluster_scheduling_policies_interval.tick() => {
-                        messages.push(Message::CheckSchedulingPolicies);
-                    },
-
+                    // Re-check pending strict serializable reads. Deliberately
+                    // placed below the group commit branches above: a re-check
+                    // only makes a read ready if the timestamp oracle has
+                    // advanced, and the oracle only advances via group commit, so
+                    // this must never win over (and thereby starve) group commit.
+                    // `Notify` coalesces re-arms into a single wakeup, so even
+                    // when a pending read sits just behind the oracle (re-armed
+                    // sub-millisecond), the lower branches (including the idle
+                    // watchdog) stay reachable. See the pin above for why the
+                    // future is persisted rather than recreated per iteration.
+                    () = linearize_reads_notified.as_mut() => {
+                        linearize_reads_notified.set(linearize_reads_notify.notified());
+                        messages.push(Message::LinearizeReads);
+                    }
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     // Receive a single command.
@@ -3773,6 +4390,14 @@ impl Coordinator {
                     }
                 }
             }
+
+            // The sweep can own timestamp-oracle senders through its background
+            // client. Release them before the coordinator runtime starts shutting
+            // down the oracle workers.
+            if let Some(sweep) = self.hydration_history_sweep.take() {
+                sweep.abort_and_wait().await;
+            }
+
             // Try and cleanup as a best effort. There may be some async tasks out there holding a
             // reference that prevents us from cleaning up.
             if let Some(catalog) = Arc::into_inner(self.catalog) {
@@ -3923,7 +4548,8 @@ impl Coordinator {
         ctx_extra: ExecuteContextExtra,
     ) {
         if let Some(uuid) = ctx_extra.retire() {
-            self.end_statement_execution(uuid, reason);
+            let ended_at = self.now();
+            self.end_statement_execution(uuid, reason, ended_at);
         }
     }
 
@@ -3952,7 +4578,7 @@ impl Coordinator {
     /// Panics if dataflow creation fails.
     pub(crate) async fn ship_dataflow(
         &mut self,
-        dataflow: DataflowDescription<Plan>,
+        dataflow: DataflowDescription<LirRelationExpr>,
         instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
     ) {
@@ -3965,7 +4591,7 @@ impl Coordinator {
     /// initialize the read policies for its exported readable objects.
     pub(crate) async fn try_ship_dataflow(
         &mut self,
-        dataflow: DataflowDescription<Plan>,
+        dataflow: DataflowDescription<LirRelationExpr>,
         instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
@@ -3996,7 +4622,7 @@ impl Coordinator {
     /// Like `ship_dataflow`, but also await on builtin table updates.
     pub(crate) async fn ship_dataflow_and_notice_builtin_table_updates(
         &mut self,
-        dataflow: DataflowDescription<Plan>,
+        dataflow: DataflowDescription<LirRelationExpr>,
         instance: ComputeInstanceId,
         notice_builtin_updates_fut: Option<BuiltinTableAppendNotify>,
         target_replica: Option<ReplicaId>,
@@ -4216,9 +4842,12 @@ impl Coordinator {
         });
     }
 
-    fn current_credit_consumption_rate(&self) -> Numeric {
+    /// The environment's current credit consumption rate, summed over all user
+    /// cluster replicas except those of `exclude_cluster`.
+    fn current_credit_consumption_rate(&self, exclude_cluster: Option<ClusterId>) -> Numeric {
         self.catalog()
             .user_cluster_replicas()
+            .filter(|replica| Some(replica.cluster_id) != exclude_cluster)
             .filter_map(|replica| match &replica.config.location {
                 ReplicaLocation::Managed(location) => Some(location.size_for_billing()),
                 ReplicaLocation::Unmanaged(_) => None,
@@ -4272,7 +4901,10 @@ fn arrangement_sizes_expired_retractions(
 #[cfg(test)]
 impl Coordinator {
     #[allow(dead_code)]
-    async fn verify_ship_dataflow_no_error(&mut self, dataflow: DataflowDescription<Plan>) {
+    async fn verify_ship_dataflow_no_error(
+        &mut self,
+        dataflow: DataflowDescription<LirRelationExpr>,
+    ) {
         // `ship_dataflow_new` is not allowed to have a `Result` return because this function is
         // called after `catalog_transact`, after which no errors are allowed. This test exists to
         // prevent us from incorrectly teaching those functions how to return errors (which has
@@ -4337,7 +4969,6 @@ pub fn serve(
         controller_config,
         controller_envd_epoch,
         mut storage,
-        audit_logs_iterator,
         timestamp_oracle_url,
         unsafe_mode,
         all_features,
@@ -4456,6 +5087,20 @@ pub fn serve(
             .expect("inserted above")
             .oracle;
 
+        // The catalog shard's upper is durable, so a write that once landed far ahead of the
+        // clock is re-applied to the oracle here on every boot and cannot be waited out. We
+        // report it rather than refusing to start: the timeline is stalled either way, and a
+        // process that will not boot turns that into a total outage plus a crash loop.
+        let boot_now: mz_repr::Timestamp = (now)().into();
+        if catalog_upper > timeline::write_ts_upper_bound(&boot_now) {
+            tracing::error!(
+                %catalog_upper, %boot_now,
+                "catalog upper is far ahead of the wall clock, so writes and \
+                strict-serializable reads on the EpochMilliseconds timeline will block \
+                until the clock catches up",
+            );
+        }
+
         let mut boot_ts = if read_only_controllers {
             let read_ts = epoch_millis_oracle.read_ts().await;
             std::cmp::max(read_ts, catalog_upper)
@@ -4487,6 +5132,7 @@ pub fn serve(
         ;
         let OpenCatalogResult {
             mut catalog,
+            last_seen_version,
             migrated_storage_collections_0dt,
             new_builtin_collections,
             builtin_table_updates,
@@ -4542,6 +5188,22 @@ pub fn serve(
             catalog_open_start.elapsed()
         );
 
+        // Whether replacement-migrated builtin MVs may write their new shards before cut-over.
+        // Both `bootstrap` and the readiness gate below read this, and they have to agree.
+        // `MIN_LEADER_VERSION_FOR_MIGRATED_MV_WRITES` explains why the leader's version settles it.
+        //
+        // While we are read-only, `last_seen_version` is that leader's version: our catalog
+        // transaction is a savepoint, so our own bump of the setting never lands. `None` means a
+        // freshly initialized catalog, with nothing migrated and no leader to be compatible with.
+        //
+        // `ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS` is the break-glass revert: off falls back to
+        // excluding migrated MVs from the caught-up gate, no redeploy needed.
+        let hydrate_migrated_mvs = ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS
+            .get(catalog.system_config().dyncfgs())
+            && last_seen_version
+                .as_ref()
+                .is_none_or(|version| *version >= MIN_LEADER_VERSION_FOR_MIGRATED_MV_WRITES);
+
         let coord_thread_start = Instant::now();
         info!("startup: coordinator init: coordinator thread start beginning");
 
@@ -4564,12 +5226,6 @@ pub fn serve(
         let coord_now = now.clone();
         let advance_timelines_interval =
             tokio::time::interval(catalog.system_config().default_timestamp_interval());
-        let mut check_scheduling_policies_interval = tokio::time::interval(
-            catalog
-                .system_config()
-                .cluster_check_scheduling_policies_interval(),
-        );
-        check_scheduling_policies_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         let clusters_caught_up_check_interval = if read_only_controllers {
             let dyncfgs = catalog.system_config().dyncfgs();
@@ -4594,24 +5250,35 @@ pub fn serve(
         let clusters_caught_up_check =
             clusters_caught_up_trigger.map(|trigger| {
                 let mut exclude_collections: BTreeSet<GlobalId> =
-                    new_builtin_collections.into_iter().collect();
+                    new_builtin_collections.iter().copied().collect();
 
-                // Migrated MVs can't make progress in read-only mode. Exclude them and all their
-                // transitive dependents.
+                // A collection that can't advance its write frontier in read-only mode
+                // stalls its transitive dependents too, so exclude those from the caught-up
+                // check as well. That's every *new* builtin collection, whose fresh shard has no
+                // writer until this deployment promotes, plus migrated MVs whenever the leader is
+                // too old for them to write. An excluded dependent may still be hydrating right
+                // after promotion, a brief blip we accept because these collections are small and
+                // get a writer at cut-over.
                 //
-                // TODO: Consider sending `allow_writes` for the dataflows of migrated MVs, which
-                //       would allow them to make progress even in read-only mode. This doesn't
-                //       work for MVs based on `mz_catalog_raw`, if the leader's version is less
-                //       than v26.17, since before that version the catalog shard's frontier wasn't
-                //       kept up-to-date with the current time. So this workaround has to remain in
-                //       place upgrades from a version less than v26.17 are no longer supported.
-                let mut todo: Vec<_> = migrated_storage_collections_0dt
+                // Seeded from all of `new_builtin_collections`, not just the MVs: a new builtin
+                // table or source has no read-only writer either (`register_table_collections`
+                // retains only *migrated* tables), so an MV reading one never advances past its
+                // empty frontier. A *migrated* table is the opposite case, even though a builtin
+                // MV can read one (`mz_clusters` joins `mz_cluster_replica_size_internal`):
+                // `read_only_mode_table_worker` keeps advancing migrated tables' uppers.
+                let new_builtin_items = new_builtin_collections.iter().map(|global_id| {
+                    catalog
+                        .state()
+                        .try_get_entry_by_global_id(global_id)
+                        .expect("new builtin collections have catalog entries")
+                        .id()
+                });
+                let frozen_migrated_mvs = migrated_storage_collections_0dt
                     .iter()
-                    .filter(|id| {
-                        catalog.state().get_entry(id).is_materialized_view()
-                    })
                     .copied()
-                    .collect();
+                    .filter(|_| !hydrate_migrated_mvs)
+                    .filter(|id| catalog.state().get_entry(id).is_materialized_view());
+                let mut todo: Vec<_> = new_builtin_items.chain(frozen_migrated_mvs).collect();
                 while let Some(item_id) = todo.pop() {
                     let entry = catalog.state().get_entry(&item_id);
                     exclude_collections.extend(entry.global_ids());
@@ -4621,6 +5288,7 @@ pub fn serve(
                 CaughtUpCheckContext {
                     trigger,
                     exclude_collections,
+                    cluster_stability: BTreeMap::new(),
                 }
             });
 
@@ -4700,14 +5368,25 @@ pub fn serve(
                 }
 
                 let catalog = Arc::new(catalog);
+                // Both are read once at startup, see the field docs on
+                // `occ_write_semaphore` and `frontend_read_then_write_enabled`.
+                let max_concurrent_occ_writes =
+                    usize::cast_from(catalog.system_config().max_concurrent_occ_writes());
+                let frontend_read_then_write_enabled = {
+                                FRONTEND_READ_THEN_WRITE.get(catalog.system_config().dyncfgs())
+                };
 
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
+                let (group_committer_tx, group_committer_rx) = mpsc::unbounded_channel();
                 let mut coord = Coordinator {
                     controller,
                     catalog,
                     internal_cmd_tx,
                     group_commit_tx,
+                    reconcile_now: Arc::new(Notify::new()),
+                    group_committer_tx,
                     strict_serializable_reads_tx,
+                    linearize_reads_notify: Arc::new(Notify::new()),
                     global_timelines: timestamp_oracles,
                     transient_id_gen: Arc::new(TransientIdGen::new()),
                     active_conns: BTreeMap::new(),
@@ -4721,9 +5400,15 @@ pub fn serve(
                     active_copies: BTreeMap::new(),
                     connection_cancel_watches: BTreeMap::new(),
                     introspection_subscribes: BTreeMap::new(),
+                    hydration_history_replica_cursor: None,
+                    hydration_history_sweep: None,
+                    metric_sinks: BTreeMap::new(),
+                    metric_sink_plans: BTreeMap::new(),
                     write_locks: BTreeMap::new(),
                     deferred_write_ops: BTreeMap::new(),
                     pending_writes: Vec::new(),
+                    occ_write_semaphore: Arc::new(Semaphore::new(max_concurrent_occ_writes)),
+                    frontend_read_then_write_enabled,
                     advance_timelines_interval,
                     secrets_controller,
                     caching_secrets_reader,
@@ -4733,13 +5418,12 @@ pub fn serve(
                     segment_client,
                     metrics,
                     catalog_info_metrics_registry: metrics_registry.clone(),
+                    scoped_frontend: None,
                     optimizer_metrics,
                     tracing_handle,
                     statement_logging: StatementLogging::new(coord_now.clone()),
                     webhook_concurrency_limit,
                     timestamp_oracle_config,
-                    check_cluster_scheduling_policies_interval: check_scheduling_policies_interval,
-                    cluster_scheduling_decisions: BTreeMap::new(),
                     caught_up_check_interval: clusters_caught_up_check_interval,
                     caught_up_check: clusters_caught_up_check,
                     installed_watch_sets: BTreeMap::new(),
@@ -4751,15 +5435,30 @@ pub fn serve(
                     user_id_pool: IdPool::empty(),
                     persist_client,
                 };
+
+                // Read-only promotion restarts the process and creates a fresh committer.
+                handle.block_on(async {
+                    appends::spawn_group_committer(
+                        group_committer_rx,
+                        coord.get_local_timestamp_oracle(),
+                        coord.controller.storage.table_write_handle(),
+                        coord.catalog().upper_handle(),
+                        coord.internal_cmd_tx.clone(),
+                        coord.catalog().config().now.clone(),
+                        coord.metrics.clone(),
+                        coord.catalog().system_config().dyncfgs(),
+                    );
+                });
+
                 let bootstrap = handle.block_on(async {
                     coord
                         .bootstrap(
                             boot_ts,
                             migrated_storage_collections_0dt,
+                            hydrate_migrated_mvs,
                             builtin_table_updates,
                             cached_global_exprs,
                             uncached_local_exprs,
-                            audit_logs_iterator,
                         )
                         .await?;
                     coord
@@ -5121,6 +5820,46 @@ pub(crate) fn infer_sql_type_for_catalog(
     let mut typ = hir_expr.top_level_typ();
     typ.backport_nullability_and_keys(&mir_expr.typ());
     typ
+}
+
+#[cfg(test)]
+mod execute_context_tests {
+    use tokio::sync::{mpsc, oneshot};
+
+    use super::*;
+    use crate::session::Session;
+    use crate::util::ClientTransmitter;
+
+    /// Runtime shutdown drops the barrier-waiting task that `retire` spawns. The context's `Drop`
+    /// backstop must answer the client, rather than panicking on an unsent `ClientTransmitter`.
+    #[mz_ore::test]
+    fn test_retire_answers_client_when_runtime_shuts_down() {
+        let runtime = tokio::runtime::Runtime::new().expect("can build runtime");
+
+        let (client_tx, mut client_rx) = oneshot::channel();
+        let (internal_cmd_tx, _internal_cmd_rx) = mpsc::unbounded_channel();
+
+        runtime.block_on(async {
+            let ctx = ExecuteContext::from_parts_with_response_barriers(
+                ClientTransmitter::new(client_tx, internal_cmd_tx.clone()),
+                internal_cmd_tx,
+                Session::dummy(),
+                ExecuteContextGuard::default(),
+                // Stands in for a group commit that shutdown will never apply.
+                vec![Box::pin(std::future::pending())],
+            );
+            ctx.retire(Ok(ExecuteResponse::StartedTransaction));
+        });
+
+        drop(runtime);
+
+        let response = client_rx.try_recv().expect("client must be answered");
+        assert!(
+            matches!(response.result, Err(AdapterError::Internal(_))),
+            "expected an internal error, got {:?}",
+            response.result
+        );
+    }
 }
 
 #[cfg(test)]

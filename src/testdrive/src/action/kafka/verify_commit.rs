@@ -41,8 +41,9 @@ pub async fn run_verify_commit(
 
     let mut config = state.kafka_config.clone();
     config.set("group.id", &consumer_group_id);
+    // Use `state.timeout` so `$ set-sql-timeout` extends this wait too.
     Retry::default()
-        .max_duration(state.default_timeout)
+        .max_duration(state.timeout)
         .retry_async_canceling(|_| async {
             let config = config.clone();
             let mut tpl = TopicPartitionList::new();

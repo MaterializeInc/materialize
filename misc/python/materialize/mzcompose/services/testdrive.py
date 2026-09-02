@@ -9,10 +9,15 @@
 
 import json
 import random
+import re
 from typing import Any
 
 from materialize import buildkite, ui
-from materialize.mzcompose import DEFAULT_MZ_VOLUMES, cluster_replica_size_map
+from materialize.mzcompose import (
+    DEFAULT_MZ_VOLUMES,
+    cluster_replica_size_map,
+    sanitizer_enabled,
+)
 from materialize.mzcompose.service import (
     Service,
     ServiceConfig,
@@ -25,6 +30,22 @@ from materialize.mzcompose.services.metadata_store import (
     metadata_store_companions,
 )
 from materialize.mzcompose.services.minio import minio_blob_uri
+
+SANITIZER_TIMEOUT_FACTOR = 10
+
+# Deadline for a single end-of-file consistency check. It bounds opening the
+# durable catalog and diffing two dumps of it, work that scales with the size of
+# the catalog rather than with how long a query may take, so it is kept separate
+# from `--default-timeout` and set far above what a healthy check costs.
+CONSISTENCY_CHECK_TIMEOUT = "10min"
+
+
+def scale_timeout(timeout: str, factor: int) -> str:
+    """Multiply a humantime duration such as `30s`, keeping its unit."""
+    match = re.fullmatch(r"(\d+)(ms|s|m|min|h)", timeout.strip())
+    if match is None:
+        raise ValueError(f"cannot scale testdrive timeout {timeout!r}")
+    return f"{int(match.group(1)) * factor}{match.group(2)}"
 
 
 class Testdrive(Service):
@@ -61,6 +82,9 @@ class Testdrive(Service):
         external_metadata_store: str | bool = EXTERNAL_METADATA_STORE_ADDRESS,
         external_blob_store: bool = False,
         blob_store_is_azure: bool = False,
+        fivetran_destination: bool = False,
+        fivetran_destination_url: str = "http://fivetran-destination:6874",
+        fivetran_destination_files_path: str = "/share/tmp",
         mz_service: str = "materialized",
         metadata_store: str = METADATA_STORE,
         stop_grace_period: str = "120s",
@@ -94,7 +118,10 @@ class Testdrive(Service):
                 "AWS_SESSION_TOKEN",
             ]
 
-        environment += [
+        # Concatenate instead of appending so the caller's list is not
+        # mutated: constructing Testdrive twice from the same list would
+        # otherwise accumulate duplicate entries.
+        environment = environment + [
             f"CLUSTER_REPLICA_SIZES={json.dumps(cluster_replica_size)}",
             "MZ_CI_LICENSE_KEY",
             "LD_PRELOAD=libeatmydata.so",
@@ -117,6 +144,11 @@ class Testdrive(Service):
                 *(["--materialize-use-https"] if materialize_use_https else []),
                 # Faster retries
             ]
+        else:
+            # Copy so the appends below don't mutate the caller's list:
+            # constructing Testdrive twice from the same list would otherwise
+            # accumulate duplicate flags, which abort testdrive at startup.
+            entrypoint = list(entrypoint)
 
         entrypoint.append(f"--backoff-factor={backoff_factor}")
 
@@ -148,7 +180,17 @@ class Testdrive(Service):
             default_timeout = (
                 "120s" if ui.env_is_truthy("CI_COVERAGE_ENABLED") else "20s"
             )
+        consistency_check_timeout = CONSISTENCY_CHECK_TIMEOUT
+        if sanitizer_enabled():
+            # `set-sql-timeout` in a fragment never lowers a timeout below this
+            # one, so scaling here scales the deadlines inside the fragments
+            # too.
+            default_timeout = scale_timeout(default_timeout, SANITIZER_TIMEOUT_FACTOR)
+            consistency_check_timeout = scale_timeout(
+                consistency_check_timeout, SANITIZER_TIMEOUT_FACTOR
+            )
         entrypoint.append(f"--default-timeout={default_timeout}")
+        entrypoint.append(f"--consistency-check-timeout={consistency_check_timeout}")
 
         if kafka_default_partitions:
             entrypoint.append(f"--kafka-default-partitions={kafka_default_partitions}")
@@ -170,6 +212,12 @@ class Testdrive(Service):
 
         if check_statement_logging:
             entrypoint.append("--check-statement-logging")
+
+        if fivetran_destination:
+            entrypoint.append(f"--fivetran-destination-url={fivetran_destination_url}")
+            entrypoint.append(
+                f"--fivetran-destination-files-path={fivetran_destination_files_path}"
+            )
 
         if set_persist_urls:
             if external_blob_store:

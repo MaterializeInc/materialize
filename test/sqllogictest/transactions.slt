@@ -323,6 +323,7 @@ Only the following relations are available:
 "mz_catalog.mz_views"
 "mz_internal.mz_aggregates"
 "mz_internal.mz_comments"
+"mz_internal.mz_metric_sinks"
 "mz_internal.mz_object_dependencies"
 "mz_internal.mz_type_pg_metadata"
 
@@ -481,6 +482,32 @@ INSERT INTO t (a) VALUES (1)
 
 statement ok
 ROLLBACK
+
+## A constant peek must not let a write sneak into a read-only transaction.
+## Regression test for SQL-373 and SQL-374: the constant SELECT used to switch
+## the transaction into a write transaction, so the INSERT was wrongly accepted.
+## A following second write then panicked (SQL-373), and a single write even
+## committed and persisted data (SQL-374). The write must be rejected, and
+## committing the transaction must not persist anything.
+
+statement ok
+BEGIN TRANSACTION READ ONLY
+
+query I
+SELECT 1
+----
+1
+
+statement error transaction in read-only mode
+INSERT INTO t (a) VALUES (42424242)
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM t WHERE a = 42424242
+----
+0
 
 ## BEGIN does not lose READ ONLY bit
 
@@ -791,6 +818,39 @@ RESET TRANSACTION_ISOLATION
 
 statement ok
 ROLLBACK
+
+# Regression: a `SET TRANSACTION` / `SET SESSION CHARACTERISTICS` whose mode
+# list mixes a (supported) isolation level with an (unsupported) access mode
+# must be rejected atomically. Previously the sequencer applied each mode in
+# order, so an isolation level listed before an access mode was applied to the
+# session before the statement then errored on the access mode, leaving the
+# session silently pinned to a different isolation level despite the error.
+
+statement ok
+RESET transaction_isolation
+
+query T
+SHOW transaction_isolation
+----
+strict serializable
+
+statement error SET TRANSACTION <access-mode>
+SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE
+
+# The failed statement must not have changed the isolation level.
+query T
+SHOW transaction_isolation
+----
+strict serializable
+
+# Access mode alone is likewise rejected, with no isolation change.
+statement error SET TRANSACTION <access-mode>
+SET TRANSACTION READ ONLY
+
+query T
+SHOW transaction_isolation
+----
+strict serializable
 
 # Test explicit single statement transactions.
 

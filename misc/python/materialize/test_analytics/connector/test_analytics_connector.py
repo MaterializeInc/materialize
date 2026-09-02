@@ -19,6 +19,10 @@ from materialize.test_analytics.config.mz_db_config import MzDbConfig
 from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 
 
+def _is_usable(connection: Connection) -> bool:
+    return not connection.closed and not connection.broken
+
+
 class TestAnalyticsUploadError(Exception):
     __test__ = False
 
@@ -72,7 +76,18 @@ class DatabaseConnector:
     def try_get_or_query_settings(self) -> TestAnalyticsSettings | None:
         raise NotImplementedError
 
-    def add_update_statements(self, sql_statements: list[str]) -> None:
+    def add_update_statements(
+        self, sql_statements: list[str], idempotent: bool = False
+    ) -> None:
+        """Queue statements for the next `submit_update_statements`.
+
+        Set `idempotent` when executing a statement a second time cannot
+        duplicate its write, which holds for an UPDATE assigning fixed values
+        and for an INSERT guarded by a `WHERE NOT EXISTS` uniqueness check.
+        Only such statements are replayed after the connection drops while they
+        are in flight. Everything else is abandoned with an unknown outcome, so
+        leaving this at the default risks losing a row, never duplicating one.
+        """
         raise NotImplementedError
 
     def submit_update_statements(self) -> None:
@@ -113,7 +128,9 @@ class DummyDatabaseConnector(DatabaseConnector):
     def try_get_or_query_settings(self) -> TestAnalyticsSettings | None:
         return None
 
-    def add_update_statements(self, sql_statements: list[str]) -> None:
+    def add_update_statements(
+        self, sql_statements: list[str], idempotent: bool = False
+    ) -> None:
         pass
 
     def submit_update_statements(self) -> None:
@@ -124,7 +141,7 @@ class DatabaseConnectorImpl(DatabaseConnector):
     def __init__(self, config: MzDbConfig, current_data_version: int, log_sql: bool):
         super().__init__(config)
         self.current_data_version = current_data_version
-        self.update_statements = []
+        self.update_statements: list[tuple[str, bool]] = []
         self._log_sql = log_sql
         self._read_only = False
         self.open_connection: Connection | None = None
@@ -240,8 +257,10 @@ class DatabaseConnectorImpl(DatabaseConnector):
         except:
             return None
 
-    def add_update_statements(self, sql_statements: list[str]) -> None:
-        self.update_statements.extend(sql_statements)
+    def add_update_statements(
+        self, sql_statements: list[str], idempotent: bool = False
+    ) -> None:
+        self.update_statements.extend((sql, idempotent) for sql in sql_statements)
 
     def submit_update_statements(self) -> None:
         # Do not use transactions because they do not allow to mix read and write statements (INSERT INTO ... SELECT FROM ...) in mz.
@@ -263,17 +282,20 @@ class DatabaseConnectorImpl(DatabaseConnector):
             )
             return
 
-        last_executed_sql = self.update_statements[0]
+        last_executed_sql = dedent(self.update_statements[0][0])
+        abandoned_sql: list[str] = []
 
         print("--- Updates to test analytics database")
 
         try:
-            for sql in self.update_statements:
+            for sql, idempotent in self.update_statements:
                 sql = dedent(sql)
                 last_executed_sql = sql
-                self._execute_sql(cursor, sql, print_status=True)
-
-            print("Upload completed.")
+                cursor, outcome_known = self._execute_sql(
+                    cursor, sql, idempotent=idempotent, print_status=True
+                )
+                if not outcome_known:
+                    abandoned_sql.append(sql)
         except Exception as e:
             print("Upload failed.")
 
@@ -282,16 +304,48 @@ class DatabaseConnectorImpl(DatabaseConnector):
         finally:
             self.update_statements = []
 
+        if abandoned_sql:
+            print("Upload incomplete.")
+
+            error_msg = (
+                "Lost the connection to the test analytics database while "
+                f"{len(abandoned_sql)} statement(s) were in flight! They were not "
+                "replayed because re-executing them could have duplicated an "
+                "already committed write."
+            )
+            raise TestAnalyticsUploadError(error_msg, sql=abandoned_sql[0])
+
+        print("Upload completed.")
+
     def _execute_sql(
         self,
         cursor: Cursor,
         sql: str,
+        idempotent: bool,
         print_status: bool = False,
         remaining_retries: int = 1,
-    ) -> None:
+    ) -> tuple[Cursor, bool]:
+        """Execute sql, retrying once when a retry cannot duplicate its write.
+
+        Returns the cursor to use for subsequent statements, which is a new one
+        if the connection had to be re-established, and whether the server-side
+        outcome of the statement is known.
+
+        Statements run in autocommit mode, so losing the connection while one is
+        in flight leaves its outcome unknowable: the server may have committed
+        before the result reached us. Such a statement is only replayed when
+        `idempotent` promises a second execution cannot duplicate the write.
+        Otherwise it is abandoned with an unknown outcome, because a duplicated
+        row corrupts the data silently whereas a missing one is reported. The
+        two other failure shapes leave the server untouched and are always safe
+        to retry: an error that arrives over a still-usable connection, and a
+        statement that was never sent because the connection was already dead.
+        """
         if self._log_sql:
             printable_sql = self.to_short_printable_sql(sql)
             print(f"> {printable_sql}")
+
+        was_usable = _is_usable(cursor.connection)
 
         try:
             start_time = time.time()
@@ -305,20 +359,37 @@ class DatabaseConnectorImpl(DatabaseConnector):
                     f"-- OK ({affected_rows} row{'s' if affected_rows != 1 else ''} affected, {duration_in_sec}s)"
                 )
         except:
+            lost_in_flight = was_usable and not _is_usable(cursor.connection)
+
+            if lost_in_flight and not idempotent:
+                print(
+                    "-- UNKNOWN OUTCOME! Connection lost while the statement was in "
+                    "flight, not replaying it. Reconnecting..."
+                )
+                return self._reconnect(cursor), False
+
             if remaining_retries > 0:
                 print("-- Retrying in 5 seconds...")
                 time.sleep(5)
-                self._execute_sql(
+                if not _is_usable(cursor.connection):
+                    print("-- Connection lost, reconnecting...")
+                    cursor = self._reconnect(cursor)
+                return self._execute_sql(
                     cursor=cursor,
                     sql=sql,
+                    idempotent=idempotent,
                     print_status=print_status,
                     remaining_retries=remaining_retries - 1,
                 )
-                return
 
             if print_status:
                 print("-- FAILED!")
             raise
+
+        return cursor, True
+
+    def _reconnect(self, cursor: Cursor) -> Cursor:
+        return self.create_cursor(autocommit=cursor.connection.autocommit)
 
     def _disable_if_uploads_not_allowed(
         self,
