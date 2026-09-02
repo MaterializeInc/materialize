@@ -22,14 +22,20 @@ from typing import Optional
 
 logger = logging.getLogger("bootstrap")
 
+# Minimum supported Python. Keep in sync with `PYTHON_MIN_VERSION` in
+# `ci/test/lint-main/checks/check-python-version.sh` and with the version named
+# in `doc/developer/guide.md`.
+MIN_HEXVERSION = 0x030D0000
+MIN_VERSION = "3.13.0"
+
 
 def main(args: list[str]) -> int:
     logging.basicConfig(level=os.environ.get("MZ_DEV_LOG", "WARNING").upper())
     logger.debug("args=%s", args)
 
     # Validate Python version.
-    if sys.hexversion < 0x030d0000:
-        print("fatal: python v3.13.0+ required", file=sys.stderr)
+    if sys.hexversion < MIN_HEXVERSION:
+        print(f"fatal: python v{MIN_VERSION}+ required", file=sys.stderr)
         print(
             " hint: you have v{}.{}.{}".format(
                 sys.version_info.major, sys.version_info.minor, sys.version_info.micro
@@ -71,34 +77,43 @@ def activate_venv(py_dir: Path) -> Path:
     # have a working virtualenv. Instead we use the presence of the
     # `stamp_path`, as that indicates the virtualenv was once working enough to
     # have dependencies installed into it.
+    # The version check in `main` covers the bootstrap interpreter, not this one,
+    # and the two need not agree: the virtualenv outlives the interpreter it was
+    # built from. Probe the version here as well, so raising the minimum rebuilds
+    # existing virtualenvs instead of silently reusing one that is too old and
+    # failing later on an import the old version does not have.
     try:
         os.stat(stamp_path)
-        subprocess.check_call([python, "-c", ""])
+        subprocess.check_call(
+            [python, "-c", f"import sys; sys.exit(sys.hexversion < {MIN_HEXVERSION})"]
+        )
     except Exception as e:
         print("==> Checking for existing virtualenv", file=sys.stderr)
         if isinstance(e, FileNotFoundError):
             print("no existing virtualenv detected", file=sys.stderr)
         else:
-            # Usually just an indication that the user has upgraded the system
-            # Python that the virtualenv is referring to. Not important to
-            # bubble up the error here. If it's persistent, it'll occur in the
-            # new virtual env and bubble up when we exec later.
+            # Either the interpreter is gone, usually because the system Python
+            # it referred to was upgraded, or it predates the minimum version.
+            # Not important to tell the two apart or to bubble the error up: a
+            # problem that survives the rebuild surfaces when we exec later.
             print(
-                "warning: existing virtualenv is unable to execute python; will recreate",
+                f"warning: existing virtualenv is missing python or older than v{MIN_VERSION}; will recreate",
                 file=sys.stderr
             )
-            logger.info("python exec error: %s", e)
+            logger.info("python probe error: %s", e)
         print(f"==> Initializing virtualenv in {venv_dir}", file=sys.stderr)
         try:
             # Build from the interpreter running this script, the one the version
             # check above validated. Left to itself, `uv` resolves an interpreter
             # by its own preference order, which favors uv-managed installs and so
             # can pick a Python older than the system one and older than the check
-            # accepts. `--clear` matches the `venv.create` call below: reaching
-            # this point means the virtualenv is absent or unusable, and without
-            # the flag `uv` refuses to replace one that already exists.
+            # accepts. `--clear --force` matches the `venv.create` call below:
+            # reaching this point means the virtualenv is absent or unusable, so
+            # whatever occupies the path should go. `--clear` alone refuses a
+            # directory that is not a virtualenv, which is exactly the
+            # half-finished state the comment above describes.
             subprocess.check_call(
-                ["uv", "venv", "--python", sys.executable, "--clear", venv_dir]
+                ["uv", "venv", "--python", sys.executable, "--clear", "--force", venv_dir]
             )
         except FileNotFoundError:
             # Install Python into the virtualenv via a symlink rather than copying,
