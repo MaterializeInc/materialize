@@ -174,8 +174,8 @@ impl Metrics {
                 name: "mz_time_to_first_row_seconds",
                 help: "Latency of an execute for a successful query from pgwire's perspective",
                 var_labels: ["instance_id", "isolation_level", "strategy", "application_name"],
-                // NOTE: This bucket is slightly reduced since measures sub <512us are few and far between.
-                // This has a high impact on cardinality otherwise (and is slightly leaky)
+                // NOTE: Measurements below 512 microseconds are negligible, so omit those buckets.
+                // This histogram retains series for dropped `instance_id` label values.
                 buckets: histogram_seconds_buckets(0.000_512, 32.0)
             }),
             statement_logging_records: registry.register(metric! {
