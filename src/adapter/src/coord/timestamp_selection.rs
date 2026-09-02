@@ -18,7 +18,6 @@ use constraints::Constraints;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_compute_types::ComputeInstanceId;
-use mz_ore::cast::CastLossy;
 use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
 use mz_sql::session::vars::IsolationLevel;
@@ -708,31 +707,6 @@ impl Coordinator {
                 &compute_instance.to_string(),
             ])
             .inc();
-        if !det.respond_immediately()
-            && isolation_level.is_bounded_staleness()
-            && real_time_recency_ts.is_none()
-        {
-            // Note down the difference between BoundedStaleness and Serializable into a metric.
-            if let Some(bs_ts) = det.timestamp_context.timestamp() {
-                let (serializable_det, _tmp_read_holds) = self.determine_timestamp_for(
-                    session,
-                    id_bundle,
-                    when,
-                    timeline_context,
-                    oracle_read_ts,
-                    real_time_recency_ts,
-                    &IsolationLevel::Serializable,
-                )?;
-                if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
-                    self.metrics
-                        .timestamp_difference_for_bounded_staleness_ms
-                        .with_label_values(&[compute_instance.to_string().as_str()])
-                        .observe(f64::cast_lossy(u64::from(
-                            serializable.saturating_sub(*bs_ts),
-                        )));
-                }
-            }
-        }
         Ok((det, read_holds))
     }
 

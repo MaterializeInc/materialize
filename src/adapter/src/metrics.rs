@@ -25,7 +25,6 @@ pub struct Metrics {
     pub active_copy_tos: IntGaugeVec,
     pub queue_busy_seconds: Histogram,
     pub determine_timestamp: IntCounterVec,
-    pub timestamp_difference_for_bounded_staleness_ms: HistogramVec,
     pub commands: IntCounterVec,
     pub storage_usage_collection_time_seconds: Histogram,
     pub arrangement_sizes_collection_time_seconds: Histogram,
@@ -108,12 +107,6 @@ impl Metrics {
                 name: "mz_determine_timestamp",
                 help: "The total number of calls to determine_timestamp.",
                 var_labels:["respond_immediately", "isolation_level", "compute_instance"],
-            )),
-            timestamp_difference_for_bounded_staleness_ms: registry.register(metric!(
-                name: "mz_timestamp_difference_for_bounded_staleness_ms",
-                help: "How much older bounded-staleness timestamps are compared to serializable, in milliseconds. Measures the actual staleness incurred.",
-                var_labels:["compute_instance"],
-                buckets: histogram_milliseconds_buckets(1., 8000.),
             )),
             commands: registry.register(metric!(
                 name: "mz_adapter_commands",
@@ -330,9 +323,6 @@ impl Metrics {
             query_total: self.query_total.clone(),
             subscribe_outputs: self.subscribe_outputs.clone(),
             determine_timestamp: self.determine_timestamp.clone(),
-            timestamp_difference_for_bounded_staleness_ms: self
-                .timestamp_difference_for_bounded_staleness_ms
-                .clone(),
             optimization_notices: self.optimization_notices.clone(),
             statement_logging_records: self.statement_logging_records.clone(),
             statement_logging_unsampled_bytes: self.statement_logging_unsampled_bytes.clone(),
@@ -349,7 +339,6 @@ pub struct SessionMetrics {
     query_total: IntCounterVec,
     subscribe_outputs: IntCounterVec,
     determine_timestamp: IntCounterVec,
-    timestamp_difference_for_bounded_staleness_ms: HistogramVec,
     optimization_notices: IntCounterVec,
     statement_logging_records: IntCounterVec,
     statement_logging_unsampled_bytes: IntCounter,
@@ -375,14 +364,6 @@ impl SessionMetrics {
 
     pub(crate) fn determine_timestamp(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
         self.determine_timestamp.with_label_values(label_values)
-    }
-
-    pub(crate) fn timestamp_difference_for_bounded_staleness_ms(
-        &self,
-        label_values: &[&str],
-    ) -> Histogram {
-        self.timestamp_difference_for_bounded_staleness_ms
-            .with_label_values(label_values)
     }
 
     pub(crate) fn optimization_notices(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {

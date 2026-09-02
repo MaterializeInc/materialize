@@ -18,7 +18,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller_types::ClusterId;
 use mz_expr::{CollectionPlan, ResultSpec, RowSetFinishing};
-use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::JoinHandle;
@@ -1541,37 +1541,6 @@ impl PeekClient {
                 &compute_instance.to_string(),
             ])
             .inc();
-        if !det.respond_immediately()
-            && isolation_level.is_bounded_staleness()
-            && real_time_recency_ts.is_none()
-        {
-            // Note down the difference between BoundedStaleness and Serializable into a metric.
-            if let Some(bs_ts) = det.timestamp_context.timestamp() {
-                let (serializable_det, _tmp_read_holds) =
-                    <Coordinator as TimestampProvider>::determine_timestamp_for_inner(
-                        session,
-                        id_bundle,
-                        when,
-                        timeline_context,
-                        oracle_read_ts,
-                        real_time_recency_ts,
-                        &IsolationLevel::Serializable,
-                        read_holds.clone(),
-                        upper,
-                    )?;
-                if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
-                    session
-                        .metrics()
-                        .timestamp_difference_for_bounded_staleness_ms(&[compute_instance
-                            .to_string()
-                            .as_ref()])
-                        .observe(f64::cast_lossy(u64::from(
-                            serializable.saturating_sub(*bs_ts),
-                        )));
-                }
-            }
-        }
-
         Ok((det, read_holds))
     }
 
