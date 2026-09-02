@@ -165,16 +165,16 @@ immediately.
 During a graceful resize, Materialize:
 1. Provisions new replicas at the target size, alongside the current replicas.
 2. Waits for the new replicas to
-   [hydrate](/concepts/hydration/).
+   [hydrate](/concepts/hydration/) and catch up to the current replicas.
 3. Retires the old replicas.
 
 Throughout, the cluster keeps serving queries, first from the old replicas,
 then from both sets as the new replicas come up, so the resize incurs no
 downtime.
 
-If the new replicas do not hydrate within the reconfiguration timeout (24 hours
-by default), Materialize rolls back the resize and the cluster keeps its current
-size. To customize the timeout behavior, use the `WAIT UNTIL READY` or `WAIT FOR` options.
+If the new replicas do not hydrate and catch up within the reconfiguration
+timeout (24 hours by default), Materialize rolls back the resize and the cluster
+keeps its current size. To customize the timeout behavior, use the `WAIT UNTIL READY` or `WAIT FOR` options.
 The resize still proceeds in the background.
 
 {{< private-preview >}}
@@ -183,8 +183,9 @@ Customizing the resize timeout with `WAIT UNTIL READY` or `WAIT FOR`
 
 - `WAIT UNTIL READY (TIMEOUT = ..., ON TIMEOUT = ...)` sets the timeout for the
   resize. On timeout, `ON TIMEOUT` selects whether to `COMMIT` (retire the old
-  replicas and proceed with the not-yet-hydrated new ones, which can cause
-  downtime) or `ROLLBACK` (keep the current size). Default: `ROLLBACK`.
+  replicas and proceed with the new ones even if they have not yet hydrated or
+  caught up, which can cause downtime or stale results) or `ROLLBACK` (keep the
+  current size). Default: `ROLLBACK`.
 
   ```mzsql
   ALTER CLUSTER c1
@@ -192,8 +193,8 @@ Customizing the resize timeout with `WAIT UNTIL READY` or `WAIT FOR`
   ```
 
 - `WAIT FOR '<duration>'` sets the timeout and commits when it expires,
-  regardless of hydration status, which can cause downtime. Prefer
-  `WAIT UNTIL READY`.
+  regardless of whether the new replicas have hydrated or caught up, which can
+  cause downtime. Prefer `WAIT UNTIL READY`.
 
 See [Monitoring a resize](#monitoring-a-resize) to track progress and
 [cancel](#monitoring-a-resize) an in-flight resize.
@@ -230,8 +231,8 @@ configuration.
 You can use the `WAIT UNTIL READY` option to perform a zero-downtime resizing,
 which incurs **no downtime**. Instead of restarting the cluster, this approach
 spins up an additional cluster replica under the covers with the desired new
-size, waits for the replica to be hydrated, and then replaces the original
-replica.
+size, waits for the replica to be hydrated and caught up, and then replaces the
+original replica.
 
 ```sql
 ALTER CLUSTER c1

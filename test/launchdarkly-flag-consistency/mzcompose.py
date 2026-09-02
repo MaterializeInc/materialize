@@ -198,6 +198,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     cluster_controller_tick_interval
     cluster_enable_topology_spread
     cluster_multi_process_replica_az_affinity_weight
+    cluster_reconfiguration_allowed_lag
     cluster_soften_az_affinity
     cluster_soften_az_affinity_weight
     cluster_soften_replication_anti_affinity
@@ -239,6 +240,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_any_all_null_array_semantics
     enable_auto_scaling_strategy
     enable_background_alter_cluster
+    enable_cluster_reconfiguration_lag_gate
     enable_statement_arrival_logging
     enable_binary_date_bin
     enable_coalesce_case_transform

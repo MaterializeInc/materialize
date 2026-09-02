@@ -355,7 +355,7 @@ impl ClusterController {
             if request.hydratable_objects {
                 live.has_hydratable_objects = ctx.has_hydratable_objects(state.cluster_id).await;
             }
-            if request.hydration {
+            if request.hydration || request.readiness {
                 let replica_ids: Vec<_> = state
                     .replicas
                     .iter()
@@ -363,8 +363,20 @@ impl ClusterController {
                     .map(|r| r.replica_id)
                     .collect();
                 if !replica_ids.is_empty() {
-                    live.hydrated_replicas =
-                        ctx.hydrated_replicas(state.cluster_id, &replica_ids).await;
+                    // Two probes only when a cluster has both an in-flight
+                    // reconfiguration and an armed burst policy. Each is an
+                    // in-memory pass over the instance's collections, and the
+                    // two answer different questions, so neither subsumes the
+                    // other cheaply enough to be worth deriving one from the
+                    // other here.
+                    if request.hydration {
+                        live.hydrated_replicas =
+                            ctx.hydrated_replicas(state.cluster_id, &replica_ids).await;
+                    }
+                    if request.readiness {
+                        live.ready_replicas =
+                            ctx.ready_replicas(state.cluster_id, &replica_ids).await;
+                    }
                 }
             }
             if request.refresh_window {

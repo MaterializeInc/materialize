@@ -428,6 +428,33 @@ pub trait ClusterControllerCtx: Send {
         replicas: &[ReplicaId],
     ) -> BTreeSet<ReplicaId>;
 
+    /// Of `replicas` on `cluster`, which are online, have *all* current
+    /// (non-transient) collections on the cluster hydrated, *and* for each
+    /// collection are no further than the configured allowance behind the
+    /// furthest output frontier any replica of the cluster reports for it. The
+    /// returned set is a subset of `replicas`, and of
+    /// [`Self::hydrated_replicas`].
+    ///
+    /// This is the signal for deciding whether to cut over to a replica.
+    /// Hydration alone is not: a dataflow's as-of is pinned when its replica is
+    /// added and never moves, so a long-hydrating collection reports hydrated
+    /// the moment its initial snapshot lands, with everything since the as-of
+    /// still to replay. Cutting over on hydration alone drops the caught-up
+    /// replicas and leaves the cluster's frontiers frozen until the new ones
+    /// catch up.
+    ///
+    /// [`Self::hydrated_replicas`] remains the right signal for observing that
+    /// dataflows have started producing output, which is what the burst
+    /// strategy's durable `steady_hydrated_at` stamp records.
+    ///
+    /// Callers should request only replicas their strategy currently needs. This
+    /// keeps live-signal dependencies local to the strategies that consume them.
+    async fn ready_replicas(
+        &mut self,
+        cluster_id: ClusterId,
+        replicas: &[ReplicaId],
+    ) -> BTreeSet<ReplicaId>;
+
     /// Whether `cluster_id` has at least one hydratable (dataflow-backed) object
     /// bound to it: an index, materialized view, ingestion source, or sink.
     ///

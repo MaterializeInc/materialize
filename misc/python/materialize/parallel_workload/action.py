@@ -3428,6 +3428,11 @@ class FlipFlagsAction(Action):
             "read_then_write_max_dependencies",
             "enable_hydration_burst",
             "default_hydration_burst_linger",
+            # The graceful cut-over lag gate. Flipping the gate off or the
+            # allowance to an arbitrary value mid-reconfiguration changes when a
+            # cut-over fires, which the workload does not model.
+            "enable_cluster_reconfiguration_lag_gate",
+            "cluster_reconfiguration_allowed_lag",
         ]
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:

@@ -423,17 +423,23 @@ impl ComputeController {
         Ok(res)
     }
 
-    /// Returns `true` if all non-transient, non-excluded collections are hydrated on any of the
-    /// provided replicas.
+    /// Returns `true` if all non-transient, non-excluded collections are ready on any of the
+    /// provided replicas: hydrated, and, when `allowed_lag` is `Some`, no further than that
+    /// behind the furthest output frontier any replica of the instance reports for the
+    /// collection.
     ///
-    /// For this check, zero-replica clusters are always considered hydrated.
+    /// See `Instance::collections_ready_on_replicas` for why hydration alone is not a
+    /// readiness signal for a cut-over.
+    ///
+    /// For this check, zero-replica clusters are always considered ready.
     /// Their collections would never normally be considered hydrated but it's
     /// clearly intentional that they have no replicas.
-    pub fn collections_hydrated_for_replicas(
+    pub fn collections_ready_for_replicas(
         &self,
         instance_id: ComputeInstanceId,
         replicas: Vec<ReplicaId>,
         exclude_collections: BTreeSet<GlobalId>,
+        allowed_lag: Option<Timestamp>,
     ) -> Result<oneshot::Receiver<bool>, anyhow::Error> {
         let instance = self.instance(instance_id)?;
 
@@ -447,7 +453,7 @@ impl ComputeController {
         let (tx, rx) = oneshot::channel();
         instance.call(move |i| {
             let result = i
-                .collections_hydrated_on_replicas(Some(replicas), &exclude_collections)
+                .collections_ready_on_replicas(Some(replicas), &exclude_collections, allowed_lag)
                 .expect("validated");
             let _ = tx.send(result);
         });
