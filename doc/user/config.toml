@@ -6,6 +6,7 @@ disableKinds = ['taxonomy']
 
 [params]
 repo = "//github.com/MaterializeInc/materialize"
+canonicalHost = "https://materialize.com"
 bannerMessage = ""
 bannerLink = ""
 
@@ -122,6 +123,18 @@ weight = 55
   baseName = "index"
   isPlainText = true
   notAlternative = true
+
+#
+# Custom output format for the llms.txt docs index
+#
+[outputFormats.llmstxt]
+  mediaType = "text/plain"
+  baseName = "llms"
+  isPlainText = true
+  notAlternative = true
+
+[outputs]
+  home = ["HTML", "RSS", "llmstxt"]
 
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works
