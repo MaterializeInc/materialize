@@ -626,6 +626,183 @@ def workflow_fenced_writer(c: Composition) -> None:
         time.sleep(1)
 
 
+def workflow_prefix_writer(c: Composition) -> None:
+    """Regression test: a snapshot whose frontier falls strictly inside the
+    sink's pending batch must stop the sink from committing that batch.
+
+    How this could happen in practice:
+
+    Suppose we have a sink with commit interval 30s.
+    Then we alter the sink's commit interval to 1s.
+
+    Let the table's frontier be X.
+    The new version of the sink can commit a batch [X, X + 1s).
+    The old version of the sink will try to commit a batch [X, X + 30s).
+
+    Committing both batches would result in duplicate writes."""
+    key = _setup(c)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "prefix-writer-setup.td",
+    )
+
+    token = get_polaris_access_token(c)
+    table_url = (
+        f"http://localhost:{c.port('polaris', 8181)}"
+        "/api/catalog/v1/default_catalog/namespaces/default_namespace/tables/prefix_table"
+    )
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    def load_metadata() -> dict | None:
+        req = urllib.request.Request(table_url, headers=headers)
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return json.loads(resp.read())["metadata"]
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            raise
+
+    def load_current() -> tuple[dict, dict] | None:
+        """Table metadata plus its current snapshot, once the sink has committed."""
+        meta = load_metadata()
+        if meta is None:
+            return None
+        snapshot_id = meta.get("current-snapshot-id")
+        if snapshot_id in (None, -1):
+            return None
+        snapshot = next(s for s in meta["snapshots"] if s["snapshot-id"] == snapshot_id)
+        return meta, snapshot
+
+    def frontier_of(snapshot: dict) -> int:
+        elements = json.loads(snapshot["summary"]["mz-frontier"])
+        assert len(elements) == 1, f"expected a single frontier element: {elements}"
+        return elements[0]
+
+    def committed_frontier() -> int | None:
+        current = load_current()
+        return None if current is None else frontier_of(current[1])
+
+    await_condition(
+        "first sink commit", timeout=60, check=lambda: committed_frontier() is not None
+    )
+    first_frontier = committed_frontier()
+    assert first_frontier is not None
+
+    # The first commit covers the source snapshot and ends just past the as_of.
+    # The catch-up batch that follows it can be just as narrow, so wait for that
+    # one to commit too. Only then is the pending batch a full commit interval
+    # wide, which is what makes room for a frontier strictly inside it.
+    def catchup_committed() -> bool:
+        frontier = committed_frontier()
+        return frontier is not None and frontier > first_frontier
+
+    await_condition("catch-up commit", timeout=120, check=catchup_committed)
+
+    def forge_prefix_snapshot() -> tuple[int, int]:
+        """Commit a snapshot claiming the running sink's own ID and version, one
+        second past its last committed frontier: what a second incarnation with
+        a shorter commit interval leaves behind. Reuses the current snapshot's
+        manifest list so the table stays readable without writing new files.
+        Returns the forged sequence number and frontier."""
+        current = load_current()
+        assert current is not None
+        meta, snapshot = current
+        current_id = snapshot["snapshot-id"]
+        forged_seq = meta["last-sequence-number"] + 1
+        # Frontiers are milliseconds, so one second past the last commit.
+        forged_frontier = frontier_of(snapshot) + 1000
+        body = json.dumps(
+            {
+                "requirements": [
+                    {
+                        "type": "assert-ref-snapshot-id",
+                        "ref": "main",
+                        "snapshot-id": current_id,
+                    }
+                ],
+                "updates": [
+                    {
+                        "action": "add-snapshot",
+                        "snapshot": {
+                            "snapshot-id": current_id + 1,
+                            "parent-snapshot-id": current_id,
+                            "sequence-number": forged_seq,
+                            "timestamp-ms": int(time.time() * 1000),
+                            "manifest-list": snapshot["manifest-list"],
+                            "schema-id": meta["current-schema-id"],
+                            "summary": {
+                                "operation": "append",
+                                "mz-sink-id": snapshot["summary"]["mz-sink-id"],
+                                "mz-frontier": json.dumps([forged_frontier]),
+                                "mz-sink-version": snapshot["summary"][
+                                    "mz-sink-version"
+                                ],
+                            },
+                        },
+                    },
+                    {
+                        "action": "set-snapshot-ref",
+                        "ref-name": "main",
+                        "type": "branch",
+                        "snapshot-id": current_id + 1,
+                    },
+                ],
+            }
+        ).encode()
+        req = urllib.request.Request(
+            table_url, data=body, headers=headers, method="POST"
+        )
+        with urllib.request.urlopen(req) as resp:
+            resp.read()
+        return forged_seq, forged_frontier
+
+    # The sink may commit between reading the metadata and posting the forged
+    # snapshot, failing our requirement. Retry on conflict with fresh metadata.
+    for attempt in range(5):
+        try:
+            forged_seq, forged_frontier = forge_prefix_snapshot()
+            break
+        except urllib.error.HTTPError as e:
+            if e.code != 409 or attempt == 4:
+                raise
+    else:
+        raise AssertionError("unreachable")
+
+    # Put a row in the range the forged snapshot claims to have committed, so the
+    # overlap the sink must refuse is not empty.
+    c.sql("INSERT INTO prefix_src VALUES (4, 'd')")
+
+    deadline = time.time() + 120
+    while True:
+        meta = load_metadata()
+        assert meta is not None
+        for snapshot in meta["snapshots"]:
+            if snapshot["sequence-number"] > forged_seq:
+                raise AssertionError(
+                    "sink committed a batch overlapping the forged writer's "
+                    f"range: forged frontier {forged_frontier}, batch started at "
+                    f"{forged_frontier - 1000}, snapshot {snapshot['snapshot-id']} "
+                    f"summary {snapshot['summary']}"
+                )
+
+        status_rows = c.sql_query(
+            "SELECT s.status, COALESCE(s.error, '') "
+            "FROM mz_internal.mz_sink_statuses s "
+            "JOIN mz_sinks ON s.id = mz_sinks.id "
+            "WHERE mz_sinks.name = 'prefix_sink'"
+        )
+        assert status_rows, "prefix_sink not found in mz_sink_statuses"
+        status, error = status_rows[0]
+        if status != "running" and ("another writer" in error or "Fenced off" in error):
+            return
+        if time.time() > deadline:
+            raise AssertionError(f"sink not fenced: status={status!r} error={error!r}")
+        time.sleep(1)
+
+
 def workflow_large_upsert_batch(c: Composition) -> None:
     """Regression test for database-issues#11326: DeltaWriter seen_rows
     eviction caused equality deletes within the same snapshot, which
