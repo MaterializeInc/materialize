@@ -415,6 +415,10 @@ impl Listeners {
         let adapter_client_rx = adapter_client_rx.shared();
 
         let metrics_registry = config.metrics_registry.clone();
+        let metrics_export_filter = mz_metrics::ExportFilter::install(
+            &metrics_registry,
+            Arc::clone(&config.system_dyncfgs),
+        );
         let metrics = http::Metrics::register_into(&metrics_registry, "mz_http");
         let mcp_metrics = http::mcp_metrics::McpMetrics::register_into(&metrics_registry);
         let oauth_metadata_metrics =
@@ -445,6 +449,7 @@ impl Listeners {
                 dyncfgs: Arc::clone(&config.system_dyncfgs),
                 metrics: metrics.clone(),
                 metrics_registry: metrics_registry.clone(),
+                metrics_export_filter: metrics_export_filter.clone(),
                 mcp_metrics: mcp_metrics.clone(),
                 oauth_metadata_metrics: oauth_metadata_metrics.clone(),
                 internal_route_config: Arc::clone(&internal_route_config),

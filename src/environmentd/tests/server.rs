@@ -2211,6 +2211,110 @@ fn test_internal_console_proxy() {
 
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
+fn test_metrics_export_filter() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut internal_client = server.connect_internal(postgres::NoTls).unwrap();
+
+    let url = Url::parse(&format!(
+        "http://{}/metrics",
+        server.internal_http_local_addr()
+    ))
+    .unwrap();
+    let scrape = || {
+        let res = Client::new().get(url.clone()).send().unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        res.text().unwrap()
+    };
+    // Dyncfg updates reach the filter asynchronously; poll the scrape until
+    // `check` holds.
+    let wait_for = |what: &str, check: &dyn Fn(&str) -> bool| {
+        Retry::default()
+            .max_duration(Duration::from_secs(30))
+            .retry(|_| {
+                if check(&scrape()) {
+                    Ok(())
+                } else {
+                    Err(format!("{what} not yet observed in /metrics"))
+                }
+            })
+            .unwrap();
+    };
+
+    // The system clusters give `mz_compute_controller_replica_count` one
+    // series per cluster, labeled by `instance_id`.
+    let per_cluster = "mz_compute_controller_replica_count{";
+    let s1 = "mz_compute_controller_replica_count{instance_id=\"s1\"";
+    let s2 = "mz_compute_controller_replica_count{instance_id=\"s2\"";
+    wait_for("system cluster series", &|body| {
+        body.contains(s1) && body.contains(s2)
+    });
+
+    // Disabling a family by exact name removes it and nothing else.
+    internal_client
+        .batch_execute(
+            "ALTER SYSTEM SET metrics_export_disabled_families = 'mz_compute_controller_replica_count'",
+        )
+        .unwrap();
+    wait_for("disabled family", &|body| {
+        !body.contains(per_cluster) && body.contains("mz_compute_controller_collection_count{")
+    });
+
+    // A trailing `*` disables every family with the prefix.
+    internal_client
+        .batch_execute(
+            "ALTER SYSTEM SET metrics_export_disabled_families = 'mz_compute_controller_*'",
+        )
+        .unwrap();
+    // The filter's own `mz_metrics_export_*` families stay exported and name
+    // the dropped families in their labels, so look for sample lines rather
+    // than any occurrence of the prefix.
+    wait_for("disabled prefix", &|body| {
+        !body.contains("\nmz_compute_controller_")
+            && body.contains(
+                "mz_metrics_export_dropped_series_total{family=\"mz_compute_controller_replica_count\",reason=\"disabled_family\"}",
+            )
+    });
+
+    // Resetting restores the families with their current values.
+    internal_client
+        .batch_execute("ALTER SYSTEM RESET metrics_export_disabled_families")
+        .unwrap();
+    wait_for("families restored", &|body| {
+        body.contains(s1) && body.contains(s2)
+    });
+
+    // A cluster allowlist keeps only the listed cluster's series.
+    internal_client
+        .batch_execute("ALTER SYSTEM SET metrics_export_cluster_allowlist = 's1'")
+        .unwrap();
+    wait_for("cluster allowlist", &|body| {
+        body.contains(s1) && !body.contains(s2) && !body.contains("instance_id=\"s2\"")
+    });
+    internal_client
+        .batch_execute("ALTER SYSTEM RESET metrics_export_cluster_allowlist")
+        .unwrap();
+    wait_for("allowlist reset", &|body| body.contains(s2));
+
+    // The series cap drops a multi-series family whole and leaves single-series
+    // families in place.
+    internal_client
+        .batch_execute("ALTER SYSTEM SET metrics_export_max_series_per_family = 1")
+        .unwrap();
+    wait_for("series cap", &|body| {
+        !body.contains(per_cluster)
+            && body.contains("mz_metrics_export_encoded_bytes ")
+            && body.contains(
+                "mz_metrics_export_dropped_series_total{family=\"mz_compute_controller_replica_count\",reason=\"over_cap\"}",
+            )
+    });
+    internal_client
+        .batch_execute("ALTER SYSTEM RESET metrics_export_max_series_per_family")
+        .unwrap();
+    wait_for("cap reset", &|body| body.contains(s1) && body.contains(s2));
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_metrics_public_endpoint() {
     let server = test_util::TestHarness::default()
         .with_system_parameter_default(

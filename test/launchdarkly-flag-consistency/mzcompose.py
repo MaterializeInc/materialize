@@ -317,6 +317,10 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     mcp_max_response_size
     mcp_request_timeout
     memory_limiter_usage_bias
+    metrics_export_cluster_allowlist
+    metrics_export_disabled_families
+    metrics_export_max_series_per_family
+    metrics_export_replica_allowlist
     mysql_replication_heartbeat_interval
     mysql_source_connect_timeout
     mysql_source_snapshot_lock_wait_timeout

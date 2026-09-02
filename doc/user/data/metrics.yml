@@ -1228,6 +1228,23 @@ metrics:
   help: The current VmSwap metric.
   source: src/compute/src/memory_limiter.rs
   visibility: internal
+- name: mz_metrics_export_dropped_series_total
+  help: Samples removed from the exported metrics by the export filter.
+  labels:
+  - family
+  - reason
+  source: src/metrics/src/export_filter.rs
+  visibility: internal
+- name: mz_metrics_export_encoded_bytes
+  help: Size in bytes of the most recently encoded internal metrics response.
+  source: src/metrics/src/export_filter.rs
+  visibility: internal
+- name: mz_metrics_export_series
+  help: Number of samples exported per metric family at the previous gather, after filtering.
+  labels:
+  - family
+  source: src/metrics/src/export_filter.rs
+  visibility: internal
 - name: mz_metrics_lgalloc_allocations_total
   help: Number of region allocations in size class
   labels:

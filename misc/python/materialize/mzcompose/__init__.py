@@ -213,6 +213,19 @@ def get_variable_system_parameters(
             "100ms",
             ["10ms", "100ms", "1s", "10s"],
         ),
+        # Exercise the metrics export filter without changing what tests
+        # observe: the disabled family does not exist and the cap is far above
+        # any real family's series count.
+        VariableSystemParameter(
+            "metrics_export_disabled_families",
+            "mz_export_filter_ci_probe_*",
+            ["", "mz_export_filter_ci_probe_*"],
+        ),
+        VariableSystemParameter(
+            "metrics_export_max_series_per_family",
+            "1000000",
+            ["0", "1000000"],
+        ),
         VariableSystemParameter(
             "persist_next_listen_batch_retryer_fixed_sleep",
             "1200ms",
@@ -818,6 +831,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "mz_metrics_lgalloc_refresh_interval",
     "mz_metrics_rusage_refresh_interval",
     "mz_metrics_usage_refresh_interval",
+    "metrics_export_cluster_allowlist",
+    "metrics_export_replica_allowlist",
     "compute_peek_response_stash_batch_max_runs",
     "compute_peek_response_stash_read_batch_size_bytes",
     "compute_peek_response_stash_read_memory_budget_bytes",

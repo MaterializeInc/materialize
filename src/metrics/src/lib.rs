@@ -25,8 +25,10 @@ use mz_ore::metrics::MetricsRegistry;
 use tokio::time::Interval;
 
 pub use dyncfgs::all_dyncfgs;
+pub use export_filter::ExportFilter;
 
 mod dyncfgs;
+mod export_filter;
 pub mod lgalloc;
 pub mod rusage;
 pub mod usage;

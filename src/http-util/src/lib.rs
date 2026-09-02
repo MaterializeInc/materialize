@@ -139,6 +139,16 @@ pub async fn handle_prometheus(
     registry: &MetricsRegistry,
     headers: HeaderMap,
 ) -> Result<Response, (StatusCode, String)> {
+    handle_prometheus_with(registry, headers, |_| ())
+}
+
+/// Like [`handle_prometheus`], additionally passing the encoded response size
+/// in bytes to `on_encoded` before the response is returned.
+pub fn handle_prometheus_with(
+    registry: &MetricsRegistry,
+    headers: HeaderMap,
+    on_encoded: impl FnOnce(usize),
+) -> Result<Response, (StatusCode, String)> {
     let families = registry.gather();
     let mut buf = Vec::new();
     let content_type = if wants_prometheus_protobuf(&headers) {
@@ -158,6 +168,7 @@ pub async fn handle_prometheus(
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         ContentType::text()
     };
+    on_encoded(buf.len());
 
     Ok((TypedHeader(content_type), buf).into_response())
 }
