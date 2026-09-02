@@ -81,26 +81,21 @@ principal](https://docs.databricks.com/aws/en/admin/users-groups/service-princip
    client ID (its application ID) and a client secret. Record the secret when it
    is shown; Databricks does not display it again.
 
-3. Grant the service principal these privileges **on the metastore**. In
+3. Grant the service principal `READ METADATA` **on the metastore**. In
    **Catalog Explorer**, open the metastore, go to its **Permissions** tab, and
-   grant, under **Data Administration**:
+   grant `READ METADATA`, which lets Materialize read the metadata of the tables
+   the sink commits against.
 
-    | Privilege | Why Materialize needs it |
-    | --- | --- |
-    | `USE METASTORE REMOTELY` | Reach the metastore from outside a Databricks compute resource, which is what an Iceberg REST client is. |
-    | `READ METADATA` | Read the table metadata the sink commits against. |
-    | `CREATE STORAGE CREDENTIAL` | Receive the temporary storage credentials Unity Catalog vends for the table's storage. |
-
-    These are metastore-level grants, separate from the catalog and schema grants
-    below. Granting only the catalog and schema privileges leaves the connection
-    failing on every request.
+    This is a metastore-level grant, separate from the catalog and schema grants
+    below. Materialize needs `READ METADATA` at both levels.
 
 4. Grant the service principal the privileges Materialize needs **on the catalog
    and schema**. In a Databricks SQL editor, using the service principal's
    application ID as the grantee:
 
     ```sql
-    GRANT USE CATALOG ON CATALOG <catalog_name> TO `<application_id>`;
+    GRANT USE CATALOG, READ METADATA ON CATALOG <catalog_name>
+      TO `<application_id>`;
 
     GRANT USE SCHEMA, CREATE TABLE, MODIFY, SELECT, EXTERNAL USE SCHEMA
       ON SCHEMA <catalog_name>.<schema_name> TO `<application_id>`;
@@ -109,10 +104,11 @@ principal](https://docs.databricks.com/aws/en/admin/users-groups/service-princip
     | Privilege | Why Materialize needs it |
     | --- | --- |
     | `USE CATALOG`, `USE SCHEMA` | Allows access to the catalog and schema. |
+    | `READ METADATA` | Read the metadata of the tables the sink commits against. |
     | `EXTERNAL USE SCHEMA` | Read and write the schema's tables from an Iceberg REST client. Without it, every catalog request is rejected. |
     | `CREATE TABLE` | Create the Iceberg table the first time the sink runs. |
     | `MODIFY` | Commit new snapshots as data changes. |
-    | `SELECT` | Read the table's current metadata before each commit. |
+    | `SELECT` | Read the table the sink writes to. |
 
     Databricks restricts who may grant `EXTERNAL USE SCHEMA`. If the grant is
     rejected, ask the catalog owner or a metastore admin to run it. See
@@ -232,9 +228,9 @@ SELECT name, error FROM mz_internal.mz_sink_statuses WHERE name = '<sink_name>';
 | Error | Cause |
 | --- | --- |
 | Token exchange failures | `OAUTH2 SERVER URL` or `SCOPE` does not match what the workspace expects, the service principal is not assigned to the workspace, or its OAuth secret has been rotated or revoked. |
-| Authentication failures on every catalog request | External data access is not enabled on the metastore, or the service principal is missing a metastore grant (`USE METASTORE REMOTELY`, `READ METADATA`) or `EXTERNAL USE SCHEMA` on the schema. |
+| Authentication failures on every catalog request | External data access is not enabled on the metastore, or the service principal is missing `READ METADATA` on the metastore or `EXTERNAL USE SCHEMA` on the schema. |
 | A namespace-not-found error when the sink starts | The schema named by `NAMESPACE` does not exist, or the service principal cannot see it. |
-| Storage errors once the sink is running | `ACCESS DELEGATION = 'vended-credentials'` is not set on the connection, or the service principal lacks `CREATE STORAGE CREDENTIAL` on the metastore. Unity Catalog vends credentials as the only way to reach its storage. |
+| Storage errors once the sink is running | `ACCESS DELEGATION = 'vended-credentials'` is not set on the connection, or the catalog uses an external location the service principal lacks `EXTERNAL USE LOCATION` on. Unity Catalog vends credentials as the only way to reach its storage. |
 
 {{% include-headless "/headless/iceberg-sinks/troubleshooting" %}}
 
