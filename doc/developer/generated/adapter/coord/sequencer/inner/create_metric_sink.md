@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner/create_metric_sink.rs
-revision: a702b8be70
+revision: 41e1741ca3
 ---
 
 # adapter::coord::sequencer::inner::create_metric_sink

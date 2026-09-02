@@ -1,6 +1,6 @@
 ---
 source: src/storage-controller/src/instance.rs
-revision: 5a4a36c4fd
+revision: 3eb91cd467
 ---
 
 # storage-controller::instance
