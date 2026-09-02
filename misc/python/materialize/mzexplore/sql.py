@@ -23,7 +23,7 @@ from pg8000.native import literal
 
 from materialize.mzexplore.common import resource_path
 
-DictGenerator = Generator[dict[Any, Any], None, None]
+DictGenerator = Generator[dict[Any, Any]]
 
 
 class Database:
@@ -125,9 +125,7 @@ class Database:
 
 
 @contextlib.contextmanager
-def update_environment(
-    db: Database, env: dict[str, str]
-) -> Generator[Database, None, None]:
+def update_environment(db: Database, env: dict[str, str]) -> Generator[Database]:
     original = dict()
     for e in db.query_all("SHOW ALL"):
         key, old_value = e["name"], e["setting"]

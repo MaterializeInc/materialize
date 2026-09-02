@@ -13,22 +13,23 @@ target_version = ["py313"]
 exclude = "(\\.direnv|\\.eggs|\\.git|\\.hg|\\.ipynb_checkpoints|\\.mypy_cache|\\.nox|\\.pytest_cache|\\.ruff_cache|\\.tox|\\.svn|\\.venv|\\.vscode|__pypackages__|_build|buck-out|dist|venv|target|target-xcompile|\\.terraform)"
 
 [tool.ruff]
-# The pinned ruff predates Python 3.13 and rejects `py313`, so this trails the
-# minimum version enforced by `bin/pyactivate`. Raise it once ruff is upgraded.
-target-version = "py312"
-select = [
-    "F",
-    "I",
-    "UP", # e.g. PEP585 built-in generic type annotations
-    "E711", # comparisons to none
-]
+# Keep in sync with the minimum version enforced by `bin/pyactivate`.
+target-version = "py313"
 extend-exclude = [
     "venv", "target",
     # This dbt adapter may be published elsewhere, so doesn't follow the same compatibility rules as our internal code.
     "misc/dbt-materialize",
 ]
 
-[tool.ruff.isort]
+[tool.ruff.lint]
+select = [
+    "F",
+    "I",
+    "UP", # e.g. PEP585 built-in generic type annotations
+    "E711", # comparisons to none
+]
+
+[tool.ruff.lint.isort]
 known-first-party = ["materialize"]
 
 [tool.pyright]
