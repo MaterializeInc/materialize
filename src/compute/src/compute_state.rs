@@ -71,7 +71,7 @@ use uuid::Uuid;
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
-use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
+use crate::logging::compute::{CollectionLogging, ComputeEvent, LifecycleStage, PeekEvent};
 use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
@@ -168,6 +168,13 @@ pub struct ComputeState {
     ///  * Persist sinks store their current frontier in `CollectionState::sink_write_frontier`.
     ///  * Subscribes report their frontiers through the `subscribe_response_buffer`.
     pub collections: BTreeMap<GlobalId, CollectionState>,
+    /// The exports of each installed dataflow, keyed by dataflow index.
+    ///
+    /// Timely mints indices from a per-worker counter that only increases, so an index is never
+    /// reused within a process. Maintained alongside `collections` by
+    /// [`ComputeState::insert_collection`] and [`ActiveComputeState::drop_collection`], which is
+    /// the only reason a dataflow's export set is knowable without scanning every collection.
+    dataflow_exports: BTreeMap<usize, BTreeSet<GlobalId>>,
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
     /// Shared buffer with SUBSCRIBE operator instances by which they can respond.
@@ -283,12 +290,28 @@ impl ComputeState {
             worker_config: mz_dyncfgs::all_dyncfgs().into(),
             metrics_registry,
             workers_per_process,
+            dataflow_exports: Default::default(),
             suspended_collections: Default::default(),
             server_maintenance_interval: Duration::ZERO,
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
             storage_log_reader,
         }
+    }
+
+    /// Install the state for a new collection and record it as an export of its dataflow.
+    ///
+    /// Returns the state this displaced, which is always a bug in the caller.
+    fn insert_collection(
+        &mut self,
+        id: GlobalId,
+        collection: CollectionState,
+    ) -> Option<CollectionState> {
+        self.dataflow_exports
+            .entry(collection.dataflow_index)
+            .or_default()
+            .insert(id);
+        self.collections.insert(id, collection)
     }
 
     /// Return a mutable reference to the identified collection.
@@ -705,7 +728,7 @@ impl<'a> ActiveComputeState<'a> {
         &mut self,
         dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
     ) {
-        let dataflow_index = Rc::new(self.timely_worker.next_dataflow_index());
+        let dataflow_index = self.timely_worker.next_dataflow_index();
         let as_of = dataflow.as_of.clone().unwrap();
 
         let dataflow_expiration = dataflow
@@ -770,18 +793,15 @@ impl<'a> ActiveComputeState<'a> {
         for object_id in dataflow.export_ids() {
             let is_subscribe_or_copy = subscribe_copy_ids.contains(&object_id);
             let metrics = self.compute_state.metrics.for_collection(object_id);
-            let mut collection = CollectionState::new(
-                Rc::clone(&dataflow_index),
-                is_subscribe_or_copy,
-                as_of.clone(),
-                metrics,
-            );
+            let mut collection =
+                CollectionState::new(dataflow_index, is_subscribe_or_copy, as_of.clone(), metrics);
 
             if let Some(logger) = self.compute_state.compute_logger.clone() {
                 let logging = CollectionLogging::new(
                     object_id,
                     logger,
-                    *dataflow_index,
+                    dataflow_index,
+                    as_of.as_option().copied(),
                     dataflow.import_ids(),
                 );
                 if starts_immediately {
@@ -794,7 +814,7 @@ impl<'a> ActiveComputeState<'a> {
                 lower: as_of.clone(),
             });
 
-            let existing = self.compute_state.collections.insert(object_id, collection);
+            let existing = self.compute_state.insert_collection(object_id, collection);
             if existing.is_some() {
                 error!(
                     id = ?object_id,
@@ -826,11 +846,39 @@ impl<'a> ActiveComputeState<'a> {
         // dataflow can export multiple collections and they all share one suspension token, so the
         // computation of a dataflow will only start once all its exported collections have been
         // scheduled.
-        let suspension_token = self.compute_state.suspended_collections.remove(&id);
-        drop(suspension_token);
+        self.compute_state.suspended_collections.remove(&id);
 
-        if let Some(collection) = self.compute_state.collections.get(&id) {
-            if let Some(logging) = &collection.logging {
+        // Report the start for every export of the dataflow, not just the one this command named.
+        // Computation begins for all of them at this instant, so crediting each export from its
+        // own `Schedule` would date the earlier ones to before their dataflow was running and
+        // overstate the compute time between `started` and `snapshot_complete`.
+        let Some(collection) = self.compute_state.collections.get(&id) else {
+            return;
+        };
+        let Some(export_ids) = self
+            .compute_state
+            .dataflow_exports
+            .get(&collection.dataflow_index)
+        else {
+            return;
+        };
+
+        // An export still holding its token means the dataflow is still suspended, so there is no
+        // start to report yet.
+        let still_suspended = export_ids
+            .iter()
+            .any(|id| self.compute_state.suspended_collections.contains_key(id));
+        if still_suspended {
+            return;
+        }
+
+        for export_id in export_ids {
+            let logging = self
+                .compute_state
+                .collections
+                .get(export_id)
+                .and_then(|c| c.logging.as_ref());
+            if let Some(logging) = logging {
                 logging.set_hydration_start();
             }
         }
@@ -906,11 +954,22 @@ impl<'a> ActiveComputeState<'a> {
         // If this collection is an index, remove its trace.
         self.compute_state.traces.remove(&id);
         // If the collection is unscheduled, remove it from the list of waiting collections.
+        //
+        // NOTE: dropping the last unscheduled export of a multi-export dataflow releases the
+        // token here, which unsuspends the dataflow without reporting a hydration start. That
+        // would charge the surviving exports' queueing time to hydration. Unreachable while every
+        // dataflow reaching a replica has exactly one export, which
+        // `SequentialHydration::absorb_command` requires.
         self.compute_state.suspended_collections.remove(&id);
 
         // Drop the dataflow, if all its exports have been dropped.
-        if let Ok(index) = Rc::try_unwrap(collection.dataflow_index) {
-            self.timely_worker.drop_dataflow(index);
+        let index = collection.dataflow_index;
+        if let Some(exports) = self.compute_state.dataflow_exports.get_mut(&index) {
+            exports.remove(&id);
+            if exports.is_empty() {
+                self.compute_state.dataflow_exports.remove(&index);
+                self.timely_worker.drop_dataflow(index);
+            }
         }
 
         // The compute protocol requires us to send a `Frontiers` response with empty frontiers
@@ -957,7 +1016,6 @@ impl<'a> ActiveComputeState<'a> {
             storage_log_reader,
         );
 
-        let dataflow_index = Rc::new(dataflow_index);
         let mut log_index_ids = config.index_logs;
         for (log, trace) in traces {
             // Install trace as maintained index.
@@ -970,23 +1028,24 @@ impl<'a> ActiveComputeState<'a> {
             let is_subscribe_or_copy = false;
             let as_of = Antichain::from_elem(Timestamp::MIN);
             let metrics = self.compute_state.metrics.for_collection(id);
-            let mut collection = CollectionState::new(
-                Rc::clone(&dataflow_index),
-                is_subscribe_or_copy,
-                as_of,
-                metrics,
-            );
+            let mut collection =
+                CollectionState::new(dataflow_index, is_subscribe_or_copy, as_of.clone(), metrics);
 
-            let logging =
-                CollectionLogging::new(id, logger.clone(), *dataflow_index, std::iter::empty());
+            let logging = CollectionLogging::new(
+                id,
+                logger.clone(),
+                dataflow_index,
+                as_of.as_option().copied(),
+                std::iter::empty(),
+            );
             // Log collections are never suspended and the controller marks them scheduled
             // implicitly, so no `Schedule` command ever arrives for them. Record their hydration
-            // start here, or they would sit permanently in the illegal state of being hydrated
-            // without having started.
+            // start here, or they would sit permanently in the illegal state of having completed
+            // a snapshot without having started.
             logging.set_hydration_start();
             collection.logging = Some(logging);
 
-            let existing = self.compute_state.collections.insert(id, collection);
+            let existing = self.compute_state.insert_collection(id, collection);
             if existing.is_some() {
                 error!(
                     id = ?id,
@@ -1010,7 +1069,8 @@ impl<'a> ActiveComputeState<'a> {
 
         // Maintain a single allocation for `new_frontier` to avoid allocating on every iteration.
         let mut new_frontier = Antichain::new();
-
+        // Same, for the frontier that measures dataflow progress.
+        let mut snapshot_frontier = Antichain::new();
         for (&id, collection) in self.compute_state.collections.iter_mut() {
             // The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
             // collections (database-issues#4701).
@@ -1038,6 +1098,23 @@ impl<'a> ActiveComputeState<'a> {
                 .write_frontier
                 .allows_reporting(&new_frontier)
                 .then(|| new_frontier.clone());
+
+            // Collect the frontier that measures the dataflow's own progress, for
+            // `snapshot_complete`. Deliberately not the output frontier collected below, which
+            // folds in the write frontier and so measures durability instead, and is not uniform
+            // across workers for a collection that sinks to persist.
+            //
+            // A collection without a compute frontier produces its output *by* writing it, an
+            // index into its own trace, so there the write frontier is the progress.
+            snapshot_frontier.clear();
+            match &collection.compute_probe {
+                Some(probe) => {
+                    probe.with_frontier(|frontier| {
+                        snapshot_frontier.extend(frontier.iter().copied())
+                    });
+                }
+                None => snapshot_frontier.clone_from(&new_frontier),
+            }
 
             // Collect the output frontier and check for progress.
             //
@@ -1084,6 +1161,8 @@ impl<'a> ActiveComputeState<'a> {
                 collection
                     .set_reported_output_frontier(ReportedFrontier::Reported(frontier.clone()));
             }
+
+            collection.observe_snapshot(&snapshot_frontier);
 
             let response = FrontiersResponse {
                 write_frontier: new_write_frontier,
@@ -1305,6 +1384,15 @@ impl<'a> ActiveComputeState<'a> {
                     .set_reported_write_frontier(ReportedFrontier::Reported(new_frontier.clone()));
                 collection
                     .set_reported_input_frontier(ReportedFrontier::Reported(new_frontier.clone()));
+                // Only a non-empty batch upper measures progress here. A subscribe reports an
+                // empty upper both when cancelled and when complete, and completion says nothing
+                // about the as-of: the sink manufactures the empty upper once
+                // `up_to <= frontier`, which for `SUBSCRIBE ... UP TO x AS OF x` is reached
+                // without computing x. A subscribe that did compute through its as-of already
+                // reported the stage from an earlier, non-empty upper.
+                if matches!(response, SubscribeResponse::Batch(_)) && !new_frontier.is_empty() {
+                    collection.observe_snapshot(&new_frontier);
+                }
                 collection.set_reported_output_frontier(ReportedFrontier::Reported(new_frontier));
             } else {
                 // Presumably tracking state for this subscribe was already dropped by
@@ -2085,10 +2173,9 @@ pub struct CollectionState {
     reported_frontiers: ReportedFrontiers,
     /// The index of the dataflow computing this collection.
     ///
-    /// Used for dropping the dataflow when the collection is dropped.
-    /// The Dataflow index is wrapped in an `Rc`s and can be shared between collections, to reflect
-    /// the possibility that a single dataflow can export multiple collections.
-    dataflow_index: Rc<usize>,
+    /// A dataflow can compute more than one collection. Which ones is tracked by
+    /// `ComputeState::dataflow_exports`, which is also what decides when the dataflow is dropped.
+    dataflow_index: usize,
     /// Whether this collection is a subscribe or copy-to.
     ///
     /// The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
@@ -2108,7 +2195,7 @@ pub struct CollectionState {
     /// Frontier of sink writes.
     ///
     /// Only `Some` if the collection is a sink and *not* a subscribe.
-    pub sink_write_frontier: Option<Rc<RefCell<Antichain<Timestamp>>>>,
+    sink_write_frontier: Option<Rc<RefCell<Antichain<Timestamp>>>>,
     /// Frontier probes for every input to the collection.
     pub input_probes: BTreeMap<GlobalId, probe::Handle<Timestamp>>,
     /// A probe reporting the frontier of times through which all collection outputs have been
@@ -2120,6 +2207,12 @@ pub struct CollectionState {
     logging: Option<CollectionLogging>,
     /// Metrics tracked for this collection.
     metrics: CollectionMetrics,
+    /// Which lifecycle stages have been logged for this collection.
+    ///
+    /// Stages are only ever added, never removed. Reconciliation resets the reported frontiers of
+    /// a retained dataflow, so without this the collection would look unfinished again and re-log
+    /// a stage it already reported.
+    logged_stages: BTreeSet<LifecycleStage>,
     /// Send-side to transition a dataflow from read-only mode to read-write mode.
     ///
     /// All dataflows start in read-only mode. Only after receiving a
@@ -2138,7 +2231,7 @@ pub struct CollectionState {
 
 impl CollectionState {
     fn new(
-        dataflow_index: Rc<usize>,
+        dataflow_index: usize,
         is_subscribe_or_copy: bool,
         as_of: Antichain<Timestamp>,
         metrics: CollectionMetrics,
@@ -2158,6 +2251,7 @@ impl CollectionState {
             compute_probe: None,
             logging: None,
             metrics,
+            logged_stages: BTreeSet::new(),
             read_only_tx,
             read_only_rx,
         }
@@ -2216,6 +2310,10 @@ impl CollectionState {
     }
 
     /// Return whether this collection is hydrated.
+    ///
+    /// This is the output-frontier reading, which folds in the write frontier and so reports
+    /// durability for a collection that sinks to persist. `observe_snapshot` reports the
+    /// dataflow-progress reading instead.
     fn hydrated(&self) -> bool {
         match &self.reported_frontiers.output_frontier {
             ReportedFrontier::Reported(frontier) => PartialOrder::less_than(&self.as_of, frontier),
@@ -2223,10 +2321,41 @@ impl CollectionState {
         }
     }
 
+    /// Log that this collection reached a lifecycle stage, unless it already reported it.
+    fn log_stage(&mut self, stage: LifecycleStage) {
+        if !self.logged_stages.insert(stage) {
+            return;
+        }
+        if let Some(logging) = &self.logging {
+            logging.log_lifecycle(stage);
+        }
+    }
+
+    /// Observe this collection's dataflow progress and log the `snapshot_complete` stage the
+    /// first time that progress has passed the as-of.
+    ///
+    /// `progress` must measure the dataflow's own computation rather than the durability of its
+    /// output. See the comment where it is collected in `report_frontiers`.
+    ///
+    /// An empty `progress` counts as complete, matching [`Self::hydrated`]. A caller whose
+    /// frontier can go empty for a reason other than the dataflow running to its end must exclude
+    /// that itself, which `process_subscribes` does: a cancelled subscribe reports an empty upper
+    /// that says nothing about whether the as-of was computed.
+    fn observe_snapshot(&mut self, progress: &Antichain<Timestamp>) {
+        if PartialOrder::less_than(&self.as_of, progress) {
+            self.log_stage(LifecycleStage::SnapshotComplete);
+        }
+    }
+
+    /// Record the shared frontier a sink publishes its write progress through.
+    pub(crate) fn set_sink_write_frontier(&mut self, frontier: Rc<RefCell<Antichain<Timestamp>>>) {
+        self.sink_write_frontier = Some(frontier);
+    }
+
     /// Allow writes for this collection.
     fn allow_writes(&self) {
         info!(
-            dataflow_index = *self.dataflow_index,
+            dataflow_index = self.dataflow_index,
             export = ?self.logging.as_ref().map(|l| l.export_id()),
             "allowing writes for dataflow",
         );

@@ -357,6 +357,39 @@ pub static MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER: LazyLock<BuiltinLog> =
         }),
     });
 
+pub static MZ_COMPUTE_LIFECYCLE_EVENTS_PER_WORKER: LazyLock<BuiltinLog> =
+    LazyLock::new(|| BuiltinLog {
+        name: "mz_compute_lifecycle_events_per_worker",
+        schema: MZ_INTROSPECTION_SCHEMA,
+        oid: oid::LOG_MZ_COMPUTE_LIFECYCLE_EVENTS_PER_WORKER_OID,
+        variant: LogVariant::Compute(ComputeLog::LifecycleEvent),
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "compute_lifecycle_event_per_worker",
+            description: "The lifecycle stages each compute export has reached, with the \
+                          wallclock instant each was reached at, reported by the worker that \
+                          observed it.",
+            links: &const {
+                [OntologyLink {
+                    name: "lifecycle_event_of",
+                    target: "compute_export_per_worker",
+                    properties: LinkProperties::MapsTo {
+                        source_column: "export_id",
+                        target_column: "export_id",
+                        via: None,
+                        from_type: Some(SemanticType::GlobalId),
+                        to_type: Some(SemanticType::GlobalId),
+                        note: Some(
+                            "Both relations are per worker, so the join is on \
+                                 (export_id, worker_id).",
+                        ),
+                    },
+                }]
+            },
+            column_semantic_types: &[("export_id", SemanticType::GlobalId)],
+        }),
+    });
+
 pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER: LazyLock<BuiltinLog> =
     LazyLock::new(|| BuiltinLog {
         name: "mz_compute_operator_hydration_statuses_per_worker",

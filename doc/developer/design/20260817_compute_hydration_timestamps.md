@@ -103,11 +103,25 @@ them.
 | --- | --- | --- |
 | `installed_at` | the `Export` event, from `CreateDataflow` | the dataflow exists on this worker, suspended, so this is also the start of queueing |
 | `started_at` | the dataflow is unsuspended | hydration is actually running |
-| `hydrated_at` | the output frontier passes the as-of | hydration is complete |
+| `hydrated_at` | the reported output frontier passes the as-of | the output is readable, which for a collection that writes means durable |
 
 `hydrated_at - started_at` is hydration time as users mean it, and
 `started_at - installed_at` is the queueing interval. Today's `time_ns` conflates
 the two.
+
+The lifecycle is wider than these three stages, and timestamp columns cannot carry all
+of it. Two things get in the way. First, some stages are per worker and others are not.
+Each worker computes its own fragment of the dataflow, so `installed`, `started` and
+`snapshot_complete` happen once per worker, while whether the output is durable is a
+property of the sink as a whole. Second, a timestamp column cannot say *why* the next
+stage has not happened, so a NULL cannot tell a replacement materialized view waiting
+for a cutover apart from an index that will never write.
+
+So the lifecycle proper is recorded as an append-only event log, described under
+"The lifecycle event log", and `mz_compute_hydration_times_per_worker` keeps
+exactly the shape and meaning above. The two are complementary: the timestamps are
+the compact per-worker summary a rollup aggregates, and the log is where causes and
+the write stages live.
 
 Two choices shape everything else, each argued in its own section below. The
 timestamps are stamped by the replica rather than by the compute controller, for
@@ -162,6 +176,134 @@ absorbs anchor skew. That skew is pre-existing across everything derived from
 compute logging and has not been observed to be severe, but it is a real risk and
 this design is the first to invite direct comparison of absolute times, so it is
 acknowledged rather than designed around.
+
+### The lifecycle event log
+
+One append-only log relation, per replica, in memory:
+
+```
+export_id    text        not null
+worker_id    uint8       not null
+dataflow_id  uint8       not null
+event        text        not null
+occurred_at  timestamptz not null
+reason       text        nullable
+details      jsonb       nullable
+```
+
+| event | reported | `reason` |
+| --- | --- | --- |
+| `installed` | per worker | none |
+| `started` | per worker | none |
+| `snapshot_complete` | per worker | none |
+| `write_blocked` | per object | `read_only` |
+| `write_unblocked` | per object | none |
+| `written` | per object | none |
+
+An index emits the first three and stops. Subscribes and `COPY TO` stop early for the
+same reason, and a metric sink folds its output into the metrics registry rather than
+into a shard, so it has no write stages either.
+
+**`worker_id`.** Every event carries the worker that recorded it, which is not the same as
+the event being specific to that worker. How to read it depends on the event: a per-worker
+stage describes that worker's fragment of the dataflow, while a per-object stage is
+recorded by the one worker that maintains the sink's write frontier and describes the
+export as a whole.
+
+**`dataflow_id`.** `snapshot_complete` and the write stages are properties of one export.
+`installed` and `started` describe the dataflow, so they carry one instant shared by every
+export it maintains. Today a non-logging dataflow has at most one export, so the
+distinction only starts to matter if that changes.
+
+The relation is keyed by export, since the export id is what `mz_objects.id` holds, and
+carries `dataflow_id` as a column so that the shared events are recognizable as shared:
+`SELECT DISTINCT dataflow_id, event, occurred_at` recovers the dataflow-level facts.
+
+**`installed` is the denominator.** Every worker logs `installed` when the export is
+created, so the count of `installed` events for an export is the number of workers
+reporting on it:
+
+```sql
+count(*) FILTER (WHERE event = 'snapshot_complete')
+    = count(*) FILTER (WHERE event = 'installed')
+```
+
+is the all-workers-reported test, with no worker count needed from the catalog. The
+per-object stages are expected exactly once, or not at all for an export that never
+writes. Which stages are reported per worker is a fixed property of the vocabulary, so a
+consumer encodes it once rather than deriving it per query.
+
+**Which frontier each stage reads.** `snapshot_complete` reads the dataflow's own progress
+frontier, the compute probe, not the reported output frontier. The output frontier is the
+meet of the write and compute frontiers, which makes it a measure of durability rather
+than of computation. A collection with no compute probe produces its output *by* writing
+it, an index into its own trace, so there the write frontier is the progress and
+`snapshot_complete` coincides with durability.
+
+`written` reads the output shard's upper passing the as-of. It says the output is durable
+through the as-of, not that this replica wrote it: every replica's `mint` reads the same
+upper back from persist, so it advances on all of them when any one wins the append.
+
+**The write stages are reported by the sink, and are ordered against nothing.** `mint` is
+the only place that tracks the shard's upper, and it runs on one elected worker, which is
+what makes these three events one report per object rather than one per worker. Reporting
+them there rather than from the collection also means nothing outside the sink needs to
+know which worker was elected.
+
+The price is that only the compute stages remain ordered. `written` reads the shard's
+upper, and for a shard that already holds data the as-of is bounded one step below it, so
+`written` is true from installation. `apply_refresh` advances the upper of a `REFRESH`
+materialized view before its dataflow computes anything, for the same effect. And
+`write_blocked` needs the dataflow's desired frontier to pass that upper, which is strictly
+later than observing it, so a replica awaiting a cutover reports `written` *before*
+`write_blocked`. A consumer must not assume any order among the six beyond the compute
+stages.
+
+**`write_blocked` is logged on entry, not on exit,** because the state an operator debugs
+is the one that has not ended, and that state carries no `write_unblocked` row. Entry
+means the sink has a batch to mint and read-only mode forbids writing it, which is
+exactly the condition `maybe_mint_batch_description` already evaluates. Reporting every
+read-only observation instead would put the pair on essentially every materialized view,
+since collections start read-only and the controller releases them.
+
+**`write_unblocked` is when writing became permitted,** not when the first write happened,
+and it is reported only for a sink that was seen to wait. `mint` produces a batch
+description as soon as the desired frontier passes the persist frontier, so a separate
+stamp for the first write would carry no information.
+
+**`reason` and `details`.** `reason` is a typed cause for the event, and is NULL unless the
+event has one. Its only value is `read_only`, on `write_blocked`. `details` is a nullable
+`jsonb` object, following `mz_source_statuses` and `mz_sink_statuses`. Its only key is
+`as_of`, the dataflow's as-of as a string, which every stage is defined relative to:
+without it `snapshot_complete - started` cannot distinguish a fast computation from one
+whose as-of was already recent. Both vocabularies are open, so tests assert on `event`,
+`reason` and `occurred_at` and never on `details`.
+
+**Bounds.** At most six rows per object, times workers for the first three events,
+all retracted when the object is dropped. This is in-memory introspection, so
+there is no durable growth to reason about.
+
+**Only `read_only` is attributed.** It is the one cause of a write block that compute can
+observe. Two further attributions are follow-up work.
+
+### Refresh schedules do not block writing
+
+`apply_refresh` rounds a `REFRESH` materialized view's frontier *up* to the next
+refresh time, and it does so off its input frontier, before the dataflow has
+computed anything. The sink therefore sees a desired frontier ahead of the as-of
+immediately, mints a description for the pre-refresh window, and appends an empty
+batch, advancing the shard's upper. A refresh schedule brings writing forward
+rather than holding it back.
+
+`test/testdrive/materialized-view-refresh-options.td` shows this from the outside:
+a materialized view whose first refresh is far in the future reports
+`mz_hydration_statuses.hydrated = true`, and that flag is `time_ns IS NOT NULL`,
+which requires the write frontier to have passed the as-of.
+
+Two consequences. There is no `refresh` cause for `write_blocked` to report, because there
+is no such state. And the shard's upper can pass the as-of while the dataflow is still
+hydrating, which is one of the reasons `written` is not ordered against
+`snapshot_complete`.
 
 ### A new hydration start event
 
@@ -274,10 +416,14 @@ change nor the rename would have touched that relation.
 **`time_ns` is kept rather than replaced.** It is the reason the existing columns
 keep their exact values: retained rather than derived, so nothing is recomputed,
 no precision is lost, and no cross-worker arithmetic is introduced.
-Deriving `time_ns` as `hydrated_at - installed_at` would have moved it to
+It could not be derived from the timestamps in any case. `time_ns` and
+`hydrated_at` fire on the same crossing, but deriving the duration would move it to
 microsecond precision, since `timestamptz` caps there, where today it is true
-nanoseconds. Deriving it after aggregation would additionally have absorbed
-cross-worker install skew and the per-worker anchor skew described above. So
+nanoseconds. It would also change what the interval is measured from: `time_ns`
+runs off a single `Instant` taken when the export state is created, where
+`hydrated_at - installed_at` is a difference of two rounded event times. Deriving
+it after aggregation would additionally have absorbed cross-worker install skew and
+the per-worker anchor skew described above. So
 `time_ns` remains the authoritative per-worker duration, measured from a single
 `Instant` inside one worker, and the timestamps carry episode identity, which
 requires absolute times a duration cannot provide. Two columns with two documented
@@ -312,7 +458,7 @@ in one controller turn and one replica turn.
 | 6 | replica | inserts the suspension token and renders the dataflow, whose operators park on the `StartSignal` | |
 | 7 | replica | `handle_schedule` drops the token and the operators start | **`started_at`** |
 | 8 | replica | the dataflow reads its inputs from the as-of forward and builds arrangements. Nothing is stamped here, this interval is the hydration | |
-| 9 | replica | the output frontier passes the as-of and `set_reported_output_frontier` calls `set_hydrated` | **`hydrated_at`** |
+| 9 | replica | the reported output frontier passes the as-of and `set_reported_output_frontier` calls `set_hydrated`. Separately, `observe_snapshot` sees the dataflow's own progress frontier pass the as-of and logs the `snapshot_complete` stage | **`hydrated_at`**, and the `snapshot_complete` event |
 | 10 | replica | the demux writes the retract and insert pair, so the per-worker relation carries all three | |
 | 11 | controller | separately, a `Frontiers` response arrives and `update_output_frontier` flips the controller's own hydration view, which is what the 0dt caught-up check and the autoscaling signal read. One round trip later, and it stamps nothing | |
 
@@ -391,21 +537,78 @@ restarting. Consumers must gate on introspection freshness, as
 `mz_object_arrangement_size_history` already does via
 `fresh_introspection_replicas`.
 
-**`REFRESH` materialized views report a refresh interval, not hydration work.**
-The reported output frontier is the meet of write and compute frontier, and a
-REFRESH MV's write frontier sits at the as-of until the first refresh lands, so
-hydration is not considered complete until then. For `REFRESH EVERY '1 day'`,
-`hydrated_at - started_at` can be most of a day, nearly all of it idle. The
-per-object stamps are still internally consistent, so this is not a defect in the
-relation, but any rollup must exclude these objects or it will never close an
-episode. The controller already receives `refresh_schedule` in `add_collection`,
-so it can mark them.
+**`REFRESH` materialized views hydrate on their computation.** The compute probe
+is attached before the `apply_refresh` operator, deliberately, with the comment in
+`src/compute/src/sink/materialized_view.rs` explaining that rounding frontiers up
+"makes it impossible to accurately track the progress of the computation". So the
+log's `snapshot_complete` stage reads the pre-rounding frontier. `hydrated_at` agrees,
+even
+though it reads the meet: a refresh schedule pushes the write frontier ahead of the
+as-of, so the meet is bounded by the compute frontier and crosses when the
+computation does. Both report when the computation caught up rather than anything
+derived from the schedule. What the schedule does affect is writing, and it
+advances it rather than delaying it. See "Refresh schedules do not block writing".
 
-**Read-only mode changes what the output frontier means.** In read-only mode the
-write frontier is deliberately excluded from the reported output frontier, because
-a read-only dataflow cannot push it forward. So `hydrated_at` during a 0dt
-read-only window reflects compute progress only, which is the intended reading but
-differs from the steady-state one.
+**Compatibility: what a consumer may rely on.** Downstream work builds rollups and
+history relations on top of these two relations, so what is frozen and what may still
+move needs saying explicitly rather than being inferred from the current
+implementation.
+
+Stable. We intend these to hold, and will treat breaking one as a change that needs
+coordinating with consumers rather than a detail:
+
+- The six `event` values, and their meanings.
+- Which events are per worker and which are per object. `installed`, `started` and
+  `snapshot_complete` are per worker. `write_blocked`, `write_unblocked` and `written`
+  are per object, observed by the
+  elected frontier owner. This is a property of the event name, fixed for all
+  objects and all cluster shapes, so a consumer encodes it once rather than deriving
+  it per query.
+- `installed` as the all-workers-reported denominator, per "`installed` is the
+  denominator" above.
+- `occurred_at` is a wallclock instant, carrying its worker's epoch anchor.
+- `snapshot_complete` is always the dataflow-progress reading and `written` is always
+  "the output is durable through the as-of". Neither varies by object type.
+- The compute stages are ordered among themselves. Nothing else is ordered: not the two
+  sides against each other, and not the three write stages against each other. `written`
+  reads the output shard's upper, which moves whether or not this replica may write, so in
+  the one case that produces `write_blocked` at all, a replacement awaiting a cutover, the
+  shard already holds data and `written` is reported first. A consumer must not read the
+  six as one sequence, and must not treat a difference between two of them as an elapsed
+  interval unless it is between two compute stages.
+- `mz_compute_hydration_times_per_worker.hydrated_at` and `time_ns` remain the
+  durability reading, computed in the demux. That relation will not become a view over
+  the lifecycle log. `mz_compute_hydration_statuses.hydrated` is `time_ns IS NOT NULL`
+  and the blue-green readiness query is defined on it, so pointing it at the earlier
+  dataflow-progress reading would have readiness cut over before the output is durable.
+- `(export_id, worker_id)` is the exact join between the two relations. Both are per
+  worker, so joining on `export_id` alone multiplies rows by the worker count.
+- Rows are retracted when the replica processes the drop, which is not when the
+  catalog transaction commits. `DROP` returns once the catalog row is gone, while the
+  retraction still has to reach the replica as an empty `AllowCompaction`, be logged by
+  the demux, and travel through the introspection subscribe and a storage append. A
+  consumer will therefore observe lifecycle rows whose `export_id` is no longer in
+  `mz_objects`, and must not use an inner join against the catalog to filter if losing
+  the tail of an episode matters. This is not specific to this relation:
+  `mz_compute_hydration_times_per_worker` rows also disappear only when the replica
+  retracts them.
+
+Open sets. A consumer must tolerate additions rather than enumerate these
+exhaustively, even though the invariant tests assert closed vocabularies for the
+values that exist today:
+
+- New `event` values. The two candidates are a per-worker durability stage, and a
+  stage recording that this replica's own append made the output durable.
+- New `reason` values. Two useful attributions are not observable today and are
+  described under "Attributing why an export waited".
+- New keys in `details`.
+
+The corollary for `written` is worth stating on its own, because it is the one place
+where a follow-up could plausibly redefine an existing term. Attributing a write to
+the replica that performed it, per "Attributing `written` to the replica that wrote",
+arrives as a new stage. `written` keeps the meaning above. A consumer reading
+`written` today will still be reading the same thing afterwards, and one that wants
+attribution opts into the new stage.
 
 ### Why the replica and not the compute controller
 
@@ -433,52 +636,36 @@ benefit of replica stamping is for same-version environmentd restarts,
 reconnections and generation changes, which is still the common case, rather than
 for upgrades.
 
-### Implementation touch points
+### Goldens a new log relation touches
 
-- `src/compute/src/logging/compute.rs`: `ComputeEvent::HydrationStart`, the three
-  `ExportState` fields, the packer, `handle_export`, `handle_export_dropped`,
-  `handle_hydration` including the `started_at` backfill, and a new
-  `handle_hydration_start`. Also a `CollectionLogging` method alongside
-  `set_hydrated`.
-- `src/compute/src/compute_state.rs`: log the start event from `handle_schedule`,
-  from `handle_create_dataflow` when `import_ids` is empty, and from
-  `initialize_logging`.
-- `src/compute-client/src/logging.rs`: the widened `RelationDesc`.
-  `LogVariant::desc` is the only exhaustive match a shape change touches, since
-  the variant itself is unchanged.
-- `src/catalog/src/builtin/mz_introspection.rs`: the appended columns on the
-  existing builtin log. No rename, so no new OID and no `BUILTINS_STATIC` entry.
-- Goldens that hardcode this relation's identity, columns, OIDs or indexes:
-  `test/sqllogictest/oid.slt`, `information_schema_tables.slt`,
-  `mz_catalog_server_index_accounting.slt`, `cluster.slt`,
-  `catalog_server_explain.slt`, `test/cluster/mzcompose.py`, and the autogenerated
-  `test/sqllogictest/autogenerated/mz_introspection.slt`.
-- Docs: the `mz_introspection` system catalog reference page.
-
-Not touched, and deliberately so: the introspection subscribe,
-`mz_internal.mz_compute_hydration_times`,
-`mz_internal.mz_compute_hydration_statuses`,
-`src/adapter/src/coord/message_handler.rs`, and
-`src/mz-debug/src/system_catalog_dumper.rs`.
-
-New testdrive coverage worth adding:
-
-- `installed_at` set and `started_at` NULL for an object gated by
-  `HYDRATION_CONCURRENCY`.
-- `started_at` NULL for an object waiting on an unavailable input.
-- An import-free dataflow carrying `started_at` from creation, equal to its
-  `installed_at`, and satisfying the ordering invariant.
-- Log collections having all three timestamps set.
-- All timestamps surviving an environmentd restart unchanged.
-- A replica restart yielding entirely fresh values.
-
-The most important tests are compatibility ones: that
-`mz_compute_hydration_times_per_worker`, `mz_compute_hydration_times` and
-`mz_compute_hydration_statuses` return identical values before and after. The
-existing assertions in `test/testdrive/hydration-status.td` and the blue-green
-tests are the contract and should be left alone rather than adjusted to fit.
+Two of these are worth naming, because adding a *column* to an existing log reaches them
+while leaving everything else alone, and neither is found by searching for a count.
+`cluster.slt` lists each per-replica index's key columns with their positions, so a column
+added to an unkeyed log shifts every position after it. `cockroach/srfs.slt` runs
+`SELECT relname, unnest(indkey)`, so it gains a row per index instance. The reliable way to
+find this class is to search every file that mentions the relation by name and read what it
+asserts, rather than to reason about which kinds of value could have moved.
 
 ## Follow-up work
+
+### Attributing `written` to the replica that wrote
+
+`written` says the output is durable and this replica was permitted to write, not that
+this replica wrote, for the reason given above. Attribution needs a signal from the
+replica's own successful append rather than a reading of the shared upper, and that
+signal has to cross workers: `next_append_worker` rotates independently of
+`sink::frontier_owner`, so the worker that appends is generally not the worker that
+reports the stage. Whether the distinction is worth that machinery is the open
+question, since the batches the replicas race to append are identical.
+
+### Attributing why an export waited
+
+Two causes the `reason` vocabulary would carry are not observable today. Distinguishing a
+`started` that waited on the hydration limiter from one that waited on its inputs needs
+`SequentialHydration` to report which, since both appear to the replica as `Schedule`
+arriving late. Distinguishing a dataflow installed by a fresh `CreateDataflow` from one
+retained across reconciliation is not observable in the replica at all, because a retained
+dataflow emits no new `installed` event.
 
 ### `mz_compute_hydration_timestamps`, the per-replica relation
 
@@ -539,7 +726,7 @@ The prototype is the compute and catalog change itself, exercised through
 testdrive against a targeted replica. The validating query selects from
 `mz_compute_hydration_times_per_worker` on a cluster with a hydration
 concurrency limit and a handful of indexes, showing objects moving from waiting,
-to hydrating, to hydrated, with the queueing interval visible separately from the
+to computing, to snapshot complete, with the queueing interval visible separately from the
 hydration interval. A second run after an environmentd restart shows identical
 values, which is the property the design turns on. A third check confirms
 `mz_compute_hydration_times` and `mz_compute_hydration_statuses` are byte for byte
@@ -591,38 +778,9 @@ inside every replica.
 cannot observe a transition, only its aftermath, so a hydration that starts and
 finishes between two samples is invisible.
 
-## Settled during review
-
-Recorded so the reasoning is not relitigated. Each item is argued in the section
-named.
-
-- **Stamping location.** The replica, not the compute controller. See "Why the
-  replica and not the compute controller".
-- **`time_ns` is kept.** See "Preserving the existing relations".
-- **`started_at` for dataflows with no imports is stamped at creation,** with the
-  backfill at hydration kept for the cases creation-time stamping cannot see. See
-  "A new hydration start event".
-- **The per-worker log is widened in place,** keeping its name and OID, rather than
-  renamed behind a projecting view. See "Preserving the existing relations".
-- **`hydration_time` is left exactly as it is,** and no `queue_time` column is
-  added. Future consumers read the timestamps. See "Alternatives".
-- **Clock skew.** Accepted and documented rather than designed around.
-  Pre-existing across everything derived from compute logging.
-- **Per-export rather than per-dataflow stamping.** Correct for today's
-  single-export dataflows, which the interceptor asserts outright. If multi-output
-  dataflows land, the fix is to stamp per dataflow and fan out to exports in a
-  view.
-- **No fourth stamp** for the hydration-slot boundary. The interceptor knows it
-  but runs in environmentd.
-- **Crash detection is not compute's job.** A replica cannot report its own death,
-  and replica lifecycle is already in `mz_cluster_replica_status_history`.
-- **Sub-window episodes are unavoidable in the limit.** Mitigated by stamping
-  event time so that recorded episodes are accurate, and documented as a
-  visibility limit.
-- **Log collections** get a start event rather than a filter.
-- **The per-replica relation is follow-up work,** not part of this design.
-
 ## Open questions
 
-None outstanding for this design. The open questions all belong to the per-replica
-rollup and are enumerated under "Follow-up work".
+None outstanding for this design. Two attributions the `reason` vocabulary would
+benefit from are not observable today and are enumerated under "Follow-up work
+log". The rest of the open questions belong to the per-replica rollup and are
+enumerated under "Follow-up work".

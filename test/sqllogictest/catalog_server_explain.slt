@@ -4986,7 +4986,7 @@ mz_catalog.mz_indexes:
           Filter: ("2" = (#1 ->> "object_type")) AND ("mz_introspection" = (#1 ->> "schema_name")) AND ((#1 ->> "object_name")) IS NOT NULL AND ("GidMapping" = #2)
             →Read mz_internal.mz_catalog_raw
       →Arrange (#0{log_name})
-        →Constant (33 rows)
+        →Constant (34 rows)
 
 Source mz_internal.mz_catalog_raw
   project=(#0..=#2)
@@ -5392,7 +5392,7 @@ mz_catalog.mz_sources:
             Project: #4, #0, #5, #1, #2, #6..=#12, #3, #13, #14
             Map: null, null, null, null, null, null, "s1", null, null
         →Arrange (#1{schema_name}, #2{name})
-          →Constant (57 rows)
+          →Constant (58 rows)
         →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
           →Fused with Child Map/Filter/Project
             Project: #4, #3, #5
@@ -8236,7 +8236,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_sources";
 ----
 Explained Query (fast path):
-  →Constant (57 rows)
+  →Constant (58 rows)
 
 Target cluster: mz_catalog_server
 
@@ -10248,7 +10248,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_ontology_link_types";
 ----
 Explained Query (fast path):
-  →Constant (180 rows)
+  →Constant (181 rows)
 
 Target cluster: mz_catalog_server
 
@@ -10315,7 +10315,7 @@ Explained Query:
       →Differential Join %0:l4[#0{entity_name}, #1{name}] » %1[#0{entity_name}, #1{column_name}]
         →Arranged l4
         →Arrange (#0{entity_name}, #1{column_name})
-          →Constant (281 rows)
+          →Constant (282 rows)
   →Return
     →Union
       →Map/Filter/Project
