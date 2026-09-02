@@ -71,7 +71,7 @@ pub struct Metrics {
 
 impl Metrics {
     pub(crate) fn register_into(registry: &MetricsRegistry) -> Self {
-        let metrics = Self {
+        Self {
             query_total: registry.register(metric!(
                 name: "mz_query_total",
                 help: "The total number of queries issued of the given type since process start.",
@@ -323,11 +323,7 @@ impl Metrics {
                     0., 1., 2., 3., 5., 10., 25., 50., 100., 200., 300., 500., 750., 1000.,
                 ],
             )),
-        };
-        for caller in [OCC_CALLER_SESSION, OCC_CALLER_BACKGROUND] {
-            let _ = metrics.occ_retry_count.with_label_values(&[caller]);
         }
-        metrics
     }
 
     pub(crate) fn row_set_finishing_seconds(&self) -> Histogram {

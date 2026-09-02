@@ -4877,8 +4877,8 @@ def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
     disarm = f"SET failpoints = '{failpoint}=off'"
 
     def occ_writes() -> tuple[int, int]:
-        """Read-then-writes the OCC path sequenced, and how many of their write
-        attempts lost the race for their write timestamp."""
+        """Session read-then-writes sequenced through OCC, and how many of their
+        write attempts lost the race for their write timestamp."""
         metric = "mz_occ_read_then_write_retry_count"
         metrics = c.exec(
             "materialized", "curl", "localhost:6878/metrics", capture=True
@@ -4887,9 +4887,12 @@ def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
         for suffix in ["count", "sum"]:
             prefix = f'{metric}_{suffix}{{caller="session"}} '
             values[suffix] = next(
-                int(float(line.split()[1]))
-                for line in metrics.splitlines()
-                if line.startswith(prefix)
+                (
+                    int(float(line.split()[1]))
+                    for line in metrics.splitlines()
+                    if line.startswith(prefix)
+                ),
+                0,
             )
         return values["count"], values["sum"]
 
