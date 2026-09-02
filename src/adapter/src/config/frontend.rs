@@ -344,6 +344,37 @@ pub struct ReplicaEvalContext {
     pub replica: ReplicaScopeContext,
 }
 
+impl ReplicaEvalContext {
+    /// Builds the eval context for a replica owned by `cluster`. The owning
+    /// cluster's scope context supplies both the cluster-free pass and the
+    /// replica's cluster attributes (id, name, builtin flag), so the caller
+    /// passes it once rather than restating those fields.
+    pub(crate) fn for_replica(
+        cluster_id: ClusterId,
+        cluster: ClusterScopeContext,
+        replica_id: ReplicaId,
+        name: String,
+        size: String,
+        size_family: String,
+    ) -> Self {
+        let replica = ReplicaScopeContext {
+            id: replica_id.to_string(),
+            name,
+            is_builtin: cluster.is_builtin,
+            size,
+            size_family,
+            cluster_id: cluster.id.clone(),
+            cluster_name: cluster.name.clone(),
+        };
+        ReplicaEvalContext {
+            cluster_id,
+            replica_id,
+            cluster,
+            replica,
+        }
+    }
+}
+
 /// The identity of a single live cluster, used to evaluate cluster-coherent
 /// scoped parameters in [`SystemParameterFrontend::pull_cluster_overrides`].
 #[derive(Clone, Debug)]
@@ -504,6 +535,19 @@ pub struct ClusterScopeContext {
     pub name: String,
     /// Whether the cluster is a builtin (system) cluster.
     pub is_builtin: bool,
+}
+
+impl ClusterScopeContext {
+    /// Builds the scope context for `cluster_id`, whose id namespace also
+    /// decides the builtin flag. The single derivation keeps create-time and
+    /// steady-state evaluation from disagreeing on a cluster's attributes.
+    pub(crate) fn for_cluster(cluster_id: ClusterId, name: String) -> Self {
+        ClusterScopeContext {
+            id: cluster_id.to_string(),
+            name,
+            is_builtin: cluster_id.is_system(),
+        }
+    }
 }
 
 /// Identity of a replica, used to build a `replica` context kind for
