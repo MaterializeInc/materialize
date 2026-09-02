@@ -197,7 +197,7 @@
 //!
 //! Not yet documented
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -207,22 +207,46 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs;
 use mz_storage_types::oneshot_sources::{OneshotIngestionDescription, OneshotIngestionRequest};
 use mz_storage_types::sinks::StorageSinkDesc;
-use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceConnection};
+use mz_storage_types::sources::{
+    GenericSourceConnection, IngestionDescription, SourceConnection, SourceEnvelope,
+    SourceTimestamp,
+};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::scope_label::ScopeExt;
 use timely::dataflow::operators::vec::Map;
 use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave};
 use timely::progress::Antichain;
+use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::Semaphore;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::RawSourceCreationConfig;
+use crate::source::types::SourceRender;
 use crate::storage_state::StorageState;
 
 mod persist_sink;
 pub mod sinks;
 pub mod sources;
+
+/// The exports this dataflow incarnation will snapshot.
+///
+/// An export snapshots when its resume upper is the minimum from-time, which is the test each
+/// connector's snapshot operator makes once it decodes the rows back. It has to be made in the
+/// from-time domain: the reclocking of a resume upper maps any into-time upper at or below the
+/// as_of back to the minimum, which is what keeps a restart during a snapshot reading as
+/// snapshotting even though the shard upper has moved past its own minimum by then.
+fn snapshotting_exports<C: SourceRender>(
+    _connection: &C,
+    source_resume_uppers: &BTreeMap<GlobalId, Vec<Row>>,
+) -> BTreeSet<GlobalId> {
+    let minimum = Antichain::from_elem(C::Time::minimum());
+    source_resume_uppers
+        .iter()
+        .filter(|(_, rows)| Antichain::from_iter(rows.iter().map(C::Time::decode_row)) == minimum)
+        .map(|(id, _)| *id)
+        .collect()
+}
 
 /// Assemble the "ingestion" side of a dataflow, i.e. the sources.
 ///
@@ -271,6 +295,32 @@ pub fn build_ingestion_dataflow(
             } else {
                 Arc::new(Semaphore::new(Semaphore::MAX_PERMITS))
             };
+
+            // Which exports snapshot is fixed for this incarnation, so it is decided once here
+            // rather than inferred downstream. See `snapshotting_exports`.
+            let mut snapshotting = match &connection {
+                GenericSourceConnection::Kafka(c) => snapshotting_exports(c, &source_resume_uppers),
+                GenericSourceConnection::Postgres(c) => {
+                    snapshotting_exports(c, &source_resume_uppers)
+                }
+                GenericSourceConnection::MySql(c) => snapshotting_exports(c, &source_resume_uppers),
+                GenericSourceConnection::SqlServer(c) => {
+                    snapshotting_exports(c, &source_resume_uppers)
+                }
+                GenericSourceConnection::LoadGenerator(c) => {
+                    snapshotting_exports(c, &source_resume_uppers)
+                }
+            };
+            // The persist sink commits batch descriptions a wall-clock width ahead of a
+            // snapshotting export's frontier. A CDCv2 export takes its MZ times from the data
+            // rather than from reclocking, so no width relates to the clock and a committed
+            // upper the data never reaches would hold the shard upper forever.
+            snapshotting.retain(|export_id| {
+                !matches!(
+                    description.source_exports[export_id].data_config.envelope,
+                    SourceEnvelope::CdcV2
+                )
+            });
 
             let base_source_config = RawSourceCreationConfig {
                 name: format!("{}-{}", connection.name(), primary_source_id),
@@ -380,6 +430,7 @@ pub fn build_ingestion_dataflow(
                     storage_state,
                     metrics,
                     Arc::clone(&busy_signal),
+                    snapshotting.contains(&export_id),
                 );
                 upper_streams.push(upper_stream);
                 tokens.extend(sink_tokens);

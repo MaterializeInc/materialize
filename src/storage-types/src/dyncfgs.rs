@@ -512,6 +512,49 @@ pub const STORAGE_SOURCE_SNAPSHOT_CONCURRENT_REPLICATION: Config<bool> = Config:
     false,
     "Emit source rewind requests when the snapshot bound is known instead of after the \
     snapshot completes, so the replication stream is read concurrently with the snapshot.",
+    ParameterScope::Environment,
+);
+
+/// How many bytes of updates the source `persist_sink` may take in past its last batch description
+/// before committing one ahead of the collection's frontier, so that it can group updates while a
+/// hydrating export holds that frontier pinned.
+///
+/// A batch's bounds come from a batch description, and while a collection's frontier is pinned the
+/// minter has nothing to derive one from, so the sink has no bounds to group updates under and
+/// falls back to one batch per timestamp. With a window the minter commits a description this wide
+/// as soon as the frontier pins, and the next one whenever the data comes within one initial width
+/// of the committed upper, so every description is in the writers' hands before the updates it
+/// covers arrive. Each committed description is twice as wide as the last, up to
+/// [`STORAGE_PERSIST_SINK_DESCRIPTION_WINDOW_MAX`]. Committing does not make a description
+/// appendable, that still waits for the frontier to reach its upper, which is what a short
+/// snapshot pays: its shard upper waits at the last committed lower until the frontier passes
+/// that description's upper.
+///
+/// Only applies to an export that is snapshotting in this dataflow incarnation, and only until the
+/// frontier moves off the time its snapshot occupies. A collection that is keeping up lags the data
+/// by about one `timestamp_interval` and so has nothing to group, and committing ahead of a
+/// frontier that is moving would hold the shard upper at the committed boundary instead.
+///
+/// Zero disables committing ahead, leaving descriptions derived from the frontier alone and every
+/// timestamp writing its own batch.
+pub const STORAGE_PERSIST_SINK_DESCRIPTION_WINDOW: Config<Duration> = Config::new(
+    "storage_persist_sink_description_window",
+    Duration::ZERO,
+    "Width of the first batch description the source persist sink commits ahead of a pinned \
+    collection frontier, so updates can be grouped while a snapshot runs. Later ones double up to \
+    storage_persist_sink_description_window_max (zero leaves every timestamp writing its own batch).",
+    ParameterScope::Environment,
+);
+
+/// Ceiling on the width a committed description reaches by doubling. See
+/// [`STORAGE_PERSIST_SINK_DESCRIPTION_WINDOW`]. It bounds both the batches a long snapshot costs and
+/// how long the shard upper can wait for the frontier once the snapshot ends.
+pub const STORAGE_PERSIST_SINK_DESCRIPTION_WINDOW_MAX: Config<Duration> = Config::new(
+    "storage_persist_sink_description_window_max",
+    Duration::from_secs(300),
+    "Ceiling on the width of a batch description the source persist sink commits ahead of a \
+    pinned collection frontier.",
+    ParameterScope::Environment,
 );
 
 /// Configure mz-ore overflowing type behavior.
@@ -569,6 +612,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
+        .add(&STORAGE_PERSIST_SINK_DESCRIPTION_WINDOW)
+        .add(&STORAGE_PERSIST_SINK_DESCRIPTION_WINDOW_MAX)
         .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
         .add(&STORAGE_SOURCE_SNAPSHOT_CONCURRENT_REPLICATION)
         .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
