@@ -91,11 +91,13 @@ unmount. Three kinds exist:
   changes, so no page serves another region's catalog.
 - `createCollectionSubscribeSession`: owns a socket, feeds a collection.
   Additionally holds a keep-alive subscriber so the collection is not garbage
-  collected while no component queries it, and hydrates the collection from
-  its scoped cache via the scope atom.
+  collected while no component queries it, clears the collection synchronously
+  on a region change, and hydrates it from its scoped cache via the scope atom.
 - `createAtomFedCollectionSession`: no socket. Bridges an already running
   subscribe atom into a collection, adding no upstream load, plus the same
-  scoped hydration. Region behavior comes from the source atom's own session.
+  region clear and scoped hydration. (The source atom's own reset reaches the
+  bridge as an empty pre-snapshot, which applySnapshot ignores, so the
+  collection must clear itself.)
 
 ```
                      +--------------------------------------+
@@ -128,6 +130,8 @@ The bridge also owns the instant-load cache:
   rows load into the collection and the loading gate opens immediately. A
   cached snapshot counts as complete for gating; the live snapshot replaces it
   when it arrives. Other scopes' cache entries are pruned on hydrate.
+- **Fail closed.** A scope resolution that errors suspends persistence
+  entirely rather than leaving writes aimed at the previous scope's key.
 - **Scope changes.** Re-hydrating under a new scope drops the in-memory rows
   and any pending persist first, so one tenant's rows are never shown as, or
   written under, another tenant's cache.

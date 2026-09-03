@@ -33,18 +33,38 @@ export type ScopeLoadableAtom = Atom<
 >;
 
 /** Hydrates `target` from its scoped cache whenever the scope settles or
- * changes; hydrate itself handles both seeding and the scope-change reset. */
+ * changes; hydrate itself handles both seeding and the scope-change reset. A
+ * failed scope resolution fails closed: persistence is suspended rather than
+ * left aimed at a previous scope's key. */
 function subscribeToScope(
   store: JotaiStore,
   scopeAtom: ScopeLoadableAtom,
-  hydrate: (scope: string) => void,
+  target: {
+    hydrate: (scope: string) => void;
+    suspendPersistence: () => void;
+  },
 ) {
   const applyScope = () => {
     const value = store.get(scopeAtom);
-    if (value.state === "hasData" && value.data) hydrate(value.data);
+    if (value.state === "hasData" && value.data) target.hydrate(value.data);
+    else if (value.state === "hasError") target.suspendPersistence();
   };
   applyScope();
   return store.sub(scopeAtom, applyScope);
+}
+
+/** Invokes `onRegionChange` when the current region changes. */
+function subscribeToRegionChange(
+  store: JotaiStore,
+  onRegionChange: () => void,
+) {
+  let regionId = store.get(currentRegionIdSyncAtom);
+  return store.sub(currentRegionIdSyncAtom, () => {
+    const next = store.get(currentRegionIdSyncAtom);
+    if (next === regionId) return;
+    regionId = next;
+    onRegionChange();
+  });
 }
 
 export interface SubscribeSessionOptions<T extends object, R> {
@@ -95,11 +115,7 @@ function createSubscribeSession<T extends object, R>(
 
   // The held rows belong to the previous region's catalog: reset rather than
   // serve or replay them while the socket re-subscribes at the new address.
-  let regionId = store.get(currentRegionIdSyncAtom);
-  const unsubscribeRegion = store.sub(currentRegionIdSyncAtom, () => {
-    const next = store.get(currentRegionIdSyncAtom);
-    if (next === regionId) return;
-    regionId = next;
+  const unsubscribeRegion = subscribeToRegionChange(store, () => {
     manager.reset();
     sink.onRegionChange?.();
   });
@@ -140,8 +156,8 @@ export function createAtomSubscribeSession<
 }
 
 /** A subscribe session that feeds a TanStack DB collection (namespaces et al.).
- * The manager reset on region change suffices for the sink: onOpen then
- * replays an empty pre-snapshot, which applySnapshot ignores. */
+ * The region change clears the collection synchronously; hydrate is
+ * responsible only for cache seeding. */
 export function createCollectionSubscribeSession<
   T extends object,
   R extends object = SubscribeRow<T>,
@@ -156,10 +172,11 @@ export function createCollectionSubscribeSession<
   // while no component is querying it.
   const keepAlive = target.collection.subscribeChanges(() => {});
   const unsubscribeScope = scopeAtom
-    ? subscribeToScope(store, scopeAtom, target.hydrate)
+    ? subscribeToScope(store, scopeAtom, target)
     : undefined;
   const session = createSubscribeSession(options, {
     apply: (snapshot) => target.applySnapshot(snapshot),
+    onRegionChange: () => target.reset(),
   });
   target.applySnapshot(session.manager.getSnapshot());
   return {
@@ -174,9 +191,10 @@ export function createCollectionSubscribeSession<
 
 /**
  * Feeds a collection from an already-running subscribe atom rather than its
- * own socket, adding no upstream load. Region handling comes for free: the
- * source atom's session resets it, and the scope hydration both seeds from
- * and resets the collection's cache on a scope change.
+ * own socket, adding no upstream load. The source atom's own session resets
+ * the atom on a region change, but that reaches this bridge as an empty
+ * pre-snapshot, which applySnapshot ignores, so the collection clears itself
+ * on the region change too.
  */
 export function createAtomFedCollectionSession<R extends object>(options: {
   store: JotaiStore;
@@ -186,14 +204,18 @@ export function createAtomFedCollectionSession<R extends object>(options: {
 }): { destroy: () => void } {
   const { store, sourceAtom, target, scopeAtom } = options;
   const unsubscribeScope = scopeAtom
-    ? subscribeToScope(store, scopeAtom, target.hydrate)
+    ? subscribeToScope(store, scopeAtom, target)
     : undefined;
+  const unsubscribeRegion = subscribeToRegionChange(store, () =>
+    target.reset(),
+  );
   const apply = () => target.applySnapshot(store.get(sourceAtom));
   apply();
   const unsubscribeSource = store.sub(sourceAtom, apply);
   return {
     destroy() {
       unsubscribeScope?.();
+      unsubscribeRegion();
       unsubscribeSource();
     },
   };

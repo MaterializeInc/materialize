@@ -190,6 +190,60 @@ describe("createSubscribeCollection", () => {
     expect(collection.get("9")?.name).toBe("region-b");
   });
 
+  it("reset drops rows, pending persistence, and the loading gate", async () => {
+    vi.useFakeTimers();
+    try {
+      const name = "reset";
+      const scope = "org|regionA";
+      const key = syncEngineCacheKey(name, scope);
+      const { collection, statusAtom, applySnapshot, hydrate, reset } =
+        freshCollection(name);
+      hydrate(scope);
+      applySnapshot(state([{ id: "1", name: "a" }]));
+
+      // Reset before the persist throttle fires: nothing may be written.
+      reset();
+      vi.advanceTimersByTime(1100);
+      expect(localStorage.getItem(key)).toBeNull();
+      expect(getStore().get(statusAtom).snapshotComplete).toBe(false);
+
+      vi.useRealTimers();
+      await flush();
+      expect(collection.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("suspendPersistence stops writes until a scope resolves again", () => {
+    vi.useFakeTimers();
+    try {
+      const name = "suspend";
+      const scope = "org|regionA";
+      const key = syncEngineCacheKey(name, scope);
+      const { applySnapshot, hydrate, suspendPersistence } =
+        freshCollection(name);
+      hydrate(scope);
+      applySnapshot(state([{ id: "1", name: "a" }]));
+
+      // Suspend cancels the pending write and later snapshots stay unpersisted.
+      suspendPersistence();
+      applySnapshot(state([{ id: "2", name: "b" }]));
+      vi.advanceTimersByTime(1100);
+      expect(localStorage.getItem(key)).toBeNull();
+
+      // A scope resolving again re-arms persistence, even the same scope.
+      hydrate(scope);
+      applySnapshot(state([{ id: "3", name: "c" }]));
+      vi.advanceTimersByTime(1100);
+      expect(JSON.parse(localStorage.getItem(key) ?? "[]")).toEqual([
+        { id: "3", name: "c" },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("clears a stale error when an empty pre-snapshot follows a reconnect", () => {
     const { applySnapshot, statusAtom } = freshCollection();
     const error = { code: "boom", message: "it failed" };

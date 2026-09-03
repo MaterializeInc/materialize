@@ -72,6 +72,14 @@ export interface SubscribeCollection<T extends object> {
    * tenant's catalog into another's session after an org or region switch. Only
    * the first call per scope seeds; later calls for the same scope no-op. */
   hydrate: (scope: string) => void;
+  /** Drop all rows and pending persistence and return to the loading state,
+   * for when the held rows belong to another region's catalog. A later
+   * hydrate may still seed the new scope from its cache. */
+  reset: () => void;
+  /** Stop persisting until a scope resolves again. Scope resolution failing
+   * must fail closed: writes aimed at a previous scope's key would store one
+   * tenant's rows under another's cache. */
+  suspendPersistence: () => void;
 }
 
 /**
@@ -291,5 +299,36 @@ export function createSubscribeCollection<T extends object>(options: {
     writeStatus({ error: undefined, snapshotComplete: lastSnapshotComplete });
   };
 
-  return { collection, statusAtom, applySnapshot, hydrate };
+  const clearPendingPersist = () => {
+    if (persistTimer) {
+      clearTimeout(persistTimer);
+      persistTimer = undefined;
+    }
+  };
+
+  const reset = () => {
+    clearPendingPersist();
+    desired = new Map();
+    lastSnapshotComplete = false;
+    liveSnapshotApplied = false;
+    materialize();
+    writeStatus({ error: undefined, snapshotComplete: false });
+  };
+
+  const suspendPersistence = () => {
+    clearPendingPersist();
+    persistKey = undefined;
+    // Allow a later successful resolution to hydrate again, even for the
+    // scope whose resolution just failed.
+    hydratedScope = undefined;
+  };
+
+  return {
+    collection,
+    statusAtom,
+    applySnapshot,
+    hydrate,
+    reset,
+    suspendPersistence,
+  };
 }
