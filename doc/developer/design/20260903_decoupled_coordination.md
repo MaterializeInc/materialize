@@ -211,3 +211,21 @@ Next useful step: establish input protection for runtime MV reconstruction befor
 moving compute installation. A cache miss can choose imports outside the creator's
 holds, and acquiring fresh holds after commit cannot recover history needed for
 the committed first refresh. No protection mechanism or boundary change was agreed.
+
+### 2026-09-03: Pending first-refresh recovery coverage
+
+Added cache-disabled restart coverage for an unexecuted first refresh after its
+input changes. Python formatting and Ruff passed. Full formatting/lint remain
+blocked by missing tools and an OpenSSL dependency build. Prior
+[CI build 133887](https://buildkite.com/materialize/test/builds/133887) passed.
+This slice's [PR CI](https://github.com/MaterializeInc/materialize/pull/38696/checks)
+and runtime verification are pending.
+
+Code inspection ruled out merely broadening creator holds: timestamp selection
+joins every hold, changing historical MV readability, while
+[`sufficient_collections`](../../../src/adapter/src/coord/indexes.rs) stops at
+available indexes and does not cover sibling indexes exposed by same-batch drops.
+Compute holds do protect actual transitive dependencies. Production MV installation
+remains paused. Next proposed step: agree whether to establish lifecycle-owned
+protection now or build a temporary protected-plan reconstruction bridge. No new
+mechanism or boundary change was agreed.

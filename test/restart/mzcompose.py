@@ -886,6 +886,16 @@ def workflow_dataflows_without_expression_cache(c: Composition) -> None:
                 > CREATE INDEX IF NOT EXISTS uncached_arrangement ON uncached_index_v (b);
                 > CREATE MATERIALIZED VIEW uncached_mv AS SELECT sum(b) AS total FROM uncached_index_v;
                 > CREATE DEFAULT INDEX ON uncached_mv;
+
+                # Keep the first refresh pending until after catalog reconstruction.
+                > CREATE CLUSTER uncached_refresh SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
+                > CREATE TABLE uncached_refresh_t (a int);
+                > INSERT INTO uncached_refresh_t VALUES (1);
+                > CREATE MATERIALIZED VIEW uncached_refresh_mv
+                  IN CLUSTER uncached_refresh
+                  WITH (REFRESH AT CREATION)
+                  AS SELECT a FROM uncached_refresh_t;
+                > UPDATE uncached_refresh_t SET a = 2;
                 """),
         )
         index_id = c.sql_query(
@@ -938,6 +948,14 @@ def workflow_dataflows_without_expression_cache(c: Composition) -> None:
                 > INSERT INTO uncached_index_t VALUES (3);
                 > SELECT total FROM uncached_mv;
                 9
+
+                > ALTER CLUSTER uncached_refresh SET (REPLICATION FACTOR 1);
+                > SELECT a FROM uncached_refresh_t;
+                2
+
+                # Recovery must use the committed first refresh, not the current input.
+                > SELECT a FROM uncached_refresh_mv;
+                1
                 """),
         )
 
@@ -951,6 +969,8 @@ def workflow_dataflows_without_expression_cache(c: Composition) -> None:
         )
         assert notices == [(0,)], notices
         c.sql("DROP TABLE uncached_index_t CASCADE", reuse_connection=False)
+        c.sql("DROP TABLE uncached_refresh_t CASCADE", reuse_connection=False)
+        c.sql("DROP CLUSTER uncached_refresh", reuse_connection=False)
 
 
 def workflow_index_compute_dependencies(c: Composition) -> None:
