@@ -12,6 +12,7 @@ import { loadable } from "jotai/utils";
 
 import {
   fetchCurrentOrganization,
+  isOrganizationFetchEnabled,
   queryKeys as authQueryKeys,
 } from "~/api/auth";
 import { Organization } from "~/api/cloudGlobalApi";
@@ -29,15 +30,7 @@ export const syncEngineCacheScopeAtom = atom(async (get) => {
   const regionId = get(currentRegionIdSyncAtom);
   if (!regionId) return undefined;
 
-  const appConfig = get(appConfigAtom);
-  const isLocalImpersonation =
-    appConfig.mode === "cloud" &&
-    appConfig.isImpersonating &&
-    appConfig.isLocalImpersonation;
-  const organizationFetchEnabled =
-    appConfig.mode !== "self-managed" && !isLocalImpersonation;
-
-  const organizationId = organizationFetchEnabled
+  const organizationId = isOrganizationFetchEnabled(get(appConfigAtom))
     ? (
         await getQueryClient().ensureQueryData<Organization>({
           queryKey: authQueryKeys.currentOrganization(),

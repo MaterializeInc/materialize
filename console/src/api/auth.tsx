@@ -14,6 +14,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 
+import { AppConfig } from "~/config/AppConfig";
 import { CloudRuntimeConfig } from "~/config/AppConfigSwitch";
 import { useAppConfig } from "~/config/useAppConfig";
 import {
@@ -170,6 +171,20 @@ export function useSelfManagedSubscription() {
   return { subscription, isLoading, isError, error };
 }
 
+/**
+ * Whether this deployment fetches the current organization at all. This also
+ * decides the organization half of the sync-engine cache key
+ * (store/syncEngineCache.ts), which isolates tenants' caches on a shared
+ * origin, so every caller must use this one predicate.
+ */
+export function isOrganizationFetchEnabled(appConfig: AppConfig): boolean {
+  const isLocalImpersonation =
+    appConfig.mode === "cloud" &&
+    appConfig.isImpersonating &&
+    appConfig.isLocalImpersonation;
+  return appConfig.mode !== "self-managed" && !isLocalImpersonation;
+}
+
 // Convenience hook for getting the current organization ID based on
 // the app's deployment mode. Although "organizations" don't really exist in
 // self managed environments, a lot of our code uses the organization ID as part of a key to cache
@@ -177,13 +192,8 @@ export function useSelfManagedSubscription() {
 // in deployment modes where the organization ID is not available.
 export function useMaybeCurrentOrganizationId() {
   const appConfig = useAppConfig();
-  const isLocalImpersonation =
-    appConfig.mode === "cloud" &&
-    appConfig.isImpersonating &&
-    appConfig.isLocalImpersonation;
-
   const isCurrentOrganizationFetchEnabled =
-    appConfig.mode !== "self-managed" && !isLocalImpersonation;
+    isOrganizationFetchEnabled(appConfig);
 
   const res = useQuery({
     queryKey: queryKeys.currentOrganization(),
