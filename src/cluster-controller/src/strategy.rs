@@ -282,12 +282,12 @@ impl Strategy for GracefulReconfigurationStrategy {
         //      `Commit` (cut over to the not-yet-hydrated target anyway).
         //
         // NOTE: the deadline is reached at `now >= deadline`, not `now > deadline`.
-        // A `WAIT FOR '0s'` writes `deadline = now` to request an immediate
-        // cut-over. With a strict `>`, a first tick landing at exactly that
-        // timestamp would miss the deadline, so phase 2 would provision the overlap
-        // target replicas and only a later tick would cut over. `>=` fires the
-        // deadline the instant it is reached, so the zero-timeout cut-over happens
-        // on the first tick, before any overlap replica is desired.
+        // An `ON TIMEOUT COMMIT` with a zero timeout writes `deadline = now` to
+        // request an immediate cut-over. With a strict `>`, a first tick landing at
+        // exactly that timestamp would miss the deadline, so phase 2 would provision
+        // the overlap target replicas and only a later tick would cut over. `>=`
+        // fires the deadline the instant it is reached, so the zero-timeout cut-over
+        // happens on the first tick, before any overlap replica is desired.
         let hydrated = self.target_hydrated(state, signals, record);
         let deadline_reached = now >= record.deadline;
         let commit_on_timeout = deadline_reached && matches!(record.on_timeout, OnTimeout::Commit);

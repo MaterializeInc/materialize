@@ -6367,12 +6367,12 @@ def workflow_test_zero_downtime_reconfigure(
         # replica set and background ALTER on, this writes a durable
         # reconfiguration record and returns immediately; the controller brings up
         # a fresh target replica alongside r1, re-hydrates it, then cuts the
-        # realized size over and drops r1. `WAIT FOR` resolves to ON TIMEOUT
-        # COMMIT, so the reconfiguration commits even if its deadline passes during
-        # the restart below.
+        # realized size over and drops r1. Explicit ON TIMEOUT COMMIT ensures the
+        # reconfiguration commits even if its deadline passes during the restart
+        # below.
         c.sql(
             """
-            ALTER CLUSTER cluster1 SET (SIZE = 'scale=1,workers=2') WITH (WAIT FOR '10s')
+            ALTER CLUSTER cluster1 SET (SIZE = 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '10s', ON TIMEOUT 'COMMIT'))
             """,
             port=6877,
             user="mz_system",
@@ -6474,8 +6474,8 @@ def workflow_test_pending_replica_audit_events(
     # the replica set and background ALTER on, this writes a durable
     # reconfiguration record and returns immediately; the controller brings up a
     # fresh target replica, cuts the size over, and drops the old one. `WAIT FOR`
-    # resolves to ON TIMEOUT COMMIT with a long deadline, so the in-flight
-    # reconfiguration commits once the (empty) target hydrates.
+    # uses the safe rollback action with a long deadline, and the in-flight
+    # reconfiguration finalizes once the (empty) target hydrates.
     c.sql(
         """
         ALTER CLUSTER test_audit SET (SIZE = 'scale=1,workers=2') WITH (WAIT FOR '300s')

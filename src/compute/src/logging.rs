@@ -306,7 +306,7 @@ where
     B::Output: Clone,
     CB: ContainerBuilder,
     L: Into<LogVariant>,
-    F: for<'a> FnMut(B::Output, &mut PermutedRowPacker, &mut OutputSession<CB>) + 'static,
+    F: FnMut(B::Output, &mut PermutedRowPacker, &mut OutputSession<CB>) + 'static,
 {
     let log = log.into();
     // TODO: Use something other than the debug representation of the log variant as a name.

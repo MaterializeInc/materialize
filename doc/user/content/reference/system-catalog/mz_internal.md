@@ -743,6 +743,31 @@ logical timestamp, so the recorded finish can precede the latest process's finis
 | `hydrated_at`  | [`timestamp with time zone`] | When hydration finished.                                                                                                 |
 | `status`       | [`text`]                     | The terminal status. Currently always `hydrated`.                                                                        |
 
+## `mz_replica_hydration_history`
+
+The `mz_replica_hydration_history` table records successful replica hydration
+episodes. An episode begins when a maintained compute dataflow is installed on
+a fully hydrated replica and finishes when every running maintained compute
+dataflow has hydrated.
+
+By default, rows are retained for 30 days while collection is enabled. Recording
+is best effort, and only the latest completed episode visible in each collection
+is recorded. Resource peaks cover the replica processes' lifetimes through
+collection, not only the hydration episode. On a multi-process replica, the
+table records the largest peak reported by any process.
+
+<!-- RELATION_SPEC mz_internal.mz_replica_hydration_history -->
+| Field               | Type                         | Meaning                                                                                                                  |
+| ------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `replica_id`        | [`text`]                     | The ID of the cluster replica. May name a replica that no longer exists.                                                 |
+| `cluster_id`        | [`text`]                     | The ID of the replica's cluster.                                                                                          |
+| `started_at`        | [`timestamp with time zone`] | The earliest maintained compute dataflow installation in the hydration episode.                                         |
+| `finished_at`       | [`timestamp with time zone`] | The latest maintained compute dataflow hydration in the hydration episode.                                               |
+| `object_count`      | [`uint8`]                    | The number of maintained compute dataflows in the hydration episode.                                                     |
+| `peak_memory_bytes` | [`uint8`]                    | The largest process-lifetime cgroup memory high-water mark reported by any process when the collector recorded the episode. `NULL` if the platform reports no cgroup memory peak. |
+| `peak_disk_bytes`   | [`uint8`]                    | The largest process-lifetime scratch-filesystem or swap high-water mark reported by any process when the collector recorded the episode. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available. |
+| `status`            | [`text`]                     | The hydration episode's status. Currently always `hydrated`.                                                             |
+
 ## `mz_object_transitive_dependencies`
 
 The `mz_object_transitive_dependencies` view describes the transitive dependency structure between
