@@ -26,11 +26,12 @@ use mz_compute_client::protocol::command::{
 };
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
-    ComputeResponse, CopyToResponse, FrontiersResponse, PeekError, PeekResponse, SubscribeResponse,
+    ComputeResponse, CopyToResponse, FrontiersResponse, HeapSizeLimitStatus, PeekError,
+    PeekResponse, StatusResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
-    ENABLE_PEEK_RESPONSE_STASH, ENABLE_PEEK_ROW_ITERATION_LIMIT,
+    ENABLE_COMPUTE_HEAP_SIZE_LIMIT, ENABLE_PEEK_RESPONSE_STASH, ENABLE_PEEK_ROW_ITERATION_LIMIT,
     PEEK_RESPONSE_STASH_BATCH_MAX_RUNS, PEEK_RESPONSE_STASH_THRESHOLD_BYTES,
     PEEK_ROW_ITERATION_LIMIT, PEEK_STASH_BATCH_SIZE, PEEK_STASH_NUM_BATCHES,
 };
@@ -247,6 +248,17 @@ pub struct ComputeState {
 
     /// The storage worker forwards its introspection logs to the compute worker.
     pub storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
+
+    /// Heap size limit in bytes, keyed by Timely dataflow index.
+    ///
+    /// Shared with the watchdog logging fragment, which reads it to decide whether a dataflow's
+    /// observed heap size is over budget. Only dataflows that carry a limit appear here.
+    heap_size_limits: Rc<RefCell<BTreeMap<usize, u64>>>,
+    /// Timely dataflow indices the watchdog reported as over their heap size limit, along with
+    /// the heap size it observed.
+    ///
+    /// Written by the watchdog fragment, drained by [`ActiveComputeState::process_heap_size_limits`].
+    dataflows_exceeding_heap_size_limit: Rc<RefCell<BTreeMap<usize, u64>>>,
 }
 
 impl ComputeState {
@@ -288,6 +300,8 @@ impl ComputeState {
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
             storage_log_reader,
+            heap_size_limits: Default::default(),
+            dataflows_exceeding_heap_size_limit: Default::default(),
         }
     }
 
@@ -732,6 +746,7 @@ impl<'a> ActiveComputeState<'a> {
                     .map(|t| mz_ore::now::to_datetime(t.into())),
                 plan_until = ?dataflow.until.elements(),
                 until = ?until.elements(),
+                heap_size_limit = ?dataflow.heap_size_limit,
                 "creating dataflow",
             );
         } else {
@@ -747,6 +762,7 @@ impl<'a> ActiveComputeState<'a> {
                     .map(|t| mz_ore::now::to_datetime(t.into())),
                 plan_until = ?dataflow.until.elements(),
                 until = ?until.elements(),
+                heap_size_limit = ?dataflow.heap_size_limit,
                 "creating dataflow",
             );
         };
@@ -808,6 +824,26 @@ impl<'a> ActiveComputeState<'a> {
             self.compute_state
                 .suspended_collections
                 .insert(id, Rc::clone(&suspension_token));
+        }
+
+        // The gate is read here as well as at logging initialization, so that turning the feature
+        // off keeps this map empty rather than filling it for a watchdog that is not running.
+        if let Some(limit) = dataflow.heap_size_limit {
+            // Exceeding a limit fails the query the dataflow serves, and there is no such query
+            // behind an index or a materialized view, so the controller only ever sets a limit on
+            // a transient dataflow. Enforcing one here anyway would fail nothing and hide the bug.
+            if !dataflow.is_transient() {
+                soft_panic_or_log!(
+                    "heap size limit on a non-transient dataflow \
+                     (name={}, limit={limit})",
+                    dataflow.debug_name,
+                );
+            } else if ENABLE_COMPUTE_HEAP_SIZE_LIMIT.get(&self.compute_state.worker_config) {
+                self.compute_state
+                    .heap_size_limits
+                    .borrow_mut()
+                    .insert(*dataflow_index, limit);
+            }
         }
 
         crate::render::build_compute_dataflow(
@@ -910,6 +946,10 @@ impl<'a> ActiveComputeState<'a> {
 
         // Drop the dataflow, if all its exports have been dropped.
         if let Ok(index) = Rc::try_unwrap(collection.dataflow_index) {
+            self.compute_state
+                .heap_size_limits
+                .borrow_mut()
+                .remove(&index);
             self.timely_worker.drop_dataflow(index);
         }
 
@@ -955,6 +995,8 @@ impl<'a> ActiveComputeState<'a> {
             Rc::clone(&self.compute_state.worker_config),
             self.compute_state.workers_per_process,
             storage_log_reader,
+            Rc::clone(&self.compute_state.heap_size_limits),
+            Rc::clone(&self.compute_state.dataflows_exceeding_heap_size_limit),
         );
 
         let dataflow_index = Rc::new(dataflow_index);
@@ -1322,6 +1364,51 @@ impl<'a> ActiveComputeState<'a> {
         let mut responses = self.compute_state.copy_to_response_buffer.borrow_mut();
         for (sink_id, response) in responses.drain(..) {
             self.send_compute_response(ComputeResponse::CopyToResponse(sink_id, response));
+        }
+    }
+
+    /// Reports dataflows the watchdog found to be over their heap size limit.
+    ///
+    /// The report names the collection rather than the Timely dataflow, because the dataflow index
+    /// is a replica-local detail the controller does not track. A dataflow with a limit is
+    /// transient and therefore exports exactly one collection, but the scan tolerates more.
+    ///
+    /// Reporting is all this does. The replica never drops the offending dataflow on its own
+    /// judgement, because the controller owns which dataflows a replica runs and a self-inflicted
+    /// drop would leave the replica's dataflow set disagreeing with the command history the
+    /// controller reconciles against. The heap size is summed across all of a replica's workers,
+    /// so in a multi-process replica the verdict is reached in one process and there is no
+    /// protocol to carry it to the others. The price is a command round trip before the memory is
+    /// released, which the approximate accounting already concedes.
+    pub fn process_heap_size_limits(&self) {
+        let exceeded = std::mem::take(
+            &mut *self
+                .compute_state
+                .dataflows_exceeding_heap_size_limit
+                .borrow_mut(),
+        );
+        if exceeded.is_empty() {
+            return;
+        }
+
+        let limits = self.compute_state.heap_size_limits.borrow();
+        for (&collection_id, state) in self.compute_state.collections.iter() {
+            let Some(&heap_size) = exceeded.get(&*state.dataflow_index) else {
+                continue;
+            };
+            // The limit is dropped along with the dataflow, so a report that raced the drop has
+            // nothing left to fail.
+            let Some(&heap_size_limit) = limits.get(&*state.dataflow_index) else {
+                continue;
+            };
+            let status = HeapSizeLimitStatus {
+                collection_id,
+                heap_size,
+                heap_size_limit,
+            };
+            self.send_compute_response(ComputeResponse::Status(
+                StatusResponse::HeapSizeLimitExceeded(status),
+            ));
         }
     }
 

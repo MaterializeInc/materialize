@@ -15,7 +15,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use mz_adapter_types::connection::ConnectionId;
-use mz_compute_client::protocol::response::SubscribeBatch;
+use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeError};
 use mz_controller_types::ClusterId;
 use mz_expr::row::RowCollection;
 use mz_expr::{RowComparator, compare_columns};
@@ -278,11 +278,16 @@ impl ActiveSubscribe {
                 );
                 mz_ore::iter::consolidate_update_iter(merged)
             }
-            Err(s) => {
-                self.send(
-                    PeekResponseUnary::Error(AdapterError::Unstructured(anyhow::Error::msg(s))),
-                    0,
-                );
+            Err(error) => {
+                let error = match error {
+                    SubscribeError::Unstructured(error) => {
+                        AdapterError::Unstructured(anyhow::Error::msg(error))
+                    }
+                    SubscribeError::HeapSizeLimitExceeded { heap_size, limit } => {
+                        AdapterError::QueryHeapSizeLimitExceeded { heap_size, limit }
+                    }
+                };
+                self.send(PeekResponseUnary::Error(error), 0);
                 return true;
             }
         };

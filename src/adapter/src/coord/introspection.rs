@@ -36,7 +36,7 @@ use derivative::Derivative;
 use mz_adapter_types::dyncfgs::ENABLE_INTROSPECTION_SUBSCRIBES;
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::error::ERROR_TARGET_REPLICA_FAILED;
-use mz_compute_client::protocol::response::SubscribeBatch;
+use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeError};
 use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
@@ -456,7 +456,7 @@ impl Coordinator {
         let updates = match batch.updates {
             Ok(updates) if updates.is_empty() => return,
             Ok(updates) => updates,
-            Err(error) if error == ERROR_TARGET_REPLICA_FAILED => {
+            Err(SubscribeError::Unstructured(error)) if error == ERROR_TARGET_REPLICA_FAILED => {
                 // The target replica disconnected, reinstall the subscribe.
                 self.reinstall_introspection_subscribe(id).await;
                 return;

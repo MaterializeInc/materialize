@@ -137,7 +137,7 @@ impl Coordinator {
                 target_cluster,
                 None,
                 explain_ctx,
-                max_query_result_size
+                max_query_result_size,
             ),
             ctx
         );
@@ -766,11 +766,17 @@ impl Coordinator {
             );
         }
 
+        let max_query_heap_size = ctx.session().vars().max_query_heap_size();
+
         let session = ctx.session_mut();
         let conn_id = session.conn_id().clone();
 
-        let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
+        let (mut peek_plan, df_meta, typ) = global_lir_plan.unapply();
         let source_arity = typ.arity();
+
+        if let peek::PeekPlan::SlowPath(PeekDataflowPlan { desc, .. }) = &mut peek_plan {
+            desc.heap_size_limit = max_query_heap_size;
+        }
 
         emit_optimizer_notices(&*self.catalog, &*session, &df_meta.optimizer_notices);
 

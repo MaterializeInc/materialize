@@ -715,6 +715,7 @@ fn augment(
         refresh_schedule: lowered.refresh_schedule,
         debug_name: lowered.debug_name,
         time_dependence: lowered.time_dependence,
+        heap_size_limit: lowered.heap_size_limit,
     })
 }
 

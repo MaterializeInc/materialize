@@ -26,25 +26,32 @@ use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
-use timely::dataflow::operators::InputCapability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator::empty;
 use timely::dataflow::operators::generic::{OutputBuilder, Session};
+use timely::dataflow::operators::{InputCapability, Leave};
 use timely::dataflow::{Scope, StreamVec};
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::compute::{ArrangementHeapSizeOperatorDrop, ComputeEvent};
 use crate::logging::{
-    DifferentialLog, EventQueue, LogCollection, LogVariant, SharedLoggingState,
+    DifferentialLog, EventQueue, LogCollection, LogVariant, SharedLoggingState, Update,
     consolidate_and_pack,
 };
 use crate::typedefs::{KeyBatcher, RowRowSpine};
 use mz_row_spine::RowRowBuilder;
 
 /// The return type of [`construct`].
-pub(super) struct Return {
+pub(super) struct Return<'scope> {
     /// Collections to export.
     pub collections: BTreeMap<LogVariant, LogCollection>,
+    /// Per-operator merge batcher heap size deltas, in bytes carried in the diff field.
+    ///
+    /// A batcher is logged under the global ID of the arrangement operator that owns it, so this
+    /// stream shares a key space with the compute logging fragment's arrangement heap sizes.
+    /// `None` unless the caller asked for it, so that a replica that enforces no heap size limits
+    /// pays for neither the output nor the channel leaving the logging scope.
+    pub batcher_heap_size: Option<StreamVec<'scope, Timestamp, Update<(usize, ())>>>,
 }
 
 /// Constructs the logging dataflow fragment for differential logs.
@@ -54,14 +61,17 @@ pub(super) struct Return {
 /// * `config`: Logging configuration
 /// * `event_queue`: The source to read log events from.
 /// * `shared_state`: Shared state across all logging dataflow fragments.
-pub(super) fn construct(
-    scope: Scope<'_, Timestamp>,
+/// * `batcher_heap_size`: Whether to produce the [`Return::batcher_heap_size`] stream.
+pub(super) fn construct<'scope>(
+    scope: Scope<'scope, Timestamp>,
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
-) -> Return {
+    batcher_heap_size: bool,
+) -> Return<'scope> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
 
+    let outer = scope;
     scope.scoped("differential logging", move |scope| {
         let enable_logging = config.enable_logging;
         let (logs, token) = if enable_logging {
@@ -88,6 +98,8 @@ pub(super) fn construct(
         let (batcher_size_out, batcher_size) = demux.new_output();
         let (batcher_capacity_out, batcher_capacity) = demux.new_output();
         let (batcher_allocations_out, batcher_allocations) = demux.new_output();
+        let (batcher_heap_size_out, batcher_heap_size) =
+            batcher_heap_size.then(|| demux.new_output()).unzip();
 
         let mut batches_out = OutputBuilder::from(batches_out);
         let mut records_out = OutputBuilder::from(records_out);
@@ -96,6 +108,7 @@ pub(super) fn construct(
         let mut batcher_size_out = OutputBuilder::from(batcher_size_out);
         let mut batcher_capacity_out = OutputBuilder::from(batcher_capacity_out);
         let mut batcher_allocations_out = OutputBuilder::from(batcher_allocations_out);
+        let mut batcher_heap_size_out = batcher_heap_size_out.map(OutputBuilder::from);
 
         let mut demux_state = Default::default();
         demux.build(move |_capability| {
@@ -107,6 +120,8 @@ pub(super) fn construct(
                 let mut batcher_size = batcher_size_out.activate();
                 let mut batcher_capacity = batcher_capacity_out.activate();
                 let mut batcher_allocations = batcher_allocations_out.activate();
+                let mut batcher_heap_size =
+                    batcher_heap_size_out.as_mut().map(|out| out.activate());
 
                 input.for_each_time(|cap, data| {
                     let mut output_buffers = DemuxOutput {
@@ -117,6 +132,9 @@ pub(super) fn construct(
                         batcher_size: batcher_size.session_with_builder(&cap),
                         batcher_capacity: batcher_capacity.session_with_builder(&cap),
                         batcher_allocations: batcher_allocations.session_with_builder(&cap),
+                        batcher_heap_size: batcher_heap_size
+                            .as_mut()
+                            .map(|out| out.session_with_builder(&cap)),
                     };
 
                     for (time, event) in data.flat_map(|data: &mut Vec<_>| data.drain(..)) {
@@ -209,7 +227,10 @@ pub(super) fn construct(
             }
         }
 
-        Return { collections }
+        Return {
+            collections,
+            batcher_heap_size: batcher_heap_size.map(|stream| stream.leave(outer)),
+        }
     })
 }
 
@@ -230,6 +251,10 @@ struct DemuxOutput<'a, 'b> {
     batcher_size: OutputSession<'a, 'b, (usize, ())>,
     batcher_capacity: OutputSession<'a, 'b, (usize, ())>,
     batcher_allocations: OutputSession<'a, 'b, (usize, ())>,
+    /// Duplicates `batcher_size` for the watchdog, which consumes it unpacked. A second demux
+    /// output is cheaper than teeing the stream, which would clone every container. Absent unless
+    /// the watchdog is rendered.
+    batcher_heap_size: Option<OutputSession<'a, 'b, (usize, ())>>,
 }
 
 /// State maintained by the demux operator.
@@ -353,6 +378,9 @@ impl DemuxHandler<'_, '_, '_> {
         self.output
             .batcher_size
             .give(((operator_id, ()), ts, size_diff));
+        if let Some(output) = &mut self.output.batcher_heap_size {
+            output.give(((operator_id, ()), ts, size_diff));
+        }
         self.output
             .batcher_capacity
             .give(((operator_id, ()), ts, capacity_diff));

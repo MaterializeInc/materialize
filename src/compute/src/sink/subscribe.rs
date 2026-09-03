@@ -256,13 +256,13 @@ impl SubscribeProtocol {
         let updates = match (&self.poison, ship_errors.first()) {
             (Some(error), _) => {
                 // The subscribe is poisoned; keep sending the same error.
-                Err(error.clone())
+                Err(error.clone().into())
             }
             (None, Some((_, error, _))) => {
                 // The subscribe encountered its first error; poison it.
                 let error = error.to_string();
                 self.poison = Some(error.clone());
-                Err(error)
+                Err(error.into())
             }
             (None, None) => {
                 // No error encountered so for; ship the rows we have!

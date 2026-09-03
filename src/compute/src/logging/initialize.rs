@@ -14,6 +14,7 @@ use differential_dataflow::VecCollection;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
+use mz_compute_types::dyncfgs::ENABLE_COMPUTE_HEAP_SIZE_LIMIT;
 use mz_dyncfg::ConfigSet;
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::{Diff, Timestamp};
@@ -48,6 +49,8 @@ pub fn initialize(
     worker_config: Rc<ConfigSet>,
     workers_per_process: usize,
     storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
+    heap_size_limits: Rc<RefCell<BTreeMap<usize, u64>>>,
+    dataflows_exceeding_heap_size_limit: Rc<RefCell<BTreeMap<usize, u64>>>,
 ) -> LoggingTraces {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
@@ -74,6 +77,8 @@ pub fn initialize(
         worker_config,
         workers_per_process,
         storage_log_reader,
+        heap_size_limits,
+        dataflows_exceeding_heap_size_limit,
     };
 
     // Depending on whether we should log the creation of the logging dataflows, we register the
@@ -114,6 +119,10 @@ struct LoggingContext<'a> {
     workers_per_process: usize,
     /// Optional reader for storage timely logging events.
     storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
+    /// Heap size limit in bytes per Timely dataflow index, maintained by the compute state.
+    heap_size_limits: Rc<RefCell<BTreeMap<usize, u64>>>,
+    /// Timely dataflow indices the watchdog found to be over their heap size limit.
+    dataflows_exceeding_heap_size_limit: Rc<RefCell<BTreeMap<usize, u64>>>,
 }
 
 pub(crate) struct LoggingTraces {
@@ -148,26 +157,58 @@ impl LoggingContext<'_> {
             } = super::reachability::construct(scope, self.config, self.r_event_queue.clone());
             collections.extend(reachability_collections);
 
+            // Read once here so the compute and differential fragments agree on whether to
+            // produce the watchdog's inputs at all. Their demux outputs and the channels leaving
+            // the logging scope cost every replica, not just one enforcing a limit.
+            let heap_size_watchdog = ENABLE_COMPUTE_HEAP_SIZE_LIMIT.get(&self.worker_config);
+
             let super::differential::Return {
                 collections: differential_collections,
+                batcher_heap_size,
             } = super::differential::construct(
                 scope,
                 self.config,
                 self.d_event_queue.clone(),
                 Rc::clone(&self.shared_state),
+                heap_size_watchdog,
             );
             collections.extend(differential_collections);
 
             let super::compute::Return {
                 collections: compute_collections,
+                arrangement_heap_size,
+                arrangement_dataflows,
             } = super::compute::construct(
                 scope.clone(),
                 scope.activations(),
                 self.config,
                 self.c_event_queue.clone(),
                 Rc::clone(&self.shared_state),
+                heap_size_watchdog,
             );
             collections.extend(compute_collections);
+
+            if let (
+                Some(arrangement_heap_size),
+                Some(batcher_heap_size),
+                Some(arrangement_dataflows),
+            ) = (
+                arrangement_heap_size,
+                batcher_heap_size,
+                arrangement_dataflows,
+            ) {
+                let inputs = super::watchdog::Inputs {
+                    arrangement_heap_size,
+                    batcher_heap_size,
+                    arrangement_dataflows,
+                };
+                super::watchdog::construct(
+                    scope,
+                    inputs,
+                    Rc::clone(&self.heap_size_limits),
+                    Rc::clone(&self.dataflows_exceeding_heap_size_limit),
+                );
+            }
 
             let super::prometheus::Return {
                 collections: prometheus_collections,

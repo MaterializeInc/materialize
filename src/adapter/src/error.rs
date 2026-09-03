@@ -208,6 +208,13 @@ pub enum AdapterError {
         /// The configured per-worker limit.
         limit: usize,
     },
+    /// A query's dataflow exceeded the `max_query_heap_size` limit.
+    QueryHeapSizeLimitExceeded {
+        /// The heap size observed, in bytes. A lower bound on what the query actually used.
+        heap_size: u64,
+        /// The limit that was in effect, in bytes.
+        limit: u64,
+    },
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
     /// The current transaction had the wrong set of write locks.
@@ -615,6 +622,11 @@ impl AdapterError {
                  worker. This limit prevents long-running SELECT queries from delaying other \
                  work on the cluster."
             )),
+            AdapterError::QueryHeapSizeLimitExceeded { heap_size, .. } => Some(format!(
+                "The query's dataflow was observed holding at least {heap_size} bytes across the \
+                 cluster replica. The measurement covers the dataflow's internal state and is \
+                 taken periodically, so the query may have grown past the limit by more than this."
+            )),
             AdapterError::SafeModeViolation(_) => Some(
                 "The Materialize server you are connected to is running in \
                  safe mode, which limits the features that are available."
@@ -867,6 +879,12 @@ impl AdapterError {
                  `compute_peek_row_iteration_limit`."
                     .into(),
             ),
+            AdapterError::QueryHeapSizeLimitExceeded { .. } => Some(
+                "Reduce the amount of data the query keeps in memory, for example by filtering \
+                 earlier or querying an index. To permit this query, raise the \
+                 `max_query_heap_size` session variable."
+                    .into(),
+            ),
             AdapterError::PlanError(e) => e.hint(),
             AdapterError::UnallowedOnCluster { cluster, .. } => {
                 (cluster != MZ_CATALOG_SERVER_CLUSTER.name).then(||
@@ -1011,6 +1029,7 @@ impl AdapterError {
             AdapterError::ResultSize(_) => SqlState::OUT_OF_MEMORY,
             AdapterError::SubscribeFellBehind { .. } => SqlState::OUT_OF_MEMORY,
             AdapterError::PeekRowIterationLimitExceeded { .. } => SqlState::PROGRAM_LIMIT_EXCEEDED,
+            AdapterError::QueryHeapSizeLimitExceeded { .. } => SqlState::OUT_OF_MEMORY,
             AdapterError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
             AdapterError::SubscribeOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::Optimizer(e) => match e {
@@ -1323,6 +1342,12 @@ impl fmt::Display for AdapterError {
                 write!(
                     f,
                     "query exceeded the configured row iteration limit of {limit} rows"
+                )
+            }
+            AdapterError::QueryHeapSizeLimitExceeded { limit, .. } => {
+                write!(
+                    f,
+                    "query exceeded the max_query_heap_size limit of {limit} bytes"
                 )
             }
             AdapterError::ReplaceMaterializedViewSealed { name } => {
@@ -1682,6 +1707,9 @@ impl From<mz_compute_client::protocol::response::PeekError> for AdapterError {
             PeekError::RowIterationLimitExceeded { limit } => {
                 AdapterError::PeekRowIterationLimitExceeded { limit }
             }
+            PeekError::HeapSizeLimitExceeded { heap_size, limit } => {
+                AdapterError::QueryHeapSizeLimitExceeded { heap_size, limit }
+            }
         }
     }
 }
@@ -1848,6 +1876,29 @@ mod tests {
                 .hint
                 .as_deref()
                 .is_some_and(|hint| hint.contains("compute_peek_row_iteration_limit"))
+        );
+    }
+
+    #[mz_ore::test]
+    fn heap_size_limit_error_is_not_an_internal_error() {
+        use mz_compute_client::protocol::response::PeekError;
+
+        let response = AdapterError::from(PeekError::HeapSizeLimitExceeded {
+            heap_size: 2048,
+            limit: 1024,
+        })
+        .into_response(Severity::Error);
+
+        assert_eq!(response.code, SqlState::OUT_OF_MEMORY);
+        assert_eq!(
+            response.message,
+            "query exceeded the max_query_heap_size limit of 1024 bytes"
+        );
+        assert!(
+            response
+                .hint
+                .as_deref()
+                .is_some_and(|hint| hint.contains("max_query_heap_size"))
         );
     }
 

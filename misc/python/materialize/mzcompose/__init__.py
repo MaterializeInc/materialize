@@ -649,6 +649,11 @@ def get_default_system_parameters(
 # all. Only add it in UNINTERESTING_SYSTEM_PARAMETERS if none of the above
 # apply.
 UNINTERESTING_SYSTEM_PARAMETERS = [
+    # Not varied fleet-wide: turning it on adds the watchdog's operators, and the
+    # logging channels feeding them, to every replica's logging dataflow, which
+    # introspection goldens enumerate. test/testdrive/query_heap_size.td turns it
+    # on for clusters of its own instead.
+    "enable_compute_heap_size_limit",
     "enable_compute_half_join2",
     "enable_mz_join_core",
     "linear_join_yielding",
