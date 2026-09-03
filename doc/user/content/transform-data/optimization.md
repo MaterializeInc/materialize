@@ -448,7 +448,7 @@ The following are the possible index usage types:
 
 ### Limitations
 
-{{% include-headless "/headless/index-ordering" %}}
+{{% include-from-yaml data="index_details" name="index-not-optimized" %}}
 
 ## Query hints
 

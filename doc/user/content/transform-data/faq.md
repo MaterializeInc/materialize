@@ -11,14 +11,28 @@ aliases:
   - /self-managed/v25.2/transform-data/faq/
 ---
 
-## Do indexes in Materialize support `ORDER BY`?
+## Are indexes in Materialize optimized for `ORDER BY`?
 
-No. Indexes in Materialize do not support `ORDER BY` clauses.
+No.
 
-{{% include-headless "/headless/index-ordering" %}}
+{{% include-from-yaml data="index_details" name="index-key-distribution" %}}
 
-## Do indexes in Materialize support range queries?
+{{% include-from-yaml data="index_details" name="index-key-ordering-within-workers" %}}
 
-No. Indexes in Materialize do not support range queries.
+As such, Materialize indexes are not optimized for ordered access, including
+`ORDER BY` clauses.
 
-{{% include-headless "/headless/index-ordering" %}}
+## Are indexes in Materialize optimized for range queries?
+
+No.
+
+{{% include-from-yaml data="index_details" name="index-key-distribution" %}}
+
+{{% include-from-yaml data="index_details" name="index-key-ordering-within-workers" %}}
+
+As such, Materialize indexes are not optimized for ordered access, including
+range queries.
+
+## Are indexes in Materialize optimized for `GROUP BY` aggregations?
+
+No. {{< include-from-yaml data="index_details" name="index-groupby-not-optimized" >}}

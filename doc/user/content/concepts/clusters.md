@@ -16,6 +16,21 @@ aliases:
 Clusters are pools of compute resources (CPU, memory, and scratch disk space)
 for running your workloads.
 
+## Resource isolation
+
+Clusters provide **resource isolation.** Each cluster provisions dedicated
+compute resources and can fail independently from other clusters. All workloads
+on a given cluster compete for access to that cluster's compute resources.
+
+Workloads on different clusters are strictly isolated from one another. That is,
+a given workload has access only to the CPU, memory, and scratch disk of the
+cluster it runs on.
+
+Resource isolation lets you place workloads on separate clusters to prevent
+them from competing for compute resources.
+
+See also [three-tier architecture](#three-tier-architecture-in-production).
+
 ## Clusters and workloads
 
 The following operations require a cluster in Materialize:
@@ -37,7 +52,8 @@ SET CLUSTER = 'my_transform_cluster';
 [`SELECT`] and [`SUBSCRIBE`] statements run in the session's active cluster.
 
 Objects that require compute (e.g., indexes, materialized views, sources) are
-associated with a cluster when they are created, either:
+associated with a cluster when they are created. The associated cluster is
+either:
 
 - the session's active cluster by default, or
 
@@ -53,22 +69,6 @@ associated with a cluster when they are created, either:
 {{% include-from-yaml data="index_details" name="index-cluster-local" %}}
 
 For more on indexes and clusters, see [Indexes](/concepts/indexes/).
-
-## Resource isolation
-
-Clusters provide **resource isolation.** Each cluster provisions dedicated
-compute resources and can fail independently from other clusters. All workloads
-on a given cluster compete for access to that cluster's compute resources.
-
-Workloads on different clusters are strictly isolated from one another. That is,
-a given workload has access only to the CPU, memory, and scratch disk of the
-cluster it runs on.
-
-Resource isolation lets you place workloads on separate clusters to prevent
-them from competing for compute resources: for example, sources in one
-cluster, materialized views in a second, and indexes that serve queries in a
-third, as in the recommended [three-tier
-architecture](#three-tier-architecture-in-production).
 
 ## Cluster replicas
 
