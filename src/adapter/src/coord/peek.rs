@@ -1044,22 +1044,35 @@ impl crate::coord::Coordinator {
         mut persist_client: mz_persist_client::PersistClient,
         peek_stash_read_batch_size_bytes: usize,
         peek_stash_read_memory_budget_bytes: usize,
-        registration_guard: Option<crate::peek_registry::PeekRegistrationGuard>,
+        completion: Option<crate::peek_client::FrontendPeekCompletion>,
     ) -> impl futures::Stream<Item = PeekResponseUnary> {
         async_stream::stream!({
-            // Held for the stream's lifetime. On completion or drop it removes
-            // the peek's registry entry (frontend peeks only; `None` otherwise).
-            let _registration_guard = registration_guard;
+            // `Some` only for a frontend-sequenced peek, which settles its
+            // registry entry and its statement log here rather than through the
+            // coordinator. Dropping the stream before the peek responds drops
+            // this, which unregisters and logs the statement as aborted.
+            let mut completion = completion;
 
             let result = rows_rx.await;
 
             let rows = match result {
                 Ok(rows) => rows,
                 Err(e) => {
+                    if let Some(completion) = completion.take() {
+                        completion.retire_errored(e.to_string());
+                    }
                     yield PeekResponseUnary::Error(AdapterError::Unstructured(anyhow::anyhow!(e)));
                     return;
                 }
             };
+
+            // Retire against the raw response, before the finishing runs, so
+            // that both sequencing paths record the same numbers: this is the
+            // point at which the compute controller would emit the
+            // `PeekNotification` for a coordinator-sequenced peek.
+            if let Some(completion) = completion.take() {
+                completion.retire(&rows);
+            }
 
             match rows {
                 PeekResponse::Rows(rows) => {

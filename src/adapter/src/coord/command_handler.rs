@@ -597,6 +597,13 @@ impl Coordinator {
                 Command::UnregisterFrontendPeek { uuid, reason, tx } => {
                     self.handle_unregister_frontend_peek(uuid, reason, tx);
                 }
+                Command::InstallPeekWatchSets { conn_id, watch_set } => {
+                    if let Err(e) = self.install_peek_watch_sets(conn_id, watch_set) {
+                        tracing::debug!(
+                            "dropping lifecycle watch sets for an in-flight frontend peek: {e:?}"
+                        );
+                    }
+                }
                 Command::ExplainTimestamp {
                     conn_id,
                     session_wall_time,

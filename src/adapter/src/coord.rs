@@ -525,6 +525,7 @@ impl Message {
                 Command::LookupConnection { .. } => "lookup-connection",
                 Command::RegisterFrontendPeek { .. } => "register-frontend-peek",
                 Command::UnregisterFrontendPeek { .. } => "unregister-frontend-peek",
+                Command::InstallPeekWatchSets { .. } => "install-peek-watch-sets",
                 Command::ExplainTimestamp { .. } => "explain-timestamp",
                 Command::FrontendStatementLogging(..) => "frontend-statement-logging",
                 Command::StartCopyFromStdin { .. } => "start-copy-from-stdin",
