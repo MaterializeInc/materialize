@@ -2573,13 +2573,6 @@ metrics:
   - shard
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
-- name: mz_persist_shard_inline_backpressure_count
-  help: count of CaA attempts retried because of inline backpressure
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
 - name: mz_persist_shard_inline_part_bytes
   help: total size of parts inline in shard metadata
   labels:
@@ -2596,13 +2589,6 @@ metrics:
   visibility: internal
 - name: mz_persist_shard_largest_batch_size
   help: largest encoded batch size by shard
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_live_writers
-  help: number of writers that have recently appended updates to this shard
   labels:
   - name
   - shard
@@ -2631,13 +2617,6 @@ metrics:
   visibility: internal
 - name: mz_persist_shard_pubsub_diff_not_applied_stale
   help: number of diffs received via pubsub that did not apply due to staleness
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_rewrite_part_count
-  help: count of batch parts with rewrites by shard
   labels:
   - name
   - shard

@@ -1289,19 +1289,16 @@ pub struct ShardsMetrics {
     stale_version: mz_ore::metrics::UIntGaugeVec,
     blob_gets: mz_ore::metrics::IntCounterVec,
     blob_sets: mz_ore::metrics::IntCounterVec,
-    live_writers: mz_ore::metrics::UIntGaugeVec,
     unconsolidated_snapshot: mz_ore::metrics::IntCounterVec,
     backpressure_emitted_bytes: IntCounterVec,
     backpressure_last_backpressured_bytes: UIntGaugeVec,
     backpressure_retired_bytes: IntCounterVec,
-    rewrite_part_count: UIntGaugeVec,
     inline_part_count: UIntGaugeVec,
     inline_part_bytes: UIntGaugeVec,
     compact_batches: UIntGaugeVec,
     compacting_batches: UIntGaugeVec,
     noncompact_batches: UIntGaugeVec,
     schema_registry_version_count: UIntGaugeVec,
-    inline_backpressure_count: IntCounterVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -1474,11 +1471,6 @@ impl ShardsMetrics {
                 help: "number of Blob::set calls for this shard",
                 var_labels: ["shard", "name"],
             )),
-            live_writers: registry.register(metric!(
-                name: "mz_persist_shard_live_writers",
-                help: "number of writers that have recently appended updates to this shard",
-                var_labels: ["shard", "name"],
-            )),
             unconsolidated_snapshot: registry.register(metric!(
                 name: "mz_persist_shard_unconsolidated_snapshot",
                 help: "in snapshot_and_read, the number of times consolidating the raw data wasn't enough to produce consolidated output",
@@ -1499,11 +1491,6 @@ impl ShardsMetrics {
             backpressure_retired_bytes: registry.register(metric!(
                 name: "mz_persist_backpressure_retired_bytes",
                 help:"A counter with the number of bytes retired by downstream processing.",
-                var_labels: ["shard", "name"],
-            )),
-            rewrite_part_count: registry.register(metric!(
-                name: "mz_persist_shard_rewrite_part_count",
-                help: "count of batch parts with rewrites by shard",
                 var_labels: ["shard", "name"],
             )),
             inline_part_count: registry.register(metric!(
@@ -1534,11 +1521,6 @@ impl ShardsMetrics {
             schema_registry_version_count: registry.register(metric!(
                 name: "mz_persist_shard_schema_registry_version_count",
                 help: "count of versions in the schema registry",
-                var_labels: ["shard", "name"],
-            )),
-            inline_backpressure_count: registry.register(metric!(
-                name: "mz_persist_shard_inline_backpressure_count",
-                help: "count of CaA attempts retried because of inline backpressure",
                 var_labels: ["shard", "name"],
             )),
             shards,
@@ -1617,19 +1599,16 @@ pub struct ShardMetrics {
     pub stale_version: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub blob_gets: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub blob_sets: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub live_writers: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub unconsolidated_snapshot: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub backpressure_emitted_bytes: Arc<DeleteOnDropCounter<AtomicU64, Vec<String>>>,
     pub backpressure_last_backpressured_bytes: Arc<DeleteOnDropGauge<AtomicU64, Vec<String>>>,
     pub backpressure_retired_bytes: Arc<DeleteOnDropCounter<AtomicU64, Vec<String>>>,
-    pub rewrite_part_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub inline_part_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub inline_part_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub compact_batches: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub compacting_batches: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub noncompact_batches: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub schema_registry_version_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
-    pub inline_backpressure_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 }
 
 impl ShardMetrics {
@@ -1725,9 +1704,6 @@ impl ShardMetrics {
             blob_sets: shards_metrics
                 .blob_sets
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
-            live_writers: shards_metrics
-                .live_writers
-                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             unconsolidated_snapshot: shards_metrics
                 .unconsolidated_snapshot
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
@@ -1746,9 +1722,6 @@ impl ShardMetrics {
                     .backpressure_retired_bytes
                     .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             ),
-            rewrite_part_count: shards_metrics
-                .rewrite_part_count
-                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             inline_part_count: shards_metrics
                 .inline_part_count
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
@@ -1766,9 +1739,6 @@ impl ShardMetrics {
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             schema_registry_version_count: shards_metrics
                 .schema_registry_version_count
-                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
-            inline_backpressure_count: shards_metrics
-                .inline_backpressure_count
                 .get_delete_on_drop_metric(vec![shard, name.to_string()]),
         }
     }

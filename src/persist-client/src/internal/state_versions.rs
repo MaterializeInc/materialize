@@ -296,9 +296,6 @@ impl StateVersions {
                     .batch_part_count
                     .set(u64::cast_from(size_metrics.batch_part_count));
                 shard_metrics
-                    .rewrite_part_count
-                    .set(u64::cast_from(size_metrics.rewrite_part_count));
-                shard_metrics
                     .update_count
                     .set(u64::cast_from(size_metrics.num_updates));
                 shard_metrics
@@ -319,12 +316,6 @@ impl StateVersions {
                 shard_metrics
                     .encoded_diff_size
                     .inc_by(u64::cast_from(payload_len));
-                shard_metrics
-                    .live_writers
-                    .set(u64::cast_from(new_state.collections.writers.len()));
-                shard_metrics
-                    .rewrite_part_count
-                    .set(u64::cast_from(size_metrics.rewrite_part_count));
                 shard_metrics
                     .inline_part_count
                     .set(u64::cast_from(size_metrics.inline_part_count));

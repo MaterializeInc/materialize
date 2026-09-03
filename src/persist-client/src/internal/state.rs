@@ -2486,9 +2486,6 @@ where
 
                 let batch_size = x.encoded_size_bytes();
                 for x in x.parts.iter() {
-                    if x.ts_rewrite().is_some() {
-                        ret.rewrite_part_count += 1;
-                    }
                     if x.is_inline() {
                         ret.inline_part_count += 1;
                         ret.inline_part_bytes += x.inline_bytes();
@@ -2857,7 +2854,6 @@ impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
 pub struct StateSizeMetrics {
     pub hollow_batch_count: usize,
     pub batch_part_count: usize,
-    pub rewrite_part_count: usize,
     pub num_updates: usize,
     pub largest_batch_bytes: usize,
     pub state_batches_bytes: usize,
