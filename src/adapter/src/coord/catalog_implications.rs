@@ -33,6 +33,7 @@ use std::time::{Duration, Instant};
 use fail::fail_point;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
+use mz_catalog::expr_cache::GlobalExpressions;
 use mz_catalog::memory::objects::{
     CatalogItem, Cluster, ClusterReplica, Connection, DataSourceDesc, Index, MaterializedView,
     MetricSink, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
@@ -48,6 +49,7 @@ use mz_ore::future::InTask;
 use mz_ore::instrument;
 use mz_ore::retry::Retry;
 use mz_ore::task;
+use mz_repr::optimize::OverrideFrom;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion, RelationVersionSelector};
 use mz_sql::plan::ConnectionDetails;
 use mz_storage_client::controller::{CollectionDescription, DataSource};
@@ -66,6 +68,8 @@ use crate::coord::catalog_implications::parsed_state_updates::{
 };
 use crate::coord::peek::DroppedDependency;
 use crate::coord::timeline::TimelineState;
+use crate::optimize::OptimizerConfig;
+use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementLoggingId};
 use crate::{AdapterError, CollectionIdBundle, ExecuteContext, ResultExt};
 
@@ -268,6 +272,7 @@ impl Coordinator {
         let mut table_collections_to_create = BTreeMap::new();
         let mut source_collections_to_create = BTreeMap::new();
         let mut sinks_to_create = Vec::new();
+        let mut indexes_to_create = Vec::new();
         let mut storage_policies_to_initialize = BTreeMap::new();
         let mut execution_timestamps_to_set = BTreeSet::new();
         let mut vpc_endpoints_to_create: Vec<(CatalogItemId, VpcEndpointConfig)> = vec![];
@@ -430,7 +435,7 @@ impl Coordinator {
                     dropped_item_names.insert(sink.global_id(), full_name);
                 }
                 CatalogImplication::Index(CatalogImplicationKind::Added(index)) => {
-                    tracing::debug!(?index, "not handling AddIndex in here yet");
+                    indexes_to_create.push((catalog_id, index));
                 }
                 CatalogImplication::Index(CatalogImplicationKind::Altered {
                     prev: prev_index,
@@ -454,7 +459,7 @@ impl Coordinator {
                     dropped_item_names.insert(index.global_id(), full_name);
                 }
                 CatalogImplication::MetricSink(CatalogImplicationKind::Added(_metric_sink)) => {
-                    // Nothing to do, mirroring `Index`: shipping the dataflow at create time is
+                    // Nothing to do: shipping the dataflow at create time is
                     // the sequencer's job (`create_metric_sink_finish`), and re-rendering it after
                     // a restart happens during bootstrap (`bootstrap_dataflow_plans`).
                 }
@@ -812,6 +817,10 @@ impl Coordinator {
         // Sink inputs must exist before exports acquire their dependency read holds.
         for sink in sinks_to_create {
             self.create_storage_export(sink.global_id(), &sink).await?;
+        }
+        // Index imports need the cluster and storage collections from this batch.
+        for (catalog_id, index) in indexes_to_create {
+            self.create_index_from_catalog(catalog_id, &index).await?;
         }
         // It is _very_ important that we only initialize read policies after we
         // have created all the sources/collections. Some of the sources created
@@ -1184,6 +1193,73 @@ impl Coordinator {
         ))
         .await;
 
+        Ok(())
+    }
+
+    async fn create_index_from_catalog(
+        &mut self,
+        catalog_id: CatalogItemId,
+        index: &Index,
+    ) -> Result<(), AdapterError> {
+        let global_id = index.global_id();
+        let compute_instance = self
+            .instance_snapshot(index.cluster_id)
+            .expect("index cluster must exist before installation");
+        let optimizer_config = OptimizerConfig::from(self.catalog().system_config())
+            .override_from(
+                &self
+                    .catalog()
+                    .get_cluster(index.cluster_id)
+                    .config
+                    .features(),
+            )
+            .override_from(&self.cluster_scoped_optimizer_overrides(index.cluster_id));
+        let cached = self.catalog().cached_global_expressions(global_id).await;
+        let cached = cached.filter(|expressions| {
+            expressions.item_version == RelationVersion::root()
+                && expressions.optimizer_features == optimizer_config.features
+                // A dropped index can still be in compute until this batch's drops run.
+                // Conversely, a committed index may not have been installed yet.
+                && expressions.global_mir.index_imports.keys()
+                    .chain(expressions.physical_plan.index_imports.keys())
+                    .all(|id| {
+                        self.catalog().try_get_entry_by_global_id(id).is_some()
+                            && compute_instance.contains_collection(id)
+                    })
+                && expressions.dataflow_metainfos.optimizer_notices.iter().all(|notice| {
+                    notice.dependencies.iter().all(|id| {
+                        self.catalog().try_get_entry_by_global_id(id).is_some()
+                    })
+                })
+        });
+        let expressions = match cached {
+            Some(expressions) => expressions,
+            None => {
+                let name = self.catalog().get_entry(&catalog_id).name();
+                self.build_index_dataflow_plan(name, index, compute_instance, optimizer_config)?
+            }
+        };
+        let GlobalExpressions {
+            global_mir,
+            physical_plan,
+            dataflow_metainfos,
+            ..
+        } = expressions;
+        let id_bundle = dataflow_import_id_bundle(&physical_plan, index.cluster_id);
+        self.catalog_mut().set_optimized_plan(global_id, global_mir);
+        self.catalog_mut()
+            .set_physical_plan(global_id, physical_plan.clone());
+        let notice_updates = self.persist_dataflow_metainfo(dataflow_metainfos, global_id);
+        self.ship_new_dataflow(&id_bundle, physical_plan, index.cluster_id, notice_updates)
+            .await;
+        self.update_compute_read_policy(
+            index.cluster_id,
+            catalog_id,
+            index
+                .custom_logical_compaction_window
+                .unwrap_or_default()
+                .into(),
+        );
         Ok(())
     }
 

@@ -174,6 +174,7 @@ use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use mz_storage_types::sources::{IngestionDescription, SourceExport, Timeline};
 use mz_timestamp_oracle::{TimestampOracleConfig, WriteTimestamp};
 use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::notice::OptimizerNotice;
 use opentelemetry::trace::TraceContextExt;
 use semver::Version;
 use serde::Serialize;
@@ -3721,7 +3722,7 @@ impl Coordinator {
     /// The snapshot must contain the compute collections available for imports.
     /// This does not select an `as_of`, install the dataflow, or cache the result.
     fn build_index_dataflow_plan(
-        &mut self,
+        &self,
         name: &QualifiedItemName,
         index: &Index,
         compute_instance: ComputeInstanceSnapshot,
@@ -4653,6 +4654,72 @@ impl Coordinator {
             .compute
             .allow_writes(instance, id)
             .unwrap_or_terminate("allow_writes cannot fail");
+    }
+
+    /// Sets `df_desc`'s as-of from a read hold on `id_bundle`, ships the dataflow, and drops the
+    /// hold once compute has taken its own (compute puts in its own read holds during
+    /// `create_dataflow`, so it is safe to release this one right after shipping).
+    ///
+    /// The read hold across shipping keeps the since of `id_bundle` from advancing underneath the
+    /// as-of just picked.
+    async fn ship_new_dataflow(
+        &mut self,
+        id_bundle: &CollectionIdBundle,
+        mut df_desc: DataflowDescription<LirRelationExpr>,
+        instance: ComputeInstanceId,
+        notice_builtin_updates_fut: Option<BuiltinTableAppendNotify>,
+    ) {
+        let read_holds = self.acquire_read_holds(id_bundle);
+        let since = read_holds.least_valid_read();
+        df_desc.set_as_of(since);
+
+        self.ship_dataflow_and_notice_builtin_table_updates(
+            df_desc,
+            instance,
+            notice_builtin_updates_fut,
+            None,
+        )
+        .await;
+
+        drop(read_holds);
+    }
+
+    /// Persist already-rendered optimizer notices for a newly created
+    /// non-transient dataflow.
+    ///
+    /// This:
+    /// - packs builtin-table updates for `mz_optimizer_notices` (if enabled),
+    /// - stores the rendered metainfo on the catalog object via
+    ///   `set_dataflow_metainfo`,
+    /// - and returns a future that resolves once the builtin-table append
+    ///   has been observed, or `None` if nothing was appended.
+    fn persist_dataflow_metainfo(
+        &mut self,
+        df_meta: DataflowMetainfo<Arc<OptimizerNotice>>,
+        export_id: GlobalId,
+    ) -> Option<BuiltinTableAppendNotify> {
+        // Attend to optimization notice builtin tables and save the metainfo in the catalog's
+        // in-memory state.
+        if self.catalog().state().system_config().enable_mz_notices()
+            && !df_meta.optimizer_notices.is_empty()
+        {
+            let mut builtin_table_updates = Vec::with_capacity(df_meta.optimizer_notices.len());
+            self.catalog().state().pack_optimizer_notices(
+                &mut builtin_table_updates,
+                df_meta.optimizer_notices.iter(),
+                Diff::ONE,
+            );
+
+            // Save the metainfo.
+            self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);
+
+            Some(self.builtin_table_update().execute(builtin_table_updates))
+        } else {
+            // Save the metainfo.
+            self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);
+
+            None
+        }
     }
 
     /// Like `ship_dataflow`, but also await on builtin table updates.

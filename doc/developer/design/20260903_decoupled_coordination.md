@@ -156,3 +156,27 @@ Next proposed slice: runtime expression-cache reads and index-add implications
 using reconstruction on cache misses. Cache validity must account for committed
 dependencies, and installation must follow same-batch prerequisites. Add direct
 committed-update coverage without sequencer plans. No boundary decision changed.
+
+### 2026-09-03: Runtime index implications, verification in progress
+
+Index additions now acquire cached or reconstructed plans and install through
+implications. Runtime cache reads are best-effort and validated against committed
+dependencies and compute availability. Review identified stale session notices
+after cache rejection, addressed by filtering dropped dependencies.
+
+Adapter and cache-test compilation passed. Runtime tests remain pending. The
+extraction's Clippy fix passed both [CI Clippy jobs](https://buildkite.com/materialize/test/builds/133870).
+Full validation of this follow-up is pending. Proposed test-only adapter catalog
+transaction request awaits Aljoscha's approval, because no existing harness can
+exercise cluster/table/index creation in one committed batch. Same-batch MV/index
+creation still depends on moving MV storage creation into implications.
+
+### 2026-09-03: System-boundary verification
+
+Agreed with Aljoscha to proceed with system-level coverage, without a test-only
+coordinator command. Added cache-disabled SQL creation and restart coverage for
+index use, EXPLAIN, notices, and drop cleanup. Python formatting and Ruff passed,
+runtime validation remains in [PR CI](https://github.com/MaterializeInc/materialize/pull/38696/checks).
+The no-sequencer same-batch runtime case remains uncovered until a production
+catalog subscriber exists. External catalog writers fence the adapter today,
+and the existing read-only catalog harness does not apply controller effects.

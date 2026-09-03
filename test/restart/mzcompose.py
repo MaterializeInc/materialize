@@ -865,6 +865,76 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
     )
 
 
+def workflow_index_without_expression_cache(c: Composition) -> None:
+    # Expression-cache enablement is sampled when the catalog opens.
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_expression_cache": "false",
+                "enable_mz_notices": "true",
+            },
+        )
+    ):
+        c.up("materialized", Service("testdrive_no_reset", idle=True))
+        c.testdrive(
+            service="testdrive_no_reset",
+            input=dedent("""
+                > CREATE TABLE uncached_index_t (a int);
+                > INSERT INTO uncached_index_t VALUES (1), (2);
+                > CREATE VIEW uncached_index_v AS SELECT a + 1 AS b FROM uncached_index_t;
+                > CREATE INDEX uncached_arrangement ON uncached_index_v ();
+                > CREATE INDEX IF NOT EXISTS uncached_arrangement ON uncached_index_v (b);
+                """),
+        )
+        index_id = c.sql_query(
+            "SELECT id FROM mz_indexes WHERE name = 'uncached_arrangement'",
+            reuse_connection=False,
+        )[0][0]
+
+        def verify() -> None:
+            c.testdrive(
+                service="testdrive_no_reset",
+                input=dedent("""
+                    > SELECT b FROM uncached_index_v ORDER BY b;
+                    2
+                    3
+                    """),
+            )
+            notices = c.sql_query(
+                f"SELECT notice_type, count(*) FROM mz_internal.mz_optimizer_notices "
+                f"WHERE object_id = '{index_id}' GROUP BY notice_type",
+                user="mz_system",
+                port=6877,
+                reuse_connection=False,
+            )
+            assert notices == [("Empty index key", 1)], notices
+            plan = c.sql_query(
+                "EXPLAIN SELECT b FROM uncached_index_v", reuse_connection=False
+            )[0][0]
+            assert "uncached_arrangement" in plan, plan
+            for stage in ("OPTIMIZED", "PHYSICAL"):
+                c.sql_query(
+                    f"EXPLAIN {stage} PLAN FOR INDEX uncached_arrangement",
+                    reuse_connection=False,
+                )
+
+        verify()
+        c.kill("materialized")
+        c.up("materialized")
+        verify()
+
+        c.sql("DROP INDEX uncached_arrangement", reuse_connection=False)
+        notices = c.sql_query(
+            f"SELECT count(*) FROM mz_internal.mz_optimizer_notices "
+            f"WHERE object_id = '{index_id}'",
+            user="mz_system",
+            port=6877,
+            reuse_connection=False,
+        )
+        assert notices == [(0,)], notices
+        c.sql("DROP TABLE uncached_index_t CASCADE", reuse_connection=False)
+
+
 def workflow_index_compute_dependencies(c: Composition) -> None:
     """
     Assert that materialized views and index catalog items see and use only

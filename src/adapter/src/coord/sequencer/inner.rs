@@ -28,9 +28,6 @@ use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
-use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::LirRelationExpr;
 use mz_expr::{
     CollectionPlan, Eval, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
 };
@@ -109,9 +106,7 @@ use crate::catalog::{
     self, Catalog, CatalogState, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant,
 };
 use crate::command::{ExecuteResponse, Response};
-use crate::coord::appends::{
-    BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn, UserWriteResponder,
-};
+use crate::coord::appends::{DeferredOp, DeferredPlan, PendingWriteTxn, UserWriteResponder};
 use crate::coord::read_then_write::{DependencyPolicy, validate_read_then_write_dependencies};
 use crate::coord::sequencer::emit_optimizer_notices;
 use crate::coord::{
@@ -130,7 +125,7 @@ use crate::session::{
     WriteLocks, WriteOp,
 };
 use crate::util::{ClientTransmitter, ResultExt, viewable_variables};
-use crate::{CollectionIdBundle, PeekResponseUnary, ReadHolds};
+use crate::{PeekResponseUnary, ReadHolds};
 
 /// A future that resolves to a real-time recency timestamp.
 type RtrTimestampFuture = BoxFuture<'static, Result<Timestamp, StorageError>>;
@@ -5138,71 +5133,5 @@ impl Coordinator {
             notice_ids,
             Some(global_id),
         )
-    }
-
-    /// Sets `df_desc`'s as-of from a read hold on `id_bundle`, ships the dataflow, and drops the
-    /// hold once compute has taken its own (compute puts in its own read holds during
-    /// `create_dataflow`, so it is safe to release this one right after shipping).
-    ///
-    /// The read hold across shipping keeps the since of `id_bundle` from advancing underneath the
-    /// as-of just picked.
-    async fn ship_new_dataflow(
-        &mut self,
-        id_bundle: &CollectionIdBundle,
-        mut df_desc: DataflowDescription<LirRelationExpr>,
-        instance: ComputeInstanceId,
-        notice_builtin_updates_fut: Option<BuiltinTableAppendNotify>,
-    ) {
-        let read_holds = self.acquire_read_holds(id_bundle);
-        let since = read_holds.least_valid_read();
-        df_desc.set_as_of(since);
-
-        self.ship_dataflow_and_notice_builtin_table_updates(
-            df_desc,
-            instance,
-            notice_builtin_updates_fut,
-            None,
-        )
-        .await;
-
-        drop(read_holds);
-    }
-
-    /// Persist already-rendered optimizer notices for a newly created
-    /// non-transient dataflow.
-    ///
-    /// This:
-    /// - packs builtin-table updates for `mz_optimizer_notices` (if enabled),
-    /// - stores the rendered metainfo on the catalog object via
-    ///   `set_dataflow_metainfo`,
-    /// - and returns a future that resolves once the builtin-table append
-    ///   has been observed, or `None` if nothing was appended.
-    fn persist_dataflow_metainfo(
-        &mut self,
-        df_meta: DataflowMetainfo<Arc<OptimizerNotice>>,
-        export_id: GlobalId,
-    ) -> Option<BuiltinTableAppendNotify> {
-        // Attend to optimization notice builtin tables and save the metainfo in the catalog's
-        // in-memory state.
-        if self.catalog().state().system_config().enable_mz_notices()
-            && !df_meta.optimizer_notices.is_empty()
-        {
-            let mut builtin_table_updates = Vec::with_capacity(df_meta.optimizer_notices.len());
-            self.catalog().state().pack_optimizer_notices(
-                &mut builtin_table_updates,
-                df_meta.optimizer_notices.iter(),
-                Diff::ONE,
-            );
-
-            // Save the metainfo.
-            self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);
-
-            Some(self.builtin_table_update().execute(builtin_table_updates))
-        } else {
-            // Save the metainfo.
-            self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);
-
-            None
-        }
     }
 }
