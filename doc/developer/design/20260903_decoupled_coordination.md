@@ -41,6 +41,37 @@ client ownership of the cluster's maintained lifecycle. Responses, cancellation,
 and disconnect cleanup belong to the relevant client. This is a semantic split,
 not simply another listener for the same controller protocol.
 
+## Catalog-backed compaction bounds
+
+Store explicit compaction bounds for maintained collections in the catalog.
+Storage and compute must not compact those collections beyond committed
+permission. Applied compaction may lag, retaining extra history. Bounds advance
+monotonically within a collection's lifetime. Their representation and granularity
+remain implementation choices.
+
+Introducing or strengthening a maintained read requirement and advancing the
+affected bounds must be coordinated at the catalog transaction boundary. A
+transaction must not commit a requirement incompatible with already authorized
+compaction, or authorize compaction that invalidates a committed requirement.
+Protection must cover the interval between catalog commit and cluster application,
+independently of the creating adapter's lifetime.
+
+This places maintained read requirements and permission to discard history under
+the same durable authority. Cluster-side components have an explicit limit to
+enforce and recover, without treating a live owner's local accounting as the
+authority to advance beyond it.
+
+The cost is ongoing catalog traffic proportional to the number of changing bounds
+and their publication cadence, together with catalog processing and subscriber
+work. Publication competes with DDL, and further advancement depends on catalog
+write availability. Delaying publication retains more history, with storage and
+compute resource costs even when the metadata bandwidth is modest.
+
+Avoid coupling ordinary query throughput to catalog writes for every hold change.
+Coalescing or rate-limiting bound advancement may retain extra history, but must
+not delay protection until after it is needed. Choose cadence and batching from
+measured catalog load, DDL latency, and retention cost.
+
 ## Boundary contracts
 
 ### Readability and compaction
@@ -51,11 +82,10 @@ valid, compute and persist compaction must respect it, including through
 dependencies, installation, and ownership handover. One client cannot release
 another's protection.
 
-Catalog state carries the authority for advancing readability frontiers. The
-representation and accounting of individual read requirements remain open.
-An evolving per-object frontier is a candidate, not a prescribed schema. Keep
-its meaning distinct from a dataflow's installation `as_of` and an MV's initial
-storage visibility boundary unless the implementation establishes how they fit.
+Keep compaction bounds distinct from a dataflow's installation `as_of` and an
+MV's initial storage visibility boundary unless the implementation establishes
+how they fit. The representation and accounting of individual read requirements
+remain open.
 
 Propagation to persist critical since handles must respect all valid read
 requirements. Those handles are the durable backstop, not a substitute for
@@ -63,10 +93,10 @@ multi-client accounting. Stale owners must not advance compaction or destroy
 data based on incomplete local knowledge. Abandoned client holds must be
 reclaimable without allowing that client to resume using invalid protection.
 
-Avoid coupling ordinary query throughput to catalog writes for every hold
-change. Coalescing or rate-limiting frontier advancement may retain extra
-history, but must not delay protection until after it is needed. Choose cadence
-and any configuration from measured catalog load and retention cost.
+Recovery must establish actual readability and restore valid read requirements
+before further advancement is authorized. Reconstructed plans must use inputs
+readable at the protected timestamps, rather than assume equivalent access paths
+have equivalent history.
 
 ### Visibility and execution
 
@@ -79,6 +109,28 @@ Query-client connections must not replace one another's desired state or reset
 maintained dataflows. Lifecycle ownership and permission to perform external
 writes must remain safe across restarts and handover, independently of query
 connection lifetime.
+
+## Alternatives
+
+### Delegated compaction advancement
+
+The catalog could define maintained requirements and retention policies while a
+fenced lifecycle owner accounts for client and maintained reads and advances
+compaction directly. Persist critical handles would provide the durable storage
+backstop, without publishing advancing bounds to the catalog. This avoids ongoing
+frontier-publication traffic and its dependence on catalog write availability.
+
+Delegation still requires coordination when durable read requirements are
+introduced or strengthened. Their admission must be tied to owner-held protection.
+Reclaiming abandoned precommit protection must exclude a late commit that relies
+on it. Observing an object's absence in a catalog snapshot is not sufficient.
+Recovery of valid holds and enforcement against stale owners remain necessary
+under either approach.
+
+We choose explicit bounds for the catalog-local permission boundary. Delegation
+reduces ongoing catalog traffic but shifts coordination into maintained-DDL
+admission and cleanup. We accept the publication and retention costs of explicit
+bounds rather than this owner-backed admission and reclamation protocol.
 
 ## Implementation and verification
 
@@ -229,3 +281,49 @@ Compute holds do protect actual transitive dependencies. Production MV installat
 remains paused. Next proposed step: agree whether to establish lifecycle-owned
 protection now or build a temporary protected-plan reconstruction bridge. No new
 mechanism or boundary change was agreed.
+
+### 2026-09-03: Lifecycle protection prioritized with Aljoscha
+
+Proceed with lifecycle-owned protection rather than a temporary adapter bridge.
+Both restart jobs in [CI build 133889](https://buildkite.com/materialize/test/builds/133889)
+passed, including the pending-first-refresh regression. Overall CI remains pending.
+
+The durable writer is already shared behind a mutex, so an independent lifecycle
+component need not introduce concurrent catalog writers. Existing hold accounting
+and epoch fencing are reusable, but neither recovers pending maintained read
+requirements from catalog state. Before choosing a schema, clarify whether catalog
+authority requires committed frontier bounds or can delegate advancement to a
+fenced lifecycle owner under catalog-derived policies. The latter is a proposal,
+not an agreed interpretation of the boundary. No production changes made.
+
+### 2026-09-03: Delegation failure-scenario exploration
+
+[CI build 133889](https://buildkite.com/materialize/test/builds/133889) passed.
+Worked cases require atomic ordering of creation commit versus hold reclamation,
+physical fencing, and a recovery barrier before compaction resumes. Snapshot absence
+and catalog fencing alone are insufficient. Small abstract interleaving models
+checked these orderings, not production behavior. The delegation proposal shifts
+coordination to read-requiring DDL and owner handover rather than ongoing frontier
+publication. Admission/revocation and recovery of valid client holds remain open.
+The shared writer mutex only serializes one in-process handle, not independent
+writers or subscriber delivery. No boundary decision or production change made.
+
+### 2026-09-03: Catalog-bound traffic estimate
+
+Aljoscha leans toward explicit bounds. For compact records advancing once per
+minute, a planning budget of 300–500 bytes per retraction/insertion pair gives
+0.5–0.83 MB/s at 100,000 changing bounds. This estimates uncompressed logical
+updates, not measured persist traffic. Current structured JSONB encoding retains
+whole-record JSON text. Whole-item rewrites, batch sizes, catalog CPU/DDL latency,
+persist maintenance, subscriber fanout, and retained history need measurement.
+No schema or publication cadence was agreed.
+
+### 2026-09-03: Explicit bounds agreed with Aljoscha
+
+Choose catalog-backed compaction bounds and document delegated advancement as an
+alternative. Schema, granularity, batching, and publication cadence remain open.
+The one-minute traffic estimate is not a chosen cadence. Next useful step: define
+the catalog transaction boundary for maintained read requirements and bound
+advancement. This is a design decision, with no production implementation change.
+Documentation checks passed. Full formatting and lint remain blocked by missing
+tools and the Python-doctest OpenSSL build.
