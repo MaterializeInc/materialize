@@ -105,8 +105,28 @@ BEGIN
 statement ok
 DECLARE "Mixed" CURSOR FOR SELECT 1
 
+query I
+FETCH "Mixed"
+----
+1
+
 statement ok
 CLOSE "Mixed"
+
+statement ok
+ROLLBACK
+
+# A cursor whose statement closes the cursor itself removes the portal that is
+# executing it, which the completion bookkeeping has to tolerate. Reachable from
+# plain SQL, not just the extended protocol.
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR CLOSE c
+
+statement ok
+FETCH c
 
 statement ok
 ROLLBACK

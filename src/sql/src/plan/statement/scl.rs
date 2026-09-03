@@ -12,6 +12,7 @@
 //! This module houses the handlers for statements that manipulate the session,
 //! like `DISCARD` and `SET`.
 
+use mz_ore::str::StrExt;
 use mz_repr::{CatalogItemId, RelationDesc, RelationVersionSelector, SqlScalarType};
 use mz_sql_parser::ast::InspectShardStatement;
 use std::time::Duration;
@@ -336,7 +337,7 @@ fn plan_execute_desc<'a>(
     let desc = match scx.catalog.get_prepared_statement_desc(&name) {
         Some(desc) => desc,
         // TODO(mjibson): use CoordError::UnknownPreparedStatement.
-        None => sql_bail!("unknown prepared statement {}", name),
+        None => sql_bail!("unknown prepared statement {}", name.quoted()),
     };
     Ok((
         desc,
