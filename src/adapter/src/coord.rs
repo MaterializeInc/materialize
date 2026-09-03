@@ -2129,8 +2129,9 @@ pub struct Coordinator {
     client_pending_peeks: BTreeMap<ConnectionId, BTreeMap<Uuid, ClusterId>>,
     /// Registry of in-flight frontend-sequenced peeks, shared with every
     /// session's `PeekClient`. Frontend peeks register/unregister here off the
-    /// coordinator task. The coordinator only consults it to cancel a
-    /// connection's peeks (see [`Coordinator::cancel_pending_peeks`]).
+    /// coordinator task; the coordinator reads it from its teardown paths, to
+    /// cancel a connection's peeks and to cancel peeks whose dependencies were
+    /// dropped.
     frontend_peek_registry: Arc<FrontendPeekRegistry>,
 
     /// A map from client connection ids to pending linearize read transaction.
@@ -5343,9 +5344,9 @@ pub fn serve(
 
         let (group_commit_tx, group_commit_rx) = appends::notifier();
 
-        // Shared between the coordinator and every session's `PeekClient`. Fixed
-        // shard count keeps the hot-path locks contention-spread across
-        // concurrent sessions.
+        // Shared between the coordinator and every session's `PeekClient`. The
+        // shard count is set well above the concurrent-session counts we
+        // benchmark at rather than tuned against a measurement.
         let frontend_peek_registry = Arc::new(FrontendPeekRegistry::new(64));
         let coord_frontend_peek_registry = Arc::clone(&frontend_peek_registry);
 

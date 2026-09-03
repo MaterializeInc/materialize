@@ -13,14 +13,14 @@
 //!
 //! Frontend peeks register and unregister themselves here directly, off the
 //! single coordinator task, so that the peek hot path never blocks on a
-//! coordinator round-trip. The coordinator only consults the registry when it
-//! must cancel a connection's peeks, in `Coordinator::cancel_pending_peeks`.
-//!
-//! The registry tracks what the two teardown paths need: the connection that
-//! owns a peek, the cluster it runs on, and the collections it reads.
+//! coordinator round-trip. The coordinator reads the registry from its two
+//! teardown paths: `Coordinator::cancel_pending_peeks` for a connection's
+//! peeks, and `catalog_implications` for peeks whose dependencies were
+//! dropped. Each entry therefore records the owning connection, the cluster,
+//! and the collections the peek reads.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use mz_adapter_types::connection::ConnectionId;
 use mz_controller_types::ClusterId;
@@ -29,23 +29,23 @@ use uuid::Uuid;
 
 /// State tracked per in-flight frontend peek.
 #[derive(Debug, Clone)]
-pub struct PendingPeekEntry {
-    pub conn_id: ConnectionId,
-    pub cluster_id: ClusterId,
+pub(crate) struct PendingPeekEntry {
+    pub(crate) conn_id: ConnectionId,
+    pub(crate) cluster_id: ClusterId,
     /// Every `GlobalId` the peek reads. Dependency teardown matches against
     /// this to decide whether a dropped collection kills the peek.
-    pub depends_on: BTreeSet<GlobalId>,
+    pub(crate) depends_on: BTreeSet<GlobalId>,
 }
 
 /// A registry peek that a catalog drop has invalidated.
 #[derive(Debug)]
-pub struct DroppedPeek {
-    pub uuid: Uuid,
-    pub cluster_id: ClusterId,
+pub(crate) struct DroppedPeek {
+    pub(crate) uuid: Uuid,
+    pub(crate) cluster_id: ClusterId,
     /// The dropped collection the peek reads, or `None` when the peek matched
     /// because its cluster is going away. The caller turns this into the
     /// user-facing dependency name.
-    pub dropped_collection: Option<GlobalId>,
+    pub(crate) dropped_collection: Option<GlobalId>,
 }
 
 /// A sharded, lock-per-shard registry of in-flight frontend peeks.
@@ -53,19 +53,24 @@ pub struct DroppedPeek {
 /// The per-uuid shards carry the hot-path inserts and removes. `by_conn` is a
 /// secondary index consulted only by cancellation, which is cold.
 #[derive(Debug)]
-pub struct FrontendPeekRegistry {
+pub(crate) struct FrontendPeekRegistry {
     /// Per-uuid entries, sharded to spread lock contention across concurrent
     /// sessions. A uuid always maps to the same shard via [`Self::shard_of`].
     shards: Box<[Mutex<BTreeMap<Uuid, PendingPeekEntry>>]>,
-    /// Secondary index from connection to its outstanding peek uuids. Used by
-    /// cancellation to find a connection's peeks without scanning every shard.
+    /// Secondary index from connection to its outstanding peek uuids, so that
+    /// cancellation need not scan every shard.
+    ///
+    /// Written on every register and every remove, so it is on the peek hot
+    /// path despite the sharding. It is also the OUTER lock: every method that
+    /// takes both takes this one first, which is what makes a registration
+    /// atomic against a concurrent [`Self::take_conn`].
     by_conn: Mutex<BTreeMap<ConnectionId, BTreeSet<Uuid>>>,
 }
 
 impl FrontendPeekRegistry {
     /// Creates a registry with `shards` per-uuid shards. `shards` must be
     /// non-zero.
-    pub fn new(shards: usize) -> Self {
+    pub(crate) fn new(shards: usize) -> Self {
         assert!(shards > 0, "registry needs at least one shard");
         let shards = (0..shards)
             .map(|_| Mutex::new(BTreeMap::new()))
@@ -87,30 +92,30 @@ impl FrontendPeekRegistry {
     ///
     /// Must complete before the peek is issued so that a concurrent
     /// cancellation observes the entry.
-    pub fn register(&self, uuid: Uuid, entry: PendingPeekEntry) {
+    pub(crate) fn register(&self, uuid: Uuid, entry: PendingPeekEntry) {
         let conn_id = entry.conn_id.clone();
-        {
-            let mut shard = self.shards[self.shard_of(&uuid)]
-                .lock()
-                .expect("lock poisoned");
-            shard.insert(uuid, entry);
-        }
+        // Both maps are updated under `by_conn`. Publishing the shard entry
+        // first and taking `by_conn` afterwards would let a `take_conn`
+        // in between drain the connection and still miss this peek, leaving it
+        // live and uncancellable.
         let mut by_conn = self.by_conn.lock().expect("lock poisoned");
+        self.shards[self.shard_of(&uuid)]
+            .lock()
+            .expect("lock poisoned")
+            .insert(uuid, entry);
         by_conn.entry(conn_id).or_default().insert(uuid);
     }
 
     /// Removes an in-flight peek, returning its entry if it was present.
     ///
     /// Also drops the uuid from the connection's secondary index.
-    pub fn remove(&self, uuid: Uuid) -> Option<PendingPeekEntry> {
-        let entry = {
-            let mut shard = self.shards[self.shard_of(&uuid)]
-                .lock()
-                .expect("lock poisoned");
-            shard.remove(&uuid)
-        };
+    pub(crate) fn remove(&self, uuid: Uuid) -> Option<PendingPeekEntry> {
+        let mut by_conn = self.by_conn.lock().expect("lock poisoned");
+        let entry = self.shards[self.shard_of(&uuid)]
+            .lock()
+            .expect("lock poisoned")
+            .remove(&uuid);
         if let Some(entry) = &entry {
-            let mut by_conn = self.by_conn.lock().expect("lock poisoned");
             if let Some(uuids) = by_conn.get_mut(&entry.conn_id) {
                 uuids.remove(&uuid);
                 if uuids.is_empty() {
@@ -123,11 +128,9 @@ impl FrontendPeekRegistry {
 
     /// Drains and returns all in-flight peeks for `conn_id`, removing them from
     /// both the secondary index and the shards.
-    pub fn take_conn(&self, conn_id: &ConnectionId) -> Vec<(Uuid, ClusterId)> {
-        let uuids = {
-            let mut by_conn = self.by_conn.lock().expect("lock poisoned");
-            by_conn.remove(conn_id).unwrap_or_default()
-        };
+    pub(crate) fn take_conn(&self, conn_id: &ConnectionId) -> Vec<(Uuid, ClusterId)> {
+        let mut by_conn = self.by_conn.lock().expect("lock poisoned");
+        let uuids = by_conn.remove(conn_id).unwrap_or_default();
         let mut result = Vec::with_capacity(uuids.len());
         for uuid in uuids {
             let mut shard = self.shards[self.shard_of(&uuid)]
@@ -154,8 +157,9 @@ impl FrontendPeekRegistry {
     /// [`Self::remove`] returning `None` is what tells the caller to skip it.
     ///
     /// This scans every shard, which is fine: it runs on catalog DDL, not on
-    /// the peek hot path.
-    pub fn find_dropped(
+    /// the peek hot path. It takes no `by_conn` lock, so it cannot invert the
+    /// order the other methods establish.
+    pub(crate) fn find_dropped(
         &self,
         collections: &BTreeSet<GlobalId>,
         clusters: &[ClusterId],
@@ -186,13 +190,13 @@ impl FrontendPeekRegistry {
 /// idempotent, so a prior explicit [`FrontendPeekRegistry::remove`] or
 /// [`FrontendPeekRegistry::take_conn`] makes the drop a no-op.
 #[derive(Debug)]
-pub struct PeekRegistrationGuard {
-    registry: std::sync::Arc<FrontendPeekRegistry>,
+pub(crate) struct PeekRegistrationGuard {
+    registry: Arc<FrontendPeekRegistry>,
     uuid: Uuid,
 }
 
 impl PeekRegistrationGuard {
-    pub fn new(registry: std::sync::Arc<FrontendPeekRegistry>, uuid: Uuid) -> Self {
+    pub(crate) fn new(registry: Arc<FrontendPeekRegistry>, uuid: Uuid) -> Self {
         Self { registry, uuid }
     }
 }

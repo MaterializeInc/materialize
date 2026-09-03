@@ -1054,6 +1054,11 @@ impl Coordinator {
                         // The session observes this error on its response
                         // stream, which also retires the statement's end of
                         // execution, so there is nothing to retire here.
+                        //
+                        // Unlike the `pending_peeks` loop above this tolerates
+                        // a failed cancel instead of terminating: dropping the
+                        // peek's cluster removes the instance, and the peek's
+                        // own issue path already reports that to the session.
                         let _ =
                             self.controller
                                 .compute
