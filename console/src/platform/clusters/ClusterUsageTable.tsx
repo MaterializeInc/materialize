@@ -111,8 +111,11 @@ const NO_UTILIZATION: ReplicaUtilizationValues = {
  * be looked up from table meta.
  *
  * `replica` is null for a cluster that currently has no replicas. Such a
- * cluster still gets a row, so the list stays a complete inventory of clusters
- * rather than silently hiding the ones with nothing running.
+ * cluster still gets a row, so every cluster is representable, but the replica
+ * count filter defaults to a minimum of one replica and so hides those rows
+ * until a reader asks for them. The row model stays complete because the filter
+ * is the reader's to remove: it is stated on a chip and is one click from off,
+ * which a dropped row could not be. See `replicaCountFilters`.
  *
  * `hydration` is null when the replica has no counted objects, which is not the
  * same as nothing being hydrated. See `buildReplicaHydrationQuery` for what the

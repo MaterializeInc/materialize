@@ -2138,6 +2138,28 @@ describe("ClustersList replica count filter", () => {
     expect(chipLabels()).toEqual([]);
   });
 
+  it("shows every row when the panel's Clear is pressed", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(clustersByReplicaCount());
+
+    await clearFilter(user, "Replica");
+
+    expect(rowOrder()).toEqual(["-", "pair-1", "pair-2", "single-1"]);
+    expect(chipLabels()).toEqual([]);
+  });
+
+  it("treats an emptied box as no minimum", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(clustersByReplicaCount());
+
+    await applyMinimum(user, "");
+
+    // Emptying the box and pressing Apply is a separate gesture from Clear and
+    // has to reach the same place: nothing in the box is no minimum.
+    expect(rowOrder()).toEqual(["-", "pair-1", "pair-2", "single-1"]);
+    expect(chipLabels()).toEqual([]);
+  });
+
   it("counts the row's cluster's replicas, not the row itself", async () => {
     const user = userEvent.setup();
     await renderClustersList(clustersByReplicaCount());
@@ -2203,6 +2225,29 @@ describe("ClustersList replica count filter", () => {
     );
 
     expect(rowOrder()).toEqual(["-", "pair-1", "pair-2", "single-1"]);
+  });
+
+  it("meets the empty state when no cluster has a replica", async () => {
+    const user = userEvent.setup();
+    await renderAt([
+      buildCluster({ id: "u1", name: "empty-one", replicas: [] }),
+      buildCluster({ id: "u2", name: "empty-two", replicas: [] }),
+    ]);
+
+    // A first visit filters by the default, so an account whose clusters all
+    // sit idle reaches this without having touched a filter. The page has to
+    // say why it is empty and offer the way back, or it reads as broken.
+    expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
+    expect(chipLabels()).toEqual(["Replicas ≥ 1"]);
+
+    await user.click(
+      screen.getByRole("button", { name: "Remove Replicas ≥ 1" }),
+    );
+
+    // The empty state replaced the table, so removing the chip mounts a fresh
+    // one rather than adding rows to a table already on screen.
+    await screen.findByRole("table");
+    expect(columnOrder(COLUMN.cluster)).toEqual(["empty-one", "empty-two"]);
   });
 
   describe("URL state", () => {
