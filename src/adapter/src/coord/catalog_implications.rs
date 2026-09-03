@@ -267,6 +267,7 @@ impl Coordinator {
         // sources (which don't).
         let mut table_collections_to_create = BTreeMap::new();
         let mut source_collections_to_create = BTreeMap::new();
+        let mut sinks_to_create = Vec::new();
         let mut storage_policies_to_initialize = BTreeMap::new();
         let mut execution_timestamps_to_set = BTreeSet::new();
         let mut vpc_endpoints_to_create: Vec<(CatalogItemId, VpcEndpointConfig)> = vec![];
@@ -412,7 +413,11 @@ impl Coordinator {
                     }
                 }
                 CatalogImplication::Sink(CatalogImplicationKind::Added(sink)) => {
-                    tracing::debug!(?sink, "not handling AddSink in here yet");
+                    storage_policies_to_initialize
+                        .entry(CompactionWindow::Default)
+                        .or_default()
+                        .insert(sink.global_id());
+                    sinks_to_create.push(sink);
                 }
                 CatalogImplication::Sink(CatalogImplicationKind::Altered {
                     prev: prev_sink,
@@ -803,6 +808,10 @@ impl Coordinator {
         if !table_collections_to_create.is_empty() {
             self.create_table_collections(table_collections_to_create, execution_timestamps_to_set)
                 .await?;
+        }
+        // Sink inputs must exist before exports acquire their dependency read holds.
+        for sink in sinks_to_create {
+            self.create_storage_export(sink.global_id(), &sink).await?;
         }
         // It is _very_ important that we only initialize read policies after we
         // have created all the sources/collections. Some of the sources created

@@ -128,3 +128,17 @@ Query-local dataflows remain on the fast protocol. Adapter loss must not harm
 other clients or maintained dataflows, but transparent failover is not required.
 Completing relevant catalog implication paths is within scope. Implementation
 has not started and runtime validation has not been performed.
+
+### 2026-09-03: Sink creation from committed implications
+
+Sink additions now install exports through catalog implications. Independent
+review found no blocking issue. [CI build 133862](https://buildkite.com/materialize/test/builds/133862)
+passed both Clippy jobs and formatting before a documentation push superseded it.
+Latest CI and runtime validation remain pending. Local builds were blocked by
+missing artifacts and tools. Aljoscha confirmed CI as the default test loop.
+
+Controllers still live in the adapter. Direct committed-update tests and
+same-batch MV/sink creation remain gaps. Next proposed slice: reuse index plan
+reconstruction from bootstrap, preserving precommit optimization as a cache.
+Index parsing leaves plans absent and the expression cache has no runtime read
+API. No new boundary decision was made.

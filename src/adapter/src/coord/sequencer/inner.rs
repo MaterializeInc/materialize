@@ -19,7 +19,6 @@ use futures::future::{BoxFuture, FutureExt};
 use futures::{Future, StreamExt, future};
 use itertools::Itertools;
 use maplit::btreemap;
-use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{
     ENABLE_EXPRESSION_CACHE, ENABLE_PASSWORD_AUTH, FRONTEND_READ_THEN_WRITE,
@@ -1185,7 +1184,7 @@ impl Coordinator {
         let ops = vec![catalog::Op::CreateItem {
             id: item_id,
             name: name.clone(),
-            item: CatalogItem::Sink(catalog_sink.clone()),
+            item: CatalogItem::Sink(catalog_sink),
             owner_id: *ctx.session().current_role_id(),
         }];
 
@@ -1209,13 +1208,6 @@ impl Coordinator {
                 return;
             }
         };
-
-        self.create_storage_export(global_id, &catalog_sink)
-            .await
-            .unwrap_or_terminate("cannot fail to create exports");
-
-        self.initialize_storage_read_policies([item_id].into(), CompactionWindow::Default)
-            .await;
 
         ctx.retire(Ok(ExecuteResponse::CreatedSink))
     }
