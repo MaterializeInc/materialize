@@ -107,7 +107,7 @@ use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions, latest_item_version};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, Connection, DataSourceDesc, Index,
-    ReconfigurationTarget, Table, TableDataSource,
+    MaterializedView, ReconfigurationTarget, Table, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
@@ -3739,6 +3739,57 @@ impl Coordinator {
         })
     }
 
+    /// Builds a materialized view plan and rendered notices from its catalog definition.
+    ///
+    /// The snapshot must contain the compute collections available for imports.
+    /// This does not select an `as_of`, install the dataflow, or cache the result.
+    fn build_materialized_view_dataflow_plan(
+        &self,
+        name: &QualifiedItemName,
+        mv: &MaterializedView,
+        compute_instance: ComputeInstanceSnapshot,
+        optimizer_config: OptimizerConfig,
+    ) -> Result<GlobalExpressions, AdapterError> {
+        let global_id = mv.global_id_writes();
+        let (_, internal_view_id) = self.allocate_transient_id();
+        let debug_name = self.catalog().resolve_full_name(name, None).to_string();
+        let mut optimizer = optimize::materialized_view::Optimizer::new(
+            self.owned_catalog().as_optimizer_catalog(),
+            compute_instance,
+            global_id,
+            internal_view_id,
+            mv.desc.latest().iter_names().cloned().collect(),
+            mv.non_null_assertions.clone(),
+            mv.refresh_schedule.clone(),
+            debug_name,
+            optimizer_config.clone(),
+            self.optimizer_metrics(),
+        );
+
+        // Use the HIR SQL type because MIR SQL types may not be coherent.
+        let typ =
+            infer_sql_type_for_catalog(&mv.raw_expr, &mv.locally_optimized_expr.as_ref().clone());
+        let global_mir_plan =
+            optimizer.optimize((mv.locally_optimized_expr.as_ref().clone(), typ))?;
+        let global_mir = global_mir_plan.df_desc().clone();
+        let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+        let (physical_plan, metainfo) = global_lir_plan.unapply();
+        let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
+            .map(|(_item_id, gid)| gid)
+            .take(metainfo.optimizer_notices.len())
+            .collect::<Vec<_>>();
+        let dataflow_metainfos =
+            self.catalog()
+                .render_notices(metainfo, notice_ids, Some(global_id));
+        Ok(GlobalExpressions {
+            global_mir,
+            physical_plan,
+            dataflow_metainfos,
+            optimizer_features: optimizer_config.features,
+            item_version: latest_item_version(&mv.collections),
+        })
+    }
+
     /// Invokes the optimizer on all indexes and materialized views in the catalog and inserts the
     /// resulting dataflow plans into the catalog state.
     ///
@@ -3843,86 +3894,34 @@ impl Coordinator {
 
                     let optimizer_config = optimizer_config(&self.catalog, mv.cluster_id);
 
-                    let (optimized_plan, physical_plan, metainfo) = match cached_global_exprs
-                        .remove(&global_id)
-                    {
-                        Some(global_expressions)
-                            if global_expressions.optimizer_features
-                                == optimizer_config.features =>
-                        {
-                            debug!("global expression cache hit for {global_id:?}");
-                            (
-                                global_expressions.global_mir,
-                                global_expressions.physical_plan,
-                                global_expressions.dataflow_metainfos,
-                            )
-                        }
-                        Some(_) | None => {
-                            let (_, internal_view_id) = self.allocate_transient_id();
-                            let debug_name = self
-                                .catalog()
-                                .resolve_full_name(entry.name(), None)
-                                .to_string();
-
-                            let (optimized_plan, global_lir_plan) = {
-                                // Build an optimizer for this MATERIALIZED VIEW.
-                                let mut optimizer = optimize::materialized_view::Optimizer::new(
-                                    self.owned_catalog().as_optimizer_catalog(),
-                                    compute_instance.clone(),
-                                    global_id,
-                                    internal_view_id,
-                                    mv.desc.latest().iter_names().cloned().collect(),
-                                    mv.non_null_assertions.clone(),
-                                    mv.refresh_schedule.clone(),
-                                    debug_name,
-                                    optimizer_config.clone(),
-                                    self.optimizer_metrics(),
-                                );
-
-                                // MIR ⇒ MIR optimization (global)
-                                // We make sure to use the HIR SQL type (since MIR SQL types may not be coherent).
-                                let typ = infer_sql_type_for_catalog(
-                                    &mv.raw_expr,
-                                    &mv.locally_optimized_expr.as_ref().clone(),
-                                );
-                                let global_mir_plan = optimizer
-                                    .optimize((mv.locally_optimized_expr.as_ref().clone(), typ))?;
-                                let optimized_plan = global_mir_plan.df_desc().clone();
-
-                                // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                                let global_lir_plan = optimizer.optimize(global_mir_plan)?;
-
-                                (optimized_plan, global_lir_plan)
-                            };
-
-                            let (physical_plan, metainfo) = global_lir_plan.unapply();
-                            let metainfo = {
-                                // Pre-allocate a vector of transient GlobalIds for each notice.
-                                let notice_ids =
-                                    std::iter::repeat_with(|| self.allocate_transient_id())
-                                        .map(|(_item_id, global_id)| global_id)
-                                        .take(metainfo.optimizer_notices.len())
-                                        .collect::<Vec<_>>();
-                                // Return a metainfo with rendered notices.
-                                self.catalog().render_notices(
-                                    metainfo,
-                                    notice_ids,
-                                    Some(mv.global_id_writes()),
+                    let (optimized_plan, physical_plan, metainfo) =
+                        match cached_global_exprs.remove(&global_id) {
+                            Some(global_expressions)
+                                if global_expressions.optimizer_features
+                                    == optimizer_config.features =>
+                            {
+                                debug!("global expression cache hit for {global_id:?}");
+                                (
+                                    global_expressions.global_mir,
+                                    global_expressions.physical_plan,
+                                    global_expressions.dataflow_metainfos,
                                 )
-                            };
-                            uncached_expressions.insert(
-                                global_id,
-                                GlobalExpressions {
-                                    global_mir: optimized_plan.clone(),
-                                    physical_plan: physical_plan.clone(),
-                                    dataflow_metainfos: metainfo.clone(),
-                                    optimizer_features: optimizer_config.features.clone(),
-                                    item_version: latest_item_version(&mv.collections),
-                                },
-                            );
-                            (optimized_plan, physical_plan, metainfo)
-                        }
-                    };
+                            }
+                            Some(_) | None => {
+                                let expressions = self.build_materialized_view_dataflow_plan(
+                                    entry.name(),
+                                    mv,
+                                    compute_instance.clone(),
+                                    optimizer_config,
+                                )?;
+                                uncached_expressions.insert(global_id, expressions.clone());
+                                (
+                                    expressions.global_mir,
+                                    expressions.physical_plan,
+                                    expressions.dataflow_metainfos,
+                                )
+                            }
+                        };
 
                     let catalog = self.catalog_mut();
                     catalog.set_optimized_plan(mv.global_id_writes(), optimized_plan);

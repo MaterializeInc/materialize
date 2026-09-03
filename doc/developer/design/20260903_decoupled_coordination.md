@@ -195,3 +195,19 @@ is pending. Prior regular [CI build 133879](https://buildkite.com/materialize/te
 passed. Next useful step: catalog-driven MV compute planning and installation,
 preserving refresh timestamp selection and input protection. Same-batch runtime
 coverage still awaits a production subscriber.
+
+### 2026-09-03: Reusable MV reconstruction
+
+Extracted bootstrap MV reconstruction without changing cache policy or timestamp
+selection. Extended cache-disabled restart coverage to MV results, EXPLAIN, and
+continued maintenance. Independent review found no issue. Adapter compilation
+and Rust/Python formatting passed.
+Full formatting and lint remain blocked by missing tools and an OpenSSL dependency
+build. Prior [CI build 133882](https://buildkite.com/materialize/test/builds/133882)
+passed. This slice's [PR CI](https://github.com/MaterializeInc/materialize/pull/38696/checks)
+and runtime coverage are pending.
+
+Next useful step: establish input protection for runtime MV reconstruction before
+moving compute installation. A cache miss can choose imports outside the creator's
+holds, and acquiring fresh holds after commit cannot recover history needed for
+the committed first refresh. No protection mechanism or boundary change was agreed.

@@ -865,7 +865,7 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
     )
 
 
-def workflow_index_without_expression_cache(c: Composition) -> None:
+def workflow_dataflows_without_expression_cache(c: Composition) -> None:
     # Expression-cache enablement is sampled when the catalog opens.
     with c.override(
         Materialized(
@@ -884,6 +884,8 @@ def workflow_index_without_expression_cache(c: Composition) -> None:
                 > CREATE VIEW uncached_index_v AS SELECT a + 1 AS b FROM uncached_index_t;
                 > CREATE INDEX uncached_arrangement ON uncached_index_v ();
                 > CREATE INDEX IF NOT EXISTS uncached_arrangement ON uncached_index_v (b);
+                > CREATE MATERIALIZED VIEW uncached_mv AS SELECT sum(b) AS total FROM uncached_index_v;
+                > CREATE DEFAULT INDEX ON uncached_mv;
                 """),
         )
         index_id = c.sql_query(
@@ -898,6 +900,9 @@ def workflow_index_without_expression_cache(c: Composition) -> None:
                     > SELECT b FROM uncached_index_v ORDER BY b;
                     2
                     3
+
+                    > SELECT total FROM uncached_mv;
+                    5
                     """),
             )
             notices = c.sql_query(
@@ -917,11 +922,24 @@ def workflow_index_without_expression_cache(c: Composition) -> None:
                     f"EXPLAIN {stage} PLAN FOR INDEX uncached_arrangement",
                     reuse_connection=False,
                 )
+                c.sql_query(
+                    f"EXPLAIN {stage} PLAN FOR MATERIALIZED VIEW uncached_mv",
+                    reuse_connection=False,
+                )
 
         verify()
         c.kill("materialized")
         c.up("materialized")
         verify()
+
+        c.testdrive(
+            service="testdrive_no_reset",
+            input=dedent("""
+                > INSERT INTO uncached_index_t VALUES (3);
+                > SELECT total FROM uncached_mv;
+                9
+                """),
+        )
 
         c.sql("DROP INDEX uncached_arrangement", reuse_connection=False)
         notices = c.sql_query(
