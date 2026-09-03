@@ -16,23 +16,36 @@
 //! coordinator round-trip. The coordinator only consults the registry when it
 //! must cancel a connection's peeks, in `Coordinator::cancel_pending_peeks`.
 //!
-//! The registry tracks the minimum state cancellation needs: for a connection,
-//! the set of peek uuids it owns, and for each uuid the cluster it runs on.
+//! The registry tracks what the two teardown paths need: the connection that
+//! owns a peek, the cluster it runs on, and the collections it reads.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use mz_adapter_types::connection::ConnectionId;
 use mz_controller_types::ClusterId;
+use mz_repr::GlobalId;
 use uuid::Uuid;
 
 /// State tracked per in-flight frontend peek.
-///
-/// This is the minimum cancellation needs: `conn -> uuid -> cluster`.
 #[derive(Debug, Clone)]
 pub struct PendingPeekEntry {
     pub conn_id: ConnectionId,
     pub cluster_id: ClusterId,
+    /// Every `GlobalId` the peek reads. Dependency teardown matches against
+    /// this to decide whether a dropped collection kills the peek.
+    pub depends_on: BTreeSet<GlobalId>,
+}
+
+/// A registry peek that a catalog drop has invalidated.
+#[derive(Debug)]
+pub struct DroppedPeek {
+    pub uuid: Uuid,
+    pub cluster_id: ClusterId,
+    /// The dropped collection the peek reads, or `None` when the peek matched
+    /// because its cluster is going away. The caller turns this into the
+    /// user-facing dependency name.
+    pub dropped_collection: Option<GlobalId>,
 }
 
 /// A sharded, lock-per-shard registry of in-flight frontend peeks.
@@ -125,6 +138,44 @@ impl FrontendPeekRegistry {
             }
         }
         result
+    }
+
+    /// Returns the in-flight peeks invalidated by dropping `collections` and
+    /// `clusters`, without removing them.
+    ///
+    /// A dropped collection takes precedence over a dropped cluster, matching
+    /// how the coordinator reports the dependency for its own pending peeks:
+    /// naming the relation is more useful than naming the cluster when both
+    /// went away in the same DDL.
+    ///
+    /// Finding and removing are separate because the caller cancels each peek
+    /// on the compute instance, and only a peek it actually removed may be
+    /// cancelled. A concurrent completion can remove an entry in between, and
+    /// [`Self::remove`] returning `None` is what tells the caller to skip it.
+    ///
+    /// This scans every shard, which is fine: it runs on catalog DDL, not on
+    /// the peek hot path.
+    pub fn find_dropped(
+        &self,
+        collections: &BTreeSet<GlobalId>,
+        clusters: &[ClusterId],
+    ) -> Vec<DroppedPeek> {
+        let mut dropped = Vec::new();
+        for shard in &self.shards {
+            let shard = shard.lock().expect("lock poisoned");
+            for (uuid, entry) in shard.iter() {
+                let dropped_collection = entry.depends_on.intersection(collections).next().copied();
+                if dropped_collection.is_none() && !clusters.contains(&entry.cluster_id) {
+                    continue;
+                }
+                dropped.push(DroppedPeek {
+                    uuid: *uuid,
+                    cluster_id: entry.cluster_id,
+                    dropped_collection,
+                });
+            }
+        }
+        dropped
     }
 }
 

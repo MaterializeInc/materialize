@@ -256,6 +256,7 @@ impl Coordinator {
         let mut cluster_replicas_to_drop = vec![];
         let mut active_compute_sinks_to_drop = BTreeMap::new();
         let mut peeks_to_drop = vec![];
+        let mut registry_peeks_to_drop = vec![];
         let mut copies_to_drop = vec![];
 
         // Maps for storing names of dropped objects for error messages.
@@ -892,6 +893,31 @@ impl Coordinator {
             }
         }
 
+        // Frontend-sequenced fast-path peeks live in the shared registry rather
+        // than in `pending_peeks`, so they need the same sweep. Their cancel
+        // reason has to carry the dropped dependency too: a bare `Canceled`
+        // would leave the session with no explanation for why its query died.
+        let dropped_registry_peeks = self
+            .frontend_peek_registry
+            .find_dropped(&readable_collections_to_drop, &clusters_to_drop);
+        for dropped in &dropped_registry_peeks {
+            let dep = match dropped.dropped_collection {
+                Some(id) => DroppedDependency::Relation {
+                    name: dropped_item_names
+                        .get(&id)
+                        .cloned()
+                        .expect("missing relation name"),
+                },
+                None => DroppedDependency::Cluster {
+                    name: dropped_cluster_names
+                        .get(&dropped.cluster_id)
+                        .cloned()
+                        .expect("missing cluster name"),
+                },
+            };
+            registry_peeks_to_drop.push((dep, dropped.uuid, dropped.cluster_id));
+        }
+
         // Clean up any pending `COPY` statements that rely on dropped relations or clusters.
         for (conn_id, pending_copy) in &self.active_copies {
             let dropping_table = tables_to_drop
@@ -1012,6 +1038,26 @@ impl Coordinator {
                             StatementEndedExecutionReason::Canceled,
                             pending_peek.ctx_extra.defuse(),
                         );
+                    }
+                }
+            }
+
+            if !registry_peeks_to_drop.is_empty() {
+                for (dep, uuid, cluster_id) in registry_peeks_to_drop {
+                    // Only cancel a peek this removal actually claimed. A
+                    // concurrent completion may have removed it already, and
+                    // cancelling then would race that peek's own teardown.
+                    if self.frontend_peek_registry.remove(uuid).is_some() {
+                        let cancel_reason = PeekResponse::Error(PeekError::unstructured(
+                            dep.query_terminated_error(),
+                        ));
+                        // The session observes this error on its response
+                        // stream, which also retires the statement's end of
+                        // execution, so there is nothing to retire here.
+                        let _ =
+                            self.controller
+                                .compute
+                                .cancel_peek(cluster_id, uuid, cancel_reason);
                     }
                 }
             }

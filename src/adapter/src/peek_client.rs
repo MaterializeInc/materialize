@@ -386,10 +386,7 @@ impl PeekClient {
         peek_stash_read_batch_size_bytes: usize,
         peek_stash_read_memory_budget_bytes: usize,
         conn_id: mz_adapter_types::connection::ConnectionId,
-        // NOTE: Unused in the prototype. The coordinator used this for DROP
-        // CLUSTER teardown of registered peeks, which the shared registry does
-        // not yet implement.
-        _depends_on: std::collections::BTreeSet<mz_repr::GlobalId>,
+        depends_on: std::collections::BTreeSet<mz_repr::GlobalId>,
         watch_set: Option<WatchSetCreation>,
         logging: &mut ExecutionLogging,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
@@ -524,6 +521,7 @@ impl PeekClient {
             PendingPeekEntry {
                 conn_id: conn_id.clone(),
                 cluster_id: compute_instance,
+                depends_on,
             },
         );
 
