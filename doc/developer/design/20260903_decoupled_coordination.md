@@ -180,3 +180,18 @@ runtime validation remains in [PR CI](https://github.com/MaterializeInc/material
 The no-sequencer same-batch runtime case remains uncovered until a production
 catalog subscriber exists. External catalog writers fence the adapter today,
 and the existing read-only catalog harness does not apply controller effects.
+
+### 2026-09-03: MV storage registration from committed implications
+
+MV additions register storage before dependent sinks/indexes, then initialize
+read policies through the deferred batch. Runtime and bootstrap share descriptor
+construction, including replacement ownership and the initial storage frontier.
+Compute installation remains sequencer-side. No boundary decision changed.
+
+Local adapter compilation and Rust/Python formatting passed. Full formatting and
+lint are blocked by missing tools and a Python-doctest OpenSSL dependency build.
+Independent review found no issue. This slice's [PR CI](https://github.com/MaterializeInc/materialize/pull/38696/checks)
+is pending. Prior regular [CI build 133879](https://buildkite.com/materialize/test/builds/133879)
+passed. Next useful step: catalog-driven MV compute planning and installation,
+preserving refresh timestamp selection and input protection. Same-batch runtime
+coverage still awaits a production subscriber.

@@ -476,7 +476,16 @@ impl Coordinator {
                     dropped_item_names.insert(metric_sink.global_id, full_name);
                 }
                 CatalogImplication::MaterializedView(CatalogImplicationKind::Added(mv)) => {
-                    tracing::debug!(?mv, "not handling AddMaterializedView in here yet");
+                    source_collections_to_create
+                        .extend(self.materialized_view_storage_collections(&mv));
+                    storage_policies_to_initialize
+                        .entry(
+                            mv.custom_logical_compaction_window
+                                .unwrap_or(CompactionWindow::Default),
+                        )
+                        .or_default()
+                        .extend(mv.global_ids());
+                    // TODO: Derive compute installation from the committed MV as well.
                 }
                 CatalogImplication::MaterializedView(CatalogImplicationKind::Altered {
                     prev: prev_mv,
@@ -1310,6 +1319,28 @@ impl Coordinator {
         }
 
         Ok(())
+    }
+
+    /// Describe an MV's storage collections from committed catalog state.
+    pub(super) fn materialized_view_storage_collections(
+        &self,
+        mv: &MaterializedView,
+    ) -> Vec<(GlobalId, CollectionDescription)> {
+        // The oldest collection owns the shard. Applied replacements point to
+        // their predecessor, and pending replacements to their target's latest
+        // collection. NOTE: Versioned tables chain in the opposite direction.
+        let mut primary = mv
+            .replacement_target
+            .map(|target_id| self.catalog().get_entry(&target_id).latest_global_id());
+        mv.collection_descs()
+            .map(|(gid, _version, desc)| {
+                let mut collection_desc =
+                    CollectionDescription::for_other(desc, mv.initial_as_of.clone());
+                collection_desc.primary = primary;
+                primary = Some(gid);
+                (gid, collection_desc)
+            })
+            .collect()
     }
 
     #[instrument(level = "debug")]

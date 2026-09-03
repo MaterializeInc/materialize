@@ -10,8 +10,6 @@
 use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
 use maplit::btreemap;
-use maplit::btreeset;
-use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
 use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::collections::CollectionExt;
@@ -29,7 +27,6 @@ use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_storage_client::controller::CollectionDescription;
 use std::collections::BTreeMap;
 use timely::progress::Antichain;
 use tracing::Span;
@@ -50,7 +47,6 @@ use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
-use crate::util::ResultExt;
 use crate::{AdapterNotice, CollectionIdBundle, ExecuteContext, TimestampProvider, catalog};
 
 impl Staged for CreateMaterializedViewStage {
@@ -718,7 +714,6 @@ impl Coordinator {
         // here, so that if the catalog transaction below fails the user
         // isn't shown confusing notices about an item that wasn't actually
         // created.
-        let output_desc = global_lir_plan.desc().clone();
         let (mut df_desc, raw_df_meta) = global_lir_plan.unapply();
         let df_meta = {
             let system_catalog = self.catalog().for_system_session();
@@ -772,39 +767,6 @@ impl Coordinator {
                     df_desc.set_initial_as_of(initial_as_of);
                     df_desc.until = until;
 
-                    let storage_metadata = coord.catalog.state().storage_metadata();
-
-                    let mut collection_desc =
-                        CollectionDescription::for_other(output_desc, Some(storage_as_of));
-                    let mut allow_writes = true;
-
-                    // If this MV is intended to replace another one, we need to start it in
-                    // read-only mode, targeting the shard of the replacement target.
-                    if let Some(target_id) = replacement_target {
-                        let target_gid = coord.catalog.get_entry(&target_id).latest_global_id();
-                        collection_desc.primary = Some(target_gid);
-                        allow_writes = false;
-                    }
-
-                    // Announce the creation of the materialized view source.
-                    coord
-                        .controller
-                        .storage
-                        .create_collections(
-                            storage_metadata,
-                            None,
-                            vec![(global_id, collection_desc)],
-                        )
-                        .await
-                        .unwrap_or_terminate("cannot fail to append");
-
-                    coord
-                        .initialize_storage_read_policies(
-                            btreeset![item_id],
-                            compaction_window.unwrap_or(CompactionWindow::Default),
-                        )
-                        .await;
-
                     coord
                         .ship_dataflow_and_notice_builtin_table_updates(
                             df_desc,
@@ -814,7 +776,7 @@ impl Coordinator {
                         )
                         .await;
 
-                    if allow_writes {
+                    if replacement_target.is_none() {
                         coord.allow_writes(cluster_id, global_id);
                     }
                 })
