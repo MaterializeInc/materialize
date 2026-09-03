@@ -83,14 +83,14 @@ pub(super) struct WalkPhases {
     /// Whether the error walk ended without finding an error. The two numbers above describe a
     /// finished phase only when it did.
     pub error_trace_clean: bool,
-    /// Worker time the ok walk spent, including the time thinning spent sorting.
+    /// Worker time the ok walk spent, including the time thinning spent.
     pub row_iteration: Duration,
     /// Cursor positions the ok walk evaluated.
     pub rows_processed: usize,
-    /// Worker time thinning spent sorting.
-    pub result_sort: Duration,
-    /// Rows handed to a sort, summed over the times thinning ran.
-    pub rows_sorted: usize,
+    /// Worker time thinning spent.
+    pub thinning: Duration,
+    /// Rows handed to thinning, summed over the times it ran.
+    pub rows_thinned: usize,
 }
 
 /// How a scan's rows may leave for the peek stash.
@@ -187,12 +187,12 @@ where
     /// Worker time spent opening the ok cursor.
     pub(super) cursor_setup_time: Duration,
     /// Worker time the ok walk spent, summed over the slices it was cut into. Includes the time
-    /// thinning spent sorting.
+    /// thinning spent.
     pub(super) row_iteration_time: Duration,
-    /// Worker time thinning spent sorting, summed over the times it ran.
-    pub(super) result_sort_time: Duration,
-    /// Rows handed to a sort, summed over the times thinning ran.
-    pub(super) rows_sorted: usize,
+    /// Worker time thinning spent, summed over the times it ran.
+    pub(super) thinning_time: Duration,
+    /// Rows handed to thinning, summed over the times it ran.
+    pub(super) rows_thinned: usize,
 }
 
 impl<Tr> PeekScan<Tr>
@@ -255,8 +255,8 @@ where
             error_scan_time,
             cursor_setup_time,
             row_iteration_time: Duration::ZERO,
-            result_sort_time: Duration::ZERO,
-            rows_sorted: 0,
+            thinning_time: Duration::ZERO,
+            rows_thinned: 0,
         }
     }
 
@@ -327,8 +327,8 @@ where
             error_trace_clean: self.error_trace_clean(),
             row_iteration: self.row_iteration_time,
             rows_processed: self.rows_processed(),
-            result_sort: self.result_sort_time,
-            rows_sorted: self.rows_sorted,
+            thinning: self.thinning_time,
+            rows_thinned: self.rows_thinned,
         }
     }
 
@@ -523,17 +523,28 @@ where
             return None;
         }
 
-        // We can sort `results` and then truncate to `max_results`. This has an effect similar to
-        // a priority queue, without its interactive dequeueing properties.
+        // Partitioned rather than sorted, because only which rows fall outside the first
+        // `max_results` matters here. The order among those that stay is established once, when
+        // the answer is collected.
+        //
+        // Partitioning is unstable, and entries carry counts, so which entry survives a tie
+        // across the cut changes the retained multiset. The client cannot tell: tied rows are
+        // byte-identical, since the tiebreaker compares the whole encoded row, and the
+        // `max_results` entries kept expand to at least `max_results` rows, of which the finishing
+        // reads `offset..offset + limit`.
+        //
+        // NOTE: a peek result must not be consumed without applying the finishing's limit.
+        //
         // TODO: Had we left these as `Vec<Datum>` we would avoid the unpacking; we should consider
         // doing that, although it will require a re-pivot of the code to branch on this inner test
         // (as we prefer not to maintain `Vec<Datum>` in the other case).
-        let sort_start = Instant::now();
-        self.rows_sorted = self.rows_sorted.saturating_add(self.results.len());
-        self.results.sort_by(|left, right| {
-            comparator.compare_rows(&left.0, &right.0, || left.0.cmp(&right.0))
-        });
-        self.result_sort_time += sort_start.elapsed();
+        let thinning_start = Instant::now();
+        self.rows_thinned = self.rows_thinned.saturating_add(self.results.len());
+        self.results
+            .select_nth_unstable_by(max_results, |left, right| {
+                comparator.compare_rows(&left.0, &right.0, || left.0.cmp(&right.0))
+            });
+        self.thinning_time += thinning_start.elapsed();
 
         let dropped = self.results.drain(max_results..);
         let (dropped_size, dropped_rows) = dropped.into_iter().fold(

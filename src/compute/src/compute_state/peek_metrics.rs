@@ -128,9 +128,9 @@ impl PeekWalkMetrics {
         self.row_iteration_rows
             .observe(f64::cast_lossy(phases.rows_processed));
         self.result_sort_seconds
-            .observe(phases.result_sort.as_secs_f64());
+            .observe(phases.thinning.as_secs_f64());
         self.result_sort_rows
-            .observe(f64::cast_lossy(phases.rows_sorted));
+            .observe(f64::cast_lossy(phases.rows_thinned));
     }
 
     /// Reports the time [`rows_response`](super::peek_scan::rows_response) took.

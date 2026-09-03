@@ -64,6 +64,21 @@ fn expected(values: impl IntoIterator<Item = u64>) -> RowBatch {
         .collect()
 }
 
+/// Asserts that a finished scan kept `values`, as a multiset.
+///
+/// Thinning partitions rather than sorts, so it does not order what it keeps. The answer's order
+/// is established when the rows are collected.
+fn assert_kept(outcome: ScanOutcome, values: impl IntoIterator<Item = u64>) {
+    let ScanOutcome::Finished(Ok(kept)) = outcome else {
+        panic!("the scan did not finish with rows: {outcome:?}");
+    };
+    let mut kept = kept;
+    let mut want = expected(values);
+    kept.sort();
+    want.sort();
+    assert_eq!(kept, want);
+}
+
 /// A walk over an ok trace holding `keys`, each once.
 fn ok_iterator(keys: &[Row]) -> PeekResultIterator<TestTrace> {
     ok_iterator_with_copies(keys, Diff::ONE)
@@ -132,8 +147,8 @@ fn scan(error_phase: ErrorPhase, keys: &[Row]) -> PeekScan<TestTrace> {
         error_scan_time: Duration::ZERO,
         cursor_setup_time: Duration::ZERO,
         row_iteration_time: Duration::ZERO,
-        result_sort_time: Duration::ZERO,
-        rows_sorted: 0,
+        thinning_time: Duration::ZERO,
+        rows_thinned: 0,
     }
 }
 
@@ -457,10 +472,7 @@ fn ordered_thinning_keeps_the_rows_the_ordering_ranks_first() {
     }]));
 
     let mut fuel = usize::MAX;
-    assert_eq!(
-        subject.step(None, &mut fuel),
-        ScanOutcome::Finished(Ok(expected([9, 8])))
-    );
+    assert_kept(subject.step(None, &mut fuel), [9, 8]);
     assert_eq!(
         subject.rows_processed(),
         keys.len(),
@@ -882,10 +894,7 @@ fn a_scan_thins_towards_the_rows_the_peeks_finishing_needs() {
     let mut subject = open(&mut bundle, &peek, u64::MAX, false, usize::MAX);
 
     let mut fuel = usize::MAX;
-    assert_eq!(
-        subject.step(None, &mut fuel),
-        ScanOutcome::Finished(Ok(expected([9, 8]))),
-    );
+    assert_kept(subject.step(None, &mut fuel), [9, 8]);
 }
 
 /// `entry_byte_len` is the per-entry half of `RowCollection::byte_len`, which is what the

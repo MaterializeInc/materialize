@@ -1061,31 +1061,31 @@ metrics:
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_result_sort_rows_bucket
-  help: Number of intermediate result rows sorted during peek collection, summed across sort operations.
+  help: Number of intermediate result rows handed to thinning during peek collection, summed across the times it ran.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_result_sort_rows_count
-  help: Number of intermediate result rows sorted during peek collection, summed across sort operations.
+  help: Number of intermediate result rows handed to thinning during peek collection, summed across the times it ran.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_result_sort_rows_sum
-  help: Number of intermediate result rows sorted during peek collection, summed across sort operations.
+  help: Number of intermediate result rows handed to thinning during peek collection, summed across the times it ran.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_result_sort_seconds_bucket
-  help: Time sorting intermediate results during peek collection.
+  help: Time thinning intermediate results down to the rows a peek's finishing needs.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_result_sort_seconds_count
-  help: Time sorting intermediate results during peek collection.
+  help: Time thinning intermediate results down to the rows a peek's finishing needs.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_result_sort_seconds_sum
-  help: Time sorting intermediate results during peek collection.
+  help: Time thinning intermediate results down to the rows a peek's finishing needs.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_collection_seconds_bucket

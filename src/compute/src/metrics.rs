@@ -245,12 +245,12 @@ impl ComputeMetrics {
             ), role)),
             index_peek_result_sort_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_result_sort_seconds",
-                help: "Time sorting intermediate results during peek collection.",
+                help: "Time thinning intermediate results down to the rows a peek's finishing needs.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_result_sort_rows: registry.register(with_role(metric!(
                 name: "mz_index_peek_result_sort_rows",
-                help: "Number of intermediate result rows sorted during peek collection, summed across sort operations.",
+                help: "Number of intermediate result rows handed to thinning during peek collection, summed across the times it ran.",
                 buckets: index_peek_row_buckets,
             ), role)),
             index_peek_frontier_check_seconds: registry.register(with_role(metric!(
