@@ -389,9 +389,10 @@ pub enum ApplyOutcome {
     /// batch is rejected; the controller recomputes next tick.
     Rejected,
     /// The batch was rejected because it exceeded the environment's resource
-    /// budget. No requested cluster mutation was transacted. Unlike a guard
-    /// rejection, retrying the same batch cannot succeed on its own: the
-    /// controller decides what to shed to make room.
+    /// budget. No requested cluster mutation was transacted. The controller
+    /// sheds an active graceful reconfiguration when possible. Otherwise it
+    /// retries on later ticks, when desired state or available capacity may
+    /// have changed.
     ResourceExhausted,
 }
 
