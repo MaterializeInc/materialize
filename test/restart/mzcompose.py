@@ -1522,7 +1522,7 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
             time.sleep(0.5)
         assert replica_before, "replica hydration history timed out before restart"
 
-        # Discover an MV whose persist-sink worker is off worker 0 instead of
+        # Prefer an MV whose persist-sink worker is off worker 0 instead of
         # predicting it from user-ID allocation and hashing. Enough input data
         # separates compute completion from the active worker's durable write,
         # but a single MV is not a reliable trial: its sink can land on worker
@@ -1531,6 +1531,15 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
         # MV, so once a trial is fully hydrated and disqualified, create
         # another MV: a fresh id rolls the sink worker and a fresh snapshot
         # write rolls the timing.
+        #
+        # Which worker holds the maximum is a dice roll, so it must not decide
+        # whether the test passes. Every fully hydrated trial is checked
+        # against the all-worker maximum below, and that is the property under
+        # test whichever worker holds the maximum. A run where no trial
+        # separates the workers still checks it, it only loses the ability to
+        # tell a worker-0-only implementation apart, and the query shape that
+        # separation guards against is pinned deterministically by
+        # `collect_requires_every_worker`.
         deadline = time.time() + 240
         mv_names = ["hydration_history_mv_a", "hydration_history_mv_b"]
         max_mvs = 8
@@ -1579,29 +1588,32 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
             finally:
                 cursor.execute("RESET cluster_replica")
                 cursor.execute("RESET cluster")
-        assert candidates, (
-            "no MV produced an observable off-worker-0 persist-sink finish, "
-            f"tried {len(mv_names)}: {worker_rows}"
+        assert worker_rows, (
+            "no trial materialized view hydrated on every worker, tried "
+            f"{len(mv_names)}"
         )
-        mv_name, latest_worker_finish, worker_zero_finish = candidates[0]
 
-        # The selected MV's history episode must use the all-worker maximum,
-        # not worker 0's earlier compute-only finish.
-        deadline = time.time() + 120
-        mv_episodes = []
-        while time.time() < deadline:
-            mv_episodes = episodes(mv_name)
-            if mv_episodes:
-                break
-            time.sleep(0.5)
-        assert (
-            len(mv_episodes) == 1
-        ), f"expected one materialized view episode for {mv_name}, got {mv_episodes}"
-        assert mv_episodes[0][2] == latest_worker_finish, (
-            f"durable finish {mv_episodes[0][2]} did not match "
-            f"latest worker finish {latest_worker_finish}. "
-            f"worker 0 finished at {worker_zero_finish}"
-        )
+        # Every trial's history episode must use the all-worker maximum, not
+        # worker 0's possibly earlier compute-only finish. Separating trials go
+        # first so that a regression reports the trial that proves it.
+        trials = candidates + [row for row in worker_rows if row not in candidates]
+        for mv_name, latest_worker_finish, worker_zero_finish in trials:
+            deadline = time.time() + 120
+            mv_episodes = []
+            while time.time() < deadline:
+                mv_episodes = episodes(mv_name)
+                if mv_episodes:
+                    break
+                time.sleep(0.5)
+            assert len(mv_episodes) == 1, (
+                f"expected one materialized view episode for {mv_name}, "
+                f"got {mv_episodes}"
+            )
+            assert mv_episodes[0][2] == latest_worker_finish, (
+                f"durable finish {mv_episodes[0][2]} for {mv_name} did not "
+                f"match latest worker finish {latest_worker_finish}. "
+                f"worker 0 finished at {worker_zero_finish}"
+            )
 
         # Re-read the pre-restart episodes immediately before the kill. The
         # waits above leave minutes in which a further legitimate episode can
