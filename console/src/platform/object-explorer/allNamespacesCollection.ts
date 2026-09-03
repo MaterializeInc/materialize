@@ -9,7 +9,7 @@
 
 import { useLiveQuery } from "@tanstack/react-db";
 import { useAtomValue } from "jotai";
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 
 import { buildSubscribeQuery } from "~/api/materialize/buildSubscribeQuery";
 import {
@@ -19,7 +19,7 @@ import {
 import { createSubscribeCollection } from "~/api/materialize/subscribeCollection";
 import { SubscribeRow } from "~/api/materialize/SubscribeManager";
 import { useGlobalSubscribeCollection } from "~/api/materialize/useSubscribe";
-import { useSyncEngineCacheScope } from "~/store/syncEngineCache";
+import { syncEngineCacheScopeLoadableAtom } from "~/store/syncEngineCache";
 
 /** Subset of AllNamespaceItem stored per row, matching the existing atom's select. */
 export type NamespaceItem = Pick<
@@ -39,29 +39,23 @@ export const allNamespacesCollection = createSubscribeCollection<NamespaceItem>(
   },
 );
 
+const ALL_NAMESPACES_SUBSCRIBE_OPTIONS = {
+  target: allNamespacesCollection,
+  scopeAtom: syncEngineCacheScopeLoadableAtom,
+  subscribe: buildSubscribeQuery(buildAllNamespacesQuery(), {
+    upsertKey: ["schemaId", "databaseId"],
+  }),
+  select: (row: SubscribeRow<AllNamespaceItem>): NamespaceItem => ({
+    schemaId: row.data.schemaId,
+    schemaName: row.data.schemaName,
+    databaseId: row.data.databaseId,
+    databaseName: row.data.databaseName,
+  }),
+  upsertKey: (row: SubscribeRow<AllNamespaceItem>) => namespaceKey(row.data),
+};
+
 export function useSubscribeToAllNamespacesCollection() {
-  const scope = useSyncEngineCacheScope();
-  useEffect(() => {
-    if (scope) allNamespacesCollection.hydrate(scope);
-  }, [scope]);
-
-  const subscribe = useMemo(() => {
-    return buildSubscribeQuery(buildAllNamespacesQuery(), {
-      upsertKey: ["schemaId", "databaseId"],
-    });
-  }, []);
-
-  return useGlobalSubscribeCollection<AllNamespaceItem, NamespaceItem>({
-    target: allNamespacesCollection,
-    subscribe,
-    select: (row: SubscribeRow<AllNamespaceItem>) => ({
-      schemaId: row.data.schemaId,
-      schemaName: row.data.schemaName,
-      databaseId: row.data.databaseId,
-      databaseName: row.data.databaseName,
-    }),
-    upsertKey: (row: SubscribeRow<AllNamespaceItem>) => namespaceKey(row.data),
-  });
+  useGlobalSubscribeCollection(ALL_NAMESPACES_SUBSCRIBE_OPTIONS);
 }
 
 /** Returns the namespace items for the object explorer tree, from the collection. */
