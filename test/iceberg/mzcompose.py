@@ -204,6 +204,26 @@ def workflow_finite_source(c: Composition) -> None:
     )
 
 
+def workflow_alter_table_add_column(c: Composition) -> None:
+    """A sink pointed at an Iceberg table whose schema is narrower than the
+    sink's input relation must not panic the storage worker. The writer builds
+    its Arrow column builders from the Iceberg table's schema, so a row with
+    more datums than that schema has columns reaches `zip_eq` in
+    `ArrowBuilder::add_row`."""
+    key = _setup(c)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "alter-table-add-column.td",
+    )
+
+    logs = c.invoke("logs", "materialized", capture=True)
+    assert (
+        "zip_eq" not in logs.stdout
+    ), "storage worker panicked in ArrowBuilder::add_row"
+
+
 def _polaris_get(table_url: str, access_token: str) -> dict:
     """GET table metadata from Polaris REST API (always returns latest)."""
     req = urllib.request.Request(
