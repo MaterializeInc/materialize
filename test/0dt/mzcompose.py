@@ -14,7 +14,7 @@ version, no upgrade).
 
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from textwrap import dedent
 from threading import Thread
 
@@ -2250,7 +2250,7 @@ def workflow_upsert_sources(c: Composition) -> None:
         > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
             """))
 
-    end_time = datetime.now() + timedelta(seconds=200)
+    end_time = datetime.now(UTC) + timedelta(seconds=200)
     mz1 = "mz_old"
     mz2 = "mz_new"
 
@@ -2270,7 +2270,7 @@ def workflow_upsert_sources(c: Composition) -> None:
             > CREATE MATERIALIZED VIEW mv{i} AS SELECT * FROM kafka_source_tbl{i}
                 """))
 
-        while datetime.now() < end_time:
+        while datetime.now(UTC) < end_time:
             try:
                 c.testdrive(dedent(f"""
                     $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka{i} repeat=10000
@@ -2288,7 +2288,7 @@ def workflow_upsert_sources(c: Composition) -> None:
         thread.start()
 
     i = 1
-    while datetime.now() < end_time:
+    while datetime.now(UTC) < end_time:
         with c.override(
             Materialized(
                 name=mz2,

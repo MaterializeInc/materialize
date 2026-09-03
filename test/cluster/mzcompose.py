@@ -20,7 +20,7 @@ import struct
 import time
 from collections.abc import Callable
 from copy import copy
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from statistics import median, quantiles
 from textwrap import dedent
 from threading import Event, Thread
@@ -3364,8 +3364,8 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
         raise AssertionError(f"since not found in explain: {explain}")
 
     def validate_since(since: int, name: str) -> None:
-        now = datetime.now()
-        dt = datetime.fromtimestamp(since / 1000.0)
+        now = datetime.now(UTC)
+        dt = datetime.fromtimestamp(since / 1000.0, UTC)
         diff = now - dt
 
         # This env was just created, so the since should be recent.
@@ -3949,7 +3949,7 @@ def workflow_test_incident_70(c: Composition) -> None:
                 {mz_view_create_statements_sql}
                 """))
 
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
         end_time = start_time + timedelta(seconds=600)
 
         def worker(c: Composition, worker_index: int) -> None:
@@ -3958,7 +3958,7 @@ def workflow_test_incident_70(c: Composition) -> None:
             print(f"Thread {worker_index} got a cursor")
 
             iteration = 1
-            while datetime.now() < end_time:
+            while datetime.now(UTC) < end_time:
                 if iteration % 20 == 0:
                     print(f"Thread {worker_index}, iteration {iteration}")
                 cursor.execute("SELECT * FROM mv_lineitem_count_1;")
@@ -5844,8 +5844,8 @@ def workflow_test_http_race_condition(
         thread.join()
 
     cleanup_seconds = 120 if ui.env_is_truthy("CI_COVERAGE_ENABLED") else 30
-    stopping_time = datetime.now() + timedelta(seconds=cleanup_seconds)
-    while datetime.now() < stopping_time:
+    stopping_time = datetime.now(UTC) + timedelta(seconds=cleanup_seconds)
+    while datetime.now(UTC) < stopping_time:
         result = c.sql_query(
             "SELECT * FROM mz_internal.mz_sessions WHERE connection_id <> pg_backend_pid()"
         )
@@ -6772,7 +6772,7 @@ def workflow_crash_on_replica_expiration_index(
             (expected_expiration_timestamp_sec - offset)
             < expiration_timestamp_sec
             < (expected_expiration_timestamp_sec + offset)
-        ), f"expiration_timestamp: expected={expected_expiration_timestamp_sec}[{datetime.fromtimestamp(expected_expiration_timestamp_sec)}], got={expiration_timestamp_sec}[{[{datetime.fromtimestamp(expiration_timestamp_sec)}]}]"
+        ), f"expiration_timestamp: expected={expected_expiration_timestamp_sec}[{datetime.fromtimestamp(expected_expiration_timestamp_sec, UTC)}], got={expiration_timestamp_sec}[{[{datetime.fromtimestamp(expiration_timestamp_sec, UTC)}]}]"
 
         expiration_remaining = metrics.get_value(
             "mz_dataflow_replica_expiration_remaining_seconds"

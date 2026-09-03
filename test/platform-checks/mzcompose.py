@@ -18,15 +18,15 @@ import os
 from enum import Enum
 
 from materialize import buildkite
-from materialize.checks.all_checks import *  # noqa: F401 F403
+from materialize.checks.all_checks import *  # noqa: F403
 from materialize.checks.checks import Check
 from materialize.checks.executors import MzcomposeExecutor, MzcomposeExecutorParallel
 from materialize.checks.features import Features
-from materialize.checks.scenarios import *  # noqa: F401 F403
+from materialize.checks.scenarios import *  # noqa: F403
 from materialize.checks.scenarios import Scenario, SystemVarChange
-from materialize.checks.scenarios_backup_restore import *  # noqa: F401 F403
-from materialize.checks.scenarios_upgrade import *  # noqa: F401 F403
-from materialize.checks.scenarios_zero_downtime import *  # noqa: F401 F403
+from materialize.checks.scenarios_backup_restore import *  # noqa: F403
+from materialize.checks.scenarios_upgrade import *  # noqa: F403
+from materialize.checks.scenarios_zero_downtime import *  # noqa: F403
 from materialize.mzcompose.composition import (
     Composition,
     Service,

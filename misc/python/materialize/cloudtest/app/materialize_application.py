@@ -11,7 +11,7 @@ import logging
 import os
 import subprocess
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from pg8000.exceptions import InterfaceError
 
@@ -151,13 +151,13 @@ class MaterializeApplication(CloudtestApplicationBase):
         """Wait until environmentd pod is ready and can accept SQL connections"""
         wait(condition="condition=Ready", resource="pod/environmentd-0")
 
-        start = datetime.now()
+        start = datetime.now(UTC)
         while True:
             try:
                 self.environmentd.sql("SELECT 1")
                 break
             except (InterfaceError, OSError) as e:
-                if datetime.now() - start > timedelta(seconds=300):
+                if datetime.now(UTC) - start > timedelta(seconds=300):
                     raise
                 # Since we crash environmentd, we expect some errors that we
                 # swallow. pg8000 wraps most connection failures in

@@ -31,7 +31,7 @@ import traceback
 from collections import OrderedDict
 from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -669,9 +669,9 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
                     runnable = job.get("runnable_at")
                     if not runnable or job.get("started_at"):
                         continue
-                    if datetime.now(timezone.utc) - datetime.fromisoformat(
-                        runnable
-                    ) < timedelta(minutes=20):
+                    if datetime.now(UTC) - datetime.fromisoformat(runnable) < timedelta(
+                        minutes=20
+                    ):
                         continue
 
                     print(

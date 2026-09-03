@@ -22,7 +22,7 @@ import sys
 import tempfile
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
 import psutil
@@ -430,11 +430,11 @@ def main() -> int:
         # generally unexpected and we don't want to inadvertently hide them
         # during local development.)
         while True:
-            last_start_time = datetime.now()
+            last_start_time = datetime.now(UTC)
             proc = subprocess.run(command, env=env)
             if proc.returncode == 166:
                 wait = max(
-                    timedelta(seconds=5) - (datetime.now() - last_start_time),
+                    timedelta(seconds=5) - (datetime.now(UTC) - last_start_time),
                     timedelta(seconds=0),
                 )
                 print(f"environmentd halted; will restart in {wait.total_seconds()}s")
