@@ -1613,6 +1613,14 @@ impl Catalog {
         self.update_expression_cache(local_exprs, global_exprs, Default::default())
     }
 
+    /// Returns a best-effort cached plan, whose compatibility the caller must validate.
+    pub(crate) async fn cached_global_expressions(
+        &self,
+        id: GlobalId,
+    ) -> Option<GlobalExpressions> {
+        self.expr_cache_handle.as_ref()?.get_global(id).await
+    }
+
     pub(crate) fn update_expression_cache<'a, 'b>(
         &'a self,
         new_local_expressions: Vec<(GlobalId, LocalExpressions)>,

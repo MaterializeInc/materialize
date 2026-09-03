@@ -209,31 +209,6 @@ impl ReadHolds {
 }
 
 impl crate::coord::Coordinator {
-    /// Initialize the storage read policies.
-    ///
-    /// This should be called only after a storage collection is created, and
-    /// ideally very soon afterwards. The collection is otherwise initialized
-    /// with a read policy that allows no compaction.
-    pub(crate) async fn initialize_storage_read_policies(
-        &mut self,
-        ids: BTreeSet<CatalogItemId>,
-        compaction_window: CompactionWindow,
-    ) {
-        let gids = ids
-            .into_iter()
-            .map(|item_id| self.catalog().get_entry(&item_id).global_ids())
-            .flatten()
-            .collect();
-        self.initialize_read_policies(
-            &CollectionIdBundle {
-                storage_ids: gids,
-                compute_ids: BTreeMap::new(),
-            },
-            compaction_window,
-        )
-        .await;
-    }
-
     /// Initialize the compute read policies.
     ///
     /// This should be called only after a compute collection is created, and

@@ -128,3 +128,104 @@ Query-local dataflows remain on the fast protocol. Adapter loss must not harm
 other clients or maintained dataflows, but transparent failover is not required.
 Completing relevant catalog implication paths is within scope. Implementation
 has not started and runtime validation has not been performed.
+
+### 2026-09-03: Sink creation from committed implications
+
+Sink additions now install exports through catalog implications. Independent
+review found no blocking issue. [CI build 133862](https://buildkite.com/materialize/test/builds/133862)
+passed both Clippy jobs and formatting before a documentation push superseded it.
+Latest CI and runtime validation remain pending. Local builds were blocked by
+missing artifacts and tools. Aljoscha confirmed CI as the default test loop.
+
+Controllers still live in the adapter. Direct committed-update tests and
+same-batch MV/sink creation remain gaps. Next proposed slice: reuse index plan
+reconstruction from bootstrap, preserving precommit optimization as a cache.
+Index parsing leaves plans absent and the expression cache has no runtime read
+API. No new boundary decision was made.
+
+### 2026-09-03: Reusable index reconstruction
+
+Extracted bootstrap's uncached index planning and notice rendering without
+changing cache policy, ordering, or installation. Independent review found no
+issue. Local adapter `cargo check` and Rust formatting passed. Full formatting
+and lint failed on missing tools and a Python-doctest dependency build. Runtime
+validation and this commit's [PR CI](https://github.com/MaterializeInc/materialize/pull/38696/checks)
+remain pending.
+
+Next proposed slice: runtime expression-cache reads and index-add implications
+using reconstruction on cache misses. Cache validity must account for committed
+dependencies, and installation must follow same-batch prerequisites. Add direct
+committed-update coverage without sequencer plans. No boundary decision changed.
+
+### 2026-09-03: Runtime index implications, verification in progress
+
+Index additions now acquire cached or reconstructed plans and install through
+implications. Runtime cache reads are best-effort and validated against committed
+dependencies and compute availability. Review identified stale session notices
+after cache rejection, addressed by filtering dropped dependencies.
+
+Adapter and cache-test compilation passed. Runtime tests remain pending. The
+extraction's Clippy fix passed both [CI Clippy jobs](https://buildkite.com/materialize/test/builds/133870).
+Full validation of this follow-up is pending. Proposed test-only adapter catalog
+transaction request awaits Aljoscha's approval, because no existing harness can
+exercise cluster/table/index creation in one committed batch. Same-batch MV/index
+creation still depends on moving MV storage creation into implications.
+
+### 2026-09-03: System-boundary verification
+
+Agreed with Aljoscha to proceed with system-level coverage, without a test-only
+coordinator command. Added cache-disabled SQL creation and restart coverage for
+index use, EXPLAIN, notices, and drop cleanup. Python formatting and Ruff passed,
+runtime validation remains in [PR CI](https://github.com/MaterializeInc/materialize/pull/38696/checks).
+The no-sequencer same-batch runtime case remains uncovered until a production
+catalog subscriber exists. External catalog writers fence the adapter today,
+and the existing read-only catalog harness does not apply controller effects.
+
+### 2026-09-03: MV storage registration from committed implications
+
+MV additions register storage before dependent sinks/indexes, then initialize
+read policies through the deferred batch. Runtime and bootstrap share descriptor
+construction, including replacement ownership and the initial storage frontier.
+Compute installation remains sequencer-side. No boundary decision changed.
+
+Local adapter compilation and Rust/Python formatting passed. Full formatting and
+lint are blocked by missing tools and a Python-doctest OpenSSL dependency build.
+Independent review found no issue. This slice's [PR CI](https://github.com/MaterializeInc/materialize/pull/38696/checks)
+is pending. Prior regular [CI build 133879](https://buildkite.com/materialize/test/builds/133879)
+passed. Next useful step: catalog-driven MV compute planning and installation,
+preserving refresh timestamp selection and input protection. Same-batch runtime
+coverage still awaits a production subscriber.
+
+### 2026-09-03: Reusable MV reconstruction
+
+Extracted bootstrap MV reconstruction without changing cache policy or timestamp
+selection. Extended cache-disabled restart coverage to MV results, EXPLAIN, and
+continued maintenance. Independent review found no issue. Adapter compilation
+and Rust/Python formatting passed.
+Full formatting and lint remain blocked by missing tools and an OpenSSL dependency
+build. Prior [CI build 133882](https://buildkite.com/materialize/test/builds/133882)
+passed. This slice's [PR CI](https://github.com/MaterializeInc/materialize/pull/38696/checks)
+and runtime coverage are pending.
+
+Next useful step: establish input protection for runtime MV reconstruction before
+moving compute installation. A cache miss can choose imports outside the creator's
+holds, and acquiring fresh holds after commit cannot recover history needed for
+the committed first refresh. No protection mechanism or boundary change was agreed.
+
+### 2026-09-03: Pending first-refresh recovery coverage
+
+Added cache-disabled restart coverage for an unexecuted first refresh after its
+input changes. Python formatting and Ruff passed. Full formatting/lint remain
+blocked by missing tools and an OpenSSL dependency build. Prior
+[CI build 133887](https://buildkite.com/materialize/test/builds/133887) passed.
+This slice's [PR CI](https://github.com/MaterializeInc/materialize/pull/38696/checks)
+and runtime verification are pending.
+
+Code inspection ruled out merely broadening creator holds: timestamp selection
+joins every hold, changing historical MV readability, while
+[`sufficient_collections`](../../../src/adapter/src/coord/indexes.rs) stops at
+available indexes and does not cover sibling indexes exposed by same-batch drops.
+Compute holds do protect actual transitive dependencies. Production MV installation
+remains paused. Next proposed step: agree whether to establish lifecycle-owned
+protection now or build a temporary protected-plan reconstruction bridge. No new
+mechanism or boundary change was agreed.
