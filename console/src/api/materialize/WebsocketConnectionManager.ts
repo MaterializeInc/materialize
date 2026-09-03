@@ -77,6 +77,10 @@ export class WebsocketConnectionManager {
 
   private isHealthy = false;
   private currentHttpAddress?: string;
+  /** Address used for the most recent connection attempt. */
+  private attemptedHttpAddress?: string;
+  /** Region the most recent connection attempt was made for. */
+  private attemptedRegionId?: string | null;
   private retryAttempt = 0;
   private hasEverConnected = false;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -158,11 +162,20 @@ export class WebsocketConnectionManager {
     }
 
     if (nowHealthy) {
-      if (!this.target.isConnected()) {
+      // A connected socket may still stream from a previous region's address
+      // after a region switch; reconnect at the current one.
+      if (
+        !this.target.isConnected() ||
+        this.attemptedHttpAddress !== this.currentHttpAddress
+      ) {
         this.resumeConnection();
       }
     } else {
-      this.pauseConnection();
+      // Only tear down a socket pointing at a region the user has left; a
+      // health blip in the current region leaves a working socket alone
+      // (consumers like the Shell would get no close callback).
+      const regionId = this.store.get(currentRegionIdSyncAtom);
+      this.pauseConnection(regionId !== this.attemptedRegionId);
     }
   };
 
@@ -205,6 +218,14 @@ export class WebsocketConnectionManager {
     this.retryAttempt = 0;
     this.clearRetryTimer();
     this.notifyStateChange();
+    // The region may have switched while this handshake was in flight; the
+    // socket that just opened points at the old address.
+    if (
+      this.isHealthy &&
+      this.attemptedHttpAddress !== this.currentHttpAddress
+    ) {
+      this.attemptConnection();
+    }
   };
 
   /** Tear down and reopen the socket. Used on SQL request changes. */
@@ -239,6 +260,8 @@ export class WebsocketConnectionManager {
       hasEverConnected: this.hasEverConnected,
     });
     this.connectInFlight = true;
+    this.attemptedHttpAddress = this.currentHttpAddress;
+    this.attemptedRegionId = this.store.get(currentRegionIdSyncAtom);
     try {
       this.target.reconnect(this.currentHttpAddress, sessionVariables);
     } catch {
@@ -253,9 +276,15 @@ export class WebsocketConnectionManager {
     this.attemptConnection();
   }
 
-  private pauseConnection() {
+  private pauseConnection(disconnect: boolean) {
     this.clearRetryTimer();
     this.retryAttempt = 0;
+    if (disconnect) {
+      // Tear down so the resume path reconnects after an unhealthy round trip;
+      // clear connectInFlight since this socket gets no open/close callback.
+      this.connectInFlight = false;
+      this.target.disconnect();
+    }
     this.notifyStateChange();
   }
 

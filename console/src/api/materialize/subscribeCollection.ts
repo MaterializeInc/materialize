@@ -72,6 +72,14 @@ export interface SubscribeCollection<T extends object> {
    * tenant's catalog into another's session after an org or region switch. Only
    * the first call per scope seeds; later calls for the same scope no-op. */
   hydrate: (scope: string) => void;
+  /** Drop all rows and pending persistence and return to the loading state,
+   * for when the held rows belong to another region's catalog. A later
+   * hydrate may still seed the new scope from its cache. */
+  reset: () => void;
+  /** Stop persisting until a scope resolves again. Scope resolution failing
+   * must fail closed: writes aimed at a previous scope's key would store one
+   * tenant's rows under another's cache. */
+  suspendPersistence: () => void;
 }
 
 /**
@@ -213,14 +221,15 @@ export function createSubscribeCollection<T extends object>(options: {
   };
 
   const applySnapshot = (state: SubscribeState<T>) => {
-    // An empty pre-snapshot carries no information: ignore it entirely, so it
-    // neither clears cache-seeded state nor counts as live data. Marking it
-    // live would block a later hydrate (the scope resolves asynchronously, so
-    // hydrate always runs after the first empty push) and leave the cache
-    // permanently unread.
+    // An empty pre-snapshot carries no data: don't clear cache-seeded state or
+    // count it as live (that would block the later, async-scoped hydrate). It
+    // does clear a stale error so a reconnect falls back to loading.
     const isEmptyPreload =
       !state.snapshotComplete && state.data.length === 0 && !state.error;
-    if (isEmptyPreload) return;
+    if (isEmptyPreload) {
+      writeStatus({ error: undefined, snapshotComplete: lastSnapshotComplete });
+      return;
+    }
 
     liveSnapshotApplied = true;
     desired = new Map(state.data.map((row) => [getKey(row), row]));
@@ -254,9 +263,21 @@ export function createSubscribeCollection<T extends object>(options: {
 
   const hydrate = (scope: string) => {
     if (!persistName || hydratedScope === scope) return;
+    const scopeChanged = hydratedScope !== undefined;
     hydratedScope = scope;
     persistKey = syncEngineCacheKey(persistName, scope);
     pruneOtherScopes(persistKey);
+    if (scopeChanged) {
+      // The rows in memory belong to the previous scope: drop them and the
+      // pending persist (its timer reads `desired` at fire time).
+      if (persistTimer) {
+        clearTimeout(persistTimer);
+        persistTimer = undefined;
+      }
+      desired = new Map();
+      liveSnapshotApplied = false;
+      lastSnapshotComplete = false;
+    }
     if (liveSnapshotApplied) {
       // Live data already arrived; don't overwrite it with the cache, but do
       // persist it now that the scoped key is known.
@@ -264,14 +285,50 @@ export function createSubscribeCollection<T extends object>(options: {
       return;
     }
     const cached = readPersistedRows<T>(persistKey);
-    if (!cached.length) return;
-    desired = new Map(cached.map((row) => [getKey(row), row]));
-    // A cached full snapshot counts as complete for the loading gate; the live
-    // snapshot refreshes it once it arrives.
-    lastSnapshotComplete = true;
+    if (cached.length) {
+      desired = new Map(cached.map((row) => [getKey(row), row]));
+      // A cached full snapshot counts as complete for the loading gate; the
+      // live snapshot refreshes it once it arrives.
+      lastSnapshotComplete = true;
+    } else if (!scopeChanged) {
+      return;
+    }
+    // On a scope change this also flushes the emptied set, so the collection
+    // stops serving the previous scope's rows while the new snapshot loads.
     materialize();
-    writeStatus({ error: undefined, snapshotComplete: true });
+    writeStatus({ error: undefined, snapshotComplete: lastSnapshotComplete });
   };
 
-  return { collection, statusAtom, applySnapshot, hydrate };
+  const clearPendingPersist = () => {
+    if (persistTimer) {
+      clearTimeout(persistTimer);
+      persistTimer = undefined;
+    }
+  };
+
+  const reset = () => {
+    clearPendingPersist();
+    desired = new Map();
+    lastSnapshotComplete = false;
+    liveSnapshotApplied = false;
+    materialize();
+    writeStatus({ error: undefined, snapshotComplete: false });
+  };
+
+  const suspendPersistence = () => {
+    clearPendingPersist();
+    persistKey = undefined;
+    // Allow a later successful resolution to hydrate again, even for the
+    // scope whose resolution just failed.
+    hydratedScope = undefined;
+  };
+
+  return {
+    collection,
+    statusAtom,
+    applySnapshot,
+    hydrate,
+    reset,
+    suspendPersistence,
+  };
 }

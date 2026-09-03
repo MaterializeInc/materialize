@@ -8,13 +8,14 @@
 // by the Apache License, Version 2.0.
 
 import { useLiveQuery } from "@tanstack/react-db";
-import { useAtomValue } from "jotai";
+import { useAtomValue, useStore } from "jotai";
 import React from "react";
 
 import { DatabaseObject } from "~/api/materialize/objects";
 import { createSubscribeCollection } from "~/api/materialize/subscribeCollection";
+import { createAtomFedCollectionSession } from "~/api/materialize/subscribeSession";
 import { allObjects } from "~/store/allObjects";
-import { useSyncEngineCacheScope } from "~/store/syncEngineCache";
+import { syncEngineCacheScopeLoadableAtom } from "~/store/syncEngineCache";
 
 /**
  * TanStack DB-backed view of the `allObjects` jotai atom, so consumers can run
@@ -35,14 +36,16 @@ export const allObjectsCollection = createSubscribeCollection<DatabaseObject>({
  * tree is mounted, and sync re-seeds from the retained row set if it restarts.
  */
 export function useSubscribeToAllObjectsCollection() {
-  const state = useAtomValue(allObjects);
-  const scope = useSyncEngineCacheScope();
+  const store = useStore();
   React.useEffect(() => {
-    if (scope) allObjectsCollection.hydrate(scope);
-  }, [scope]);
-  React.useEffect(() => {
-    allObjectsCollection.applySnapshot(state);
-  }, [state]);
+    const session = createAtomFedCollectionSession({
+      store,
+      sourceAtom: allObjects,
+      target: allObjectsCollection,
+      scopeAtom: syncEngineCacheScopeLoadableAtom,
+    });
+    return session.destroy;
+  }, [store]);
 }
 
 /**
