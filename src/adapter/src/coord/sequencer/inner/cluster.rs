@@ -756,8 +756,7 @@ impl Coordinator {
         //                          user set on the reconfiguration in progress.
         //   - no `WAIT`, nothing in flight -> the system-default timeout and the
         //                          implicit `on_timeout` default (`ROLLBACK`).
-        //   - `WAIT FOR`        -> sugar for `ON TIMEOUT COMMIT` (cut over at the
-        //                          deadline regardless of hydration).
+        //   - `WAIT FOR`        -> sugar for `ON TIMEOUT ROLLBACK`.
         //   - `WAIT UNTIL READY -> the explicit `TIMEOUT` / `ON TIMEOUT`, with
         //                          `ON TIMEOUT` defaulting to `ROLLBACK` when
         //                          omitted.
@@ -785,7 +784,7 @@ impl Coordinator {
                 ),
             },
             AlterClusterPlanStrategy::For(timeout) => {
-                (deadline_from(*timeout), OnTimeoutAction::Commit)
+                (deadline_from(*timeout), OnTimeoutAction::Rollback)
             }
             AlterClusterPlanStrategy::UntilReady {
                 timeout,

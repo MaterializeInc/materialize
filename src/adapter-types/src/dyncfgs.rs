@@ -429,11 +429,11 @@ pub const HYDRATION_HISTORY_COLLECTION_INTERVAL: Config<Duration> = Config::new(
     ParameterScope::Environment,
 );
 
-/// How long to retain completed object hydration episodes.
+/// How long to retain completed object and replica hydration episodes.
 pub const HYDRATION_HISTORY_RETENTION_PERIOD: Config<Duration> = Config::new(
     "hydration_history_retention_period",
     Duration::from_hours(30 * 24),
-    "How long to retain rows in mz_internal.mz_object_hydration_history.",
+    "How long to retain rows in mz_internal.mz_object_hydration_history and mz_internal.mz_replica_hydration_history.",
     ParameterScope::Environment,
 );
 

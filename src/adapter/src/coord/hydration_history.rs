@@ -7,12 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Durable history collection for completed compute-object hydration episodes.
+//! Durable history collection for completed object and replica hydration episodes.
 //!
 //! One sweep visits a single user replica, installs a replica-targeted
 //! subscribe that diffs that replica's live hydration timestamps against the
-//! durable history table, and appends what is missing through the timestamped
-//! OCC write path. Including the history table in the read expression is what
+//! durable history tables, and appends what is missing through the timestamped
+//! OCC write path. Including each history table in its read expression is what
 //! makes the write idempotent across concurrent `environmentd` processes: two
 //! collectors that compute the same row race for one write timestamp, and the
 //! loser observes the winner's append through its own subscribe and finds
@@ -22,10 +22,10 @@
 //! replicas revisits each one approximately every `N * interval`. Lowering the
 //! interval improves freshness at the cost of more replica dataflow installs.
 //!
-//! Collection is sampling, not an event log. An episode whose live row is
-//! retracted before its replica's turn in the sweep (a dropped object, or a
-//! replica that restarts first) is not recorded, and cannot be, because
-//! the only evidence is gone. See the design doc for why that is accepted here.
+//! Collection is sampling, not an event log. Replica history records only the
+//! latest completed episode visible in a sweep. Intermediate episodes and
+//! intervals retracted before collection leave no evidence and are not recorded.
+//! See the design doc for the resulting semantics.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -36,7 +36,9 @@ use mz_adapter_types::dyncfgs::{
     FRONTEND_READ_THEN_WRITE, HYDRATION_HISTORY_COLLECTION_INTERVAL,
     HYDRATION_HISTORY_RETENTION_PERIOD,
 };
-use mz_catalog::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_OBJECT_HYDRATION_HISTORY};
+use mz_catalog::builtin::{
+    MZ_CATALOG_SERVER_CLUSTER, MZ_OBJECT_HYDRATION_HISTORY, MZ_REPLICA_HYDRATION_HISTORY,
+};
 use mz_cluster_client::ReplicaId;
 use mz_controller::clusters::{ClusterStatus, ReplicaLocation};
 use mz_controller_types::ClusterId;
@@ -208,8 +210,12 @@ impl Coordinator {
                 // used by tests. Their bounded mutation determines readiness.
                 ReplicaLocation::Unmanaged(_) => true,
             })
-            .map(|replica| (replica.cluster_id, replica.replica_id))
-            .sorted_by_key(|(_, replica_id)| *replica_id)
+            .map(|replica| ReplicaTarget {
+                cluster_id: replica.cluster_id,
+                replica_id: replica.replica_id,
+                process_count: replica.config.location.num_processes(),
+            })
+            .sorted_by_key(|replica| replica.replica_id)
             .collect_vec();
 
         let catalog = self.owned_catalog();
@@ -223,16 +229,16 @@ impl Coordinator {
             .map(|replica| (catalog_server.id, replica.replica_id));
 
         let replica = next_replica(&replicas, self.hydration_history_replica_cursor);
-        if let Some((_, replica_id)) = replica {
-            self.hydration_history_replica_cursor = Some(replica_id);
+        if let Some(replica) = replica {
+            self.hydration_history_replica_cursor = Some(replica.replica_id);
         }
         let mut sweep = self.new_sweep(catalog, retention);
         let internal_cmd_tx = self.internal_cmd_tx.clone();
 
         let handle = task::spawn(|| "hydration_history_sweep", async move {
             let started = Instant::now();
-            if let Some((cluster_id, replica_id)) = replica {
-                sweep.collect(cluster_id, replica_id).await;
+            if let Some(replica) = replica {
+                sweep.collect(replica).await;
             }
 
             // Retention runs even when collection failed above. A replica that
@@ -279,7 +285,8 @@ impl Coordinator {
         );
         Sweep {
             client,
-            history_id: catalog.resolve_builtin_table(&MZ_OBJECT_HYDRATION_HISTORY),
+            object_history_id: catalog.resolve_builtin_table(&MZ_OBJECT_HYDRATION_HISTORY),
+            replica_history_id: catalog.resolve_builtin_table(&MZ_REPLICA_HYDRATION_HISTORY),
             catalog,
             metrics: self.metrics.clone(),
             wall_time: self.now_datetime(),
@@ -288,18 +295,23 @@ impl Coordinator {
     }
 }
 
+/// A user replica eligible for one collection step.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReplicaTarget {
+    cluster_id: ClusterId,
+    replica_id: ReplicaId,
+    process_count: usize,
+}
+
 /// Picks the replica after `cursor`, wrapping around at the end.
 ///
 /// `replicas` must be sorted ascending by replica id. Unsorted input still
 /// returns a replica but degenerates the rotation, revisiting some replicas and
 /// starving others.
-fn next_replica(
-    replicas: &[(ClusterId, ReplicaId)],
-    cursor: Option<ReplicaId>,
-) -> Option<(ClusterId, ReplicaId)> {
+fn next_replica(replicas: &[ReplicaTarget], cursor: Option<ReplicaId>) -> Option<ReplicaTarget> {
     replicas
         .iter()
-        .find(|(_, replica_id)| cursor.is_none_or(|cursor| *replica_id > cursor))
+        .find(|replica| cursor.is_none_or(|cursor| replica.replica_id > cursor))
         .or_else(|| replicas.first())
         .copied()
 }
@@ -345,7 +357,7 @@ fn next_replica(
 /// not-yet-recorded dataflow, and the OCC path rejects a result that exceeds
 /// `max_result_size` or `max_query_result_size`. At their 1 GiB defaults that
 /// ceiling only matters at millions of dataflows per replica.
-fn collect_sql(cluster_id: ClusterId, replica_id: ReplicaId, cutoff: &str) -> String {
+fn object_collection_sql(cluster_id: ClusterId, replica_id: ReplicaId, cutoff: &str) -> String {
     // Interpolating into SQL is safe here: the ids are catalog-internal and the
     // cutoff is an RFC 3339 timestamp we formatted ourselves. Nothing in this
     // query comes from a user.
@@ -394,12 +406,168 @@ fn collect_sql(cluster_id: ClusterId, replica_id: ReplicaId, cutoff: &str) -> St
     )
 }
 
+/// Returns SQL for the latest completed compute hydration episode and its
+/// process resource peaks.
+///
+/// Episodes are connected components of export hydration intervals. An export
+/// that has not hydrated keeps its component open: whether it is slow or
+/// permanently stuck is unobservable, so an open component is simply an
+/// in-progress episode, recorded when (if) it completes. It blocks only its
+/// own component: an unhydrated export installed at or before a completed
+/// component's finish would extend that component, one installed later belongs
+/// to a later episode. The latest completed component disconnected from every
+/// open one is recorded. The monotonic history guard still admits an open
+/// episode once it completes, because its start lies after every recorded
+/// finish. Cross-process clock skew can break that ordering, in which case the
+/// guard suppresses the episode rather than misrecording it.
+///
+/// Collection also waits until every configured replica process has reported
+/// resource usage. The query itself narrates how each step works.
+fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
+    let ReplicaTarget {
+        cluster_id,
+        replica_id,
+        process_count,
+    } = target;
+    // Interpolating into SQL is safe here: the ids and process count are
+    // catalog-internal and the cutoff is an RFC 3339 timestamp we formatted.
+    format!(
+        "WITH
+        -- One hydration interval per compute export: earliest install and
+        -- latest finish across its workers. Hydrated only once every worker
+        -- visible at this timestamp has finished.
+        objects AS (
+            SELECT
+                t.export_id AS object_id,
+                min(t.installed_at) AS installed_at,
+                max(t.hydrated_at) AS hydrated_at,
+                count(*) = count(t.hydrated_at) AS hydrated
+            FROM mz_introspection.mz_compute_hydration_times_per_worker AS t
+            WHERE t.export_id NOT LIKE 't%'
+            GROUP BY t.export_id
+        ),
+        -- Completed intervals in install order, each with the coverage
+        -- horizon: the latest finish among this and all earlier intervals.
+        covered AS (
+            SELECT
+                object_id,
+                installed_at,
+                hydrated_at,
+                max(hydrated_at) OVER (
+                    ORDER BY installed_at, object_id
+                    ROWS UNBOUNDED PRECEDING
+                ) AS covered_through
+            FROM objects
+            WHERE hydrated
+        ),
+        -- An interval starts a new episode when the horizon just before it
+        -- does not reach its install: for a moment, nothing was hydrating.
+        flagged AS (
+            SELECT
+                object_id,
+                installed_at,
+                hydrated_at,
+                lag(covered_through) OVER (
+                    ORDER BY installed_at, object_id
+                ) IS NULL
+                    OR lag(covered_through) OVER (
+                        ORDER BY installed_at, object_id
+                    ) < installed_at AS starts_episode
+            FROM covered
+        ),
+        -- Each interval belongs to the latest episode start at or before it.
+        labeled AS (
+            SELECT
+                installed_at,
+                hydrated_at,
+                max(CASE WHEN starts_episode THEN installed_at END) OVER (
+                    ORDER BY installed_at, object_id
+                    ROWS UNBOUNDED PRECEDING
+                ) AS episode_started_at
+            FROM flagged
+        ),
+        -- One row per completed episode.
+        episodes AS (
+            SELECT
+                episode_started_at AS started_at,
+                max(hydrated_at) AS finished_at,
+                count(*)::uint8 AS object_count
+            FROM labeled
+            GROUP BY episode_started_at
+        ),
+        -- The earliest install of an export that has not hydrated yet.
+        open_min AS (
+            SELECT min(installed_at) AS v FROM objects WHERE NOT hydrated
+        ),
+        -- The episode to record: the latest one that finished before any
+        -- unhydrated export was installed. An episode finishing at or after
+        -- open_min contains that open interval and is still in progress.
+        -- Comparing against this one scalar, instead of joining episodes
+        -- with open intervals, avoids a cross product that is quadratic when
+        -- many episodes coexist with many still-hydrating exports.
+        episode AS (
+            SELECT e.started_at, e.finished_at, e.object_count
+            FROM episodes AS e, open_min AS o
+            WHERE o.v IS NULL OR e.finished_at < o.v
+            ORDER BY e.started_at DESC
+            LIMIT 1
+        ),
+        -- Process-lifetime resource high-water marks, and how many processes
+        -- have reported them.
+        resources AS (
+            SELECT
+                count(DISTINCT process_id) AS process_count,
+                max(value) FILTER (
+                    WHERE source = 'cgroup' AND metric = 'memory_peak'
+                ) AS peak_memory_bytes,
+                coalesce(
+                    max(value) FILTER (
+                        WHERE source = 'statvfs' AND metric = 'fs_used_peak'
+                    ),
+                    max(value) FILTER (
+                        WHERE source = 'cgroup' AND metric = 'swap_peak'
+                    )
+                ) AS peak_disk_bytes
+            FROM mz_introspection.mz_cluster_replica_resource_usage
+        ),
+        -- The history row to write, held back until every configured process
+        -- has reported resource usage and dropped once the episode has aged
+        -- past the retention cutoff.
+        candidate AS (
+            SELECT
+                '{replica_id}'::text AS replica_id,
+                '{cluster_id}'::text AS cluster_id,
+                e.started_at,
+                e.finished_at,
+                e.object_count,
+                r.peak_memory_bytes,
+                r.peak_disk_bytes,
+                'hydrated'::text AS status
+            FROM episode AS e
+            CROSS JOIN resources AS r
+            WHERE r.process_count = {process_count}::uint8
+              AND e.finished_at >= TIMESTAMPTZ '{cutoff}'
+        )
+        -- Skip episodes the history already covers: a recorded row finishing
+        -- at or after this start is this episode, or overlaps it under
+        -- cross-process clock skew.
+        SELECT c.*
+        FROM candidate AS c
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM mz_internal.mz_replica_hydration_history AS h
+            WHERE h.replica_id = c.replica_id
+              AND h.finished_at >= c.started_at
+        )"
+    )
+}
+
 /// A bounded batch of history rows that have aged out.
 ///
 /// Only rows with a `hydrated_at` age out. Every row written today has one, and
 /// a row without one would be immortal here, so an unfinished-episode
 /// representation needs a second age basis before it can be recorded.
-fn retention_sql(cutoff: &str) -> String {
+fn object_retention_sql(cutoff: &str) -> String {
     // The LIMIT has to sit inside a subquery. A top-level LIMIT lands in the
     // plan's `RowSetFinishing`, which this OCC stage cannot apply. Inside a
     // derived table it lowers into the relation expression instead.
@@ -416,25 +584,60 @@ fn retention_sql(cutoff: &str) -> String {
     )
 }
 
+/// A bounded batch of replica history rows that have aged out.
+fn replica_retention_sql(cutoff: &str) -> String {
+    format!(
+        "SELECT * FROM (
+            SELECT
+                replica_id, cluster_id, started_at, finished_at, object_count,
+                peak_memory_bytes, peak_disk_bytes, status
+            FROM mz_internal.mz_replica_hydration_history
+            WHERE finished_at < TIMESTAMPTZ '{cutoff}'
+            ORDER BY finished_at
+            LIMIT {RETENTION_BATCH_SIZE}
+        )"
+    )
+}
+
 /// What one sweep needs to run its mutations against the history table.
 struct Sweep {
     client: PeekClient,
     catalog: Arc<Catalog>,
-    history_id: CatalogItemId,
+    object_history_id: CatalogItemId,
+    replica_history_id: CatalogItemId,
     metrics: Metrics,
     wall_time: chrono::DateTime<chrono::Utc>,
-    /// Rows finishing before this have aged out. Both steps apply it, so a live
-    /// log row cannot resurrect an episode retention just retracted.
+    /// Rows finishing before this have aged out. Both steps apply it, so this
+    /// sweep cannot resurrect an episode its own retention step retracts.
+    /// Concurrent sweeps can have different cutoffs, making retention eventual.
     cutoff: String,
 }
 
 impl Sweep {
-    /// Appends this replica's completed episodes that the table is missing.
-    async fn collect(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
-        let sql = collect_sql(cluster_id, replica_id, &self.cutoff);
+    /// Appends completed object and replica episodes from one replica.
+    async fn collect(&mut self, target: ReplicaTarget) {
+        let ReplicaTarget {
+            cluster_id,
+            replica_id,
+            ..
+        } = target;
+        let sql = object_collection_sql(cluster_id, replica_id, &self.cutoff);
         let _ = self
             .run(
                 "collection",
+                self.object_history_id,
+                cluster_id,
+                replica_id,
+                MutationKind::Insert,
+                &sql,
+            )
+            .await;
+
+        let sql = replica_collection_sql(target, &self.cutoff);
+        let _ = self
+            .run(
+                "replica_collection",
+                self.replica_history_id,
                 cluster_id,
                 replica_id,
                 MutationKind::Insert,
@@ -445,20 +648,35 @@ impl Sweep {
 
     /// Retracts one bounded batch of aged-out rows.
     async fn retain(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
-        let sql = retention_sql(&self.cutoff);
-        let Some(deleted) = self
+        let sql = object_retention_sql(&self.cutoff);
+        if let Some(deleted) = self
             .run(
                 "retention",
+                self.object_history_id,
                 cluster_id,
                 replica_id,
                 MutationKind::Delete,
                 &sql,
             )
             .await
-        else {
-            return;
-        };
-        if deleted == RETENTION_BATCH_SIZE {
+            && deleted == RETENTION_BATCH_SIZE
+        {
+            self.metrics.hydration_history_retention_batch_full.inc();
+        }
+
+        let sql = replica_retention_sql(&self.cutoff);
+        if let Some(deleted) = self
+            .run(
+                "replica_retention",
+                self.replica_history_id,
+                cluster_id,
+                replica_id,
+                MutationKind::Delete,
+                &sql,
+            )
+            .await
+            && deleted == RETENTION_BATCH_SIZE
+        {
             self.metrics.hydration_history_retention_batch_full.inc();
         }
     }
@@ -476,13 +694,14 @@ impl Sweep {
     async fn run(
         &mut self,
         step: &'static str,
+        history_id: CatalogItemId,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
         kind: MutationKind,
         sql: &str,
     ) -> Option<usize> {
         let mutation = async {
-            let plan = plan_mutation(&self.catalog, self.history_id, kind, sql)?;
+            let plan = plan_mutation(&self.catalog, history_id, kind, sql)?;
             let mut session = Session::dummy();
             session.start_transaction_single_stmt(self.wall_time);
             let response = self
@@ -521,7 +740,9 @@ impl Sweep {
             }
             Ok(Err(error)) => {
                 self.observe_mutation(step, "error");
-                if step == "collection" && matches!(&error, AdapterError::ReadThenWriteContention) {
+                if step.ends_with("collection")
+                    && matches!(&error, AdapterError::ReadThenWriteContention)
+                {
                     warn!(
                         %step, %cluster_id, %replica_id, %error,
                         "hydration history step failed, the replica's introspection frontier \
@@ -535,7 +756,7 @@ impl Sweep {
             // A trailing replica can repeatedly certify a target only after the
             // oracle has advanced past it. Each refused write raises the target,
             // and the conflict loop can continue until this timeout fires.
-            Err(_) if step == "collection" => {
+            Err(_) if step.ends_with("collection") => {
                 self.observe_mutation(step, "timeout");
                 warn!(
                     %step, %cluster_id, %replica_id,
@@ -630,7 +851,18 @@ mod tests {
     #[mz_ore::test]
     fn replica_sweep_advances_and_wraps() {
         let cluster = ClusterId::user(1).expect("valid cluster ID");
-        let replicas = [(cluster, ReplicaId::User(1)), (cluster, ReplicaId::User(3))];
+        let replicas = [
+            ReplicaTarget {
+                cluster_id: cluster,
+                replica_id: ReplicaId::User(1),
+                process_count: 1,
+            },
+            ReplicaTarget {
+                cluster_id: cluster,
+                replica_id: ReplicaId::User(3),
+                process_count: 1,
+            },
+        ];
 
         assert_eq!(next_replica(&replicas, None), Some(replicas[0]));
         assert_eq!(
@@ -696,7 +928,7 @@ mod tests {
     #[mz_ore::test]
     fn collect_requires_every_worker() {
         let cutoff = "1970-01-01T00:00:00+00:00";
-        let sql = collect_sql(
+        let sql = object_collection_sql(
             ClusterId::user(1).expect("valid cluster ID"),
             ReplicaId::User(2),
             cutoff,
@@ -716,5 +948,79 @@ mod tests {
             sql.find("NOT EXISTS").expect("anti-join") > aggregate_end,
             "{sql}"
         );
+    }
+
+    /// Replica episodes are connected components of object hydration intervals,
+    /// enumerated gaps-and-islands style. An episode still connected to an open
+    /// interval is skipped via a scalar comparison against the earliest open
+    /// install, and the latest remaining episode is recorded. The query must
+    /// also wait for every replica process before it snapshots process-local
+    /// high-water marks.
+    #[mz_ore::test]
+    fn replica_collection_uses_latest_completed_interval_island() {
+        let sql = replica_collection_sql(
+            ReplicaTarget {
+                cluster_id: ClusterId::user(1).expect("valid cluster ID"),
+                replica_id: ReplicaId::User(2),
+                process_count: 3,
+            },
+            "1970-01-01T00:00:00+00:00",
+        );
+        let normalized_sql = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        // The gaps-and-islands scaffolding: running coverage horizon, gap
+        // detection against the previous row's horizon, episode labels, and
+        // per-episode aggregation.
+        assert!(sql.contains("ROWS UNBOUNDED PRECEDING"), "{sql}");
+        assert!(sql.contains("lag(covered_through)"), "{sql}");
+        assert!(
+            sql.contains("CASE WHEN starts_episode THEN installed_at END"),
+            "{sql}"
+        );
+        assert!(sql.contains("GROUP BY episode_started_at"), "{sql}");
+        // The unfinished-export guard applies per episode. A replica-wide
+        // all-hydrated gate would lose a completed episode for good: once the
+        // in-progress one finishes, it is the latest and the earlier one is
+        // never recorded.
+        assert!(!sql.contains("bool_and(hydrated)"), "{sql}");
+        // The guard compares each episode against the earliest open install,
+        // one scalar row. A join against all open intervals is quadratic when
+        // many episodes coexist with many still-hydrating exports.
+        assert!(
+            normalized_sql.contains("WHERE o.v IS NULL OR e.finished_at < o.v"),
+            "{sql}"
+        );
+        assert!(!sql.contains("o.installed_at <= e.finished_at"), "{sql}");
+        assert!(
+            normalized_sql.contains("ORDER BY e.started_at DESC LIMIT 1"),
+            "{sql}"
+        );
+        assert!(sql.contains("r.process_count = 3::uint8"), "{sql}");
+        assert!(sql.contains("WHERE t.export_id NOT LIKE 't%'"), "{sql}");
+        assert!(!sql.contains("WHERE t.export_id LIKE 'u%'"), "{sql}");
+        assert!(!sql.contains("mz_object_global_ids"), "{sql}");
+        assert!(!sql.contains("mz_catalog.mz_objects"), "{sql}");
+        assert!(
+            normalized_sql
+                .contains("max(value) FILTER ( WHERE source = 'cgroup' AND metric = 'memory_peak'"),
+            "{sql}"
+        );
+        assert!(
+            normalized_sql.contains(
+                "max(value) FILTER ( WHERE source = 'statvfs' AND metric = 'fs_used_peak'"
+            ),
+            "{sql}"
+        );
+        assert!(
+            normalized_sql
+                .contains("max(value) FILTER ( WHERE source = 'cgroup' AND metric = 'swap_peak'"),
+            "{sql}"
+        );
+        assert!(!normalized_sql.contains("sum(value)"), "{sql}");
+        assert!(
+            sql.contains("FROM mz_internal.mz_replica_hydration_history"),
+            "{sql}"
+        );
+        assert!(sql.contains("h.finished_at >= c.started_at"), "{sql}");
     }
 }

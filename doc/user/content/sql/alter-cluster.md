@@ -191,9 +191,11 @@ Customizing the resize timeout with `WAIT UNTIL READY` or `WAIT FOR`
   SET (SIZE = '100cc') WITH (WAIT UNTIL READY (TIMEOUT = '10m'));
   ```
 
-- `WAIT FOR '<duration>'` sets the timeout and commits when it expires,
-  regardless of hydration status, which can cause downtime. Prefer
-  `WAIT UNTIL READY`.
+- `WAIT FOR '<duration>'` is equivalent to `WAIT UNTIL READY (TIMEOUT =
+  '<duration>', ON TIMEOUT = 'ROLLBACK')`. Materialize cuts over once the target
+  replicas hydrate. When Materialize processes an expired timeout, it
+  rolls back the resize and keeps the current size if the target replicas are
+  still unhydrated.
 
 See [Monitoring a resize](#monitoring-a-resize) to track progress and
 [cancel](#monitoring-a-resize) an in-flight resize.

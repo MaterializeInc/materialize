@@ -667,7 +667,6 @@ mod tests {
     use std::sync::Arc;
 
     use columnar::Index;
-    use timely::container::PushInto as _;
 
     use super::*;
     use crate::column_pager::{PageDecision, PageEvent, PageHint, PagingPolicy};

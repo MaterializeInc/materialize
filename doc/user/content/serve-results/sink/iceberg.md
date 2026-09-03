@@ -2,37 +2,49 @@
 title: "Apache Iceberg"
 description: "How to export results from Materialize to Apache Iceberg tables."
 menu:
-  main:
-    parent: sink
-    name: "Apache Iceberg"
-    identifier: sink-iceberg
-    weight: 15
+    main:
+        parent: sink
+        name: "Apache Iceberg"
+        identifier: sink-iceberg
+        weight: 15
 ---
 
 {{< public-preview />}}
 
 Iceberg sinks provide exactly once delivery of updates from Materialize into
-[Apache Iceberg](https://iceberg.apache.org/)[^1] tables hosted on either
-[Amazon S3
-Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html)[^2]
-or [Google Cloud BigLake](https://cloud.google.com/biglake)[^3]. As data
-changes in Materialize, the corresponding Iceberg tables are automatically
-kept up to date. You can sink data from a materialized view, a source, or a
-table.
+[Apache Iceberg](https://iceberg.apache.org/)[^1] tables. As data changes in
+Materialize, the corresponding Iceberg tables are automatically kept up to date.
+You can sink data from a materialized view, a source, or a table.
 
-Follow the guide for the platform hosting your Iceberg tables:
+Materialize reaches your tables through an Iceberg catalog. Follow the guide for
+the catalog hosting them:
 
-- [AWS S3 Tables](/serve-results/sink/iceberg-aws/)
-- [GCP BigLake](/serve-results/sink/iceberg-gcp/) {{< private-preview-inline />}}
+- [AWS S3
+  Tables](/serve-results/sink/iceberg-aws/)[^2], which authenticates through an
+  AWS connection.
+- [GCP BigLake](/serve-results/sink/iceberg-gcp/)[^3] {{< private-preview-inline />}},
+  which authenticates through a GCP connection.
+- [Databricks Unity Catalog](/serve-results/sink/iceberg-databricks/)[^4] on
+  AWS, which authenticates with the OAuth2 credentials of a Databricks service
+  principal.
 
-[^1]: [Apache Iceberg](https://iceberg.apache.org/) is an open table format for
-large-scale analytics datasets.
+[^1]:
+    [Apache Iceberg](https://iceberg.apache.org/) is an open table format for
+    large-scale analytics datasets.
 
-[^2]: [Amazon S3
-Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html) is
+[^2]:
+    [Amazon S3
+    Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html) is
     an AWS feature that provides fully managed Apache Iceberg tables as a native
     S3 storage type.
 
-[^3]: [Google Cloud
-BigLake](https://cloud.google.com/biglake) provides a managed Apache Iceberg
+[^3]:
+    [Google Cloud
+    BigLake](https://cloud.google.com/biglake) provides a managed Apache Iceberg
     REST catalog over Google Cloud Storage.
+
+[^4]:
+    [Databricks Unity
+    Catalog](https://docs.databricks.com/aws/en/external-access/iceberg) exposes
+    its tables to Apache Iceberg clients through an Iceberg REST catalog
+    endpoint.
