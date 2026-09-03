@@ -14,12 +14,12 @@
         specified, defaults to the active cluster.
     - name: "`<obj_name>`"
       description: |
-        The name of the source, view, or materialized view on which you want
+        The name of the table, source, view, or materialized view on which you want
         to create an index.
     - name: "`USING <method>`"
       description: |
         The name of the index method to use. The only supported method is
-        [`arrangement`](/overview/arrangements).
+        [`arrangement`](/get-started/arrangements/).
     - name: "`(<col_expr>, ...)`"
       description: |
         The expressions to use as the key for the index.
@@ -43,12 +43,12 @@
         specified, defaults to the active cluster.
     - name: "`<obj_name>`"
       description: |
-        The name of the source, view, or materialized view on which you want
+        The name of the table, source, view, or materialized view on which you want
         to create an index.
     - name: "`USING <method>`"
       description: |
         The name of the index method to use. The only supported method is
-        [`arrangement`](/overview/arrangements).
+        [`arrangement`](/get-started/arrangements/).
     - name: "`WITH (<with_option>[,...])`"
       description: |
         The following `<with_option>` is supported:
