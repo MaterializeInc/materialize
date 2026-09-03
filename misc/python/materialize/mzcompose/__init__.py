@@ -663,6 +663,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_column_paged_batcher",
     "enable_column_paged_batcher_spill",
     "column_chunk_compress_min_depth",
+    "column_chunk_codec",
+    "column_chunk_zstd_level",
     "column_paged_batcher_budget_fraction",
     "column_paged_batcher_lz4",
     "column_paged_batcher_swap_pageout",

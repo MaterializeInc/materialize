@@ -3143,6 +3143,8 @@ class FlipFlagsAction(Action):
             "1",  # the default: fresh chunks store uncompressed
             "4",  # exempt several young generations
         ]
+        self.flags_with_values["column_chunk_codec"] = ["lz4", "zstd"]
+        self.flags_with_values["column_chunk_zstd_level"] = ["1", "3", "9"]
         # 0 forces the estimated-size path for every table, the default forces
         # the exact COUNT(*) path for workload-sized tables.
         self.flags_with_values["mysql_source_snapshot_exact_count_max_rows"] = [
