@@ -38,7 +38,7 @@ from psycopg.errors import (
 )
 
 from materialize import buildkite, ui
-from materialize.mzcompose import sanitizer_enabled
+from materialize.mzcompose import cluster_replica_size_map, sanitizer_enabled
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -1293,6 +1293,77 @@ def workflow_test_notice_drop_restart(c: Composition) -> None:
         assert (
             notice_count() == 0
         ), "expected the notice to be retracted after DROP SCHEMA ... CASCADE"
+
+
+def workflow_test_billed_as_size_removed(c: Composition) -> None:
+    """
+    A replica whose BILLED AS size later disappears from the replica size
+    map must still be droppable, and other cluster DDL must keep working
+    (SQL-658). The size map is process configuration, so the removal is a
+    restart with a smaller map. Soft assertions are off for the restarted
+    process: the tolerant credit lookup soft-panics on the stale size by
+    design, and the production behavior is what is under test.
+    """
+    c.up("materialized")
+
+    c.sql(
+        """
+        CREATE CLUSTER billed_as_test SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
+        CREATE CLUSTER REPLICA billed_as_test.unbilled
+            SIZE 'scale=1,workers=1', INTERNAL, BILLED AS 'scale=2,workers=4';
+        """,
+        port=6877,
+        user="mz_system",
+    )
+
+    sizes = cluster_replica_size_map()
+    del sizes["scale=2,workers=4"]
+    with c.override(
+        Materialized(
+            propagate_crashes=False,
+            external_metadata_store=True,
+            additional_system_parameter_defaults={
+                "unsafe_enable_unsafe_functions": "true",
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
+            },
+            support_external_clusterd=True,
+            cluster_replica_size=sizes,
+            soft_assertions=False,
+        )
+    ):
+        c.kill("materialized")
+        c.up("materialized")
+
+        rows = c.sql_query("""
+            SELECT r.name, r.size
+            FROM mz_cluster_replicas r
+            JOIN mz_clusters cl ON r.cluster_id = cl.id
+            WHERE cl.name = 'billed_as_test'
+            """)
+        assert len(rows) == 1 and tuple(rows[0]) == (
+            "unbilled",
+            "scale=1,workers=1",
+        ), rows
+
+        # Every cluster DDL sums the credit rate of all existing replicas,
+        # including the one with the stale billing size.
+        c.sql(
+            """
+            CREATE CLUSTER billed_as_other SIZE 'scale=1,workers=1';
+            DROP CLUSTER REPLICA billed_as_test.unbilled;
+            CREATE CLUSTER REPLICA billed_as_test.unbilled2 SIZE 'scale=1,workers=1', INTERNAL;
+            DROP CLUSTER billed_as_other;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        rows = c.sql_query("""
+            SELECT r.name
+            FROM mz_cluster_replicas r
+            JOIN mz_clusters cl ON r.cluster_id = cl.id
+            WHERE cl.name = 'billed_as_test'
+            """)
+        assert [tuple(r) for r in rows] == [("unbilled2",)], rows
 
 
 def workflow_test_upsert(c: Composition) -> None:
