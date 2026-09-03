@@ -1030,6 +1030,10 @@ impl Coordinator {
                 self.drop_vpc_endpoints_in_background(vpc_endpoints_to_drop)
             }
 
+            let clusters_losing_replicas: BTreeSet<_> = cluster_replicas_to_drop
+                .iter()
+                .map(|(cluster_id, _)| *cluster_id)
+                .collect();
             if !cluster_replicas_to_drop.is_empty() {
                 fail::fail_point!("after_catalog_drop_replica");
 
@@ -1038,8 +1042,19 @@ impl Coordinator {
                 }
             }
             if !clusters_to_drop.is_empty() {
-                for cluster_id in clusters_to_drop {
-                    self.controller.drop_cluster(cluster_id);
+                for cluster_id in &clusters_to_drop {
+                    self.controller.drop_cluster(*cluster_id);
+                }
+            }
+            // A dropped cluster, or one left without replicas, cannot serve
+            // peeks, so its peek series are stale. They come back on the first
+            // peek once a cluster has a replica again.
+            for cluster_id in clusters_losing_replicas.into_iter().chain(clusters_to_drop) {
+                let has_replicas = self
+                    .catalog()
+                    .try_get_cluster(cluster_id)
+                    .is_some_and(|cluster| cluster.replicas().next().is_some());
+                if !has_replicas {
                     self.metrics.by_cluster.remove_cluster(cluster_id);
                 }
             }
