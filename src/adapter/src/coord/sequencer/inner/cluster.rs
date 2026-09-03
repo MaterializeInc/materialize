@@ -813,25 +813,14 @@ impl Coordinator {
             ClusterVariant::Unmanaged => false,
         };
 
-        match record {
-            None => {
-                // Defensive fallback for old or manually-edited catalogs. New
-                // controller writes retain a terminal record.
-                if realized_matches_target {
-                    Ok(StageResult::Response(ExecuteResponse::AlteredObject(
-                        ObjectType::Cluster,
-                    )))
-                } else {
-                    Err(AdapterError::AlterClusterTimeout)
-                }
-            }
-            Some(record) if !record.is_in_progress() => {
-                terminal_reconfiguration_result(&record, &target, realized_matches_target)?;
+        match reconfiguration_wait_result(record.as_ref(), &target, realized_matches_target) {
+            Some(result) => {
+                result?;
                 Ok(StageResult::Response(ExecuteResponse::AlteredObject(
                     ObjectType::Cluster,
                 )))
             }
-            Some(_) => {
+            None => {
                 // Still in progress. Re-poll after the configured interval and
                 // wait for the controller to resolve the record. We deliberately
                 // do not consult the deadline here: erroring while the record is
@@ -2444,27 +2433,31 @@ struct ReconfigurationDimensionsUnchanged {
     arrangement_compression: bool,
 }
 
-/// Returns the foreground result for a terminal reconfiguration record.
+/// Returns the foreground result, or `None` while the awaited target is pending.
 ///
-/// Records are overwritten by later ALTERs. A terminal outcome belongs to this
-/// waiter only when it resolved the target the waiter wrote. A superseding
-/// target therefore reports the generic timeout/cancellation result rather than
-/// attributing its resource failure to the earlier statement.
-fn terminal_reconfiguration_result(
-    record: &ReconfigurationState,
+/// Records are overwritten by later ALTERs, so success is defined by realized
+/// state rather than record identity. A waiter follows a record only while that
+/// record still carries its target.
+fn reconfiguration_wait_result(
+    record: Option<&ReconfigurationState>,
     awaited_target: &ReconfigurationTarget,
     realized_matches_target: bool,
-) -> Result<(), AdapterError> {
+) -> Option<Result<(), AdapterError>> {
+    if realized_matches_target {
+        return Some(Ok(()));
+    }
+    let Some(record) = record.filter(|record| record.target == *awaited_target) else {
+        return Some(Err(AdapterError::AlterClusterSuperseded));
+    };
     match record.status {
-        ReconfigurationStatus::ResourceExhausted if record.target == *awaited_target => {
-            Err(AdapterError::AlterClusterResourceExhausted)
+        ReconfigurationStatus::InProgress => None,
+        ReconfigurationStatus::ResourceExhausted => {
+            Some(Err(AdapterError::AlterClusterResourceExhausted))
         }
-        ReconfigurationStatus::Finalized | ReconfigurationStatus::Cancelled
-            if realized_matches_target =>
-        {
-            Ok(())
+        ReconfigurationStatus::TimedOut => Some(Err(AdapterError::AlterClusterTimeout)),
+        ReconfigurationStatus::Finalized | ReconfigurationStatus::Cancelled => {
+            Some(Err(AdapterError::AlterClusterSuperseded))
         }
-        _ => Err(AdapterError::AlterClusterTimeout),
     }
 }
 
@@ -2632,24 +2625,63 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn resource_exhaustion_is_attributed_to_the_matching_waiter() {
+    fn foreground_wait_succeeds_when_target_is_realized() {
+        let awaited = target("200cc", 1, &[], false);
+        let record = ReconfigurationState {
+            target: target("300cc", 1, &[], false),
+            deadline: Timestamp::from(0),
+            on_timeout: OnTimeoutAction::Rollback,
+            status: ReconfigurationStatus::InProgress,
+        };
+
+        assert!(matches!(
+            reconfiguration_wait_result(Some(&record), &awaited, true),
+            Some(Ok(()))
+        ));
+    }
+
+    #[mz_ore::test]
+    fn foreground_wait_follows_matching_target() {
         let awaited = target("200cc", 1, &[], false);
         let mut record = ReconfigurationState {
             target: awaited.clone(),
             deadline: Timestamp::from(0),
             on_timeout: OnTimeoutAction::Rollback,
-            status: ReconfigurationStatus::ResourceExhausted,
+            status: ReconfigurationStatus::InProgress,
+        };
+
+        assert!(reconfiguration_wait_result(Some(&record), &awaited, false).is_none());
+
+        record.status = ReconfigurationStatus::ResourceExhausted;
+        assert!(matches!(
+            reconfiguration_wait_result(Some(&record), &awaited, false),
+            Some(Err(AdapterError::AlterClusterResourceExhausted))
+        ));
+
+        record.status = ReconfigurationStatus::TimedOut;
+        assert!(matches!(
+            reconfiguration_wait_result(Some(&record), &awaited, false),
+            Some(Err(AdapterError::AlterClusterTimeout))
+        ));
+    }
+
+    #[mz_ore::test]
+    fn foreground_wait_reports_superseded_target() {
+        let awaited = target("200cc", 1, &[], false);
+        let record = ReconfigurationState {
+            target: target("300cc", 1, &[], false),
+            deadline: Timestamp::from(0),
+            on_timeout: OnTimeoutAction::Rollback,
+            status: ReconfigurationStatus::InProgress,
         };
 
         assert!(matches!(
-            terminal_reconfiguration_result(&record, &awaited, false),
-            Err(AdapterError::AlterClusterResourceExhausted)
+            reconfiguration_wait_result(Some(&record), &awaited, false),
+            Some(Err(AdapterError::AlterClusterSuperseded))
         ));
-
-        record.target = target("300cc", 1, &[], false);
         assert!(matches!(
-            terminal_reconfiguration_result(&record, &awaited, false),
-            Err(AdapterError::AlterClusterTimeout)
+            reconfiguration_wait_result(None, &awaited, false),
+            Some(Err(AdapterError::AlterClusterSuperseded))
         ));
     }
 

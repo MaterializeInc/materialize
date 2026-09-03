@@ -311,6 +311,9 @@ pub enum AdapterError {
     /// read-only mode.
     ReadOnly,
     AlterClusterTimeout,
+    /// Another `ALTER CLUSTER` replaced the target this statement was waiting
+    /// for before it became realized.
+    AlterClusterSuperseded,
     /// The cluster controller could not provision a reconfiguration target
     /// within the environment's resource limits.
     AlterClusterResourceExhausted,
@@ -888,6 +891,9 @@ impl AdapterError {
             AdapterError::AlterClusterTimeout => Some(
                 "Consider increasing the timeout duration in the alter cluster statement.".into(),
             ),
+            AdapterError::AlterClusterSuperseded => Some(
+                "Retry the ALTER CLUSTER statement if its target is still desired.".into(),
+            ),
             AdapterError::AlterClusterResourceExhausted => Some(
                 "Reduce the target resource use, or inspect \
                  mz_internal.mz_cluster_reconfigurations for the retained outcome."
@@ -1093,6 +1099,7 @@ impl AdapterError {
             // transactions.
             AdapterError::ReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::AlterClusterTimeout => SqlState::QUERY_CANCELED,
+            AdapterError::AlterClusterSuperseded => SqlState::QUERY_CANCELED,
             AdapterError::AlterClusterResourceExhausted => SqlState::INSUFFICIENT_RESOURCES,
             AdapterError::AlterClusterWhilePendingReplicas => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterUnmanagedWhileReconfiguring => SqlState::OBJECT_IN_USE,
@@ -1560,6 +1567,12 @@ impl fmt::Display for AdapterError {
             AdapterError::ReadOnly => write!(f, "cannot write in read-only mode"),
             AdapterError::AlterClusterTimeout => {
                 write!(f, "canceling statement, provided timeout lapsed")
+            }
+            AdapterError::AlterClusterSuperseded => {
+                write!(
+                    f,
+                    "cluster reconfiguration was superseded by another ALTER CLUSTER"
+                )
             }
             AdapterError::AlterClusterResourceExhausted => {
                 write!(
