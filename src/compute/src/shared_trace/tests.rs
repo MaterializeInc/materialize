@@ -7,8 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::fmt::Debug;
+use std::time::{Duration, Instant};
+
 use differential_dataflow::input::Input;
 use differential_dataflow::trace::Cursor;
+use differential_dataflow::trace::cursor::{CursorList, cursor_list};
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, Timestamp};
 use mz_row_spine::{RowRowBatcher, RowRowBuilder};
@@ -18,6 +22,117 @@ use crate::extensions::arrange::MzArrange;
 use crate::typedefs::RowRowSpine;
 
 use super::*;
+
+/// How long [`SharedTraceHandle::snapshot_at`] waits for a seal before failing the test.
+///
+/// Generous, because it only has to exceed the time a correct publisher takes to step. A test that
+/// hits it has wedged, and the assertion reports which frontier stalled rather than leaving the
+/// harness to kill a silent hang.
+const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// An owned, consistent snapshot of a published arrangement: an immutable chain.
+///
+/// The result of [`SharedTraceHandle::snapshot_at`]. Holding it pins the chain's batches, keeping
+/// their memory alive even as the publishing worker merges.
+pub(crate) struct TraceSnapshot<Tr: TraceReader> {
+    chain: Vec<Tr::Batch>,
+}
+
+impl<Tr: TraceReader> TraceSnapshot<Tr> {
+    /// A cursor merging the snapshot's batch cursors, with the batches as its storage.
+    fn cursor(&self) -> (CursorList<<Tr::Batch as Navigable>::Cursor>, Vec<Tr::Batch>)
+    where
+        Tr::Batch: Navigable,
+    {
+        cursor_list(self.chain.clone())
+    }
+}
+
+/// Observations on a publication point's internals that no reader surface exposes.
+impl<Tr: TraceReader> Published<Tr> {
+    /// The accumulated logical holds registered against this publication point.
+    ///
+    /// Empty when every hold has released, which the published frontiers cannot show: the publisher
+    /// leaves its agent where it stands rather than forwarding an empty accumulation.
+    fn logical_holds(&self) -> Antichain<Tr::Time> {
+        let state = self.shared.state.lock().expect("shared trace poisoned");
+        state.logical_compaction.frontier().to_owned()
+    }
+
+    /// The accumulated physical holds registered against this publication point.
+    ///
+    /// Empty when no reader is registered, in which case the publisher forwards the chain coverage
+    /// instead.
+    fn physical_holds(&self) -> Antichain<Tr::Time> {
+        let state = self.shared.state.lock().expect("shared trace poisoned");
+        state.physical_compaction.frontier().to_owned()
+    }
+
+    /// The number of batches in the published chain.
+    ///
+    /// Counting through a handle would register a physical hold and perturb the merge behaviour
+    /// being measured, which is the whole observable here.
+    fn chain_len(&self) -> usize {
+        let state = self.shared.state.lock().expect("shared trace poisoned");
+        state.chain.len()
+    }
+
+    /// The standing hold currently bounding this arrangement's logical compaction.
+    fn standing_hold(&self) -> Antichain<Tr::Time> {
+        let state = self.shared.state.lock().expect("shared trace poisoned");
+        state.standing_hold.clone()
+    }
+}
+
+impl<Tr: TraceReader> SharedTraceHandle<Tr> {
+    /// Takes a consistent snapshot of the published arrangement as of `time`, waiting until `upper`
+    /// passes `time`.
+    ///
+    /// Production reads go through [`SharedTraceHandle::import_snapshot_at`], which is notification
+    /// driven and never parks a worker. This waits by polling, so it must not be called from a
+    /// timely worker thread: a worker blocked here cannot step, and on a single-worker test that
+    /// includes the publisher it is waiting for.
+    ///
+    /// Returns `None` when the snapshot cannot serve `time`, which is either the publisher closed
+    /// before `upper` passed `time`, or compaction has advanced `since` beyond `time` so the
+    /// accumulation at `time` is no longer accurate. The gate on `since` mirrors the single-runtime
+    /// peek path, which errors when the compaction frontier is beyond the read time rather than
+    /// returning coalesced results.
+    ///
+    /// Panics once the wait exceeds [`SNAPSHOT_TIMEOUT`], naming the frontiers it was waiting on.
+    fn snapshot_at(&self, time: &Tr::Time) -> Option<TraceSnapshot<Tr>>
+    where
+        Tr::Time: Debug,
+    {
+        let deadline = Instant::now() + SNAPSHOT_TIMEOUT;
+        loop {
+            {
+                let state = self.shared.state.lock().expect("shared trace poisoned");
+                // `upper` not less-equal `time` means all updates at `time` are sealed.
+                if !state.upper.less_equal(time) {
+                    // `since` beyond `time` means times at `time` have been coalesced and a read
+                    // there would be inaccurate. Fail to `None` rather than serve stale data.
+                    if !state.since.less_equal(time) {
+                        return None;
+                    }
+                    return Some(TraceSnapshot {
+                        chain: state.chain.clone(),
+                    });
+                }
+                if state.closed {
+                    return None;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "snapshot_at({time:?}) timed out waiting for a seal: upper={:?} since={:?}",
+                    state.upper.elements(),
+                    state.since.elements(),
+                );
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
 
 /// Adopts a freshly rendered arrangement into a new placeholder, the standalone-primitive
 /// counterpart to the maintenance placeholder+adopt path. Creates a [`Published::placeholder`]
@@ -569,10 +684,11 @@ fn empty_logical_request_releases_the_hold() {
         let mut hold = published.handle();
         hold.set_logical_compaction(Antichain::new().borrow());
 
-        let holds = published.logical_holds();
-        assert!(
-            !holds.iter().any(|h| h.is_empty()),
-            "an empty request must release the hold, not record an empty one: {holds:?}"
+        assert_eq!(
+            published.logical_holds(),
+            published.standing_hold(),
+            "an empty request must release the hold rather than record it, leaving the standing \
+             hold as the whole accumulation"
         );
     });
 }
@@ -877,14 +993,13 @@ fn reader_floor_bounds_merges_and_no_reader_merges_freely() {
     });
 }
 
-/// A clone inherits its source's physical hold, not the weaker frontier its source reports.
+/// A clone registers at its source's physical frontier, the chain coverage.
 ///
-/// `register`/`register_at` seed the hold at the chain coverage while reporting the published
-/// `since`, which is weaker. Registering the reported frontier for a clone would silently install a
-/// hold below the coverage the source was seeded with, and since the accumulation is a meet, that
-/// clone becomes a floor under every other hold for as long as it lives.
+/// Registering anything lower, such as the published `since`, would put the clone below the boundary
+/// its source was seeded with, and since the accumulation is a meet, that clone becomes a floor under
+/// every other hold for as long as it lives.
 #[mz_ore::test]
-fn clone_inherits_the_hold_not_the_reported_frontier() {
+fn clone_registers_at_its_sources_physical_frontier() {
     timely::execute_directly(move |worker| {
         let (published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
@@ -905,8 +1020,8 @@ fn clone_inherits_the_hold_not_the_reported_frontier() {
             );
         }
 
-        // The chain now covers 4, while the published `since` is still the minimum, so the two
-        // frontiers a handle carries are distinguishable.
+        // The chain now covers 4, while the published `since` is still the minimum, so a hold at
+        // the coverage is distinguishable from one at `since`.
         let handle = published.handle();
         let (since, _upper) = handle.frontiers();
         let coverage = Antichain::from_elem(Timestamp::from(4_u64));
@@ -918,10 +1033,9 @@ fn clone_inherits_the_hold_not_the_reported_frontier() {
 
         let clone = handle.clone();
         drop(handle);
-        let holds = published.physical_holds();
         assert_eq!(
-            holds,
-            vec![coverage],
+            published.physical_holds(),
+            coverage,
             "the clone's hold is not the coverage its source was seeded with, so it sits below \
              every boundary the source still needed"
         );
