@@ -1614,13 +1614,7 @@ impl Coordinator {
                     )
                     .await;
                     let result = result.map_err(|e| e.into());
-                    // `ALTER SOURCE` carries its target as an unresolved name, so name
-                    // resolution never records it and `resolved_ids` does not cover it.
-                    // Without it a source dropped while purification ran off-thread
-                    // passes the validity check below and then surfaces as a missing
-                    // catalog entry during planning.
-                    let mut dependency_ids: BTreeSet<_> = resolved_ids.items().copied().collect();
-                    dependency_ids.extend(statement_source.map(|source| source.id()));
+                    let dependency_ids = resolved_ids.items().copied().collect();
                     let plan_validity = PlanValidity::new(
                         &catalog,
                         dependency_ids,
