@@ -126,6 +126,9 @@ PREPARE p AS SELECT repeat($1, $1);
 statement error prepared statement "Nope" does not exist
 DEALLOCATE "Nope"
 
+statement error unknown prepared statement "Nope"
+EXECUTE "Nope"
+
 statement ok
 PREPARE "Mixed" AS SELECT 1;
 
