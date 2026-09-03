@@ -8,10 +8,12 @@ menu:
 ---
 
 The Materialize Console includes a **Query History** view, under its
-[**Monitoring**](/console/monitoring/) section, that lists the SQL statements
-recently issued to your Materialize instance along with their duration, status,
-and the cluster that ran them. Query history is available in self-managed
-deployments and is enabled by default.
+[**Monitoring**](/console/monitoring/) section, that lists a sample of the SQL
+statements recently issued to your Materialize instance, along with their
+duration, status, and the cluster that ran them. Query history is available in
+self-managed deployments and is enabled by default in Materialize operator chart
+v26.40.0 and later. Earlier chart versions disabled statement logging outright,
+and the Query History view stays empty on them.
 
 Query history is backed by *statement logging*: Materialize records a randomly
 sampled fraction of statement executions into the system catalog, most visibly
@@ -26,53 +28,50 @@ To see query history in the Console, connect as a Materialize *superuser* or as
 a user granted the [`mz_monitor`
 role](/security/appendix/appendix-built-in-roles/#system-catalog-roles).
 
-## Defaults
+## Configure statement logging
 
-The Materialize operator Helm chart sets
-`operator.args.statementLoggingMaxSampleRate` to `0.99`, and leaves
-`operator.args.statementLoggingTargetDataRate` unset so that `environmentd`'s
-own default of 2071 bytes per second applies. Statement logging is therefore on
-by default, sampling nearly every statement up to the byte rate below.
+Two system parameters bound how much query history you collect. The Materialize
+operator Helm chart ships a value for each:
 
-The rate that actually applies to a statement is the smaller of two parameters:
+| Parameter | Chart value | Default | Bounds |
+|-----------|-------------|---------|--------|
+| `statement_logging_max_sample_rate` | `operator.args.statementLoggingMaxSampleRate` | `0.99` | The fraction of executions considered for logging. |
+| `statement_logging_target_data_rate` | `operator.args.statementLoggingTargetDataRate` | Unset, so `environmentd`'s own 2071 | The sustained bytes per second written. Must be greater than 0. |
 
-| Parameter | Scope | Meaning |
-|-----------|-------|---------|
-| `statement_logging_sample_rate` | Session | The rate a session asks for. A session may `SET` this to any value between 0 and 1, but only values below the cap have any effect. |
-| `statement_logging_max_sample_rate` | System | A cap on the above. The chart value sets this. |
+Statement logging is therefore on by default, sampling nearly every statement up
+to that byte rate.
 
-Because the system parameter is a cap, lowering it reduces logging for every
-session regardless of what individual sessions request.
+A session can request its own rate with `SET statement_logging_sample_rate`. The
+rate that applies to a statement is the smaller of the session's rate and the
+system cap, so lowering the cap reduces logging for every session regardless of
+what individual sessions ask for.
 
 Sampling is not the only limit, and it is not the one that bounds volume.
-Materialize also throttles statement logging to a sustained byte rate,
-`statement_logging_target_data_rate`, and drops sampled executions that would
-exceed it. So a sample rate of `1.0` does not guarantee every statement is
-recorded, and on a busy instance the byte rate is what determines how much
-history you actually accumulate.
+Materialize also throttles statement logging to the target byte rate and drops
+sampled executions that would exceed it. So a sample rate of `1.0` does not
+guarantee every statement is recorded, and on a busy instance the byte rate is
+what determines how much history you actually accumulate.
+
+The two parameters are not interchangeable. Lower the data rate to hold storage
+growth down. Lowering the sample rate instead makes query history less
+representative without lowering the ceiling on what statement logging stores,
+because the byte rate is already the binding limit.
 
 {{< note >}}
-The chart also enables `enableInternalStatementLogging`, so statements issued by
-the `mz_system` user are logged. Internal activity, including the Console's own
-catalog queries, is sampled alongside your workload and counts toward the cost
-described below.
+The chart also enables `enableInternalStatementLogging`, which logs statements
+run by Materialize's internal users: `mz_system`, `mz_support`, and
+`mz_analytics`. This covers both Materialize's own activity, such as the
+Console's catalog queries, and any session you open as one of those users, and
+it counts toward the cost described below.
+
+Statements from your own users are always subject to sampling and are unaffected
+by this setting. Logging in through the Console as a normal user is sampled at
+the rates above either way.
 {{< /note >}}
 
-## Tune statement logging
-
-Two parameters bound how much query history you collect:
-
-| Parameter | Chart value | Bounds |
-|-----------|-------------|--------|
-| `statement_logging_max_sample_rate` | `operator.args.statementLoggingMaxSampleRate` (`0.99`) | The fraction of executions considered for logging. |
-| `statement_logging_target_data_rate` | `operator.args.statementLoggingTargetDataRate` (unset, so 2071) | The sustained bytes per second written. Must be greater than 0. |
-
-The two are not interchangeable. Lower the data rate to hold storage growth
-down. Lowering the sample rate instead makes query history less representative
-without lowering the ceiling on what statement logging stores, because the byte
-rate is already the binding limit. Each can be set either through the Helm chart
-or as a system parameter, and those two paths interact, so read the note on
-precedence below before picking one.
+Either parameter can be set through the Helm chart or as a system parameter, and
+those two paths interact, so read the note on precedence below before picking
+one.
 
 ### Using the Helm chart
 
@@ -135,6 +134,15 @@ Or with [`ALTER SYSTEM SET`](/sql/alter-system-set/), connected as the
 ```mzsql
 ALTER SYSTEM SET statement_logging_target_data_rate = 1035;
 ```
+
+{{< warning >}}
+Setting `statement_logging_max_sample_rate` to `0` this way turns off statement
+logging for the whole instance, and the Console's Query History view stops
+recording new statements. Unlike the Helm chart value, this takes effect
+immediately and without a rollout, so it is easy to disable query history
+without meaning to. Use `SET statement_logging_sample_rate` in a session if you
+only want to stop logging your own statements.
+{{< /warning >}}
 
 {{< note >}}
 A value set through the ConfigMap or `ALTER SYSTEM SET` is stored in the catalog
