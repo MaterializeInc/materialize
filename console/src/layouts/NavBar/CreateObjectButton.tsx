@@ -25,7 +25,6 @@ import { Link, LinkProps } from "react-router-dom";
 import { useSegment } from "~/analytics/segment";
 import useCanCreateCluster from "~/api/materialize/cluster/useCanCreateCluster";
 import useCanCreateObjects from "~/api/materialize/useCanCreateObjects";
-import { AppConfigSwitch } from "~/config/AppConfigSwitch";
 import { regionPath } from "~/platform/routeHelpers";
 import { useRegionSlug } from "~/store/environments";
 import { PlusIcon } from "~/svg/PlusIcon";
@@ -132,18 +131,6 @@ export const CreateObjectButton = (props: CreateObjectButtonProps) => {
             >
               Source
             </CreateObjectLink>
-            <AppConfigSwitch
-              cloudConfigElement={({ runtimeConfig }) =>
-                runtimeConfig.isImpersonating ? null : (
-                  <CreateObjectLink
-                    state={{ new: true }}
-                    to="/access/app-passwords"
-                  >
-                    App Password
-                  </CreateObjectLink>
-                )
-              }
-            />
           </VStack>
         </PopoverContent>
       </Popover>

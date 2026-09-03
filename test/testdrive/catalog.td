@@ -613,6 +613,7 @@ mz_object_global_ids                     ""
 mz_object_hydration_history              ""
 mz_optimizer_notices                     ""
 mz_replacements                          ""
+mz_replica_hydration_history             ""
 mz_sessions                              ""
 mz_source_references                     ""
 mz_storage_usage_by_shard                ""
@@ -836,7 +837,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-30
+31
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

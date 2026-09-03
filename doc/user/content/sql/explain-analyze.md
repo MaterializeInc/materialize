@@ -335,6 +335,9 @@ correlate [`mz_introspection` performance
 information](https://materialize.com/docs/reference/system-catalog/mz_introspection/)
 with the LIR operators in
 [`mz_introspection.mz_lir_mapping`](../../reference/system-catalog/mz_introspection/#mz_lir_mapping).
+Its `lir_id` is the node ID that `EXPLAIN PHYSICAL PLAN WITH (node identifiers)`
+prints, so a row of that SQL can be matched to a plan operator by ID rather
+than by its text.
 
 - For TopK hints, `EXPLAIN ANALYZE` uses
 [`mz_introspection.mz_expected_group_size_advice`](/reference/system-catalog/mz_introspection/#mz_expected_group_size_advice)

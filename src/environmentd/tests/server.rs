@@ -14,7 +14,7 @@
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -61,7 +61,7 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka_sys::RDKafkaErrorCode;
 use regex::Regex;
 use reqwest::blocking::Client;
-use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE};
+use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE, COOKIE, LOCATION, ORIGIN, SET_COOKIE};
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
@@ -2207,6 +2207,156 @@ fn test_internal_console_proxy() {
         res.headers().get(CONTENT_TYPE).unwrap().to_str().unwrap(),
         "text/html"
     );
+}
+
+/// Serves a canned HTTP response on a local port, counting requests. Stands in
+/// for the upstream console deployment in proxy tests.
+fn spawn_mock_console_upstream(body: &'static str) -> (String, Arc<AtomicUsize>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let hits_clone = Arc::clone(&hits);
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else {
+                continue;
+            };
+            hits_clone.fetch_add(1, Ordering::SeqCst);
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+    (format!("http://{}", addr), hits)
+}
+
+#[mz_ore::test]
+fn test_internal_console_proxy_preview_build() {
+    let (upstream_url, upstream_hits) = spawn_mock_console_upstream("default-build");
+    let server = test_util::TestHarness::default()
+        .with_internal_console_redirect_url(Some(upstream_url))
+        .start_blocking();
+
+    let client = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let base = format!(
+        "http://{}/internal-console/",
+        server.internal_http_local_addr()
+    );
+
+    // Without a selection, the default upstream serves the request.
+    let res = client.get(Url::parse(&base).unwrap()).send().unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.text().unwrap(), "default-build");
+
+    // A GET with a preview build label only renders the confirmation page.
+    let res = client
+        .get(Url::parse(&format!("{base}?preview_build=console-git-foo&x=1")).unwrap())
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers().get(SET_COOKIE), None);
+    let body = res.text().unwrap();
+    assert_contains!(body.as_str(), "console-git-foo.127.0.0.1");
+    assert_contains!(body.as_str(), "<form method=\"post\"");
+
+    // POSTing the selection sets the cookie and redirects back to the same
+    // path, preserving unrelated query parameters.
+    let res = client
+        .post(Url::parse(&format!("{base}?preview_build=console-git-foo&x=1")).unwrap())
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        res.headers().get(LOCATION).unwrap().to_str().unwrap(),
+        "/internal-console/?x=1"
+    );
+    let cookie = res.headers().get(SET_COOKIE).unwrap().to_str().unwrap();
+    assert_contains!(cookie, "mz_console_preview_build=console-git-foo");
+    assert_contains!(cookie, "Path=/internal-console");
+
+    // A cross-site POST is rejected on its own provenance, independent of the
+    // fronting proxy's session cookie policy.
+    for (header, value) in [
+        ("sec-fetch-site", "cross-site"),
+        (ORIGIN.as_str(), "https://attacker.example"),
+    ] {
+        let res = client
+            .post(Url::parse(&format!("{base}?preview_build=console-git-foo")).unwrap())
+            .header(header, value)
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        assert_eq!(res.headers().get(SET_COOKIE), None);
+    }
+
+    // A same-origin POST declaring its provenance still succeeds.
+    let res = client
+        .post(Url::parse(&format!("{base}?preview_build=console-git-foo")).unwrap())
+        .header("sec-fetch-site", "same-origin")
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+    // An invalid label and a label without the console-git- prefix are
+    // rejected outright.
+    for label in ["Bad_Label", "other-subdomain"] {
+        let res = client
+            .get(Url::parse(&format!("{base}?preview_build={label}")).unwrap())
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // A POST without a selection is not proxied.
+    let res = client.post(Url::parse(&base).unwrap()).send().unwrap();
+    assert_eq!(res.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+    // A selection cookie routes the request to the preview host instead of
+    // the default upstream. `https://console-git-foo.127.0.0.1` is
+    // unreachable, so the proxy serves the recovery page rather than falling
+    // back.
+    let hits_before = upstream_hits.load(Ordering::SeqCst);
+    let res = client
+        .get(Url::parse(&base).unwrap())
+        .header(COOKIE, "mz_console_preview_build=console-git-foo")
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    assert_contains!(res.text().unwrap(), "?preview_build=");
+    assert_eq!(upstream_hits.load(Ordering::SeqCst), hits_before);
+
+    // Invalid or non-prefixed cookie values are ignored, serving the default
+    // build.
+    for cookie in [
+        "mz_console_preview_build=NOT!VALID",
+        "mz_console_preview_build=other-subdomain",
+    ] {
+        let res = client
+            .get(Url::parse(&base).unwrap())
+            .header(COOKIE, cookie)
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.text().unwrap(), "default-build");
+    }
+
+    // An empty selection clears the cookie.
+    let res = client
+        .get(Url::parse(&format!("{base}?preview_build=")).unwrap())
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let cookie = res.headers().get(SET_COOKIE).unwrap().to_str().unwrap();
+    assert_contains!(cookie, "mz_console_preview_build=;");
+    assert_contains!(cookie, "Max-Age=0");
 }
 
 #[mz_ore::test]
@@ -4433,6 +4583,61 @@ fn test_durable_oids() {
             .expect("failed to select")
             .get(0);
         assert_ne!(table_oid, view_oid);
+    }
+}
+
+// Applying a materialized view replacement retains the target's existing
+// GlobalIds as prior versions while swapping in the replacement's definition.
+// The durable expression cache is keyed by GlobalId under the invariant that
+// the definition behind a GlobalId never changes, so the apply must invalidate
+// the cached expressions of the retained GlobalIds. If it doesn't, the next
+// bootstrap installs the stale optimized expression for the item, and if the
+// old definition's dependencies have since been dropped, timeline resolution
+// panics with "catalog out of sync" on every startup.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_replacement_materialized_view_invalidates_expression_cache() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default()
+        .data_directory(data_dir.path())
+        .with_system_parameter_default(
+            "enable_replacement_materialized_views".to_string(),
+            "true".to_string(),
+        );
+
+    {
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.batch_execute("CREATE TABLE t1 (a int)").unwrap();
+        client.batch_execute("INSERT INTO t1 VALUES (1)").unwrap();
+        client
+            .batch_execute("CREATE VIEW v1 AS SELECT a FROM t1")
+            .unwrap();
+        client
+            .batch_execute("CREATE MATERIALIZED VIEW mv AS SELECT a FROM v1")
+            .unwrap();
+        client.batch_execute("CREATE TABLE t2 (a int)").unwrap();
+        client.batch_execute("INSERT INTO t2 VALUES (2)").unwrap();
+        client
+            .batch_execute("CREATE VIEW v2 AS SELECT a FROM t2")
+            .unwrap();
+        client
+            .batch_execute("CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a FROM v2")
+            .unwrap();
+        client
+            .batch_execute("ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp")
+            .unwrap();
+        client.batch_execute("DROP VIEW v1").unwrap();
+        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
+        assert_eq!(row.get::<_, i32>(0), 2, "pre-restart");
+    }
+
+    {
+        let server = harness.start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
+        assert_eq!(row.get::<_, i32>(0), 2);
     }
 }
 

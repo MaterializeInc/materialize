@@ -60,6 +60,7 @@ import { LoadingContainer } from "~/components/LoadingContainer";
 import { Modal } from "~/components/Modal";
 import SimpleSelect from "~/components/SimpleSelect";
 import StatusPill from "~/components/StatusPill";
+import { useAppConfig } from "~/config/useAppConfig";
 import { User } from "~/external-library-wrappers/frontegg";
 import {
   MainContentContainer,
@@ -93,6 +94,10 @@ const EXPIRING_SOON_MS = 7 * 24 * 60 * 60 * 1000;
 const AppPasswordsPage = ({ user }: { user: User }) => {
   const { isOpen, onOpen, onClose } = useDisclosure();
   const location = useLocation();
+  const appConfig = useAppConfig();
+
+  const isImpersonating =
+    appConfig.mode === "cloud" && appConfig.isImpersonating;
 
   React.useEffect(() => {
     if (location.state && "new" in location.state && location.state.new) {
@@ -103,7 +108,14 @@ const AppPasswordsPage = ({ user }: { user: User }) => {
   return (
     <MainContentContainer>
       <PageHeader>
-        <PageHeading>App Passwords</PageHeading>
+        <HStack width="100%" justifyContent="space-between">
+          <PageHeading>App Passwords</PageHeading>
+          {!isImpersonating && (
+            <Button variant="primary" size="sm" onClick={onOpen}>
+              Create New App Password
+            </Button>
+          )}
+        </HStack>
       </PageHeader>
       <React.Suspense fallback={<LoadingContainer />}>
         <AppErrorBoundary>

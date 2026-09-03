@@ -977,6 +977,7 @@ mz_records_per_dataflow_per_worker
 mz_relations
 mz_render_typmod
 mz_replacements
+mz_replica_hydration_history
 mz_replica_system_parameters
 mz_resolve_object_name
 mz_role_auth

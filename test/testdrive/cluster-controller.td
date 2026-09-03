@@ -256,8 +256,8 @@ scale=1,workers=2
 > SELECT size FROM mz_clusters WHERE name = 'cc_timeout'
 scale=1,workers=4
 
-# Explicit ON TIMEOUT COMMIT, and WAIT FOR (which desugars to ON TIMEOUT COMMIT):
-# both accepted under the gate and drive a cut-over.
+# Explicit ON TIMEOUT COMMIT and WAIT FOR (which uses ROLLBACK on timeout) both
+# drive a cut-over when the target hydrates before the deadline.
 > ALTER CLUSTER cc_timeout SET (SIZE 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '60s', ON TIMEOUT 'COMMIT'))
 > SELECT size FROM mz_clusters WHERE name = 'cc_timeout'
 scale=1,workers=2
@@ -284,8 +284,9 @@ scale=1,workers=1
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
 
-# ROLLBACK: the controller drops the target set at the deadline, leaves the
-# realized config untouched, and audits the record as timed-out.
+# WAIT FOR uses ROLLBACK on timeout: the controller drops the target set at the
+# deadline, leaves the realized config untouched, and audits the record as
+# timed-out.
 > CREATE CLUSTER cc_deadline (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
 
 > CREATE TABLE cc_deadline_t (id int)
@@ -295,7 +296,7 @@ ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
 > CREATE MATERIALIZED VIEW cc_deadline_slow IN CLUSTER cc_deadline AS
   SELECT mz_unsafe.mz_sleep(id * 3600) AS s FROM cc_deadline_t
 
-> ALTER CLUSTER cc_deadline SET (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '1s', ON TIMEOUT 'ROLLBACK'))
+> ALTER CLUSTER cc_deadline SET (SIZE 'scale=1,workers=4') WITH (WAIT FOR '1s')
 
 > SELECT details->>'transition' FROM mz_catalog.mz_audit_events WHERE event_type = 'alter' AND object_type = 'cluster' AND details->>'cluster_name' = 'cc_deadline' AND details->>'transition' IS NOT NULL ORDER BY id
 started

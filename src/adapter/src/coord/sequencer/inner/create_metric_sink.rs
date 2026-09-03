@@ -136,6 +136,10 @@ impl Coordinator {
             .override_from(&self.catalog.get_cluster(cluster_id).config.features())
             .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id));
         let optimizer_features = optimizer_config.features.clone();
+        let debug_name = self
+            .catalog()
+            .resolve_full_name(&plan.name, None)
+            .to_string();
 
         // Build an optimizer for this METRIC SINK.
         let mut optimizer = optimize::metric_sink::Optimizer::new(
@@ -152,9 +156,10 @@ impl Coordinator {
             move || {
                 span.in_scope(|| {
                     let metric_sink = optimize::metric_sink::MetricSink::new(
-                        plan.name.clone(),
-                        plan.metric_sink.from,
+                        debug_name,
+                        optimize::metric_sink::MetricSinkFrom::Id(plan.metric_sink.from),
                         plan.metric_sink.prefix.clone(),
+                        None,
                     );
 
                     // MIR ⇒ MIR optimization (global)

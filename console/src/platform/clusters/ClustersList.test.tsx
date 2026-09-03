@@ -14,6 +14,7 @@ import { useLocation } from "react-router-dom";
 
 import { Cluster, Replica } from "~/api/materialize/cluster/clusterList";
 import { ReplicaUtilization } from "~/api/materialize/cluster/replicaUtilization";
+import { uiPreviewOptInStorageKey } from "~/hooks/useUiPreview";
 import { getStore } from "~/jotai";
 import { allClusters } from "~/store/allClusters";
 import { mockSubscribeState } from "~/test/mockSubscribe";
@@ -24,8 +25,10 @@ import {
 } from "~/utils/dateFormat";
 
 import ClustersListPage from "./ClustersList";
+import { ReplicaHydrationCounts } from "./queries";
 
-// The per-replica table is gated on this flag. The global useFlags mock in
+// The per-replica table is a UI preview: its flag must be on AND the user
+// opted in (seeded into localStorage below). The global useFlags mock in
 // vitest.setup.ts returns no flags at all, so without this override the list
 // renders the one-row-per-cluster table and none of these tests reach the code.
 vi.mock("~/hooks/useFlags", () => ({
@@ -55,6 +58,11 @@ vi.mock("~/api/materialize/cluster/useLatestOfflineReplica", async () => {
 
 beforeEach(() => {
   offlineReplicas.clear();
+  replicaHydration.clear();
+  localStorage.setItem(
+    uiPreviewOptInStorageKey("clusterListUsageMetrics"),
+    "true",
+  );
 });
 
 // A row's actions menu renders only for clusters the user owns, and `useOwners`
@@ -63,6 +71,7 @@ beforeEach(() => {
 // Utilization arrives from its own polled query, so the fixtures register it
 // here and the table reads it back through the mocked hook.
 const replicaUtilization = new Map<string, ReplicaUtilization>();
+const replicaHydration = new Map<string, ReplicaHydrationCounts>();
 
 vi.mock("./queries", async () => {
   const actual = await vi.importActual("./queries");
@@ -70,6 +79,7 @@ vi.mock("./queries", async () => {
     ...actual,
     useOwners: () => ({ isOwner: () => true }),
     useReplicaUtilization: () => ({ data: replicaUtilization }),
+    useReplicaHydration: () => ({ data: replicaHydration }),
   };
 });
 
@@ -92,8 +102,13 @@ const buildReplica = ({
   memoryPercent = 0.4,
   diskPercent = 0.25,
   heapPercent = 0.45,
+  hydration = { hydratedObjects: 4, totalObjects: 4 },
   ...overrides
-}: Partial<Replica> & Partial<Omit<ReplicaUtilization, "replicaId">> = {}) => {
+}: Partial<Replica> &
+  Partial<Omit<ReplicaUtilization, "replicaId">> & {
+    /** Null for a replica the hydration query reports nothing for. */
+    hydration?: ReplicaHydrationCounts | null;
+  } = {}) => {
   const replica: Replica = {
     id: "u10",
     name: "r1",
@@ -117,6 +132,9 @@ const buildReplica = ({
     diskPercent,
     heapPercent,
   });
+  if (hydration) {
+    replicaHydration.set(replica.id, hydration);
+  }
   return replica;
 };
 
@@ -178,8 +196,9 @@ const COLUMN = {
   memory: 4,
   disk: 5,
   heap: 6,
-  lastStatusChange: 7,
-  actions: 8,
+  hydration: 7,
+  lastStatusChange: 8,
+  actions: 9,
 } as const;
 
 // `queryAllByRole`, not `getAllByRole`: when the search or a filter excludes
@@ -230,6 +249,7 @@ const FILTER_COLUMN_IDS: Record<string, string> = {
   Memory: "memoryPercent",
   Disk: "diskPercent",
   Heap: "heapPercent",
+  Hydration: "hydration",
 };
 
 /** The filter trigger in the header of the column headed `label`. */
@@ -308,6 +328,51 @@ const panelValues = async (
   };
 };
 
+/**
+ * Toggles each of `statuses` in the Hydration panel, then closes it.
+ *
+ * The panel applies on every click, so unlike the utilization panels there is
+ * no Apply to press. Closing matters for the same reason it does there: an open
+ * panel covers the table the assertions read.
+ */
+const toggleHydration = async (
+  user: ReturnType<typeof userEvent.setup>,
+  ...statuses: string[]
+) => {
+  await user.click(filterTrigger("Hydration"));
+  for (const status of statuses) {
+    await user.click(await screen.findByRole("checkbox", { name: status }));
+  }
+  // Nothing to close when the selection emptied the table: the header the
+  // panel hung off went with it.
+  const trigger = queryFilterTrigger("Hydration");
+  if (trigger) await user.click(trigger);
+};
+
+/** The filter chips on screen, by the condition each states. */
+const chipLabels = () =>
+  screen
+    .queryAllByRole("button", { name: /^Remove / })
+    .map((button) => button.getAttribute("aria-label")?.replace("Remove ", ""));
+
+describe("ClustersList preview gating", () => {
+  it("renders the classic table when the flag is on but the user hasn't opted in", async () => {
+    localStorage.removeItem(
+      uiPreviewOptInStorageKey("clusterListUsageMetrics"),
+    );
+    await renderClustersList([buildCluster()]);
+
+    // The classic table summarizes replicas per cluster; the per-replica
+    // usage table is the one with utilization columns.
+    expect(
+      screen.getByRole("columnheader", { name: "Replicas" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("columnheader", { name: "CPU" }),
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe("ClustersList replica rows", () => {
   it("renders one row per replica, naming the cluster on each", async () => {
     await renderClustersList([buildCluster()]);
@@ -328,6 +393,7 @@ describe("ClustersList replica rows", () => {
       "40.0%",
       "25.0%",
       "45.0%",
+      "Hydrated",
       formatted(STATUS_UPDATED_AT),
       "",
     ]);
@@ -983,16 +1049,27 @@ describe("ClustersList keyboard navigation", () => {
     const user = userEvent.setup();
     await renderClustersList([singleReplicaCluster()]);
 
-    // The header's system-objects switch and the table's toolbar precede the
-    // rows in document order.
+    // The header's preview pill (showing the way back, since these tests opt
+    // in) and its collapse button, the system-objects switch, and the table's
+    // toolbar precede the rows in document order.
+    await user.tab();
+    expect(
+      screen.getByRole("button", { name: /Switch to classic UI/ }),
+    ).toHaveFocus();
+
+    await user.tab();
+    expect(
+      screen.getByRole("button", { name: "Collapse preview" }),
+    ).toHaveFocus();
+
     await user.tab();
     expect(screen.getByLabelText("Show system clusters")).toHaveFocus();
 
     await user.tab();
     expect(screen.getByLabelText("Search clusters...")).toHaveFocus();
 
-    // One control per utilization column, in the order the table shows them.
-    for (const label of ["CPU", "Memory", "Disk", "Heap"]) {
+    // One control per filterable column, in the order the table shows them.
+    for (const label of ["CPU", "Memory", "Disk", "Heap", "Hydration"]) {
       await user.tab();
       expect(filterTrigger(label)).toHaveFocus();
     }
@@ -1752,6 +1829,76 @@ describe("ClustersList filter URL state", () => {
     const { percent } = await panelValues(user, "CPU");
     expect(percent).toHaveValue("7.5");
   });
+
+  describe("a hydration selection", () => {
+    it("is written to the URL, one parameter per status", async () => {
+      const user = userEvent.setup();
+      await renderAt(twoClusters());
+
+      await toggleHydration(user, "Hydrated", "Hydrating");
+
+      await waitFor(() =>
+        expect(currentSearch().getAll("hydration[]")).toEqual([
+          "hydrated",
+          "hydrating",
+        ]),
+      );
+    });
+
+    it("is dropped from the URL when the last status is unchecked", async () => {
+      const user = userEvent.setup();
+      await renderAt(twoClusters());
+
+      await toggleHydration(user, "Hydrated");
+      await waitFor(() =>
+        expect(currentSearch().getAll("hydration[]")).toEqual(["hydrated"]),
+      );
+
+      await toggleHydration(user, "Hydrated");
+      await waitFor(() =>
+        expect(currentSearch().getAll("hydration[]")).toEqual([]),
+      );
+    });
+
+    it("is restored from a bookmark, in the rows and in the panel", async () => {
+      const user = userEvent.setup();
+      // Every replica in the fixture is fully hydrated, so a bookmark asking
+      // for anything else leaves nothing on screen.
+      await renderAt(twoClusters(), "/?hydration[]=not_hydrated");
+
+      expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
+
+      await user.click(
+        screen.getByRole("button", { name: "Remove Hydration: Not Hydrated" }),
+      );
+      // The empty state replaced the table, so clearing the filter mounts a
+      // fresh one rather than adding rows to the table already on screen.
+      await screen.findByRole("table");
+      expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
+    });
+
+    it("restores every status a bookmark names", async () => {
+      await renderAt(
+        twoClusters(),
+        "/?hydration[]=hydrated&hydration[]=hydrating",
+      );
+
+      expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
+      expect(chipLabels()).toEqual([
+        "Hydration: Hydrated",
+        "Hydration: Hydrating",
+      ]);
+    });
+
+    describe("when the URL names a status that does not exist", () => {
+      it("ignores it and leaves the table unfiltered", async () => {
+        await renderAt(twoClusters(), "/?hydration[]=lukewarm");
+
+        expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
+        expect(chipLabels()).toEqual([]);
+      });
+    });
+  });
 });
 
 describe("ClustersList filter chips", () => {
@@ -1885,5 +2032,266 @@ describe("ClustersList filter chips", () => {
     await user.click(screen.getByRole("button", { name: "Remove CPU ≥ 99%" }));
 
     expect(rowOrder()).toEqual(["idle", "busy", "hot-cpu"]);
+  });
+});
+
+describe("ClustersList hydration", () => {
+  /**
+   * One cluster covering every hydration state, including a replica the query
+   * reports no counted objects for. Named so that neither the ascending nor the
+   * descending sort matches the order the rows arrive in.
+   */
+  const mixedHydration = () => [
+    buildCluster({
+      id: "u1",
+      name: "compute",
+      replicas: [
+        buildReplica({
+          id: "u10",
+          name: "ready",
+          hydration: { hydratedObjects: 4, totalObjects: 4 },
+        }),
+        buildReplica({
+          id: "u11",
+          name: "partway",
+          hydration: { hydratedObjects: 1, totalObjects: 4 },
+        }),
+        buildReplica({
+          id: "u12",
+          name: "cold",
+          hydration: { hydratedObjects: 0, totalObjects: 4 },
+        }),
+        buildReplica({ id: "u13", name: "quiet", hydration: null }),
+      ],
+    }),
+  ];
+
+  const hydrationFor = (rowLabel: string) =>
+    cellsForRow(rowLabel)[COLUMN.hydration];
+
+  it("reports a replica whose every object is hydrated", async () => {
+    await renderClustersList(mixedHydration());
+
+    expect(hydrationFor("ready")).toBe("Hydrated");
+  });
+
+  it("reports a partly hydrated replica as still hydrating", async () => {
+    await renderClustersList(mixedHydration());
+
+    expect(hydrationFor("partway")).toBe("Hydrating");
+  });
+
+  it("reports a replica with nothing hydrated", async () => {
+    await renderClustersList(mixedHydration());
+
+    expect(hydrationFor("cold")).toBe("Not Hydrated");
+  });
+
+  it("renders a dash when no object on the replica is counted", async () => {
+    // Not the same as nothing being hydrated. The counts leave out sinks and
+    // system objects, so a replica running only those reports nothing at all,
+    // and a red pill would name a problem that is not there.
+    await renderClustersList(mixedHydration());
+
+    expect(hydrationFor("quiet")).toBe("-");
+  });
+
+  it("renders a dash for a cluster with no replicas", async () => {
+    await renderClustersList([
+      buildCluster({ id: "u1", name: "empty", replicas: [] }),
+    ]);
+
+    expect(hydrationFor("empty")).toBe("-");
+  });
+
+  describe("sorting", () => {
+    const sortByHydration = (user: ReturnType<typeof userEvent.setup>) =>
+      clickHeader(user, /^Hydration/);
+
+    it("orders replicas by how far hydration has progressed", async () => {
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      await sortByHydration(user);
+
+      expect(rowOrder()).toEqual(["cold", "partway", "ready", "quiet"]);
+    });
+
+    it("separates replicas the pill groups together", async () => {
+      // Both read "Hydrating", so a sort on the pill alone would tie them and
+      // leave them in arrival order.
+      const user = userEvent.setup();
+      await renderClustersList([
+        buildCluster({
+          id: "u1",
+          name: "compute",
+          replicas: [
+            buildReplica({
+              id: "u10",
+              name: "nearly",
+              hydration: { hydratedObjects: 9, totalObjects: 10 },
+            }),
+            buildReplica({
+              id: "u11",
+              name: "barely",
+              hydration: { hydratedObjects: 1, totalObjects: 10 },
+            }),
+          ],
+        }),
+      ]);
+
+      await sortByHydration(user);
+
+      expect(rowOrder()).toEqual(["barely", "nearly"]);
+    });
+  });
+
+  describe("filter", () => {
+    it("offers a checkbox per status", async () => {
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      await user.click(filterTrigger("Hydration"));
+
+      for (const status of ["Hydrated", "Hydrating", "Not Hydrated"]) {
+        expect(
+          await screen.findByRole("checkbox", { name: status }),
+        ).toBeInTheDocument();
+      }
+    });
+
+    it("keeps only the replicas in the selected status", async () => {
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      await toggleHydration(user, "Hydrating");
+
+      expect(rowOrder()).toEqual(["partway"]);
+    });
+
+    it("keeps the replicas in any of several selected statuses", async () => {
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      await toggleHydration(user, "Hydrating", "Not Hydrated");
+
+      expect(rowOrder()).toEqual(["partway", "cold"]);
+    });
+
+    it("drops a replica no status describes", async () => {
+      // A replica with no counted objects is in no bucket, so selecting every
+      // bucket still leaves it out.
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      await toggleHydration(user, "Hydrated", "Hydrating", "Not Hydrated");
+
+      expect(rowOrder()).toEqual(["ready", "partway", "cold"]);
+    });
+
+    it("restores every row when the last status is unchecked", async () => {
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      await toggleHydration(user, "Hydrating");
+      expect(rowOrder()).toEqual(["partway"]);
+
+      await toggleHydration(user, "Hydrating");
+      expect(rowOrder()).toEqual(["ready", "partway", "cold", "quiet"]);
+    });
+
+    it("holds the selection in its panel", async () => {
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      await toggleHydration(user, "Hydrating");
+      await user.click(filterTrigger("Hydration"));
+
+      expect(
+        await screen.findByRole("checkbox", { name: "Hydrating" }),
+      ).toBeChecked();
+      expect(
+        screen.getByRole("checkbox", { name: "Hydrated" }),
+      ).not.toBeChecked();
+    });
+
+    it("states each selected status on its own chip", async () => {
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      await toggleHydration(user, "Hydrating", "Not Hydrated");
+
+      expect(chipLabels()).toEqual([
+        "Hydration: Hydrating",
+        "Hydration: Not Hydrated",
+      ]);
+    });
+
+    it("drops one status from its chip and keeps the rest", async () => {
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      await toggleHydration(user, "Hydrating", "Not Hydrated");
+      await user.click(
+        screen.getByRole("button", { name: "Remove Hydration: Not Hydrated" }),
+      );
+
+      expect(rowOrder()).toEqual(["partway"]);
+      expect(chipLabels()).toEqual(["Hydration: Hydrating"]);
+    });
+
+    it("stays recoverable when the selection empties the table", async () => {
+      const user = userEvent.setup();
+      await renderClustersList([
+        buildCluster({
+          id: "u1",
+          name: "compute",
+          replicas: [
+            buildReplica({
+              id: "u10",
+              name: "ready",
+              hydration: { hydratedObjects: 4, totalObjects: 4 },
+            }),
+          ],
+        }),
+      ]);
+
+      await toggleHydration(user, "Not Hydrated");
+
+      expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
+      // The message replaces the table and takes the headers, and so the
+      // panel, with it. The chip is the only way back.
+      expect(chipLabels()).toEqual(["Hydration: Not Hydrated"]);
+    });
+
+    it("narrows the search results rather than replacing them", async () => {
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      await user.type(screen.getByLabelText("Search clusters..."), "partway");
+      await waitFor(() => expect(rowOrder()).toEqual(["partway"]));
+
+      await toggleHydration(user, "Hydrating");
+
+      expect(rowOrder()).toEqual(["partway"]);
+    });
+
+    it("is the only way to narrow by status: the search ignores the column", async () => {
+      // The accessor holds a bucket id, so a searchable hydration column would
+      // match "not_hydrated" while the "Not Hydrated" on screen missed, and
+      // would only do so when the first row in the payload reports hydration.
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      for (const term of ["hydrating", "not_hydrated", "Not Hydrated"]) {
+        await user.clear(screen.getByLabelText("Search clusters..."));
+        await user.type(screen.getByLabelText("Search clusters..."), term);
+
+        // waitFor absorbs the search box's debounce.
+        await waitFor(() =>
+          expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument(),
+        );
+      }
+    });
   });
 });

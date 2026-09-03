@@ -963,7 +963,7 @@ metrics:
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_hydration_history_retention_batch_full_total
-  help: Total hydration-history sweeps whose retention batch was full. Repeated increments mean retention may not be keeping up with its schedule.
+  help: Total hydration-history retention batches that were full. Repeated increments mean retention may not be keeping up with its schedule.
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_hydration_history_rows_affected_total
@@ -1500,15 +1500,20 @@ metrics:
 - name: mz_occ_read_then_write_retry_count_bucket
   help: Number of OCC retries per read-then-write operation.
   labels:
+  - caller
   - le
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_occ_read_then_write_retry_count_count
   help: Number of OCC retries per read-then-write operation.
+  labels:
+  - caller
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_occ_read_then_write_retry_count_sum
   help: Number of OCC retries per read-then-write operation.
+  labels:
+  - caller
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_optimization_notices
