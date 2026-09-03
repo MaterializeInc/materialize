@@ -978,9 +978,8 @@ impl ExecutionLogging {
 /// entry goes away and the statement is logged as aborted.
 ///
 /// This is the frontend's counterpart to the coordinator's `pending_peeks`
-/// entry, which
-/// [`Coordinator::handle_peek_notification`](crate::coord::Coordinator::handle_peek_notification)
-/// retires for coordinator-sequenced peeks.
+/// entry, which `Coordinator::handle_peek_notification` retires for
+/// coordinator-sequenced peeks.
 pub(crate) struct FrontendPeekCompletion {
     /// Removes the registry entry on drop, so it is enough to hold this.
     _registration: PeekRegistrationGuard,

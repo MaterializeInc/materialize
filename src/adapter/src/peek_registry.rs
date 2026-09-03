@@ -14,8 +14,7 @@
 //! Frontend peeks register and unregister themselves here directly, off the
 //! single coordinator task, so that the peek hot path never blocks on a
 //! coordinator round-trip. The coordinator only consults the registry when it
-//! must cancel a connection's peeks (see
-//! [`Coordinator::cancel_pending_peeks`](crate::coord::Coordinator::cancel_pending_peeks)).
+//! must cancel a connection's peeks, in `Coordinator::cancel_pending_peeks`.
 //!
 //! The registry tracks the minimum state cancellation needs: for a connection,
 //! the set of peek uuids it owns, and for each uuid the cluster it runs on.
