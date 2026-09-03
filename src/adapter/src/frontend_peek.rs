@@ -1542,36 +1542,6 @@ impl PeekClient {
             ])
             .inc();
         if !det.respond_immediately()
-            && isolation_level == &IsolationLevel::StrictSerializable
-            && real_time_recency_ts.is_none()
-        {
-            // Note down the difference between StrictSerializable and Serializable into a metric.
-            if let Some(strict) = det.timestamp_context.timestamp() {
-                let (serializable_det, _tmp_read_holds) =
-                    <Coordinator as TimestampProvider>::determine_timestamp_for_inner(
-                        session,
-                        id_bundle,
-                        when,
-                        timeline_context,
-                        oracle_read_ts,
-                        real_time_recency_ts,
-                        &IsolationLevel::Serializable,
-                        read_holds.clone(),
-                        upper.clone(),
-                    )?;
-                if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
-                    session
-                        .metrics()
-                        .timestamp_difference_for_strict_serializable_ms(&[compute_instance
-                            .to_string()
-                            .as_ref()])
-                        .observe(f64::cast_lossy(u64::from(
-                            strict.saturating_sub(*serializable),
-                        )));
-                }
-            }
-        }
-        if !det.respond_immediately()
             && isolation_level.is_bounded_staleness()
             && real_time_recency_ts.is_none()
         {
