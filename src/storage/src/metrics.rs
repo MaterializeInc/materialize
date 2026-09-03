@@ -28,13 +28,10 @@
 //! needing to interact with metrics _definitions_ into the code that actually bumps those
 //! metrics.
 
-use std::sync::Arc;
-
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::GlobalId;
 
 use crate::statistics::{SinkStatisticsMetricDefs, SourceStatisticsMetricDefs};
-use mz_storage_operators::metrics::BackpressureMetrics;
 
 pub mod decode;
 pub mod sink;
@@ -77,37 +74,22 @@ impl StorageMetrics {
         }
     }
 
-    /// Get a `BackpressureMetrics` for the given id and worker id.
+    /// Get the backpressure series for the given id and worker id.
     pub(crate) fn get_backpressure_metrics(
         &self,
         id: GlobalId,
         index: usize,
-    ) -> BackpressureMetrics {
-        BackpressureMetrics {
-            emitted_bytes: Arc::new(
-                self.upsert_backpressure_defs
-                    .emitted_bytes
-                    .get_delete_on_drop_metric(vec![id.to_string(), index.to_string()]),
-            ),
-            last_backpressured_bytes: Arc::new(
-                self.upsert_backpressure_defs
-                    .last_backpressured_bytes
-                    .get_delete_on_drop_metric(vec![id.to_string(), index.to_string()]),
-            ),
-            retired_bytes: Arc::new(
-                self.upsert_backpressure_defs
-                    .retired_bytes
-                    .get_delete_on_drop_metric(vec![id.to_string(), index.to_string()]),
-            ),
-        }
+    ) -> upsert::UpsertBackpressureMetrics {
+        upsert::UpsertBackpressureMetrics::new(&self.upsert_backpressure_defs, id, index)
     }
 
-    /// Get an `UpsertMetrics` for the given id and worker id (and optional `BackpressureMetrics`).
+    /// Get an `UpsertMetrics` for the given id and worker id (and optional
+    /// `UpsertBackpressureMetrics`).
     pub(crate) fn get_upsert_metrics(
         &self,
         id: GlobalId,
         worker_id: usize,
-        backpressure_metrics: Option<BackpressureMetrics>,
+        backpressure_metrics: Option<upsert::UpsertBackpressureMetrics>,
     ) -> upsert::UpsertMetrics {
         upsert::UpsertMetrics::new(&self.upsert_defs, id, worker_id, backpressure_metrics)
     }

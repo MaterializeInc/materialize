@@ -1646,24 +1646,15 @@ metrics:
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_backpressure_emitted_bytes
-  help: A counter with the number of emitted bytes.
-  labels:
-  - name
-  - shard
+  help: bytes emitted by backpressure operators
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_backpressure_last_backpressured_bytes
-  help: The last count of bytes we are waiting to be retired in the operator. This cannot be directly compared to `retired_bytes`, but CAN indicate that backpressure is happening.
-  labels:
-  - name
-  - shard
+  help: sum over backpressure operators of the inflight bytes each last stalled on; not comparable to retired bytes, but nonzero growth indicates backpressure is happening
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_backpressure_retired_bytes
-  help: A counter with the number of bytes retired by downstream processing.
-  labels:
-  - name
-  - shard
+  help: bytes retired by processing downstream of backpressure operators
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_blob_cache_evictions
@@ -2198,6 +2189,18 @@ metrics:
   help: count of grpc errors received
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
+- name: mz_persist_pubsub_client_receiver_diff_applied
+  help: number of diffs received via pubsub that applied
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_pubsub_client_receiver_diff_not_applied_out_of_order
+  help: number of diffs received via pubsub that did not apply due to out-of-order delivery
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_pubsub_client_receiver_diff_not_applied_stale
+  help: number of diffs received via pubsub that did not apply due to staleness
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_client_receiver_state_push_diff_fast_path
   help: count fast-path state push_diff calls
   source: src/persist-client/src/internal/metrics.rs
@@ -2596,27 +2599,6 @@ metrics:
   visibility: internal
 - name: mz_persist_shard_noncompact_batches
   help: number of batches in the shard that aren't compact and have no ongoing compaction
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_pubsub_diff_applied
-  help: number of diffs received via pubsub that applied
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_pubsub_diff_not_applied_out_of_order
-  help: number of diffs received via pubsub that did not apply due to out-of-order delivery
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_pubsub_diff_not_applied_stale
-  help: number of diffs received via pubsub that did not apply due to staleness
   labels:
   - name
   - shard

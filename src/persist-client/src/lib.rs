@@ -78,7 +78,7 @@ pub mod iter;
 pub mod metrics {
     //! Utilities related to metrics.
     pub use crate::internal::metrics::{
-        Metrics, SinkMetrics, SinkWorkerMetrics, UpdateDelta, encode_ts_metric,
+        BackpressureMetrics, Metrics, SinkMetrics, SinkWorkerMetrics, UpdateDelta, encode_ts_metric,
     };
 }
 pub mod operators {

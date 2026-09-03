@@ -25,7 +25,6 @@ use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_rocksdb::ValueIterator;
 use mz_sql_server_util::cdc::Lsn;
-use mz_storage_operators::metrics::BackpressureMetrics;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::dyncfgs;
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
@@ -47,7 +46,7 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::healthcheck::HealthStatusUpdate;
-use crate::metrics::upsert::UpsertMetrics;
+use crate::metrics::upsert::{UpsertBackpressureMetrics, UpsertMetrics};
 use crate::storage_state::StorageInstanceContext;
 use crate::{upsert_continual_feedback, upsert_continual_feedback_v2};
 use types::{
@@ -508,7 +507,7 @@ pub(crate) fn upsert<'scope, T, FromTime>(
     instance_context: &StorageInstanceContext,
     storage_configuration: &StorageConfiguration,
     dataflow_paramters: &crate::internal_control::DataflowParameters,
-    backpressure_metrics: Option<BackpressureMetrics>,
+    backpressure_metrics: Option<UpsertBackpressureMetrics>,
 ) -> (
     VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
     StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
@@ -641,7 +640,7 @@ pub(crate) fn upsert_v2<'scope, T, FromTime>(
     previous: VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
     previous_token: Option<Vec<PressOnDropButton>>,
     source_config: crate::source::SourceExportCreationConfig,
-    backpressure_metrics: Option<BackpressureMetrics>,
+    backpressure_metrics: Option<UpsertBackpressureMetrics>,
     stash_flavor: upsert_continual_feedback_v2::UpsertStashFlavor,
 ) -> (
     VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
