@@ -853,7 +853,6 @@ async fn try_commit_batch(
     conn_table: &str,
     sink_id: GlobalId,
     sink_version: u64,
-    frontier: &Antichain<Timestamp>,
     batch_lower: &Antichain<Timestamp>,
     batch_upper: &Antichain<Timestamp>,
     metrics: &IcebergSinkMetrics,
@@ -883,7 +882,7 @@ async fn try_commit_batch(
     };
     if let Some((last_frontier, last_id, last_version)) = last {
         // Just in case the sink was recreated, check both sink ID and version to see if it was us.
-        if last_id == sink_id && last_version == sink_version && last_frontier == *frontier {
+        if last_id == sink_id && last_version == sink_version && last_frontier == *batch_upper {
             // Our own commit for this batch is already on the table.
             // We must've missed the response.
             info!(
@@ -911,15 +910,17 @@ async fn try_commit_batch(
             );
         }
 
-        if PartialOrder::less_equal(frontier, &last_frontier) {
-            // Someone else has already written this batch (or an even later batch).
+        if PartialOrder::less_equal(batch_upper, &last_frontier)
+            || PartialOrder::less_than(batch_lower, &last_frontier)
+        {
+            // This batch contains records someone else has already written.
             return (
                 table,
                 RetryResult::FatalErr(anyhow!(
                     "Iceberg table '{}' has been modified by another writer. \
                     Current frontier: {:?}, last frontier: {:?}.",
                     conn_table,
-                    frontier,
+                    batch_upper,
                     last_frontier,
                 )),
             );
@@ -2730,7 +2731,6 @@ fn commit_to_iceberg<'scope>(
                             let catalog = Arc::clone(&catalog);
                             let conn_namespace = connection.namespace.clone();
                             let conn_table = connection.table.clone();
-                            let frontier = frontier.clone();
                             let batch_lower = batch.0.clone();
                             let batch_upper = batch.1.clone();
                             async move {
@@ -2744,7 +2744,6 @@ fn commit_to_iceberg<'scope>(
                                     &conn_table,
                                     sink_id,
                                     sink_version,
-                                    &frontier,
                                     &batch_lower,
                                     &batch_upper,
                                     &metrics,
