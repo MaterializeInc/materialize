@@ -19,14 +19,14 @@ use mz_ore::str::StrExt;
 use mz_repr::CatalogItemId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_sql_parser::ast::{Ident, QualifiedReplica, RawItemName, Statement};
+use mz_sql_parser::ast::{Ident, QualifiedReplica};
 use tracing::debug;
 
 use crate::catalog::{
     CatalogItemType, ErrorMessageObjectDescription, ObjectType, SessionCatalog, SystemObjectType,
 };
 use crate::names::{
-    Aug, CommentObjectId, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
+    CommentObjectId, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
     SchemaSpecifier, SystemObjectId,
 };
 use crate::plan::{self, PlanKind};
@@ -34,6 +34,7 @@ use crate::plan::{
     DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, TableDataSource,
     UpdatePrivilege,
 };
+use crate::pure::StatementSource;
 use crate::session::metadata::SessionMetadata;
 use crate::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use crate::session::vars::SystemVars;
@@ -398,74 +399,41 @@ pub fn check_usage(
     Ok(())
 }
 
-/// Authorizes a statement for purification, which runs before planning and,
-/// for statements that reach an upstream system through an existing source,
-/// borrows that source's own connection. The source is resolved from the
-/// statement because `ALTER SOURCE` carries its target as an unresolved name
-/// that `resolved_ids` never contains; resolution mirrors what purification
-/// itself does, so this gates exactly the item that would be dialed. The
-/// requirements are the same ones planning enforces later (ownership for
-/// `ALTER SOURCE`, read for `CREATE TABLE ... FROM SOURCE`), so a statement
-/// that passes here can still be rejected by [`check_plan`], never the reverse.
+/// Authorizes a statement for purification, which runs before planning and so
+/// escapes the [`check_plan`] gate. `source` is the existing source the
+/// statement would drive, as resolved by [`crate::pure::statement_source`].
 ///
-/// Returns the resolved source's id so the caller can track it as a dependency
-/// of the about-to-be-purified statement; name resolution does not record it
-/// for `ALTER SOURCE`.
+/// The requirements are the same ones planning enforces later, so a statement
+/// that passes here can still be rejected by [`check_plan`], never the reverse.
 pub fn check_purification(
     catalog: &impl SessionCatalog,
     session: &dyn SessionMetadata,
-    stmt: &Statement<Aug>,
+    source: Option<StatementSource>,
     resolved_ids: &ResolvedIds,
-) -> Result<Option<CatalogItemId>, UnauthorizedError> {
+) -> Result<(), UnauthorizedError> {
     // Like `check_plan`: `validate` reads the current role's membership through
     // the panicking `get_role`, so the concurrent-role-drop case must be turned
     // into a clean error before anything else runs.
     rbac_check_preamble(catalog, session)?;
 
     let role_id = session.role_metadata().current_role;
-    let scx = crate::plan::StatementContext::new(None, catalog);
-
-    // A name that does not resolve is left to purification to report: failing
-    // to resolve leaks nothing, and both purify paths bail before any
-    // connection is opened.
-    let source = match stmt {
-        Statement::AlterSource(stmt) => scx
-            .resolve_item(RawItemName::Name(stmt.source_name.clone()))
-            .ok()
-            .map(|item| (item.id(), item.item_type(), true)),
-        Statement::CreateTableFromSource(stmt) => scx
-            .get_item_by_resolved_name(&stmt.source)
-            .ok()
-            .map(|item| (item.id(), item.item_type(), false)),
-        // Other purified statements (`CREATE SOURCE`, `CREATE SINK`) name
-        // their connection, which the `item_usage` requirement below covers.
-        _ => None,
-    };
-
     let mut requirements = RbacRequirements {
         item_usage: &CREATE_ITEM_USAGE,
         ..Default::default()
     };
-    let source_id = match source {
-        // Only a `Source` can carry a source description for purification to
-        // borrow a connection from; every other item type errors there before
-        // dialing out.
-        Some((id, CatalogItemType::Source, requires_ownership)) => {
-            if requires_ownership {
-                requirements.ownership = vec![ObjectId::Item(id)];
-            } else {
-                requirements.privileges =
-                    generate_read_privileges(catalog, iter::once(id), role_id);
-            }
-            Some(id)
+    match source {
+        Some(StatementSource::Altered(id)) => {
+            requirements.ownership = vec![ObjectId::Item(id)];
         }
-        _ => None,
-    };
+        Some(StatementSource::Read(id)) => {
+            requirements.privileges = generate_read_privileges(catalog, iter::once(id), role_id);
+        }
+        // Statements that name their connection are covered by `item_usage`.
+        None => {}
+    }
 
     let requirements = filter_requirements(catalog, session, requirements);
-    requirements.validate(catalog, session, resolved_ids)?;
-
-    Ok(source_id)
+    requirements.validate(catalog, session, resolved_ids)
 }
 
 /// Checks if a session is authorized to execute a plan. If not, an error is returned.
