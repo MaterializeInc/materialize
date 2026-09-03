@@ -9,11 +9,11 @@
 
 //! Sharing arrangements across timely runtimes.
 //!
-//! An arrangement is normally readable only from the worker that maintains it: its batches are
-//! reference counted with `Rc` and its trace handle is `Rc<RefCell<..>>`, both pinned to one
-//! thread. This module lets a worker publish an arrangement whose batches are `Arc`'d (and whose
-//! contents are `Send + Sync`) through a *publication point*, from which readers on other threads
-//! take consistent snapshots or import the arrangement into a second timely runtime.
+//! An arrangement is normally readable only from the worker that maintains it. Its batches already
+//! cross threads, being `Arc`-backed through `mz_row_spine::ArcBatch`, but its trace handle is a
+//! `TraceAgent`, which is `Rc<RefCell<..>>` and pinned to one thread. This module lets a worker
+//! publish an arrangement through a *publication point*, from which readers on other threads take
+//! consistent snapshots or import the arrangement into a second timely runtime.
 //!
 //! The unit that crosses the thread boundary is not the
 //! [`Spine`](differential_dataflow::trace::implementations::spine_fueled::Spine), which holds
@@ -40,23 +40,25 @@
 //! frontier locally and adjusts the accumulation as a delta, the way a `TraceAgent` does.
 //!
 //! Logical compaction decides which times stay *distinguishable*, physical compaction which batches
-//! may *merge*. A reader needs distinguishability at its `as_of`, and a boundary at each frontier it
-//! passes to `cursor_through`. It needs no boundary at its `as_of`: an import is seeded with the whole
-//! chain and wrapped in `TraceFrontier`, which advances times rather than cutting. Conflating the two
-//! is the mistake to avoid, and forwarding `since` as the physical frontier is what stopped published
-//! arrangements from merging at all.
+//! may *merge*. A reader needs distinguishability at its `as_of`, and a batch boundary at each
+//! frontier it passes to `cursor_through`. It needs no boundary at its `as_of`: an import is seeded
+//! with the whole chain and wrapped in `TraceFrontier`, which advances times rather than cutting. The
+//! two axes therefore carry different frontiers, and `since` is never the right physical one.
 //!
-//! Two of the holds have no reader behind them, and both exist because a reader registers only once
-//! its dataflow is built, while the agent's setter joins and so only ever advances. The *standing
-//! hold* tracks the frontier the importing runtime has applied, keeping the agent at or below every
-//! `as_of` that runtime can still present. The *coverage hold* is its physical counterpart: a reader
-//! registering on the next activation seeds at the current chain coverage and needs a boundary there.
+//! *Coverage* is the frontier through which the published chain is complete, which is its last
+//! batch's upper. A reader seeded with that chain makes its first cut there, so that is where its
+//! physical hold starts. With no reader registered the publisher forwards the coverage itself, the
+//! frontier an unshared index gets from `crate::arrangement::manager::TraceManager::maintenance`.
 //!
-//! The sharing machinery lives entirely in Materialize, so it builds against a released
-//! differential-dataflow rather than a fork. Publishing is exposed as the [`PublishArrangement`]
-//! extension trait, since Materialize cannot add inherent methods to differential's foreign
-//! `Arranged` type. Cross-thread batch sharing rests on the local `mz_row_spine::ArcBatch` newtype,
-//! not on any differential-side `Arc` batch impls.
+//! The *standing hold* is a logical hold with no reader behind it. A reader registers only once its
+//! dataflow is built, while the agent's setter joins and so only ever advances, so this hold tracks
+//! the frontier the importing runtime has applied and keeps the agent at or below every `as_of` that
+//! runtime can still present.
+
+// TODO(CPU-215): drop once `crate::sharing` calls this module. Nothing in the crate does yet, so
+// every item here reads as dead. The alternative, exporting the module publicly to keep the
+// analysis quiet, would ship a crate-internal primitive on the public surface.
+#![allow(dead_code)]
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -64,8 +66,6 @@ use std::sync::{Arc, Mutex};
 use differential_dataflow::lattice::{Lattice, antichain_meet};
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent, TraceReplayInstruction};
 use differential_dataflow::trace::cursor::Navigable;
-#[cfg(test)]
-use differential_dataflow::trace::cursor::{CursorList, cursor_list};
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::{BatchFrontier, TraceFrontier};
 use differential_dataflow::trace::{BatchReader, TraceReader};
@@ -73,6 +73,7 @@ use mz_repr::{Diff, Timestamp};
 use timely::dataflow::Scope;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::operators::generic::{Operator, source};
+use timely::order::TotalOrder;
 use timely::progress::Antichain;
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::scheduling::activate::SyncActivator;
@@ -80,9 +81,9 @@ use timely::scheduling::activate::SyncActivator;
 use crate::typedefs::{ErrSpine, RowRowSpine};
 
 /// A `Send` reader handle for a published `oks` arrangement.
-pub type SharedOksHandle = SharedTraceHandle<RowRowSpine<Timestamp, Diff>>;
+pub(crate) type SharedOksHandle = SharedTraceHandle<RowRowSpine<Timestamp, Diff>>;
 /// A `Send` reader handle for a published `errs` arrangement.
-pub type SharedErrsHandle = SharedTraceHandle<ErrSpine<Timestamp, Diff>>;
+pub(crate) type SharedErrsHandle = SharedTraceHandle<ErrSpine<Timestamp, Diff>>;
 
 /// A [`SharedOksHandle`] imported as a static `as_of` snapshot, wrapped in a `TraceFrontier`.
 ///
@@ -90,14 +91,14 @@ pub type SharedErrsHandle = SharedTraceHandle<ErrSpine<Timestamp, Diff>>;
 /// which returns a `TraceFrontier`-wrapped arrangement whose times are advanced to the dataflow
 /// `as_of` and bounded by `until`. Mirrors the maintenance import's `RowRowEnter`, which is likewise
 /// `TraceFrontier`-wrapped.
-pub type SharedOksFrontier = TraceFrontier<SharedOksHandle>;
+pub(crate) type SharedOksFrontier = TraceFrontier<SharedOksHandle>;
 /// An `ErrSpine` counterpart to [`SharedOksFrontier`].
-pub type SharedErrsFrontier = TraceFrontier<SharedErrsHandle>;
+pub(crate) type SharedErrsFrontier = TraceFrontier<SharedErrsHandle>;
 
 /// A [`SharedOksFrontier`] entered into a render scope whose timestamp is `TEnter`.
-pub type SharedOksEnter<TEnter> = TraceEnter<SharedOksFrontier, TEnter>;
+pub(crate) type SharedOksEnter<TEnter> = TraceEnter<SharedOksFrontier, TEnter>;
 /// A [`SharedErrsFrontier`] entered into a render scope whose timestamp is `TEnter`.
-pub type SharedErrsEnter<TEnter> = TraceEnter<SharedErrsFrontier, TEnter>;
+pub(crate) type SharedErrsEnter<TEnter> = TraceEnter<SharedErrsFrontier, TEnter>;
 
 /// The queue and wakeup for one importer registered against a publication point.
 struct ImportQueue<Tr: TraceReader> {
@@ -130,25 +131,13 @@ struct SharedTraceState<Tr: TraceReader> {
     /// Accumulated logical holds: every reader registration plus `standing_hold`. The publisher
     /// forwards this frontier to its agent.
     logical_compaction: MutableAntichain<Tr::Time>,
-    /// Accumulated physical holds: every reader registration plus `coverage_hold`.
-    physical_compaction: MutableAntichain<Tr::Time>,
-    /// Per-registration logical holds, mirroring what each handle contributes to
-    /// `logical_compaction`.
+    /// Accumulated physical holds: the lowest frontier each reader may still cut at.
     ///
-    /// The accumulation alone cannot say which reader holds what, and a refusal diagnostic needs
-    /// exactly that: "a hold sits at `f`" and "no hold exists and the frontier happens to be `f`"
-    /// are the difference between an import that is protected and one that is not.
-    logical_holds: BTreeMap<usize, Antichain<Tr::Time>>,
-    /// Per-registration physical holds: the lowest frontier each reader may still cut at.
-    ///
-    /// This is the path a shared reader's request travels, and a local consumer needs no equivalent:
-    /// `crate::render::join::mz_join_core` is an agent on its own trace, so its
+    /// Empty when no reader is registered, and the publisher then forwards the chain coverage
+    /// instead. This is the path a shared reader's request travels, and a local consumer needs no
+    /// equivalent: `crate::render::join::mz_join_core` is an agent on its own trace, so its
     /// `set_physical_compaction(acknowledged)` reaches the `TraceBox` directly.
-    ///
-    /// An entry starts at the chain coverage at registration, never at `since` and never at `as_of`:
-    /// `acknowledged` is initialised to that coverage in `SharedTraceHandle::import_snapshot_at` and
-    /// only advances, so no cut ever happens below it.
-    physical_holds: BTreeMap<usize, Antichain<Tr::Time>>,
+    physical_compaction: MutableAntichain<Tr::Time>,
     /// The controller's last logical compaction frontier for this arrangement, forwarded from
     /// `handle_allow_compaction` via `crate::sharing::ArrangementSharingRegistry::note_allow_compaction`.
     /// `None` until the first `AllowCompaction` arrives.
@@ -171,17 +160,10 @@ struct SharedTraceState<Tr: TraceReader> {
     /// every dataflow that may import the collection, because the controller does not offer an `as_of`
     /// below a collection's own `since`.
     standing_hold: Antichain<Tr::Time>,
-    /// Physical hold at the coverage of the published chain, the publisher's own.
-    ///
-    /// A reader registers at the coverage it finds, so a merge spanning the current coverage would
-    /// destroy the boundary the next reader to arrive cuts at. With no readers this is the whole
-    /// physical frontier, which is what an unshared index gets from
-    /// `crate::arrangement::manager::TraceManager::maintenance`.
-    coverage_hold: Antichain<Tr::Time>,
     /// Importer queues, keyed by registration id. A handle may back several registrations, so this
     /// is keyed separately from any handle.
     queues: BTreeMap<usize, ImportQueue<Tr>>,
-    /// Monotonic source of registration ids for holds and queues.
+    /// Monotonic source of registration ids for importer queues.
     next_id: usize,
     /// Set when the publisher drops. A terminal empty frontier is enqueued to each importer, so
     /// readers close only after draining what was already published.
@@ -192,41 +174,22 @@ impl<Tr: TraceReader> SharedTraceState<Tr>
 where
     Tr::Time: Lattice + Clone,
 {
-    /// Sets registration `id`'s logical hold to `frontier`, releasing it when `frontier` is empty.
+    /// Moves a logical hold from `previous` to `next`.
     ///
-    /// The empty antichain means "compaction is permitted everywhere", so a handle that reaches it
-    /// has released. The reduce operator reaches it on every dataflow whose input finishes: it
+    /// The empty antichain means "compaction is permitted everywhere", so passing it as `next`
+    /// releases. The reduce operator does exactly that on every dataflow whose input finishes: it
     /// forwards `upper_limit` to its source trace, and `upper_limit` is the join of the input
     /// frontiers, which empties when the input does.
-    fn set_logical_hold(&mut self, id: usize, frontier: &Antichain<Tr::Time>) {
-        let previous = if frontier.is_empty() {
-            self.logical_holds.remove(&id)
-        } else {
-            self.logical_holds.insert(id, frontier.clone())
-        };
-        let previous = previous.unwrap_or_else(Antichain::new);
-        adjust(&mut self.logical_compaction, &previous, frontier);
+    fn move_logical_hold(&mut self, previous: &Antichain<Tr::Time>, next: &Antichain<Tr::Time>) {
+        adjust(&mut self.logical_compaction, previous, next);
     }
 
-    /// Sets registration `id`'s physical hold to `frontier`, releasing it when `frontier` is empty.
+    /// Moves a physical hold from `previous` to `next`.
     ///
-    /// An empty request means this reader will never cut again, so it stops constraining where the
+    /// An empty `next` means this reader will never cut again, so it stops constraining where the
     /// spine may merge.
-    fn set_physical_hold(&mut self, id: usize, frontier: &Antichain<Tr::Time>) {
-        let previous = if frontier.is_empty() {
-            self.physical_holds.remove(&id)
-        } else {
-            self.physical_holds.insert(id, frontier.clone())
-        };
-        let previous = previous.unwrap_or_else(Antichain::new);
-        adjust(&mut self.physical_compaction, &previous, frontier);
-    }
-
-    /// Releases registration `id`'s holds on both axes.
-    fn release_holds(&mut self, id: usize) {
-        let empty = Antichain::new();
-        self.set_logical_hold(id, &empty);
-        self.set_physical_hold(id, &empty);
+    fn move_physical_hold(&mut self, previous: &Antichain<Tr::Time>, next: &Antichain<Tr::Time>) {
+        adjust(&mut self.physical_compaction, previous, next);
     }
 
     /// Advances the standing hold to its join with `frontier`.
@@ -234,16 +197,6 @@ where
         let next = self.standing_hold.join(frontier);
         let previous = std::mem::replace(&mut self.standing_hold, next);
         adjust(&mut self.logical_compaction, &previous, &self.standing_hold);
-    }
-
-    /// Moves the publisher's own physical hold to `frontier`, the coverage of the published chain.
-    fn set_coverage_hold(&mut self, frontier: Antichain<Tr::Time>) {
-        let previous = std::mem::replace(&mut self.coverage_hold, frontier);
-        adjust(
-            &mut self.physical_compaction,
-            &previous,
-            &self.coverage_hold,
-        );
     }
 }
 
@@ -280,7 +233,7 @@ impl<Tr: TraceReader> SharedTrace<Tr> {
     /// Used by [`Published::placeholder`], which leaves the point unbacked for a later
     /// [`PublishArrangement::adopt`].
     fn new_empty(peers: usize) -> Self {
-        let minimum = Antichain::from_elem(batch_min::<Tr>());
+        let minimum = Antichain::from_elem(<Tr::Time as timely::progress::Timestamp>::minimum());
         SharedTrace {
             state: Mutex::new(SharedTraceState {
                 chain: Vec::new(),
@@ -289,14 +242,14 @@ impl<Tr: TraceReader> SharedTrace<Tr> {
                 // vacuously true and returning empty results instead of blocking.
                 since: minimum.clone(),
                 upper: minimum.clone(),
-                // Seeded with the two holds that have no reader behind them.
-                logical_compaction: MutableAntichain::from_elem(batch_min::<Tr>()),
-                physical_compaction: MutableAntichain::from_elem(batch_min::<Tr>()),
-                logical_holds: BTreeMap::new(),
-                physical_holds: BTreeMap::new(),
+                // Seeded with the standing hold's own contribution. The physical accumulation has
+                // no such hold and starts empty.
+                logical_compaction: MutableAntichain::from_elem(
+                    <Tr::Time as timely::progress::Timestamp>::minimum(),
+                ),
+                physical_compaction: MutableAntichain::new(),
                 writer_logical: None,
-                standing_hold: minimum.clone(),
-                coverage_hold: minimum,
+                standing_hold: minimum,
                 queues: BTreeMap::new(),
                 next_id: 0,
                 closed: false,
@@ -309,7 +262,7 @@ impl<Tr: TraceReader> SharedTrace<Tr> {
 /// The result of publishing an arrangement. Holding it keeps the publication point registered;
 /// dropping it does not stop the publisher (the publisher lives with its dataflow), but no further
 /// handles can be minted from it.
-pub struct Published<Tr: TraceReader> {
+pub(crate) struct Published<Tr: TraceReader> {
     shared: SharedTraceRef<Tr>,
 }
 
@@ -321,7 +274,7 @@ where
     ///
     /// The handle registers a logical hold at the current published `since`, so the arrangement
     /// will not compact past it until the handle (and all its clones) drop.
-    pub fn handle(&self) -> SharedTraceHandle<Tr> {
+    pub(crate) fn handle(&self) -> SharedTraceHandle<Tr> {
         SharedTraceHandle::register(Arc::clone(&self.shared))
     }
 
@@ -338,7 +291,7 @@ where
     /// failure rather than a serving failure, since the controller promises an index's `since` never
     /// passes the `as_of` of a dataflow importing it, so callers report it loudly rather than
     /// degrading.
-    pub fn handle_at(
+    pub(crate) fn handle_at(
         &self,
         as_of: &Antichain<Tr::Time>,
     ) -> Result<SharedTraceHandle<Tr>, Antichain<Tr::Time>> {
@@ -356,41 +309,10 @@ where
     ///
     /// `peers` must equal the total peer count of the scope that later adopts the point, the same
     /// invariant [`SharedTraceHandle::import_snapshot_at`] enforces.
-    pub fn placeholder(peers: usize) -> Self {
+    pub(crate) fn placeholder(peers: usize) -> Self {
         Published {
             shared: Arc::new(SharedTrace::new_empty(peers)),
         }
-    }
-
-    /// The logical holds currently registered against this publication point.
-    ///
-    /// Test-only, and the only way to distinguish "a hold exists and sits at `f`" from "no hold
-    /// exists and the accumulated frontier happens to be `f`", which look identical from the
-    /// published frontiers.
-    #[cfg(test)]
-    pub(crate) fn logical_holds(&self) -> Vec<Antichain<Tr::Time>> {
-        let state = self.shared.state.lock().expect("shared trace poisoned");
-        state.logical_holds.values().cloned().collect()
-    }
-
-    /// The physical holds currently registered against this publication point.
-    ///
-    /// Test-only. A handle reports a weaker physical frontier than it holds, so the hold cannot be
-    /// read back through `TraceReader::get_physical_compaction`.
-    #[cfg(test)]
-    pub(crate) fn physical_holds(&self) -> Vec<Antichain<Tr::Time>> {
-        let state = self.shared.state.lock().expect("shared trace poisoned");
-        state.physical_holds.values().cloned().collect()
-    }
-
-    /// The number of batches in the published chain.
-    ///
-    /// Test-only. Counting through a handle would register a physical hold and perturb the merge
-    /// behaviour being measured, which is the whole observable here.
-    #[cfg(test)]
-    pub(crate) fn chain_len(&self) -> usize {
-        let state = self.shared.state.lock().expect("shared trace poisoned");
-        state.chain.len()
     }
 
     /// The controller's last `AllowCompaction` frontier for this arrangement, or `None` if none has
@@ -405,7 +327,7 @@ where
     /// runtime had already applied this compaction before it built the importing dataflow, and no
     /// replica-side hold could have prevented it. A standing hold BELOW that `since` means the
     /// publisher escaped its own bound, which is a bug here rather than upstream.
-    pub fn diagnostics(
+    pub(crate) fn diagnostics(
         &self,
     ) -> (
         Option<Antichain<Tr::Time>>,
@@ -426,7 +348,7 @@ where
     ///
     /// The publisher reads it to publish `since`, which is the meet of the trace's agents. Called
     /// from `handle_allow_compaction` through the registry.
-    pub fn note_writer_logical(&self, frontier: &Antichain<Tr::Time>) {
+    pub(crate) fn note_writer_logical(&self, frontier: &Antichain<Tr::Time>) {
         if let Ok(mut state) = self.shared.state.lock() {
             state.writer_logical = Some(frontier.clone());
         }
@@ -437,17 +359,10 @@ where
     ///
     /// Joins rather than assigning, so a reordered or replayed command cannot lower a bound the
     /// publisher already forwarded, which its agent's own joining setter could not honour anyway.
-    pub fn note_standing_hold(&self, frontier: &Antichain<Tr::Time>) {
+    pub(crate) fn note_standing_hold(&self, frontier: &Antichain<Tr::Time>) {
         if let Ok(mut state) = self.shared.state.lock() {
             state.advance_standing_hold(frontier);
         }
-    }
-
-    /// The standing hold currently bounding this arrangement's logical compaction.
-    #[cfg(test)]
-    pub(crate) fn standing_hold(&self) -> Antichain<Tr::Time> {
-        let state = self.shared.state.lock().expect("shared trace poisoned");
-        state.standing_hold.clone()
     }
 }
 
@@ -456,53 +371,40 @@ where
 /// Implements [`TraceReader`], so downstream operators drive its compaction and acquire cursors as
 /// with any trace handle. Each clone carries an independent registration: cloning mints a fresh id
 /// and copies the source's holds, so two consumers of one import cannot release each other's holds.
-pub struct SharedTraceHandle<Tr: TraceReader> {
+pub(crate) struct SharedTraceHandle<Tr: TraceReader> {
     shared: SharedTraceRef<Tr>,
-    /// This handle's hold registration id.
-    id: usize,
-    /// This handle's own logical frontier, mirrored into `logical_holds[id]`. Kept locally so
-    /// `get_logical_compaction` can return a borrow.
+    /// This handle's logical frontier, and its contribution to `logical_compaction`. Kept locally
+    /// both so `get_logical_compaction` can return a borrow and so the setter and `Drop` can adjust
+    /// the accumulation by a delta without the point tracking per-handle state.
     logical: Antichain<Tr::Time>,
-    /// The physical frontier this handle *reports*, seeded at the published `since`. Kept locally so
-    /// `get_physical_compaction` can return a borrow.
+    /// This handle's physical frontier, and its contribution to `physical_compaction`.
+    ///
+    /// Seeded at the chain coverage, never at `since` and never at `as_of`. A merge spanning the
+    /// coverage destroys the boundary this reader was seeded with, and `as_of` is not a boundary at
+    /// all: an import cuts at the coverage of its seed and only above it.
     physical: Antichain<Tr::Time>,
-    /// The physical frontier this handle *holds*, seeded at the chain coverage and mirrored into
-    /// `physical_holds[id]`.
-    ///
-    /// Distinct from `physical`, which is the weaker of the two on registration and must stay so:
-    /// a reported frontier may never lead the chain coverage (see `Self::register_at`), while the
-    /// hold has to start AT that coverage or a merge can eat the boundary this reader was seeded
-    /// with. Overwriting the hold with the reported value silently lowers it, which stops the spine
-    /// merging for the life of the handle.
-    ///
-    /// The logical axis needs no such split: both registrations install the same frontier a handle
-    /// reports.
-    physical_hold: Antichain<Tr::Time>,
 }
 
 impl<Tr: TraceReader> SharedTraceHandle<Tr>
 where
     Tr::Time: Lattice + Clone,
 {
-    /// Registers a fresh hold at the current published `since` and returns a handle for it.
+    /// Registers a fresh logical hold at the current published `since` and returns a handle for it.
     fn register(shared: SharedTraceRef<Tr>) -> Self {
-        let (id, since, coverage) = {
+        let empty = Antichain::new();
+        let (since, coverage) = {
             let mut state = shared.state.lock().expect("shared trace poisoned");
-            let id = state.next_id;
-            state.next_id += 1;
             let since = state.since.clone();
-            state.set_logical_hold(id, &since);
+            state.move_logical_hold(&empty, &since);
             // The cut floor starts at the chain coverage, NOT at `since`. See `register_at`.
             let coverage = seed_frontier::<Tr>(&state.chain, &state.upper);
-            state.set_physical_hold(id, &coverage);
-            (id, since, coverage)
+            state.move_physical_hold(&empty, &coverage);
+            (since, coverage)
         };
         Self {
             shared,
-            id,
-            logical: since.clone(),
-            physical: since,
-            physical_hold: coverage,
+            logical: since,
+            physical: coverage,
         }
     }
 
@@ -512,15 +414,13 @@ where
         shared: SharedTraceRef<Tr>,
         as_of: &Antichain<Tr::Time>,
     ) -> Result<Self, Antichain<Tr::Time>> {
-        let (id, since, coverage) = {
+        let empty = Antichain::new();
+        let coverage = {
             let mut state = shared.state.lock().expect("shared trace poisoned");
             if !timely::PartialOrder::less_equal(&state.since, as_of) {
                 return Err(state.since.clone());
             }
-            let id = state.next_id;
-            state.next_id += 1;
-            let since = state.since.clone();
-            state.set_logical_hold(id, as_of);
+            state.move_logical_hold(&empty, as_of);
             // The cut floor is the CHAIN COVERAGE, and it is neither `as_of` nor `since`.
             //
             // Not `since`: `since` is a logical frontier, the floor on which times stay
@@ -537,66 +437,22 @@ where
             // does not yet carry (see `seed_frontier_covers_the_chain_not_the_stream_frontier`), so
             // `upper` is the wrong value too: it would sit above the seed a reader registering now
             // will get, and permit a merge across the very first frontier that reader cuts at.
+            //
+            // The coverage is also the only value `get_physical_compaction` may report. A consumer
+            // asserts the reported frontier against the coverage it derives from `map_batches`: see
+            // `crate::render::join::mz_join_core`, which differential's own `join_core` also carries.
+            // An `as_of` legitimately leads the coverage, for an import over a placeholder whose
+            // publisher has not adopted it yet, or for a read at a timestamp beyond the index's seal,
+            // so reporting `as_of` would abort the worker on a correct import.
             let coverage = seed_frontier::<Tr>(&state.chain, &state.upper);
-            state.set_physical_hold(id, &coverage);
-            (id, since, coverage)
+            state.move_physical_hold(&empty, &coverage);
+            coverage
         };
         Ok(Self {
             shared,
-            id,
             logical: as_of.clone(),
-            // NOTE: `since`, NOT `as_of`. `get_physical_compaction` must never report a frontier
-            // that leads the published chain's coverage, because a consumer checks exactly that
-            // against the coverage it derives from `map_batches`: see the assertion in
-            // `crate::render::join::mz_join_core`, which differential's own `join_core` also carries.
-            // An `as_of` legitimately leads the coverage, for an import over a placeholder whose
-            // publisher has not adopted it yet, or for a read at a timestamp beyond the index's seal.
-            // Reporting it here aborts the worker on a correct import.
-            //
-            // `since` is right for the same reason it is right in `TraceAgent::clone`, which inherits
-            // the frontier of the agent it clones: it is what the trace actually guarantees. The
-            // publisher forwards the published `since` as its physical target, so this reports the
-            // grant.
-            physical: since,
-            physical_hold: coverage,
+            physical: coverage,
         })
-    }
-
-    /// Takes a consistent snapshot of the published arrangement as of `time`, waiting until `upper`
-    /// passes `time`.
-    ///
-    /// Test-only. Production reads go through [`Self::import_snapshot_at`], which is notification
-    /// driven and never parks a worker. This waits by polling, so it must not be called from a
-    /// timely worker thread: a worker blocked here cannot step, and on a single-worker test that
-    /// includes the publisher it is waiting for.
-    ///
-    /// Returns `None` when the snapshot cannot serve `time`, which is either the publisher closed
-    /// before `upper` passed `time`, or compaction has advanced `since` beyond `time` so the
-    /// accumulation at `time` is no longer accurate. The gate on `since` mirrors the single-runtime
-    /// peek path, which errors when the compaction frontier is beyond the read time rather than
-    /// returning coalesced results.
-    #[cfg(test)]
-    pub(crate) fn snapshot_at(&self, time: &Tr::Time) -> Option<TraceSnapshot<Tr>> {
-        loop {
-            {
-                let state = self.shared.state.lock().expect("shared trace poisoned");
-                // `upper` not less-equal `time` means all updates at `time` are sealed.
-                if !state.upper.less_equal(time) {
-                    // `since` beyond `time` means times at `time` have been coalesced and a read
-                    // there would be inaccurate. Fail to `None` rather than serve stale data.
-                    if !state.since.less_equal(time) {
-                        return None;
-                    }
-                    return Some(TraceSnapshot {
-                        chain: state.chain.clone(),
-                    });
-                }
-                if state.closed {
-                    return None;
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
     }
 
     /// The controller's last `AllowCompaction` frontier for this arrangement, or `None` if none has
@@ -605,7 +461,7 @@ where
     /// Diagnostic only. It distinguishes a published `since` that the controller drove from one the
     /// publisher's own hold drove, which is what tells apart a protocol-ordering violation from a
     /// local compaction bug when a reader finds `since` beyond its `as_of`.
-    pub fn writer_logical(&self) -> Option<Antichain<Tr::Time>> {
+    pub(crate) fn writer_logical(&self) -> Option<Antichain<Tr::Time>> {
         let state = self.shared.state.lock().expect("shared trace poisoned");
         state.writer_logical.clone()
     }
@@ -614,21 +470,9 @@ where
     ///
     /// A point-in-time observation for diagnostics. Either frontier may have advanced by the time
     /// the caller inspects the returned values.
-    pub fn frontiers(&self) -> (Antichain<Tr::Time>, Antichain<Tr::Time>) {
+    pub(crate) fn frontiers(&self) -> (Antichain<Tr::Time>, Antichain<Tr::Time>) {
         let state = self.shared.state.lock().expect("shared trace poisoned");
         (state.since.clone(), state.upper.clone())
-    }
-
-    /// Mirrors this handle's logical frontier into the publication point.
-    fn update_hold(&self) {
-        let mut state = self.shared.state.lock().expect("shared trace poisoned");
-        state.set_logical_hold(self.id, &self.logical);
-    }
-
-    /// Mirrors this handle's physical hold into the publication point.
-    fn update_physical_hold(&self) {
-        let mut state = self.shared.state.lock().expect("shared trace poisoned");
-        state.set_physical_hold(self.id, &self.physical_hold);
     }
 }
 
@@ -639,26 +483,18 @@ where
     fn clone(&self) -> Self {
         // A clone must be an independent hold: `import` returns `Arranged { trace: handle.clone() }`
         // and `Arranged` is itself `Clone`, so distinct downstream operators drive compaction on
-        // distinct clones. Sharing one hold slot would let the faster operator release the slower
-        // one's hold. This mirrors `TraceAgent::clone`, which registers an independent counted hold.
-        let id = {
+        // distinct clones. Sharing one hold would let the faster operator release the slower one's.
+        // This mirrors `TraceAgent::clone`, which registers an independent counted hold.
+        {
+            let empty = Antichain::new();
             let mut state = self.shared.state.lock().expect("shared trace poisoned");
-            let id = state.next_id;
-            state.next_id += 1;
-            state.set_logical_hold(id, &self.logical);
-            // The clone inherits this handle's HOLD, not the frontier it reports. Registering the
-            // reported frontier would install a hold below the coverage the source was seeded with,
-            // and since the accumulation is a meet, one such clone stops the spine merging for as
-            // long as it lives.
-            state.set_physical_hold(id, &self.physical_hold);
-            id
-        };
+            state.move_logical_hold(&empty, &self.logical);
+            state.move_physical_hold(&empty, &self.physical);
+        }
         Self {
             shared: Arc::clone(&self.shared),
-            id,
             logical: self.logical.clone(),
             physical: self.physical.clone(),
-            physical_hold: self.physical_hold.clone(),
         }
     }
 }
@@ -666,14 +502,20 @@ where
 impl<Tr: TraceReader> Drop for SharedTraceHandle<Tr> {
     fn drop(&mut self) {
         if let Ok(mut state) = self.shared.state.lock() {
-            state.release_holds(self.id);
+            let empty = Antichain::new();
+            // `Drop` cannot carry the `Tr::Time: Lattice` bound the state's own movers require, so
+            // it adjusts the accumulations directly.
+            adjust(&mut state.logical_compaction, &self.logical, &empty);
+            adjust(&mut state.physical_compaction, &self.physical, &empty);
         }
     }
 }
 
 impl<Tr: TraceReader> TraceReader for SharedTraceHandle<Tr>
 where
-    Tr::Time: Lattice + Clone,
+    // `TotalOrder`: `batches_through` stops at the first batch whose lower is beyond the cut and
+    // takes every later batch to be past it too, which holds because the chain is totally ordered.
+    Tr::Time: Lattice + Clone + TotalOrder,
 {
     type Time = Tr::Time;
     type Batch = Tr::Batch;
@@ -725,8 +567,10 @@ where
         // the joint consequence of every frontier it has been asked to hold. Overwriting would let a
         // consumer lower its own hold below a frontier the trace was already told it could compact
         // past, and then `get_logical_compaction` would report a frontier that is not held.
-        self.logical = self.logical.join(&frontier.to_owned());
-        self.update_hold();
+        let next = self.logical.join(&frontier.to_owned());
+        let previous = std::mem::replace(&mut self.logical, next);
+        let mut state = self.shared.state.lock().expect("shared trace poisoned");
+        state.move_logical_hold(&previous, &self.logical);
     }
 
     fn get_logical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> {
@@ -734,13 +578,14 @@ where
     }
 
     fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Tr::Time>) {
-        let frontier = frontier.to_owned();
-        self.physical = self.physical.join(&frontier);
-        // Join, never assign: the hold starts at the chain coverage, which leads what this handle
-        // reports, and a request below that coverage must not pull the hold down to it. `join` with
-        // the empty antichain is absorbing, which is what still lets an empty request release.
-        self.physical_hold = self.physical_hold.join(&frontier);
-        self.update_physical_hold();
+        // Join, never assign: the hold starts at the chain coverage, and a request below that
+        // coverage must not pull it down to where a merge could eat the boundary this reader was
+        // seeded with. `join` with the empty antichain is absorbing, which still lets an empty
+        // request release.
+        let next = self.physical.join(&frontier.to_owned());
+        let previous = std::mem::replace(&mut self.physical, next);
+        let mut state = self.shared.state.lock().expect("shared trace poisoned");
+        state.move_physical_hold(&previous, &self.physical);
     }
 
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> {
@@ -753,11 +598,6 @@ where
             f(batch);
         }
     }
-}
-
-/// Smallest time, used only to satisfy the borrow in the cut check for empty lower frontiers.
-fn batch_min<Tr: TraceReader>() -> Tr::Time {
-    <Tr::Time as timely::progress::Timestamp>::minimum()
 }
 
 /// The frontier a chain seeded into a fresh importer covers.
@@ -780,32 +620,12 @@ fn seed_frontier<Tr: TraceReader>(
         .map_or_else(|| upper.clone(), |batch| batch.upper().clone())
 }
 
-/// An owned, consistent snapshot of a published arrangement: an immutable chain plus its frontiers.
-///
-/// Test-only, the result of [`SharedTraceHandle::snapshot_at`]. Holding it pins the chain's batches,
-/// keeping their memory alive even as the publishing worker merges.
-#[cfg(test)]
-pub(crate) struct TraceSnapshot<Tr: TraceReader> {
-    chain: Vec<Tr::Batch>,
-}
-
-#[cfg(test)]
-impl<Tr: TraceReader> TraceSnapshot<Tr> {
-    /// A cursor merging the snapshot's batch cursors, with the batches as its storage.
-    pub(crate) fn cursor(&self) -> (CursorList<<Tr::Batch as Navigable>::Cursor>, Vec<Tr::Batch>)
-    where
-        Tr::Batch: Navigable,
-    {
-        cursor_list(self.chain.clone())
-    }
-}
-
 /// Publishes an [`Arranged`] arrangement through a publication point on its owning worker.
 ///
 /// Materialize cannot add inherent methods to differential's foreign `Arranged` type, so it exposes
 /// them as this extension trait instead. Bring it into scope at a call site to use
 /// `arranged.adopt(...)`.
-pub trait PublishArrangement<Tr: TraceReader> {
+pub(crate) trait PublishArrangement<Tr: TraceReader> {
     /// Installs this arrangement's publisher into an existing `placeholder` publication point,
     /// created by [`Published::placeholder`], rather than minting a fresh one.
     ///
@@ -985,9 +805,16 @@ where
                     // frontier it passes to `cursor_through`, which is why its floor is forwarded
                     // rather than discarded, and why this is a correctness mechanism rather than a
                     // tuning knob.
-                    let coverage = seed_frontier::<Tr>(&state.chain, &state.upper);
-                    state.set_coverage_hold(coverage);
+                    //
+                    // With no reader registered, forward the chain coverage: nobody cuts below it,
+                    // and holding anything lower would stop the spine merging for a shared
+                    // arrangement that nothing reads.
                     let physical = state.physical_compaction.frontier().to_owned();
+                    let physical = if physical.is_empty() {
+                        seed_frontier::<Tr>(&state.chain, &state.upper)
+                    } else {
+                        physical
+                    };
 
                     // Wake importers and any peek waiters.
                     for queue in state.queues.values() {
@@ -1041,7 +868,7 @@ impl<Tr: TraceReader> Drop for Publisher<Tr> {
 impl<Tr: TraceReader> SharedTraceHandle<Tr>
 where
     Tr: 'static,
-    Tr::Time: Lattice + Clone,
+    Tr::Time: Lattice + Clone + TotalOrder,
     Tr::Batch: Navigable,
 {
     /// Imports the published arrangement restricted to `[as_of, until)`, presented at `as_of`.
@@ -1077,9 +904,8 @@ where
     /// it.
     ///
     /// For a single-time interactive read pass `until = as_of.step_forward()`: the capability then
-    /// drops once the trace's frontier passes `as_of`, so the one-shot result completes. An empty
-    /// `until` performs no bounding and the import stays live with the trace.
-    pub fn import_snapshot_at<'scope>(
+    /// drops once the trace's frontier passes `as_of`, so the one-shot result completes.
+    pub(crate) fn import_snapshot_at<'scope>(
         &self,
         scope: Scope<'scope, Tr::Time>,
         name: &str,
@@ -1123,7 +949,7 @@ where
                 for batch in state.chain.iter() {
                     instructions.push_back(TraceReplayInstruction::Batch(
                         batch.clone(),
-                        Some(batch_min::<Tr>()),
+                        Some(<Tr::Time as timely::progress::Timestamp>::minimum()),
                     ));
                 }
                 let seed = seed_frontier::<Tr>(&state.chain, &state.upper);
@@ -1223,12 +1049,13 @@ where
                                 caps.downgrade(&frontier.borrow()[..]);
                             }
                             TraceReplayInstruction::Batch(batch, hint) => {
-                                // A batch the seed already covers. The chain is read from the
-                                // trace, which can hold a batch the arrangement stream has not
-                                // delivered yet, so the publisher will push that same batch as a
-                                // live instruction on a later activation. Emitting it twice would
-                                // double count it, and its hint sits below the frontier the seed
-                                // already claimed, which `delayed` panics on.
+                                // The seed and the live instructions come from different places:
+                                // the seed is the trace's chain at registration, the live ones are
+                                // batches off the arrangement stream. The trace seals a batch a
+                                // scheduling round before the stream delivers it, so a batch in the
+                                // seed can arrive again as a live instruction. Emitting it twice
+                                // would double count it, and its hint sits below the frontier the
+                                // seed already claimed, which `delayed` panics on.
                                 if !draining_seed
                                     && timely::PartialOrder::less_equal(
                                         &batch.upper().borrow(),
