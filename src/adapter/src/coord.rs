@@ -2401,7 +2401,7 @@ impl Coordinator {
             let ReplicaLocation::Managed(location) = &config.location else {
                 continue;
             };
-            let cluster = created_clusters.get(cluster_id).cloned().or_else(|| {
+            let Some(cluster) = created_clusters.get(cluster_id).cloned().or_else(|| {
                 self.catalog()
                     .try_get_cluster(*cluster_id)
                     .map(|cluster| ClusterScopeContext {
@@ -2409,7 +2409,9 @@ impl Coordinator {
                         name: cluster.name.clone(),
                         is_builtin: cluster_id.is_system(),
                     })
-            })?;
+            }) else {
+                continue;
+            };
             replicas.push(ReplicaEvalContext {
                 cluster_id: *cluster_id,
                 replica_id: *replica_id,

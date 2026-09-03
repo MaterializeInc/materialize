@@ -646,6 +646,9 @@ ALTER SYSTEM SET max_replicas_per_cluster = 6
 > SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters c ON c.id = recon.cluster_id WHERE c.name = 'cc_limit_cancel'
 in-progress
 
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id WHERE c.name = 'cc_limit_cancel'
+6
+
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET max_replicas_per_cluster = 2
 
@@ -764,6 +767,14 @@ ALTER SYSTEM RESET max_credit_consumption_rate
 # near the budget therefore works, where waiting for hydration cannot.
 
 > CREATE CLUSTER cc_swap (SIZE 'scale=1,workers=1', REPLICATION FACTOR 2)
+> CREATE TABLE cc_swap_t (id int)
+> INSERT INTO cc_swap_t VALUES (1)
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
+
+> CREATE MATERIALIZED VIEW cc_swap_slow IN CLUSTER cc_swap AS
+  SELECT mz_unsafe.mz_sleep(id * 3600) AS s FROM cc_swap_t
 
 $ set-from-sql var=swap_credit_limit
 SELECT (sum(s.credits_per_hour) + 3)::text FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id JOIN mz_catalog.mz_cluster_replica_sizes s ON r.size = s.size WHERE c.id LIKE 'u%'
@@ -787,10 +798,12 @@ finalized true
 > SELECT DISTINCT r.size FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_swap'
 scale=1,workers=2
 
-> DROP CLUSTER cc_swap
+> DROP CLUSTER cc_swap CASCADE
+> DROP TABLE cc_swap_t
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM RESET max_credit_consumption_rate
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
 
 # ----- Converting to unmanaged is refused while a reconfiguration is in flight -----
 #
