@@ -4110,25 +4110,6 @@ metrics:
   - compute_instance
   source: src/adapter/src/metrics.rs
   visibility: internal
-- name: mz_timestamp_difference_for_strict_serializable_ms_bucket
-  help: Difference in timestamp in milliseconds for running in strict serializable vs serializable isolation level.
-  labels:
-  - compute_instance
-  - le
-  source: src/adapter/src/metrics.rs
-  visibility: internal
-- name: mz_timestamp_difference_for_strict_serializable_ms_count
-  help: Difference in timestamp in milliseconds for running in strict serializable vs serializable isolation level.
-  labels:
-  - compute_instance
-  source: src/adapter/src/metrics.rs
-  visibility: internal
-- name: mz_timestamp_difference_for_strict_serializable_ms_sum
-  help: Difference in timestamp in milliseconds for running in strict serializable vs serializable isolation level.
-  labels:
-  - compute_instance
-  source: src/adapter/src/metrics.rs
-  visibility: internal
 - name: mz_tokio_blocking_queue_depth
   help: The number of tasks currently scheduled in the blocking thread pool, spawned using spawn_blocking.
   labels:
