@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
@@ -2187,25 +2186,12 @@ impl RecordFirstRowStream {
         let session = client.session.as_ref().expect("session invariant");
         let isolation_level = *session.vars().transaction_isolation();
         let name_hint = ApplicationNameHint::from_str(session.application_name());
-        let instance = match instance_id {
-            Some(i) => Cow::Owned(i.to_string()),
-            None => Cow::Borrowed("none"),
-        };
-        let strategy = match strategy {
-            Some(s) => s.name(),
-            None => "none",
-        };
 
         client
             .inner()
             .metrics()
-            .time_to_first_row_seconds
-            .with_label_values(&[
-                instance.as_ref(),
-                isolation_level.as_variant_str(),
-                strategy,
-                name_hint.as_str(),
-            ])
+            .by_cluster
+            .time_to_first_row_seconds(instance_id, isolation_level, strategy, name_hint)
     }
 
     /// If you want to match [`RecordFirstRowStream`]'s logic but don't need

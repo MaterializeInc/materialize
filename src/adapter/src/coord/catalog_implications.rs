@@ -1040,6 +1040,7 @@ impl Coordinator {
             if !clusters_to_drop.is_empty() {
                 for cluster_id in clusters_to_drop {
                     self.controller.drop_cluster(cluster_id);
+                    self.metrics.by_cluster.remove_cluster(cluster_id);
                 }
             }
 

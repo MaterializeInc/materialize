@@ -7561,3 +7561,63 @@ fn test_startup_only_system_var_warns() {
         "RESET ALL warned without changing anything, notices: {notices:?}"
     );
 }
+
+/// The values of `label` across the series of the `family` metric.
+fn label_values(registry: &MetricsRegistry, family: &str, label: &str) -> BTreeSet<String> {
+    registry
+        .gather()
+        .into_iter()
+        .filter(|f| f.name() == family)
+        .flat_map(|f| f.get_metric().to_vec())
+        .flat_map(|metric| metric.get_label().to_vec())
+        .filter(|pair| pair.name() == label)
+        .map(|pair| pair.value().to_string())
+        .collect()
+}
+
+/// Metric families with a cluster id label, paired with that label's name.
+const CLUSTER_LABELED_METRICS: [(&str, &str); 2] = [
+    ("mz_time_to_first_row_seconds", "instance_id"),
+    ("mz_determine_timestamp", "compute_instance"),
+];
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_cluster_labeled_metrics_are_removed_on_cluster_drop() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client
+        .batch_execute("CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))")
+        .unwrap();
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client.batch_execute("INSERT INTO t VALUES (1)").unwrap();
+    client
+        .batch_execute("CREATE INDEX t_idx IN CLUSTER c ON t (a)")
+        .unwrap();
+    let cluster_id: String = client
+        .query_one("SELECT id FROM mz_clusters WHERE name = 'c'", &[])
+        .unwrap()
+        .get(0);
+
+    // A peek served by the index on `c` records series labeled with its id.
+    client.batch_execute("SET cluster = c").unwrap();
+    client.query("SELECT * FROM t", &[]).unwrap();
+    for (family, label) in CLUSTER_LABELED_METRICS {
+        assert!(
+            label_values(server.metrics_registry(), family, label).contains(&cluster_id),
+            "peek on {cluster_id} recorded no {family} series"
+        );
+    }
+
+    // DROP CLUSTER applies its catalog implications, the metrics sweep among
+    // them, before it responds, so the series are gone once it returns.
+    client.batch_execute("SET cluster = quickstart").unwrap();
+    client.batch_execute("DROP CLUSTER c CASCADE").unwrap();
+    for (family, label) in CLUSTER_LABELED_METRICS {
+        assert!(
+            !label_values(server.metrics_registry(), family, label).contains(&cluster_id),
+            "{family} still has a {cluster_id} series after DROP CLUSTER"
+        );
+    }
+}
