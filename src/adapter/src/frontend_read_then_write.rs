@@ -163,6 +163,7 @@ use crate::coord::read_then_write::{DependencyPolicy, validate_read_then_write_d
 use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::{Coordinator, TargetCluster};
 use crate::error::AdapterError;
+use crate::metrics::{OCC_CALLER_BACKGROUND, OCC_CALLER_SESSION};
 use crate::optimize::Optimize;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::peek_client::CoordinatorClient;
@@ -1068,9 +1069,14 @@ impl PeekClient {
             )
             .await;
 
+        let caller_label = match caller {
+            RtwCaller::Session => OCC_CALLER_SESSION,
+            RtwCaller::Background { .. } => OCC_CALLER_BACKGROUND,
+        };
         self.coordinator_client()
             .metrics()
             .occ_retry_count
+            .with_label_values(&[caller_label])
             .observe(f64::from(u32::try_from(retry_count).unwrap_or(u32::MAX)));
 
         // Finish the operation, including a blind write's submission, before

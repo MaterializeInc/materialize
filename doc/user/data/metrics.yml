@@ -1500,15 +1500,20 @@ metrics:
 - name: mz_occ_read_then_write_retry_count_bucket
   help: Number of OCC retries per read-then-write operation.
   labels:
+  - caller
   - le
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_occ_read_then_write_retry_count_count
   help: Number of OCC retries per read-then-write operation.
+  labels:
+  - caller
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_occ_read_then_write_retry_count_sum
   help: Number of OCC retries per read-then-write operation.
+  labels:
+  - caller
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_optimization_notices
