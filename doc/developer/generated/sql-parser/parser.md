@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/parser.rs
-revision: f40272e177
+revision: 4e012ea88d
 ---
 
 # mz-sql-parser::parser
@@ -14,6 +14,7 @@ The right-hand side of `IS [NOT] DISTINCT FROM` is parsed at the precedence of t
 `parse_cast_expr` wraps the inner expression in `Expr::Nested` only for expressions that are unsafe to place directly left of a `::` cast (i.e. those with an exposed operator spine that would re-associate on reparse); self-delimiting expressions (identifiers, function calls, nested, values, etc.) are left unwrapped.
 `parse_raw_ident_str` rejects empty identifiers so that resolved names like `[""]` (which display as `[]` and fail to reparse) are caught at parse time.
 A parenthesized `(SHOW …)` query at statement level is unwrapped to a bare `Statement::Show` when it carries no CTEs, ORDER BY, LIMIT, or OFFSET, keeping the AST independent of redundant outer parens.
+`parse_explain_timestamp` accepts `TEXT`, `JSON`, and `DOT` as format keywords; `DOT` produces `ExplainFormat::Dot`, matching the behavior of `parse_explain_plan`. An `EXPLAIN TIMESTAMP AS DOT FOR <query>` statement parses successfully and reaches the sequencer's existing unsupported-format error path rather than panicking.
 Iceberg sink mode parsing accepts `UPSERT` or `APPEND` as valid values.
 The `ACCESS` keyword in connection option parsing dispatches on a second keyword: `KEY ID` resolves to `ConnectionOptionName::AccessKeyId`, while `DELEGATION` resolves to `ConnectionOptionName::AccessDelegation`. The `OAUTH2` keyword requires `SERVER URL` to follow, resolving to `ConnectionOptionName::Oauth2ServerUrl`.
 `parse_option_map` peeks ahead for `[` before committing to a map literal; a bare `map` identifier in an option-value position therefore falls through to `parse_item_name` rather than causing a parse error.

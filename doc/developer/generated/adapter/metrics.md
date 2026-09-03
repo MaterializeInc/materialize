@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/metrics.rs
-revision: a1bcaebfe6
+revision: 46f729653a
 ---
 
 # adapter::metrics

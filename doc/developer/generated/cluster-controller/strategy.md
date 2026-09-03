@@ -1,6 +1,6 @@
 ---
 source: src/cluster-controller/src/strategy.rs
-revision: 38a95cefe2
+revision: b2419281fb
 ---
 
 # cluster-controller::strategy
