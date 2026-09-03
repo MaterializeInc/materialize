@@ -106,7 +106,7 @@ use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, Cluste
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions, latest_item_version};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, Connection, DataSourceDesc,
+    CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, Connection, DataSourceDesc, Index,
     ReconfigurationTarget, Table, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
@@ -3716,6 +3716,46 @@ impl Coordinator {
         result
     }
 
+    /// Builds an index plan and rendered notices from its catalog definition.
+    ///
+    /// The snapshot must contain the compute collections available for imports.
+    /// This does not select an `as_of`, install the dataflow, or cache the result.
+    fn build_index_dataflow_plan(
+        &mut self,
+        name: &QualifiedItemName,
+        index: &Index,
+        compute_instance: ComputeInstanceSnapshot,
+        optimizer_config: OptimizerConfig,
+    ) -> Result<GlobalExpressions, AdapterError> {
+        let global_id = index.global_id();
+        let mut optimizer = optimize::index::Optimizer::new(
+            self.owned_catalog(),
+            compute_instance,
+            global_id,
+            optimizer_config.clone(),
+            self.optimizer_metrics(),
+        );
+        let index_plan = optimize::index::Index::new(name.clone(), index.on, index.keys.to_vec());
+        let global_mir_plan = optimizer.optimize(index_plan)?;
+        let global_mir = global_mir_plan.df_desc().clone();
+        let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+        let (physical_plan, metainfo) = global_lir_plan.unapply();
+        let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
+            .map(|(_item_id, gid)| gid)
+            .take(metainfo.optimizer_notices.len())
+            .collect::<Vec<_>>();
+        let dataflow_metainfos =
+            self.catalog()
+                .render_notices(metainfo, notice_ids, Some(global_id));
+        Ok(GlobalExpressions {
+            global_mir,
+            physical_plan,
+            dataflow_metainfos,
+            optimizer_features: optimizer_config.features,
+            item_version: RelationVersion::root(),
+        })
+    }
+
     /// Invokes the optimizer on all indexes and materialized views in the catalog and inserts the
     /// resulting dataflow plans into the catalog state.
     ///
@@ -3787,57 +3827,18 @@ impl Coordinator {
                                 )
                             }
                             Some(_) | None => {
-                                let (optimized_plan, global_lir_plan) = {
-                                    // Build an optimizer for this INDEX.
-                                    let mut optimizer = optimize::index::Optimizer::new(
-                                        self.owned_catalog(),
-                                        compute_instance.clone(),
-                                        global_id,
-                                        optimizer_config.clone(),
-                                        self.optimizer_metrics(),
-                                    );
-
-                                    // MIR ⇒ MIR optimization (global)
-                                    let index_plan = optimize::index::Index::new(
-                                        entry.name().clone(),
-                                        idx.on,
-                                        idx.keys.to_vec(),
-                                    );
-                                    let global_mir_plan = optimizer.optimize(index_plan)?;
-                                    let optimized_plan = global_mir_plan.df_desc().clone();
-
-                                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                                    let global_lir_plan = optimizer.optimize(global_mir_plan)?;
-
-                                    (optimized_plan, global_lir_plan)
-                                };
-
-                                let (physical_plan, metainfo) = global_lir_plan.unapply();
-                                let metainfo = {
-                                    // Pre-allocate a vector of transient GlobalIds for each notice.
-                                    let notice_ids =
-                                        std::iter::repeat_with(|| self.allocate_transient_id())
-                                            .map(|(_item_id, gid)| gid)
-                                            .take(metainfo.optimizer_notices.len())
-                                            .collect::<Vec<_>>();
-                                    // Return a metainfo with rendered notices.
-                                    self.catalog().render_notices(
-                                        metainfo,
-                                        notice_ids,
-                                        Some(idx.global_id()),
-                                    )
-                                };
-                                uncached_expressions.insert(
-                                    global_id,
-                                    GlobalExpressions {
-                                        global_mir: optimized_plan.clone(),
-                                        physical_plan: physical_plan.clone(),
-                                        dataflow_metainfos: metainfo.clone(),
-                                        optimizer_features: optimizer_config.features.clone(),
-                                        item_version: RelationVersion::root(),
-                                    },
-                                );
-                                (optimized_plan, physical_plan, metainfo)
+                                let expressions = self.build_index_dataflow_plan(
+                                    entry.name(),
+                                    idx,
+                                    compute_instance.clone(),
+                                    optimizer_config,
+                                )?;
+                                uncached_expressions.insert(global_id, expressions.clone());
+                                (
+                                    expressions.global_mir,
+                                    expressions.physical_plan,
+                                    expressions.dataflow_metainfos,
+                                )
                             }
                         };
 

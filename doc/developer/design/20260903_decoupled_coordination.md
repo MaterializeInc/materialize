@@ -142,3 +142,17 @@ same-batch MV/sink creation remain gaps. Next proposed slice: reuse index plan
 reconstruction from bootstrap, preserving precommit optimization as a cache.
 Index parsing leaves plans absent and the expression cache has no runtime read
 API. No new boundary decision was made.
+
+### 2026-09-03: Reusable index reconstruction
+
+Extracted bootstrap's uncached index planning and notice rendering without
+changing cache policy, ordering, or installation. Independent review found no
+issue. Local adapter `cargo check` and Rust formatting passed. Full formatting
+and lint failed on missing tools and a Python-doctest dependency build. Runtime
+validation and this commit's [PR CI](https://github.com/MaterializeInc/materialize/pull/38696/checks)
+remain pending.
+
+Next proposed slice: runtime expression-cache reads and index-add implications
+using reconstruction on cache misses. Cache validity must account for committed
+dependencies, and installation must follow same-batch prerequisites. Add direct
+committed-update coverage without sequencer plans. No boundary decision changed.
