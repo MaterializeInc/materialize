@@ -1254,3 +1254,5 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17122  mz_object_hydration_history
 17123  mz_cluster_replica_resource_usage
 17124  mz_replica_hydration_history
+17125  parse_catalog_item_references
+17126  mz_object_dependencies_raw
