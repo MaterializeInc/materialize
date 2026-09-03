@@ -36,4 +36,3 @@ range queries.
 ## Are indexes in Materialize optimized for `GROUP BY` aggregations?
 
 No. {{< include-from-yaml data="index_details" name="index-groupby-not-optimized" >}}
-
