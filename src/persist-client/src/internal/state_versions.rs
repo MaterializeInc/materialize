@@ -274,8 +274,6 @@ impl StateVersions {
                     new_state
                 );
 
-                shard_metrics.set_since(new_state.since());
-                shard_metrics.set_upper(new_state.upper());
                 shard_metrics.seqnos_since_last_rollup.set(
                     new_state
                         .seqno
@@ -286,9 +284,6 @@ impl StateVersions {
                     .spine_batch_count
                     .set(u64::cast_from(new_state.spine_batch_count()));
                 let size_metrics = new_state.size_metrics();
-                shard_metrics
-                    .schema_registry_version_count
-                    .set(u64::cast_from(new_state.collections.schemas.len()));
                 shard_metrics
                     .hollow_batch_count
                     .set(u64::cast_from(size_metrics.hollow_batch_count));
@@ -319,22 +314,6 @@ impl StateVersions {
                 shard_metrics
                     .inline_part_count
                     .set(u64::cast_from(size_metrics.inline_part_count));
-                shard_metrics
-                    .inline_part_bytes
-                    .set(u64::cast_from(size_metrics.inline_part_bytes));
-                shard_metrics.stale_version.set(
-                    if new_state
-                        .state
-                        .collections
-                        .version
-                        .cmp_precedence(&self.cfg.build_version)
-                        .is_lt()
-                    {
-                        1
-                    } else {
-                        0
-                    },
-                );
 
                 let spine_metrics = new_state.collections.trace.spine_metrics();
                 shard_metrics
@@ -362,8 +341,8 @@ impl StateVersions {
                         // Carefully avoid any String allocs by splitting.
                         let (writer_key, _) = key.0.split_once('/')?;
                         match &writer_key[..1] {
-                            "w" => Some(("old", part.encoded_size_bytes())),
-                            "n" => Some((&writer_key[1..], part.encoded_size_bytes())),
+                            "w" => Some("old"),
+                            "n" => Some(&writer_key[1..]),
                             _ => None,
                         }
                     });

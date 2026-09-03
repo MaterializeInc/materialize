@@ -2479,14 +2479,6 @@ metrics:
   - shard
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
-- name: mz_persist_shard_batch_part_version_bytes
-  help: total bytes in batch parts by shard and version
-  labels:
-  - name
-  - shard
-  - version
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
 - name: mz_persist_shard_batch_part_version_count
   help: count of batch parts by shard and version
   labels:
@@ -2576,13 +2568,6 @@ metrics:
   - shard
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
-- name: mz_persist_shard_inline_part_bytes
-  help: total size of parts inline in shard metadata
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
 - name: mz_persist_shard_inline_part_count
   help: count of parts inline in shard metadata
   labels:
@@ -2618,13 +2603,6 @@ metrics:
   - shard
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
-- name: mz_persist_shard_schema_registry_version_count
-  help: count of versions in the schema registry
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
 - name: mz_persist_shard_seqnos_held
   help: maximum count of gc-ineligible states by shard
   labels:
@@ -2639,22 +2617,8 @@ metrics:
   - shard
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
-- name: mz_persist_shard_since
-  help: since by shard
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
 - name: mz_persist_shard_spine_batch_count
   help: count of spine batches by shard
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_stale_version
-  help: indicates whether the current version of the shard is less than the current version of the code
   labels:
   - name
   - shard
@@ -2669,13 +2633,6 @@ metrics:
   visibility: internal
 - name: mz_persist_shard_update_count
   help: count of updates by shard
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_upper
-  help: upper by shard
   labels:
   - name
   - shard

@@ -2488,7 +2488,6 @@ where
                 for x in x.parts.iter() {
                     if x.is_inline() {
                         ret.inline_part_count += 1;
-                        ret.inline_part_bytes += x.inline_bytes();
                     }
                 }
                 ret.largest_batch_bytes = std::cmp::max(ret.largest_batch_bytes, batch_size);
@@ -2860,7 +2859,6 @@ pub struct StateSizeMetrics {
     pub state_rollups_bytes: usize,
     pub state_rollup_count: usize,
     pub inline_part_count: usize,
-    pub inline_part_bytes: usize,
 }
 
 #[derive(Default)]
