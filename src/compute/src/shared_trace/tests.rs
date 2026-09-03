@@ -7,7 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use differential_dataflow::input::Input;
@@ -18,9 +20,17 @@ use mz_repr::{Datum, Diff, Row, Timestamp};
 use mz_row_spine::{RowRowBatcher, RowRowBuilder};
 use mz_timely_util::columnation::ColumnationChunker;
 
+use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::{Arranged, TraceAgent, TraceReplayInstruction};
+use differential_dataflow::trace::cursor::Navigable;
+use differential_dataflow::trace::{BatchReader, TraceReader};
+use timely::dataflow::operators::generic::Operator;
+use timely::progress::Antichain;
+
 use crate::extensions::arrange::MzArrange;
 use crate::typedefs::RowRowSpine;
 
+use super::state::seed_frontier;
 use super::*;
 
 /// How long [`SharedTraceHandle::snapshot_at`] waits for a seal before failing the test.
@@ -40,7 +50,7 @@ pub(crate) struct TraceSnapshot<Tr: TraceReader> {
 
 impl<Tr: TraceReader> TraceSnapshot<Tr> {
     /// A cursor merging the snapshot's batch cursors, with the batches as its storage.
-    fn cursor(&self) -> (CursorList<<Tr::Batch as Navigable>::Cursor>, Vec<Tr::Batch>)
+    pub(crate) fn cursor(&self) -> (CursorList<<Tr::Batch as Navigable>::Cursor>, Vec<Tr::Batch>)
     where
         Tr::Batch: Navigable,
     {
@@ -54,7 +64,7 @@ impl<Tr: TraceReader> Published<Tr> {
     ///
     /// Empty when every hold has released, which the published frontiers cannot show: the publisher
     /// leaves its agent where it stands rather than forwarding an empty accumulation.
-    fn logical_holds(&self) -> Antichain<Tr::Time> {
+    pub(crate) fn logical_holds(&self) -> Antichain<Tr::Time> {
         let state = self.shared.state.lock().expect("shared trace poisoned");
         state.logical_compaction.frontier().to_owned()
     }
@@ -63,7 +73,7 @@ impl<Tr: TraceReader> Published<Tr> {
     ///
     /// Empty when no reader is registered, in which case the publisher forwards the chain coverage
     /// instead.
-    fn physical_holds(&self) -> Antichain<Tr::Time> {
+    pub(crate) fn physical_holds(&self) -> Antichain<Tr::Time> {
         let state = self.shared.state.lock().expect("shared trace poisoned");
         state.physical_compaction.frontier().to_owned()
     }
@@ -72,13 +82,13 @@ impl<Tr: TraceReader> Published<Tr> {
     ///
     /// Counting through a handle would register a physical hold and perturb the merge behaviour
     /// being measured, which is the whole observable here.
-    fn chain_len(&self) -> usize {
+    pub(crate) fn chain_len(&self) -> usize {
         let state = self.shared.state.lock().expect("shared trace poisoned");
         state.chain.len()
     }
 
     /// The standing hold currently bounding this arrangement's logical compaction.
-    fn standing_hold(&self) -> Antichain<Tr::Time> {
+    pub(crate) fn standing_hold(&self) -> Antichain<Tr::Time> {
         let state = self.shared.state.lock().expect("shared trace poisoned");
         state.standing_hold.clone()
     }
@@ -100,7 +110,7 @@ impl<Tr: TraceReader> SharedTraceHandle<Tr> {
     /// returning coalesced results.
     ///
     /// Panics once the wait exceeds [`SNAPSHOT_TIMEOUT`], naming the frontiers it was waiting on.
-    fn snapshot_at(&self, time: &Tr::Time) -> Option<TraceSnapshot<Tr>>
+    pub(crate) fn snapshot_at(&self, time: &Tr::Time) -> Option<TraceSnapshot<Tr>>
     where
         Tr::Time: Debug,
     {
@@ -134,18 +144,18 @@ impl<Tr: TraceReader> SharedTraceHandle<Tr> {
     }
 }
 
-/// Adopts a freshly rendered arrangement into a new placeholder, the standalone-primitive
-/// counterpart to the maintenance placeholder+adopt path. Creates a [`Published::placeholder`]
-/// sized to the arrangement's own scope, installs `arranged`'s publisher into it via
-/// [`PublishArrangement::adopt`], and returns the now-backed point.
+/// Adopts a freshly rendered arrangement into a new point, the standalone-primitive counterpart to
+/// the maintenance create-then-adopt path. Creates a [`Published::new`] sized to the arrangement's
+/// own scope, installs `arranged`'s publisher into it via [`PublishArrangement::adopt`], and returns
+/// the now-backed point.
 fn adopt_fresh<Tr>(arranged: &Arranged<'_, TraceAgent<Tr>>) -> Published<Tr>
 where
     Tr: differential_dataflow::trace::Trace + 'static,
     Tr::Batch: Send + Sync,
     Tr::Time: Lattice + Clone + Send + Sync,
 {
-    let published = Published::placeholder(arranged.stream.scope().peers());
-    PublishArrangement::adopt(arranged, &published, || {});
+    let published = Published::new(arranged.stream.scope().peers());
+    PublishArrangement::adopt(arranged, &published, "test", || {});
     published
 }
 
@@ -734,7 +744,8 @@ fn an_emptied_accumulation_does_not_release_the_trace() {
             Timestamp::from(4_u64),
         );
 
-        let (_, standing, since, _) = published.diagnostics();
+        let standing = published.diagnostics().standing_hold;
+        let since = published.handle().frontiers().0;
         assert!(
             standing.is_empty(),
             "the standing hold did not follow the controller's empty frontier: {standing:?}"
@@ -1273,27 +1284,29 @@ fn live_batch_covered_by_the_seed_is_dropped() {
         // `Batch(1)` would then panic in `delayed` if the loop replayed it. Activate the
         // importer so it drains this step.
         {
-            let mut state = handle.shared.state.lock().unwrap();
-            let queue = state
-                .queues
-                .values_mut()
-                .next_back()
-                .expect("importer queue registered");
-            queue.instructions.clear();
-            queue.instructions.push_back(TraceReplayInstruction::Batch(
-                real_batch.clone(),
-                Some(Timestamp::from(5_u64)),
-            ));
-            queue
-                .instructions
-                .push_back(TraceReplayInstruction::Frontier(Antichain::from_elem(
+            let queue = {
+                let mut state = handle.shared.state.lock().unwrap();
+                state
+                    .live_queues()
+                    .pop()
+                    .expect("importer queue registered")
+            };
+            {
+                let mut instructions = queue.instructions.lock().unwrap();
+                instructions.clear();
+                instructions.push_back(TraceReplayInstruction::Batch(
+                    real_batch.clone(),
+                    Some(Timestamp::from(5_u64)),
+                ));
+                instructions.push_back(TraceReplayInstruction::Frontier(Antichain::from_elem(
                     Timestamp::from(5_u64),
                 )));
-            queue.instructions.push_back(TraceReplayInstruction::Batch(
-                real_batch.clone(),
-                Some(Timestamp::from(1_u64)),
-            ));
-            let _ = queue.activator.activate();
+                instructions.push_back(TraceReplayInstruction::Batch(
+                    real_batch.clone(),
+                    Some(Timestamp::from(1_u64)),
+                ));
+            }
+            queue.activate();
         }
 
         // Keep `input` alive so the publisher does not close and null the importer's caps.
