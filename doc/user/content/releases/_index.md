@@ -23,22 +23,57 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-09-02* <br>
 *Released to Materialize Self-Managed: 2026-09-03* <br>
 
-### Query History for Self-Managed {#v26.40-query-history-for-self-managed}
-Self-Managed deployments can now use the Console's Query History view, which was previously reachable only on Materialize Cloud. The Materialize operator Helm chart no longer hard-disables statement logging: `operator.args.statementLoggingMaxSampleRate` defaults to `0.99`, matching Materialize Cloud, and `operator.args.statementLoggingTargetDataRate` bounds how much statement logging writes. When an operator sets the sample rate to `0`, Query History says sampling is off rather than showing an empty filter result.
+### Iceberg support for Databricks on AWS {#v26.40-iceberg-support-for-databricks-on-aws}
 
-### Catalog-Vended Credentials for Iceberg Sinks {#v26.40-catalog-vended-credentials-for-iceberg-sinks}
-Iceberg catalog connections accept `ACCESS DELEGATION = 'vended-credentials'`, which asks the catalog for temporary, table-scoped storage credentials instead of using static keys, and `OAUTH2 SERVER URL`, which names a token endpoint that does not sit under the catalog URI. Materialize refreshes vended credentials ahead of expiry, so a sink that runs longer than one credential lifetime keeps writing. Together these let you sink to catalogs such as Unity Catalog and Polaris without handing Materialize long-lived storage keys.
+{{< public-preview />}}
+
+Iceberg sinks can now write to Apache Iceberg tables registered in [Databricks
+Unity Catalog](/serve-results/sink/iceberg-databricks/) on AWS, reached through
+Unity Catalog's Iceberg REST catalog endpoint. Two new Iceberg catalog
+connection options make this work: `OAUTH2 SERVER URL`, which names a token
+endpoint that does not sit under the catalog URI, and `ACCESS DELEGATION =
+'vended-credentials'`, which asks the catalog for temporary, table-scoped
+storage credentials instead of static keys. Materialize refreshes both the
+OAuth2 token and the vended credentials while the sink runs, so a sink that
+outlives one credential lifetime keeps writing.
+
+```mzsql
+CREATE SECRET databricks_oauth
+  AS '<client_id>:<client_secret>';
+
+CREATE CONNECTION iceberg_catalog_connection TO ICEBERG CATALOG (
+    CATALOG TYPE = 'rest',
+    URL = 'https://<workspace>.cloud.databricks.com/api/2.1/unity-catalog/iceberg-rest',
+    WAREHOUSE = '<catalog_name>',
+    CREDENTIAL = SECRET databricks_oauth,
+    OAUTH2 SERVER URL = 'https://<workspace>.cloud.databricks.com/oidc/v1/token',
+    SCOPE = 'all-apis',
+    ACCESS DELEGATION = 'vended-credentials'
+);
+
+CREATE SINK <sink_name>
+  IN CLUSTER <sink_cluster>
+  FROM <my_materialize_object>
+  INTO ICEBERG CATALOG CONNECTION iceberg_catalog_connection (
+    NAMESPACE = '<unity_catalog_schema>',
+    TABLE = '<my_iceberg_table>'
+  )
+  MODE APPEND
+  WITH (COMMIT INTERVAL = '<commit_interval>');
+```
+
+For more information, see:
+- [Guide: Databricks on AWS](/serve-results/sink/iceberg-databricks/)
+- [`CREATE CONNECTION`: Iceberg catalog](/sql/create-connection/#iceberg-catalog), including [storage access delegation](/sql/create-connection/#iceberg-catalog-access-delegation)
+- [`CREATE SINK`: Iceberg](/sql/create-sink/iceberg/), including [append mode](/sql/create-sink/iceberg/#append-mode)
 
 ### Improvements {#v26.40-improvements}
-- **Bounded staleness isolation is generally available**: The `bounded staleness <duration>` transaction isolation level is out of public preview and is now a supported part of the `transaction_isolation` surface.
+- **Query History for Self-Managed**: Self-Managed deployments can now use the Console's Query History view to debug latency and performance.
+- **Bounded staleness isolation is generally available**: The [`bounded staleness <duration>`](/reference/isolation-level/#bounded-staleness) transaction [isolation level](/reference/isolation-level/) is out of public preview and is now a supported part of the [`transaction_isolation`](/reference/isolation-level/#setting-isolation-level) surface. See [when to use bounded staleness](/reference/isolation-level/#when-to-use-bounded-staleness) and its [restrictions](/reference/isolation-level/#restrictions).
 - **Replica resource usage introspection**: A new `mz_introspection.mz_cluster_replica_resource_usage` relation reports each replica process's own memory, swap, and disk observations at a higher cadence than the roughly once-a-minute orchestrator samples, so a spike between two samples is no longer invisible.
-- **App password expirations in the Console**: App passwords can now be created with a 30-, 60-, or 90-day expiration, defaulting to 90 days, and the list shows each password's expiry with an expired or expiring-soon marker.
-- **Expired-license banner for Self-Managed**: Super-users in a Self-Managed deployment now see a dismissible banner when the enterprise license has expired, instead of the status being visible only on the license admin page.
-- **Clearer error for `avg(interval)`**: The unsupported-`sum` error now names `avg(interval)` alongside `sum(interval)`, so a query that never mentions `sum` no longer reports an error about it.
 
 ### Agent Skills {#v26.40-agent-skills}
 - **mz-optimize-memory**: A new skill that works top-down from a cluster's largest arrangements to a table of memory-reducing fixes — index changes, outer-join and subquery rewrites, window-function patterns, and arrangement size hints — with rules for estimating each saving before making the change and verifying it afterwards.
-- **mcp-developer-analysis**: The skill's guidance was corrected against the developer MCP server, an emulator run, and a Cloud environment; most notably it no longer tells agents to avoid `mz_dataflow_arrangement_sizes` outright, and it now gives the working join path from dataflow ids to catalog objects.
 
 ### Bug Fixes {#v26.40-bug-fixes}
 - Fixed the MCP servers rejecting `tools/list`, `ping`, and `notifications/initialized` requests that carry any `params` — including the `_meta` field MCP clients are allowed to attach — with a non-JSON-RPC HTTP 422 that clients read as the server being unavailable.
