@@ -30,6 +30,10 @@ prerequisite for pushing. Follow the mz-debug-ci skill when investigating CI.
 Report pending or failed checks explicitly rather than treating a push as
 successful validation.
 
+Focus on regular PR CI for now. Nightly intentionally does not run on this
+draft PR, so do not treat its absence as a blocker or try to enable it. We will
+start nightly validation once we have a working implementation.
+
 Normally finish the session with one coherent change. Give it a clear commit
 message and change description explaining the outcome, rationale, and validation
 status, not the chronology of attempts. If blocked, report the blocker rather
