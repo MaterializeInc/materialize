@@ -560,7 +560,8 @@ fn test_storage_usage_collection_interval() {
                     FROM mz_internal.mz_storage_usage_by_shard",
                     &[],
                 )?;
-                // mz_storage_usage_by_shard may not be populated yet, which would result in a NULL ts.
+                // mz_storage_usage_by_shard may not be populated yet, which would result in a NULL
+                // ts.
                 let ts = row.try_get::<_, DateTime<Utc>>("max")?;
                 if ts <= last_timestamp {
                     bail!("next collection has not yet occurred")
@@ -813,7 +814,8 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
         let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
-        // Create a table with no data, which should have some overhead and therefore some storage usage
+        // Create a table with no data, which should have some overhead and therefore some storage
+        // usage
         client
             .batch_execute("CREATE TABLE usage_test (a int)")
             .unwrap();
@@ -852,7 +854,8 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
         initial_timestamp
     };
 
-    // Push time forward, start a new server, and assert that the previous storage records have been reaped
+    // Push time forward, start a new server, and assert that the previous storage records have been
+    // reaped
     *now.lock().expect("lock poisoned") = u64::try_from(initial_timestamp)
         .expect("negative timestamps are impossible")
         + u64::try_from(retention_period.as_millis()).expect("known to fit")
@@ -908,7 +911,8 @@ fn test_storage_usage_records_are_not_cleared_on_restart() {
     let (initial_timestamp, initial_storage_usage_records) = {
         let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
-        // Create a table with no data, which should have some overhead and therefore some storage usage.
+        // Create a table with no data, which should have some overhead and therefore some storage
+        // usage.
         client
             .batch_execute("CREATE TABLE usage_test (a int)")
             .unwrap();
@@ -6313,8 +6317,9 @@ fn test_mcp_agent_with_data_product() {
         }),
     );
     assert_eq!(status, StatusCode::OK);
-    // The cluster name is escaped, so this should fail as an invalid cluster, not execute injection.
-    // It may be a query execution error (bad cluster name) which is fine - the key is no injection.
+    // The cluster name is escaped, so this should fail as an invalid cluster, not execute
+    // injection. It may be a query execution error (bad cluster name) which is fine - the key
+    // is no injection.
     assert!(
         body["error"].is_object(),
         "injection in cluster should produce an error, not succeed"
@@ -6763,9 +6768,8 @@ fn test_mcp_metrics() {
     // Exercise three distinct request shapes:
     //   1. `initialize`: succeeds.
     //   2. `tools/list`: succeeds.
-    //   3. `tools/call` for `read_data_product` with a nonexistent name:
-    //      the request itself completes with an MCP error
-    //      (`DataProductNotFound`), which both `requests_total` and
+    //   3. `tools/call` for `read_data_product` with a nonexistent name: the request itself
+    //      completes with an MCP error (`DataProductNotFound`), which both `requests_total` and
     //      `tool_calls_total` should reflect via the status label.
 
     let (status, _) = mcp_post(
@@ -7410,4 +7414,127 @@ fn test_startup_only_system_var_warns() {
         !notices.iter().any(|message| message.contains(WARNING)),
         "RESET ALL warned without changing anything, notices: {notices:?}"
     );
+}
+
+/// The values of `label` across the series of the `family` metric.
+fn label_values(registry: &MetricsRegistry, family: &str, label: &str) -> BTreeSet<String> {
+    registry
+        .gather()
+        .into_iter()
+        .filter(|f| f.name() == family)
+        .flat_map(|f| f.get_metric().to_vec())
+        .flat_map(|metric| metric.get_label().to_vec())
+        .filter(|pair| pair.name() == label)
+        .map(|pair| pair.value().to_string())
+        .collect()
+}
+
+/// Metric families with a cluster id label, paired with that label's name.
+const CLUSTER_LABELED_METRICS: [(&str, &str); 2] = [
+    ("mz_time_to_first_row_seconds", "instance_id"),
+    ("mz_determine_timestamp", "compute_instance"),
+];
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_cluster_labeled_metrics_are_removed_on_cluster_drop() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client
+        .batch_execute("CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))")
+        .unwrap();
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client.batch_execute("INSERT INTO t VALUES (1)").unwrap();
+    client
+        .batch_execute("CREATE INDEX t_idx IN CLUSTER c ON t (a)")
+        .unwrap();
+    let cluster_id: String = client
+        .query_one("SELECT id FROM mz_clusters WHERE name = 'c'", &[])
+        .unwrap()
+        .get(0);
+
+    // A peek served by the index on `c` records series labeled with its id.
+    client.batch_execute("SET cluster = c").unwrap();
+    client.query("SELECT * FROM t", &[]).unwrap();
+    for (family, label) in CLUSTER_LABELED_METRICS {
+        assert!(
+            label_values(server.metrics_registry(), family, label).contains(&cluster_id),
+            "peek on {cluster_id} recorded no {family} series"
+        );
+    }
+
+    // DROP CLUSTER applies its catalog implications, the metrics sweep among
+    // them, before it responds, so the series are gone once it returns.
+    client.batch_execute("SET cluster = quickstart").unwrap();
+    client.batch_execute("DROP CLUSTER c CASCADE").unwrap();
+    for (family, label) in CLUSTER_LABELED_METRICS {
+        assert!(
+            !label_values(server.metrics_registry(), family, label).contains(&cluster_id),
+            "{family} still has a {cluster_id} series after DROP CLUSTER"
+        );
+    }
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_cluster_labeled_metrics_are_removed_at_zero_replicas() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client
+        .batch_execute("CREATE CLUSTER c SIZE 'scale=1,workers=1'")
+        .unwrap();
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client.batch_execute("INSERT INTO t VALUES (1)").unwrap();
+    client
+        .batch_execute("CREATE INDEX t_idx IN CLUSTER c ON t (a)")
+        .unwrap();
+    let cluster_id: String = client
+        .query_one("SELECT id FROM mz_clusters WHERE name = 'c'", &[])
+        .unwrap()
+        .get(0);
+    client.batch_execute("SET cluster = c").unwrap();
+    client.query("SELECT * FROM t", &[]).unwrap();
+    for (family, label) in CLUSTER_LABELED_METRICS {
+        assert!(
+            label_values(server.metrics_registry(), family, label).contains(&cluster_id),
+            "peek on {cluster_id} recorded no {family} series"
+        );
+    }
+
+    // Losing the last replica sweeps the cluster's series like a drop does.
+    // Unlike DROP CLUSTER, a managed cluster's replication factor change
+    // applies its replica drop in a later coordinator stage, after the
+    // statement has responded, so the sweep has to be waited for.
+    client
+        .batch_execute("ALTER CLUSTER c SET (REPLICATION FACTOR 0)")
+        .unwrap();
+    Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| {
+            for (family, label) in CLUSTER_LABELED_METRICS {
+                if label_values(server.metrics_registry(), family, label).contains(&cluster_id) {
+                    return Err(format!(
+                        "{family} still has a {cluster_id} series at zero replicas"
+                    ));
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    client
+        .batch_execute("ALTER CLUSTER c SET (REPLICATION FACTOR 1)")
+        .unwrap();
+    Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| client.query("SELECT * FROM t", &[]).map(|_| ()))
+        .unwrap();
+    for (family, label) in CLUSTER_LABELED_METRICS {
+        assert!(
+            label_values(server.metrics_registry(), family, label).contains(&cluster_id),
+            "peek after scaling back up recorded no {family} series"
+        );
+    }
 }

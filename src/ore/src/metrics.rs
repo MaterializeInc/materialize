@@ -42,6 +42,7 @@
 //! ```
 
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
@@ -1027,10 +1028,45 @@ pub fn describe_runtime_metrics() -> Vec<(String, String, Vec<String>, &'static 
         .collect()
 }
 
+/// Removes every child of `vec` whose label `name` has the value `value`.
+///
+/// Prometheus removes children only by their full label tuple, so this learns
+/// the tuples by collecting the vec, which clones every child once. Meant for
+/// occasional cleanup such as dropping an object's series, not for hot paths.
+pub fn remove_children_with_label<V: MetricVec_ + Collector>(vec: &V, name: &str, value: &str) {
+    let descs = vec.desc();
+    // A metric vec has exactly one `Desc`.
+    let Some(desc) = descs.first() else {
+        return;
+    };
+    for family in vec.collect() {
+        for child in family.get_metric() {
+            let labels: BTreeMap<&str, &str> = child
+                .get_label()
+                .iter()
+                .map(|pair| (pair.name(), pair.value()))
+                .collect();
+            if labels.get(name) != Some(&value) {
+                continue;
+            }
+            let values: Vec<&str> = desc
+                .variable_labels
+                .iter()
+                .map(|label| labels.get(label.as_str()).copied().unwrap_or_default())
+                .collect();
+            // `remove_label_values` fails when the series is already gone, which happens
+            // if another caller removed it between the `collect` snapshot above and now.
+            // That is the state we wanted, so the error is ignored.
+            let _ = vec.remove_label_values(&values);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
+    use prometheus::core::Collector;
     use prometheus::{CounterVec, HistogramVec};
 
     use crate::stats::histogram_seconds_buckets;
@@ -1107,8 +1143,9 @@ mod tests {
 
         let exec_histogram = exec_metric[0].get_histogram();
         assert_eq!(exec_histogram.get_sample_count(), 1);
-        // This future will normally complete very quickly, but it's hard to guarantee any particular
-        // timing in an arbitrary test environment, so we don't assert on it here.
+        // This future will normally complete very quickly, but it's hard to guarantee any
+        // particular timing in an arbitrary test environment, so we don't assert on it
+        // here.
 
         let wall_family = reports
             .iter()
@@ -1207,5 +1244,35 @@ mod tests {
 
         drop(handle);
         assert_eq!(registry.gather().len(), before);
+    }
+
+    #[crate::test]
+    fn remove_children_with_label_removes_only_matching_children() {
+        let registry = MetricsRegistry::new();
+        let vec: HistogramVec = registry.register(metric!(
+            name: "labeled_hist",
+            help: "help",
+            var_labels: ["cluster", "kind"],
+            buckets: histogram_seconds_buckets(0.000_128, 8.0),
+        ));
+        vec.with_label_values(&["u1", "a"]).observe(1.0);
+        vec.with_label_values(&["u1", "b"]).observe(1.0);
+        vec.with_label_values(&["u2", "a"]).observe(1.0);
+
+        super::remove_children_with_label(&vec, "cluster", "u1");
+
+        let remaining: Vec<Vec<String>> = vec
+            .collect()
+            .into_iter()
+            .flat_map(|family| family.get_metric().to_vec())
+            .map(|child| {
+                child
+                    .get_label()
+                    .iter()
+                    .map(|pair| pair.value().to_string())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(remaining, vec![vec!["u2".to_string(), "a".to_string()]]);
     }
 }
