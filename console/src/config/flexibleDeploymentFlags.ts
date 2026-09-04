@@ -13,7 +13,6 @@
  * to disable.
  */
 export const disabledFlexibleDeploymentFlags: Record<string, boolean> = {
-  "usage-metrics-in-cluster-list-CNS121": false,
 };
 
 export const flexibleDeploymentFlags = new Proxy(
