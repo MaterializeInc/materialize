@@ -29,8 +29,11 @@ from materialize.cargo_bench.compare import (
 )
 from materialize.cargo_bench.targets import (
     BenchTarget,
+    BuiltBench,
+    bench_executables,
     bench_targets,
-    cargo_bench_args,
+    cargo_build_args,
+    package_manifests,
 )
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -75,79 +78,146 @@ def target_dir() -> Path:
     return value if value.is_absolute() else MZ_ROOT / value
 
 
-def load_targets(cwd: Path, packages: list[str]) -> list[BenchTarget]:
+def load_targets(
+    cwd: Path, packages: list[str]
+) -> tuple[list[BenchTarget], dict[str, str]]:
+    """Enumerate bench targets and package manifest paths for one checkout via `cargo metadata`."""
     metadata = json.loads(
         spawn.capture(["cargo", "metadata", "--no-deps", "--format-version=1"], cwd=cwd)
     )
     targets = bench_targets(metadata)
     if packages:
         targets = [t for t in targets if t.package in packages]
-    return targets
+    return targets, package_manifests(metadata)
 
 
-def run_targets(
-    targets: list[BenchTarget],
+def build_benches(
     cwd: Path,
+    targets: list[BenchTarget],
+    manifests: dict[str, str],
     env: dict[str, str],
-    criterion_args: list[str],
-) -> list[TargetFailure]:
-    """Run each target on its own so one failure does not take down the rest. Returns the failures."""
-    failures = []
-    base_criterion_home = Path(env["CRITERION_HOME"])
+) -> tuple[list[BuiltBench], list[TargetFailure]]:
+    """Compile every bench target of one checkout in as few `cargo bench --no-run` invocations as possible.
+
+    A single invocation covering every target builds with full core
+    parallelism, but cargo's message stream gives no way to tell which target
+    broke when the invocation itself exits non-zero. The fallback isolates
+    the failing targets with one invocation each; cargo's incremental cache
+    makes recompiling the targets that already succeeded cheap.
+    """
+    print(f"--- Building {len(targets)} bench targets in {cwd}")
+    try:
+        output = spawn.capture(cargo_build_args(targets), cwd=cwd, env=env)
+        return bench_executables(output.splitlines(), manifests), []
+    except subprocess.CalledProcessError:
+        pass
+
+    built: list[BuiltBench] = []
+    failures: list[TargetFailure] = []
     for target in targets:
-        print(f"--- Benchmarking {target.package}/{target.name} in {cwd}")
+        try:
+            output = spawn.capture(cargo_build_args([target]), cwd=cwd, env=env)
+            built.extend(bench_executables(output.splitlines(), manifests))
+        except subprocess.CalledProcessError as e:
+            print(
+                f"^^^ +++ {target.package}/{target.name} failed to build with {e.returncode}"
+            )
+            failures.append(TargetFailure(target, e.returncode))
+    return built, failures
+
+
+def run_bench(
+    built: BuiltBench,
+    criterion_args: list[str],
+    env: dict[str, str],
+    target_home: Path,
+    label: str,
+) -> int | None:
+    """Run one compiled bench binary directly and return its exit code on failure, else `None`.
+
+    The binary is invoked directly rather than through `cargo bench` again,
+    since cargo has already compiled it and re-running cargo would recheck
+    the whole workspace for no benefit. `--bench` is required: a criterion
+    binary invoked without it runs in test mode and measures nothing. Cargo
+    itself runs bench binaries with the package directory as cwd, which is
+    also what `CARGO_MANIFEST_DIR` would otherwise expand to at build time,
+    so both are set here for a binary that inspects either at runtime.
+    """
+    print(f"--- Benchmarking {built.package}/{built.name} ({label})")
+    target_env = dict(
+        env,
+        CARGO_MANIFEST_DIR=str(built.manifest_dir),
+        CRITERION_HOME=str(target_home),
+    )
+    try:
+        spawn.runv(
+            [str(built.executable), "--bench", *criterion_args],
+            cwd=built.manifest_dir,
+            env=target_env,
+        )
+        return None
+    except subprocess.CalledProcessError as e:
+        print(f"^^^ +++ {built.package}/{built.name} failed with {e.returncode}")
+        return e.returncode
+
+
+def run_benches(
+    head_built: list[BuiltBench],
+    ancestor_built: list[BuiltBench],
+    head_targets: list[BenchTarget],
+    ancestor_targets: list[BenchTarget],
+    env: dict[str, str],
+    criterion_home: Path,
+) -> tuple[list[TargetFailure], list[TargetFailure]]:
+    """Run every HEAD bench binary, its ancestor counterpart first when one was built for the same target.
+
+    Interleaving ancestor and HEAD per target, rather than running every
+    ancestor target and then every HEAD target, keeps the machine's page
+    cache and thermal state close between the two runs of a benchmark, which
+    is what produced repeatable false regressions in the I/O-bound
+    mz-ore/pager benches when the two phases ran far apart. A target present
+    only in the ancestor is never run, since there is no HEAD result to
+    compare it against.
+    """
+    ancestor_by_key = {(b.package, b.name): b for b in ancestor_built}
+    ancestor_target_by_key = {(t.package, t.name): t for t in ancestor_targets}
+    head_target_by_key = {(t.package, t.name): t for t in head_targets}
+
+    ancestor_failures: list[TargetFailure] = []
+    current_failures: list[TargetFailure] = []
+    for head_bin in sorted(head_built, key=lambda b: (b.package, b.name)):
+        key = (head_bin.package, head_bin.name)
         # Benchmark ids are only unique within a target, so a collision
         # across targets sharing one criterion home would silently merge two
         # unrelated benchmarks.
-        target_env = dict(
-            env,
-            CRITERION_HOME=str(base_criterion_home / target.package / target.name),
-        )
-        try:
-            spawn.runv(
-                cargo_bench_args(target, criterion_args), cwd=cwd, env=target_env
+        target_home = criterion_home / head_bin.package / head_bin.name
+        ancestor_bin = ancestor_by_key.get(key)
+        if ancestor_bin is not None:
+            rc = run_bench(
+                ancestor_bin,
+                ["--save-baseline", BASELINE],
+                env,
+                target_home,
+                "ancestor",
             )
-        except subprocess.CalledProcessError as e:
-            print(f"^^^ +++ {target.package}/{target.name} failed with {e.returncode}")
-            failures.append(TargetFailure(target, e.returncode))
-    return failures
-
-
-def run_ancestor(
-    ancestor: str,
-    packages: list[str],
-    env: dict[str, str],
-) -> list[TargetFailure]:
-    """Build and bench every target at `ancestor` in a scratch worktree. Returns the failures."""
-    worktree = Path(tempfile.mkdtemp(prefix="cargo-bench-ancestor-"))
-    added = False
-    try:
-        # A cancelled or timed-out job destroys the container's /tmp worktree
-        # before the `finally` block below runs to remove it, and CI agents
-        # reuse their checkout across jobs, so stale registrations would
-        # otherwise accumulate in `.git/worktrees`.
-        spawn.runv(["git", "worktree", "prune"], cwd=MZ_ROOT)
-        # `git worktree add` can fail on a bad ancestor ref, in which case
-        # there is no worktree to remove, only the scratch directory to clean up.
-        spawn.runv(
-            ["git", "worktree", "add", "--detach", str(worktree), ancestor],
-            cwd=MZ_ROOT,
+            if rc is not None:
+                ancestor_failures.append(TargetFailure(ancestor_target_by_key[key], rc))
+            # Criterion's --save-baseline leaves a `new/` copy of the
+            # ancestor run behind in addition to the baseline it saves. An id
+            # absent at HEAD would otherwise keep that copy and get reported
+            # as a HEAD result carrying the ancestor's numbers. Criterion
+            # recreates `new/` on the HEAD run and only reads
+            # `ancestor/estimates.json` and `ancestor/sample.json` for
+            # comparison, so removing it here is safe.
+            for d in target_home.rglob("new"):
+                if d.is_dir():
+                    shutil.rmtree(d)
+        rc = run_bench(
+            head_bin, ["--baseline-lenient", BASELINE], env, target_home, "current"
         )
-        added = True
-        targets = load_targets(worktree, packages)
-        return run_targets(targets, worktree, env, ["--save-baseline", BASELINE])
-    finally:
-        if added:
-            try:
-                spawn.runv(
-                    ["git", "worktree", "remove", "--force", str(worktree)],
-                    cwd=MZ_ROOT,
-                )
-            except subprocess.CalledProcessError as e:
-                # A failing remove must not mask an in-flight exception from
-                # the try block above.
-                print(f"^^^ +++ removing worktree {worktree} failed: {e}")
-        shutil.rmtree(worktree, ignore_errors=True)
+        if rc is not None:
+            current_failures.append(TargetFailure(head_target_by_key[key], rc))
+    return ancestor_failures, current_failures
 
 
 def render_report(
@@ -212,8 +282,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.skip_ancestor and args.ancestor:
         parser.error("--ancestor has no effect with --skip-ancestor")
 
-    current_targets = load_targets(MZ_ROOT, args.package)
-    if not current_targets:
+    head_targets, head_manifests = load_targets(MZ_ROOT, args.package)
+    if not head_targets:
         raise RuntimeError("no bench targets found")
 
     criterion_home = target_dir() / "criterion-compare"
@@ -221,37 +291,77 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # comparison target, so start from an empty directory every time.
     shutil.rmtree(criterion_home, ignore_errors=True)
     criterion_home.mkdir(parents=True)
-    env = dict(
-        os.environ,
-        CARGO_TARGET_DIR=str(target_dir()),
-        CRITERION_HOME=str(criterion_home),
-    )
+    env = dict(os.environ, CARGO_TARGET_DIR=str(target_dir()))
     # Persist's test storage configs panic under CI when no external Postgres
     # or S3 endpoint is configured. This step measures code, not network
     # storage, so the benches run as they do locally and skip those variants.
     env.pop("CI", None)
 
     ancestor: str | None = None
-    ancestor_failures: list[TargetFailure] = []
-    if not args.skip_ancestor:
+    if args.skip_ancestor:
+        head_built, current_build_failures = build_benches(
+            MZ_ROOT, head_targets, head_manifests, env
+        )
+        ancestor_run_failures, current_run_failures = run_benches(
+            head_built, [], head_targets, [], env, criterion_home
+        )
+        ancestor_failures = ancestor_run_failures
+        current_failures = current_build_failures + current_run_failures
+    else:
         ancestor = args.ancestor or resolve_ancestor()
         assert ancestor is not None
         print(f"--- Comparing against ancestor {ancestor}")
-        ancestor_failures = run_ancestor(ancestor, args.package, env)
-
-        # Criterion's --save-baseline leaves a `new/` copy of the ancestor
-        # run behind in addition to the baseline it saves. An id absent at
-        # HEAD would otherwise keep that copy and get reported as a HEAD
-        # result carrying the ancestor's numbers. Criterion recreates `new/`
-        # on the HEAD run and only reads `ancestor/estimates.json` and
-        # `ancestor/sample.json` for comparison, so removing it here is safe.
-        for d in criterion_home.rglob("new"):
-            if d.is_dir():
-                shutil.rmtree(d)
-
-    current_failures = run_targets(
-        current_targets, MZ_ROOT, env, ["--baseline-lenient", BASELINE]
-    )
+        worktree = Path(tempfile.mkdtemp(prefix="cargo-bench-ancestor-"))
+        added = False
+        try:
+            # A cancelled or timed-out job destroys the container's /tmp
+            # worktree before the `finally` block below runs to remove it,
+            # and CI agents reuse their checkout across jobs, so stale
+            # registrations would otherwise accumulate in `.git/worktrees`.
+            spawn.runv(["git", "worktree", "prune"], cwd=MZ_ROOT)
+            # `git worktree add` can fail on a bad ancestor ref, in which
+            # case there is no worktree to remove, only the scratch
+            # directory to clean up.
+            spawn.runv(
+                ["git", "worktree", "add", "--detach", str(worktree), ancestor],
+                cwd=MZ_ROOT,
+            )
+            added = True
+            ancestor_targets, ancestor_manifests = load_targets(worktree, args.package)
+            # Building ancestor before HEAD lets both build phases run at
+            # full core parallelism back to back, then the run phase below
+            # benchmarks matching targets ancestor then HEAD while the
+            # worktree the ancestor binaries were compiled against is still
+            # present. Bench binaries read fixtures relative to their
+            # manifest dir, so the worktree must outlive the run phase.
+            ancestor_built, ancestor_build_failures = build_benches(
+                worktree, ancestor_targets, ancestor_manifests, env
+            )
+            head_built, current_build_failures = build_benches(
+                MZ_ROOT, head_targets, head_manifests, env
+            )
+            ancestor_run_failures, current_run_failures = run_benches(
+                head_built,
+                ancestor_built,
+                head_targets,
+                ancestor_targets,
+                env,
+                criterion_home,
+            )
+            ancestor_failures = ancestor_build_failures + ancestor_run_failures
+            current_failures = current_build_failures + current_run_failures
+        finally:
+            if added:
+                try:
+                    spawn.runv(
+                        ["git", "worktree", "remove", "--force", str(worktree)],
+                        cwd=MZ_ROOT,
+                    )
+                except subprocess.CalledProcessError as e:
+                    # A failing remove must not mask an in-flight exception
+                    # from the try block above.
+                    print(f"^^^ +++ removing worktree {worktree} failed: {e}")
+            shutil.rmtree(worktree, ignore_errors=True)
 
     report = compare(criterion_home, args.threshold)
     markdown = render_report(
