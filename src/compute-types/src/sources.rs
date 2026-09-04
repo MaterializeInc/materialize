@@ -32,4 +32,8 @@ pub struct SourceInstanceDesc<M> {
 pub struct SourceInstanceArguments {
     /// Linear operators to be applied record-by-record.
     pub operators: Option<mz_expr::MapFilterProject>,
+    /// If set, read the shard at this fixed as-of (not the dataflow's) and promote each
+    /// consolidated update's time and diff to trailing `mz_timestamp` and `mz_diff` columns.
+    /// `operators` must be `None`: the shard's rows do not have the promoted columns.
+    pub changes_as_of: Option<mz_repr::Timestamp>,
 }

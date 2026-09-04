@@ -459,6 +459,7 @@ impl MirRelationExpr {
             Get {
                 id,
                 access_strategy: persist_or_index,
+                changes_as_of,
                 ..
             } => {
                 match id {
@@ -527,6 +528,9 @@ impl MirRelationExpr {
                             }
                         }
                     }
+                }
+                if let Some(as_of) = changes_as_of {
+                    write!(f, " changes_as_of={}", as_of)?;
                 }
                 self.fmt_analyses(f, ctx)?;
             }

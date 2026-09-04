@@ -251,6 +251,7 @@ pub fn enforce_linear_chains(expr: &mut MirRelationExpr) -> Result<(), ExplainEr
                         id: Id::Local(id.clone()),
                         typ: input.typ(),
                         access_strategy: AccessStrategy::UnknownOrLocal,
+                        changes_as_of: None,
                     }),
                 };
                 // swap the current body with the replacement

@@ -2137,6 +2137,7 @@ fn apply_mutation_to_mir(
                 id: Id::Local(binding_id),
                 typ: expr.typ(),
                 access_strategy: mz_expr::AccessStrategy::UnknownOrLocal,
+                changes_as_of: None,
             };
 
             let map_scalars: Vec<MirScalarExpr> = (0..arity)

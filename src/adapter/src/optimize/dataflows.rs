@@ -312,6 +312,14 @@ impl<'a> DataflowBuilder<'a> {
         features: &OptimizerFeatures,
     ) -> Result<(), OptimizerError> {
         maybe_grow(|| {
+            if let Some(import) = dataflow.source_imports.get(id) {
+                if let Some(as_of) = import.desc.arguments.changes_as_of {
+                    return Err(OptimizerError::Internal(format!(
+                        "collection {id} cannot be read both directly and as CHANGES AS OF \
+                         {as_of} within one dataflow"
+                    )));
+                }
+            }
             // Avoid importing the item redundantly.
             if dataflow.is_imported(id) {
                 return Ok(());
@@ -399,10 +407,78 @@ impl<'a> DataflowBuilder<'a> {
         dataflow: &mut DataflowDesc,
         features: &OptimizerFeatures,
     ) -> Result<(), OptimizerError> {
-        for get_id in view.depends_on() {
+        // CHANGES reads are imports of a different shape than plain reads of the same id, so
+        // they are registered first and plain imports of the same id are then rejected.
+        let mut changes_reads = BTreeMap::new();
+        let mut plain_reads = BTreeSet::new();
+        view.as_inner().visit_pre(|expr| {
+            if let MirRelationExpr::Get {
+                id: Id::Global(id),
+                changes_as_of,
+                ..
+            } = expr
+            {
+                match changes_as_of {
+                    Some(as_of) => {
+                        changes_reads.entry(*id).or_insert(*as_of);
+                    }
+                    None => {
+                        plain_reads.insert(*id);
+                    }
+                }
+            }
+        });
+        for (id, as_of) in changes_reads {
+            if plain_reads.contains(&id) {
+                return Err(OptimizerError::Internal(format!(
+                    "collection {id} cannot be read both directly and as CHANGES AS OF {as_of} \
+                     within one dataflow"
+                )));
+            }
+            self.import_changes_into_dataflow(&id, as_of, dataflow)?;
+        }
+        for get_id in plain_reads {
             self.import_into_dataflow(&get_id, dataflow, features)?;
         }
         dataflow.insert_plan(*view_id, view.clone());
+        Ok(())
+    }
+
+    /// Imports the history of `id` from `as_of` onward, as read by `CHANGES(id AS OF as_of)`.
+    ///
+    /// The read goes to the persist shard regardless of available indexes, because only the
+    /// shard's pinned since guarantees the history is present.
+    fn import_changes_into_dataflow(
+        &mut self,
+        id: &GlobalId,
+        as_of: mz_repr::Timestamp,
+        dataflow: &mut DataflowDesc,
+    ) -> Result<(), OptimizerError> {
+        if let Some(import) = dataflow.source_imports.get(id) {
+            if import.desc.arguments.changes_as_of == Some(as_of) {
+                return Ok(());
+            }
+        }
+        if dataflow.is_imported(id) {
+            return Err(OptimizerError::Internal(format!(
+                "collection {id} cannot be read both directly and as CHANGES AS OF {as_of} \
+                 within one dataflow"
+            )));
+        }
+        let entry = self.catalog.get_entry(id);
+        if !matches!(
+            entry.item(),
+            CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::MaterializedView(_)
+        ) {
+            return Err(OptimizerError::Internal(format!(
+                "CHANGES requires a persist-backed collection, but {id} is not one"
+            )));
+        }
+        let desc = entry.relation_desc().ok_or_else(|| {
+            OptimizerError::Internal(format!("CHANGES source {id} has no relation description"))
+        })?;
+        let typ = mz_sql::plan::changes_desc(&desc).typ().clone();
+        dataflow.import_changes(*id, typ, as_of);
         Ok(())
     }
 

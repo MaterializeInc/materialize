@@ -223,6 +223,10 @@ impl Context {
     fn refine_source_mfps(&mut self, dataflow: &mut DataflowDescription<LirRelationExpr>) {
         for (source_id, source_import) in dataflow.source_imports.iter_mut() {
             let source = &mut source_import.desc;
+            // A CHANGES import's rows differ from the shard's rows; its reads keep their MFPs.
+            if source.arguments.changes_as_of.is_some() {
+                continue;
+            }
             let source_id = *source_id;
             let mut identity_present = false;
 

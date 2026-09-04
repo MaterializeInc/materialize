@@ -1054,7 +1054,7 @@ mod column_names {
                 Get {
                     id: Id::Global(id),
                     typ,
-                    access_strategy: _,
+                    ..
                 } => {
                     // Emit ColumnName::Global instances for each column in the
                     // `Get` type. Those can be resolved to real names later when an
@@ -1066,7 +1066,7 @@ mod column_names {
                 Get {
                     id: Id::Local(id),
                     typ,
-                    access_strategy: _,
+                    ..
                 } => {
                     let index_child = *depends.bindings().get(id).expect("id in scope");
                     if index_child < results.len() {

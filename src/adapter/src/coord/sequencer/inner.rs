@@ -3243,6 +3243,48 @@ impl Coordinator {
                 }
             }
         }
+        // Dependents reading CHANGES from this item need its history from their AS OF onward,
+        // so the pin may neither move past the earliest such literal nor become a lag.
+        let entry = self.catalog().get_entry(&plan.id);
+        let gids: std::collections::BTreeSet<GlobalId> = entry.global_ids().collect();
+        let mut earliest_changes_read: Option<(CatalogItemId, mz_repr::Timestamp)> = None;
+        for dep_id in entry.used_by() {
+            let expr = match self.catalog().get_entry(dep_id).item() {
+                CatalogItem::View(view) => Some(view.locally_optimized_expr.as_ref().clone()),
+                CatalogItem::MaterializedView(mview) => {
+                    Some(mview.locally_optimized_expr.as_ref().clone())
+                }
+                _ => None,
+            };
+            if let Some(expr) = expr {
+                expr.as_inner().visit_pre(|e| {
+                    if let mz_expr::MirRelationExpr::Get {
+                        id: mz_expr::Id::Global(id),
+                        changes_as_of: Some(t),
+                        ..
+                    } = e
+                    {
+                        if gids.contains(id)
+                            && earliest_changes_read.is_none_or(|(_, cur)| *t < cur)
+                        {
+                            earliest_changes_read = Some((*dep_id, *t));
+                        }
+                    }
+                });
+            }
+        }
+        if let Some((dep_id, t)) = earliest_changes_read {
+            if !matches!(plan.window, CompactionWindow::PinAt(pin) if pin <= t) {
+                let conn_id = Some(ctx.session().conn_id());
+                let name = self.catalog().resolve_full_name(entry.name(), conn_id);
+                let dep = self.catalog().get_entry(&dep_id);
+                let dep_name = self.catalog().resolve_full_name(dep.name(), conn_id);
+                return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                    "cannot change RETAIN HISTORY of {name}: {dep_name} reads CHANGES AS OF {t}, \
+                     which requires RETAIN HISTORY PIN AT at or before {t}"
+                )));
+            }
+        }
         let ops = vec![catalog::Op::AlterRetainHistory {
             id: plan.id,
             value: plan.value,

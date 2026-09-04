@@ -148,7 +148,7 @@ use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::vec::ToStream;
-use timely::dataflow::operators::vec::{BranchWhen, Filter};
+use timely::dataflow::operators::vec::{BranchWhen, Filter, Map};
 use timely::dataflow::operators::{Capability, Operator, Probe, probe};
 use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::{Product, TotalOrder};
@@ -253,7 +253,7 @@ pub fn build_compute_dataflow(
             for (source_id, import) in dataflow.source_imports.iter() {
                 region.region_named(&format!("Source({:?})", source_id), |inner| {
                     let mut read_schema = None;
-                    let mut mfp = import.desc.arguments.operators.clone().map(|mut ops| {
+                    let mfp = import.desc.arguments.operators.clone().map(|mut ops| {
                         // If enabled, we read from Persist with a `RelationDesc` that
                         // omits uneeded columns.
                         if apply_demands {
@@ -286,9 +286,22 @@ pub fn build_compute_dataflow(
                     };
                     let suppress_early_progress_as_of = dataflow.as_of.clone();
 
+                    // A CHANGES import reads the shard at its own fixed as-of and unfiltered;
+                    // the promotion below then advances its times to the dataflow as-of.
+                    let changes_as_of = import.desc.arguments.changes_as_of;
+                    let (read_as_of, snapshot_mode, read_schema, mut mfp) = match changes_as_of {
+                        Some(t) => (
+                            Some(Antichain::from_elem(t)),
+                            SnapshotMode::Include,
+                            None,
+                            None,
+                        ),
+                        None => (dataflow.as_of.clone(), snapshot_mode, read_schema, mfp),
+                    };
+
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                    let (mut ok_stream, err_stream, token) =
+                    let (mut ok_stream, mut err_stream, token) =
                         persist_source::persist_source::<DataflowErrorSer>(
                             inner,
                             *source_id,
@@ -296,7 +309,7 @@ pub fn build_compute_dataflow(
                             &compute_state.txns_ctx,
                             import.desc.storage_metadata.clone(),
                             read_schema,
-                            dataflow.as_of.clone(),
+                            read_as_of,
                             snapshot_mode,
                             until.clone(),
                             mfp.as_mut(),
@@ -308,6 +321,41 @@ pub fn build_compute_dataflow(
                     // If `mfp` is non-identity, we need to apply what remains.
                     // For the moment, assert that it is either trivial or `None`.
                     assert!(mfp.map(|x| x.is_identity()).unwrap_or(true));
+
+                    if changes_as_of.is_some() {
+                        // Consolidate per (row, time) first: the shard's batch layout is not
+                        // canonical, but the consolidated update at each time is, given the
+                        // shard's since is at or before the read as-of. Then promote time and
+                        // diff to data, and advance everything to the dataflow as-of so the
+                        // as-of guarantee above holds for the promoted rows too.
+                        let dataflow_as_of =
+                            dataflow.as_of.as_ref().and_then(|f| f.as_option().copied());
+                        let oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                            ok_stream.as_collection(),
+                            "ChangesConsolidate",
+                        );
+                        let oks = oks
+                            .inner
+                            .map(|(row, time, diff): (Row, mz_repr::Timestamp, Diff)| {
+                                let mut out = Row::default();
+                                let mut packer = out.packer();
+                                packer.extend(row.iter());
+                                packer.push(Datum::MzTimestamp(time));
+                                packer.push(Datum::Int64(diff.into_inner()));
+                                (out, time, Diff::ONE)
+                            })
+                            .as_collection();
+                        let errs = err_stream.as_collection();
+                        let (oks, errs) = match dataflow_as_of {
+                            Some(as_of) => (
+                                oks.delay(move |t| std::cmp::max(*t, as_of)),
+                                errs.delay(move |t| std::cmp::max(*t, as_of)),
+                            ),
+                            None => (oks, errs),
+                        };
+                        ok_stream = oks.inner;
+                        err_stream = errs.inner;
+                    }
 
                     // To avoid a memory spike during arrangement hydration (database-issues#6368), need to
                     // ensure that the first frontier we report into the dataflow is beyond the

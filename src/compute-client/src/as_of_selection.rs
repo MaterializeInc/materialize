@@ -1069,6 +1069,7 @@ mod tests {
                 let desc = SourceInstanceDesc {
                     arguments: SourceInstanceArguments {
                         operators: Default::default(),
+                        changes_as_of: None,
                     },
                     storage_metadata: Default::default(),
                     typ: SqlRelationType::empty(),

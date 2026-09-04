@@ -8710,6 +8710,16 @@ impl<'a> Parser<'a> {
             })
         } else if self.parse_keywords(&[ROWS, FROM]) {
             Ok(self.parse_rows_from()?)
+        } else if self.peek_keyword(CHANGES) && self.peek_nth_token(1) == Some(Token::LParen) {
+            self.expect_keyword(CHANGES)?;
+            self.expect_token(&Token::LParen)?;
+            let name = self.parse_raw_name()?;
+            self.expect_keyword(AS)?;
+            self.expect_keyword(OF)?;
+            let as_of = self.parse_expr()?;
+            self.expect_token(&Token::RParen)?;
+            let alias = self.parse_optional_table_alias()?;
+            Ok(TableFactor::Changes { name, as_of, alias })
         } else {
             let name = self.parse_raw_name()?;
             if self.consume_token(&Token::LParen) {

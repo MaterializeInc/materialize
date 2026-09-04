@@ -240,11 +240,13 @@ mod relation {
                 id: Id::Global(*id),
                 typ: ReprRelationType::from(typ),
                 access_strategy: AccessStrategy::UnknownOrLocal,
+                changes_as_of: None,
             }),
             None => Ok(MirRelationExpr::Get {
                 id: Id::Local(parse_local_id(ident)?),
                 typ: ReprRelationType::empty(),
                 access_strategy: AccessStrategy::UnknownOrLocal,
+                changes_as_of: None,
             }),
         }
     }
@@ -328,6 +330,7 @@ mod relation {
                         id: Id::Local(id),
                         typ,
                         access_strategy: AccessStrategy::UnknownOrLocal,
+                        changes_as_of: None,
                     };
                     // Do not use the `union` smart constructor here!
                     MirRelationExpr::Union {
