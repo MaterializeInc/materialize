@@ -169,8 +169,8 @@ def run_bench(
         return e.returncode
 
 
-def loaded_image_digest(executable: Path, scratch: Path) -> str:
-    """Return the sha256 hex digest of the bytes a loader actually maps for `executable`.
+def loaded_image_digest(executable: Path, scratch: Path) -> str | None:
+    """Return the sha256 hex digest of the bytes a loader actually maps for `executable`, or `None` if `strip` fails.
 
     Two builds of identical source from different checkouts still differ in
     debug info, symbol names, the build-id note, and `.comment` (compiler and
@@ -179,22 +179,27 @@ def loaded_image_digest(executable: Path, scratch: Path) -> str:
     those out before hashing judges identity on the loaded program rather
     than on incidental build-environment bytes. `--strip-all` removes symbol
     tables and debug info but leaves `.comment` behind, so it is named
-    explicitly.
+    explicitly. A `None` return means "unknown", not "identical": the caller
+    must never treat two `None`s as a match, or a broken `strip` would skip
+    every benchmark instead of running them.
     """
     stripped = scratch / executable.name
-    spawn.runv(
-        [
-            "strip",
-            "--strip-all",
-            "--remove-section=.note.gnu.build-id",
-            "--remove-section=.comment",
-            "-o",
-            str(stripped),
-            str(executable),
-        ]
-    )
     try:
+        spawn.runv(
+            [
+                "strip",
+                "--strip-all",
+                "--remove-section=.note.gnu.build-id",
+                "--remove-section=.comment",
+                "-o",
+                str(stripped),
+                str(executable),
+            ]
+        )
         return hashlib.sha256(stripped.read_bytes()).hexdigest()
+    except subprocess.CalledProcessError as e:
+        print(f"^^^ +++ stripping {executable} failed: {e}")
+        return None
     finally:
         stripped.unlink(missing_ok=True)
 
@@ -246,15 +251,19 @@ def run_benches(
             # false regression from shared CI hardware.
             ancestor_digest = loaded_image_digest(ancestor_bin.executable, scratch)
             head_digest = loaded_image_digest(head_bin.executable, scratch)
-            if ancestor_digest == head_digest:
+            if (
+                ancestor_digest is not None
+                and head_digest is not None
+                and ancestor_digest == head_digest
+            ):
                 print(
                     f"--- Skipping {head_bin.package}/{head_bin.name}: identical binaries"
                 )
                 identical.append(head_bin)
                 continue
-            header_suffix = (
-                f" ancestor={ancestor_digest[:12]} current={head_digest[:12]}"
-            )
+            ancestor_label = ancestor_digest[:12] if ancestor_digest else "unknown"
+            head_label = head_digest[:12] if head_digest else "unknown"
+            header_suffix = f" ancestor={ancestor_label} current={head_label}"
             rc = run_bench(
                 ancestor_bin,
                 ["--save-baseline", BASELINE],
