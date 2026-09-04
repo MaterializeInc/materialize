@@ -19,3 +19,9 @@ export const TUTORIAL_WIDTH = "600px";
 
 export const CONNECTION_LOST_NOTICE_MESSAGE =
   "The connection was interrupted. Some session state may have been lost.";
+
+// Shown on a command that was in flight when the WebSocket closed. The socket
+// has no heartbeat, so a connection that died while idle is only discovered
+// when the next command is sent into it.
+export const COMMAND_INTERRUPTED_MESSAGE =
+  "The connection to Materialize was lost. This command may not have run. Press Retry to send it again.";

@@ -1277,15 +1277,7 @@ impl Coordinator {
                     if cluster_id.is_user() {
                         *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) += 1;
                         if let ReplicaLocation::Managed(location) = &config.location {
-                            let replica_allocation = self
-                                .catalog()
-                                .cluster_replica_sizes()
-                                .0
-                                .get(location.size_for_billing())
-                                .expect(
-                                    "location size is validated against the cluster replica sizes",
-                                );
-                            new_credit_consumption_rate += replica_allocation.credits_per_hour
+                            new_credit_consumption_rate += self.replica_credits_per_hour(location);
                         }
                     }
                 }
@@ -1348,16 +1340,8 @@ impl Coordinator {
                                     if let ReplicaLocation::Managed(location) =
                                         &cluster.config.location
                                     {
-                                        let replica_allocation = self
-                                            .catalog()
-                                            .cluster_replica_sizes()
-                                            .0
-                                            .get(location.size_for_billing())
-                                            .expect(
-                                                "location size is validated against the cluster replica sizes",
-                                            );
                                         new_credit_consumption_rate -=
-                                            replica_allocation.credits_per_hour
+                                            self.replica_credits_per_hour(location);
                                     }
                                 }
                             }

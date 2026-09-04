@@ -239,6 +239,17 @@
       "prettier/prettier": "error",
       "simple-import-sort/imports": "error",
       "simple-import-sort/exports": "error",
+      "no-restricted-syntax": [
+        "error",
+        {
+          "selector": "CallExpression[callee.name='useGlobalUpsertSubscribe'] > ObjectExpression",
+          "message": "Declare subscribe options at module scope; an inline object restarts the SUBSCRIBE session on every render."
+        },
+        {
+          "selector": "CallExpression[callee.name='useGlobalSubscribeCollection'] > ObjectExpression",
+          "message": "Declare subscribe options at module scope; an inline object restarts the SUBSCRIBE session on every render."
+        }
+      ],
       "@typescript-eslint/no-shadow": "error",
       "@typescript-eslint/ban-ts-comment": "off",
       "@typescript-eslint/explicit-module-boundary-types": "off",

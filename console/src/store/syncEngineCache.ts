@@ -7,26 +7,41 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { useAtomValue } from "jotai";
+import { atom } from "jotai";
+import { loadable } from "jotai/utils";
 
-import { useMaybeCurrentOrganizationId } from "~/api/auth";
+import {
+  fetchCurrentOrganization,
+  isOrganizationFetchEnabled,
+  queryKeys as authQueryKeys,
+} from "~/api/auth";
+import { Organization } from "~/api/cloudGlobalApi";
+import { appConfigAtom } from "~/config/store";
+import { getQueryClient } from "~/queryClient";
 import { currentRegionIdSyncAtom } from "~/store/environments";
 
 /**
  * The auth/region scope for the sync-engine localStorage caches, as
- * `organizationId|regionId`. Returns undefined until both are known, so callers
- * defer seeding until the scope is settled and never share one tenant's cache
- * with another on the shared `console.materialize.com` origin.
+ * `organizationId|regionId`. Resolves to undefined until both are known, so
+ * consumers defer cache seeding until the scope is settled and never share one
+ * tenant's cache with another on a shared origin.
  */
-export function useSyncEngineCacheScope(): string | undefined {
-  const maybeOrganizationId = useMaybeCurrentOrganizationId();
-  const regionId = useAtomValue(currentRegionIdSyncAtom);
+export const syncEngineCacheScopeAtom = atom(async (get) => {
+  const regionId = get(currentRegionIdSyncAtom);
+  if (!regionId) return undefined;
 
-  const organizationIdLoading =
-    maybeOrganizationId !== null && maybeOrganizationId.isLoading;
-  if (organizationIdLoading || !regionId) return undefined;
-
-  const organizationId =
-    maybeOrganizationId !== null ? maybeOrganizationId.data : undefined;
+  const organizationId = isOrganizationFetchEnabled(get(appConfigAtom))
+    ? (
+        await getQueryClient().ensureQueryData<Organization>({
+          queryKey: authQueryKeys.currentOrganization(),
+          queryFn: fetchCurrentOrganization,
+        })
+      ).id
+    : undefined;
   return `${organizationId ?? ""}|${regionId}`;
-}
+});
+
+/** Synchronous view of the scope for store.sub consumers (subscribe sessions). */
+export const syncEngineCacheScopeLoadableAtom = loadable(
+  syncEngineCacheScopeAtom,
+);

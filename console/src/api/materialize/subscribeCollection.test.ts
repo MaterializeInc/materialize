@@ -105,9 +105,8 @@ describe("createSubscribeCollection", () => {
   });
 
   it("hydrates from cache after an empty pre-snapshot was applied", async () => {
-    // The mount effect pushes the atom's empty initial state before the async
-    // auth/region scope resolves, so hydrate always runs after it. The empty
-    // placeholder must not count as live data, or the cache is never read.
+    // The empty initial state is pushed before the async scope resolves, so
+    // hydrate always runs after it; it must not count as live data.
     const name = "late-hydrate";
     const scope = "org1|region1";
     localStorage.setItem(
@@ -141,6 +140,121 @@ describe("createSubscribeCollection", () => {
     applySnapshot(state([], false));
     await flush();
     expect(collection.size).toBe(1);
+  });
+
+  it("does not carry the previous scope's rows into a new scope", async () => {
+    const name = "scope-switch";
+    const keyB = syncEngineCacheKey(name, "org|regionB");
+    const { collection, statusAtom, applySnapshot, hydrate } =
+      freshCollection(name);
+
+    hydrate("org|regionA");
+    applySnapshot(state([{ id: "1", name: "region-a" }]));
+    await flush();
+    expect(collection.size).toBe(1);
+
+    vi.useFakeTimers();
+    try {
+      // A region switch re-hydrates with a new scope while region A's rows are
+      // still in memory. They must not be persisted under region B's key.
+      hydrate("org|regionB");
+      vi.advanceTimersByTime(1100);
+      expect(localStorage.getItem(keyB)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // Nor served as region B data: the collection empties and the loading
+    // gate closes until region B's own snapshot arrives.
+    await flush();
+    expect(collection.size).toBe(0);
+    expect(getStore().get(statusAtom).snapshotComplete).toBe(false);
+  });
+
+  it("seeds the new scope from its own cache after a scope switch", async () => {
+    const name = "scope-switch-seed";
+    const keyB = syncEngineCacheKey(name, "org|regionB");
+    const { collection, applySnapshot, hydrate } = freshCollection(name);
+
+    hydrate("org|regionA");
+    applySnapshot(state([{ id: "1", name: "region-a" }]));
+    await flush();
+
+    // Written after region A's hydrate pruned other scopes, as another tab
+    // already on region B would.
+    localStorage.setItem(keyB, JSON.stringify([{ id: "9", name: "region-b" }]));
+    hydrate("org|regionB");
+    await flush();
+
+    expect(collection.has("1")).toBe(false);
+    expect(collection.get("9")?.name).toBe("region-b");
+  });
+
+  it("reset drops rows, pending persistence, and the loading gate", async () => {
+    vi.useFakeTimers();
+    try {
+      const name = "reset";
+      const scope = "org|regionA";
+      const key = syncEngineCacheKey(name, scope);
+      const { collection, statusAtom, applySnapshot, hydrate, reset } =
+        freshCollection(name);
+      hydrate(scope);
+      applySnapshot(state([{ id: "1", name: "a" }]));
+
+      // Reset before the persist throttle fires: nothing may be written.
+      reset();
+      vi.advanceTimersByTime(1100);
+      expect(localStorage.getItem(key)).toBeNull();
+      expect(getStore().get(statusAtom).snapshotComplete).toBe(false);
+
+      vi.useRealTimers();
+      await flush();
+      expect(collection.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("suspendPersistence stops writes until a scope resolves again", () => {
+    vi.useFakeTimers();
+    try {
+      const name = "suspend";
+      const scope = "org|regionA";
+      const key = syncEngineCacheKey(name, scope);
+      const { applySnapshot, hydrate, suspendPersistence } =
+        freshCollection(name);
+      hydrate(scope);
+      applySnapshot(state([{ id: "1", name: "a" }]));
+
+      // Suspend cancels the pending write and later snapshots stay unpersisted.
+      suspendPersistence();
+      applySnapshot(state([{ id: "2", name: "b" }]));
+      vi.advanceTimersByTime(1100);
+      expect(localStorage.getItem(key)).toBeNull();
+
+      // A scope resolving again re-arms persistence, even the same scope.
+      hydrate(scope);
+      applySnapshot(state([{ id: "3", name: "c" }]));
+      vi.advanceTimersByTime(1100);
+      expect(JSON.parse(localStorage.getItem(key) ?? "[]")).toEqual([
+        { id: "3", name: "c" },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears a stale error when an empty pre-snapshot follows a reconnect", () => {
+    const { applySnapshot, statusAtom } = freshCollection();
+    const error = { code: "boom", message: "it failed" };
+    applySnapshot(state([], false, error));
+    expect(getStore().get(statusAtom).error).toEqual(error);
+
+    // SubscribeManager re-emits an empty pre-snapshot when a reconnect opens;
+    // the status must fall back to loading, not hold the error.
+    applySnapshot(state([], false));
+    expect(getStore().get(statusAtom).error).toBeUndefined();
+    expect(getStore().get(statusAtom).snapshotComplete).toBe(false);
   });
 
   it("surfaces error and snapshotComplete on the status atom", () => {

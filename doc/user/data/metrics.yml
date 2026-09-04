@@ -1500,15 +1500,20 @@ metrics:
 - name: mz_occ_read_then_write_retry_count_bucket
   help: Number of OCC retries per read-then-write operation.
   labels:
+  - caller
   - le
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_occ_read_then_write_retry_count_count
   help: Number of OCC retries per read-then-write operation.
+  labels:
+  - caller
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_occ_read_then_write_retry_count_sum
   help: Number of OCC retries per read-then-write operation.
+  labels:
+  - caller
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_optimization_notices
@@ -4101,25 +4106,6 @@ metrics:
   visibility: internal
 - name: mz_timestamp_difference_for_bounded_staleness_ms_sum
   help: How much older bounded-staleness timestamps are compared to serializable, in milliseconds. Measures the actual staleness incurred.
-  labels:
-  - compute_instance
-  source: src/adapter/src/metrics.rs
-  visibility: internal
-- name: mz_timestamp_difference_for_strict_serializable_ms_bucket
-  help: Difference in timestamp in milliseconds for running in strict serializable vs serializable isolation level.
-  labels:
-  - compute_instance
-  - le
-  source: src/adapter/src/metrics.rs
-  visibility: internal
-- name: mz_timestamp_difference_for_strict_serializable_ms_count
-  help: Difference in timestamp in milliseconds for running in strict serializable vs serializable isolation level.
-  labels:
-  - compute_instance
-  source: src/adapter/src/metrics.rs
-  visibility: internal
-- name: mz_timestamp_difference_for_strict_serializable_ms_sum
-  help: Difference in timestamp in milliseconds for running in strict serializable vs serializable isolation level.
   labels:
   - compute_instance
   source: src/adapter/src/metrics.rs

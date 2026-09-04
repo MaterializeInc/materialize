@@ -927,6 +927,20 @@ async fn load_or_create_table(
         Ok(table) => {
             // Table exists, return it
             // TODO: Add proper schema evolution/validation to ensure compatibility
+            let current_schema = table.metadata().current_schema();
+            if !(current_schema.as_struct().eq(schema.as_struct())
+                && current_schema
+                    .identifier_field_ids()
+                    .eq(schema.identifier_field_ids()))
+            {
+                anyhow::bail!(
+                    "Iceberg table '{}' schema does not match expected schema. \
+                     Current schema: {:?}, expected schema: {:?}",
+                    table_name,
+                    current_schema,
+                    schema
+                );
+            }
             Ok(table)
         }
         Err(err) => {

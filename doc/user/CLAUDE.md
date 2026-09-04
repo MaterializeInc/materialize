@@ -137,6 +137,14 @@ with two dead sections:
 - **Symlinked content**: `content/` contains no symlinks today (only
   `sql-grammar/keywords.txt` is one).
 
+## Verifying docs
+
+- Test documentation by running its SQL against the Materialize emulator (the
+  `materialize/materialized` Docker image) before committing, rather than
+  assuming a query works.
+- When writing syntax demos, include both the query and its output, and confirm
+  the syntax and shown output match what the emulator actually returns.
+
 ## Reviewing docs changes
 
 The `docs-content-reviewer` agent and `.prompts/docs_pre_pr_review.md` encode the

@@ -1753,18 +1753,17 @@ class DropIndexAction(Action):
             if index not in exe.db.indexes:
                 return False
 
-            query = f"DROP INDEX {index}"
-            try:
-                exe.execute(query, http=Http.RANDOM)
-            except QueryError:
-                # The indexed object or its schema may have been dropped
-                # concurrently, taking the index with it. Untrack the index
-                # either way so stale entries don't fill up the set and choke
-                # off CreateIndexAction. Use discard, not remove: a concurrent
-                # CASCADE drop's untrack_objects_in_schemas may have already
-                # removed it, and remove would raise KeyError.
-                exe.db.indexes.discard(index)
-                raise
+            # The indexed object or its schema may have dropped
+            # concurrently, taking the index with it. Thus whether
+            # we drop it successfully or find it doesn't exist, we
+            # untrack its entry as to not fill up the set and choke
+            # off CreateIndexAction. An RBAC error however (in case
+            # a non-owner tries this drop) will raise an error and
+            # we'll retry the DropIndexAction.
+            exe.execute(f"DROP INDEX IF EXISTS {index}", http=Http.RANDOM)
+            # Use discard, not remove: a concurrent
+            # CASCADE drop's untrack_objects_in_schemas may have already
+            # removed it, and remove would raise KeyError.
             exe.db.indexes.discard(index)
             return True
 

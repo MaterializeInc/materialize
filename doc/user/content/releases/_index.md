@@ -19,6 +19,76 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.40.0
+*Released to Materialize Cloud: 2026-09-02* <br>
+*Released to Materialize Self-Managed: 2026-09-03* <br>
+
+### Iceberg support for Databricks on AWS {#v26.40-iceberg-support-for-databricks-on-aws}
+
+{{< public-preview />}}
+
+Iceberg sinks can now write to Apache Iceberg tables registered in [Databricks
+Unity Catalog](/serve-results/sink/iceberg-databricks/) on AWS, reached through
+Unity Catalog's Iceberg REST catalog endpoint. Two new Iceberg catalog
+connection options make this work: `OAUTH2 SERVER URL`, which names a token
+endpoint that does not sit under the catalog URI, and `ACCESS DELEGATION =
+'vended-credentials'`, which asks the catalog for temporary, table-scoped
+storage credentials instead of static keys. Materialize refreshes both the
+OAuth2 token and the vended credentials while the sink runs, so a sink that
+outlives one credential lifetime keeps writing.
+
+```mzsql
+CREATE SECRET databricks_oauth
+  AS '<client_id>:<client_secret>';
+
+CREATE CONNECTION iceberg_catalog_connection TO ICEBERG CATALOG (
+    CATALOG TYPE = 'rest',
+    URL = 'https://<workspace>.cloud.databricks.com/api/2.1/unity-catalog/iceberg-rest',
+    WAREHOUSE = '<catalog_name>',
+    CREDENTIAL = SECRET databricks_oauth,
+    OAUTH2 SERVER URL = 'https://<workspace>.cloud.databricks.com/oidc/v1/token',
+    SCOPE = 'all-apis',
+    ACCESS DELEGATION = 'vended-credentials'
+);
+
+CREATE SINK <sink_name>
+  IN CLUSTER <sink_cluster>
+  FROM <my_materialize_object>
+  INTO ICEBERG CATALOG CONNECTION iceberg_catalog_connection (
+    NAMESPACE = '<unity_catalog_schema>',
+    TABLE = '<my_iceberg_table>'
+  )
+  MODE APPEND
+  WITH (COMMIT INTERVAL = '<commit_interval>');
+```
+
+For more information, see:
+- [Guide: Databricks on AWS](/serve-results/sink/iceberg-databricks/)
+- [`CREATE CONNECTION`: Iceberg catalog](/sql/create-connection/#iceberg-catalog), including [storage access delegation](/sql/create-connection/#iceberg-catalog-access-delegation)
+- [`CREATE SINK`: Iceberg](/sql/create-sink/iceberg/), including [append mode](/sql/create-sink/iceberg/#append-mode)
+
+### Improvements {#v26.40-improvements}
+- **Query History for Self-Managed**: Self-Managed deployments can now use the Console's Query History view to debug latency and performance.
+- **Bounded staleness isolation is generally available**: The [`bounded staleness <duration>`](/reference/isolation-level/#bounded-staleness) transaction [isolation level](/reference/isolation-level/) is out of public preview and is now a supported part of the [`transaction_isolation`](/reference/isolation-level/#setting-isolation-level) surface. See [when to use bounded staleness](/reference/isolation-level/#when-to-use-bounded-staleness) and its [restrictions](/reference/isolation-level/#restrictions).
+- **Replica resource usage introspection**: A new `mz_introspection.mz_cluster_replica_resource_usage` relation reports each replica process's own memory, swap, and disk observations at a higher cadence than the roughly once-a-minute orchestrator samples, so a spike between two samples is no longer invisible.
+
+### Agent Skills {#v26.40-agent-skills}
+- **mz-optimize-memory**: A new skill that works top-down from a cluster's largest arrangements to a table of memory-reducing fixes — index changes, outer-join and subquery rewrites, window-function patterns, and arrangement size hints — with rules for estimating each saving before making the change and verifying it afterwards.
+
+### Bug Fixes {#v26.40-bug-fixes}
+- Fixed the MCP servers rejecting `tools/list`, `ping`, and `notifications/initialized` requests that carry any `params` — including the `_meta` field MCP clients are allowed to attach — with a non-JSON-RPC HTTP 422 that clients read as the server being unavailable.
+- Fixed `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` leaving a stale cached query plan behind, which put `environmentd` into a crash loop on every subsequent restart once a dependency of the replaced definition was dropped, and could otherwise leave the view computing its old definition.
+- `CREATE TABLE ... FROM SOURCE` now requires `SELECT` on the source and `USAGE` on its schema, closing a case where `CREATE` on any schema a role controlled was enough to read a source that role had been denied; deployments where a platform team owns sources and application teams attach tables into their own schemas will need those `SELECT` grants added.
+- Fixed `ALTER CONNECTION` letting a connection owner keep secrets and connections they lack `USAGE` privileges on, and read those secrets during content checks or connection validation.
+- Fixed `ANY`/`ALL` over a `NULL` array or list returning the empty-set answer instead of `NULL`, and `array_position` failing to find `NULL` elements, both now matching PostgreSQL.
+- Fixed `round(numeric, scale)` erroring on a scale that reaches past the value's fractional digits, such as `round(123::numeric, 38)`, which could also let filter pushdown discard data a query matched.
+- Fixed identity-provider group sync silently finding nothing when `oidc_group_claim` names a claim the token declares directly, such as `roles`, so group-to-role mapping now works without a custom claim or JWT prehook.
+- Fixed Arrow ADBC clients failing to connect by adding the missing `pg_type.typsend` column, and fixed `typreceive` rendering as a numeric OID rather than the function name, so those clients resolve every column to its real type.
+- Fixed Iceberg sinks ignoring a table's `write.data.path` property and always writing data files to the default location.
+- Fixed sources on the Console's Objects page being described in replica-hydration terms, which could show a healthy source as `Not Hydrated`, leave a webhook source with no status, and hold a completed snapshot at 99%.
+- Fixed several `dbt-materialize` error paths reporting confusing failures instead of the intended messages, covering the index config parser, renaming a view, dropping an unsupported relation type, connection option parsing, and the version check against a server that is not Materialize.
+- Fixed the `mz` CLI failing on read-only commands such as `mz sql` when `mz.toml` sits on a read-only mount.
+
 ## v26.39.0
 *Released to Materialize Cloud: 2026-08-26* <br>
 *Released to Materialize Self-Managed: 2026-08-27* <br>

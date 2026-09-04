@@ -16,6 +16,9 @@ use mz_sql_parser::ast::statement_kind_label_value;
 use prometheus::core::{AtomicU64, GenericCounter};
 use prometheus::{Histogram, HistogramVec, IntCounter, IntCounterVec, IntGaugeVec};
 
+pub(crate) const OCC_CALLER_SESSION: &str = "session";
+pub(crate) const OCC_CALLER_BACKGROUND: &str = "background";
+
 #[derive(Debug, Clone)]
 pub struct Metrics {
     pub query_total: IntCounterVec,
@@ -25,7 +28,6 @@ pub struct Metrics {
     pub active_copy_tos: IntGaugeVec,
     pub queue_busy_seconds: Histogram,
     pub determine_timestamp: IntCounterVec,
-    pub timestamp_difference_for_strict_serializable_ms: HistogramVec,
     pub timestamp_difference_for_bounded_staleness_ms: HistogramVec,
     pub commands: IntCounterVec,
     pub storage_usage_collection_time_seconds: Histogram,
@@ -63,7 +65,7 @@ pub struct Metrics {
     pub catalog_transact_phase_seconds: HistogramVec,
     pub apply_catalog_implications_seconds: Histogram,
     pub group_commit_catalog_upper_seconds: Histogram,
-    pub occ_retry_count: Histogram,
+    pub occ_retry_count: HistogramVec,
 }
 
 impl Metrics {
@@ -109,12 +111,6 @@ impl Metrics {
                 name: "mz_determine_timestamp",
                 help: "The total number of calls to determine_timestamp.",
                 var_labels:["respond_immediately", "isolation_level", "compute_instance"],
-            )),
-            timestamp_difference_for_strict_serializable_ms: registry.register(metric!(
-                name: "mz_timestamp_difference_for_strict_serializable_ms",
-                help: "Difference in timestamp in milliseconds for running in strict serializable vs serializable isolation level.",
-                var_labels:["compute_instance"],
-                buckets: histogram_milliseconds_buckets(1., 8000.),
             )),
             timestamp_difference_for_bounded_staleness_ms: registry.register(metric!(
                 name: "mz_timestamp_difference_for_bounded_staleness_ms",
@@ -181,7 +177,9 @@ impl Metrics {
                 name: "mz_time_to_first_row_seconds",
                 help: "Latency of an execute for a successful query from pgwire's perspective",
                 var_labels: ["instance_id", "isolation_level", "strategy", "application_name"],
-                buckets: histogram_seconds_buckets(0.000_128, 32.0)
+                // NOTE: Measurements below 512 microseconds are negligible, so omit those buckets.
+                // This histogram retains series for dropped `instance_id` label values.
+                buckets: histogram_seconds_buckets(0.000_512, 32.0)
             }),
             statement_logging_records: registry.register(metric! {
                 name: "mz_statement_logging_record_count",
@@ -315,6 +313,7 @@ impl Metrics {
             occ_retry_count: registry.register(metric!(
                 name: "mz_occ_read_then_write_retry_count",
                 help: "Number of OCC retries per read-then-write operation.",
+                var_labels: ["caller"],
                 buckets: vec![
                     0., 1., 2., 3., 5., 10., 25., 50., 100., 200., 300., 500., 750., 1000.,
                 ],
@@ -333,9 +332,6 @@ impl Metrics {
             query_total: self.query_total.clone(),
             subscribe_outputs: self.subscribe_outputs.clone(),
             determine_timestamp: self.determine_timestamp.clone(),
-            timestamp_difference_for_strict_serializable_ms: self
-                .timestamp_difference_for_strict_serializable_ms
-                .clone(),
             timestamp_difference_for_bounded_staleness_ms: self
                 .timestamp_difference_for_bounded_staleness_ms
                 .clone(),
@@ -355,7 +351,6 @@ pub struct SessionMetrics {
     query_total: IntCounterVec,
     subscribe_outputs: IntCounterVec,
     determine_timestamp: IntCounterVec,
-    timestamp_difference_for_strict_serializable_ms: HistogramVec,
     timestamp_difference_for_bounded_staleness_ms: HistogramVec,
     optimization_notices: IntCounterVec,
     statement_logging_records: IntCounterVec,
@@ -382,14 +377,6 @@ impl SessionMetrics {
 
     pub(crate) fn determine_timestamp(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
         self.determine_timestamp.with_label_values(label_values)
-    }
-
-    pub(crate) fn timestamp_difference_for_strict_serializable_ms(
-        &self,
-        label_values: &[&str],
-    ) -> Histogram {
-        self.timestamp_difference_for_strict_serializable_ms
-            .with_label_values(label_values)
     }
 
     pub(crate) fn timestamp_difference_for_bounded_staleness_ms(
