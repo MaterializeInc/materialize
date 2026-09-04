@@ -17,7 +17,7 @@ mcp-developer
 {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\"\n  ]\n]"}],"isError":false}}
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"[\n  [\"materialize\"]\n]"}],"isError":false}}
 
 # Responses over the limit are rejected with an error telling the agent to
 # narrow its query. repeat() gives a deterministic response size.
@@ -25,4 +25,4 @@ mcp-developer
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT repeat('x', 5000) FROM mz_catalog.mz_databases WHERE name = 'materialize'"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":2,"error":{"code":-32603,"message":"Query execution failed: Response size (5018 bytes) exceeds the 1024 byte limit. Use LIMIT or WHERE to narrow your query.","data":{"error_type":"ExecutionError"}}}
+{"jsonrpc":"2.0","id":2,"error":{"code":-32603,"message":"Query execution failed: Response size (5010 bytes) exceeds the 1024 byte limit. Use LIMIT or WHERE to narrow your query.","data":{"error_type":"ExecutionError"}}}

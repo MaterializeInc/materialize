@@ -29,6 +29,7 @@ from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 TLS_CONF_PATH = MZ_ROOT / "test" / "sql-server-cdc" / "tls-mssconfig.conf"
 
@@ -41,6 +42,7 @@ SERVICES = [
     ),
     Testdrive(),
     TestCerts(),
+    Toxiproxy(),
     SqlServer(
         volumes_extra=[
             "secrets:/var/opt/mssql/certs",
@@ -122,10 +124,18 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.rm("sql-server")
     c.kill("materialized")
     c.rm("materialized")
+    c.kill("toxiproxy")
+    c.rm("toxiproxy")
 
     # must start test-certs, otherwise the certificates needed by sql-server may not be available
     # in the secrets volume when it starts up
-    c.up("materialized", "test-certs", "sql-server", Service("testdrive", idle=True))
+    c.up(
+        "materialized",
+        "test-certs",
+        "sql-server",
+        "toxiproxy",
+        Service("testdrive", idle=True),
+    )
     seed = random.getrandbits(16)
 
     ssl_ca = c.exec(

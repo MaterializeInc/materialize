@@ -16,7 +16,9 @@ MZFROM openssh-static AS openssh-static
 
 # In production, we use distroless images based on Debian 13.
 # We retain apt and install more packages in this image for development.
-FROM debian:13-slim
+# Pinned by rolling tag + multi-arch index digest, matching debian-base, so
+# dependabot refreshes the digest for security fixes.
+FROM debian:13-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258
 
 ARG CI_SANITIZER=none
 

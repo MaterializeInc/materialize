@@ -180,6 +180,21 @@ The current implementation rejects bounded-staleness queries whose timeline
 is not `EpochMilliseconds`, in `determine_timestamp_for_inner`. The freshness
 math is currently scoped to that timeline.
 
+### System-session replanning does not grant authority
+
+Some DDL paths reconstruct and mutate a stored definition by replanning it with
+a system session. The initial authorization check only sees dependencies in the
+submitted statement, so it cannot authorize retained dependencies discovered
+during replanning. Before reading secrets, performing external I/O, or
+persisting the result, authorize the final dependency set against the invoking
+session. Check the final set rather than the union of old and new dependencies,
+so a caller can remove a dependency they are no longer authorized to use.
+
+This rule applies when reconstructing or mutating a definition. Executing a
+fixed connection does not authorize its dependencies separately. For example,
+standalone `VALIDATE CONNECTION` is delegated by `USAGE` on the connection and
+its containing schema, without requiring `USAGE` on referenced secrets.
+
 ### The catalog is the source of truth for state that gets rebuilt from it
 
 If a reconcile or refresh path rebuilds downstream state (for example a
@@ -312,3 +327,32 @@ real, but the solution must maintain strict serializability. Correct alternative
 might include: reducing oracle round-trip latency, colocating the oracle,
 using the batching oracle's existing mechanism to serve more callers per batch,
 or relaxing the isolation level for queries that opt in.
+
+### Session records in the durable catalog
+
+**What:** Write a durable catalog record (`StateUpdateKind::Session`) on every
+session connect and delete it on close, so that `mz_sessions` becomes a
+materialized view over `mz_catalog_raw` and cleanup logic has a durable
+session inventory.
+
+**Why it was rejected:** Connection lifecycle events are far more frequent
+than DDL, and the catalog shard has a single writer. Every connect became a
+timestamp oracle round-trip plus a compare-and-append against the catalog
+shard, serialized on the coordinator loop. Startup could not respond before
+the record was durable (otherwise temp DDL could race its own session
+record), so connect latency was coupled to catalog commit latency, and
+connection churn queued real DDL behind session commits. Batching session ops
+into shared catalog transactions and bounding the flush rate reduced the
+commit count but kept both couplings.
+
+The durable records also bought nothing for garbage collection in the
+single-envd world. Cleanup at promotion deletes all ephemeral rows, justified
+by the deploy-generation fence alone, and graceful session close knows the
+session UUID from in-memory connection metadata.
+
+**The general lesson:** high-frequency per-connection state belongs in builtin
+tables written through group commit, which is fire-and-forget from the
+coordinator loop, batched with all other builtin writes, and never touches
+the catalog shard. Reserve durable catalog writes for state that must be
+transactional with DDL. See
+`doc/developer/design/20260706_sql_150_durable_temporary_objects.md`.

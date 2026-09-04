@@ -21,7 +21,7 @@ use differential_dataflow::trace::Description;
 use futures::{Stream, pin_mut};
 use futures_util::StreamExt;
 use itertools::Either;
-use mz_dyncfg::Config;
+use mz_dyncfg::{Config, ParameterScope};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::now::NowFn;
@@ -145,6 +145,7 @@ pub(crate) const COMPACTION_MINIMUM_TIMEOUT: Config<Duration> = Config::new(
     "\
     The minimum amount of time to allow a persist compaction request to run \
     before timing it out (Materialize).",
+    ParameterScope::Environment,
 );
 
 pub(crate) const COMPACTION_CHECK_PROCESS_FLAG: Config<bool> = Config::new(
@@ -152,6 +153,7 @@ pub(crate) const COMPACTION_CHECK_PROCESS_FLAG: Config<bool> = Config::new(
     true,
     "Whether Compactor will obey the process_requests flag in PersistConfig, \
         which allows dynamically disabling compaction. If false, all compaction requests will be processed.",
+    ParameterScope::Environment,
 );
 
 /// Create a `[CompactionInput::IdRange]` from a set of `SpineId`s.
@@ -886,10 +888,10 @@ where
             // This batch is too large to compact with others, or even in a single go.
             // Process this batch alone, splitting into single-batch chunks as needed.
             let mut run_iter = runs.into_iter().peekable();
-            debug_assert!(current_chunk_ids.is_empty());
-            debug_assert!(current_chunk_descs.is_empty());
-            debug_assert!(current_chunk_runs.is_empty());
-            debug_assert_eq!(current_chunk_max_memory_usage, 0);
+            mz_ore::soft_assert_no_log!(current_chunk_ids.is_empty());
+            mz_ore::soft_assert_no_log!(current_chunk_descs.is_empty());
+            mz_ore::soft_assert_no_log!(current_chunk_runs.is_empty());
+            mz_ore::soft_assert_eq_no_log!(current_chunk_max_memory_usage, 0);
             let mut current_chunk_run_ids = BTreeSet::new();
 
             while let Some((desc, meta, parts)) = run_iter.next() {

@@ -1,6 +1,6 @@
 ---
 source: src/audit-log/src/lib.rs
-revision: 8598d82c1c
+revision: 39dcae2fba
 ---
 
 # mz-audit-log
@@ -17,7 +17,7 @@ All event types and their detail payloads are defined here and serialized as JSO
 The crate is a single `lib.rs` with no submodules.
 It defines two independent versioned hierarchies:
 
-* **Audit events** — `VersionedEvent` (currently `V1`) wraps `EventV1`, which carries an `EventType` (Create/Drop/Alter/Grant/Revoke/Comment), an `ObjectType` (Cluster, ClusterReplica, Connection, ContinualTask, Database, Func, Index, MaterializedView, NetworkPolicy, Role, Secret, Schema, Sink, Source, System, Table, Type, View), and an `EventDetails` variant holding the event-specific payload struct.
+* **Audit events** — `VersionedEvent` (currently `V1`) wraps `EventV1`, which carries an `EventType` (Create/Drop/Alter/Grant/Revoke/Comment), an `ObjectType` (Cluster, ClusterReplica, Connection, ContinualTask, Database, Func, Index, MaterializedView, MetricSink, NetworkPolicy, Role, Secret, Schema, Sink, Source, System, Table, Type, View), and an `EventDetails` variant holding the event-specific payload struct.
 * **Storage usage snapshots** — `VersionedStorageUsage` (currently `V1`) wraps `StorageUsageV1`, recording per-shard byte sizes at a point in time.
 
 Each `EventDetails` variant is a versioned struct (e.g. `CreateClusterReplicaV1` through `V4`).

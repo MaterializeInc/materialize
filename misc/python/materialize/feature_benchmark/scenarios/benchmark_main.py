@@ -2012,15 +2012,6 @@ class MySqlInitialLoad(MySqlCdc):
 
     FIXED_SCALE = True  # TODO: Remove when database-issues#7556 is fixed
 
-    # The parallel snapshot path has a wider memory envelope during the initial
-    # load, so allow a bit more headroom than the base default before flagging a
-    # regression.
-    RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
-        MeasurementType.WALLCLOCK: 0.10,
-        MeasurementType.MEMORY_MZ: 0.30,
-        MeasurementType.MEMORY_CLUSTERD: 0.50,
-    }
-
     def shared(self) -> Action:
         return TdAction(f"""
 $ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
@@ -2068,12 +2059,6 @@ class MySqlInitialLoadMultiWorkerSampled(MySqlCdc):
     """Measure an 8-worker snapshot across 20 tables with a single-column
     non-integer primary key (a CHAR(26) ULID-like key)."""
 
-    RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
-        MeasurementType.WALLCLOCK: 0.10,
-        MeasurementType.MEMORY_MZ: 0.60,
-        MeasurementType.MEMORY_CLUSTERD: 0.60,
-    }
-
     # Cap scale so each per-table load fits one mysql.time_zone self-join
     # (~3M rows), so a single INSERT per table suffices.
     MAX_SCALE = 6
@@ -2097,7 +2082,7 @@ class MySqlInitialLoadMultiWorkerSampled(MySqlCdc):
         for i in range(self.TABLES):
             table = f"pk_table{i + 1}"
             table_blocks.append(
-                f"CREATE TABLE {table} (pk CHAR(26) PRIMARY KEY, f2 BIGINT);\n"
+                f"CREATE TABLE {table} (pk CHAR(26) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, f2 BIGINT);\n"
                 f"SET @i := 0;\n"
                 f"INSERT INTO {table} SELECT {row_values} "
                 f"FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {row_counts[i]};"
@@ -2167,12 +2152,6 @@ class MySqlInitialLoadMultiWorkerSingleTable(MySqlCdc):
     single-column non-integer primary key (a CHAR(26) ULID-like key). The
     single-table companion to MySqlInitialLoadMultiWorkerSampled."""
 
-    RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
-        MeasurementType.WALLCLOCK: 0.10,
-        MeasurementType.MEMORY_MZ: 0.60,
-        MeasurementType.MEMORY_CLUSTERD: 0.60,
-    }
-
     # Cap scale so the load fits one mysql.time_zone self-join (~3M rows), so a
     # single INSERT suffices.
     MAX_SCALE = 6
@@ -2188,7 +2167,7 @@ DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
 
-CREATE TABLE pk_table (pk CHAR(26) PRIMARY KEY, f2 BIGINT);
+CREATE TABLE pk_table (pk CHAR(26) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, f2 BIGINT);
 SET @i := 0;
 INSERT INTO pk_table SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {self.n()};
 """)

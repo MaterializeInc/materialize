@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/client/connection.rs
-revision: 3f3bdb0535
+revision: 2e6c03ac43
 ---
 
 # mz-deploy::client::connection

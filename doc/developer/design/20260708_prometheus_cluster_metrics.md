@@ -38,7 +38,7 @@ To do this we define a `BuiltinPrometheusSink` static that pairs a SQL query wit
 This resolves the requirements because:
 
 - **(1) envd-down survival:** the scrape path is clusterd → Prometheus, so envd is not on the scrape path. For this to hold, attribution must also be designed so it does not couple the sink's *emission* frontier to envd. That coupling is the central risk and is worked in §6.8.
-- **(2) load/hydration:** the dataflow's frontier advances as work completes. The sink emits `mz_metric_sink_frontier_ms` whenever the frontier moves. When a worker stalls, the frontier freezes and this metric goes stale. Prometheus sees the last-good value plus the stale freshness metric.
+- **(2) load/hydration:** the dataflow's frontier advances as work completes. The sink emits `mz_compute_metric_sink_frontier_ms` whenever the frontier moves. When a worker stalls, the frontier freezes and this metric goes stale. Prometheus sees the last-good value plus the stale freshness metric.
 - **(3) attribution:** attribution is resolved on the replica so labels carry both stable identifiers (collection ID) and human-readable names, so dashboards read cleanly and alerts survive object renames. Resolving names without dragging the sink's freshness down to envd's cadence needs care (§6.8).
 
 ## 6. Proposed Design
@@ -99,7 +99,7 @@ Three sinks, distilled from `COMPUTE_METRIC_QUERIES` in `src/environmentd/src/ht
 
 Sink #2's `mz_dataflow_elapsed_seconds_total` is monotonic within a replica lifetime and resets only on replica restart (reconciliation after an envd restart being the sole other mid-flight mutation). Consumers should wrap it in `rate()`, which handles the reset.
 
-Each sink automatically emits the `MetricSink` operator's per-sink health gauges (see §6.5), which cover complementary failure modes: `mz_metric_sink_frontier_ms{sink="<name>"}` (liveness, is the sink advancing?) and `mz_metric_sink_errors{sink="<name>"}` (data-plane, is the sink's SQL producing errors?).
+Each sink automatically emits the `MetricSink` operator's per-sink health gauges (see §6.5), which cover complementary failure modes: `mz_compute_metric_sink_frontier_ms{sink="<name>"}` (liveness, is the sink advancing?) and `mz_compute_metric_sink_errors{sink="<name>"}` (data-plane, is the sink's SQL producing errors?).
 
 ### 6.3 How this sink differs from existing compute sinks
 
@@ -132,12 +132,12 @@ Because the sink SQL is written by us as part of the database itself, we can con
 
 Two failure modes need separate signals, because the sink can only observe one of them from inside its own dataflow.
 
-- **Data-plane errors (sink is running, SQL is producing errors).** SQL-level errors (division by zero, casts, etc.) flow through the standard compute error side channel. The `MetricSink` operator consumes both the OK and ERR streams from its input (the same shape `MaterializedView` uses when it writes OK/ERR shards to persist), emits gauges and counters from the OK stream, and tracks the number of currently-live error rows in `mz_metric_sink_errors{sink="<name>"}`. This is a gauge of net-live errors, not a monotonic counter: it rises as errors appear and falls as they are retracted, and published metric values freeze while it is nonzero. Alert on `mz_metric_sink_errors > 0`, not on its rate.
-- **Liveness (sink stopped advancing).** Once the sink is running, the freshness metric `mz_metric_sink_frontier_ms{sink="<name>"}` is the primary signal that it has stalled. If it stops making progress, the frontier stops advancing, the value stops updating, and a staleness alert fires. This does not cover the case where the dataflow is never rendered at all, which is a larger problem.
+- **Data-plane errors (sink is running, SQL is producing errors).** SQL-level errors (division by zero, casts, etc.) flow through the standard compute error side channel. The `MetricSink` operator consumes both the OK and ERR streams from its input (the same shape `MaterializedView` uses when it writes OK/ERR shards to persist), emits gauges and counters from the OK stream, and tracks the number of currently-live error rows in `mz_compute_metric_sink_errors{sink="<name>"}`. This is a gauge of net-live errors, not a monotonic counter: it rises as errors appear and falls as they are retracted, and published metric values freeze while it is nonzero. Alert on `mz_compute_metric_sink_errors > 0`, not on its rate.
+- **Liveness (sink stopped advancing).** Once the sink is running, the freshness metric `mz_compute_metric_sink_frontier_ms{sink="<name>"}` is the primary signal that it has stalled. If it stops making progress, the frontier stops advancing, the value stops updating, and a staleness alert fires. This does not cover the case where the dataflow is never rendered at all, which is a larger problem.
 
 This carries the sink input's **logical frontier in milliseconds**. For the introspection sources these sinks read, logical time is driven by the replica's real-time clock (epoch milliseconds), so `scrape_time - frontier_ms` measures how far the emitted values lag real time, and it grows without bound under a wedged worker.
 
-Staleness detection is opt-in. A Prometheus gauge is stamped fresh on every scrape regardless of when its value last changed, so a consumer only learns a series is stale by comparing `mz_metric_sink_frontier_ms` against scrape time. Dashboards and alerts that ignore the freshness signal read the last-good value as current. We do not make a stale data series read as absent.
+Staleness detection is opt-in. A Prometheus gauge is stamped fresh on every scrape regardless of when its value last changed, so a consumer only learns a series is stale by comparing `mz_compute_metric_sink_frontier_ms` against scrape time. Dashboards and alerts that ignore the freshness signal read the last-good value as current. We do not make a stale data series read as absent.
 
 The two signals are complementary and neither subsumes the other. Alerting rules should include both.
 

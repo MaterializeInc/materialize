@@ -18,6 +18,12 @@ import subprocess
 from materialize import MZ_ROOT
 from materialize.parallel_task import TaskSpec, run_parallel
 
+# Rust sources live in more than one workspace, and `cargo metadata` only ever
+# reports the one it is pointed at. The `src/*/fuzz` cargo-fuzz crates attach to
+# the `test/cargo-fuzz` workspace, which the root workspace does not include, so
+# without a second invocation here they go unformatted entirely.
+RUST_MANIFESTS = ["Cargo.toml", "test/cargo-fuzz/Cargo.toml"]
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="fmt")
@@ -45,28 +51,43 @@ def _rustfmt_fn(*, check: bool):
     def run() -> tuple[bool, str]:
         ncpus = os.cpu_count() or 8
 
-        result = subprocess.run(
-            ["cargo", "metadata", "--no-deps", "--format-version=1"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            return False, result.stderr.strip()
-
-        meta = json.loads(result.stdout)
         kinds = {"lib", "bin", "bench", "test", "example", "proc-macro", "custom-build"}
-        paths = [
-            t["src_path"]
-            for pkg in meta["packages"]
-            for t in pkg["targets"]
-            if kinds & set(t["kind"])
-        ]
-        if not paths:
+        # Keyed by edition: `gen` is an identifier in 2021 but a reserved keyword
+        # in 2024, so rustfmt cannot even parse a file at the wrong edition.
+        paths_by_edition: dict[str, list[str]] = {}
+        for manifest in RUST_MANIFESTS:
+            result = subprocess.run(
+                [
+                    "cargo",
+                    "metadata",
+                    "--no-deps",
+                    "--format-version=1",
+                    f"--manifest-path={manifest}",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                return False, result.stderr.strip()
+
+            meta = json.loads(result.stdout)
+            for pkg in meta["packages"]:
+                for t in pkg["targets"]:
+                    if kinds & set(t["kind"]):
+                        paths_by_edition.setdefault(pkg["edition"], []).append(
+                            t["src_path"]
+                        )
+        if not paths_by_edition:
             return True, ""
 
         # Split into batches and run rustfmt in parallel.
-        batch_size = math.ceil(len(paths) / ncpus)
-        batches = [paths[i : i + batch_size] for i in range(0, len(paths), batch_size)]
+        batches = []
+        for edition, paths in paths_by_edition.items():
+            batch_size = math.ceil(len(paths) / ncpus)
+            batches += [
+                (edition, paths[i : i + batch_size])
+                for i in range(0, len(paths), batch_size)
+            ]
 
         cmd_base = ["rustfmt", "--config", "error_on_line_overflow=true"]
         if check:
@@ -74,11 +95,11 @@ def _rustfmt_fn(*, check: bool):
 
         procs = [
             subprocess.Popen(
-                cmd_base + batch,
+                cmd_base + [f"--edition={edition}"] + batch,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
             )
-            for batch in batches
+            for edition, batch in batches
         ]
 
         all_output = []

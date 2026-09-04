@@ -10,7 +10,7 @@
 //! Dyncfgs used by the storage layer. Despite their name, these can be used
 //! "statically" during rendering, or dynamically within timely operators.
 
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 use std::time::Duration;
 
 /// When dataflows observe an invariant violation it is either due to a bug or due to the cluster
@@ -22,6 +22,7 @@ pub const CLUSTER_SHUTDOWN_GRACE_PERIOD: Config<Duration> = Config::new(
     "When dataflows observe an invariant violation it is either due to a bug or due to \
         the cluster being shut down. This configuration defines the amount of time to \
         wait before panicking the process, which will register the invariant violation.",
+    ParameterScope::Replica,
 );
 
 // Flow control
@@ -34,6 +35,7 @@ pub const DELAY_SOURCES_PAST_REHYDRATION: Config<bool> = Config::new(
     true,
     "Whether or not to delay sources producing values in some scenarios \
         (namely, upsert) till after rehydration is finished",
+    ParameterScope::Environment,
 );
 
 /// Whether storage dataflows should suspend execution while downstream operators are still
@@ -43,6 +45,7 @@ pub const SUSPENDABLE_SOURCES: Config<bool> = Config::new(
     true,
     "Whether storage dataflows should suspend execution while downstream operators are still \
         processing data.",
+    ParameterScope::Environment,
 );
 
 // Controller
@@ -55,6 +58,7 @@ pub const STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION: Config<bool> = Config::ne
     true,
     "When enabled, force-downgrade the controller's since handle on the shard\
     during shard finalization",
+    ParameterScope::Environment,
 );
 
 /// The interval of time to keep when truncating the replica metrics history.
@@ -62,6 +66,7 @@ pub const REPLICA_METRICS_HISTORY_RETENTION_INTERVAL: Config<Duration> = Config:
     "replica_metrics_history_retention_interval",
     Duration::from_secs(60 * 60 * 24 * 30), // 30 days
     "The interval of time to keep when truncating the replica metrics history.",
+    ParameterScope::Environment,
 );
 
 /// The interval of time to keep when truncating the wallclock lag history.
@@ -69,6 +74,7 @@ pub const WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL: Config<Duration> = Config::n
     "wallclock_lag_history_retention_interval",
     Duration::from_secs(60 * 60 * 24 * 30), // 30 days
     "The interval of time to keep when truncating the wallclock lag history.",
+    ParameterScope::Environment,
 );
 
 /// The interval of time to keep when truncating the wallclock lag histogram.
@@ -76,6 +82,7 @@ pub const WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL: Config<Duration> = 
     "wallclock_global_lag_histogram_retention_interval",
     Duration::from_secs(60 * 60 * 24 * 30), // 30 days
     "The interval of time to keep when truncating the wallclock lag histogram.",
+    ParameterScope::Environment,
 );
 
 // Kafka
@@ -94,6 +101,7 @@ pub const KAFKA_CLIENT_ID_ENRICHMENT_RULES: Config<fn() -> serde_json::Value> = 
     "kafka_client_id_enrichment_rules",
     || serde_json::json!([]),
     "Rules for enriching the `client.id` property of Kafka clients with additional data.",
+    ParameterScope::Environment,
 );
 
 /// The maximum time we will wait before re-polling rdkafka to see if new partitions/data are
@@ -103,15 +111,20 @@ pub const KAFKA_POLL_MAX_WAIT: Config<Duration> = Config::new(
     Duration::from_secs(1),
     "The maximum time we will wait before re-polling rdkafka to see if new partitions/data are \
     available.",
+    ParameterScope::Replica,
 );
 
 /// Whether to check the low watermark for Kafka sources and error if the start offset/resume
 /// upper has been compacted away.
+/// Environment-scoped because it decides whether a definite error is emitted.
+/// Replicas of one cluster disagreeing would write different collection
+/// contents, so the value has to be coherent across them.
 pub const KAFKA_LOW_WATERMARK_CHECK: Config<bool> = Config::new(
     "kafka_low_watermark_check",
     true,
     "Whether to check the low watermark for Kafka sources and error if the start \
     offset/resume upper has been compacted away.",
+    ParameterScope::Environment,
 );
 
 pub const KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM: Config<&'static str> =
@@ -121,6 +134,7 @@ pub const KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM: Confi
         "none",
         "The value we set for the 'ssl.endpoint.identification.algorithm' option in the Kafka \
     Connection config. default: 'none'",
+        ParameterScope::Environment,
     );
 
 pub const KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS: Config<usize> = Config::new(
@@ -129,6 +143,7 @@ pub const KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS: Config<usize> = Config
     "In the Kafka sink operator we might need to buffer messages before emitting them. As a \
         performance optimization we reuse the buffer allocations, but shrink it to retain at \
         most this number of elements.",
+    ParameterScope::Replica,
 );
 
 /// Sets retry.backoff.ms in librdkafka for sources and sinks.
@@ -137,6 +152,7 @@ pub const KAFKA_RETRY_BACKOFF: Config<Duration> = Config::new(
     "kafka_retry_backoff",
     Duration::from_millis(100),
     "Sets retry.backoff.ms in librdkafka for sources and sinks.",
+    ParameterScope::Replica,
 );
 
 /// Sets retry.backoff.max.ms in librdkafka for sources and sinks.
@@ -145,6 +161,7 @@ pub const KAFKA_RETRY_BACKOFF_MAX: Config<Duration> = Config::new(
     "kafka_retry_backoff_max",
     Duration::from_secs(1),
     "Sets retry.backoff.max.ms in librdkafka for sources and sinks.",
+    ParameterScope::Replica,
 );
 
 /// Sets reconnect.backoff.ms in librdkafka for sources and sinks.
@@ -153,6 +170,7 @@ pub const KAFKA_RECONNECT_BACKOFF: Config<Duration> = Config::new(
     "kafka_reconnect_backoff",
     Duration::from_millis(100),
     "Sets reconnect.backoff.ms in librdkafka for sources and sinks.",
+    ParameterScope::Replica,
 );
 
 /// Sets reconnect.backoff.max.ms in librdkafka for sources and sinks.
@@ -163,6 +181,7 @@ pub const KAFKA_RECONNECT_BACKOFF_MAX: Config<Duration> = Config::new(
     "kafka_reconnect_backoff_max",
     Duration::from_secs(30),
     "Sets reconnect.backoff.max.ms in librdkafka for sources and sinks.",
+    ParameterScope::Replica,
 );
 
 /// Sets message.max.bytes in librdkafka for Kafka sink producers.
@@ -174,6 +193,7 @@ pub const KAFKA_SINK_MESSAGE_MAX_BYTES: Config<usize> = Config::new(
     "kafka_sink_message_max_bytes",
     1_000_000,
     "Sets message.max.bytes in librdkafka for Kafka sink producers.",
+    ParameterScope::Environment,
 );
 
 /// Sets batch.size in librdkafka for Kafka sink producers.
@@ -185,6 +205,7 @@ pub const KAFKA_SINK_BATCH_SIZE: Config<usize> = Config::new(
     "kafka_sink_batch_size",
     1_000_000,
     "Sets batch.size in librdkafka for Kafka sink producers.",
+    ParameterScope::Environment,
 );
 
 /// Sets batch.num.messages in librdkafka for Kafka sink producers.
@@ -195,6 +216,7 @@ pub const KAFKA_SINK_BATCH_NUM_MESSAGES: Config<usize> = Config::new(
     "kafka_sink_batch_num_messages",
     10_000,
     "Sets batch.num.messages in librdkafka for Kafka sink producers.",
+    ParameterScope::Environment,
 );
 
 // MySQL
@@ -204,6 +226,7 @@ pub const MYSQL_REPLICATION_HEARTBEAT_INTERVAL: Config<Duration> = Config::new(
     "mysql_replication_heartbeat_interval",
     Duration::from_secs(30),
     "Replication heartbeat interval requested from the MySQL server.",
+    ParameterScope::Replica,
 );
 
 /// Whether to split snapshot reads of tables with a supported single-column
@@ -213,7 +236,29 @@ pub static MYSQL_SOURCE_SNAPSHOT_PARALLELISM: Config<bool> = Config::new(
     "mysql_source_snapshot_parallelism",
     false,
     "Whether to split MySQL snapshot reads across workers by primary-key ranges.",
+    ParameterScope::Replica,
 );
+
+/// Smallest estimated row count the MySQL snapshot partitioner attempts to subdivide.
+pub static MYSQL_SOURCE_SNAPSHOT_PARTITION_MIN_ROWS: Config<usize> = Config::new(
+    "mysql_source_snapshot_partition_min_rows",
+    50_000,
+    "Minimum estimated rows the MySQL snapshot partitioner attempts to split.",
+    ParameterScope::Replica,
+);
+
+/// Cap on string primary key prefixes visited when attempting to partition a table for
+/// parallel snapshotting in MySQL. This limits runtime on high-cardinality prefixes,
+/// and will return correct but likely more skewed boundaries on budget exhaustion.
+pub static MYSQL_SOURCE_SNAPSHOT_PARTITION_PROBED_PREFIXES_PER_BILLION_ROWS: Config<usize> =
+    Config::new(
+        "mysql_source_snapshot_partition_probed_prefixes_per_billion_rows",
+        1_000,
+        "Cap on MySQL snapshot PK-prefix partitioning probed prefixes per table, per billion \
+     estimated rows; when exhausted, splitting stops early with coarser partition boundaries. \
+     The per-table budget is additionally hard-capped at 5000.",
+        ParameterScope::Replica,
+    );
 
 /// If the optimizer estimates the table has fewer rows than this, compute the exact row count
 /// with `COUNT(*)`. Otherwise, report the `information_schema` estimate directly.
@@ -222,6 +267,7 @@ pub static MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS: Config<usize> = Config::n
     1_000_000,
     "Maximum estimated table size for which MySQL snapshots compute an exact COUNT(*) \
      for the size gauge; larger tables report the information_schema estimate.",
+    ParameterScope::Replica,
 );
 
 // Postgres
@@ -231,6 +277,7 @@ pub const PG_FETCH_SLOT_RESUME_LSN_INTERVAL: Config<Duration> = Config::new(
     "postgres_fetch_slot_resume_lsn_interval",
     Duration::from_millis(500),
     "Interval to poll `confirmed_flush_lsn` to get a resumption lsn.",
+    ParameterScope::Replica,
 );
 
 /// Interval to re-validate the schemas of ingested tables.
@@ -238,6 +285,7 @@ pub const PG_SCHEMA_VALIDATION_INTERVAL: Config<Duration> = Config::new(
     "pg_schema_validation_interval",
     Duration::from_secs(15),
     "Interval to re-validate the schemas of ingested tables.",
+    ParameterScope::Environment,
 );
 
 /// Controls behavior of PG Source when the upstream DB timeline changes. The default behavior
@@ -245,10 +293,14 @@ pub const PG_SCHEMA_VALIDATION_INTERVAL: Config<Duration> = Config::new(
 /// provide guarantees of failover without loss of data (e.g. CloudSQL maintenance). Changing this
 /// flag puts the onus on the customer to recreate the source if the upstream DB changes timeline
 /// in a way that introduces data loss (e.g. manual failover, restore, etc.).
+/// Environment-scoped because it decides whether a definite error is emitted.
+/// Replicas of one cluster disagreeing would write different collection
+/// contents, so the value has to be coherent across them.
 pub static PG_SOURCE_VALIDATE_TIMELINE: Config<bool> = Config::new(
     "pg_source_validate_timeline",
     true,
     "Whether to treat a timeline switch as a definite error",
+    ParameterScope::Environment,
 );
 
 /// Controls behavior of the SQL Server source when the upstream DB restore history changes. The
@@ -256,10 +308,14 @@ pub static PG_SOURCE_VALIDATE_TIMELINE: Config<bool> = Config::new(
 /// On Availability Group (AOAG), the upstream DB may guarantee continuity without loss of data.
 /// Changing this flag puts the onus on the customer to recreate the source if the upstream DB
 /// changes in a way that introduces data loss.
+/// Environment-scoped because it decides whether a definite error is emitted.
+/// Replicas of one cluster disagreeing would write different collection
+/// contents, so the value has to be coherent across them.
 pub static SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY: Config<bool> = Config::new(
     "sql_server_source_validate_restore_history",
     true,
     "Whether to treat a restore history change as a definite error",
+    ParameterScope::Environment,
 );
 
 // AWS
@@ -276,17 +332,23 @@ pub const AWS_PREFETCH_STS_CONNECT_TIMEOUT: Config<Duration> = Config::new(
     "aws_prefetch_sts_connect_timeout",
     Duration::from_millis(3100),
     "Connect timeout for the AWS AssumeRole credentials prefetcher's STS calls.",
+    ParameterScope::Replica,
 );
 
 // Networking
 
 /// Whether or not to enforce that external connection addresses are global
 /// (not private or local) when resolving them.
+///
+/// Read on both `environmentd` (purification, `COPY` planning) and the replica.
+/// Deliberately environment-scoped even so: this is a security control, and a
+/// per-replica override would weaken it for part of the environment only.
 pub const ENFORCE_EXTERNAL_ADDRESSES: Config<bool> = Config::new(
     "storage_enforce_external_addresses",
     false,
     "Whether or not to enforce that external connection addresses are global \
           (not private or local) when resolving them",
+    ParameterScope::Environment,
 );
 
 // Upsert
@@ -309,6 +371,7 @@ pub const STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING: Config<bool> = Config::new(
     "storage_upsert_prevent_snapshot_buffering",
     true,
     "Prevent snapshot buffering in upsert.",
+    ParameterScope::Replica,
 );
 
 /// Whether to enable the merge operator in upsert for the RocksDB backend.
@@ -316,6 +379,7 @@ pub const STORAGE_ROCKSDB_USE_MERGE_OPERATOR: Config<bool> = Config::new(
     "storage_rocksdb_use_merge_operator",
     true,
     "Use the native rocksdb merge operator where possible.",
+    ParameterScope::Environment,
 );
 
 /// If `storage_upsert_prevent_snapshot_buffering` is true, this prevents the upsert
@@ -326,23 +390,56 @@ pub const STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING: Config<Option<usize>> = C
     "storage_upsert_max_snapshot_batch_buffering",
     None,
     "Limit snapshot buffering in upsert.",
+    ParameterScope::Replica,
 );
 
-/// Allow the upsert-v2 source stash's chunk batcher to spill cold chains out
-/// of RSS via the process buffer pool. The stash draws from the same shared
-/// pool budget as the compute chunk batchers — there is one budget — but
-/// this flag gates the stash's participation independently of the
-/// compute-side `enable_column_paged_batcher_spill`.
+/// Allow the upsert-v2 stash to spill out of RSS. Off by default; while off,
+/// the stash keeps everything resident.
 ///
-/// Off by default; the stash keeps every chunk resident until enabled.
+/// The spill mechanism depends on the stash flavor
+/// ([`ENABLE_UPSERT_CHUNKED_STASH`]):
+///
+/// * Chunked: sets storage's leg of the process-wide chunk spill gate
+///   (`mz_timely_util::columnar::chunk`). The gate is the OR of a compute
+///   leg (`enable_column_paged_batcher_spill`) and this storage leg: chunks
+///   spill while either is set, so this flag cannot veto spilling that the
+///   compute flag has enabled. Spilled chunks draw on the one shared pool
+///   budget, and the gate is consulted at every chunk commit, so flips
+///   apply to running dataflows.
+/// * Paged: gates the storage-owned column pager the stash and feedback
+///   arrangement route their chains through, independently of compute's
+///   `enable_column_paged_batcher_spill`. Captured at operator
+///   construction, so flips apply to dataflows created after the change.
+///
 /// Enabling it also installs the process buffer pool (via compute's config
 /// handler, which reads this flag from the aggregate dyncfg set), so
 /// storage-only spilling needs no compute-side gate.
 pub const ENABLE_UPSERT_PAGED_SPILL: Config<bool> = Config::new(
     "enable_upsert_paged_spill",
     false,
-    "Allow the upsert-v2 source stash to spill chunks to the shared buffer pool, gated \
-     independently of the compute `enable_column_paged_batcher_spill`.",
+    "Allow the upsert-v2 stash to spill out of RSS, through the buffer pool (chunked stash \
+     flavor) or the column pager (paged stash flavor).",
+    ParameterScope::Replica,
+);
+
+/// Use the chunked stash flavor for the upsert-v2 operator: differential's
+/// chunk merge batcher for the source stash and a spine of chunk batches for
+/// the feedback arrangement, with a bulk-probe drain. When `false` (the
+/// default), the paged flavor is used: the paged columnar merge batcher and a
+/// `ValRowSpine`, with a cursor-based drain. See
+/// `mz_storage::upsert_continual_feedback_v2::UpsertStashFlavor` for the
+/// comparison.
+///
+/// Read at operator construction time; flips take effect on dataflows created
+/// after the change. Only meaningful when [`ENABLE_UPSERT_V2`] is `true`.
+/// Spilling in either flavor is gated by [`ENABLE_UPSERT_PAGED_SPILL`].
+pub const ENABLE_UPSERT_CHUNKED_STASH: Config<bool> = Config::new(
+    "enable_upsert_chunked_stash",
+    false,
+    "Use the chunk batcher and chunk spine for the upsert-v2 stash and feedback arrangement, \
+     instead of the paged columnar merge batcher and ValRowSpine. Only meaningful when \
+     enable_upsert_v2 is true.",
+    ParameterScope::Replica,
 );
 
 // RocksDB
@@ -352,6 +449,7 @@ pub const STORAGE_ROCKSDB_CLEANUP_TRIES: Config<usize> = Config::new(
     "storage_rocksdb_cleanup_tries",
     5,
     "How many times to try to cleanup old RocksDB DB's on disk before giving up.",
+    ParameterScope::Replica,
 );
 
 /// Delay interval when reconnecting to a source / sink after halt.
@@ -359,6 +457,7 @@ pub const STORAGE_SUSPEND_AND_RESTART_DELAY: Config<Duration> = Config::new(
     "storage_suspend_and_restart_delay",
     Duration::from_secs(5),
     "Delay interval when reconnecting to a source / sink after halt.",
+    ParameterScope::Replica,
 );
 
 /// Whether to use the new continual feedback upsert operator.
@@ -366,6 +465,7 @@ pub const STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT: Config<bool> = Config::new(
     "storage_use_continual_feedback_upsert",
     true,
     "Whether to use the new continual feedback upsert operator.",
+    ParameterScope::Environment,
 );
 
 /// Whether to use the v2 upsert operator.
@@ -373,6 +473,7 @@ pub const ENABLE_UPSERT_V2: Config<bool> = Config::new(
     "enable_upsert_v2",
     false,
     "Whether to use the v2 upsert operator.",
+    ParameterScope::Environment,
 );
 
 /// The interval at which the storage server performs maintenance tasks.
@@ -380,6 +481,7 @@ pub const STORAGE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
     "storage_server_maintenance_interval",
     Duration::from_millis(10),
     "The interval at which the storage server performs maintenance tasks. Zero enables maintenance on every iteration.",
+    ParameterScope::Replica,
 );
 
 /// If set, iteratively search the progress topic for a progress record with increasing lookback.
@@ -387,6 +489,7 @@ pub const SINK_PROGRESS_SEARCH: Config<bool> = Config::new(
     "storage_sink_progress_search",
     true,
     "If set, iteratively search the progress topic for a progress record with increasing lookback.",
+    ParameterScope::Environment,
 );
 
 /// Configure how to behave when trying to create an existing topic with specified configs.
@@ -396,6 +499,7 @@ pub const SINK_ENSURE_TOPIC_CONFIG: Config<&'static str> = Config::new(
     "If `skip`, don't check the config of existing topics; if `check`, fetch the config and \
     warn if it does not match the expected configs; if `alter`, attempt to change the upstream to \
     match the expected configs.",
+    ParameterScope::Environment,
 );
 
 /// Configure mz-ore overflowing type behavior.
@@ -403,6 +507,7 @@ pub const ORE_OVERFLOWING_BEHAVIOR: Config<&'static str> = Config::new(
     "ore_overflowing_behavior",
     "soft_panic",
     "Overflow behavior for Overflowing types. One of 'ignore', 'panic', 'soft_panic'.",
+    ParameterScope::Environment,
 );
 
 /// The time after which we delete per-replica statistics (for sources and
@@ -414,6 +519,7 @@ pub const STATISTICS_RETENTION_DURATION: Config<Duration> = Config::new(
     "storage_statistics_retention_duration",
     Duration::from_secs(86_400), /* one day */
     "The time after which we delete per replica statistics (for sources and sinks) after there have been no updates.",
+    ParameterScope::Environment,
 );
 
 /// Adds the full set of all storage `Config`s.
@@ -438,6 +544,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
         .add(&MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS)
         .add(&MYSQL_SOURCE_SNAPSHOT_PARALLELISM)
+        .add(&MYSQL_SOURCE_SNAPSHOT_PARTITION_MIN_ROWS)
+        .add(&MYSQL_SOURCE_SNAPSHOT_PARTITION_PROBED_PREFIXES_PER_BILLION_ROWS)
         .add(&ORE_OVERFLOWING_BEHAVIOR)
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
         .add(&PG_SCHEMA_VALIDATION_INTERVAL)
@@ -457,6 +565,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_UPSERT_V2)
         .add(&SUSPENDABLE_SOURCES)
         .add(&ENABLE_UPSERT_PAGED_SPILL)
+        .add(&ENABLE_UPSERT_CHUNKED_STASH)
         .add(&WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL)
         .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
         .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE)

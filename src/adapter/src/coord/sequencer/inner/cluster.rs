@@ -329,7 +329,7 @@ impl Coordinator {
             return Err(AdapterError::AlterClusterScheduleWhileReconfiguring);
         }
 
-        // Replication factor is one of the four dimensions the cut-over sets
+        // Replication factor is one of the dimensions the cut-over sets
         // atomically from the record's target (`fold_reconfiguration_target`),
         // so a change applied independently while a reconfiguration is in
         // flight would be silently clobbered at cut-over. Refused even when the
@@ -756,8 +756,7 @@ impl Coordinator {
         //                          user set on the reconfiguration in progress.
         //   - no `WAIT`, nothing in flight -> the system-default timeout and the
         //                          implicit `on_timeout` default (`ROLLBACK`).
-        //   - `WAIT FOR`        -> sugar for `ON TIMEOUT COMMIT` (cut over at the
-        //                          deadline regardless of hydration).
+        //   - `WAIT FOR`        -> sugar for `ON TIMEOUT ROLLBACK`.
         //   - `WAIT UNTIL READY -> the explicit `TIMEOUT` / `ON TIMEOUT`, with
         //                          `ON TIMEOUT` defaulting to `ROLLBACK` when
         //                          omitted.
@@ -785,7 +784,7 @@ impl Coordinator {
                 ),
             },
             AlterClusterPlanStrategy::For(timeout) => {
-                (deadline_from(*timeout), OnTimeoutAction::Commit)
+                (deadline_from(*timeout), OnTimeoutAction::Rollback)
             }
             AlterClusterPlanStrategy::UntilReady {
                 timeout,
@@ -797,10 +796,10 @@ impl Coordinator {
         };
 
         // Build the durable write from `new_config`, which carries every field the
-        // `ALTER` changed, then reset the config *shape* (size, replication factor,
-        // availability zones, logging) back to the realized values: that transition
-        // is deferred to the `reconfiguration` record and applied at cut-over. This
-        // applies non-shape changes (`workload_class`, `schedule`,
+        // `ALTER` changed, then reset the config *shape* (every
+        // `ReconfigurationTarget` dimension) back to the realized values: that
+        // transition is deferred to the `reconfiguration` record and applied at
+        // cut-over. This applies non-shape changes (`workload_class`, `schedule`,
         // `auto_scaling_strategy`, ...) immediately, matching the legacy path,
         // rather than silently dropping them. Any existing record is folded over by
         // the `record` we just built.
@@ -811,10 +810,7 @@ impl Coordinator {
                 "reshape_alter_cluster_managed requires a managed realized config".into(),
             ));
         };
-        let realized_size = realized_now.size.clone();
-        let realized_replication_factor = realized_now.replication_factor;
-        let realized_availability_zones = realized_now.availability_zones.clone();
-        let realized_logging = realized_now.logging.clone();
+        let realized_target = realized_now.realized_reconfiguration_target();
         // The status and the audit intent are two views of the same decision,
         // made together here: an ALTER back to the realized shape is a cancel,
         // anything else starts (or re-targets) a reconfiguration.
@@ -842,10 +838,7 @@ impl Coordinator {
                 "reshape_alter_cluster_managed requires a managed target config".into(),
             ));
         };
-        realized_managed.size = realized_size;
-        realized_managed.replication_factor = realized_replication_factor;
-        realized_managed.availability_zones = realized_availability_zones;
-        realized_managed.logging = realized_logging;
+        realized_managed.apply_reconfiguration_target(realized_target);
         realized_managed.reconfiguration = Some(record);
 
         self.catalog_transact(
@@ -1606,6 +1599,11 @@ impl Coordinator {
                     if billed_as.is_some() && !internal {
                         coord_bail!("must specify INTERNAL when specifying BILLED AS");
                     }
+                    // Concretizing the location validates `SIZE` only, see
+                    // `ensure_valid_billed_as_size`.
+                    if let Some(billed_as) = &billed_as {
+                        self.ensure_valid_billed_as_size(billed_as)?;
+                    }
 
                     let location = mz_catalog::durable::ReplicaLocation::Managed {
                         // The user-pinned `AVAILABILITY ZONE`, if any, as a zero-
@@ -1784,6 +1782,20 @@ impl Coordinator {
         }
     }
 
+    /// Rejects a `BILLED AS` size that is not in the replica size map.
+    ///
+    /// Billing only reads the size's credit rate, so unlike `SIZE` the value
+    /// may be a disabled size and need not be in the role's allowed sizes.
+    /// The check lives here rather than in `concretize_replica_location`,
+    /// which catalog open also runs for every durable replica.
+    fn ensure_valid_billed_as_size(&self, size: &str) -> Result<(), AdapterError> {
+        if self.catalog().cluster_replica_sizes().0.contains_key(size) {
+            Ok(())
+        } else {
+            coord_bail!("unknown cluster replica size {size} in BILLED AS")
+        }
+    }
+
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn sequence_create_cluster_replica(
         &mut self,
@@ -1881,6 +1893,11 @@ impl Coordinator {
             // BILLED AS implies the INTERNAL flag.
             if billed_as.is_some() && !*internal {
                 coord_bail!("must specify INTERNAL when specifying BILLED AS");
+            }
+            // Concretizing the location validated `SIZE` only, see
+            // `ensure_valid_billed_as_size`.
+            if let Some(billed_as) = billed_as {
+                self.ensure_valid_billed_as_size(billed_as)?;
             }
         }
 
@@ -2737,8 +2754,9 @@ fn cancel_carried_reconfiguration(config: &mut ClusterConfig) -> Option<Reconfig
 }
 
 /// Whether an `ALTER` statement sets a replica config shape dimension (`SIZE`,
-/// `AVAILABILITY ZONES`, or either `INTROSPECTION` option), the changes that
-/// need a durable `reconfiguration` record and a hydrate-overlap.
+/// `AVAILABILITY ZONES`, either `INTROSPECTION` option, or `EXPERIMENTAL
+/// ARRANGEMENT COMPRESSION`), the changes that need a durable
+/// `reconfiguration` record and a hydrate-overlap.
 ///
 /// A statement-level check, used while a reconfiguration is in flight: an
 /// `ALTER` back to the realized shape sets a shape option without changing its

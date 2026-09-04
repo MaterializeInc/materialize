@@ -715,8 +715,16 @@ fn create_environmentd_statefulset_object(
         args.push("--system-parameter-default=enable_internal_statement_logging=true".into());
     }
 
-    if config.disable_statement_logging {
-        args.push("--system-parameter-default=statement_logging_max_sample_rate=0".into());
+    if let Some(rate) = config.statement_logging_max_sample_rate {
+        args.push(format!(
+            "--system-parameter-default=statement_logging_max_sample_rate={rate}"
+        ));
+    }
+
+    if let Some(rate) = config.statement_logging_target_data_rate {
+        args.push(format!(
+            "--system-parameter-default=statement_logging_target_data_rate={rate}"
+        ));
     }
 
     if !mz.spec.enable_rbac {

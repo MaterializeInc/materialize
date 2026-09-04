@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/cli/commands/stage.rs
-revision: b9e4651bb1
+revision: 2e6c03ac43
 ---
 
 # mz-deploy::cli::commands::stage

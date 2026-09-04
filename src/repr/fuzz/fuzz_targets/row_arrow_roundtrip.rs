@@ -44,7 +44,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char::CharLength;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
-use mz_repr::adt::numeric::{cx_datum, Numeric, NumericMaxScale};
+use mz_repr::adt::numeric::{Numeric, NumericMaxScale, cx_datum};
 use mz_repr::adt::range::{Range, RangeBound, RangeLowerBound, RangeUpperBound};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::adt::varchar::VarCharMaxLength;
@@ -308,7 +308,9 @@ fn push_datum(
                 .try_push_array(&dims, elems.iter().map(Borrow::borrow))
                 .is_err()
             {
-                packer.try_push_array(&[], std::iter::empty::<Datum>()).unwrap();
+                packer
+                    .try_push_array(&[], std::iter::empty::<Datum>())
+                    .unwrap();
             }
         }
         // A `Map` of string keys to `value_type` values. Keys must be unique
@@ -357,10 +359,7 @@ fn gen_scalar_datums<'a>(
 /// Only the `Copy` `Datum` variants (those produced by `gen_element_type` /
 /// `gen_range_element_type`) are handled, so the returned `Datum` carries no
 /// borrow and the caller can collect it into a `Vec`.
-fn gen_scalar_datum<'a>(
-    u: &mut Unstructured,
-    ty: &SqlScalarType,
-) -> arbitrary::Result<Datum<'a>> {
+fn gen_scalar_datum<'a>(u: &mut Unstructured, ty: &SqlScalarType) -> arbitrary::Result<Datum<'a>> {
     Ok(match ty {
         SqlScalarType::Bool => {
             if bool::arbitrary(u)? {
@@ -377,7 +376,8 @@ fn gen_scalar_datum<'a>(
         SqlScalarType::Float64 => Datum::Float64(f64::arbitrary(u)?.into()),
         SqlScalarType::Numeric { .. } => Datum::Numeric(gen_numeric(u)?),
         SqlScalarType::Date => Datum::Date(
-            Date::from_pg_epoch(i32::arbitrary(u)?).unwrap_or_else(|_| Date::from_pg_epoch(0).unwrap()),
+            Date::from_pg_epoch(i32::arbitrary(u)?)
+                .unwrap_or_else(|_| Date::from_pg_epoch(0).unwrap()),
         ),
         SqlScalarType::Time => {
             let secs = u.int_in_range(0u32..=86_399)?;
@@ -425,10 +425,7 @@ fn push_range(
     let upper: RangeUpperBound<Datum> = RangeBound::new(upper_d, bool::arbitrary(u)?);
     // An out-of-order range (lower > upper) is an `InvalidRangeError`. On
     // failure just fall back to the empty range so the column stays valid.
-    if packer
-        .push_range(Range::new(Some((lower, upper))))
-        .is_err()
-    {
+    if packer.push_range(Range::new(Some((lower, upper)))).is_err() {
         let _ = packer.push_range(Range { inner: None });
     }
     Ok(())

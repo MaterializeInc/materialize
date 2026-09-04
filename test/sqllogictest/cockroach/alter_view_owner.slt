@@ -74,7 +74,7 @@ statement ok
 ALTER TABLE mvx OWNER TO root
 
 # ALTER SEQUENCE cannot be used for views.
-statement error Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or NETWORK, found identifier "sequence"
+statement error Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or METRIC or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or NETWORK, found identifier "sequence"
 ALTER SEQUENCE vx OWNER TO testuser
 
 # MATERIALIZED keyword can only be present for materialized views.

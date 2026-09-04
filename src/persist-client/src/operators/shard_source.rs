@@ -534,7 +534,19 @@ where
                         BatchPart::Hollow(x) => {
                             let should_fetch =
                                 x.stats.as_ref().map_or(FilterResult::Keep, |stats| {
-                                    filter_fn(&stats.decode(), current_frontier.borrow())
+                                    // Stats written by a newer version may
+                                    // not decode. The sound fallback is to
+                                    // fetch the part.
+                                    match stats.try_decode() {
+                                        Ok(stats) => filter_fn(&stats, current_frontier.borrow()),
+                                        Err(err) => {
+                                            tracing::warn!(
+                                                %err,
+                                                "could not decode part stats, fetching part"
+                                            );
+                                            FilterResult::Keep
+                                        }
+                                    }
                                 });
                             should_fetch
                         }

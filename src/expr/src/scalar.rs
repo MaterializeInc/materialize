@@ -1407,6 +1407,44 @@ impl VisitChildren<Self> for MirScalarExpr {
 }
 
 impl MirScalarExpr {
+    /// Reports whether this expression contains a non-strict variadic call with an
+    /// operand that could error, the shape of the open bug CLU-137.
+    ///
+    /// `And`, `Or` and `ErrorIfNull` do not evaluate every operand: `Or::eval`
+    /// returns `true` the moment it sees a true operand and drops any error it
+    /// collected, `And::eval` does the same for `false`, and `ErrorIfNull`
+    /// evaluates its message operand only when the first operand is NULL. Yet
+    /// `reduce_call_variadic`'s generic error propagation replaces the whole call
+    /// with any operand's literal error, wherever it sits. So `reduce` can turn a
+    /// row the expression should evaluate into an error, and, because that literal
+    /// is typed non-nullable, it can go on to license a nullability-dependent
+    /// rewrite and yield a different *value* rather than an error.
+    ///
+    /// Fuzz oracles that compare evaluation across `reduce` use this to skip the
+    /// shape rather than rediscover CLU-137 on every run. It lives here, next to
+    /// the fold it describes, so the several oracles that need it cannot drift
+    /// apart on which functions count as non-strict.
+    ///
+    /// Deliberately conservative: it asks whether an operand *could* error rather
+    /// than whether it already holds a literal error, because `reduce` folds a
+    /// column-free fallible operand (`1 / 0`) to a literal error first and absorbs
+    /// it after.
+    pub fn could_hit_nonstrict_error_fold(&self) -> bool {
+        let mut hit = false;
+        self.visit_pre(|e| {
+            if let MirScalarExpr::CallVariadic { func, exprs } = e {
+                let non_strict = matches!(
+                    func,
+                    VariadicFunc::And(_) | VariadicFunc::Or(_) | VariadicFunc::ErrorIfNull(_)
+                );
+                if non_strict && exprs.iter().any(|operand| operand.could_error()) {
+                    hit = true;
+                }
+            }
+        });
+        hit
+    }
+
     /// Iterates through references to child expressions.
     pub fn children(&self) -> impl DoubleEndedIterator<Item = &Self> {
         let mut first = None;
@@ -2493,10 +2531,103 @@ impl RustType<ProtoDims> for (usize, usize) {
     }
 }
 
+/// An [`EvalError`] that serializes as protobuf-encoded [`ProtoEvalError`]
+/// bytes.
+///
+/// `EvalError`'s own serde impl mirrors the Rust enum, so every added error
+/// variant or payload tweak would change a durable format. Use this wrapper
+/// instead wherever an eval error is serialized into a durable, cross-version
+/// format, such as the stable LIR plan format (the same role [`StableRow`]
+/// plays for rows). `ProtoEvalError` already carries the needed backward
+/// compatibility obligation: it is embedded in `ProtoDataflowError`, which
+/// persist stores in the error side of `SourceData`, and the proto files are
+/// covered by the buf breaking lint.
+///
+/// [`StableRow`]: mz_repr::StableRow
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize
+)]
+pub struct StableEvalError(#[serde(with = "stable_eval_error_proto")] pub EvalError);
+
+/// Borrowing twin of [`StableEvalError`], to serialize without cloning. Both
+/// serialize identically, under the `StableEvalError` container name.
+#[derive(Debug, Serialize)]
+#[serde(rename = "StableEvalError")]
+pub struct StableEvalErrorRef<'a>(#[serde(with = "stable_eval_error_proto")] pub &'a EvalError);
+
+impl From<EvalError> for StableEvalError {
+    fn from(err: EvalError) -> Self {
+        StableEvalError(err)
+    }
+}
+
+impl std::ops::Deref for StableEvalError {
+    type Target = EvalError;
+
+    fn deref(&self) -> &EvalError {
+        &self.0
+    }
+}
+
+mod stable_eval_error_proto {
+    use mz_proto::RustType;
+    use prost::Message;
+    use serde::de::Error;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    use crate::scalar::{EvalError, ProtoEvalError};
+
+    pub fn serialize<S: Serializer, E: std::borrow::Borrow<EvalError>>(
+        err: &E,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(&err.borrow().into_proto().encode_to_vec())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<EvalError, D::Error> {
+        let bytes = serde_bytes::ByteBuf::deserialize(deserializer)?;
+        let proto = ProtoEvalError::decode(bytes.as_slice()).map_err(D::Error::custom)?;
+        EvalError::from_proto(proto).map_err(D::Error::custom)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::scalar::func::variadic::Coalesce;
+
+    // StableEvalError's wire format is proto bytes, so every EvalError
+    // variant must roundtrip exactly through both a self-describing format
+    // (JSON) and a compact binary one (bincode). This also exercises the
+    // EvalError -> ProtoEvalError -> EvalError conversion itself, which has
+    // no other roundtrip coverage.
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
+        fn stable_eval_error_serde_roundtrip(err in any::<EvalError>()) {
+            let stable = StableEvalError(err);
+
+            let json = serde_json::to_string(&stable).expect("serializes to JSON");
+            let from_json: StableEvalError =
+                serde_json::from_str(&json).expect("deserializes from JSON");
+            prop_assert_eq!(&stable, &from_json);
+
+            let bytes = bincode::serialize(&stable).expect("serializes to bincode");
+            let from_bincode: StableEvalError =
+                bincode::deserialize(&bytes).expect("deserializes from bincode");
+            prop_assert_eq!(&stable, &from_bincode);
+        }
+    }
 
     /// An `OutOfDomain` with both limits unset is not constructible by any
     /// caller, but it decodes out of corrupted or forged `ProtoEvalError` bytes,

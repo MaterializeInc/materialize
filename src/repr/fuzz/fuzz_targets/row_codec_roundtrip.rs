@@ -51,7 +51,13 @@ fn arb_relation_desc(u: &mut Unstructured) -> RelationDesc {
     for i in 0..ncols {
         let scalar_type = arb_scalar_type(u);
         let nullable = bool::arbitrary(u).unwrap_or(true);
-        builder = builder.with_column(format!("c{i}"), SqlColumnType { scalar_type, nullable });
+        builder = builder.with_column(
+            format!("c{i}"),
+            SqlColumnType {
+                scalar_type,
+                nullable,
+            },
+        );
     }
     builder.finish()
 }
@@ -91,5 +97,8 @@ fuzz_target!(|data: &[u8]| {
     let mut buf = Vec::new();
     orig.encode(&mut buf);
     let round = Row::decode(&buf, &schema).expect("re-encode of a valid Row must decode");
-    assert_eq!(orig, round, "Row changed across Codec roundtrip (schema = {schema:?})");
+    assert_eq!(
+        orig, round,
+        "Row changed across Codec roundtrip (schema = {schema:?})"
+    );
 });

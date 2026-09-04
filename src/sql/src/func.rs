@@ -3844,7 +3844,12 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 // prevents `sum(NULL)` from choosing the `Float64`
                 // implementation, so that we match PostgreSQL's behavior.
                 // Plus we will one day want to support this overload.
-                bail_unsupported!("sum(interval)");
+                //
+                // The message mentions `avg` because `avg(interval)` desugars
+                // to `sum(interval) / count(interval)` before type checking
+                // (see `plan_avg` in `transform_ast.rs`), so this error is all
+                // a user who typed only `avg` gets to see.
+                bail_unsupported!("sum(interval) and avg(interval)");
             }) => Interval, 2113;
         },
 
@@ -5349,6 +5354,11 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
         "parse_catalog_id" => Scalar {
             params!(Jsonb) => UnaryFunc::ParseCatalogId(func::ParseCatalogId)
                 => String, oid::FUNC_PARSE_CATALOG_ID_OID;
+        },
+        "parse_catalog_item_references" => Scalar {
+            params!(String) => UnaryFunc::ParseCatalogItemReferences(
+                func::ParseCatalogItemReferences,
+            ) => Jsonb, oid::FUNC_PARSE_CATALOG_ITEM_REFERENCES_OID;
         },
         "parse_catalog_privileges" => Scalar {
             params!(Jsonb) => UnaryFunc::ParseCatalogPrivileges(func::ParseCatalogPrivileges)

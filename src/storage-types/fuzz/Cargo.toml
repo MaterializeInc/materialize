@@ -20,7 +20,11 @@ edition = "2021"
 cargo-fuzz = true
 
 [dependencies]
+arbitrary = { version = "1", features = ["derive"] }
 libfuzzer-sys = "0.4"
+mz-expr = { path = "../../expr" }
+mz-ore = { path = "../../ore" }
+mz-persist-types = { path = "../../persist-types" }
 mz-storage-types = { path = "..", features = ["proptest"] }
 mz-proto = { path = "../../proto" }
 mz-repr = { path = "../../repr", features = ["proptest"] }
@@ -37,6 +41,13 @@ proptest = "1.11.0"
 [[bin]]
 name = "csv_decode"
 path = "fuzz_targets/csv_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pushdown_soundness"
+path = "fuzz_targets/pushdown_soundness.rs"
 test = false
 doc = false
 bench = false

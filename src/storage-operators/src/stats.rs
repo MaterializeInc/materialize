@@ -48,7 +48,11 @@ impl StatsCursor {
         let should_fetch = |name: &'static str, errors: bool| {
             move |stats: Option<&LazyPartStats>| {
                 let Some(stats) = stats else { return true };
-                let stats = stats.decode();
+                // Stats written by a newer version may not decode. The sound
+                // fallback is to fetch the part.
+                let Ok(stats) = stats.try_decode() else {
+                    return true;
+                };
                 let metrics = &metrics.pushdown.part_stats;
                 let relation_stats = RelationPartStats::new(name, metrics, desc, &stats);
                 if errors {

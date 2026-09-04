@@ -64,6 +64,15 @@ pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
 /// real one via [`merge_batcher::ColumnMergeBatcher::set_pager`].
 pub type Col2ValPagedBatcher<K, V, T, R> = merge_batcher::ColumnMergeBatcher<(K, V), T, R>;
 
+/// Columnar-native counterpart to [`Col2ValBatcher`], holding [`Column`]
+/// chunks rather than columnation stacks and merging them through
+/// [`batcher::ColumnMerger`].
+///
+/// Pairs with [`batcher::ColumnChunker`] and any builder whose `Input` is
+/// `Column<((K, V), T, R)>`. Unlike [`Col2ValPagedBatcher`] the chains stay
+/// resident, so this arm carries no pager and no spill budget.
+pub type Col2ValColBatcher<K, V, T, R> = MergeBatcher<batcher::ColumnMerger<(K, V), T, R>>;
+
 /// A container based on a columnar store, encoded in aligned bytes.
 ///
 /// The type can represent typed data, bytes from Timely, or an aligned allocation. The name
@@ -95,6 +104,19 @@ impl<C: Columnar> Column<C> {
         match self {
             Column::Typed(t) => t.clear(),
             Column::Bytes(_) | Column::Align(_) => *self = Default::default(),
+        }
+    }
+
+    /// True when the column holds no records.
+    ///
+    /// The `Typed` variant answers from the container itself. The serialized
+    /// variants have to reconstruct their borrowed view to reach a length, so
+    /// there this costs as much as [`Column::borrow`].
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Column::Typed(t) => t.is_empty(),
+            Column::Bytes(_) | Column::Align(_) => self.borrow().is_empty(),
         }
     }
 

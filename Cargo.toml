@@ -278,8 +278,8 @@ annotate-snippets = "0.12.15"
 anyhow = "1.0.102"
 array-concat = "0.5.5"
 arrayvec = "0.7.6"
-arrow = { version = "57", default-features = false }
-arrow-ipc = "57"
+arrow = { version = "58", default-features = false }
+arrow-ipc = "58"
 askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
 assert_cmd = "2.2.2"
 async-compression = { version = "0.4.27", features = ["bzip2-sys", "gzip", "tokio", "xz", "zstd"] }
@@ -299,7 +299,7 @@ aws-smithy-runtime = { version = "1.9.8", features = ["connector-hyper-0-14-x"] 
 aws-smithy-runtime-api = "1.10.0"
 aws-smithy-types = { version = "1.1.8", features = ["byte-stream-poll-next"] }
 aws-types = "1.3.9"
-axum = { version = "0.8.8", features = ["ws"] }
+axum = { version = "0.8.9", features = ["ws"] }
 axum-extra = { version = "0.12.5", features = ["typed-header"] }
 axum-server = { version = "0.8.0", features = ["tls-rustls"] }
 azure_core = "0.21.0"
@@ -384,9 +384,9 @@ hyper-0-14 = { package = "hyper", version = "0.14", features = ["client", "tcp"]
 hyper-openssl = "0.10.2"
 hyper-util = "0.1.20"
 tower-service = "0.3.3"
-iceberg = "0.9.0"
-iceberg-catalog-rest = "0.9.0"
-iceberg-storage-opendal = { version = "0.9.0", default-features = false, features = ["opendal-s3", "opendal-gcs"] }
+iceberg = "0.10.1"
+iceberg-catalog-rest = "0.10.1"
+iceberg-storage-opendal = { version = "0.10.1", default-features = false, features = ["opendal-s3", "opendal-gcs"] }
 imbl = { version = "7.0.0", features = ["serde"] }
 include_dir = "0.7.4"
 indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
@@ -399,7 +399,7 @@ jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
 junit-report = "0.8.3"
 k8s-controller = "0.12.0"
 k8s-openapi = { version = "0.27.0", features = ["schemars", "v1_34"] }
-kube = { version = "3.1.0", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
+kube = { version = "3.1.0", default-features = false, features = ["client", "derive", "openssl-tls", "runtime"] }
 launchdarkly-server-sdk = { version = "3.1.1", default-features = false, features = ["hyper-rustls-native-roots", "crypto-aws-lc-rs"] }
 launchdarkly-sdk-transport = "0.1.4"
 lgalloc = "0.6.0"
@@ -426,17 +426,17 @@ open = "5.3.5"
 openssh = { version = "0.11.6", default-features = false, features = ["native-mux"] }
 openssh-mux-client = "0.17.9"
 openssl = { version = "0.10.80", features = ["vendored"] }
-openssl-probe = "0.1.6"
+openssl-probe = "0.2.1"
 openssl-sys = { version = "0.9.108", features = ["vendored"] }
-opentelemetry = { version = "0.31.0", features = ["trace"] }
-opentelemetry-otlp = { version = "0.31.1", features = ["grpc-tonic"] }
-opentelemetry_sdk = { version = "0.31.0", features = ["experimental_trace_batch_span_processor_with_async_runtime", "rt-tokio"] }
+opentelemetry = { version = "0.32.0", features = ["trace"] }
+opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic"] }
+opentelemetry_sdk = { version = "0.32.1", features = ["experimental_trace_batch_span_processor_with_async_runtime", "rt-tokio"] }
 ordered-float = { version = "5.1.0", features = ["serde"] }
 os_info = "3.11.0"
 owo-colors = "4.3.0"
-parquet = { version = "57", default-features = false, features = ["arrow", "async", "brotli", "flate2", "flate2-zlib-rs", "lz4", "snap", "zstd"] }
+parquet = { version = "58", default-features = false, features = ["arrow", "async", "brotli", "flate2", "flate2-zlib-rs", "lz4", "snap", "zstd"] }
 paste = "1.0.15"
-pem = "3.0.6"
+pem = "4.0.0"
 phf = { version = "0.13.1", features = ["uncased"] }
 phf_codegen = "0.13.1"
 pin-project = "1.1.13"
@@ -473,6 +473,7 @@ rdkafka = { version = "0.29.0", features = ["cmake-build", "libz-static", "ssl-v
 rdkafka-sys = { version = "4.3.0", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = "1.12.3"
 regex-syntax = "0.8.10"
+reqsign-core = "3.3.0"
 reqwest = { version = "0.12.28", features = ["blocking", "charset", "cookies", "default-tls", "http2", "json", "native-tls-vendored", "stream"] }
 reqwest-middleware = { version = "0.4.2", features = ["json"] }
 reqwest-retry = "0.8.0"
@@ -488,13 +489,14 @@ scopeguard = "1.2.0"
 seahash = "4.1.0"
 segment = { version = "0.2.6", default-features = false, features = ["native-tls-vendored"] }
 semver = "1.0.28"
-sentry = { version = "0.48.2", default-features = false, features = ["backtrace", "contexts", "debug-images", "transport"] }
-sentry-panic = "0.48.2"
-sentry-tracing = "0.48.2"
+sentry = { version = "0.49.1", default-features = false, features = ["backtrace", "contexts", "debug-images", "transport"] }
+sentry-panic = "0.49.1"
+sentry-tracing = "0.49.1"
 serde = { version = "1.0.219", features = ["derive"] }
 serde-aux = "4.7.0"
+serde-reflection = "0.5.0"
 serde_bytes = "0.11.19"
-serde_json = "1.0.150"
+serde_json = { version = "1.0.150", features = ["raw_value"] }
 serde_plain = "1.0.2"
 serde_repr = "0.1.20"
 serde_urlencoded = "0.7.1"
@@ -517,7 +519,7 @@ supports-color = "3.0.2"
 syn = { version = "2.0.119", features = ["extra-traits", "full", "parsing", "printing"] }
 sysctl = "0.7.1"
 sysinfo = "0.29.11"
-tabled = "0.20.0"
+tabled = "0.21.0"
 tar = "0.4.46"
 tempfile = "3.27.0"
 termcolor = "1.4.1"
@@ -543,14 +545,19 @@ tonic-prost-build = "0.14.6"
 tower = { version = "0.5.3", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
 tower-http = { version = "0.6.11", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
 tower-lsp = { version = "0.20.0", features = ["proposed"] }
-tower-sessions = "0.14.0"
+tower-sessions = "0.15.0"
 tower-sessions-memory-store = "0.14.0"
 tracing = "0.1.44"
 tracing-capture = "0.1.0"
 tracing-core = "0.1.35"
-tracing-opentelemetry = "0.32.1"
+tracing-opentelemetry = "0.33.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json", "tracing-log"] }
-tungstenite = "0.28.0"
+# Held back: must match the `tungstenite` that `axum`'s `ws` feature pulls in
+# via `tokio-tungstenite`, else the two versions coexist in the dependency
+# graph. `axum` 0.8.9 is on `tokio-tungstenite` 0.29, which pins this to 0.29.
+# 0.30 additionally moves to `sha1` 0.11, duplicating the whole RustCrypto
+# hashing stack.
+tungstenite = "0.29.0"
 turmoil = "0.7.2"
 uncased = "0.9.10"
 unicode-normalization = "0.1.25"
@@ -662,10 +669,13 @@ tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc2
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d" }
 
 # Custom iceberg features for mz
-# All changes should go to the `mz_v0.9.0` branch.
-iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
-iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
-iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
+# All changes should go to the `mz_v0.10.x` branch.
+# NOTE: The `[workspace.dependencies]` version requirement above must stay
+# semver-compatible with this revision's crate version, otherwise Cargo drops
+# these patches into `[[patch.unused]]` and silently builds against crates.io.
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "958ac5b3c318026aeb362485c593e4956aeabe95" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "958ac5b3c318026aeb362485c593e4956aeabe95" }
+iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "958ac5b3c318026aeb362485c593e4956aeabe95" }
 
 # Custom duckdb crate to support mz needs
 # All changes should go to the `mz_changes` branch.

@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/client.rs
-revision: 3f3bdb0535
+revision: 2e6c03ac43
 ---
 
 # mz-deploy::client
@@ -15,8 +15,6 @@ Scoped sub-clients:
 * `deployment_ops` — blue/green lifecycle: staging, hydration monitoring, cutover, abort.
 * `validation` — pre-deployment checks that the target environment matches expected state.
 * `type_info` — `SHOW COLUMNS` queries to generate/refresh the `types.lock` data-contract file.
-* `auto_scaling` — helper submodule for converting autoscaling strategy values to/from SQL AST and catalog JSON.
-
 Supporting submodules: `models` (shared data structures), `errors` (`ConnectionError`, `DatabaseValidationError`), `dev_overlays` (`DevOverlaysClient`).
 
 `quote_identifier` double-quotes a SQL identifier, escaping embedded double quotes.

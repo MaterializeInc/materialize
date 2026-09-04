@@ -178,7 +178,7 @@ timeout](#customizing-the-timeout).
 During a graceful resize, Materialize:
 1. Provisions new replicas at the target size, alongside the current replicas.
 2. Waits for the new replicas to
-   [hydrate](/concepts/clusters/#consider-hydration-requirements).
+   [hydrate](/concepts/hydration/).
 3. Retires the old replicas.
 
 Throughout, the cluster keeps serving queries, first from the old replicas,
@@ -196,10 +196,6 @@ resize back if the new replicas have not hydrated by then. Use the `WAIT UNTIL
 READY` or `WAIT FOR` options to change the deadline, or to change what happens
 when it passes.
 
-{{< private-preview >}}
-Customizing the resize timeout with `WAIT UNTIL READY` or `WAIT FOR`
-{{< /private-preview >}}
-
 - `WAIT UNTIL READY (TIMEOUT = ..., ON TIMEOUT = ...)` sets the timeout for the
   resize. On timeout, `ON TIMEOUT` selects whether to `COMMIT` (retire the old
   replicas and proceed with the not-yet-hydrated new ones, which can cause
@@ -210,9 +206,11 @@ Customizing the resize timeout with `WAIT UNTIL READY` or `WAIT FOR`
   SET (SIZE = '100cc') WITH (WAIT UNTIL READY (TIMEOUT = '10m'));
   ```
 
-- `WAIT FOR '<duration>'` sets the timeout and commits when it expires,
-  regardless of hydration status, which can cause downtime. Prefer
-  `WAIT UNTIL READY`.
+- `WAIT FOR '<duration>'` is equivalent to `WAIT UNTIL READY (TIMEOUT =
+  '<duration>', ON TIMEOUT = 'ROLLBACK')`. Materialize cuts over once the target
+  replicas hydrate. When Materialize processes an expired timeout, it
+  rolls back the resize and keeps the current size if the target replicas are
+  still unhydrated.
 
 On current versions, both options still return immediately and let the resize
 proceed in the background. They do not hold the session open. In v26.33 and
@@ -220,11 +218,6 @@ earlier, `WAIT UNTIL READY` blocked the session instead. See [Resizing in
 v26.33 and earlier](#resizing-in-v2633-and-earlier). For system clusters, an
 explicit `WAIT UNTIL READY` also blocked the session through v26.37. See
 [System clusters](#system-clusters).
-
-On a self-managed deployment, these options are additionally gated behind the
-`enable_zero_downtime_cluster_reconfiguration` session feature flag, which is
-off by default. Until it is enabled, a statement using them returns an error
-rather than resizing the cluster.
 
 See [Monitoring a resize](#monitoring-a-resize) to track progress and [Cancel a
 resize](#cancel-a-resize) to stop an in-flight resize.
@@ -264,7 +257,7 @@ requires [ownership of it](#required-privileges), which for most system clusters
 means connecting as `mz_system`.
 
 {{< warning >}}
-System clusters resize gracefully starting in **v26.38**. In v26.37 and
+System clusters resize gracefully in **v26.38 and later**. In v26.37 and
 earlier, resizing a system cluster **without** an explicit `WAIT UNTIL READY`
 option replaces the cluster's replicas immediately instead of waiting for the
 new ones to hydrate, so the cluster is unavailable until they do. Resizing
@@ -317,6 +310,18 @@ example below uses `CREATE CLUSTER`; see [Configure
 autoscaling](#configure-autoscaling) for the `ALTER CLUSTER` form.
 
 {{% include-headless "/headless/cluster-hydration-burst" %}}
+
+### Dictionary compression
+
+{{% include-headless "/headless/dictionary-compression/overview" %}}
+
+Turn compression on for an existing cluster with `ALTER CLUSTER ... SET
+(EXPERIMENTAL ARRANGEMENT COMPRESSION = true)`, and go back to the default with
+`ALTER CLUSTER ... RESET (EXPERIMENTAL ARRANGEMENT COMPRESSION)`.
+
+{{% include-headless "/headless/dictionary-compression/replica-replacement" %}}
+
+{{% include-headless "/headless/dictionary-compression/tradeoff-summary" %}}
 
 ### Replication factor
 
@@ -497,3 +502,4 @@ compute-specific settings. If needed, these can be set explicitly.
 - [`CREATE CLUSTER`](/sql/create-cluster/)
 - [`SHOW CLUSTERS`](/sql/show-clusters/)
 - [`DROP CLUSTER`](/sql/drop-cluster/)
+- [Dictionary compression](/transform-data/dictionary-compression/)

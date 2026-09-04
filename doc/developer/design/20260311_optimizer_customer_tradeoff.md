@@ -231,7 +231,8 @@ We propose the following shift:
  - Use `serde_reflection` to generate a schema (using `Registry`) that lives in the repo. Any change in LIR serialization will yield a schema change. We can programmatically require migrations/LIR version bumps for certain kinds of schema changes.
    + We _must_ eventually tolerate schema changes like new LIR operators, new `*Func`s, new fields on existing structures, or pins will break too often.
 
-LIR will be stored in the catalog.
+A `DataflowDescription<LIR>` will be stored as JSON in a persist shard pointed to by the catalog.
+Splitting up the LIR in this way means that (a) the catalog doesn't scale (as much) with object plan size and (b) we can parallelize parsing of LIR plans.
 
 ## Open questions
 
@@ -255,35 +256,11 @@ What is the workflow for fixing that?
 _Any_ change to `MV2` will lead to replanning, and there is no possibility of "spot" fixes.
 How do we communicate to customers that pinning is "best effort"?
 
-### What is the serialization format for LIR?
-
-Based on ad hoc, not particularly well informed research:
-
-| Format      | Compactness | Evolution     |
-| :------     | :---------- | :------------ |
-| bincode     | +++         | none          |
-| JSON        | ---         | roll your own |
-| MessagePack | ++          | roll your own |
-| CBOR        | +           | roll your own |
-| protobuf    | ~           | theirs        |
-
-MessagePack seems like a strong possibility, but "roll your own" as a migration/evolution story is not my favorite.
-In addition to our schema registry management, we would need some kind of lint to ensure the serde annotations were correct for MessagePack (i.e., defaults are required on new struct fields, or we'll break at runtime when reading old data). Having some kind of CI test that reads a broad variety of pinned plans through an upgrade would help.
-
-Protobuf has a natural form of evolution, but it is not clear that it aligns with _ours_.
-We will likely end up maintaining protobuf wrappers by hand, which is a bad combination of "their weird defaults" and "roll your own".
-
-As an MVP, bincode is fine: we check the version number, and don't use pinned plans if anything changed. The downside is that improving that level of "best effort" to something better is moderately complex.
-
-Another alternative is explicitly versioned LIR enums, where we use version numbers to dispatch and manually write migrations between formats.
-This would allow us to use `bincode`, but would mean far more migrations: any change at all would force one.
-In this case, we would want good tooling to generate migrations and keep migration code to a minimum.
-
 ### Where does LIR live in the catalog?
 
 It could go in `CatalogPlans` (all currently keyed by global ID), in `CatalogState` (alongside per-cluster metadata), or as a sidecar (like the `ExpressionCacheHandle`).
 This part of the catalog seems to be in flux, but `CatalogState` seems right---plans for frozen clusters should be stored alongside those clusters.
-That is, whether or not a cluster is frozen is not a boolean---it's an `Option<FrozenLirPlans>`, with `Some(...)` holding the plans.
+That is, whether or not a cluster is frozen is not a boolean---it's an `Option<PersistShard pointer>`, with `Some(...)` holding the name of the shard that holds plans.
 
 ### What happens when we move to DDIR?
 

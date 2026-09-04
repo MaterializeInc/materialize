@@ -25,11 +25,10 @@
 //!  * **Raw-bytes arm.** Decodes arbitrary bytes straight into the proto,
 //!    exercising the decoder against malformed/adversarial wire input (including
 //!    the SQL Server `Lsn` `try_from` length guard, which is only reachable from
-//!    raw bytes since a re-encoded `Lsn` is always exactly 10 bytes).
-//!
-//! `SourceExportStatementDetails` doesn't derive `PartialEq`/`Debug`, so
-//! losslessness is asserted by comparing the canonical re-encoded bytes from
-//! two successive `Rust -> Proto` round trips.
+//!    raw bytes since a re-encoded `Lsn` is always exactly 10 bytes). Since this
+//!    arm has no independently known Rust value, it checks rejection behavior
+//!    and stability, not whether each protobuf discriminant has the right Rust
+//!    mapping.
 
 #![no_main]
 
@@ -40,9 +39,9 @@ use mz_proto::ProtoType;
 use mz_sql_server_util::desc::SqlServerTableDesc;
 use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
 use mz_storage_types::sources::{ProtoSourceExportStatementDetails, SourceExportStatementDetails};
-use prost::Message;
 use proptest::strategy::{Strategy, ValueTree};
 use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
+use prost::Message;
 
 /// Build a 32-byte proptest seed from `bytes` (zero-padded / truncated).
 fn seed_from(bytes: &[u8]) -> [u8; 32] {
@@ -66,7 +65,7 @@ fn encode(details: &SourceExportStatementDetails) -> Vec<u8> {
     .encode_to_vec()
 }
 
-/// `Rust -> Proto -> Rust -> Proto` must reproduce the same canonical bytes.
+/// `Rust -> Proto -> Rust` must preserve the value and canonical encoding.
 fn assert_roundtrip(orig: SourceExportStatementDetails) {
     let canonical = encode(&orig);
     let reparsed = ProtoSourceExportStatementDetails::decode(canonical.as_slice())
@@ -75,10 +74,41 @@ fn assert_roundtrip(orig: SourceExportStatementDetails) {
         .into_rust()
         .expect("re-encoded SourceExportStatementDetails must convert back to Rust");
     assert_eq!(
+        orig, round,
+        "SourceExportStatementDetails value changed across proto roundtrip"
+    );
+    assert_eq!(
         canonical,
         encode(&round),
-        "SourceExportStatementDetails changed across proto roundtrip"
+        "SourceExportStatementDetails canonical encoding changed across proto roundtrip"
     );
+}
+
+fn load_generator_output(selector: u8) -> LoadGeneratorOutput {
+    use mz_storage_types::sources::load_generator::{AuctionView, MarketingView, TpchView};
+
+    match selector % 20 {
+        0 => LoadGeneratorOutput::Default,
+        1 => LoadGeneratorOutput::Auction(AuctionView::Organizations),
+        2 => LoadGeneratorOutput::Auction(AuctionView::Users),
+        3 => LoadGeneratorOutput::Auction(AuctionView::Accounts),
+        4 => LoadGeneratorOutput::Auction(AuctionView::Auctions),
+        5 => LoadGeneratorOutput::Auction(AuctionView::Bids),
+        6 => LoadGeneratorOutput::Marketing(MarketingView::Customers),
+        7 => LoadGeneratorOutput::Marketing(MarketingView::Impressions),
+        8 => LoadGeneratorOutput::Marketing(MarketingView::Clicks),
+        9 => LoadGeneratorOutput::Marketing(MarketingView::Leads),
+        10 => LoadGeneratorOutput::Marketing(MarketingView::Coupons),
+        11 => LoadGeneratorOutput::Marketing(MarketingView::ConversionPredictions),
+        12 => LoadGeneratorOutput::Tpch(TpchView::Supplier),
+        13 => LoadGeneratorOutput::Tpch(TpchView::Part),
+        14 => LoadGeneratorOutput::Tpch(TpchView::Partsupp),
+        15 => LoadGeneratorOutput::Tpch(TpchView::Customer),
+        16 => LoadGeneratorOutput::Tpch(TpchView::Orders),
+        17 => LoadGeneratorOutput::Tpch(TpchView::Lineitem),
+        18 => LoadGeneratorOutput::Tpch(TpchView::Nation),
+        _ => LoadGeneratorOutput::Tpch(TpchView::Region),
+    }
 }
 
 fuzz_target!(|data: &[u8]| {
@@ -140,26 +170,15 @@ fuzz_target!(|data: &[u8]| {
                 }
             }
             3 => {
-                // Cover every `LoadGeneratorOutput` discriminant.
-                let output = match rest.first().copied().unwrap_or(0) % 4 {
-                    0 => LoadGeneratorOutput::Default,
-                    1 => LoadGeneratorOutput::Auction(
-                        mz_storage_types::sources::load_generator::AuctionView::Bids,
-                    ),
-                    2 => LoadGeneratorOutput::Marketing(
-                        mz_storage_types::sources::load_generator::MarketingView::Leads,
-                    ),
-                    _ => LoadGeneratorOutput::Tpch(
-                        mz_storage_types::sources::load_generator::TpchView::Customer,
-                    ),
-                };
+                let output = load_generator_output(rest.first().copied().unwrap_or(0));
                 SourceExportStatementDetails::LoadGenerator { output }
             }
             _ => SourceExportStatementDetails::Kafka {},
         };
         assert_roundtrip(value);
     } else {
-        // Raw-bytes arm: decode adversarial wire bytes, then round-trip.
+        // Raw-bytes arm: exercise rejection and fixed-point stability for
+        // adversarial wire bytes. The structured arm verifies known mappings.
         let Ok(proto) = ProtoSourceExportStatementDetails::decode(rest) else {
             return;
         };

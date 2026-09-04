@@ -32,6 +32,7 @@ import {
   QueryHistoryListRow,
 } from "~/api/materialize/query-history/queryHistoryList";
 import { fetchQueryHistoryUsers } from "~/api/materialize/query-history/queryHistoryUsers";
+import fetchStatementLoggingMaxSampleRate from "~/api/materialize/query-history/statementLoggingMaxSampleRate";
 import {
   getRecentQueryData,
   initialPlaceholderDataBuilders,
@@ -63,6 +64,11 @@ export const queryHistoryQueryKeys = {
     [...queryHistoryQueryKeys.all(), buildQueryKeyPart("clusters")] as const,
   users: () =>
     [...queryHistoryQueryKeys.all(), buildQueryKeyPart("users")] as const,
+  statementLoggingMaxSampleRate: () =>
+    [
+      ...queryHistoryQueryKeys.all(),
+      buildQueryKeyPart("statement-logging-max-sample-rate"),
+    ] as const,
   detail: ({ executionId }: { executionId: string }) =>
     [
       ...queryHistoryQueryKeys.all(),
@@ -130,6 +136,21 @@ export function useFetchQueryHistoryUsers() {
         name: row.email,
       }));
     },
+  });
+}
+
+export function useFetchStatementLoggingMaxSampleRate(options?: {
+  enabled?: boolean;
+}) {
+  return useQuery({
+    queryKey: queryHistoryQueryKeys.statementLoggingMaxSampleRate(),
+    queryFn: ({ queryKey, signal }) => {
+      return fetchStatementLoggingMaxSampleRate({
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+    enabled: options?.enabled,
   });
 }
 

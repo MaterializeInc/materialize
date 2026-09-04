@@ -794,8 +794,27 @@ impl Claims {
     /// Returns the user's group memberships extracted from the JWT claim at
     /// `claim_path` for group-to-role sync. See
     /// [`mz_auth::group_claims::extract_groups`] for semantics.
+    ///
+    /// `claim_path` resolves against the full claim set, not just
+    /// [`Claims::unknown_claims`]. Serde's `flatten` collects only the keys
+    /// that no named field above claimed, so a claim backed by a strongly
+    /// typed field, `roles` among them, is absent from that map and would
+    /// otherwise be unreachable no matter how `oidc_group_claim` is set.
+    /// Resolving against a JSON view of the whole struct keeps every claim the
+    /// IdP sent reachable, so a given `oidc_group_claim` value selects the same
+    /// claim here as it does under the OIDC authenticator, whose claims struct
+    /// types almost nothing and therefore never shadowed anything.
     pub fn groups(&self, claim_path: &str) -> Option<Vec<String>> {
-        mz_auth::group_claims::extract_groups(&self.unknown_claims, claim_path)
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::Object(claims)) => {
+                let claims = claims.into_iter().collect();
+                mz_auth::group_claims::extract_groups(&claims, claim_path)
+            }
+            // Serializing `Claims` cannot fail. Resolving against the untyped
+            // claims alone still serves every nested path, so fall back rather
+            // than skip the sync outright.
+            _ => mz_auth::group_claims::extract_groups(&self.unknown_claims, claim_path),
+        }
     }
 }
 
@@ -920,6 +939,18 @@ mod tests {
         let claims = claims_with(json!({"groups": ["analytics", "engineering"]}));
         assert_eq!(
             claims.groups("groups"),
+            Some(vec!["analytics".to_string(), "engineering".to_string()])
+        );
+    }
+
+    /// `roles` is a strongly typed field, so serde's `flatten` never routes it
+    /// into `unknown_claims`. It still has to be selectable as the group claim.
+    #[mz_ore::test]
+    fn groups_from_typed_roles_claim() {
+        let mut claims = claims_with(json!({}));
+        claims.roles = vec!["analytics".to_string(), "engineering".to_string()];
+        assert_eq!(
+            claims.groups("roles"),
             Some(vec!["analytics".to_string(), "engineering".to_string()])
         );
     }

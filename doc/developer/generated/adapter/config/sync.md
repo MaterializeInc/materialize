@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/config/sync.rs
-revision: dbd2c3fc06
+revision: 8e2fe64727
 ---
 
 # adapter::config::sync

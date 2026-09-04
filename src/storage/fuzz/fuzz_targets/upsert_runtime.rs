@@ -73,7 +73,9 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 // throughput bottleneck).
 static PARTS: OnceLock<FuzzUpsertParts> = OnceLock::new();
 thread_local! {
-    static CFG: SourceExportCreationConfig = PARTS.get_or_init(FuzzUpsertParts::new).source_config();
+    static CFG: SourceExportCreationConfig = {
+        PARTS.get_or_init(FuzzUpsertParts::new).source_config()
+    };
 }
 
 fn rt() -> &'static tokio::runtime::Runtime {
@@ -148,9 +150,9 @@ fn push_scalar(packer: &mut RowPacker, u: &mut Unstructured) -> arbitrary::Resul
             i32::arbitrary(u)?,
             i64::arbitrary(u)?,
         ))),
-        10 => packer.push(Datum::Uuid(uuid::Uuid::from_bytes(
-            <[u8; 16]>::arbitrary(u)?,
-        ))),
+        10 => packer.push(Datum::Uuid(uuid::Uuid::from_bytes(<[u8; 16]>::arbitrary(
+            u,
+        )?))),
         11 => packer.push(Datum::MzTimestamp(Timestamp::from(u64::arbitrary(u)?))),
         12 => {
             let len = u.int_in_range(0usize..=20)?;
@@ -376,7 +378,11 @@ fn run(u: &mut Unstructured) -> arbitrary::Result<()> {
         })
         .collect();
 
-    let drain_to = commands.iter().map(|(ts, ..)| *ts).max().map_or(0, |m| m + 1);
+    let drain_to = commands
+        .iter()
+        .map(|(ts, ..)| *ts)
+        .max()
+        .map_or(0, |m| m + 1);
 
     let hook_commands: Vec<(u64, UpsertKey, u64, Option<UpsertValue>)> = commands
         .iter()

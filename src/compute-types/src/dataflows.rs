@@ -320,6 +320,11 @@ impl<P, S> DataflowDescription<P, S> {
         self.source_imports.keys().copied()
     }
 
+    /// Whether `id` names an import of this dataflow, index or source.
+    pub fn is_import(&self, id: &GlobalId) -> bool {
+        self.index_imports.contains_key(id) || self.source_imports.contains_key(id)
+    }
+
     /// Identifiers of exported objects (indexes and sinks).
     pub fn export_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
         self.exported_index_ids().chain(self.exported_sink_ids())
@@ -469,12 +474,36 @@ where
     /// This method behaves like `depends_on` but filters out internal dependencies that are not
     /// included in the dataflow imports.
     pub fn depends_on_imports(&self, collection_id: GlobalId) -> BTreeSet<GlobalId> {
-        let is_import = |id: &GlobalId| {
-            self.source_imports.contains_key(id) || self.index_imports.contains_key(id)
-        };
-
         let deps = self.depends_on(collection_id);
-        deps.into_iter().filter(is_import).collect()
+        deps.into_iter().filter(|id| self.is_import(id)).collect()
+    }
+
+    /// Computes the set of imports the dataflow's exports read, meaning the imports reachable from
+    /// an index export's `on_id` or a sink export's `from`.
+    ///
+    /// A description that has been through the optimizer answers [`Self::import_ids`] here, because
+    /// the optimizer prunes the import list to what the exports read. The two come apart while a
+    /// description is still being assembled, and this is what the prune and the assertion guarding
+    /// it are both defined in terms of. The answer covers the dataflow as a whole, so an import only
+    /// one export reads is still reported, and a dataflow with no exports reports none.
+    ///
+    /// NOTE: On the index side this over-approximates. [`Self::depends_on`] cannot tell which index
+    /// on a collection a plan will use, so reaching a collection reports every index imported on it.
+    /// Pruning index imports needs the exact usage information the MIR pipeline collects, not this.
+    ///
+    /// Panics for an export naming a collection that is neither an import nor built exactly once
+    /// here, which is [`Self::depends_on`]'s precondition on its argument. Rendering resolves the
+    /// same ids, so a description that trips this does not survive being built either.
+    pub fn used_import_ids(&self) -> BTreeSet<GlobalId> {
+        let mut deps = BTreeSet::new();
+        for (index_desc, _typ) in self.index_exports.values() {
+            self.depends_on_into(index_desc.on_id, &mut deps);
+        }
+        for sink_desc in self.sink_exports.values() {
+            self.depends_on_into(sink_desc.from, &mut deps);
+        }
+        deps.retain(|id| self.is_import(id));
+        deps
     }
 }
 
@@ -628,4 +657,145 @@ pub struct BuildDesc<P> {
     pub id: GlobalId,
     /// TODO(database-issues#7533): Add documentation.
     pub plan: P,
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_expr::{AccessStrategy, Id, MirRelationExpr};
+    use mz_repr::{RelationDesc, ReprRelationType, ReprScalarType, SqlRelationType};
+
+    use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
+    use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
+
+    use super::*;
+
+    const READ: GlobalId = GlobalId::User(1);
+    const UNREAD: GlobalId = GlobalId::User(2);
+    const VIEW: GlobalId = GlobalId::Transient(1);
+    const SINK: GlobalId = GlobalId::Transient(2);
+    const INDEX: GlobalId = GlobalId::Transient(3);
+
+    fn typ() -> ReprRelationType {
+        ReprRelationType::new(vec![ReprScalarType::Int64.nullable(false)])
+    }
+
+    /// A dataflow importing `READ` and `UNREAD`, building `VIEW` from `plan`, and exporting a
+    /// subscribe sink over it.
+    fn dataflow(plan: MirRelationExpr) -> DataflowDesc {
+        let source_import = || SourceImport {
+            desc: SourceInstanceDesc {
+                arguments: SourceInstanceArguments { operators: None },
+                storage_metadata: (),
+                typ: SqlRelationType::from_repr(&typ()),
+            },
+            monotonic: false,
+            with_snapshot: true,
+            upper: Antichain::from_elem(Timestamp::MIN),
+        };
+
+        let mut df = DataflowDesc::new("test".to_string());
+        df.source_imports.insert(READ, source_import());
+        df.source_imports.insert(UNREAD, source_import());
+        df.objects_to_build.push(BuildDesc {
+            id: VIEW,
+            plan: OptimizedMirRelationExpr::declare_optimized(plan),
+        });
+        df.sink_exports.insert(
+            SINK,
+            ComputeSinkDesc {
+                from: VIEW,
+                from_desc: RelationDesc::new(SqlRelationType::from_repr(&typ()), ["c"]),
+                connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection {
+                    output: Vec::new(),
+                }),
+                with_snapshot: true,
+                up_to: Antichain::new(),
+                non_null_assertions: Vec::new(),
+                refresh_schedule: None,
+            },
+        );
+        df
+    }
+
+    #[mz_ore::test]
+    fn used_import_ids_reports_only_read_imports() {
+        let df = dataflow(MirRelationExpr::Get {
+            id: Id::Global(READ),
+            typ: typ(),
+            access_strategy: AccessStrategy::Persist,
+        });
+
+        assert_eq!(df.used_import_ids(), BTreeSet::from([READ]));
+    }
+
+    /// An export the optimizer folded to a constant reads nothing, even though the imports it was
+    /// folded from are still there. This is the shape that must not be reported as reading them.
+    #[mz_ore::test]
+    fn used_import_ids_is_empty_for_a_constant_export() {
+        let df = dataflow(MirRelationExpr::Constant {
+            rows: Ok(Vec::new()),
+            typ: typ(),
+        });
+
+        assert_eq!(df.used_import_ids(), BTreeSet::new());
+    }
+
+    /// Index exports are walked from the collection they are on, just like sink exports are from
+    /// the collection they are from.
+    #[mz_ore::test]
+    fn used_import_ids_covers_index_exports() {
+        let mut df = dataflow(MirRelationExpr::Constant {
+            rows: Ok(Vec::new()),
+            typ: typ(),
+        });
+        let other_view = GlobalId::Transient(4);
+        df.objects_to_build.push(BuildDesc {
+            id: other_view,
+            plan: OptimizedMirRelationExpr::declare_optimized(MirRelationExpr::Get {
+                id: Id::Global(UNREAD),
+                typ: typ(),
+                access_strategy: AccessStrategy::Persist,
+            }),
+        });
+        df.index_exports.insert(
+            INDEX,
+            (
+                IndexDesc {
+                    on_id: other_view,
+                    key: Vec::new(),
+                },
+                typ(),
+            ),
+        );
+
+        assert_eq!(df.used_import_ids(), BTreeSet::from([UNREAD]));
+    }
+
+    /// An imported index is reached through the collection it is on, and reported by the id of the
+    /// index rather than that of the collection.
+    #[mz_ore::test]
+    fn used_import_ids_reports_imported_indexes_by_index_id() {
+        let indexed_view = GlobalId::User(3);
+        let imported_index = GlobalId::User(4);
+
+        let mut df = dataflow(MirRelationExpr::Get {
+            id: Id::Global(indexed_view),
+            typ: typ(),
+            access_strategy: AccessStrategy::Index(Vec::new()),
+        });
+        df.index_imports.insert(
+            imported_index,
+            IndexImport {
+                desc: IndexDesc {
+                    on_id: indexed_view,
+                    key: Vec::new(),
+                },
+                typ: typ(),
+                monotonic: false,
+                with_snapshot: true,
+            },
+        );
+
+        assert_eq!(df.used_import_ids(), BTreeSet::from([imported_index]));
+    }
 }

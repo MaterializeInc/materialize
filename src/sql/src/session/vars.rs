@@ -1023,8 +1023,7 @@ fn compat_translate_name(name: &str) -> &str {
 }
 
 /// Enforces feature-flag gating for `transaction_isolation` levels that sit
-/// behind a flag (`bounded staleness <duration>` and
-/// `strong session serializable`).
+/// behind a flag (`strong session serializable`).
 ///
 /// Returns `Ok(())` for any other variable, and for an unparseable value
 /// (parse errors surface on the actual set). This is shared by every path that
@@ -1045,9 +1044,6 @@ pub fn check_transaction_isolation_feature_flag(
     };
     match level {
         IsolationLevel::StrongSessionSerializable => ENABLE_SESSION_TIMELINES.require(system_vars),
-        IsolationLevel::BoundedStaleness(_) => {
-            ENABLE_BOUNDED_STALENESS_ISOLATION.require(system_vars)
-        }
         _ => Ok(()),
     }
 }
@@ -1225,6 +1221,8 @@ impl SystemVars {
             &MAX_RESULT_SIZE,
             &MAX_COPY_FROM_ROW_SIZE,
             &ALLOWED_CLUSTER_REPLICA_SIZES,
+            &MAX_CONCURRENT_OCC_WRITES,
+            &MAX_OCC_RETRIES,
             &upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE,
             &upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
             &upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
@@ -1793,6 +1791,16 @@ impl SystemVars {
             .into_iter()
             .map(|s| s.as_str().into())
             .collect()
+    }
+
+    /// Returns the value of the `max_concurrent_occ_writes` configuration parameter.
+    pub fn max_concurrent_occ_writes(&self) -> u32 {
+        *self.expect_value(&MAX_CONCURRENT_OCC_WRITES)
+    }
+
+    /// Returns the value of the `max_occ_retries` configuration parameter.
+    pub fn max_occ_retries(&self) -> u32 {
+        *self.expect_value(&MAX_OCC_RETRIES)
     }
 
     /// Returns the value of the `default_cluster_replication_factor` configuration parameter.
@@ -2533,10 +2541,15 @@ pub struct FeatureFlag {
 }
 
 impl FeatureFlag {
+    /// Returns whether the feature flag is enabled in the provided `system_vars`.
+    pub fn enabled(&'static self, system_vars: &SystemVars) -> bool {
+        *system_vars.expect_value::<bool>(self.flag)
+    }
+
     /// Returns an error unless the feature flag is enabled in the provided
     /// `system_vars`.
     pub fn require(&'static self, system_vars: &SystemVars) -> Result<(), VarError> {
-        match *system_vars.expect_value::<bool>(self.flag) {
+        match self.enabled(system_vars) {
             true => Ok(()),
             false => Err(VarError::RequiresFeatureFlag { feature_flag: self }),
         }
@@ -2601,46 +2614,49 @@ mod isolation_feature_flag_tests {
     use super::*;
 
     #[mz_ore::test]
-    fn gates_bounded_staleness_value() {
+    fn gates_strong_session_serializable_value() {
         let mut system_vars = SystemVars::new();
 
-        // Default-on: the value passes the gate.
-        check_transaction_isolation_feature_flag(
-            TRANSACTION_ISOLATION_VAR_NAME,
-            VarInput::Flat("bounded staleness 5s"),
-            &system_vars,
-        )
-        .expect("flag on by default");
-
-        // Turn the flag off: the value is rejected regardless of the letter case
-        // of the variable name. This covers `SET`, `SET "TRANSACTION_ISOLATION"`,
-        // `ALTER ROLE ... SET`, and connection options, which all route through
-        // `SessionVars::set` and this shared check.
-        system_vars
-            .set("enable_bounded_staleness_isolation", VarInput::Flat("off"))
-            .expect("set flag");
+        // The flag defaults off: the value is rejected regardless of the letter
+        // case of the variable name. This covers `SET`,
+        // `SET "TRANSACTION_ISOLATION"`, `ALTER ROLE ... SET`, and connection
+        // options, which all route through `SessionVars::set` and this shared
+        // check.
         for name in ["transaction_isolation", "TRANSACTION_ISOLATION"] {
             let err = check_transaction_isolation_feature_flag(
                 name,
-                VarInput::Flat("bounded staleness 5s"),
+                VarInput::Flat("strong session serializable"),
                 &system_vars,
             )
-            .expect_err("flag off rejects bounded staleness");
+            .expect_err("flag off rejects strong session serializable");
             assert!(matches!(err, VarError::RequiresFeatureFlag { .. }));
         }
 
-        // Non-gated levels are unaffected.
+        // Ungated levels pass regardless of the flag.
+        for level in ["serializable", "bounded staleness 5s"] {
+            check_transaction_isolation_feature_flag(
+                TRANSACTION_ISOLATION_VAR_NAME,
+                VarInput::Flat(level),
+                &system_vars,
+            )
+            .expect("ungated level always allowed");
+        }
+
+        // With the flag on, the gated value passes too.
+        system_vars
+            .set("enable_session_timelines", VarInput::Flat("on"))
+            .expect("set flag");
         check_transaction_isolation_feature_flag(
             TRANSACTION_ISOLATION_VAR_NAME,
-            VarInput::Flat("serializable"),
+            VarInput::Flat("strong session serializable"),
             &system_vars,
         )
-        .expect("serializable always allowed");
+        .expect("flag on");
 
         // Unrelated variables are ignored, even with a gated-looking value.
         check_transaction_isolation_feature_flag(
             CLUSTER.name(),
-            VarInput::Flat("bounded staleness 5s"),
+            VarInput::Flat("strong session serializable"),
             &system_vars,
         )
         .expect("unrelated var ignored");

@@ -31,6 +31,8 @@ mod mz_catalog;
 pub use mz_catalog::*;
 mod mz_internal;
 pub use mz_internal::*;
+mod mz_object_dependencies;
+pub use mz_object_dependencies::*;
 mod mz_introspection;
 pub use mz_introspection::*;
 mod information_schema;
@@ -221,25 +223,20 @@ fn is_false(v: &bool) -> bool {
 ///
 /// Choosing the right variant matters:
 ///
-/// - [`LinkProperties::ForeignKey`]: the source entity has a column whose
-///   value is an ID that directly references a row in the target entity.
-///   Use this when there is an explicit FK column (e.g. `schema_id` ->
-///   `schema`).
-/// - [`LinkProperties::DependsOn`]: this entity logically depends on the
-///   target entity via a graph-edge table (e.g. `mz_compute_dependencies`
-///   records that a compute object depends on another object). The
-///   `source_column` is the column **in this entity** that holds the
-///   dependent's ID; `target_column` is the column in the target entity
-///   being depended upon. Use this for dependency-graph tables, **not**
-///   `ForeignKey`.
-/// - [`LinkProperties::Union`]: the source entity is a superset view that
-///   contains the target entity as a subset, optionally filtered by a
-///   discriminator column.
-/// - [`LinkProperties::MapsTo`]: the source entity provides an ID translation
-///   to the target entity, possibly via an intermediate table or across ID
-///   namespaces.
-/// - [`LinkProperties::Measures`]: the source entity records metric
-///   measurements about the target entity.
+/// - [`LinkProperties::ForeignKey`]: the source entity has a column whose value is an ID that
+///   directly references a row in the target entity. Use this when there is an explicit FK column
+///   (e.g. `schema_id` -> `schema`).
+/// - [`LinkProperties::DependsOn`]: this entity logically depends on the target entity via a
+///   graph-edge table (e.g. `mz_compute_dependencies` records that a compute object depends on
+///   another object). The `source_column` is the column **in this entity** that holds the
+///   dependent's ID; `target_column` is the column in the target entity being depended upon. Use
+///   this for dependency-graph tables, **not** `ForeignKey`.
+/// - [`LinkProperties::Union`]: the source entity is a superset view that contains the target
+///   entity as a subset, optionally filtered by a discriminator column.
+/// - [`LinkProperties::MapsTo`]: the source entity provides an ID translation to the target entity,
+///   possibly via an intermediate table or across ID namespaces.
+/// - [`LinkProperties::Measures`]: the source entity records metric measurements about the target
+///   entity.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LinkProperties {
@@ -783,6 +780,20 @@ impl Fingerprint for SqlRelationType {
     }
 }
 
+/// Asserts that `name` is safe to embed unquoted inside a `'...'`-quoted SQL literal
+/// or inside a `"..."`-quoted SQL identifier. Generated builtin relations
+/// (`make_mz_indexes`, `make_mz_object_dependencies_raw`, ...) concatenate builtin names
+/// into SQL fragments, so a quote or backslash would produce malformed SQL. Builtin
+/// names should always be plain ASCII identifiers.
+pub(super) fn assert_safe_builtin_name(name: &str, kind: &str) {
+    assert!(
+        !name.contains('\'') && !name.contains('"') && !name.contains('\\'),
+        "builtin {kind} name {name:?} contains an unsupported character; \
+         generated builtin relations reconstruct SQL via string \
+         concatenation and assume names contain no quotes or backslashes"
+    );
+}
+
 pub(super) const PUBLIC_SELECT: MzAclItem = MzAclItem {
     grantee: RoleId::Public,
     grantor: MZ_SYSTEM_ROLE_ID,
@@ -835,6 +846,32 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION: LazyLock<SystemObject
         schema_name: MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY.schema.to_string(),
         object_type: CatalogItemType::Table,
         object_name: MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY.name.to_string(),
+    });
+
+/// Identifies [`MZ_OBJECT_HYDRATION_HISTORY`] for the schema-migration guard.
+pub static MZ_OBJECT_HYDRATION_HISTORY_DESCRIPTION: LazyLock<SystemObjectDescription> =
+    LazyLock::new(|| SystemObjectDescription {
+        schema_name: MZ_OBJECT_HYDRATION_HISTORY.schema.to_string(),
+        object_type: CatalogItemType::Table,
+        object_name: MZ_OBJECT_HYDRATION_HISTORY.name.to_string(),
+    });
+
+/// Identifies [`MZ_REPLICA_HYDRATION_HISTORY`] for the schema-migration guard.
+pub static MZ_REPLICA_HYDRATION_HISTORY_DESCRIPTION: LazyLock<SystemObjectDescription> =
+    LazyLock::new(|| SystemObjectDescription {
+        schema_name: MZ_REPLICA_HYDRATION_HISTORY.schema.to_string(),
+        object_type: CatalogItemType::Table,
+        object_name: MZ_REPLICA_HYDRATION_HISTORY.name.to_string(),
+    });
+
+/// Identifies [`MZ_CLUSTER_REPLICA_FRONTIERS`] for the schema-migration guard in
+/// `builtin_schema_migration.rs`, which forbids migrating this source because the 0dt
+/// caught-up gate reads the leader's shard for it to learn the live frontiers.
+pub static MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION: LazyLock<SystemObjectDescription> =
+    LazyLock::new(|| SystemObjectDescription {
+        schema_name: MZ_CLUSTER_REPLICA_FRONTIERS.schema.to_string(),
+        object_type: CatalogItemType::Source,
+        object_name: MZ_CLUSTER_REPLICA_FRONTIERS.name.to_string(),
     });
 pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SYSTEM_ROLE_ID,
@@ -1090,6 +1127,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Log(&MZ_COMPUTE_EXPORTS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER),
         Builtin::Log(&MZ_CLUSTER_PROMETHEUS_METRICS),
+        Builtin::Log(&MZ_CLUSTER_REPLICA_RESOURCE_USAGE),
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_RAW),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW),
@@ -1110,14 +1148,16 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_KAFKA_SINKS),
         Builtin::MaterializedView(&MZ_KAFKA_CONNECTIONS),
         Builtin::MaterializedView(&MZ_KAFKA_SOURCES),
-        Builtin::Table(&MZ_OBJECT_DEPENDENCIES),
+        // mz_object_dependencies_raw is generated dynamically below with inlined
+        // builtin VALUES and inserted directly before this entry.
+        Builtin::MaterializedView(&MZ_OBJECT_DEPENDENCIES),
         Builtin::MaterializedView(&MZ_ICEBERG_SINKS),
         Builtin::MaterializedView(&MZ_DATABASES),
         Builtin::MaterializedView(&MZ_SCHEMAS),
         Builtin::Table(&MZ_COLUMNS),
         // mz_indexes is generated dynamically below with inlined builtin VALUES.
         Builtin::Table(&MZ_INDEX_COLUMNS),
-        Builtin::Table(&MZ_TABLES),
+        Builtin::MaterializedView(&MZ_TABLES),
         // mz_sources is generated dynamically below with inlined builtin VALUES.
         Builtin::Table(&MZ_SOURCE_REFERENCES),
         Builtin::MaterializedView(&MZ_POSTGRES_SOURCES),
@@ -1126,7 +1166,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_SQL_SERVER_SOURCE_TABLES),
         Builtin::MaterializedView(&MZ_KAFKA_SOURCE_TABLES),
         Builtin::MaterializedView(&MZ_SINKS),
-        Builtin::Table(&MZ_VIEWS),
+        Builtin::MaterializedView(&MZ_VIEWS),
         Builtin::Table(&MZ_TYPES),
         Builtin::Table(&MZ_TYPE_PG_METADATA),
         Builtin::Table(&MZ_ARRAY_TYPES),
@@ -1172,6 +1212,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_SYSTEM_PRIVILEGES),
         Builtin::MaterializedView(&MZ_COMMENTS),
         Builtin::Table(&MZ_WEBHOOKS_SOURCES),
+        Builtin::MaterializedView(&MZ_METRIC_SINKS),
         Builtin::Table(&MZ_HISTORY_RETENTION_STRATEGIES),
         Builtin::MaterializedView(&MZ_MATERIALIZED_VIEWS),
         Builtin::Table(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
@@ -1372,6 +1413,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Source(&MZ_MATERIALIZED_VIEW_REFRESHES),
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::View(&MZ_MATERIALIZATION_DEPENDENCIES),
+        Builtin::View(&MZ_OBJECT_GRAPH_EDGES),
         Builtin::View(&MZ_MATERIALIZATION_LAG),
         Builtin::View(&MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW),
         Builtin::View(&MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_3H),
@@ -1418,6 +1460,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_ROLES_IND),
         Builtin::Index(&MZ_SOURCES_IND),
         Builtin::Index(&MZ_SINKS_IND),
+        Builtin::Index(&MZ_METRIC_SINKS_IND),
         Builtin::Index(&MZ_MATERIALIZED_VIEWS_IND),
         Builtin::Index(&MZ_SOURCE_STATUSES_IND),
         Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
@@ -1437,6 +1480,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_OBJECT_DEPENDENCIES_IND),
         Builtin::Index(&MZ_COMPUTE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND),
+        Builtin::Index(&MZ_OBJECT_GRAPH_EDGES_IND),
         Builtin::Index(&MZ_FRONTIERS_IND),
         Builtin::Index(&MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY_IND),
         Builtin::Index(&MZ_KAFKA_SOURCES_IND),
@@ -1463,6 +1507,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_INDEX_ADVICE),
         Builtin::View(&MZ_MCP_DATA_PRODUCTS),
         Builtin::View(&MZ_MCP_DATA_PRODUCT_DETAILS),
+        Builtin::Table(&MZ_OBJECT_HYDRATION_HISTORY),
+        Builtin::Table(&MZ_REPLICA_HYDRATION_HISTORY),
     ];
 
     builtin_items.extend(notice::builtins());
@@ -1520,6 +1566,38 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
             .position(|b| matches!(b, Builtin::Table(t) if t.name == "mz_index_columns"))
             .expect("mz_index_columns must be present in builtin_items");
         builtin_items.insert(insert_pos, Builtin::MaterializedView(mz_indexes_ref));
+    }
+
+    // Generate mz_object_dependencies_raw, which inlines every builtin's
+    // dependency edges as VALUES.
+    //
+    // It has to run before ontology::generate_views and builtin::builtins, because those consume
+    // mz_object_dependencies. However, because the views those two generators produce
+    // have dependency edges of their own, it must use them as inputs. So this block runs both
+    // generators early, keeps the edges of the views they hand back, and discards the views
+    // themselves. The real ones are built below.
+    {
+        let ontology_preview = ontology::generate_views(&builtin_items);
+        let builtin_reporter_preview: Vec<_> = builtin::builtins(&builtin_items).collect();
+        let generator_input: Vec<_> = builtin_types
+            .iter()
+            .chain(builtin_funcs.iter())
+            .chain(builtin_reporter_preview.iter())
+            .chain(builtin_items.iter())
+            .chain(ontology_preview.iter())
+            .cloned()
+            .collect();
+        let mz_object_dependencies_raw =
+            mz_object_dependencies::make_mz_object_dependencies_raw(&generator_input);
+        let mz_object_dependencies_raw_ref: &'static BuiltinView =
+            Box::leak(Box::new(mz_object_dependencies_raw));
+        // The view goes directly before mz_object_dependencies, which reads it,
+        // because BUILTINS_STATIC must list dependencies before their dependents.
+        let insert_pos = builtin_items
+            .iter()
+            .position(|b| b.name() == "mz_object_dependencies")
+            .expect("mz_object_dependencies must be present in builtin_items");
+        builtin_items.insert(insert_pos, Builtin::View(mz_object_dependencies_raw_ref));
     }
 
     // Generate ontology views by enumerating existing builtins.
@@ -1630,6 +1708,112 @@ mod tests {
     use mz_sql_parser::ast::{Raw, RawItemName, UnresolvedItemName};
 
     use super::*;
+
+    /// Recomputes `mz_pgrepr::regproc::NAMES` from the builtin function registry
+    /// and fails when the checked-in copy has drifted. It is checked in as data
+    /// because `mz-pgrepr` sits below this crate in the dependency graph and so
+    /// cannot read the registry itself.
+    ///
+    /// Run with `REWRITE=1` to splice the recomputed table back into
+    /// `src/pgrepr-consts/src/regproc.rs`.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn test_regproc_names_match_builtin_functions() {
+        // `effective_search_path` unconditionally prepends these two, so a
+        // uniquely named function in either resolves from its bare name.
+        const IMPLICITLY_SEARCHED: &[&str] = &[MZ_CATALOG_SCHEMA, PG_CATALOG_SCHEMA];
+
+        // A bare name only identifies one OID when exactly one impl anywhere in
+        // the registry carries it, so count impls across schemas.
+        let mut impls_per_name: BTreeMap<&str, usize> = BTreeMap::new();
+        for func in BUILTINS::funcs() {
+            *impls_per_name.entry(func.name).or_default() += func.inner.func_impls().len();
+        }
+
+        let mut expected: BTreeMap<u32, String> = BTreeMap::new();
+        for func in BUILTINS::funcs() {
+            // Mirrors PostgreSQL's `regprocout`, which qualifies a name that
+            // would not resolve back to this OID on its own.
+            let rendered =
+                if impls_per_name[func.name] == 1 && IMPLICITLY_SEARCHED.contains(&func.schema) {
+                    func.name.to_string()
+                } else {
+                    format!("{}.{}", func.schema, func.name)
+                };
+            for details in func.inner.func_impls() {
+                let previous = expected.insert(details.oid, rendered.clone());
+                assert_eq!(
+                    previous, None,
+                    "two builtin functions share OID {}",
+                    details.oid
+                );
+            }
+        }
+
+        let table: String = expected
+            .iter()
+            .map(|(oid, name)| format!("    ({}, \"{}\"),\n", oid, name))
+            .collect();
+
+        if std::env::var_os("REWRITE").is_some() {
+            rewrite_regproc_names(&table);
+            return;
+        }
+
+        let actual: BTreeMap<u32, String> = mz_pgrepr::regproc::NAMES
+            .iter()
+            .map(|(oid, name)| (*oid, name.to_string()))
+            .collect();
+
+        if actual != expected {
+            panic!(
+                "mz_pgrepr::regproc::NAMES has drifted from the builtin function \
+                 registry. Regenerate it with:\n\n    \
+                 REWRITE=1 cargo test -p mz-catalog \
+                 test_regproc_names_match_builtin_functions\n"
+            );
+        }
+    }
+
+    /// Replaces the generated region of `mz_pgrepr::regproc::NAMES` with
+    /// `table`, leaving every other byte of the file alone.
+    ///
+    /// The path is relative to this crate's directory, which is the working
+    /// directory `cargo test` runs in.
+    ///
+    /// A splice anchored anywhere but the table would clobber the lookup
+    /// functions below it, so both markers have to appear exactly once.
+    fn rewrite_regproc_names(table: &str) {
+        const PATH: &str = "../pgrepr-consts/src/regproc.rs";
+        const BEGIN: &str = "    // BEGIN GENERATED\n";
+        const END: &str = "    // END GENERATED\n";
+
+        let contents =
+            std::fs::read_to_string(PATH).unwrap_or_else(|e| panic!("reading '{PATH}': {e}"));
+        for marker in [BEGIN, END] {
+            let count = contents.matches(marker).count();
+            assert_eq!(
+                count,
+                1,
+                "'{}' appears {} times in '{}', expected exactly once",
+                marker.trim(),
+                count,
+                PATH
+            );
+        }
+        let begin = contents.find(BEGIN).expect("checked above") + BEGIN.len();
+        let end = contents.find(END).expect("checked above");
+        assert!(
+            begin <= end,
+            "'{}' precedes '{}' in '{}'",
+            END.trim(),
+            BEGIN.trim(),
+            PATH
+        );
+
+        let rewritten = format!("{}{}{}", &contents[..begin], table, &contents[end..]);
+        std::fs::write(PATH, rewritten).unwrap_or_else(|e| panic!("writing '{PATH}': {e}"));
+    }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
@@ -1865,8 +2049,8 @@ mod tests {
         // avoid noise.
         //
         // Exemptions:
-        // - Column at index 0 named "id": almost always the entity's own PK,
-        //   not a FK (e.g. mz_objects.id, mz_functions.id).
+        // - Column at index 0 named "id": almost always the entity's own PK, not a FK (e.g.
+        //   mz_objects.id, mz_functions.id).
         // - Columns in the relation's declared key set.
         //
         // "Reference" types are ID types that imply a FK. Discriminators
@@ -2288,6 +2472,42 @@ mod tests {
             fp_base,
             Fingerprint::fingerprint(&&mv_extra_log),
             "mz_indexes fingerprint must change when a builtin log is added"
+        );
+    }
+
+    /// Because `mz_object_dependencies_raw`` is built from prior copies of the ontology and builtin
+    /// reporter views to get their edges since they must be built afterwards. Thus we test
+    /// that regenerating the view using all builtins (excluding itself) equals the SQL of the real
+    /// view.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // slow: parses every builtin's SQL twice
+    fn test_mz_object_dependencies_raw_sql_is_stable() {
+        let without_self: Vec<Builtin<NameReference>> = BUILTINS_STATIC
+            .iter()
+            .filter(|b| {
+                !matches!(b, Builtin::View(v) if v.name == mz_object_dependencies::MZ_OBJECT_DEPENDENCIES_RAW)
+            })
+            .cloned()
+            .collect();
+
+        let regenerated = mz_object_dependencies::make_mz_object_dependencies_raw(&without_self);
+
+        let from_static = BUILTINS_STATIC
+            .iter()
+            .find_map(|b| match b {
+                Builtin::View(v)
+                    if v.name == mz_object_dependencies::MZ_OBJECT_DEPENDENCIES_RAW =>
+                {
+                    Some(*v)
+                }
+                _ => None,
+            })
+            .expect("mz_object_dependencies_raw must be present in BUILTINS_STATIC");
+
+        assert_eq!(
+            regenerated.sql, from_static.sql,
+            "regenerating mz_object_dependencies_raw from the final builtin \
+             list must reproduce the SQL generated during static init"
         );
     }
 }

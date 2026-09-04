@@ -19,9 +19,10 @@ use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
 use crate::ast::{
     AstInfo, CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
-    CreateTableStatement, CreateViewStatement, CreateWebhookSourceStatement, Expr, Ident, Query,
-    Raw, RawDataType, RawItemName, Statement, UnresolvedItemName, ViewDefinition,
+    CreateMetricSinkStatement, CreateSecretStatement, CreateSinkStatement, CreateSourceStatement,
+    CreateSubsourceStatement, CreateTableStatement, CreateViewStatement,
+    CreateWebhookSourceStatement, Expr, Ident, Query, Raw, RawDataType, RawItemName, Statement,
+    UnresolvedItemName, ViewDefinition,
 };
 use crate::names::FullItemName;
 
@@ -41,6 +42,7 @@ pub fn create_stmt_rename_schema_refs(
         | stmt @ Statement::CreateSource(_)
         | stmt @ Statement::CreateSubsource(_)
         | stmt @ Statement::CreateSink(_)
+        | stmt @ Statement::CreateMetricSink(_)
         | stmt @ Statement::CreateView(_)
         | stmt @ Statement::CreateMaterializedView(_)
         | stmt @ Statement::CreateTable(_)
@@ -219,6 +221,9 @@ pub fn create_stmt_rename_refs(
             maybe_update_item_name(on_name.name_mut());
         }
         Statement::CreateSink(CreateSinkStatement { from, .. }) => {
+            maybe_update_item_name(from.name_mut());
+        }
+        Statement::CreateMetricSink(CreateMetricSinkStatement { from, .. }) => {
             maybe_update_item_name(from.name_mut());
         }
         Statement::CreateTableFromSource(CreateTableFromSourceStatement { source, .. }) => {

@@ -131,7 +131,7 @@ impl SlotAllocator {
 
     /// Returns a previously allocated slot to the warm or cold free list.
     fn free(&mut self, slot: u32, warm: bool) {
-        debug_assert!(slot < self.high_water);
+        crate::soft_assert_no_log!(slot < self.high_water);
         if warm {
             self.free_warm.push(slot);
         } else {
@@ -229,12 +229,9 @@ impl Region {
 
     /// Allocates a slot index, or `None` if every slot of the class is in
     /// use; the flag reports whether the slot came from the warm list (its
-    /// pages are resident; writing it faults nothing).
-    ///
-    /// Slots are scoped to residency (eviction frees them), so demand scales
-    /// with the *resident* set — bounded by the pool budget plus in-flight
-    /// slack — and exhaustion means residency outgrew the class reservation;
-    /// callers degrade rather than fail.
+    /// pages are resident; writing it faults nothing). Exhaustion means
+    /// residency outgrew the class reservation; callers degrade rather
+    /// than fail.
     pub(crate) fn alloc(&self) -> Option<(u32, bool)> {
         self.slots
             .lock()
@@ -296,7 +293,7 @@ impl Region {
     /// The base address of a slot, fixed while its owning chunk is resident.
     pub(crate) fn slot_ptr(&self, slot: u32) -> *mut u8 {
         let offset = usize::cast_from(slot) * self.class_size;
-        debug_assert!(offset + self.class_size <= self.capacity);
+        crate::soft_assert_no_log!(offset + self.class_size <= self.capacity);
         // SAFETY: `slot` was handed out by `alloc`, so `offset + class_size`
         // lies within the single `capacity`-byte mapping that `base` points
         // to; the add stays in bounds of one allocated object.
@@ -440,7 +437,7 @@ pub(crate) mod fake_residency {
 /// and both `addr + offset` and `sub_len` are `page`-aligned.
 #[cfg_attr(miri, allow(dead_code))]
 fn aligned_subrange(addr: usize, len: usize, page: usize) -> Option<(usize, usize)> {
-    debug_assert!(page.is_power_of_two());
+    crate::soft_assert_no_log!(page.is_power_of_two());
     let start = addr.checked_add(page - 1)? & !(page - 1);
     let end = addr.checked_add(len)? & !(page - 1);
     (start < end).then(|| (start - addr, end - start))
@@ -457,7 +454,7 @@ fn aligned_subrange(addr: usize, len: usize, page: usize) -> Option<(usize, usiz
 /// unmappable) — proved by the Kani harnesses.
 #[cfg_attr(miri, allow(dead_code))]
 fn align_trim(addr: usize, map_len: usize, len: usize, align: usize) -> Option<(usize, usize)> {
-    debug_assert!(align.is_power_of_two());
+    crate::soft_assert_no_log!(align.is_power_of_two());
     let aligned = addr.checked_next_multiple_of(align)?;
     let head = aligned - addr;
     let tail = map_len.checked_sub(head.checked_add(len)?)?;
@@ -505,7 +502,7 @@ mod sys {
     /// fragmentation).
     pub(super) fn map(len: usize, align: usize) -> io::Result<*mut u8> {
         let page = page_size();
-        debug_assert!(len % page == 0 && align % page == 0);
+        crate::soft_assert_no_log!(len % page == 0 && align % page == 0);
         #[cfg(target_os = "linux")]
         let flags = libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE;
         #[cfg(not(target_os = "linux"))]

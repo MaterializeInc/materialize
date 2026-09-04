@@ -93,6 +93,10 @@
     - `k8s_apiserver_authorized_networks`: List of CIDR
       blocks allowed to access your cluster endpoint. If unset, defaults to
       `["0.0.0.0/0"]` (<red>**all**</red> IPv4 addresses on the internet).
+    - `enable_observability`: Flag that determines whether to deploy the
+      monitoring stack (Grafana, metrics, and logs) alongside Materialize.
+      Defaults to `false` in the `simple` example. See
+      [Grafana](/manage/monitor/self-managed/grafana/).
 
     {{< note >}}
     Refer to your organization's security practices to set these values accordingly.

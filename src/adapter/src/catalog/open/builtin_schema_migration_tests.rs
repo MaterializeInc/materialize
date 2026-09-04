@@ -27,6 +27,25 @@ use tracing::info;
 
 use super::*;
 
+#[mz_ore::test]
+fn hydration_history_forced_migration_policy() {
+    for table in [
+        &*MZ_OBJECT_HYDRATION_HISTORY,
+        &*MZ_REPLICA_HYDRATION_HISTORY,
+    ] {
+        let hydration_history = Builtin::Table(table);
+
+        assert!(participates_in_forced_migration(
+            &hydration_history,
+            Mechanism::Evolution
+        ));
+        assert!(!participates_in_forced_migration(
+            &hydration_history,
+            Mechanism::Replacement
+        ));
+    }
+}
+
 #[test] // allow(test-attribute)
 #[cfg_attr(miri, ignore)] // too slow
 fn test_builtin_schema_migration() {
@@ -408,6 +427,7 @@ fn init_persist(sim: &mut turmoil::Sim) -> PersistLocation {
 /// needs a catalog already on disk to reproduce, so the default CI suite never
 /// sees it and only the upgrade nightly does. Much cheaper to catch here.
 #[mz_ore::test]
+#[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_migration_steps_resolve_to_builtins() {
     for step in MIGRATIONS.iter() {
         assert!(

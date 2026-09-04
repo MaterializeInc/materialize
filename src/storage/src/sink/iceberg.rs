@@ -134,6 +134,7 @@ use mz_persist_client::Diagnostics;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_row_spine::ArcBatch;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
@@ -926,6 +927,20 @@ async fn load_or_create_table(
         Ok(table) => {
             // Table exists, return it
             // TODO: Add proper schema evolution/validation to ensure compatibility
+            let current_schema = table.metadata().current_schema();
+            if !(current_schema.as_struct().eq(schema.as_struct())
+                && current_schema
+                    .identifier_field_ids()
+                    .eq(schema.identifier_field_ids()))
+            {
+                anyhow::bail!(
+                    "Iceberg table '{}' schema does not match expected schema. \
+                     Current schema: {:?}, expected schema: {:?}",
+                    table_name,
+                    current_schema,
+                    schema
+                );
+            }
             Ok(table)
         }
         Err(err) => {
@@ -1134,9 +1149,13 @@ fn mint_batch_descriptions<'scope>(
                 return Ok(());
             }
 
+            let table_ident = TableIdent::new(
+                NamespaceIdent::new(connection.namespace.clone()),
+                connection.table.clone(),
+            );
             let catalog = connection
                 .catalog_connection
-                .connect(&storage_configuration, InTask::Yes)
+                .connect(&storage_configuration, InTask::Yes, Some(&table_ident))
                 .await
                 .with_context(|| {
                     format!(
@@ -1470,6 +1489,38 @@ struct BoundedDataFileSet {
     pub data_files: Vec<BoundedDataFile>,
 }
 
+/// Returns the base location for the table's data files, with no trailing separator.
+///
+/// `configured_path` is the catalog's `write.data.path`, or `write.folder-storage.path` where
+/// only the older property is set. `location` is the table's own location, used when the catalog
+/// configures neither.
+///
+/// The result never ends in `/`. Callers join it with a `/` and a file name, and the joined URI
+/// is what lands in the manifest, so a separator left on the end here produces a manifest entry
+/// naming an object that was never written.
+fn data_file_location(configured_path: Option<&str>, location: &str) -> String {
+    // Both properties may legally end in `/`. `DefaultLocationGenerator` stores the value
+    // verbatim and `generate_location` appends `/` plus the file name, so `s3://b/t/data/`
+    // yields `s3://b/t/data//f.parquet`. OpenDAL collapses the `//` when it writes the object,
+    // but the Parquet writer copies the unnormalized URI into the `DataFile`, leaving the
+    // manifest pointing at a key that does not exist and the table unreadable to anyone else.
+    // The reference Iceberg location provider strips them for this reason.
+    if let Some(path) = configured_path {
+        return path.trim_end_matches('/').to_string();
+    }
+
+    // WORKAROUND: S3 Tables catalog incorrectly sets location to the metadata file path
+    // instead of the warehouse root. Strip off the /metadata/*.metadata.json suffix. No
+    // clear way to detect this properly right now, so we use heuristics.
+    let corrected_location = match location.rsplit_once("/metadata/") {
+        Some((a, b)) if b.ends_with(".metadata.json") => a,
+        _ => location,
+    };
+    // Trimmed before the join, not after, or a location ending in `/` moves the doubled
+    // separator into the middle of the URI where a trailing trim cannot reach it.
+    format!("{}/data", corrected_location.trim_end_matches('/'))
+}
+
 /// Construct the envelope-specific closures that [`write_data_files`] needs.
 ///
 /// Write rows into Parquet data files bounded by batch descriptions.
@@ -1509,9 +1560,11 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
         .build_fallible(move |caps| {
             Box::pin(async move {
                 let [capset]: &mut [_; 1] = caps.try_into().unwrap();
+                let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
+                let table_ident = TableIdent::new(namespace_ident, connection.table.clone());
                 let catalog = connection
                     .catalog_connection
-                    .connect(&storage_configuration, InTask::Yes)
+                    .connect(&storage_configuration, InTask::Yes, Some(&table_ident))
                     .await
                     .with_context(|| {
                         format!(
@@ -1522,8 +1575,6 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                         )
                     })?;
 
-                let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
-                let table_ident = TableIdent::new(namespace_ident, connection.table.clone());
                 while let Some(_) = table_ready_input.next().await {
                     // Wait for table to be ready
                 }
@@ -1548,16 +1599,24 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                     .context("Failed to merge Materialize metadata into Iceberg schema")?,
                 );
 
-                // WORKAROUND: S3 Tables catalog incorrectly sets location to the metadata file path
-                // instead of the warehouse root. Strip off the /metadata/*.metadata.json suffix.
-                // No clear way to detect this properly right now, so we use heuristics.
-                let location = table_metadata.location();
-                let corrected_location = match location.rsplit_once("/metadata/") {
-                    Some((a, b)) if b.ends_with(".metadata.json") => a,
-                    _ => location,
-                };
-
-                let data_location = format!("{}/data", corrected_location);
+                // A catalog that manages where data files live advertises it through
+                // `write.data.path`. Honor it: catalogs backing an Iceberg table with
+                // their own storage layout reject a commit whose data files sit outside
+                // that path. Unity Catalog, for one, has to register the files in the
+                // Delta log that actually backs the table, and answers a commit
+                // referencing files under `<location>/data` with a 500.
+                //
+                // `DefaultLocationGenerator::new` reads these same properties, but its
+                // fallback misses the S3 Tables correction, so choose explicitly.
+                let properties = table_metadata.properties();
+                let configured_path = properties
+                    .get("write.data.path")
+                    .or_else(|| properties.get("write.folder-storage.path"));
+                let data_location = data_file_location(
+                    configured_path.map(String::as_str),
+                    table_metadata.location(),
+                );
+                debug!(%data_location, "iceberg sink data file location");
                 let location_generator =
                     DefaultLocationGenerator::with_data_location(data_location);
 
@@ -1588,7 +1647,7 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                 // Rows can arrive before their batch description due to dataflow parallelism.
                 // Stash them until we know which batch they belong to.
                 // Keyed by the lower bound (per arrangement batch) of the rows.
-                let mut stashed_rows: VecDeque<Rc<OrdValBatch<_>>> = VecDeque::new();
+                let mut stashed_rows: VecDeque<ArcBatch<OrdValBatch<_>>> = VecDeque::new();
 
                 // Track batches currently being written. When a row arrives, we check if it belongs
                 // to an in-flight batch. When frontiers advance to a batch's upper, we close the
@@ -1682,7 +1741,7 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                                     last_input_bounds =
                                         Some((rows.lower().clone(), rows.upper().clone()));
 
-                                    stashed_rows.push_back(Rc::clone(rows));
+                                    stashed_rows.push_back(rows.clone());
                                 }
                             }
                             Event::Progress(frontier) => {
@@ -1829,7 +1888,7 @@ type BatchDescription = (Antichain<Timestamp>, Antichain<Timestamp>);
 /// are in order and non-overlapping.
 async fn with_ready_batches<L: Layout, W, Write, Close>(
     input_frontier: Antichain<Timestamp>,
-    input_batches: &mut VecDeque<Rc<OrdValBatch<L>>>,
+    input_batches: &mut VecDeque<ArcBatch<OrdValBatch<L>>>,
     output_frontier: Antichain<Timestamp>,
     output_batches: &mut VecDeque<(BatchDescription, W)>,
     mut write_rows: Write,
@@ -1909,10 +1968,84 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use iceberg::spec::{PrimitiveType, Type};
+    use iceberg::writer::file_writer::location_generator::LocationGenerator;
     use mz_repr::SqlScalarType;
     use mz_storage_types::sinks::ICEBERG_UINT64_DECIMAL_PRECISION;
+
+    use super::*;
+
+    /// The URI a data file is committed under, as the manifest records it.
+    fn manifest_uri(configured_path: Option<&str>, location: &str) -> String {
+        let data_location = data_file_location(configured_path, location);
+        DefaultLocationGenerator::with_data_location(data_location)
+            .generate_location(None, "part-00000.parquet")
+    }
+
+    /// Asserts the URI addresses exactly one object, i.e. it survives the path normalization
+    /// the object store applies before writing. An empty path segment would make the manifest
+    /// name a key that was never written.
+    fn assert_addresses_one_object(uri: &str) {
+        let path = uri
+            .split_once("://")
+            .map(|(_scheme, path)| path)
+            .unwrap_or(uri);
+        assert!(
+            !path.contains("//"),
+            "URI has an empty path segment, so it does not name the object written: {uri}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_data_file_location_trims_configured_path() {
+        // The property the catalog set is honored as-is when it carries no trailing separator.
+        assert_eq!(
+            manifest_uri(Some("s3://bucket/tbl/data"), "s3://bucket/tbl"),
+            "s3://bucket/tbl/data/part-00000.parquet"
+        );
+
+        // A trailing separator is valid in the property, and must not reach the manifest.
+        for configured in [
+            "s3://bucket/tbl/data/",
+            "s3://bucket/tbl/data//",
+            "s3://bucket/tbl/data///",
+        ] {
+            let uri = manifest_uri(Some(configured), "s3://bucket/tbl");
+            assert_addresses_one_object(&uri);
+            assert_eq!(uri, "s3://bucket/tbl/data/part-00000.parquet");
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_data_file_location_trims_table_location() {
+        // With no property set, the data directory hangs off the table location.
+        assert_eq!(
+            manifest_uri(None, "s3://bucket/tbl"),
+            "s3://bucket/tbl/data/part-00000.parquet"
+        );
+
+        // A table location ending in `/` would otherwise double the separator mid-URI, where
+        // trimming the end of the joined string could not fix it.
+        let uri = manifest_uri(None, "s3://bucket/tbl/");
+        assert_addresses_one_object(&uri);
+        assert_eq!(uri, "s3://bucket/tbl/data/part-00000.parquet");
+    }
+
+    #[mz_ore::test]
+    fn test_data_file_location_corrects_s3_tables_metadata_path() {
+        // S3 Tables reports the metadata file as the table location; the data directory has to
+        // hang off the warehouse root instead.
+        assert_eq!(
+            data_file_location(None, "s3://bucket/tbl/metadata/00001-abc.metadata.json"),
+            "s3://bucket/tbl/data"
+        );
+
+        // A path that merely contains `/metadata/` is not a metadata file and is left alone.
+        assert_eq!(
+            data_file_location(None, "s3://bucket/metadata/tbl"),
+            "s3://bucket/metadata/tbl/data"
+        );
+    }
 
     #[mz_ore::test]
     fn test_iceberg_type_overrides() {
@@ -2148,9 +2281,9 @@ mod tests {
 
         /// An input batch with the given bounds. The pairing logic under test
         /// only looks at bounds, so the batch holds no data.
-        fn input(lower: u64, upper: Option<u64>) -> Rc<TestBatch> {
+        fn input(lower: u64, upper: Option<u64>) -> ArcBatch<TestBatch> {
             let (lower, upper) = span(lower, upper);
-            Rc::new(TestBatch::empty(lower, upper))
+            ArcBatch(Arc::new(TestBatch::empty(lower, upper)))
         }
 
         #[derive(Debug, PartialEq)]
@@ -2164,7 +2297,7 @@ mod tests {
         /// sequence of calls it made.
         async fn run(
             input_frontier: Antichain<Timestamp>,
-            input_batches: &mut VecDeque<Rc<TestBatch>>,
+            input_batches: &mut VecDeque<ArcBatch<TestBatch>>,
             output_frontier: Antichain<Timestamp>,
             output_batches: &mut VecDeque<(BatchDescription, ())>,
         ) -> Vec<Call> {
@@ -2393,9 +2526,11 @@ fn commit_to_iceberg<'scope>(
                 return Ok(());
             }
 
+            let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
+            let table_ident = TableIdent::new(namespace_ident, connection.table.clone());
             let catalog = connection
                 .catalog_connection
-                .connect(&storage_configuration, InTask::Yes)
+                .connect(&storage_configuration, InTask::Yes, Some(&table_ident))
                 .await
                 .with_context(|| {
                     format!(
@@ -2406,8 +2541,6 @@ fn commit_to_iceberg<'scope>(
 
             let mut write_handle = write_handle.await?;
 
-            let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
-            let table_ident = TableIdent::new(namespace_ident, connection.table.clone());
             while let Some(_) = table_ready_input.next().await {
                 // Wait for table to be ready
             }

@@ -1,6 +1,6 @@
 ---
 source: src/txn-wal/src/txn_cache.rs
-revision: a55caae279
+revision: f0cdedca04
 ---
 
 # mz-txn-wal::txn_cache

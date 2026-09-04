@@ -20,7 +20,7 @@ use mz_expr::{
 };
 use mz_ore::{assert_none, soft_assert_eq_or_log, soft_panic_or_log};
 use mz_repr::optimize::OptimizerFeatures;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{GlobalId, StableRow, Timestamp};
 
 use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
@@ -379,7 +379,7 @@ impl Context {
                 let node = LirRelationNode::Constant {
                     rows: rows.clone().map(|rows| {
                         rows.into_iter()
-                            .map(|(row, diff)| (row, Timestamp::MIN, diff))
+                            .map(|(row, diff)| (StableRow(row), Timestamp::MIN, diff))
                             .collect()
                     }),
                 };
@@ -442,7 +442,11 @@ impl Context {
                     // present when handling the leftover MFP after this big match.)
                     mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
                     in_keys.arranged = vec![(key.clone(), permutation.clone(), thinning.clone())];
-                    GetPlan::Arrangement(key.clone(), Some(val.clone()), mfp_mir_to_lir_plan(mfp))
+                    GetPlan::Arrangement(
+                        key.clone(),
+                        Some(StableRow(val.clone())),
+                        mfp_mir_to_lir_plan(mfp),
+                    )
                 } else if !mfp.is_identity() {
                     // We need to ensure a collection exists, which means we must form it.
                     if let Some((key, permutation, thinning)) =
@@ -1421,7 +1425,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     plan = LirRelationNode::Mfp {
                         input: Box::new(plan),
                         mfp: mfp_mir_to_lir_plan(mfp),
-                        input_key_val: Some((key.clone(), val)),
+                        input_key_val: Some((key.clone(), val.map(StableRow))),
                     }
                     .as_plan(lir_id)
                 }
@@ -1430,7 +1434,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 plan = LirRelationNode::Mfp {
                     input: Box::new(plan),
                     mfp: mfp_mir_to_lir_plan(mfp),
-                    input_key_val,
+                    input_key_val: input_key_val.map(|(key, val)| (key, val.map(StableRow))),
                 }
                 .as_plan(lir_id);
                 keys = AvailableCollections::new_raw();

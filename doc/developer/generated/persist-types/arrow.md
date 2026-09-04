@@ -1,6 +1,6 @@
 ---
 source: src/persist-types/src/arrow.rs
-revision: 25802a51f9
+revision: f0cdedca04
 ---
 
 # persist-types::arrow

@@ -337,6 +337,21 @@ def get_baseline_and_other_endpoints(
                 resolved_target = resolve_ancestor_image_tag(
                     ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS
                 )
+
+                if resolved_target is None:
+                    # No comparable ancestor image exists. The common case is
+                    # an accepted regression that landed on main and demands a
+                    # baseline newer than any published release (see
+                    # ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS); only
+                    # release images share HEAD's build profile, so there is
+                    # nothing fair to measure against until that release ships.
+                    # Drop the target and keep benchmarking the remaining ones,
+                    # so the measurements still reach test analytics.
+                    print(
+                        f"Skipping target {specified_target}: no ancestor image could be resolved"
+                    )
+                    continue
+
             endpoint = MaterializeContainer(
                 composition=c,
                 specified_target=specified_target,
@@ -384,7 +399,7 @@ def report_regression_result(
     outcome: ComparisonOutcome,
 ) -> None:
     if baseline_endpoint is None:
-        print("No regression detection because '--regression-against' param is not set")
+        print("No regression detection because there is no baseline endpoint")
         return
 
     baseline_desc = endpoint_name_to_description(baseline_endpoint.try_load_version())
@@ -410,7 +425,7 @@ def report_assessment(regression_assessment: RegressionAssessment):
     print("+++ Assessment of regressions")
 
     if not regression_assessment.has_comparison_target():
-        print("No comparison was performed because not baseline was specified")
+        print("No comparison was performed because there is no baseline endpoint")
         return
 
     assert regression_assessment.baseline_endpoint is not None

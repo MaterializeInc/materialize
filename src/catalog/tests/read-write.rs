@@ -9,14 +9,14 @@
 
 #![recursion_limit = "256"]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use insta::assert_debug_snapshot;
 use itertools::Itertools;
 use mz_audit_log::{EventDetails, EventType, EventV1, IdNameV1, VersionedEvent};
 use mz_catalog::durable::objects::serialization::proto;
-use mz_catalog::durable::objects::{DurableType, IdAlloc};
+use mz_catalog::durable::objects::{Comment, DurableType, IdAlloc};
 use mz_catalog::durable::{
     CatalogError, Database, DurableCatalogError, FenceError, Item, Metrics,
     TestCatalogStateBuilder, USER_ITEM_ALLOC_KEY, test_bootstrap_args,
@@ -25,12 +25,14 @@ use mz_ore::assert_ok;
 use mz_ore::collections::HashSet;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-use mz_persist_client::PersistClient;
+use mz_persist_client::{PersistClient, ShardId};
 use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
 use mz_sql::catalog::{RoleAttributesRaw, RoleMembership, RoleVars};
-use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
+use mz_sql::names::{CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
+use mz_storage_client::controller::StorageTxn;
+use uuid::Uuid;
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
@@ -453,6 +455,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             owner_id: RoleId::User(1),
             privileges: vec![],
             extra_versions: BTreeMap::new(),
+            ephemeral_owner_session: None,
         },
         Item {
             id: CatalogItemId::User(200),
@@ -464,6 +467,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             owner_id: RoleId::User(2),
             privileges: vec![],
             extra_versions: BTreeMap::new(),
+            ephemeral_owner_session: None,
         },
     ];
 
@@ -490,6 +494,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             item.owner_id,
             item.privileges.clone(),
             item.extra_versions.clone(),
+            item.ephemeral_owner_session,
         )
         .unwrap();
     }
@@ -511,6 +516,196 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
     for item in &items {
         assert!(snapshot_items.contains(item));
     }
+    Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_ephemeral_items() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_ephemeral_items(state_builder).await;
+}
+
+/// Temporary items are durable items tagged with the UUID of the session that
+/// created them. Two properties hold them together:
+///
+/// - Name uniqueness is scoped by that tag, because every session's temporary
+///   schema shares one sentinel schema id, so without the scoping two sessions
+///   could not both hold a `tt`.
+/// - `remove_ephemeral_items` reclaims all of them and nothing else. It is what
+///   a writable catalog open uses to clean up after a crash, so an over-broad
+///   filter here would silently delete real user items.
+async fn test_ephemeral_items(state_builder: TestCatalogStateBuilder) {
+    let state_builder = state_builder.with_default_deploy_generation();
+    let session_a = Uuid::from_u128(1);
+    let session_b = Uuid::from_u128(2);
+    // The sentinel schema id that every session's temporary schema shares.
+    let temp_schema = SchemaId::User(0);
+
+    let mut state = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    // Drain initial updates.
+    let _ = state
+        .sync_to_current_updates()
+        .await
+        .expect("unable to sync");
+
+    let mut txn = state.transaction().await.unwrap();
+
+    let insert = |txn: &mut mz_catalog::durable::Transaction,
+                  id: u64,
+                  schema_id: SchemaId,
+                  name: &str,
+                  owner_session: Option<Uuid>| {
+        txn.insert_item(
+            CatalogItemId::User(id),
+            u32::try_from(20_000 + id).expect("small"),
+            GlobalId::User(id),
+            schema_id,
+            name,
+            format!("CREATE VIEW {name} AS SELECT 1"),
+            RoleId::User(1),
+            vec![],
+            BTreeMap::new(),
+            owner_session,
+        )
+    };
+
+    // A normal item, plus one temporary item per session sharing a name.
+    insert(&mut txn, 100, SchemaId::User(1), "keep", None).unwrap();
+    insert(&mut txn, 200, temp_schema, "tt", Some(session_a)).unwrap();
+    insert(&mut txn, 300, temp_schema, "tt", Some(session_b)).unwrap();
+
+    // A temporary item with an ALTER history: two global ids, one shard.
+    txn.insert_item(
+        CatalogItemId::User(500),
+        20_500,
+        GlobalId::User(500),
+        temp_schema,
+        "versioned",
+        "CREATE TABLE versioned (a int)".to_string(),
+        RoleId::User(1),
+        vec![],
+        BTreeMap::from([(RelationVersion::root().bump(), GlobalId::User(501))]),
+        Some(session_a),
+    )
+    .unwrap();
+
+    // Storage mappings like the ones `prepare_state` writes at CREATE, for
+    // the normal item, one plain temporary item, and both versions of the
+    // versioned one.
+    let keep_shard = ShardId::new();
+    let temp_shard = ShardId::new();
+    let versioned_shard = ShardId::new();
+    txn.insert_collection_metadata(BTreeMap::from([
+        (GlobalId::User(100), keep_shard),
+        (GlobalId::User(200), temp_shard),
+        (GlobalId::User(500), versioned_shard),
+        (GlobalId::User(501), versioned_shard),
+    ]))
+    .unwrap();
+
+    // Comments on a temporary and a non-temporary item.
+    txn.update_comment(
+        CommentObjectId::View(CatalogItemId::User(100)),
+        None,
+        Some("keep comment".into()),
+    )
+    .unwrap();
+    txn.update_comment(
+        CommentObjectId::View(CatalogItemId::User(200)),
+        None,
+        Some("temp comment".into()),
+    )
+    .unwrap();
+
+    // One session may not hold the same name twice, though.
+    let err = insert(&mut txn, 400, temp_schema, "tt", Some(session_a)).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Catalog(mz_sql::catalog::CatalogError::ItemAlreadyExists(_, ref name))
+                if name == "tt"
+        ),
+        "expected ItemAlreadyExists, got {err:?}"
+    );
+
+    txn.remove_ephemeral_items();
+
+    // Drain txn updates.
+    let _ = txn.get_and_commit_op_updates();
+    let commit_ts = txn.upper();
+    txn.commit(commit_ts).await.unwrap();
+
+    let snapshot_items: Vec<Item> = state
+        .snapshot()
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .map(RustType::from_proto)
+        .map_ok(|(k, v)| Item::from_key_value(k, v))
+        .collect::<Result<_, _>>()
+        .unwrap();
+
+    // Nothing ephemeral survives, and the normal item is untouched.
+    assert!(
+        !snapshot_items
+            .iter()
+            .any(|item| item.ephemeral_owner_session.is_some()),
+        "ephemeral items survived: {:?}",
+        snapshot_items
+            .iter()
+            .filter(|item| item.ephemeral_owner_session.is_some())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        snapshot_items
+            .iter()
+            .any(|item| item.id == CatalogItemId::User(100) && item.name == "keep"),
+        "non-ephemeral item was removed: {snapshot_items:?}"
+    );
+
+    // Only the non-ephemeral item's comment survives.
+    let snapshot_comments: Vec<Comment> = state
+        .snapshot()
+        .await
+        .unwrap()
+        .comments
+        .into_iter()
+        .map(RustType::from_proto)
+        .map_ok(|(k, v)| Comment::from_key_value(k, v))
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        snapshot_comments
+            .iter()
+            .map(|c| c.object_id.clone())
+            .collect::<Vec<_>>(),
+        vec![CommentObjectId::View(CatalogItemId::User(100))],
+        "comments on ephemeral items survived: {snapshot_comments:?}"
+    );
+
+    // The ephemeral items' storage mappings moved to the finalization WAL,
+    // deduped to one shard per item. The non-ephemeral mapping is untouched.
+    let txn = state.transaction().await.unwrap();
+    assert_eq!(
+        txn.get_collection_metadata(),
+        BTreeMap::from([(GlobalId::User(100), keep_shard)]),
+        "ephemeral collection metadata survived"
+    );
+    assert_eq!(
+        txn.get_unfinalized_shards(),
+        BTreeSet::from([temp_shard, versioned_shard]),
+        "ephemeral shards were not enqueued for finalization"
+    );
+    drop(txn);
+
     Box::new(state).expire().await;
 }
 
@@ -744,6 +939,7 @@ async fn test_persist_ddl_detection_with_batch_allocated_ids() {
             RoleId::User(1),
             vec![],
             BTreeMap::new(),
+            None,
         )
         .unwrap();
     }

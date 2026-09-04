@@ -121,9 +121,9 @@ fn push_scalar(packer: &mut RowPacker, u: &mut Unstructured) -> arbitrary::Resul
             i32::arbitrary(u)?,
             i64::arbitrary(u)?,
         ))),
-        10 => packer.push(Datum::Uuid(uuid::Uuid::from_bytes(
-            <[u8; 16]>::arbitrary(u)?,
-        ))),
+        10 => packer.push(Datum::Uuid(uuid::Uuid::from_bytes(<[u8; 16]>::arbitrary(
+            u,
+        )?))),
         11 => packer.push(Datum::MzTimestamp(Timestamp::from(u64::arbitrary(u)?))),
         12 => {
             let len = u.int_in_range(0usize..=20)?;

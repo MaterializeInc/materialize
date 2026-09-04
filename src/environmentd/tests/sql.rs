@@ -1761,8 +1761,12 @@ fn test_subscribe_outlive_cluster() {
         .batch_execute("CREATE CLUSTER newcluster REPLICAS (r1 (size 'scale=1,workers=1'))")
         .unwrap();
     client2_cancel.cancel_query(postgres::NoTls).unwrap();
-    client2
-        .batch_execute("ROLLBACK; SET CLUSTER = default")
+    // The cancel is asynchronous and might race with subsequent commands.
+    // Retry ROLLBACK in a loop in case it gets canceled.
+    Retry::default()
+        .max_tries(5)
+        .clamp_backoff(Duration::from_millis(100))
+        .retry(|_| client2.batch_execute("ROLLBACK; SET CLUSTER = default"))
         .unwrap();
     assert_eq!(
         client2
@@ -1806,8 +1810,16 @@ fn test_insert_concurrent_alter_table() {
         let packed = Arc::clone(&packed);
         let resume = Arc::clone(&resume);
         move || {
-            packed.wait();
-            resume.wait();
+            // This runs on a worker of the server's runtime, and `resume` does not clear until the
+            // `ALTER TABLE` below has committed. That statement needs the runtime to get there:
+            // its catalog writes, the persist schema evolution, and the table registration all run
+            // as tasks, and the harness caps Consensus at a single connection, so a worker parked
+            // here can stall the statement, which in turn never releases the worker.
+            // `block_in_place` hands this worker's queue to another thread before parking.
+            tokio::task::block_in_place(|| {
+                packed.wait();
+                resume.wait();
+            });
         }
     })
     .unwrap();
@@ -1859,7 +1871,28 @@ fn test_insert_concurrent_alter_table() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_read_then_write_serializability() {
-    let server = test_util::TestHarness::default().start_blocking();
+    test_read_then_write_serializability_inner(false);
+}
+
+// Same as `test_read_then_write_serializability`, but exercising the frontend
+// OCC read-then-write path. Concurrent `INSERT INTO t SELECT * FROM t` must
+// still double the row count exactly, i.e. OCC retries must prevent lost
+// updates.
+#[mz_ore::test]
+fn test_read_then_write_serializability_frontend_occ() {
+    test_read_then_write_serializability_inner(true);
+}
+
+#[allow(clippy::disallowed_methods)]
+fn test_read_then_write_serializability_inner(frontend_occ: bool) {
+    let mut harness = test_util::TestHarness::default();
+    if frontend_occ {
+        harness = harness.with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        );
+    }
+    let server = harness.start_blocking();
 
     // Create table with initial value
     {
@@ -2532,6 +2565,52 @@ fn test_parse_error_codes() {
             err.message(),
         );
     }
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_dataflow_error_codes() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client
+        .batch_execute("CREATE TABLE t (a int4, b int4)")
+        .unwrap();
+    client.batch_execute("INSERT INTO t VALUES (1, 0)").unwrap();
+
+    let cases: &[(&str, &SqlState)] = &[
+        ("SELECT a / b FROM t", &SqlState::DIVISION_BY_ZERO),
+        (
+            "SELECT 2147483647 + a FROM t",
+            &SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+        ),
+    ];
+
+    for (query, expected) in cases {
+        let err = client.query_one(*query, &[]).unwrap_err().unwrap_db_error();
+        assert_eq!(
+            err.code(),
+            *expected,
+            "unexpected SQLSTATE {} for query `{query}`: {}",
+            err.code().code(),
+            err.message(),
+        );
+    }
+
+    client
+        .batch_execute("CREATE MATERIALIZED VIEW mv AS SELECT a / b AS x FROM t;")
+        .unwrap();
+    let err = client
+        .query_one("SELECT * FROM mv", &[])
+        .unwrap_err()
+        .unwrap_db_error();
+    assert_eq!(
+        err.code(),
+        &SqlState::DIVISION_BY_ZERO,
+        "unexpected SQLSTATE {} reading from materialized view: {}",
+        err.code().code(),
+        err.message(),
+    );
 }
 
 #[mz_ore::test]

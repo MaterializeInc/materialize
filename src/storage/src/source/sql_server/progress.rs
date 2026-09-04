@@ -85,6 +85,11 @@ pub(crate) fn render<'scope>(
                 }
                 return Ok(());
             }
+
+            // Retrieve the latest upstream LSN eagerly to ensure the lag calculation
+            // (offset_known - offset_committed) is non-negative. Statistics represents these as
+            // uint8, which would cause the calculation to underflow for the brief period between
+            // setting offset_committed here and offset_known further below.
             let conn_config = connection
                 .resolve_config(
                     &config.config.connection_context.secrets_reader,
@@ -93,6 +98,32 @@ pub(crate) fn render<'scope>(
                 )
                 .await?;
             let mut client = mz_sql_server_util::Client::connect(conn_config).await?;
+            // increment here to match known_offset calculation below
+            let next_upstream_lsn: Lsn = get_max_lsn(&mut client).await?.increment();
+
+            // Seed `offset_committed` from the resumption LSN, or if not set, from the
+            // upstream's current max LSN. Otherwise, it stays at the default 0 until the
+            // initial snapshot durably commits and the first resume upper arrives, which
+            // for a large snapshot can be a long time. During that window the ingestion-lag
+            // calculation subtracts 0 from the (large) upstream LSN and reports an
+            // enormous, bogus lag.
+            //
+            // This defaults to upstream's current max offset instead of `initial_lsn` because
+            // `initial_lsn` can be ahead of the value returned by `sys.fn_cdc_get_max_lsn`. This
+            // is a very obscure edge case where a user has a CDC enabled table, creates a new one
+            // and configures a source for at least the second table immediately after, without
+            // performing any DML operations.
+            let mut max_committed_lsn = outputs
+                .values()
+                // resume_lsn_or will panic if info resume_upper is empty
+                .map(|info| info.resume_lsn_or(next_upstream_lsn))
+                .min()
+                .unwrap_or(next_upstream_lsn);
+
+            for stat in config.statistics.values() {
+                stat.set_offset_known(next_upstream_lsn.abbreviate());
+                stat.set_offset_committed(max_committed_lsn.abbreviate());
+            }
 
 
             // Terminate the progress probes if a restore has happened. Replication operator will
@@ -194,8 +225,14 @@ pub(crate) fn render<'scope>(
                                 }
                             }
                         }
+                        // Never regress below the seeded resumption LSN. During the initial
+                        // snapshot the resume upper sits at the minimum, which would otherwise
+                        // drag the committed offset back to 0 and reintroduce the bogus lag.
+                        if *committed_upper > max_committed_lsn {
+                            max_committed_lsn = *committed_upper;
+                        }
                         for stat in config.statistics.values() {
-                            stat.set_offset_committed(committed_upper.abbreviate());
+                            stat.set_offset_committed(max_committed_lsn.abbreviate());
                         }
                     }
                 };

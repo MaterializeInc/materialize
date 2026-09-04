@@ -15,9 +15,7 @@ import urllib.error
 import urllib.request
 
 from materialize.mzcompose.composition import Composition, Service
-from materialize.mzcompose.helpers.iceberg import (
-    setup_polaris_for_iceberg,
-)
+from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mz import Mz
@@ -43,7 +41,9 @@ SERVICES = [
 ]
 
 
-def _setup(c: Composition) -> str:
+def _setup(
+    c: Composition, vended: bool = False, static_credentials: bool = True
+) -> str:
     """Start fresh and return the S3 access key."""
     c.down(destroy_volumes=True)
     c.up(
@@ -52,7 +52,9 @@ def _setup(c: Composition) -> str:
         Service("polaris-bootstrap", idle=True),
         Service("polaris", idle=True),
     )
-    _, key = setup_polaris_for_iceberg(c)
+    _, key = setup_polaris_for_iceberg(
+        c, vended=vended, static_credentials=static_credentials
+    )
     return key
 
 
@@ -65,6 +67,25 @@ def workflow_default(c: Composition) -> None:
             c.workflow(name)
 
     c.test_parts(list(c.workflows.keys()), process)
+
+
+def workflow_vended_credentials(c: Composition) -> None:
+    """An Iceberg sink must work against a REST catalog that only hands out
+    temporary, table-scoped credentials.
+
+    The Polaris catalog is created with credential vending enabled and without
+    the long-lived S3 credentials it would otherwise return to clients, so
+    Materialize has no static credentials to fall back on. The sink can only
+    reach MinIO with what Polaris mints for it in response to the
+    `X-Iceberg-Access-Delegation: vended-credentials` request the Iceberg
+    catalog connection sends."""
+    key = _setup(c, vended=True, static_credentials=False)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "vended-credentials.td",
+    )
 
 
 def workflow_smoke(c: Composition) -> None:
@@ -92,6 +113,20 @@ def workflow_gcp_connection_validation(c: Composition) -> None:
 
     c.run_testdrive_files(
         "gcp-connection-validation.td",
+    )
+
+
+def workflow_oauth2_server_url(c: Composition) -> None:
+    """OAUTH2 SERVER URL redirects a REST catalog connection's token exchange
+    away from the endpoint the Iceberg specification derives from the catalog
+    URL. Catalogs behind an auth gateway that will not serve an unauthenticated
+    exchange, such as Databricks Unity Catalog, need it. This exercises
+    connection planning only and needs no Iceberg backend."""
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    c.run_testdrive_files(
+        "oauth2-server-url.td",
     )
 
 
@@ -167,6 +202,26 @@ def workflow_finite_source(c: Composition) -> None:
         "--var=aws-endpoint=minio:9000",
         "finite-source-verify.td",
     )
+
+
+def workflow_alter_table_add_column(c: Composition) -> None:
+    """A sink pointed at an Iceberg table whose schema is narrower than the
+    sink's input relation must not panic the storage worker. The writer builds
+    its Arrow column builders from the Iceberg table's schema, so a row with
+    more datums than that schema has columns reaches `zip_eq` in
+    `ArrowBuilder::add_row`."""
+    key = _setup(c)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "alter-table-add-column.td",
+    )
+
+    logs = c.invoke("logs", "materialized", capture=True)
+    assert (
+        "zip_eq" not in logs.stdout
+    ), "storage worker panicked in ArrowBuilder::add_row"
 
 
 def _polaris_get(table_url: str, access_token: str) -> dict:

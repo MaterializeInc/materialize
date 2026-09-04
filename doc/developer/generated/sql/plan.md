@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan.rs
-revision: 447da2b53e
+revision: 39dcae2fba
 ---
 
 # mz-sql::plan
@@ -8,6 +8,7 @@ revision: 447da2b53e
 Defines the `Plan` enum and all plan-specific data types produced by the SQL planner and consumed by the adapter.
 The file contains ~2000 lines of type definitions covering every statement kind (DDL, DML, ACL, SCL, TCL) plus shared context types (`PlanContext`, `QueryContext`, `Params`, `QueryLifetime`).
 `SubscribeFrom::Query` carries an `HirRelationExpr` (not a `MirRelationExpr`); decorrelation happens downstream.
+`CreateMetricSinkPlan` carries `name: QualifiedItemName`, `metric_sink: MetricSink`, and `if_not_exists: bool`. `MetricSink` holds `create_sql`, `from: GlobalId` (the collection the sink reads), `cluster_id: ClusterId`, and `prefix: String` (the Prometheus metric name prefix). `DropObjectsPlan` covers `MetricSink` via the `ObjectType::MetricSink` variant.
 `TryFromValue` is re-exported from the `with_options` submodule for callers that need to convert `WithOptionValue` items outside the planner.
 The module layout is documented inline: `handle_statement` (in `statement`) is the entry point; `SELECT` queries flow through `query`; all plans involve `hir` + `lowering`; supporting utilities live in `error`, `notice`, `literal`, `plan_utils`, `scope`, `with_options`, `explain`, and `typeconv`.
 `ConnectionDetails` includes a `Gcp(GcpConnection)` variant for GCP connections, and a `GlueSchemaRegistry(GlueSchemaRegistryConnection<ReferencedConnection>)` variant for AWS Glue Schema Registry connections.

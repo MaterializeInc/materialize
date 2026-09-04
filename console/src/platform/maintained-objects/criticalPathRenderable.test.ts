@@ -47,6 +47,7 @@ const buildProbe = (
   hydratedReplicas: 1,
   totalReplicas: 1,
   lag: { value: parse("00:00:10"), ms: 10_000 },
+  sourceStatus: null,
   ...overrides,
 });
 

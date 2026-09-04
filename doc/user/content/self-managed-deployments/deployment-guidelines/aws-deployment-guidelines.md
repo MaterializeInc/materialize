@@ -47,10 +47,10 @@ For the RDS PostgreSQL metadata database, we recommend:
 - **Multi-AZ** for production.
 - **gp3** storage.
 
-| Deployment size | Instance | vCPU / memory | Continuously-active objects (~60% CPU) |
-|---|---|---|---|
-| Entry / small production | `db.r6g.large` | 2 / 16 GiB | ~4,500 |
-| Recommended default | `db.r6g.2xlarge` | 8 / 64 GiB | ~18,000 |
+| Deployment size | Instance | vCPU / memory | Storage | Provisioned IOPS | Continuously-active objects (~60% CPU) |
+|---|---|---|---|---|---|
+| Entry / small production | `db.r6g.large` | 2 / 16 GiB | 200 GiB | 3,000 (baseline) | ~4,500 |
+| Recommended default | `db.r6g.2xlarge` | 8 / 64 GiB | 400 GiB | 6,000 | ~18,000 |
 
 ## TLS
 

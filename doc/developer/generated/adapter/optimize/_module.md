@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/optimize.rs
-revision: b9097f8a3d
+revision: a702b8be70
 ---
 
 # adapter::optimize

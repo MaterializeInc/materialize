@@ -84,7 +84,7 @@ pub mod metrics {
 pub mod operators {
     //! [timely] operators for reading and writing persist Shards.
 
-    use mz_dyncfg::Config;
+    use mz_dyncfg::{Config, ParameterScope};
 
     pub mod shard_source;
 
@@ -95,6 +95,7 @@ pub mod operators {
         "\
         The maximum amount of work to do in the persist_source mfp_and_decode \
         operator before yielding.",
+        ParameterScope::Environment,
     );
 }
 pub mod read;
@@ -781,8 +782,11 @@ impl PersistClient {
     /// [backward_compatible]: mz_persist_types::schema::backward_compatible
     ///
     /// To prevent races, the caller must declare what it believes to be the
-    /// latest schema id. If this doesn't match reality,
-    /// [CaESchema::ExpectedMismatch] is returned.
+    /// latest schema id. A request that already matches the current schema
+    /// returns [CaESchema::Ok] even if `expected` is stale, so retried or
+    /// duplicated evolutions are idempotent. [CaESchema::ExpectedMismatch]
+    /// means a genuine divergence: the current schema matches neither the
+    /// request nor `expected`.
     pub async fn compare_and_evolve_schema<K, V, T, D>(
         &self,
         shard_id: ShardId,

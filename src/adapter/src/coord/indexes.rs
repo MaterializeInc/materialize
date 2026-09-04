@@ -69,6 +69,7 @@ impl DataflowBuilder<'_> {
                         panic!("log source {id} is missing index");
                     }
                     CatalogItem::Sink(_)
+                    | CatalogItem::MetricSink(_)
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)

@@ -11,6 +11,7 @@
                 [, LINGER DURATION = <interval>]
             )
         )]
+        [, EXPERIMENTAL ARRANGEMENT COMPRESSION = <bool>]
     )
     [WITH ( <with_option>[,...])]
     ;
@@ -74,20 +75,40 @@
         Set an empty strategy (`AUTO SCALING STRATEGY = ()`) to disable
         autoscaling.
 
+    - name: "`EXPERIMENTAL ARRANGEMENT COMPRESSION`"
+      description: |
+        {{< warn-if-unreleased-inline "v26.38" >}}
+
+        Optional. Whether to enable [dictionary
+        compression](#dictionary-compression) for the arrangements maintained by
+        the cluster's replicas. Compression reduces the memory those
+        arrangements use, at the cost of CPU, and does not benefit every
+        workload. Only available on managed clusters.
+
+        {{< warning >}}
+        Because changing this option never changes an existing replica,
+        Materialize creates a new set of replicas carrying the new setting and
+        cuts over to them once they have hydrated. For more information, see
+        [Dictionary compression](#dictionary-compression).
+        {{< /warning >}}
+
+        Default: `FALSE`
+
     - name: "`WITH (<with_option>[,...])`"
       description: |
 
         The following `<with_option>`s are supported:
         | Option  | Description |
         |--------|-------------|
-        | `WAIT UNTIL READY(...)`    | ***Private preview.** This option has known performance or stability issues and is under active development.* {{< include-from-yaml data="examples/alter_cluster" name="wait-until-ready-cmd-option" >}} |
-        | `WAIT FOR` |  ***Private preview.** This option has known performance or stability issues and is under active development.* A fixed duration to wait for the new replicas to be ready. This option can lead to downtime. As such, we recommend using the `WAIT UNTIL READY` option instead.|
+        | `WAIT UNTIL READY(...)`    | {{< include-from-yaml data="examples/alter_cluster" name="wait-until-ready-cmd-option" >}} |
+        | `WAIT FOR` | Equivalent to `WAIT UNTIL READY` with `ON TIMEOUT = 'ROLLBACK'`. Materialize cuts over once the new replicas hydrate. When Materialize processes an expired timeout, it rolls back the resize and keeps the current size if the target replicas are still unhydrated.|
 
 - name: "syntax-reset-to-default"
   code: |
     ALTER CLUSTER <cluster_name>
     RESET (
-        REPLICATION FACTOR | MANAGED | AUTO SCALING STRATEGY,
+        REPLICATION FACTOR | MANAGED | AUTO SCALING STRATEGY
+        | EXPERIMENTAL ARRANGEMENT COMPRESSION,
         ...
     )
     ;
@@ -112,6 +133,17 @@
         Optional. Resetting removes any autoscaling strategy from the cluster.
 
         Default: no autoscaling strategy.
+    - name: "`EXPERIMENTAL ARRANGEMENT COMPRESSION`"
+      description: |
+        {{< warn-if-unreleased-inline "v26.38" >}}
+
+        Optional. Resetting turns [dictionary
+        compression](#dictionary-compression) off for the cluster. Because this
+        never changes an existing replica, Materialize creates a new set of
+        replicas without the setting and cuts over to them once they have
+        hydrated.
+
+        Default: `FALSE`
 
 - name: "syntax-rename"
   code: |

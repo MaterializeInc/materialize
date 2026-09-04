@@ -7,9 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Regression test: INSERT INTO ... SELECT ... cannot transitively refer to sources.
-# The selection may refer to views/materialized views, but the transitive
-# dependencies must not include sources or source-export tables.
+# Regression test: read-then-write selections must resolve to writable user tables.
+# The selection may refer to views/materialized views, but its relation leaves
+# cannot be sources or source-backed tables.
 #
 # Simple (employee, salary, type) example to reproduce the error.
 
@@ -35,16 +35,16 @@ simple
 INSERT INTO salary_exceptions (employee, salary, type)
 SELECT 'Alice', salary, type FROM emp_view LIMIT 1
 ----
-db error: ERROR: invalid selection: operation may only (transitively) refer to non-source, non-system tables
-DETAIL: source-export table '"materialize.public.employees_from_src"' may not be used in this operation; the selection may refer to views and materialized views, but transitive dependencies must not include sources or source-export tables
+db error: ERROR: invalid selection: every relation leaf must be a writable user table
+DETAIL: source-export table '"materialize.public.employees_from_src"' may not be used in this operation; every relation leaf in the selection must be a writable user table
 
 # Same error when selecting directly from source-export table
 simple
 INSERT INTO salary_exceptions (employee, salary, type)
 SELECT 'Bob', counter, 'part_time' FROM employees_from_src LIMIT 1
 ----
-db error: ERROR: invalid selection: operation may only (transitively) refer to non-source, non-system tables
-DETAIL: source-export table '"materialize.public.employees_from_src"' may not be used in this operation; the selection may refer to views and materialized views, but transitive dependencies must not include sources or source-export tables
+db error: ERROR: invalid selection: every relation leaf must be a writable user table
+DETAIL: source-export table '"materialize.public.employees_from_src"' may not be used in this operation; every relation leaf in the selection must be a writable user table
 
 # Same error when selecting directly from the source. Use a derived table to
 # alias the single column from emp_src (SELECT * works; column name does not).
@@ -52,22 +52,48 @@ simple
 INSERT INTO salary_exceptions (employee, salary, type)
 SELECT 'Dave', f1::int, 'contractor' FROM (SELECT * FROM emp_src LIMIT 1) AS t(f1)
 ----
-db error: ERROR: invalid selection: operation may only (transitively) refer to non-source, non-system tables
-DETAIL: source '"materialize.public.emp_src"' may not be used in this operation; the selection may refer to views and materialized views, but transitive dependencies must not include sources or source-export tables
+db error: ERROR: invalid selection: every relation leaf must be a writable user table
+DETAIL: source '"materialize.public.emp_src"' may not be used in this operation; every relation leaf in the selection must be a writable user table
 
 # Same error: UPDATE with WHERE subquery that transitively refers to source
 simple
 UPDATE salary_exceptions SET type = 'updated' WHERE salary IN (SELECT salary FROM emp_view)
 ----
-db error: ERROR: invalid selection: operation may only (transitively) refer to non-source, non-system tables
-DETAIL: source-export table '"materialize.public.employees_from_src"' may not be used in this operation; the selection may refer to views and materialized views, but transitive dependencies must not include sources or source-export tables
+db error: ERROR: invalid selection: every relation leaf must be a writable user table
+DETAIL: source-export table '"materialize.public.employees_from_src"' may not be used in this operation; every relation leaf in the selection must be a writable user table
 
 # Same error: DELETE with WHERE subquery that transitively refers to source
 simple
 DELETE FROM salary_exceptions WHERE salary IN (SELECT salary FROM emp_view)
 ----
-db error: ERROR: invalid selection: operation may only (transitively) refer to non-source, non-system tables
-DETAIL: source-export table '"materialize.public.employees_from_src"' may not be used in this operation; the selection may refer to views and materialized views, but transitive dependencies must not include sources or source-export tables
+db error: ERROR: invalid selection: every relation leaf must be a writable user table
+DETAIL: source-export table '"materialize.public.employees_from_src"' may not be used in this operation; every relation leaf in the selection must be a writable user table
+
+# A webhook table is source-backed even though it appears in the catalog as a table.
+statement ok
+CREATE TABLE webhook_events FROM WEBHOOK BODY FORMAT TEXT
+
+simple
+INSERT INTO salary_exceptions (employee, salary, type)
+SELECT body, 0, 'webhook' FROM webhook_events
+----
+db error: ERROR: invalid selection: every relation leaf must be a writable user table
+DETAIL: source-backed table '"materialize.public.webhook_events"' may not be used in this operation; every relation leaf in the selection must be a writable user table
+
+# A secret referenced by webhook validation is DDL metadata, not a read dependency.
+statement ok
+CREATE SECRET webhook_secret AS 'secret'
+
+statement ok
+CREATE TABLE authenticated_webhook_events FROM WEBHOOK BODY FORMAT TEXT
+  CHECK (WITH (BODY, SECRET webhook_secret) body = webhook_secret)
+
+simple
+INSERT INTO salary_exceptions (employee, salary, type)
+SELECT body, 0, 'webhook' FROM authenticated_webhook_events
+----
+db error: ERROR: invalid selection: every relation leaf must be a writable user table
+DETAIL: source-backed table '"materialize.public.authenticated_webhook_events"' may not be used in this operation; every relation leaf in the selection must be a writable user table
 
 # Set up a plain old table and do the same thing, it should now work
 # Valid: INSERT INTO ... SELECT ... from plain table only

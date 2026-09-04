@@ -60,12 +60,11 @@ enabled by streaming like [**Change Data Capture (CDC)**](/ingest-data/),
 
 ### Real-time data ingestion
 
-Materialize provides **native connectors** that allow ingesting data from various external systems:
+Materialize supports ingesting data from various external systems:
 
-{{% include-headless "/headless/multilink-box-native-connectors" %}}
+{{% include-headless "/headless/ingest-connectors-table" %}}
 
-For more information, see [Ingest Data](/ingest-data/) and
-[Integrations](/integrations/).
+For more information, see [Ingest Data](/ingest-data/).
 
 ### PostgreSQL wire-compatibility
 

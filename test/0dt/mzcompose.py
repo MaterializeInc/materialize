@@ -24,7 +24,7 @@ from psycopg.errors import OperationalError
 from psycopg.sql import SQL, Identifier
 
 from materialize import buildkite
-from materialize.mzcompose import get_default_system_parameters
+from materialize.mzcompose import get_default_system_parameters, sanitizer_enabled
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import (
@@ -44,6 +44,13 @@ from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import CommandFailureCausedUIError
 
 DEFAULT_TIMEOUT = "300s"
+
+# Sanitized builds run the whole read path several times slower, so the bounds
+# on "this SELECT is fast, hence the source is hydrated" have to move with them.
+# NOTE: that weakens those assertions under a sanitizer, where a read that is
+# slow because the source is only partly hydrated can still come in under the
+# scaled bound. The unscaled bound guards the non-sanitizer runs.
+HYDRATED_SELECT_FACTOR = 10 if sanitizer_enabled() else 1
 
 SYSTEM_PARAMETER_DEFAULTS = get_default_system_parameters()
 
@@ -1113,7 +1120,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         result = c.sql_query("SELECT count(*) FROM kafka_source_tbl", service="mz_new")
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            elapsed < 3
+            elapsed < 3 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
 
         start_time = time.time()
@@ -1227,7 +1234,7 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
         result = c.sql_query("SELECT count(*) FROM kafka_source_tbl", service="mz_new")
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            elapsed < 3
+            elapsed < 3 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
 
         start_time = time.time()
@@ -1347,7 +1354,7 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         print(f"final check took {elapsed} seconds")
         assert result[0][0] == total, f"Wrong result: {result}"
         assert (
-            elapsed < 4
+            elapsed < 4 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on Postgres source after 0dt upgrade, is it hydrated?"
 
         result = c.sql_query(
@@ -1470,7 +1477,7 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         print(f"final check took {elapsed} seconds")
         assert result[0][0] == total, f"Wrong result: {result}"
         assert (
-            elapsed < 4
+            elapsed < 4 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on MySQL source after 0dt upgrade, is it hydrated?"
 
         result = c.sql_query(
@@ -1600,7 +1607,7 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
         print(f"final check took {elapsed} seconds")
         assert result[0][0] == total, f"Wrong result: {result}"
         assert (
-            elapsed < 4
+            elapsed < 4 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on SQL Server source after 0dt upgrade, is it hydrated?"
 
         result = c.sql_query(
@@ -1780,7 +1787,7 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
     )
 
     mz_tables_gid = c.sql_query(
-        "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
+        "SELECT id FROM mz_materialized_views WHERE name = 'mz_tables'",
         service="mz_old",
     )[0][0]
     mv_gid = c.sql_query(
@@ -1806,11 +1813,30 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
     ):
         c.up("mz_new")
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+
+        # The new generation is ready to promote while still read-only, so its migrated builtin MVs
+        # must already be hydrated off their replacement shards. If they were excluded from the
+        # caught-up gate they would hydrate at cut-over instead, spiking catalog-server CPU. Reading
+        # them here from the read-only generation asserts the write-enable-while-read-only path
+        # actually filled those shards.
+        #
+        # NOTE: this covers hydration, not the caught-up gate's lag comparison.
+        # `force_migrations="replacement"` replaces `mz_cluster_replica_frontiers` too, and the gate
+        # reads the leader's "live" frontiers out of that collection, so here it compares this
+        # generation against itself.
+        for relation in ["mz_databases", "mz_clusters"]:
+            count = c.sql_query(
+                f"SELECT count(*) FROM mz_catalog.{relation}",
+                service="mz_new",
+                reuse_connection=False,
+            )[0][0]
+            assert count > 0, f"{relation} returned {count} on the read-only generation"
+
         c.promote_mz("mz_new")
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 
         new_mz_tables_gid = c.sql_query(
-            "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
+            "SELECT id FROM mz_materialized_views WHERE name = 'mz_tables'",
             service="mz_new",
             reuse_connection=False,
         )[0][0]
@@ -1863,7 +1889,7 @@ def workflow_builtin_schema_migrations_evolution(c: Composition) -> None:
     )
 
     mz_tables_gid = c.sql_query(
-        "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
+        "SELECT id FROM mz_materialized_views WHERE name = 'mz_tables'",
         service="mz_old",
     )[0][0]
     mv_gid = c.sql_query(
@@ -1894,7 +1920,7 @@ def workflow_builtin_schema_migrations_evolution(c: Composition) -> None:
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 
         new_mz_tables_gid = c.sql_query(
-            "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
+            "SELECT id FROM mz_materialized_views WHERE name = 'mz_tables'",
             service="mz_new",
             reuse_connection=False,
         )[0][0]
@@ -3105,3 +3131,119 @@ def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
             > SELECT * FROM pool_mv;
             1
             """))
+
+
+def workflow_ddl_detection_ephemeral_items(c: Composition) -> None:
+    """Verify that temporary items do not count as reactable DDL in preflight.
+
+    Temporary items are durable catalog items tagged with their owning
+    session's UUID and draw ids from the normal user-id allocator.
+    Ensure that creation of them during 0dt preflight does not halt the
+    read-only environment.
+    """
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+
+    PREFLIGHT_STARTED = "waiting for deployment to be caught up"
+
+    def count_preflight_starts() -> int:
+        """Count mz_new boots via the preflight start line in its log."""
+        logs = c.invoke("logs", "mz_new", capture=True).stdout
+        return sum(PREFLIGHT_STARTED in line for line in logs.splitlines())
+
+    def await_preflight_start() -> None:
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            if count_preflight_starts() >= 1:
+                return
+            time.sleep(0.5)
+        raise RuntimeError("timed out waiting for mz_new preflight to start")
+
+    # The DDL check defaults to every 5 minutes plus once right before
+    # ready-to-promote. Tighten it so the temporary items below sit through
+    # many checks. Read at mz_new's boot from the catalog.
+    c.sql(
+        """
+        ALTER SYSTEM SET with_0dt_deployment_ddl_check_interval = '1s';
+        ALTER SYSTEM SET cluster = quickstart;
+        """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+
+    # Start mz_new in read-only mode (deploy_generation=1) and wait for it
+    # to start the preflight process.
+    c.up("mz_new")
+    await_preflight_start()
+
+    # A session on the leader creates the temporary items. The connection
+    # stays open so the items stay durable.
+    conn = c.sql_connection(service="mz_old")
+    cur = conn.cursor()
+    cur.execute("CREATE TEMPORARY TABLE temp_t (a int)")
+    cur.execute("CREATE TEMPORARY VIEW temp_v AS SELECT * FROM temp_t")
+    cur.execute("INSERT INTO temp_t VALUES (1)")
+
+    # Prove the temporary items are durable catalog rows on the leader while
+    # mz_new's checks tick
+    ephemeral = c.sql_query(
+        """SELECT count(*) FROM mz_internal.mz_catalog_raw
+           WHERE data->>'kind' = 'Item'
+             AND data->'value'->>'ephemeral_owner_session' IS NOT NULL""",
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    assert ephemeral == [(2,)], f"temporary items are not durable: {ephemeral}"
+
+    # the temporary items must exist while mz_new is still checking for DDL
+    # i.e. before it announces ready. if we're caught up before we've created
+    # temporary items, fail loudly.
+    deadline = time.time() + 120
+    status = None
+    while time.time() < deadline:
+        try:
+            status = _leader_status(c, "mz_new")
+            break
+        except Exception:
+            time.sleep(1)
+    assert (
+        status == DeploymentStatus.INITIALIZING.value
+    ), f"mz_new reached status {status} before the temporary items were created"
+
+    # Sit through several 1s-interval DDL checks with the temporary items in
+    # the catalog, then let mz_new run the final check on its way to
+    # ready-to-promote. Assert we only see one preflight start throughout
+    # promotion which means we never halted.
+    time.sleep(5)
+    assert (
+        count_preflight_starts() == 1
+    ), "mz_new rebooted with only temporary items created"
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    assert (
+        count_preflight_starts() == 1
+    ), "mz_new rebooted on the final DDL check with only temporary items created"
+
+    c.promote_mz("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+    # The takeover opened the catalog with write intent, which fences the old
+    # leader (killing the session that owned the temporary items) and
+    # reclaims every ephemeral item. Only mz_catalog_raw shows whether the
+    # durable rows themselves are gone.
+    ephemeral = c.sql_query(
+        """SELECT count(*) FROM mz_internal.mz_catalog_raw
+           WHERE data->>'kind' = 'Item'
+             AND data->'value'->>'ephemeral_owner_session' IS NOT NULL""",
+        service="mz_new",
+        port=6877,
+        user="mz_system",
+    )
+    assert ephemeral == [(0,)], f"ephemeral items survived promotion: {ephemeral}"
+
+    # The old leader died with the session's socket; closing is bookkeeping.
+    try:
+        conn.close()
+    except Exception:
+        pass

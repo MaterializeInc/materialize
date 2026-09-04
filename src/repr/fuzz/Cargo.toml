@@ -63,13 +63,6 @@ doc = false
 bench = false
 
 [[bin]]
-name = "interval_proto_roundtrip"
-path = "fuzz_targets/interval_proto_roundtrip.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "mz_acl_item_proto_roundtrip"
 path = "fuzz_targets/mz_acl_item_proto_roundtrip.rs"
 test = false

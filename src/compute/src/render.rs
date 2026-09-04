@@ -125,7 +125,8 @@ use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
-    ENABLE_COMPUTE_TEMPORAL_BUCKETING, SUBSCRIBE_SNAPSHOT_OPTIMIZATION, TEMPORAL_BUCKETING_SUMMARY,
+    ENABLE_COMPUTE_TEMPORAL_BUCKETING, ENABLE_ERROR_DISTINCT, SUBSCRIBE_SNAPSHOT_OPTIMIZATION,
+    TEMPORAL_BUCKETING_SUMMARY,
 };
 use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
@@ -711,6 +712,17 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
         let key = &idx.key;
         match bundle.arrangement(key) {
             Some(ArrangementFlavor::Local(mut oks, mut errs)) => {
+                // NOTE: Do not give an exported arrangement a second reader that holds a trace
+                // handle, such as a `reduce`. Such a reader pins the shared spine's physical
+                // frontier at its own lagging progress, and `ArrangementManager::maintenance` can
+                // then no longer advance it, so batches pile up in `Spine::pending`. A cursor is
+                // only checked for straddling over pending batches, so an importing dataflow's
+                // `cursor_through` eventually panics with `upper` straddles batch. Watching
+                // `errs.stream` in `output_probe` does not help, and neither does discarding the
+                // reader's output. Stream-level readers like `as_collection` are unaffected. This is
+                // why error multiplicity is not collapsed here, leaving multiplicity that crosses
+                // an index boundary unbounded. TODO(CPU-209): bound it without a trace reader.
+
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
@@ -906,6 +918,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                                 .render_letfree_plan(object_id, value, binding)
                                 .leave_region(self.scope)
                         });
+                let bundle = self.distinct_binding_errs(bundle);
                 self.insert_id(Id::Local(id), bundle);
             }
 
@@ -939,6 +952,11 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 // here to cause that to happen.
                 let (oks, mut err) = bundle.collection.clone().unwrap();
                 let oks = oks.into_vec();
+                // Collapses what forward reads see. `err_v` below feeds reads rendered before this
+                // binding and is collapsed separately; without this, a `Get` in a later rec binding
+                // or in the body resolves to the bundle stored here and compounds level over level,
+                // which is exactly what the collapse prevents for non-recursive bindings.
+                let bundle = self.distinct_binding_errs(bundle);
                 self.insert_id(Id::Local(id), bundle);
                 let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 
@@ -1044,6 +1062,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                                 .render_letfree_plan(object_id, value, binding)
                                 .leave_region(self.scope)
                         });
+                let bundle = self.distinct_binding_errs(bundle);
                 self.insert_id(Id::Local(id), bundle);
             }
         }
@@ -1054,6 +1073,25 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 .render_letfree_plan(object_id, plan.body, BindingInfo::Body { in_let })
                 .leave_region(self.scope)
         })
+    }
+
+    /// Collapses a binding's error multiplicities.
+    ///
+    /// Applied to every binding, not only the multiply-read ones. Gating on the reference count
+    /// would be a pure optimization, since collapsing a binding one `Get` reads is harmless, and
+    /// there is almost nothing to gate: `NormalizeLets` inlines single-use bindings, so the ones
+    /// reaching rendering are shared. See [`CollectionBundle::distinct_errs`] for why the collapse
+    /// is needed at all, and why a binding's definition is the place for it rather than the
+    /// multi-input operators where the duplicate copies happen to meet again.
+    fn distinct_binding_errs(
+        &self,
+        bundle: CollectionBundle<'scope, T>,
+    ) -> CollectionBundle<'scope, T> {
+        if ENABLE_ERROR_DISTINCT.get(&self.config_set) {
+            bundle.distinct_errs()
+        } else {
+            bundle
+        }
     }
 
     /// Renders a let-free plan to a differential dataflow, producing the collection of results.
@@ -1183,7 +1221,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                         time.advance_by(as_of_frontier.borrow());
                         if !until.less_equal(&time) {
                             Some((
-                                row,
+                                row.0,
                                 <T as Refines<mz_repr::Timestamp>>::to_inner(time),
                                 diff,
                             ))

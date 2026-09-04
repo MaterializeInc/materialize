@@ -84,6 +84,11 @@ function clusterLabel(cluster: CostBreakdownCluster): string {
   return `${cluster.region} / ${label}`;
 }
 
+/** An account's display name, falling back to a shortened id when unnamed. */
+function accountLabel(account: CostBreakdownAccount): string {
+  return account.name || shortAccountId(account.external_customer_id);
+}
+
 const usageNumberFormatter = Intl.NumberFormat("default", {
   maximumFractionDigits: 2,
 });
@@ -429,21 +434,20 @@ const ledgerColumns = [
       const r = row.original;
       if (r.kind === "cluster") return clusterLabel(r.cluster);
       return (
-        <>
+        <HStack>
           <Box
             width="2"
             height="2"
             borderRadius="sm"
             backgroundColor={r.color}
-            marginRight="2"
             flexShrink={0}
           />
           <Tooltip label={r.account.external_customer_id}>
-            <Text whiteSpace="nowrap">
-              {r.account.name || shortAccountId(r.account.external_customer_id)}
+            <Text as="span" whiteSpace="nowrap">
+              {accountLabel(r.account)}
             </Text>
           </Tooltip>
-        </>
+        </HStack>
       );
     },
     footer: () => "Total",
@@ -556,18 +560,12 @@ const UnifiedLedger = ({
         rowTestId={(row) =>
           row.original.kind === "account" ? "account-row" : undefined
         }
+        expandLabel={(row) =>
+          row.original.kind === "account"
+            ? `Show clusters of ${accountLabel(row.original.account)}`
+            : undefined
+        }
         footerTestId="account-total-row"
-        // Ledger look: compact borderless rows, each account group opened by
-        // a taller top-bordered row, a bordered total row closing the table.
-        rowSx={{
-          td: { borderBottomWidth: 0, height: "8" },
-          "&[aria-expanded] td": {
-            height: "16",
-            borderTopWidth: "1px",
-            borderTopStyle: "solid",
-            borderTopColor: colors.border.secondary,
-          },
-        }}
         footerSx={{
           td: {
             textStyle: "text-ui-med",

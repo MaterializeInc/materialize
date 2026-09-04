@@ -23,15 +23,22 @@
 //! This target therefore hand-builds the columnar encoding on the protobuf wire
 //! from fuzzer-chosen parameters. The first byte selects a mode:
 //!
-//! * mode 0: feed the remaining bytes straight to `ProtoStateDiff::decode`
-//!   (the robustness arm: must never panic, and any value that
-//!   converts must survive a proto re-encode round trip losslessly).
+//! * mode 0: feed the remaining bytes straight to `ProtoStateDiff::decode` (the
+//!   robustness arm: must never panic, and any value that converts must be
+//!   *stable* under a further round trip). Arbitrary bytes can be non-canonical
+//!   (`Antichain` minimization, the `DeprecatedRollups` remap), so this arm can
+//!   only assert stability, not losslessness.
 //! * mode 1: synthesize a *valid* columnar diff over a mix of fields and
 //!   insert/update/delete diff types, with self-consistent slice counts and
-//!   lengths, then decode + round-trip it.
+//!   lengths. The conversion must accept it, and must keep every diff: a
+//!   dropped or defaulted diff is invisible to the stability oracle.
 //! * mode 2: synthesize a diff whose columnar bookkeeping is *inconsistent*
 //!   (slice count or byte length mismatch, or an unknown field/diff-type enum).
 //!   `from_proto`'s `validate()`/iter must reject it with `Err`, never panic.
+//!   A declared byte length is the one class that can get *past* `validate()`:
+//!   lengths that sum past `u64::MAX` wrap (overflow checks are off in
+//!   release/optimized builds) and can match the real `data_bytes` length, so
+//!   the corruptions cover that edge explicitly.
 
 #![no_main]
 
@@ -193,6 +200,10 @@ struct ColumnarDiff {
     diff_type: u64,
     /// key slice followed by 1 (insert/delete) or 2 (update) value slices.
     slices: Vec<Vec<u8>>,
+    /// Replaces the `data_lens` entry written for the *last* slice, while the
+    /// real slice bytes still go into `data_bytes`. The only way to express a
+    /// declared length that disagrees with the bytes actually present.
+    len_override: Option<u64>,
 }
 
 /// Picks a field + diff type + correctly-shaped key/value slices.
@@ -212,12 +223,12 @@ fn gen_diff(u: &mut Unstructured) -> ColumnarDiff {
 
     // (field, key slice, value-slice generator).
     let (field, key): (u64, Vec<u8>) = match u.u8() % 6 {
-        0 => (FIELD_HOSTNAME, Vec::new()),    // key ()
-        1 => (FIELD_LAST_GC_REQ, Vec::new()), // key ()
-        2 => (FIELD_SINCE, Vec::new()),       // key ()
+        0 => (FIELD_HOSTNAME, Vec::new()),               // key ()
+        1 => (FIELD_LAST_GC_REQ, Vec::new()),            // key ()
+        2 => (FIELD_SINCE, Vec::new()),                  // key ()
         3 => (FIELD_ROLLUPS, enc_u64(u.u64() % 10_000)), // key u64 (SeqNo)
-        4 => (FIELD_ACTIVE_ROLLUP, Vec::new()), // key ()
-        _ => (FIELD_ACTIVE_GC, Vec::new()),   // key ()
+        4 => (FIELD_ACTIVE_ROLLUP, Vec::new()),          // key ()
+        _ => (FIELD_ACTIVE_GC, Vec::new()),              // key ()
     };
 
     let mut slices = Vec::with_capacity(1 + num_vals);
@@ -251,6 +262,7 @@ fn gen_diff(u: &mut Unstructured) -> ColumnarDiff {
         field,
         diff_type,
         slices,
+        len_override: None,
     }
 }
 
@@ -265,8 +277,13 @@ fn encode_field_diffs(diffs: &[ColumnarDiff]) -> Vec<u8> {
     for d in diffs {
         put_uint(&mut fields, 1, d.field);
         put_uint(&mut diff_types, 2, d.diff_type);
-        for slice in &d.slices {
-            put_uint(&mut data_lens, 3, slice.len() as u64);
+        for (i, slice) in d.slices.iter().enumerate() {
+            let is_last = i + 1 == d.slices.len();
+            let len = match d.len_override {
+                Some(len) if is_last => len,
+                _ => slice.len() as u64,
+            };
+            put_uint(&mut data_lens, 3, len);
             data_bytes.extend_from_slice(slice);
         }
     }
@@ -300,13 +317,27 @@ fn encode_state_diff(u: &mut Unstructured, field_diffs: &[u8]) -> Vec<u8> {
     buf
 }
 
-fn roundtrip(proto: ProtoStateDiff) {
+/// Round trip whatever converts, tolerating inputs that don't.
+///
+/// Only for mode 0, where arbitrary bytes legitimately fail to convert. Modes
+/// that build a diff they *know* is valid must require the conversion instead,
+/// or a newly-rejected shape silently turns the arm into a no-op.
+fn roundtrip_lenient(proto: ProtoStateDiff) {
     let orig: StateDiff<u64> = match proto.into_rust() {
         Ok(v) => v,
         Err(_) => return,
     };
+    roundtrip_from(orig.into_proto());
+}
 
-    let proto2: ProtoStateDiff = orig.into_proto();
+/// Asserts a canonical proto (already an `into_proto` output) is stable under a
+/// further encode / decode / convert / re-encode.
+///
+/// Both sides of the comparison are post-`into_proto`, so input-side
+/// normalization can't make it false-fire. Comparing the protos rather than the
+/// `StateDiff`s is forced: `StateDiff` only derives `PartialEq` under
+/// `cfg(any(test, debug_assertions))`.
+fn roundtrip_from(proto2: ProtoStateDiff) {
     let bytes2 = proto2.encode_to_vec();
     let proto3 = ProtoStateDiff::decode(bytes2.as_slice())
         .expect("re-encode of valid StateDiff must decode");
@@ -331,7 +362,7 @@ fuzz_target!(|data: &[u8]| {
             let Ok(proto) = ProtoStateDiff::decode(rest) else {
                 return;
             };
-            roundtrip(proto);
+            roundtrip_lenient(proto);
         }
         1 => {
             // Valid columnar arm: a self-consistent set of field diffs that must
@@ -343,17 +374,31 @@ fuzz_target!(|data: &[u8]| {
             let bytes = encode_state_diff(&mut u, &field_diffs);
             let proto = ProtoStateDiff::decode(bytes.as_slice())
                 .expect("hand-built ProtoStateDiff must decode");
-            roundtrip(proto);
+            // Every shape `gen_diff` emits is valid, so rejection here is a
+            // find, not a reason to skip the arm.
+            let orig: StateDiff<u64> = proto
+                .into_rust()
+                .expect("valid columnar field_diffs must convert");
+            let proto2: ProtoStateDiff = orig.into_proto();
+            // The oracle below compares two `into_proto` outputs, so it cannot
+            // see content dropped between the input and `proto2`. `from_proto`
+            // pushes exactly one diff per input diff and `into_proto` emits
+            // exactly one entry per stored diff, so the counts must match.
+            assert_eq!(
+                proto2.field_diffs.as_ref().map_or(0, |f| f.fields.len()),
+                num_diffs,
+                "from_proto dropped columnar diffs"
+            );
+            roundtrip_from(proto2);
         }
         _ => {
             // Inconsistent-columnar arm: build a valid set, then corrupt the
             // bookkeeping so `validate()`/iter must reject it (not panic).
             let mut u = Unstructured::new(rest);
             let num_diffs = u.range(1, 6);
-            let mut diffs: Vec<ColumnarDiff> =
-                (0..num_diffs).map(|_| gen_diff(&mut u)).collect();
+            let mut diffs: Vec<ColumnarDiff> = (0..num_diffs).map(|_| gen_diff(&mut u)).collect();
 
-            match u.u8() % 4 {
+            match u.u8() % 5 {
                 0 => {
                     // Drop a value slice: data_lens count no longer matches the
                     // count implied by diff_types.
@@ -373,10 +418,28 @@ fuzz_target!(|data: &[u8]| {
                         last.field = 9999;
                     }
                 }
-                _ => {
+                3 => {
                     // Unknown diff-type enum value.
                     if let Some(last) = diffs.last_mut() {
                         last.diff_type = 9999;
+                    }
+                }
+                _ => {
+                    // A declared length that disagrees with the bytes actually
+                    // written: `validate()`'s data_bytes sum check, including the
+                    // `u64::MAX` edge where the sum of the lengths wraps and can
+                    // match the real data_bytes length.
+                    //
+                    // Always strictly greater than the true length, so the
+                    // corruption is guaranteed to be one (a length that happened
+                    // to match would make the `is_err` assertion below false-fire).
+                    if let Some(last) = diffs.last_mut() {
+                        let true_len = last.slices.last().map_or(0, |s| s.len() as u64);
+                        last.len_override = Some(match u.u8() % 3 {
+                            0 => u64::MAX,
+                            1 => u64::MAX - 1,
+                            _ => true_len + u64::from(u.u8()) + 1,
+                        });
                     }
                 }
             }

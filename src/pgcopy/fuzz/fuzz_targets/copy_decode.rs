@@ -32,7 +32,11 @@
 //!     token) is properly quoted and escaped so it survives the csv-core framing
 //!     layer and reaches the value decoder instead of erroring early. When a
 //!     header is configured we additionally emit a leading header row so the
-//!     header-skip path is exercised alongside data rows.
+//!     header-skip path is exercised alongside data rows. NOTE: a delimiter or
+//!     quote of `\r`/`\n` still frames badly, because the record terminator is
+//!     then itself a framing byte and no amount of quoting disambiguates it.
+//!     Those params are still worth feeding to the decoder, so they are
+//!     generated anyway, they just rarely reach a value decoder.
 //!
 //! A quarter of inputs feed the raw bytes through both formats so the
 //! framing/error paths stay covered.
@@ -83,12 +87,23 @@ fn push_value(
         }
         2 => out.push_str(u.choose(&["t", "f", "true", "false"])?),
         3 => out.push_str(u.choose(&[
-            "0", "-1.5", "3.14", "1e10", "-2.5e-3", "Infinity", "-Infinity", "NaN",
+            "0",
+            "-1.5",
+            "3.14",
+            "1e10",
+            "-2.5e-3",
+            "Infinity",
+            "-Infinity",
+            "NaN",
         ])?),
         4 => {
             // bytea hex: `\x<hex>`. In COPY text the backslash must be doubled.
+            // Digits come in pairs: `parse_bytes_hex` rejects an odd count, and
+            // a rejected column aborts the whole decode, so the columns after
+            // this one would never run.
             out.push_str(if text_format { "\\\\x" } else { "\\x" });
-            for _ in 0..u.int_in_range(0usize..=6)? {
+            for _ in 0..u.int_in_range(0usize..=3)? {
+                out.push(*u.choose(HEX)?);
                 out.push(*u.choose(HEX)?);
             }
         }
@@ -124,12 +139,10 @@ fn push_text_escapes(u: &mut Unstructured, out: &mut String) -> arbitrary::Resul
     for _ in 0..n {
         out.push_str(u.choose(&[
             // Literal chars (decode to themselves).
-            "a", "b", "Z", "0",
-            // Recognized C-style escapes (decode to control bytes).
+            "a", "b", "Z", "0", // Recognized C-style escapes (decode to control bytes).
             "\\b", "\\f", "\\n", "\\r", "\\t", "\\v",
             // Hex escapes in the printable ASCII range.
-            "\\x41", "\\x7e", "\\x2c",
-            // Octal escapes in the printable ASCII range.
+            "\\x41", "\\x7e", "\\x2c", // Octal escapes in the printable ASCII range.
             "\\101", "\\052", "\\176",
             // A backslash before a non-escape char drops the backslash.
             "\\q", "\\\\",
@@ -144,26 +157,29 @@ fn push_text_escapes(u: &mut Unstructured, out: &mut String) -> arbitrary::Resul
 /// NULL marker), or when it equals the active NULL token (so a data value that
 /// happens to match the NULL token is preserved as data rather than read as
 /// SQL NULL).
-fn push_csv_field(field: &str, params: &CopyCsvFormatParams, out: &mut String) {
-    let q = params.quote as char;
-    let esc = params.escape as char;
-    let delim = params.delimiter as char;
+///
+/// The record is built as bytes, not as a `String`: the delimiter/quote/escape
+/// params are `u8` and csv-core compares them byte-wise, but `u8 as char`
+/// UTF-8-encodes anything >= 0x80 as two bytes, which emits a byte pair the
+/// configured params cannot frame.
+fn push_csv_field(field: &str, params: &CopyCsvFormatParams, out: &mut Vec<u8>) {
+    let (q, esc, delim) = (params.quote, params.escape, params.delimiter);
     let needs_quote = field.is_empty()
         || *field == *params.null
         || field
-            .chars()
-            .any(|c| c == delim || c == q || c == esc || c == '\r' || c == '\n');
+            .bytes()
+            .any(|b| b == delim || b == q || b == esc || b == b'\r' || b == b'\n');
     if needs_quote {
         out.push(q);
-        for c in field.chars() {
-            if c == q || c == esc {
+        for b in field.bytes() {
+            if b == q || b == esc {
                 out.push(esc);
             }
-            out.push(c);
+            out.push(b);
         }
         out.push(q);
     } else {
-        out.push_str(field);
+        out.extend_from_slice(field.as_bytes());
     }
 }
 
@@ -201,8 +217,23 @@ fn arbitrary_csv_params(u: &mut Unstructured) -> arbitrary::Result<CopyCsvFormat
     };
     let header: bool = u.arbitrary()?;
     let null = if u.arbitrary()? {
-        // A non-empty NULL token (e.g. the conventional `NULL` / `\N`).
-        u.choose(&["NULL", "\\N", "null", "NA", "-"])?.to_string()
+        // A non-empty NULL token (e.g. the conventional `NULL` / `\N`). The
+        // token is emitted unquoted, since a quoted token is no longer read as
+        // NULL, so it must share no byte with the framing params. Otherwise it
+        // splits into extra fields and the record errors before any decoder
+        // runs. Fall back to the empty token when nothing is compatible.
+        let candidates: Vec<&str> = ["NULL", "\\N", "null", "NA", "-"]
+            .into_iter()
+            .filter(|t| {
+                !t.bytes()
+                    .any(|b| b == delimiter || b == quote || b == escape)
+            })
+            .collect();
+        if candidates.is_empty() {
+            String::new()
+        } else {
+            u.choose(&candidates)?.to_string()
+        }
     } else {
         String::new()
     };
@@ -254,8 +285,8 @@ fn run(mut u: Unstructured) -> arbitrary::Result<()> {
 
     // CSV: fuzz the format params, then emit data the params can actually frame.
     let params = arbitrary_csv_params(&mut u)?;
-    let delim = params.delimiter as char;
-    let mut s = String::new();
+    let delim = params.delimiter;
+    let mut s = Vec::new();
 
     // A configured header means the first record is column names that the
     // decoder skips. Emit a plausible one so the header-skip path runs.
@@ -266,7 +297,7 @@ fn run(mut u: Unstructured) -> arbitrary::Result<()> {
             }
             push_csv_field(&format!("col{col}"), &params, &mut s);
         }
-        s.push('\n');
+        s.push(b'\n');
     }
 
     let rows = u.int_in_range(1usize..=4)?;
@@ -278,17 +309,17 @@ fn run(mut u: Unstructured) -> arbitrary::Result<()> {
             // 1-in-8 NULL: emit the unquoted NULL token (empty field for the
             // default empty marker), which the decoder reads as SQL NULL.
             if u.int_in_range(0u8..=7)? == 0 {
-                s.push_str(&params.null);
+                s.extend_from_slice(params.null.as_bytes());
             } else {
                 let mut field = String::new();
                 push_value(&mut u, col, false, &mut field)?;
                 push_csv_field(&field, &params, &mut s);
             }
         }
-        s.push('\n');
+        s.push(b'\n');
     }
 
-    decode_csv(s.as_bytes(), params);
+    decode_csv(&s, params);
     Ok(())
 }
 

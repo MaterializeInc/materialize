@@ -142,7 +142,23 @@ def run_and_detect_retryable_build_failure(
             "unable to update registry",
         ]
         combined = stdout_contents + stderr_contents
-        if any(msg in combined for msg in incremental_build_failure_msgs):
+        # A cached build-script binary poisoned by cargo cache corruption dies
+        # with a bare ENOENT before doing any work. Both halves are required,
+        # and the error must be the exact bare line: "failed to run custom
+        # build command" alone is any build-script bug, which a retry cannot
+        # fix, and a build script that fails on a missing file with an error
+        # context of its own produces the ENOENT in a "Caused by:" detail line
+        # instead of the bare "Error:" line.
+        custom_build_script_enoent = (
+            "failed to run custom build command" in combined
+            and any(
+                line.strip() == "Error: No such file or directory (os error 2)"
+                for line in combined.splitlines()
+            )
+        )
+        if custom_build_script_enoent or any(
+            msg in combined for msg in incremental_build_failure_msgs
+        ):
             raise RustIncrementalBuildFailure()
         if any(msg in combined for msg in registry_fetch_failure_msgs):
             raise CargoRegistryFetchFailure()
@@ -258,9 +274,9 @@ class RepositoryDetails:
 
 
 @cache
-def docker_images() -> frozenset[str]:
+def docker_images() -> set[str]:
     """List the Docker images available on the local machine."""
-    return frozenset(
+    return set(
         spawn.capture(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"])
         .strip()
         .split("\n")
@@ -674,10 +690,7 @@ class CargoBuild(CargoPreImage):
         cflags = (
             [
                 f"--target={target(rd.arch)}",
-                f"--gcc-toolchain=/opt/x-tools/{target(rd.arch)}/",
                 "-fuse-ld=lld",
-                f"--sysroot=/opt/x-tools/{target(rd.arch)}/{target(rd.arch)}/sysroot",
-                f"-L/opt/x-tools/{target(rd.arch)}/{target(rd.arch)}/lib64",
             ]
             + rustc_flags.sanitizer_cflags[rd.sanitizer]
             if rd.sanitizer != Sanitizer.none
@@ -691,10 +704,10 @@ class CargoBuild(CargoPreImage):
                 "CXXSTDLIB": "stdc++",
                 "CC": "cc",
                 "CXX": "c++",
-                "CPP": "clang-cpp-18",
+                "CPP": "clang-cpp-19",
                 "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
                 "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
-                "PATH": f"/sanshim:/opt/x-tools/{target(rd.arch)}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "PATH": "/sanshim:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                 "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
             }
             if rd.sanitizer != Sanitizer.none
@@ -876,7 +889,19 @@ class CargoBuild(CargoPreImage):
                 else:
                     package = message["package_id"].split("#")[0].split("/")[-1]
                 for src, dst in self.extract.get(package, {}).items():
-                    spawn.runv(["cp", "-R", out_dir / src, self.path / dst])
+                    # Sources are relative to the build script's `out` dir.
+                    # `$CARGO_TARGET_DIR` instead names the Cargo target root
+                    # (`cargo_target_dir` is the per-target directory below
+                    # it), for artifacts a build script caches outside of
+                    # `out`. Reaching the root with `..` does not work: how
+                    # deep `out` sits below it differs between Cargo versions.
+                    if src.startswith("$CARGO_TARGET_DIR/"):
+                        src_path = target_dir.parent / src.removeprefix(
+                            "$CARGO_TARGET_DIR/"
+                        )
+                    else:
+                        src_path = out_dir / src
+                    spawn.runv(["cp", "-R", src_path, self.path / dst])
 
         self.acquired = True
 
@@ -1068,6 +1093,8 @@ class ResolvedImage:
                 self._build_locked(prep, push)
             finally:
                 fcntl.flock(lock_file, fcntl.LOCK_UN)
+        self.acquired = True
+        docker_images().add(self.spec())
 
     def _build_locked(
         self, prep: dict[type[PreImage], Any], push: bool = False
@@ -1192,6 +1219,7 @@ class ResolvedImage:
                         stdout=sys.stderr.buffer,
                     )
                     self.acquired = True
+                    docker_images().add(self.spec())
                     break
                 except subprocess.CalledProcessError:
                     if retry < max_retries:

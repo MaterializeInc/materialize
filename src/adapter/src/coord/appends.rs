@@ -64,6 +64,7 @@ use tokio::sync::{Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore, mpsc
 use tracing::{Instrument, Span, info, warn};
 
 use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogUpperHandle};
+use crate::coord::timeline::write_ts_upper_bound;
 use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
 use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, GroupCommitWriteLocks, Session, WriteLocks};
@@ -165,9 +166,6 @@ pub(crate) enum BuiltinTableUpdateSource {
 }
 
 /// Result of a write submitted by frontend sequencing.
-// The read-then-write path that submits these writes lands later in this
-// stack, this attribute goes away with it.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum WriteResult {
     /// The write committed at this timestamp.
@@ -176,6 +174,12 @@ pub enum WriteResult {
     TimestampPassed {
         target_timestamp: Timestamp,
         next_eligible_timestamp: Timestamp,
+    },
+    /// The requested timestamp ran further ahead of the wall clock than the write
+    /// timeline may be advanced, so the write was refused before it was attempted.
+    TimestampTooFarAhead {
+        target_timestamp: Timestamp,
+        limit: Timestamp,
     },
     /// The write was canceled before it entered the committer.
     Canceled,
@@ -190,19 +194,15 @@ pub enum WriteResult {
 /// Delivers an internal write result, including on task shutdown.
 ///
 /// The `Drop` impl is load-bearing. The session task waiting on the other end
-/// `expect`s a reply, so a `oneshot::Sender` that is dropped silently would
-/// panic that session on coordinator shutdown or on a dead group-committer
-/// task. Reporting [`WriteResult::Indeterminate`] instead lets the session
-/// report an error.
+/// needs a definitive response so that it can release its OCC permit and
+/// subscribe. Reporting [`WriteResult::Indeterminate`] lets it unwind when the
+/// coordinator or group committer shuts down.
 #[derive(Debug)]
 pub struct InternalWriteResponder {
     tx: Option<oneshot::Sender<WriteResult>>,
 }
 
 impl InternalWriteResponder {
-    // The read-then-write path that uses this lands later in this stack, this
-    // attribute goes away with it.
-    #[allow(dead_code)]
     pub(crate) fn new(tx: oneshot::Sender<WriteResult>) -> Self {
         Self { tx: Some(tx) }
     }
@@ -229,9 +229,6 @@ pub(crate) enum UserWriteResponder {
     /// `ExecuteContext` once the write commits.
     Session(PendingTxn),
     /// Frontend-sequenced blind write.
-    // The read-then-write path that uses this lands later in this stack, this
-    // attribute goes away with it.
-    #[allow(dead_code)]
     Internal {
         conn_id: ConnectionId,
         /// The table the diffs were computed against, item id and the generation
@@ -295,9 +292,6 @@ impl PendingWriteTxn {
 
 pub(crate) enum TableWriteCmd {
     GroupCommit(GroupCommitRequest),
-    // The read-then-write path that uses this lands later in this stack, this
-    // attribute goes away with it.
-    #[allow(dead_code)]
     TimestampedWrite(TimestampedWriteRequest),
     Register {
         tables: Vec<TableRegistration>,
@@ -450,8 +444,11 @@ impl GroupCommitter {
     ///
     /// What [`Self::commit`] does that this skips, and why that is safe:
     ///
-    /// * The wall-clock throttle. `target_timestamp` is the caller's to choose,
-    ///   and it must not run the write timeline ahead of the clock.
+    /// * The wall-clock throttle. `target_timestamp` is the caller's to choose, and a
+    ///   target above [`write_ts_upper_bound`] is refused rather than slept off.
+    ///   Committing there would advance the oracle with it, and a caller that took its
+    ///   target from the oracle cannot exceed the bound unless the timeline has already
+    ///   run away, which sleeping would not resolve.
     /// * A [`GroupCommitPermit`]. The caller bounds how many of these are in
     ///   flight, and that is the backpressure for this path.
     /// * Merging queued commits. There is nothing to merge into: these diffs
@@ -474,6 +471,18 @@ impl GroupCommitter {
             result.send(WriteResult::TimestampPassed {
                 target_timestamp,
                 next_eligible_timestamp: oracle_write_ts.step_forward(),
+            });
+            return ControlFlow::Continue(());
+        }
+
+        // Committing here would apply the target to the oracle below, which is what makes
+        // it stick. See `write_ts_upper_bound`.
+        let now: Timestamp = (self.now)().into();
+        let limit = write_ts_upper_bound(&now);
+        if target_timestamp > limit {
+            result.send(WriteResult::TimestampTooFarAhead {
+                target_timestamp,
+                limit,
             });
             return ControlFlow::Continue(());
         }
@@ -604,6 +613,16 @@ impl GroupCommitter {
 
         let now: Timestamp = (self.now)().into();
         crate::coord::timeline::check_runaway_write_ts(&now, write_ts.timestamp);
+
+        // The append above is already readable in Persist and has advanced the
+        // table's upper, while no oracle-timestamped read can reach it until
+        // the line below. Anything concluding from a read that follows Persist
+        // rather than the oracle has to cope with this window, so a test can
+        // hold it open here. Every txns-shard write parks here while armed,
+        // including the keepalives that advance table uppers, so arm it with a
+        // bounded `sleep` rather than a `pause`. Used by
+        // workflow_test_occ_zero_row_write_linearization.
+        fail::fail_point!("group_commit_before_apply_write");
 
         self.oracle.apply_write(write_ts.timestamp).await;
 
@@ -1590,6 +1609,7 @@ pub(crate) fn waiting_on_startup_appends(
         | Plan::CreateView(_)
         | Plan::CreateMaterializedView(_)
         | Plan::CreateIndex(_)
+        | Plan::CreateMetricSink(_)
         | Plan::CreateType(_)
         | Plan::Comment(_)
         | Plan::DiscardTemp
@@ -1697,6 +1717,13 @@ mod tests {
 
     use super::*;
     use crate::catalog::Catalog;
+
+    #[mz_ore::test(tokio::test)]
+    async fn internal_write_responder_reports_indeterminate_on_drop() {
+        let (tx, rx) = oneshot::channel();
+        drop(InternalWriteResponder::new(tx));
+        assert!(matches!(rx.await, Ok(WriteResult::Indeterminate)));
+    }
 
     #[derive(Debug, Default)]
     struct MemTimestampOracle {

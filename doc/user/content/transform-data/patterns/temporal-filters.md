@@ -290,6 +290,16 @@ Unfortunately, this record does not pass the filter and is excluded from process
 In conclusion: if you want to account for late arriving data up to some given time duration, you must adjust your temporal filter to allow for such records to make an appearance in the result set.
 This is often referred to as a **grace period**.
 
+<!--
+The temporal filter pushdown documentation is hidden while the optimization is
+being reworked: the guarantees described below do not currently hold for most
+temporal filters. The anchor is kept because pages across the docs, including
+published release notes, link to `#temporal-filter-pushdown`.
+-->
+<a id="temporal-filter-pushdown" name="temporal-filter-pushdown"></a>
+
+{{< hide >}}
+
 ## Temporal filter pushdown
 
 All of the queries in the previous examples only return results based on recently-added events.
@@ -325,3 +335,5 @@ Some common functions, such as casting from a string to a timestamp, can prevent
 {{< note >}}
 See the guide on [partitioning and filter pushdown](/transform-data/patterns/partition-by/) for a **private preview** feature that can make the filter pushdown optimization more predictable.
 {{< /note >}}
+
+{{< /hide >}}

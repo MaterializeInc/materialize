@@ -1,9 +1,10 @@
 ---
 source: src/regexp/src/lib.rs
-revision: 12fbe31d24
+revision: f4650d00b
 ---
 
 # mz-regexp
 
 Provides `regexp_split_to_array`, a PostgreSQL-compatible implementation of `regexp_split_to_array` on top of `mz_repr::adt::regex::Regex`.
 The implementation diverges from the standard `Regex::split` to match PostgreSQL's rule of ignoring zero-length matches at the start or end of the string and immediately after a previous match.
+Also provides `regexp_split_to_array_count`, which computes how many chunks `regexp_split_to_array` would return without building them. It applies the same zero-length-match filter so a caller sizing an allocation refuses only the calls the split itself would build.

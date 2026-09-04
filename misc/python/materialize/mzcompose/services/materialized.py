@@ -24,6 +24,7 @@ from materialize.mzcompose import (
     bootstrap_cluster_replica_size,
     cluster_replica_size_map,
     get_default_system_parameters,
+    sanitizer_enabled,
 )
 from materialize.mzcompose.service import (
     Service,
@@ -69,6 +70,18 @@ class MaterializeEmulator(Service):
 class Materialized(Service):
     class Size:
         DEFAULT_SIZE = 4
+
+        @staticmethod
+        def default() -> int:
+            """The size a composition should use when the caller pins none.
+
+            A `scale=N` replica is N separate clusterd processes, and a
+            sanitized clusterd holds several times the resident memory of an
+            ordinary one. A composition that keeps many clusters alive at once
+            runs the agent's memory cgroup out of memory at `DEFAULT_SIZE`, so
+            give a sanitized run one process per replica instead.
+            """
+            return 1 if sanitizer_enabled() else Materialized.Size.DEFAULT_SIZE
 
     def __init__(
         self,

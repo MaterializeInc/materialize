@@ -1,6 +1,6 @@
 ---
 source: src/persist/src/file.rs
-revision: a298f30bbb
+revision: f0cdedca04
 ---
 
 # persist::file

@@ -69,7 +69,12 @@ fn main() {
     // Parse each body into alternatives of items.
     let rules: Vec<Vec<Vec<Item>>> = bodies
         .iter()
-        .map(|body| split_unquoted(body, '|').iter().map(|a| tokenize(a)).collect())
+        .map(|body| {
+            split_unquoted(body, '|')
+                .iter()
+                .map(|a| tokenize(a))
+                .collect()
+        })
         .collect();
 
     // Emit the rule table.
@@ -110,7 +115,10 @@ fn main() {
         out.push_str(&format!("    ], leaf_alt: {leaf_alt} }},\n"));
     }
     out.push_str("];\n");
-    out.push_str(&format!("pub static START: usize = {};\n", index_of("statement")));
+    out.push_str(&format!(
+        "pub static START: usize = {};\n",
+        index_of("statement")
+    ));
 
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR");
     fs::write(Path::new(&out_dir).join("grammar.rs"), out).expect("write grammar.rs");

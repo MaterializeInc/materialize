@@ -14,7 +14,10 @@ import {
   buildAllObjectsQuery,
   DatabaseObject,
 } from "~/api/materialize/objects";
-import { SubscribeState } from "~/api/materialize/SubscribeManager";
+import {
+  SubscribeRow,
+  SubscribeState,
+} from "~/api/materialize/SubscribeManager";
 import {
   buildSubscribeQuery,
   useGlobalUpsertSubscribe,
@@ -26,17 +29,15 @@ export const allObjects = atom<SubscribeState<DatabaseObject>>({
   snapshotComplete: false,
 });
 
-export function useSubscribeToAllObjects() {
-  const subscribe = React.useMemo(() => {
-    return buildSubscribeQuery(buildAllObjectsQuery(), { upsertKey: "id" });
-  }, []);
+const ALL_OBJECTS_SUBSCRIBE_OPTIONS = {
+  atom: allObjects,
+  subscribe: buildSubscribeQuery(buildAllObjectsQuery(), { upsertKey: "id" }),
+  select: (row: SubscribeRow<DatabaseObject>) => row.data,
+  upsertKey: (row: SubscribeRow<DatabaseObject>) => row.data.id,
+};
 
-  return useGlobalUpsertSubscribe({
-    atom: allObjects,
-    subscribe,
-    select: (row) => row.data,
-    upsertKey: (row) => row.data.id,
-  });
+export function useSubscribeToAllObjects() {
+  useGlobalUpsertSubscribe(ALL_OBJECTS_SUBSCRIBE_OPTIONS);
 }
 
 export function useAllObjects() {

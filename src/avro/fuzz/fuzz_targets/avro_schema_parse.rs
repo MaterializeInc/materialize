@@ -16,20 +16,39 @@
 //!
 //! `schema_resolve` only parses the narrow set of schemas it generates (no
 //! logical types, no named back-references, shallow), and the decode targets
-//! cap nesting low. This one stresses the parser itself: it generates schema
-//! JSON that can nest *past* the depth limit (so the guard must fire cleanly
-//! rather than overflow the stack) and that re-references already-defined names
-//! (recursive definitions, a distinct resolution path).
+//! cap nesting low. This one stresses the parser itself: schemas that
+//! re-reference already-defined names (recursive definitions, a distinct
+//! resolution path), and nesting that straddles `MAX_SCHEMA_DEPTH`.
+//!
+//! Reaching that guard takes the *other* entry point. `Schema::from_str` runs
+//! `serde_json::from_str` first, and serde_json's own recursion limit is also
+//! 128 containers, so it rejects the schema one level before the avro guard can
+//! fire: the deepest JSON text that survives is 127 wrappers, which is avro
+//! depth 128, exactly at the limit and not over it. So the deep case goes
+//! through `Schema::parse`, which takes an already-parsed `serde_json::Value`,
+//! and the text case is bounded to nesting serde_json will accept rather than
+//! generating JSON no avro code will ever see.
 //!
 //! It also drives the parser's *naming* and *validation* paths:
 //!   * `namespace` fields and dotted/`a.b.C` names. The `FullName::from_parts`
 //!     split logic, including the documented edge case where a name has dots
 //!     *and* a `namespace` is also given (they may disagree).
-//!   * `aliases` arrays on named types, sometimes deliberately colliding with
-//!     another defined name or with the type's own name.
-//!   * structurally-valid-but-semantically-invalid schemas the parser is meant
-//!     to *reject* (not panic on): duplicate enum symbols, duplicate record
-//!     field names, decimal `scale > precision`, and `fixed` `size: 0`.
+//!   * a name that collides with an already-defined type's fullname, which
+//!     `alloc_name` must reject.
+//!   * `aliases` arrays on named types, sometimes colliding with another defined
+//!     name or with the type's own name. NOTE: parsing only *collects* aliases
+//!     into the `Name`, so a collision is indistinguishable from any other alias
+//!     here. Aliases only acquire meaning in `resolve_schemas`, which this target
+//!     does not call. They are generated to keep the attribute shape varied, not
+//!     as a validation path.
+//!   * semantically-invalid schemas, which must produce an error rather than a
+//!     panic: duplicate enum symbols, an enum `default` outside its symbols, and
+//!     `fixed` `size: 0` are all rejected. NOTE: two further shapes generated
+//!     here are *accepted* today, and are generated because the parser has to
+//!     survive them, not because it rejects them. `parse_record` has no
+//!     duplicate-field-name check, so a duplicate silently collapses in `lookup`
+//!     while both entries stay in `fields`; and `parse_bytes` catches a decimal
+//!     `scale > precision` error, logs it, and falls back to plain `bytes`.
 //! Parsing must never panic. It returns `Ok`/`Err`.
 
 #![no_main]
@@ -100,11 +119,22 @@ fn gen_named_attrs(
 /// error rather than panic.
 fn gen_invalid(u: &mut Unstructured, counter: &mut u32) -> arbitrary::Result<String> {
     *counter += 1;
-    Ok(match u.int_in_range(0u8..=4)? {
-        // Enum with duplicate symbols.
-        0 => format!(
-            "{{\"type\":\"enum\",\"name\":\"E{counter}\",\"symbols\":[\"A\",\"B\",\"A\"]}}"
+    Ok(match u.int_in_range(0u8..=5)? {
+        // Two named types sharing a fullname. The names generated elsewhere carry
+        // a strictly increasing counter and so can never collide, which leaves
+        // `alloc_name`'s duplicate-fullname rejection unreachable; this is the one
+        // shape that reaches it. Both twins are declared bare, with no
+        // `namespace`, so the collision does not depend on how the enclosing type
+        // was named.
+        5 => format!(
+            "{{\"type\":\"record\",\"name\":\"Outer{counter}\",\"fields\":[\
+             {{\"name\":\"a\",\"type\":{{\"type\":\"record\",\"name\":\"Twin{counter}\",\"fields\":[]}}}},\
+             {{\"name\":\"b\",\"type\":{{\"type\":\"record\",\"name\":\"Twin{counter}\",\"fields\":[]}}}}]}}"
         ),
+        // Enum with duplicate symbols.
+        0 => {
+            format!("{{\"type\":\"enum\",\"name\":\"E{counter}\",\"symbols\":[\"A\",\"B\",\"A\"]}}")
+        }
         // Record with duplicate field names.
         1 => format!(
             "{{\"type\":\"record\",\"name\":\"R{counter}\",\"fields\":[\
@@ -215,14 +245,60 @@ fn gen_type(
     })
 }
 
+/// Enough array layers to straddle `MAX_SCHEMA_DEPTH` (128) from both sides.
+const MAX_WRAPPERS: u32 = 300;
+
 fn run(mut u: Unstructured) -> arbitrary::Result<()> {
     let mut counter = 0u32;
     let mut defined = Vec::new();
-    // Start deeper than MAX_SCHEMA_DEPTH (128) so the fuzzer can drive nesting
-    // past the limit and exercise the depth guard, not just shallow schemas.
-    let depth = u.int_in_range(1u32..=200)?;
+    // Bounded so the generated text always survives serde_json, which refuses
+    // the 128th nested container. `depth` counts generator levels, not
+    // containers, and a level spends up to three of them (a record is
+    // `{record}` → `[fields]` → `{field}` before recursing), with `gen_invalid`
+    // spending five at the leaf. So a schema nests at most `3 * depth + 2`
+    // containers, and 40 keeps the worst case at 122. Deep nesting is the
+    // wrapped path's job below, which is not subject to this limit at all.
+    let depth = u.int_in_range(1u32..=40)?;
     let schema = gen_type(&mut u, &mut counter, &mut defined, depth)?;
-    let _ = Schema::from_str(&schema);
+
+    // Half the inputs go through the text entry point unchanged. The other half
+    // get wrapped to straddle `MAX_SCHEMA_DEPTH`, which is only reachable behind
+    // `Schema::parse`. Splitting rather than doing both keeps the cost at one JSON
+    // parse plus one schema parse per input, the same as parsing the text alone.
+    let wrappers = if u.int_in_range(0u8..=1)? == 0 {
+        0
+    } else {
+        u.int_in_range(1u32..=MAX_WRAPPERS)?
+    };
+    if wrappers == 0 {
+        let _ = Schema::from_str(&schema);
+        return Ok(());
+    }
+
+    // Every generated schema is well-formed JSON by construction (all
+    // interpolated names are `R<n>`/`E<n>`/`F<n>`/`AnAlias`/`Twin<n>`), so a
+    // parse failure here is a generator bug, and swallowing it would silently
+    // skip the depth-guard half of this target.
+    let mut value: serde_json::Value = serde_json::from_str(&schema)
+        .unwrap_or_else(|e| panic!("generated schema {schema} must be valid JSON: {e}"));
+
+    // `Schema::parse` takes an already-parsed value and so is not subject to
+    // serde_json's limit, which is what makes the guard reachable at all. The
+    // wrapper count falls on either side of it, exercising the accepted depths,
+    // the rejection, and the `self.depth` decrement on the guard's error path.
+    // Built by moving `value` into each new layer. `serde_json::json!` would
+    // deep-clone it instead (its leaf case goes through `to_value`), making the
+    // wrapping quadratic in the layer count.
+    for _ in 0..wrappers {
+        let mut layer = serde_json::Map::new();
+        layer.insert(
+            "type".to_string(),
+            serde_json::Value::String("array".to_string()),
+        );
+        layer.insert("items".to_string(), value);
+        value = serde_json::Value::Object(layer);
+    }
+    let _ = Schema::parse(&value);
     Ok(())
 }
 

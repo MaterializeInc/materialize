@@ -12,7 +12,7 @@ import { interpret } from "@xstate/fsm";
 import { ErrorCode, MzDataType } from "~/api/materialize/types";
 
 import { createHistoryId } from "../historyId";
-import webSocketFsm from "./webSocketFsm";
+import webSocketFsm, { createInterruptedCommandError } from "./webSocketFsm";
 
 const MOCKED_HISTORY_ID = "1";
 
@@ -228,6 +228,55 @@ describe("webSocketFsm", () => {
       expect(
         machine.state.context.latestCommandOutput?.commandResults[0].notices[0],
       ).toEqual(notice);
+    });
+
+    it("connection closed while a command is in flight marks it interrupted and explains why", () => {
+      const machine = interpret(webSocketFsm);
+      machine.start();
+      machine.send("READY_FOR_QUERY");
+      machine.send({
+        type: "SEND",
+        command: "SELECT 5;",
+        statements: [{ query: "SELECT 5;" }],
+      });
+      machine.send("COMMAND_STARTING_HAS_ROWS");
+
+      machine.send({ type: "CONNECTION_CLOSED" });
+
+      expect(machine.state.matches("interrupted")).toBeTruthy();
+      expect(
+        machine.state.context.latestCommandOutput?.interrupted,
+      ).toBeTruthy();
+      expect(machine.state.context.latestCommandOutput?.error).toEqual(
+        createInterruptedCommandError(),
+      );
+    });
+
+    it("connection closed after a server error keeps the server error", () => {
+      const machine = interpret(webSocketFsm);
+      machine.start();
+      machine.send("READY_FOR_QUERY");
+      machine.send({
+        type: "SEND",
+        command: "SELECT nuke_materialize();",
+        statements: [{ query: "SELECT nuke_materialize();" }],
+      });
+      machine.send("COMMAND_STARTING_HAS_ROWS");
+
+      const error = {
+        message: "function nuke_materialize does not exist",
+        code: ErrorCode.UNDEFINED_FUNCTION,
+      };
+      machine.send({ type: "ERROR", error });
+
+      // The socket can close before READY_FOR_QUERY arrives, which leaves the
+      // machine in a state that still counts as processing.
+      machine.send({ type: "CONNECTION_CLOSED" });
+
+      expect(
+        machine.state.context.latestCommandOutput?.interrupted,
+      ).toBeTruthy();
+      expect(machine.state.context.latestCommandOutput?.error).toEqual(error);
     });
   });
 

@@ -146,7 +146,6 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     # within the short poll loops below.
     mz.environmentd.sql(
         """
-        ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
         ALTER SYSTEM SET cluster_controller_tick_interval = '5ms';
         """,
         port="internal",
@@ -220,7 +219,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     # (r1 -> r2).
     mz.environmentd.sql(
         """
-        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=2' ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=2' ) WITH ( WAIT UNTIL READY (TIMEOUT '1ms', ON TIMEOUT 'COMMIT') )
         """,
         port="internal",
         user="mz_system",
@@ -236,7 +235,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     # target replicas.
     mz.environmentd.sql(
         """
-        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 2 ) WITH ( WAIT UNTIL READY (TIMEOUT '1ms', ON TIMEOUT 'COMMIT') )
         """,
         port="internal",
         user="mz_system",
@@ -247,7 +246,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     # oldest replica is kept.
     mz.environmentd.sql(
         """
-        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 1 ) WITH ( WAIT UNTIL READY (TIMEOUT '1ms', ON TIMEOUT 'COMMIT') )
         """,
         port="internal",
         user="mz_system",
@@ -257,7 +256,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     # Fresh names continue past the highest index ever observed.
     mz.environmentd.sql(
         """
-        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=2', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=2', REPLICATION FACTOR 2 ) WITH ( WAIT UNTIL READY (TIMEOUT '1ms', ON TIMEOUT 'COMMIT') )
         """,
         port="internal",
         user="mz_system",
@@ -266,7 +265,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 1 ) WITH ( WAIT UNTIL READY (TIMEOUT '1ms', ON TIMEOUT 'COMMIT') )
         """,
         port="internal",
         user="mz_system",
@@ -322,7 +321,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     # "-pending" replica.
     mz.environmentd.sql(
         """
-        ALTER CLUSTER zdtaltertest SET (SIZE = 'scale=1,workers=2') WITH ( WAIT FOR '5s')
+        ALTER CLUSTER zdtaltertest SET (SIZE = 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '5s', ON TIMEOUT 'COMMIT'))
         """,
         port="internal",
         user="mz_system",
@@ -382,7 +381,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     pid = query_with_conn("select pg_backend_pid();", conn)[0][0]
     query_with_conn(
         """
-        ALTER CLUSTER cluster1 SET (SIZE = 'scale=1,workers=2') WITH ( WAIT FOR '5s')
+        ALTER CLUSTER cluster1 SET (SIZE = 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '5s', ON TIMEOUT 'COMMIT'))
         """,
         conn,
         True,

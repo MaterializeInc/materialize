@@ -9,7 +9,6 @@
 
 use std::collections::BTreeSet;
 
-use mz_adapter_types::dyncfgs::ENABLE_SCOPED_SYSTEM_PARAMETERS;
 use mz_sql::session::vars::{ENABLE_LAUNCHDARKLY, SystemVars, Value, Var, VarInput};
 
 /// A struct that defines the system parameters that should be synchronized
@@ -156,15 +155,6 @@ impl SynchronizedParameters {
 
     pub fn enable_launchdarkly(&self) -> bool {
         let var_name = self.get(ENABLE_LAUNCHDARKLY.name());
-        let var_input = VarInput::Flat(&var_name);
-        bool::parse(var_input).expect("This is known to be a bool")
-    }
-
-    /// Whether scoped (per-cluster and per-replica) system parameters are
-    /// evaluated. Read from this working copy so the sync loop can gate the
-    /// scoped reconcile without taking a catalog snapshot.
-    pub fn enable_scoped_system_parameters(&self) -> bool {
-        let var_name = self.get(ENABLE_SCOPED_SYSTEM_PARAMETERS.name());
         let var_input = VarInput::Flat(&var_name);
         bool::parse(var_input).expect("This is known to be a bool")
     }

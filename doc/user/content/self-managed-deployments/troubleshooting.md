@@ -128,7 +128,7 @@ To increase the cluster's size, you can follow the following steps:
    ```
 
    That statement holds the session open until the new replica hydrates or the
-   timeout passes. It also requires the
+   timeout passes. On those versions the option is also gated behind the
    `enable_zero_downtime_cluster_reconfiguration` session feature flag, which is
    off by default, so enable it first.
 

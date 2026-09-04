@@ -201,6 +201,9 @@ bar  mz_arrangement_sharing_raw  mz_arrangement_sharing_raw_u7_primary_idx  2  w
 bar  mz_cluster_prometheus_metrics  mz_cluster_prometheus_metrics_u7_primary_idx  1  process_id  NULL  false
 bar  mz_cluster_prometheus_metrics  mz_cluster_prometheus_metrics_u7_primary_idx  2  metric_name  NULL  false
 bar  mz_cluster_prometheus_metrics  mz_cluster_prometheus_metrics_u7_primary_idx  3  labels  NULL  false
+bar  mz_cluster_replica_resource_usage  mz_cluster_replica_resource_usage_u7_primary_idx  1  process_id  NULL  false
+bar  mz_cluster_replica_resource_usage  mz_cluster_replica_resource_usage_u7_primary_idx  2  source  NULL  false
+bar  mz_cluster_replica_resource_usage  mz_cluster_replica_resource_usage_u7_primary_idx  3  metric  NULL  false
 bar  mz_compute_dataflow_global_ids_per_worker  mz_compute_dataflow_global_ids_per_worker_u7_primary_idx  1  id  NULL  false
 bar  mz_compute_dataflow_global_ids_per_worker  mz_compute_dataflow_global_ids_per_worker_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_compute_dataflow_global_ids_per_worker  mz_compute_dataflow_global_ids_per_worker_u7_primary_idx  3  global_id  NULL  false
@@ -407,7 +410,7 @@ DROP CLUSTER foo, foo2, foo3, foo4 CASCADE
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id = 'u1';
 ----
-32
+33
 
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id <> 'u1' AND cluster_id NOT LIKE 's%';
@@ -420,7 +423,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE 'scale=1,workers=1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-304
+313
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -428,7 +431,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-272
+280
 
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER quickstart OWNER TO materialize
@@ -1191,3 +1194,24 @@ DROP CLUSTER inem
 
 statement ok
 DROP CLUSTER iner
+
+# BILLED AS must name a configured size; an unknown one is an error rather
+# than a coordinator panic. A disabled size is accepted, which the
+# `t1.free` case above covers. These sit at the end of the file because a
+# failing CREATE CLUSTER still consumes a cluster id, which would shift the
+# hardcoded ids in the queries above.
+statement ok
+CREATE CLUSTER billed (SIZE 'scale=1,workers=1', REPLICATION FACTOR 0)
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA billed.typo SIZE 'scale=1,workers=1', INTERNAL, BILLED AS 'no-such-size'
+----
+db error: ERROR: unknown cluster replica size no-such-size in BILLED AS
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER typo REPLICAS (r1 (SIZE 'scale=1,workers=1', INTERNAL, BILLED AS 'no-such-size'))
+----
+db error: ERROR: unknown cluster replica size no-such-size in BILLED AS
+
+statement ok
+DROP CLUSTER billed

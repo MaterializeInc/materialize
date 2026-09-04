@@ -152,9 +152,6 @@ class AlterClusterGracefulReconfiguration(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(dedent("""
-            $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true
-
             $ postgres-execute connection=postgres://postgres:postgres@postgres
             CREATE USER graceful_reconfig WITH SUPERUSER PASSWORD 'postgres';
             ALTER USER graceful_reconfig WITH replication;

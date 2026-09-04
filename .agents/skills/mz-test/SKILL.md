@@ -198,6 +198,9 @@ If a flake cannot be reproduced locally, suggest the user trigger CI runs manual
 Removing the "Target Branch" generates a random identifier, allowing parallel runs.
 10-20 runs to reproduce a flake is fine.
 
+To check whether a failure is already known and chronic in CI, see the
+mz-debug-ci skill's `bin/ci-failures` search.
+
 ## Additional logging for flaky tests
 
 Add logging through `log_filter` in the test's `mzcompose.py`:

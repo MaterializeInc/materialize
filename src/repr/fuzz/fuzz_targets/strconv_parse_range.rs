@@ -73,22 +73,29 @@ fn run(mut u: Unstructured) -> arbitrary::Result<()> {
         }
     } else {
         // Independent open/close framing so mismatched brackets/parens arise.
-        s.push(if u.int_in_range(0u8..=1)? == 0 { '[' } else { '(' });
+        s.push(if u.int_in_range(0u8..=1)? == 0 {
+            '['
+        } else {
+            '('
+        });
         push_bound(&mut u, &mut s)?;
         s.push(',');
         push_bound(&mut u, &mut s)?;
         // Sometimes drop the closer entirely (truncated framing).
         if u.int_in_range(0u8..=5)? != 0 {
-            s.push(if u.int_in_range(0u8..=1)? == 0 { ']' } else { ')' });
+            s.push(if u.int_in_range(0u8..=1)? == 0 {
+                ']'
+            } else {
+                ')'
+            });
         }
     }
     // 1-in-5: splice extra structural noise to exercise the error paths.
     if u.int_in_range(0u8..=4)? == 0 {
         s.push_str(u.choose(&["[", "]", "(", ")", ",", "\"", "\\", " ", "empty"])?);
     }
-    let _ = mz_repr::strconv::parse_range(&s, |e| {
-        Ok::<_, std::convert::Infallible>(e.into_owned())
-    });
+    let _ =
+        mz_repr::strconv::parse_range(&s, |e| Ok::<_, std::convert::Infallible>(e.into_owned()));
     Ok(())
 }
 

@@ -24,6 +24,7 @@ from queue import Queue
 
 from materialize import MZ_ROOT, buildkite, ci_util, file_util, spawn, ui
 from materialize.cli.run import update_sqlite_repo
+from materialize.mzcompose import sanitizer_enabled
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -428,7 +429,7 @@ def run_sqllogictest(
                     c.has_sqllogictest_junit = True
                 if not rewrite_results:
                     failed_files.append((step, file))
-                    if ui.env_is_truthy("CI"):
+                    if ui.env_is_truthy("CI") and not sanitizer_enabled():
                         work_queue.put((step, file, True))
                 exception = e
             finally:
@@ -693,6 +694,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/quote_ident.slt",
         "test/sqllogictest/quoting.slt",
         "test/sqllogictest/range.slt",
+        "test/sqllogictest/rbac_create_table_from_source.slt",
         "test/sqllogictest/rbac_enabled.slt",
         "test/sqllogictest/record.slt",
         "test/sqllogictest/recursion_limit.slt",

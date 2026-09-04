@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/schema.rs
-revision: 161628c089
+revision: f0cdedca04
 ---
 
 # persist-client::schema

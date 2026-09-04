@@ -1,6 +1,6 @@
 ---
 source: src/kafka-util/src/client.rs
-revision: d5cab9feec
+revision: d9bb748bcd
 ---
 
 # mz-kafka-util::client

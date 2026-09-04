@@ -14,6 +14,7 @@ from typing import Any
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
 from materialize.mz_version import MzVersion
+from materialize.mzcompose import sanitizer_enabled
 
 
 class PgCdcBase:
@@ -279,8 +280,22 @@ class PgCdcNoWait(PgCdcBase, Check):
 
 @externally_idempotent(False)
 class PgCdcMzNow(Check):
+    # A row sits in the temporal filter's view for WINDOW_SECS after its
+    # timestamp, and the assertions below only count rows younger than
+    # SLACK_SECS. Retrying recovers from neither deadline: a row that takes
+    # longer than WINDOW_SECS to arrive never enters the view at all, and one
+    # that ages past SLACK_SECS stops counting towards the assertion. A
+    # sanitized binary ingests slowly enough to hit both.
+    WINDOW_SECS = 600 if sanitizer_enabled() else 60
+    # SLACK_SECS sits just above WINDOW_SECS rather than scaling with it: the
+    # "no rows older than SLACK_SECS" assertion is what proves the filter
+    # retracts, and it only proves it for rows that should already have left the
+    # view. The margin absorbs the lag between `mz_now()` and wall clock, which
+    # decides how long after WINDOW_SECS a row is actually retracted.
+    SLACK_SECS = WINDOW_SECS + 120
+
     def initialize(self) -> Testdrive:
-        return Testdrive(dedent("""
+        return Testdrive(dedent(f"""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 CREATE USER postgres2 WITH SUPERUSER PASSWORD 'postgres';
                 ALTER USER postgres2 WITH replication;
@@ -313,10 +328,10 @@ class PgCdcMzNow(Check):
                   (PUBLICATION 'postgres_mz_now_publication');
                 > CREATE TABLE postgres_mz_now_table FROM SOURCE postgres_mz_now_source (REFERENCE postgres_mz_now_table);
 
-                # Return all rows fresher than 60 seconds
+                # Return all rows fresher than WINDOW_SECS
                 > CREATE MATERIALIZED VIEW postgres_mz_now_view AS
                   SELECT * FROM postgres_mz_now_table
-                  WHERE mz_now() <= ROUND(EXTRACT(epoch FROM f1 + INTERVAL '60' SECOND) * 1000)
+                  WHERE mz_now() <= ROUND(EXTRACT(epoch FROM f1 + INTERVAL '{self.WINDOW_SECS}' SECOND) * 1000)
                 """))
 
     def manipulate(self) -> list[Testdrive]:
@@ -347,7 +362,7 @@ class PgCdcMzNow(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(dedent("""
+        return Testdrive(dedent(f"""
                 > SELECT COUNT(*) FROM postgres_mz_now_table;
                 13
 
@@ -360,14 +375,14 @@ class PgCdcMzNow(Check):
                 DELETE FROM postgres_mz_now_table WHERE f2 = 'B3';
                 UPDATE postgres_mz_now_table SET f1 = NOW() WHERE f2 = 'E1'
 
-                # Expect some rows newer than 180 seconds in view
+                # Expect some rows newer than SLACK_SECS in view
                 > SELECT COUNT(*) >= 6 FROM postgres_mz_now_view
-                  WHERE f1 > NOW() - INTERVAL '180' SECOND;
+                  WHERE f1 > NOW() - INTERVAL '{self.SLACK_SECS}' SECOND;
                 true
 
-                # Expect no rows older than 180 seconds in view
+                # Expect no rows older than SLACK_SECS in view
                 > SELECT COUNT(*) FROM postgres_mz_now_view
-                  WHERE f1 < NOW() - INTERVAL '180' SECOND;
+                  WHERE f1 < NOW() - INTERVAL '{self.SLACK_SECS}' SECOND;
                 0
 
                 # Rollback the last INSERTs so that validate() can be called multiple times

@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/dml.rs
-revision: 5b0bee10fd
+revision: 38447d1ee0
 ---
 
 # mz-sql::plan::statement::dml
@@ -13,3 +13,4 @@ Converts each statement to its corresponding `Plan` variant after running query 
 In both `EXPLAIN ANALYZE OBJECT` and `EXPLAIN ANALYZE CLUSTER`, when joining per-worker memory and CPU sub-queries to the main result, the `worker_id` filter predicate uses a three-part OR condition `(x = worker_id OR x IS NULL OR worker_id IS NULL)` so that rows from LEFT JOINs with a NULL `worker_id` are retained rather than silently dropped.
 `COPY TO` rejects the `ESCAPE` option and rejects `HEADER true` (an enabled header is unimplemented; silently accepting it would cause clients to strip the first data row as a presumed header).
 `COPY TO ... FORMAT PARQUET` validates the output descriptor using `ArrowBuilder::validate_desc_for_parquet` with no type overrides.
+`ExplainPlanOptionExtracted` includes the `enable_union_cancellation_after_relation_cse` field, which is passed through to `ExplainConfig` when planning `EXPLAIN PLAN` statements.

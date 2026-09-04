@@ -296,21 +296,21 @@ FROM t
                       "CaseLiteral": {
                         "lookup": [
                           {
-                            "literal": {
-                              "data": [
-                                45,
-                                1
-                              ]
-                            },
+                            "literal": [
+                              10,
+                              2,
+                              24,
+                              1
+                            ],
                             "expr_index": 1
                           },
                           {
-                            "literal": {
-                              "data": [
-                                45,
-                                2
-                              ]
-                            },
+                            "literal": [
+                              10,
+                              2,
+                              24,
+                              2
+                            ],
                             "expr_index": 2
                           }
                         ],

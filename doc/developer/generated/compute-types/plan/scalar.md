@@ -1,6 +1,6 @@
 ---
 source: src/compute-types/src/plan/scalar.rs
-revision: 380c8dd1a1
+revision: c6be08fe4f
 ---
 
 # compute-types::plan::scalar
@@ -11,7 +11,7 @@ Scalar expressions in a stable, serializable format for the LIR (Low-level IR) l
 
 Key types:
 
-* `LirScalarExpr` — enum with six variants: `Column(usize, TreatAsEqual<Option<Arc<str>>>)`, `Literal(Result<Row, EvalError>, ReprColumnType)`, `CallUnary`, `CallBinary`, `CallVariadic`, `If`. Implements `Eval`, `Columns`, `OptimizableExpr`, `VisitChildren`, `HumanizeDisplay`, and `ScalarOps`. Notable helpers: `is_literal_true()` returns true when the expression is a literal `true` datum (used by `LirAggregateExpr::is_count_asterisk`).
+* `LirScalarExpr` — enum with six variants: `Column(usize, TreatAsEqual<Option<Arc<str>>>)`, `Literal(Result<Row, EvalError>, ReprColumnType)`, `CallUnary { func: UnaryFunc<LirScalarExpr>, expr }`, `CallBinary`, `CallVariadic`, `If`. The `UnaryFunc<LirScalarExpr>` instantiation stores no `MirScalarExpr` inside cast functions. Implements `Eval`, `Columns`, `OptimizableExpr`, `VisitChildren`, `HumanizeDisplay`, and `ScalarOps`. Notable helpers: `is_literal_true()` returns true when the expression is a literal `true` datum (used by `LirAggregateExpr::is_count_asterisk`).
 
 Key conversion functions:
 

@@ -66,7 +66,6 @@ use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::time::{self};
 use tokio_metrics::TaskMetrics;
-use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{Instrument, debug, debug_span, info, warn};
 use uuid::Uuid;
 
@@ -2245,7 +2244,7 @@ where
                         row_desc,
                         portal_name,
                         InProgressRows::new(RecordFirstRowStream::new(
-                            Box::new(UnboundedReceiverStream::new(rx)),
+                            rx,
                             execute_started,
                             &self.adapter_client,
                             Some(instance_id),
@@ -2302,7 +2301,7 @@ where
                                 format,
                                 row_desc,
                                 RecordFirstRowStream::new(
-                                    Box::new(UnboundedReceiverStream::new(rx)),
+                                    rx,
                                     execute_started,
                                     &self.adapter_client,
                                     Some(instance_id),
@@ -2428,6 +2427,7 @@ where
             | ExecuteResponse::CreatedConnection { .. }
             | ExecuteResponse::CreatedDatabase { .. }
             | ExecuteResponse::CreatedIndex { .. }
+            | ExecuteResponse::CreatedMetricSink { .. }
             | ExecuteResponse::CreatedIntrospectionSubscribe
             | ExecuteResponse::CreatedMaterializedView { .. }
             | ExecuteResponse::CreatedRole
@@ -2580,7 +2580,7 @@ where
                         None => FetchResult::Rows(None),
                         Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
                         Some(PeekResponseUnary::Error(err)) => {
-                            FetchResult::Error(ErrorResponse::error(SqlState::INTERNAL_ERROR, err))
+                            FetchResult::Error(err.into_response(Severity::Error))
                         }
                         Some(PeekResponseUnary::DependencyDropped(dep)) => {
                             FetchResult::Error(
@@ -2844,11 +2844,10 @@ where
                 e = self.conn.wait_closed() => return Err(e),
                 batch = stream.recv() => match batch {
                     None => break,
-                    Some(PeekResponseUnary::Error(text)) => {
-                        let err =
-                            ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone());
+                    Some(PeekResponseUnary::Error(err)) => {
+                        let text = err.to_string();
                         return self
-                            .send_error_and_get_state(err)
+                            .send_error_and_get_state(err.into_response(Severity::Error))
                             .await
                             .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
                     }

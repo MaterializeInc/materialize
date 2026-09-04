@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { atom, useAtomValue } from "jotai";
-import React, { useMemo } from "react";
+import React from "react";
 
 import { buildSubscribeQuery } from "~/api/materialize/buildSubscribeQuery";
 import {
@@ -29,19 +29,17 @@ export const allRoles = atom<SubscribeState<RoleItem>>({
   snapshotComplete: false,
 });
 
-export function useSubscribeToAllRoles() {
-  const subscribe = useMemo(() => {
-    return buildSubscribeQuery(buildRolesListQuery(), {
-      upsertKey: ["roleName"],
-    });
-  }, []);
+const ALL_ROLES_SUBSCRIBE_OPTIONS = {
+  atom: allRoles,
+  subscribe: buildSubscribeQuery(buildRolesListQuery(), {
+    upsertKey: ["roleName"],
+  }),
+  select: (row: SubscribeRow<RoleItem>) => row.data,
+  upsertKey: (row: SubscribeRow<RoleItem>) => row.data.roleName,
+};
 
-  return useGlobalUpsertSubscribe({
-    atom: allRoles,
-    subscribe,
-    select: (row: SubscribeRow<RoleItem>) => row.data,
-    upsertKey: (row: SubscribeRow<RoleItem>) => row.data.roleName,
-  });
+export function useSubscribeToAllRoles() {
+  useGlobalUpsertSubscribe(ALL_ROLES_SUBSCRIBE_OPTIONS);
 }
 
 export function useAllRoles() {

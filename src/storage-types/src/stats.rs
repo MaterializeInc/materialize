@@ -50,8 +50,10 @@ impl RelationPartStats<'_> {
         let mut ranges = ColumnSpecs::new(&relation, &arena);
         ranges.push_unmaterializable(UnmaterializableFunc::MzNow, time_range);
 
-        if self.err_count().into_iter().any(|count| count > 0) {
-            // If the error collection is nonempty, we always keep the part.
+        // If the error collection is nonempty, we always keep the part.
+        // Missing err stats mean errors cannot be ruled out, so they count as
+        // "may error" too, matching the storage read path's `filter_result`.
+        if self.err_count().is_none_or(|count| count > 0) {
             return true;
         }
 
@@ -122,9 +124,20 @@ impl RelationPartStats<'_> {
         let typ = &self.desc.get_type(idx);
 
         let ok_stats = self.stats.key.col("ok")?;
-        let ok_stats = ok_stats
-            .try_as_optional_struct()
-            .expect("ok column should be nullable struct");
+        // These stats come straight off durable state, so a corrupt or
+        // version-skewed encoding can carry any shape here. Report the column
+        // range as unknown rather than panicking the process reading it.
+        let ok_stats = match ok_stats.try_as_optional_struct() {
+            Ok(ok_stats) => ok_stats,
+            Err(err) => {
+                self.metrics.mismatched_count.inc();
+                tracing::error!(
+                    "expected nullable struct stats for the 'ok' column of {}: {err}",
+                    self.name
+                );
+                return None;
+            }
+        };
         let col_stats = ok_stats.some.cols.get(name.as_str())?;
 
         if let SqlColumnType {
@@ -174,12 +187,10 @@ impl RelationPartStats<'_> {
 
     pub fn ok_count(&self) -> Option<usize> {
         // The number of OKs is the number of rows whose error is None.
-        let stats = self
-            .stats
-            .key
-            .col("err")?
-            .try_as_optional_bytes()
-            .expect("err column should be a Option<Vec<u8>>");
+        // Malformed or wrong-shaped err stats (corrupt or version-skewed
+        // durable state) count as unknown, which callers treat as
+        // "may contain errors", rather than panicking the replica.
+        let stats = self.stats.key.col("err")?.try_as_optional_bytes().ok()?;
         Some(stats.none)
     }
 
@@ -190,7 +201,9 @@ impl RelationPartStats<'_> {
         // then subtract that from the total.
         let num_results = self.stats.key.len;
         let num_oks = self.ok_count();
-        num_oks.map(|num_oks| num_results - num_oks)
+        // An ok count exceeding the part length is corrupt stats; report the
+        // err count as unknown (callers keep the part) instead of underflowing.
+        num_oks.and_then(|num_oks| num_results.checked_sub(num_oks))
     }
 
     fn col_values<'a>(&'a self, idx: &ColumnIndex, arena: &'a RowArena) -> Option<ResultSpec<'a>> {
@@ -198,8 +211,16 @@ impl RelationPartStats<'_> {
         let typ = self.desc.get_type(idx);
 
         let ok_stats = self.stats.key.cols.get("ok")?;
+        // See the note in `col_json`: durable stats can be any shape, so a
+        // wrong-shaped 'ok' column makes the range unknown, not a panic.
         let ColumnStatKinds::Struct(ok_stats) = &ok_stats.values else {
-            panic!("'ok' column stats should be a struct")
+            self.metrics.mismatched_count.inc();
+            tracing::error!(
+                "expected struct stats for the 'ok' column of {}, found {:?}",
+                self.name,
+                ok_stats.values
+            );
+            return None;
         };
         let col_stats = ok_stats.cols.get(name.as_str())?;
 
@@ -229,7 +250,8 @@ mod tests {
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_persist_types::columnar::{ColumnDecoder, Schema};
     use mz_persist_types::part::PartBuilder;
-    use mz_persist_types::stats::PartStats;
+    use mz_persist_types::stats::{PartStats, ProtoStructStats, TrimStats, trim_to_budget};
+    use mz_proto::RustType;
     use mz_repr::{Datum, RelationDesc, Row, RowArena, SqlColumnType, SqlScalarType};
     use mz_repr::{SqlRelationType, arb_datum_for_column};
     use proptest::prelude::*;
@@ -256,19 +278,53 @@ mod tests {
             .expect("success");
         let key_stats = decoder.stats();
 
-        let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
-        let stats = RelationPartStats {
-            name: "test",
-            metrics: &metrics,
-            stats: &PartStats { key: key_stats },
-            desc: &schema,
-        };
-        let arena = RowArena::default();
+        // Trimming may widen bounds or drop them entirely, but must never
+        // narrow them, so the containment check below has to hold after every
+        // trimming pass: the lossy-but-column-preserving `trim`, and
+        // `trim_to_budget` at budgets all the way down to one that drops
+        // every column. The force-keep column matches the production default
+        // of never trimming the err column's stats.
+        let proto: ProtoStructStats = RustType::into_proto(&key_stats);
+        let mut variants = vec![("collected".to_string(), key_stats)];
+        {
+            let mut trimmed = proto.clone();
+            trimmed.trim();
+            variants.push((
+                "trimmed".to_string(),
+                RustType::from_proto(trimmed).expect("valid proto"),
+            ));
+        }
+        let full = prost::Message::encoded_len(&proto);
+        for budget in [full / 2, full / 4, 16, 0] {
+            let mut trimmed = proto.clone();
+            trim_to_budget(&mut trimmed, budget, |col| col == "err");
+            variants.push((
+                format!("trim_to_budget({budget})"),
+                RustType::from_proto(trimmed).expect("valid proto"),
+            ));
+        }
 
-        // Validate that the stats would include all of the provided datums.
-        for datum in datums {
-            let spec = stats.col_stats(&ColumnIndex::from_raw(0), &arena);
-            assert!(spec.may_contain(*datum));
+        let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+        for (label, key_stats) in variants {
+            let stats = RelationPartStats {
+                name: "test",
+                metrics: &metrics,
+                stats: &PartStats { key: key_stats },
+                desc: &schema,
+            };
+            let arena = RowArena::default();
+
+            // Validate that the stats would include all of the provided datums.
+            for datum in datums {
+                let spec = stats.col_stats(&ColumnIndex::from_raw(0), &arena);
+                if !spec.may_contain(*datum) {
+                    return Err(format!(
+                        "{label} stats-derived spec claims {datum:?} is absent from a part that \
+                         contains it (type: {:?}, part: {datums:?}, spec: {spec:?})",
+                        column_type.scalar_type,
+                    ));
+                }
+            }
         }
 
         Ok(())
@@ -298,6 +354,42 @@ mod tests {
         });
     }
 
+    /// Deterministic sweep over multi-datum parts: every pair of interesting
+    /// datums and the full set, packed into a single part per type.
+    ///
+    /// Part bounds are computed over the whole part, so a value whose ordering
+    /// the stats collection disagrees on (e.g. -NaN, which arrow's total order
+    /// puts below -Infinity but `OrderedFloat` ranks above every finite value)
+    /// can invalidate the bounds for *other* values in the part. Single-datum
+    /// parts, as covered by `all_scalar_types_stats_roundtrip`, can never
+    /// catch that class of bug.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn interesting_datum_combinations_stats_roundtrip() {
+        for scalar_type in SqlScalarType::enumerate() {
+            let datums: Vec<_> = scalar_type.interesting_datums().collect();
+            if datums.is_empty() {
+                continue;
+            }
+            for nullable in [false, true] {
+                let column_type = scalar_type.clone().nullable(nullable);
+                for (i, a) in datums.iter().enumerate() {
+                    for b in &datums[i + 1..] {
+                        assert_eq!(validate_stats(&column_type, &[*a, *b]), Ok(()));
+                    }
+                    if nullable {
+                        assert_eq!(validate_stats(&column_type, &[*a, Datum::Null]), Ok(()));
+                    }
+                }
+                let mut all = datums.clone();
+                if nullable {
+                    all.push(Datum::Null);
+                }
+                assert_eq!(validate_stats(&column_type, &all[..]), Ok(()));
+            }
+        }
+    }
+
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn all_datums_produce_valid_stats() {
@@ -315,6 +407,227 @@ mod tests {
                 prop_assert_eq!(validate_stats(&ty, &datums[..]), Ok(()));
             }
         )
+    }
+
+    /// The err column's stats are force-kept from trimming by default, but
+    /// that list is configurable, so they can be absent. When they are,
+    /// `may_match_mfp` must treat the part as possibly containing errors,
+    /// exactly like `filter_result` does: error rows must surface regardless
+    /// of any filter, so a part that may hold one can never be skipped.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn may_match_mfp_missing_err_stats_keeps_part() {
+        use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, func};
+        use mz_repr::ReprScalarType;
+
+        use crate::errors::DataflowError;
+
+        let schema = RelationDesc::builder()
+            .with_column("col", SqlScalarType::Int32.nullable(false))
+            .finish();
+        let mut builder = PartBuilder::new(&schema, &UnitSchema);
+        builder.push(
+            &SourceData(Ok(Row::pack_slice(&[Datum::Int32(1)]))),
+            &(),
+            1u64,
+            1i64,
+        );
+        builder.push(
+            &SourceData(Err(DataflowError::from(EvalError::DivisionByZero))),
+            &(),
+            1u64,
+            1i64,
+        );
+        let part = builder.finish();
+        let key_col = part.key.as_struct();
+        let decoder = <RelationDesc as Schema<SourceData>>::decoder(&schema, key_col.clone())
+            .expect("success");
+        let mut key_stats = decoder.stats();
+        // Simulate the err column's stats having been trimmed away.
+        key_stats.cols.remove("err").expect("err stats present");
+
+        let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+        let stats = RelationPartStats {
+            name: "test",
+            metrics: &metrics,
+            stats: &PartStats { key: key_stats },
+            desc: &schema,
+        };
+        // No Ok row matches this filter: only the error row makes the part
+        // relevant, and with the err stats missing it cannot be ruled out.
+        let mfp = MapFilterProject::new(1).filter(std::iter::once(MirScalarExpr::CallBinary {
+            func: BinaryFunc::Eq(func::Eq),
+            expr1: Box::new(MirScalarExpr::column(0)),
+            expr2: Box::new(MirScalarExpr::literal_ok(
+                Datum::Int32(999),
+                ReprScalarType::Int32,
+            )),
+        }));
+        assert!(stats.may_match_mfp(ResultSpec::anything(), &mfp));
+    }
+
+    /// Wrong-shaped err-column stats (corrupt or version-skewed durable
+    /// state) must read as "err count unknown", which fails open to keeping
+    /// the part, not panic the replica.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn malformed_err_stats_fail_open() {
+        use mz_persist_types::stats::{ColumnNullStats, ColumnarStats, PrimitiveStats};
+
+        let schema = RelationDesc::builder()
+            .with_column("col", SqlScalarType::Int32.nullable(false))
+            .finish();
+        let mut builder = PartBuilder::new(&schema, &UnitSchema);
+        builder.push(
+            &SourceData(Ok(Row::pack_slice(&[Datum::Int32(1)]))),
+            &(),
+            1u64,
+            1i64,
+        );
+        let part = builder.finish();
+        let key_col = part.key.as_struct();
+        let decoder = <RelationDesc as Schema<SourceData>>::decoder(&schema, key_col.clone())
+            .expect("success");
+        let mut key_stats = decoder.stats();
+        // Overwrite the err column's stats with a wrong-shaped entry.
+        key_stats.cols.insert(
+            "err".to_string(),
+            ColumnarStats {
+                nulls: Some(ColumnNullStats { count: 0 }),
+                values: PrimitiveStats {
+                    lower: 0i32,
+                    upper: 0i32,
+                }
+                .into(),
+            },
+        );
+
+        let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+        let stats = RelationPartStats {
+            name: "test",
+            metrics: &metrics,
+            stats: &PartStats { key: key_stats },
+            desc: &schema,
+        };
+        assert_eq!(stats.ok_count(), None);
+        assert_eq!(stats.err_count(), None);
+
+        // Well-shaped err stats whose none count exceeds the part length
+        // (corrupt or version-skewed) must read as unknown, not underflow.
+        let mut key_stats = decoder.stats();
+        match key_stats.cols.get_mut("err") {
+            Some(err_stats) => match &mut err_stats.values {
+                ColumnStatKinds::Bytes(BytesStats::Primitive(_)) => {
+                    err_stats.nulls = Some(mz_persist_types::stats::ColumnNullStats {
+                        count: key_stats.len + 1,
+                    });
+                }
+                other => panic!("unexpected err stats {other:?}"),
+            },
+            None => panic!("err stats missing"),
+        }
+        let stats = RelationPartStats {
+            name: "test",
+            metrics: &metrics,
+            stats: &PartStats { key: key_stats },
+            desc: &schema,
+        };
+        assert_eq!(stats.err_count(), None);
+    }
+
+    /// Wrong-shaped ok-column stats must read as "column range unknown",
+    /// which fails open to keeping the part. Both column paths run here: a
+    /// plain column goes through `col_values`, a JSON one adds `col_json`,
+    /// and neither may panic the process reading durable state.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn malformed_ok_stats_fail_open() {
+        use mz_expr::{BinaryFunc, MirScalarExpr, func};
+        use mz_persist_types::stats::{ColumnNullStats, ColumnarStats, PrimitiveStats};
+        use mz_repr::ReprScalarType;
+
+        let schema = RelationDesc::builder()
+            .with_column("col", SqlScalarType::Int32.nullable(false))
+            .with_column("json", SqlScalarType::Jsonb.nullable(true))
+            .finish();
+        let mut builder = PartBuilder::new(&schema, &UnitSchema);
+        builder.push(
+            &SourceData(Ok(Row::pack_slice(&[Datum::Int32(1), Datum::JsonNull]))),
+            &(),
+            1u64,
+            1i64,
+        );
+        let part = builder.finish();
+        let key_col = part.key.as_struct();
+        let decoder = <RelationDesc as Schema<SourceData>>::decoder(&schema, key_col.clone())
+            .expect("success");
+
+        let json_idx = schema
+            .iter_all()
+            .map(|(idx, _name, _typ)| idx)
+            .nth(1)
+            .expect("two columns");
+        // A filter no Ok row in this part satisfies. With well-shaped stats
+        // the part is skipped, so keeping it proves the fallback ran.
+        let mfp = MapFilterProject::new(2).filter(std::iter::once(MirScalarExpr::CallBinary {
+            func: BinaryFunc::Eq(func::Eq),
+            expr1: Box::new(MirScalarExpr::column(0)),
+            expr2: Box::new(MirScalarExpr::literal_ok(
+                Datum::Int32(999),
+                ReprScalarType::Int32,
+            )),
+        }));
+
+        let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+        let arena = RowArena::new();
+        let well_shaped = PartStats {
+            key: decoder.stats(),
+        };
+        let well_shaped = RelationPartStats::new("test", &metrics, &schema, &well_shaped);
+        assert!(!well_shaped.may_match_mfp(ResultSpec::anything(), &mfp));
+
+        // `col_values` matched the ok column's kind infallibly. A wrong kind
+        // makes every column's range unknown.
+        let mut not_a_struct = decoder.stats();
+        not_a_struct.cols.insert(
+            "ok".to_string(),
+            ColumnarStats {
+                nulls: Some(ColumnNullStats { count: 0 }),
+                values: PrimitiveStats {
+                    lower: 0i32,
+                    upper: 0i32,
+                }
+                .into(),
+            },
+        );
+        let not_a_struct = PartStats { key: not_a_struct };
+        let not_a_struct = RelationPartStats::new("test", &metrics, &schema, &not_a_struct);
+        for (idx, _name, _typ) in schema.iter_all() {
+            assert_eq!(not_a_struct.col_stats(idx, &arena), ResultSpec::anything());
+        }
+        assert!(not_a_struct.may_match_mfp(ResultSpec::anything(), &mfp));
+
+        // `col_json` additionally required the ok column to be nullable. A
+        // struct that is not widens the JSON range alone, so assert on that
+        // rather than on the part-level decision.
+        let mut not_nullable = decoder.stats();
+        match not_nullable.cols.get_mut("ok") {
+            Some(ok_stats) => ok_stats.nulls = None,
+            None => panic!("ok stats missing"),
+        }
+        let not_nullable = PartStats { key: not_nullable };
+        let not_nullable = RelationPartStats::new("test", &metrics, &schema, &not_nullable);
+        let other_json = Datum::String("a");
+        assert!(
+            !well_shaped
+                .col_stats(json_idx, &arena)
+                .may_contain(other_json)
+        );
+        assert!(
+            not_nullable
+                .col_stats(json_idx, &arena)
+                .may_contain(other_json)
+        );
     }
 
     #[mz_ore::test]

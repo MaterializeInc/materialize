@@ -526,14 +526,14 @@ NULL
 query B
 SELECT NULL = ANY(NULL::INTEGER[]);
 ----
-false
+NULL
 
 query B
 SELECT NULL = SOME(NULL::INTEGER[]);
 ----
-false
+NULL
 
 query B
 SELECT NULL = ALL(NULL::INTEGER[]);
 ----
-true
+NULL

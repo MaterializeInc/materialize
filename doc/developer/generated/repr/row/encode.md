@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/row/encode.rs
-revision: 37d0a1c9ac
+revision: 95baa04a85
 ---
 
 # mz-repr::row::encode

@@ -115,8 +115,10 @@ use differential_dataflow::AsCollection;
 use futures::{StreamExt as _, TryStreamExt};
 use itertools::Itertools;
 use mysql_async::prelude::Queryable;
-use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
-use mz_mysql_util::{MySqlConn, MySqlError, pack_mysql_row, query_sys_var, quote_identifier};
+use mysql_async::{IsolationLevel, Row as MySqlRow, Transaction, TxOpts, Value};
+use mz_mysql_util::{
+    MySqlConn, MySqlError, QualifiedTableRef, pack_mysql_row, query_sys_var, quote_identifier,
+};
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
@@ -168,11 +170,22 @@ fn try_extract_single_column_pk(
     Some((name.clone(), scalar_type))
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct PkBoundaries {
     pk_col: String,
     // Ordered primary key values that partition the table space.
     boundaries: Vec<String>,
+}
+
+// Ensure that boundaries are not printed because they contain data from the
+// primary key column.
+impl std::fmt::Debug for PkBoundaries {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PkBoundaries")
+            .field("pk_col", &self.pk_col)
+            .field("boundaries", &mz_ore::str::redact(&self.boundaries))
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -186,9 +199,9 @@ struct SnapshotInfo {
 struct PkRange {
     /// Quoted PK column, e.g. `` `id` ``.
     pk_col: String,
-    /// Inclusive lower bound literal, or `None` for the first partition (open start).
+    /// Inclusive lower bound key value, or `None` for the first partition (open start).
     lower: Option<String>,
-    /// Exclusive upper bound literal, or `None` for the last partition (open end).
+    /// Exclusive upper bound key value, or `None` for the last partition (open end).
     upper: Option<String>,
 }
 
@@ -220,92 +233,81 @@ fn worker_pk_range(
     })
 }
 
-/// Walks the primary key index in steps of about `row_count / worker_count`, taking the key
-/// at each step's `OFFSET`. The per-step OFFSET scans sum to a full index pass, so this
-/// function has a time complexity of O(row_count). Worker count is small, so the OFFSET
-/// scans dominate the runtime. `row_count` can be an optimizer estimate for large tables,
-/// so the partitions are approximate. An overestimate walks off the end of the index and stops
-/// with fewer boundaries, resulting in some workers receiving less or no work. An underestimate
-/// leaves a larger final partition for the last worker, however both still correctly partition
-/// the table. Returns None if the primary key column type is not supported or the table is too
-/// small to split.
-async fn compute_sampled_splits<Q>(
-    conn: &mut Q,
-    table: &MySqlTableName,
-    pk_col: &(String, SqlScalarType),
-    worker_count: usize,
-    total: u64,
-) -> Result<Option<PkBoundaries>, TransientError>
-where
-    Q: Queryable,
-{
-    let (col, scalar_type) = pk_col;
-    // Render the PK column as text that sorts and compares the same way the range
-    // predicates do: `QUOTE()` under the column's collation for character types,
-    // `CAST(.. AS CHAR)` for integers. Any other type can't be split safely.
-    let (col_literal, integer_path) = match scalar_type {
-        SqlScalarType::Int16
-        | SqlScalarType::Int32
-        | SqlScalarType::Int64
-        | SqlScalarType::UInt16
-        | SqlScalarType::UInt32
-        | SqlScalarType::UInt64 => (format!("CAST({col} AS CHAR)"), true),
-        SqlScalarType::Char { .. } | SqlScalarType::VarChar { .. } | SqlScalarType::String => {
-            (format!("QUOTE({col})"), false)
-        }
-        _ => return Ok(None),
-    };
+const SUPPORTED_PK_COLLATION: &str = "utf8mb4_bin";
+const SUPPORTED_PK_CHARSET: &str = "utf8mb4";
+const MIN_PROBED_PREFIXES: u64 = 64;
+const MAX_PROBED_PREFIXES: u64 = 5_000;
 
-    let partitions = std::cmp::min(u64::cast_from(worker_count), total);
-    if partitions < 2 {
+/// Partitioning configuration settings bundled to avoid accidental mixing.
+struct PartitionSettings {
+    min_rows: u64,
+    probed_prefixes_per_billion_rows: u64,
+}
+
+/// Attempts to compute roughly even boundaries for primary keys. Returns None if the column type
+/// is unsupported or boundaries couldn't be estimated for some reason. Currently only supports
+/// CHAR/VARCHAR columns with up to 768 characters with utf8mb4_bin collation.
+async fn compute_sampled_splits(
+    tx: &mut Transaction<'_>,
+    table: &MySqlTableName,
+    raw_col: &str,
+    scalar_type: &SqlScalarType,
+    worker_count: usize,
+    row_count: u64,
+    settings: &PartitionSettings,
+) -> Result<Option<PkBoundaries>, TransientError> {
+    match scalar_type {
+        SqlScalarType::Char { length }
+            if length.is_some_and(|l| l.into_u32() <= mz_mysql_util::MAX_KEY_LENGTH) => {}
+        SqlScalarType::VarChar { max_length }
+            if max_length.is_some_and(|l| l.into_u32() <= mz_mysql_util::MAX_KEY_LENGTH) => {}
+        _ => return Ok(None),
+    }
+    let collation = fetch_column_collation(&mut *tx, table, raw_col).await?;
+    let supported = matches!(&collation, Some(c) if c.1 == SUPPORTED_PK_COLLATION);
+    if !supported {
+        tracing::debug!(?collation, "PK splitting skipped: unsupported collation");
         return Ok(None);
     }
-    let chunk = total / partitions;
-
-    let mut boundaries: Vec<String> = Vec::with_capacity(usize::cast_from(partitions) - 1);
-    for _ in 1..partitions {
-        let (predicate, offset) = match boundaries.last() {
-            Some(prev) => (format!(" WHERE {col} > {prev}"), chunk - 1),
-            None => (String::new(), chunk),
-        };
-        // The identifier is quoted via `quote_identifier`, the previous boundary is
-        // itself a value MySQL rendered as a literal, `table` via Display, and the
-        // offset is an integer, so this interpolation is safe; not parameterizable.
-        #[allow(clippy::disallowed_methods)]
-        let row: Option<MySqlRow> = conn
-            .query_first(format!(
-                "SELECT {col_literal} FROM {table}{predicate} \
-                 ORDER BY {col} LIMIT 1 OFFSET {offset}"
-            ))
-            .await?;
-        // Defensive: if a concurrent write shrank the range out from under us, stop and
-        // use the boundaries found so far. Fewer partitions is still correct.
-        let Some(mut row) = row else { break };
-        // The column is CAST/QUOTE-ed to text, so it decodes as a String that is
-        // already a valid SQL literal. A decode failure (e.g. a non-UTF-8
-        // collation) means we can't safely partition: fall back.
-        match row.take_opt::<String, usize>(0) {
-            Some(Ok(lit)) if !integer_path || is_decimal_literal(&lit) => boundaries.push(lit),
-            _ => return Ok(None),
+    let table_ref = QualifiedTableRef {
+        schema_name: &table.0,
+        table_name: &table.1,
+    };
+    // For larger table sizes we can afford to spend more time computing partitions. Making thousands of
+    // network requests to search through prefixes can take minutes, but is worth it for billions of rows
+    // that can take hours to snapshot.
+    let max_probed_prefixes = (row_count.saturating_mul(settings.probed_prefixes_per_billion_rows)
+        / 1_000_000_000)
+        .clamp(MIN_PROBED_PREFIXES, MAX_PROBED_PREFIXES);
+    let params = mz_mysql_util::PartitionParams {
+        num_workers: worker_count,
+        estimated_row_count: row_count,
+        min_split_threshold: settings.min_rows,
+        max_probed_prefixes,
+    };
+    let prefixes = match mz_mysql_util::partition_table(tx, table_ref, raw_col, params).await {
+        Ok(prefixes) => prefixes,
+        Err(err @ (MySqlError::NonUtf8KeyValue { .. } | MySqlError::MissingRowEstimate { .. })) => {
+            tracing::warn!(%err, "partitioning failed, falling back to a single partition");
+            return Ok(None);
         }
-    }
-    if boundaries.is_empty() {
+        Err(err) => return Err(err.into()),
+    };
+    if prefixes.is_empty() {
         return Ok(None);
     }
     Ok(Some(PkBoundaries {
-        pk_col: col.clone(),
-        boundaries,
+        pk_col: quote_identifier(raw_col),
+        boundaries: prefixes,
     }))
 }
 
 /// For every table, read the row count (exact only for small tables) and, for a
 /// supported single-column primary key, compute the PK-range split boundaries,
 /// concurrently over at most `worker_count` connections. `None` bounds means
-/// single-worker fallback for that table. The counts are reused for both the sampling
-/// stride and the snapshot size gauge. Snapshot size gauge is a metric for the snapshot
-/// size used to report how many rows we need to process. "Sampling stride" refers to
-/// the number of rows we use to page through the table to find roughly evenly spaced
-/// primary keys to use as partition boundaries.
+/// single-worker fallback for that table. The counts are reused for both boundary
+/// discovery and the snapshot size gauge. The snapshot size gauge is a metric
+/// reporting how many rows the snapshot needs to process.
 async fn sample_pk_bounds(
     config: &RawSourceCreationConfig,
     connection_config: &mz_mysql_util::Config,
@@ -335,11 +337,21 @@ async fn sample_pk_bounds(
         mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS
             .get(config.config.config_set()),
     );
+    let min_rows = u64::cast_from(
+        mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_PARTITION_MIN_ROWS
+            .get(config.config.config_set()),
+    );
+    let probed_prefixes_per_billion_rows = u64::cast_from(
+        mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_PARTITION_PROBED_PREFIXES_PER_BILLION_ROWS
+            .get(config.config.config_set()),
+    );
+    let partition_settings = &PartitionSettings {
+        min_rows,
+        probed_prefixes_per_billion_rows,
+    };
 
     let pooled_conns: Rc<RefCell<Vec<MySqlConn>>> = Rc::new(RefCell::new(Vec::new()));
-    // Counting and boundary-sampling each walk a table's index (O(rows)), so run tables
-    // concurrently, capped at worker_count, to keep the leader's setup from scaling with
-    // table count.
+    // Get row count and boundary estimates with worker-count concurrency.
     let per_table: Vec<(MySqlTableName, u64, Option<PkBoundaries>)> = futures::stream::iter(tables)
         .map(|(table, outputs)| {
             let pool = Rc::clone(&pooled_conns);
@@ -361,18 +373,21 @@ async fn sample_pk_bounds(
                             ))
                             .await?;
                         }
-                        #[allow(clippy::disallowed_methods)]
-                        conn.query_drop("START TRANSACTION READ ONLY").await?;
                         conn
                     }
                 };
-                // Row count, reused for the sampling stride and the size gauge. When it
+                // Repeatable read required by the partitioner.
+                let mut tx_opts = TxOpts::default();
+                tx_opts
+                    .with_isolation_level(IsolationLevel::RepeatableRead)
+                    .with_readonly(true);
+                let mut tx = conn.start_transaction(tx_opts).await?;
+                // Row count, reused for boundary discovery and the size gauge. When it
                 // is counted exactly it runs on the same `READ ONLY` transaction as the
                 // boundary walk in `compute_sampled_splits`, so both see one consistent
                 // snapshot. For large tables it is an optimizer estimate instead, which
                 // `compute_sampled_splits` tolerates.
-                let stats =
-                    collect_table_statistics(&mut *conn, table, exact_count_max_rows).await?;
+                let stats = collect_table_statistics(&mut tx, table, exact_count_max_rows).await?;
                 metrics.record_table_count_latency(
                     table.1.clone(),
                     table.0.clone(),
@@ -385,12 +400,21 @@ async fn sample_pk_bounds(
                     .flatten()
                 {
                     Some((raw_col, scalar_type)) => {
-                        let pk_col = (quote_identifier(&raw_col), scalar_type);
-                        compute_sampled_splits(&mut *conn, table, &pk_col, worker_count, count)
-                            .await?
+                        compute_sampled_splits(
+                            &mut tx,
+                            table,
+                            &raw_col,
+                            &scalar_type,
+                            worker_count,
+                            count,
+                            partition_settings,
+                        )
+                        .await?
                     }
                     None => None,
                 };
+                // Ends the borrow of `conn`.
+                tx.rollback().await?;
                 pool.borrow_mut().push(conn);
                 Ok::<_, TransientError>((table.clone(), count, splits))
             }
@@ -542,10 +566,10 @@ where
 }
 
 /// Whether `boundaries` are strictly increasing under `collation`. The half-open PK
-/// ranges only partition the table without gaps or overlaps when this holds. The
-/// boundaries are already SQL literals (from `QUOTE()`); each is coerced to
-/// `charset`/`collation` so the comparison uses the same collation as the column,
-/// matching the read predicates. Fewer than two boundaries are trivially monotonic.
+/// ranges only partition the table without gaps or overlaps when this holds. Each
+/// boundary is coerced to `charset`/`collation` so the comparison uses the same
+/// collation as the column, matching the read predicates. Fewer than two boundaries
+/// are trivially monotonic.
 async fn boundaries_strictly_monotonic<Q>(
     conn: &mut Q,
     boundaries: &[String],
@@ -563,19 +587,15 @@ where
     if !is_plain_ident(charset) || !is_plain_ident(collation) {
         return Ok(false);
     }
-    let terms = boundaries
-        .iter()
-        .map(|b| format!("CONVERT({b} USING {charset}) COLLATE {collation}"))
-        .collect::<Vec<_>>();
-    let predicate = terms
+    let term = format!("CONVERT(? USING {charset}) COLLATE {collation}");
+    let predicate = vec![format!("{term} < {term}"); boundaries.len() - 1].join(" AND ");
+    let params: Vec<Value> = boundaries
         .windows(2)
-        .map(|w| format!("{} < {}", w[0], w[1]))
-        .collect::<Vec<_>>()
-        .join(" AND ");
-    // Boundaries are MySQL-rendered literals and the identifiers are validated above,
-    // so this interpolation is safe; not parameterizable.
-    #[allow(clippy::disallowed_methods)]
-    let ok: Option<i64> = conn.query_first(format!("SELECT {predicate}")).await?;
+        .flat_map(|w| [w[0].as_str().into(), w[1].as_str().into()])
+        .collect();
+    let ok: Option<i64> = conn
+        .exec_first(format!("SELECT {predicate}"), params)
+        .await?;
     Ok(ok == Some(1))
 }
 
@@ -592,19 +612,34 @@ where
         if !matches!(plan, ReadPlan::Range(_)) {
             continue;
         }
+        // A `Range` plan is only ever derived from populated bounds over a
+        // single-column PK recorded in the static source desc, so either
+        // lookup failing means `plan_worker_reads` and this check disagree.
         let Some(Some(splits)) = pk_bounds.get(table) else {
-            continue;
+            return Err(TransientError::Generic(anyhow::anyhow!(
+                "PK range planned for {table} without any PK bounds, which is unexpected"
+            )));
         };
         let Some((raw_col, _)) = tables
             .get(table)
             .and_then(|outputs| try_extract_single_column_pk(&outputs[0].desc))
         else {
-            continue;
+            return Err(TransientError::Generic(anyhow::anyhow!(
+                "PK range planned for {table} without a single-column PK, which is unexpected"
+            )));
         };
-        let Some((charset, collation)) = fetch_column_collation(tx, table, &raw_col).await? else {
-            continue;
+        let ok = match fetch_column_collation(tx, table, &raw_col).await? {
+            // The character set is always utf8mb4 for the utf8mb4_bin
+            // collation, so this is a sanity assertion.
+            Some((charset, collation))
+                if collation == SUPPORTED_PK_COLLATION && charset == SUPPORTED_PK_CHARSET =>
+            {
+                boundaries_strictly_monotonic(tx, &splits.boundaries, &charset, &collation).await?
+            }
+            // Populated PK bounds imply the split column was a supported string PK.
+            _ => false,
         };
-        if !boundaries_strictly_monotonic(tx, &splits.boundaries, &charset, &collation).await? {
+        if !ok {
             return Err(TransientError::Generic(anyhow::anyhow!(
                 "collation of {table} changed during snapshot setup"
             )));
@@ -617,11 +652,6 @@ where
 /// gate charset/collation names before interpolating them (they can't be parameters).
 fn is_plain_ident(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
-fn is_decimal_literal(s: &str) -> bool {
-    let digits = s.strip_prefix('-').unwrap_or(s);
-    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// Returns the set of full tables/sections of tables to read.
@@ -1017,9 +1047,9 @@ pub(crate) fn render<'scope>(
                     };
 
                     let mut snapshot_staged = 0;
-                    let query = build_snapshot_query(outputs, pk_range);
+                    let (query, params) = build_snapshot_query(outputs, pk_range);
                     trace!(%id, "timely-{worker_id} reading snapshot query='{}'", query);
-                    let mut results = tx.exec_stream(query, ()).await?;
+                    let mut results = tx.exec_stream(query, params).await?;
                     while let Some(row) = results.try_next().await? {
                         let row: MySqlRow = row;
                         snapshot_staged += 1;
@@ -1178,7 +1208,10 @@ async fn lock_tables_and_read_gtid_set(
 ///
 /// When `pk_range` is provided, a WHERE clause is appended to filter rows by PK range.
 #[must_use]
-fn build_snapshot_query(outputs: &[SourceOutputInfo], pk_range: Option<&PkRange>) -> String {
+fn build_snapshot_query(
+    outputs: &[SourceOutputInfo],
+    pk_range: Option<&PkRange>,
+) -> (String, Vec<Value>) {
     let info = outputs.first().expect("MySQL table info");
     for output in &outputs[1..] {
         // the columns may be decoded based on position, and different outputs may replicate
@@ -1196,12 +1229,14 @@ fn build_snapshot_query(outputs: &[SourceOutputInfo], pk_range: Option<&PkRange>
         .map(|col| quote_identifier(&col.name))
         .join(", ");
     let mut query = format!("SELECT {} FROM {}", columns, info.table_name);
+    let mut params: Vec<Value> = vec![];
     if let Some(range) = pk_range {
         // Half-open range on the PK column. The first/last partition omits its
         // open bound.
         let col = &range.pk_col;
         if let Some(lower) = &range.lower {
-            query.push_str(&format!(" WHERE {col} >= {lower}"));
+            query.push_str(&format!(" WHERE {col} >= ?"));
+            params.push(lower.as_str().into());
         }
         if let Some(upper) = &range.upper {
             let kw = if range.lower.is_some() {
@@ -1209,10 +1244,11 @@ fn build_snapshot_query(outputs: &[SourceOutputInfo], pk_range: Option<&PkRange>
             } else {
                 "WHERE"
             };
-            query.push_str(&format!(" {kw} {col} < {upper}"));
+            query.push_str(&format!(" {kw} {col} < ?"));
+            params.push(upper.as_str().into());
         }
     }
-    query
+    (query, params)
 }
 
 #[derive(Default)]
@@ -1307,7 +1343,7 @@ mod tests {
             export_id: mz_repr::GlobalId::User(1),
             binlog_full_metadata: false,
         };
-        let query = build_snapshot_query(&[info.clone(), info], None);
+        let (query, _) = build_snapshot_query(&[info.clone(), info], None);
         assert_eq!(
             format!(
                 "SELECT `c1`, `c2`, `c3` FROM `{}`.`{}`",
@@ -1354,14 +1390,15 @@ mod tests {
             lower: Some("100".to_string()),
             upper: Some("200".to_string()),
         };
-        let query = build_snapshot_query(std::slice::from_ref(&info), Some(&range));
+        let (query, params) = build_snapshot_query(std::slice::from_ref(&info), Some(&range));
         assert_eq!(
             format!(
-                "SELECT `id`, `name` FROM `{}`.`{}` WHERE `id` >= 100 AND `id` < 200",
+                "SELECT `id`, `name` FROM `{}`.`{}` WHERE `id` >= ? AND `id` < ?",
                 schema_name, table_name
             ),
             query
         );
+        assert_eq!(params, vec![Value::from("100"), Value::from("200")]);
 
         // First worker: open start.
         let range = PkRange {
@@ -1369,14 +1406,15 @@ mod tests {
             lower: None,
             upper: Some("200".to_string()),
         };
-        let query = build_snapshot_query(std::slice::from_ref(&info), Some(&range));
+        let (query, params) = build_snapshot_query(std::slice::from_ref(&info), Some(&range));
         assert_eq!(
             format!(
-                "SELECT `id`, `name` FROM `{}`.`{}` WHERE `id` < 200",
+                "SELECT `id`, `name` FROM `{}`.`{}` WHERE `id` < ?",
                 schema_name, table_name
             ),
             query
         );
+        assert_eq!(params, vec![Value::from("200")]);
 
         // Last worker: open end.
         let range = PkRange {
@@ -1384,14 +1422,15 @@ mod tests {
             lower: Some("200".to_string()),
             upper: None,
         };
-        let query = build_snapshot_query(std::slice::from_ref(&info), Some(&range));
+        let (query, params) = build_snapshot_query(std::slice::from_ref(&info), Some(&range));
         assert_eq!(
             format!(
-                "SELECT `id`, `name` FROM `{}`.`{}` WHERE `id` >= 200",
+                "SELECT `id`, `name` FROM `{}`.`{}` WHERE `id` >= ?",
                 schema_name, table_name
             ),
             query
         );
+        assert_eq!(params, vec![Value::from("200")]);
     }
 
     #[mz_ore::test]

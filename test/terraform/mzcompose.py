@@ -30,7 +30,7 @@ from typing import IO
 import psycopg
 import yaml
 
-from materialize import MZ_ROOT, ci_util, git, spawn
+from materialize import MZ_ROOT, ci_util, spawn
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
@@ -198,7 +198,7 @@ def testdrive(no_reset: bool) -> Testdrive:
 
 
 def get_tag(tag: str | None) -> str:
-    return tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
+    return tag or ci_util.dev_docker_tag()
 
 
 def get_operator_version() -> str:

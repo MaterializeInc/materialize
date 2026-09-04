@@ -241,13 +241,13 @@ contains:unknown catalog item 'temp_v'
 contains:cannot create temporary item in non-temporary schema
 
 # Regression test: a persistent (non-temporary) item must not be allowed to
-# depend on a TEMPORARY object. Temporary objects live only in the in-memory,
-# session-scoped catalog and are never persisted, so a persisted item that
-# references one is a dangling catalog entry. The coordinator applies durable
-# items before temporary ones (it assumes the invariant holds, see
-# apply.rs), so on the next catalog rebuild deserializing the persisted item
-# fails to resolve the temporary id and panics with
-# PlanError(InvalidId(...)): invalid persisted SQL.
+# depend on a TEMPORARY object. A temporary object is durable, but it is owned
+# by the session that created it and is reclaimed when that session ends, or at
+# the next writable catalog open if the process died first. A persisted item
+# referencing one therefore becomes a dangling catalog entry as soon as the
+# owning session goes away, and on the next catalog rebuild deserializing it
+# fails to resolve the id and panics with PlanError(InvalidId(...)): invalid
+# persisted SQL.
 #
 # CREATE enforces this via ErrorKind::InvalidTemporaryDependency. ALTER SINK
 # ... SET FROM went through a separate catalog path that skipped the check,

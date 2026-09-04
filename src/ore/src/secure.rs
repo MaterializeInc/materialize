@@ -56,10 +56,9 @@ pub use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 /// A `String` that is zeroed from memory on drop and redacted in
 /// `Debug`/`Display` output.
 ///
-/// `SecureString` intentionally does **not** implement `Clone` to prevent
-/// untracked copies of sensitive data. Use [`unsecure`](SecureString::unsecure)
+/// Use [`unsecure`](SecureString::unsecure)
 /// to access the inner value when needed, and pass by reference where possible.
-#[derive(Zeroize, ZeroizeOnDrop, PartialEq, Eq)]
+#[derive(Clone, Zeroize, ZeroizeOnDrop, PartialEq, Eq)]
 pub struct SecureString(String);
 
 impl SecureString {
@@ -99,10 +98,9 @@ impl fmt::Display for SecureString {
 /// A `Vec<u8>` that is zeroed from memory on drop and redacted in
 /// `Debug`/`Display` output.
 ///
-/// `SecureVec` intentionally does **not** implement `Clone` to prevent
-/// untracked copies of sensitive data. Use [`unsecure`](SecureVec::unsecure)
+/// Use [`unsecure`](SecureVec::unsecure)
 /// to access the inner bytes when needed.
-#[derive(Zeroize, ZeroizeOnDrop, PartialEq, Eq)]
+#[derive(Clone, Zeroize, ZeroizeOnDrop, PartialEq, Eq)]
 pub struct SecureVec(Vec<u8>);
 
 impl SecureVec {

@@ -29,6 +29,7 @@ use mz_storage_client::controller::IntrospectionType;
 use super::{
     BuiltinIndex, BuiltinLog, BuiltinMaterializedView, BuiltinSource, BuiltinTable, BuiltinType,
     BuiltinView, Cardinality, LinkProperties, Ontology, OntologyLink, PUBLIC_SELECT,
+    assert_safe_builtin_name,
 };
 
 pub const TYPE_LIST: BuiltinType<NameReference> = BuiltinType {
@@ -194,6 +195,7 @@ pub const TYPE_MZ_ACL_ITEM_ARRAY: BuiltinType<NameReference> = BuiltinType {
         pg_metadata: Some(CatalogTypePgMetadata {
             typinput_oid: 750,
             typreceive_oid: 2400,
+            typsend_oid: 2401,
         }),
     },
 };
@@ -675,19 +677,6 @@ pub static MZ_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
 });
 // mz_indexes is generated dynamically in BUILTINS_STATIC via mz_catalog::make_mz_indexes()
 
-/// Asserts that `name` is safe to embed unquoted inside a `'...'`-quoted SQL literal
-/// or inside a `"..."`-quoted SQL identifier. Builtin index/log/object names are
-/// concatenated into SQL fragments below, so a quote or backslash would produce
-/// malformed SQL. Builtin names should always be plain ASCII identifiers.
-fn assert_safe_builtin_name(name: &str, kind: &str) {
-    assert!(
-        !name.contains('\'') && !name.contains('"') && !name.contains('\\'),
-        "builtin {kind} name {name:?} contains an unsupported character; \
-         mz_indexes reconstructs SQL via string concatenation and assumes \
-         names contain no quotes or backslashes"
-    );
-}
-
 /// User-created indexes, sourced from `mz_catalog_raw` `Item` entries with
 /// `parse_catalog_create_sql(...)` yielding `type = 'index'`.
 const USER_INDEXES_CTE: &str = "\
@@ -1018,10 +1007,11 @@ pub static MZ_INDEX_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
         column_semantic_types: &[("index_id", SemanticType::CatalogItemId)],
     }),
 });
-pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_TABLES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
     name: "mz_tables",
     schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_TABLES_OID,
+    oid: oid::MV_MZ_TABLES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("oid", SqlScalarType::Oid.nullable(false))
@@ -1061,6 +1051,68 @@ pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             "The ID of the source associated with the table, if any. Corresponds to `mz_sources.id`.",
         ),
     ]),
+    // Temporary tables live in a per-session temporary schema that has no
+    // durable schema record. Their rows keep the temporary schema sentinel
+    // "0" that the previous builtin-table implementation exposed.
+    sql: Box::leak(format!("
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges
+) AS
+WITH
+    user_tables AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            (data->'value'->>'oid')::oid AS oid,
+            CASE WHEN data->'value'->>'ephemeral_owner_session' IS NULL
+                THEN mz_internal.parse_catalog_id(data->'value'->'schema_id')
+                ELSE '0'
+            END AS schema_id,
+            data->'value'->>'name' AS name,
+            mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+            mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
+            data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
+            mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql,
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'source_id' AS source_id
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'Item' AND
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' = 'table'
+    ),
+    builtin_mappings AS (
+        SELECT
+            data->'key'->>'schema_name' AS schema_name,
+            data->'key'->>'object_name' AS name,
+            's' || (data->'value'->>'catalog_id') AS id
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'GidMapping' AND
+            data->'key'->>'object_type' = '1'
+    ),
+    builtin_tables AS (
+        SELECT
+            m.id,
+            t.oid,
+            s.id AS schema_id,
+            t.name,
+            '{MZ_SYSTEM_ROLE_ID}' AS owner_id,
+            t.privileges,
+            NULL::text AS create_sql,
+            NULL::text AS redacted_create_sql,
+            NULL::text AS source_id
+        FROM mz_internal.mz_builtin_tables t
+        JOIN builtin_mappings m USING (schema_name, name)
+        JOIN mz_schemas s ON s.name = t.schema_name
+        WHERE s.database_id IS NULL
+    )
+SELECT * FROM user_tables
+UNION ALL
+SELECT * FROM builtin_tables").into_boxed_str()),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
@@ -1101,6 +1153,7 @@ pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             ]
         },
     }),
+}
 });
 
 pub static MZ_CONNECTIONS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
@@ -1425,10 +1478,11 @@ WHERE
         }),
     }
 });
-pub static MZ_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_VIEWS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
     name: "mz_views",
     schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_VIEWS_OID,
+    oid: oid::MV_MZ_VIEWS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("oid", SqlScalarType::Oid.nullable(false))
@@ -1465,6 +1519,74 @@ pub static MZ_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             "The redacted `CREATE` SQL statement for the view.",
         ),
     ]),
+    // Temporary views live in a per-session temporary schema that has no
+    // durable schema record. Their rows keep the temporary schema sentinel
+    // "0" that the previous builtin-table implementation exposed.
+    //
+    // The generated `mz_builtin_*` views appear here with placeholder
+    // definition and create SQL. See `make_builtin_views`.
+    sql: Box::leak(format!("
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL definition,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges,
+    ASSERT NOT NULL create_sql,
+    ASSERT NOT NULL redacted_create_sql
+) AS
+WITH
+    user_views AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            (data->'value'->>'oid')::oid AS oid,
+            CASE WHEN data->'value'->>'ephemeral_owner_session' IS NULL
+                THEN mz_internal.parse_catalog_id(data->'value'->'schema_id')
+                ELSE '0'
+            END AS schema_id,
+            data->'value'->>'name' AS name,
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'definition' AS definition,
+            mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+            mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
+            data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
+            mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'Item' AND
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' = 'view'
+    ),
+    builtin_mappings AS (
+        SELECT
+            data->'key'->>'schema_name' AS schema_name,
+            data->'key'->>'object_name' AS name,
+            's' || (data->'value'->>'catalog_id') AS id
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'GidMapping' AND
+            data->'key'->>'object_type' = '4'
+    ),
+    builtin_views AS (
+        SELECT
+            m.id,
+            v.oid,
+            s.id AS schema_id,
+            v.name,
+            v.definition,
+            '{MZ_SYSTEM_ROLE_ID}' AS owner_id,
+            v.privileges,
+            v.create_sql,
+            mz_internal.redact_sql(v.create_sql) AS redacted_create_sql
+        FROM mz_internal.mz_builtin_views v
+        JOIN builtin_mappings m USING (schema_name, name)
+        JOIN mz_schemas s ON s.name = v.schema_name
+        WHERE s.database_id IS NULL
+    )
+SELECT * FROM user_views
+UNION ALL
+SELECT * FROM builtin_views").into_boxed_str()),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
@@ -1496,6 +1618,7 @@ pub static MZ_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             ]
         },
     }),
+}
 });
 
 pub static MZ_MATERIALIZED_VIEWS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
@@ -2735,7 +2858,7 @@ pub static MZ_AUDIT_EVENTS: LazyLock<BuiltinMaterializedView> = LazyLock::new(||
             ),
             (
                 "object_type",
-                "The type of the affected object: `cluster`, `cluster-replica`, `connection`, `continual-task`, `database`, `func`, `index`, `materialized-view`, `network-policy`, `role`, `schema`, `secret`, `sink`, `source`, `system`, `table`, `type`, or `view`.",
+                "The type of the affected object: `cluster`, `cluster-replica`, `connection`, `continual-task`, `database`, `func`, `index`, `materialized-view`, `metric-sink`, `network-policy`, `role`, `schema`, `secret`, `sink`, `source`, `system`, `table`, `type`, or `view`.",
             ),
             (
                 "details",
@@ -2814,6 +2937,7 @@ SELECT
         WHEN '16' THEN 'system'
         WHEN '17' THEN 'continual-task'
         WHEN '18' THEN 'network-policy'
+        WHEN '19' THEN 'metric-sink'
     END                                                                     AS object_type,
     mz_internal.parse_catalog_audit_log_details(e->'details')               AS details,
     e->'user'->>'inner'                                                     AS \"user\",
@@ -3320,7 +3444,7 @@ pub static MZ_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
             ("oid", "A PostgreSQL-compatible OID for the object."),
             ("schema_id", "The ID of the schema to which the object belongs. Corresponds to `mz_schemas.id`."),
             ("name", "The name of the object."),
-            ("type", "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`."),
+            ("type", "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `metric-sink`, `index`, `connection`, `secret`, `type`, or `function`."),
             ("owner_id", "The role ID of the owner of the object. Corresponds to `mz_roles.id`."),
             ("cluster_id", "The ID of the cluster maintaining the source, materialized view, index, or sink. Corresponds to `mz_clusters.id`. `NULL` for other object types."),
             ("privileges", "The privileges belonging to the object."),
@@ -3329,6 +3453,8 @@ pub static MZ_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
         "SELECT id, oid, schema_id, name, type, owner_id, cluster_id, privileges FROM mz_catalog.mz_relations
 UNION ALL
     SELECT id, oid, schema_id, name, 'sink', owner_id, cluster_id, NULL::mz_catalog.mz_aclitem[] FROM mz_catalog.mz_sinks
+UNION ALL
+    SELECT id, oid, schema_id, name, 'metric-sink', owner_id, cluster_id, NULL::mz_catalog.mz_aclitem[] FROM mz_internal.mz_metric_sinks
 UNION ALL
     SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index', mz_indexes.owner_id, mz_indexes.cluster_id, NULL::mz_catalog.mz_aclitem[]
     FROM mz_catalog.mz_indexes
@@ -3672,12 +3798,15 @@ mod tests {
     /// it's handled. A wrong string in the CASE fails the substring assertion.
     #[mz_ore::test]
     fn object_type_case_matches_proto_display() {
-        // Returns `None` for proto variants that never appear in stored
-        // `DefaultPrivilege` keys (currently just `Unknown`, the zero-value
-        // sentinel). Match is exhaustive: a new variant forces an update.
+        // `None` means the variant never shows up in a stored `DefaultPrivilege`
+        // key, so the CASE deliberately has no arm for it: `Unknown` is the
+        // zero-value sentinel, and `ON METRIC SINKS` is rejected by
+        // `plan_alter_default_privileges` before a key ever gets built. Match is
+        // exhaustive: a new variant forces an update.
         fn expected_for(proto: ProtoObjectType) -> Option<SqlObjectType> {
             match proto {
                 ProtoObjectType::Unknown => None,
+                ProtoObjectType::MetricSink => None,
                 ProtoObjectType::Table => Some(SqlObjectType::Table),
                 ProtoObjectType::View => Some(SqlObjectType::View),
                 ProtoObjectType::MaterializedView => Some(SqlObjectType::MaterializedView),
@@ -3719,6 +3848,7 @@ mod tests {
             ProtoObjectType::Schema,
             ProtoObjectType::Func,
             ProtoObjectType::NetworkPolicy,
+            ProtoObjectType::MetricSink,
         ];
 
         let sql = MZ_DEFAULT_PRIVILEGES.sql;

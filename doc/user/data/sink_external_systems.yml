@@ -34,6 +34,11 @@ rows:
     Guide(s) or Example(s): |
       - [Sink to OpenSearch](/serve-results/sink/opensearch/)
 
+  - External system: "turbopuffer"
+    Method: "Use the Kafka sink + `mz-tpuf-sink`"
+    Guide(s) or Example(s): |
+      - [Sink to turbopuffer](/serve-results/sink/turbopuffer/)
+
   - External system: "Apache Iceberg hosted on AWS S3 Tables"
     Method: "Use a native connector"
     Guide(s) or Example(s): |

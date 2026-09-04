@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/func.rs
-revision: fd1dd6e62b
+revision: b66068e923
 ---
 
 # mz-sql::func
@@ -13,4 +13,5 @@ The `MZ_CATALOG_BUILTINS` table includes `repeat_row` (backed by `TableFunc::Rep
 The `MZ_UNSAFE_BUILTINS` table includes `generate_series_unoptimized` (backed by `TableFunc::GenerateSeriesUnoptimized`), an int64 `generate_series` variant that the optimizer promises to leave as an enumeration; it is provided for tests that need to rely on the enumeration work actually happening.
 `mz_all` and `mz_any` in `MZ_UNSAFE_BUILTINS` accept `Bool` parameters rather than `Any`: `AggregateFunc::All`/`Any` render as accumulable reduces whose accumulator only handles boolean datums, so accepting non-boolean arguments would crash a compute worker at runtime; restricting the parameter type to `Bool` catches the mismatch at plan time instead.
 Polymorphic array functions (e.g., `array_remove`) reject element types that resolve to `list` or `map`: such types have no pg OID and would crash the pgwire connection when encoding the row description. The check is performed in `coerce_args_to_types` after the polymorphic type is resolved, mirroring the same restriction already present in the `ARRAY[]` constructor and `array_fill`.
+The `sum(interval)` overload in `PG_CATALOG_BUILTINS` is intentionally unsupported and produces the error `"sum(interval) and avg(interval)"`, since `avg(interval)` desugars to `sum(interval) / count(interval)` before type checking, making this the only error a user typing `avg(interval)` will see.
 This is one of the largest files in the crate and is consumed directly by `plan::query` during expression planning.

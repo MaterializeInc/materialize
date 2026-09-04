@@ -21,10 +21,8 @@ import React from "react";
 import { Location, useLocation } from "react-router-dom";
 
 import { useCanViewUsage } from "~/api/auth";
-import ConnectModal from "~/components/ConnectModal";
+import ConnectDrawer from "~/components/connect/ConnectDrawer";
 import FreeTrialNotice from "~/components/FreeTrialNotice";
-import OidcConnectModal from "~/components/OidcConnectModal";
-import PasswordConnectModal from "~/components/PasswordConnectModal";
 import { AppConfigSwitch, CloudRuntimeConfig } from "~/config/AppConfigSwitch";
 import { useFlags } from "~/hooks/useFlags";
 import { useIsSuperUser } from "~/hooks/useIsSuperUser";
@@ -56,7 +54,6 @@ const getNavItems = ({
   regionSlug,
   flags,
   canViewUsage,
-  canViewQueryHistory,
   canViewAppPasswords,
   canViewLicenseKeys,
   canViewRoles,
@@ -66,7 +63,6 @@ const getNavItems = ({
   regionSlug: string;
   flags: ReturnType<typeof useFlags>;
   canViewUsage: boolean;
-  canViewQueryHistory: boolean;
   canViewAppPasswords: boolean;
   canViewLicenseKeys: boolean;
   canViewRoles: boolean;
@@ -109,14 +105,10 @@ const getNavItems = ({
               },
             ]
           : []),
-        ...(canViewQueryHistory
-          ? [
-              {
-                label: "Query History",
-                href: `/regions/${regionSlug}/query-history`,
-              },
-            ]
-          : []),
+        {
+          label: "Query History",
+          href: `/regions/${regionSlug}/query-history`,
+        },
         ...(flags["maintained-objects-ui-50"]
           ? [
               {
@@ -221,7 +213,6 @@ const useCloudNavMenuItems = ({
     flags,
     canViewUsage,
     location,
-    canViewQueryHistory: true,
     canViewAppPasswords: true,
     canViewLicenseKeys,
     canViewRoles: Boolean(isSuperUser),
@@ -242,9 +233,6 @@ const useSelfManagedNavMenuItems = () => {
     flags,
     canViewUsage: false,
     location,
-    // TODO (SangJunBak): Remove guard once we want to re-enable Query History
-    //  for self managed, see <https://github.com/MaterializeInc/cloud/issues/10755>
-    canViewQueryHistory: false,
     canViewAppPasswords: false,
     canViewLicenseKeys,
     canViewRoles: Boolean(isSuperUser),
@@ -270,9 +258,9 @@ const NavMenuMobile = (props: {
   items: NavItemType[];
 }) => {
   const {
-    isOpen: isConnectModalOpen,
-    onClose: onCloseConnectModal,
-    onOpen: onOpenConnectModal,
+    isOpen: isConnectDrawerOpen,
+    onClose: onCloseConnectDrawer,
+    onOpen: onOpenConnectDrawer,
   } = useDisclosure();
 
   return (
@@ -304,12 +292,12 @@ const NavMenuMobile = (props: {
                 <HideIfEnvironmentDisabled>
                   <ConnectMenuItem
                     width="100%"
-                    onClick={onOpenConnectModal}
+                    onClick={onOpenConnectDrawer}
                     mb={{ base: 0, lg: 6 }}
                   />
-                  <ConnectModal
-                    onClose={onCloseConnectModal}
-                    isOpen={isConnectModalOpen}
+                  <ConnectDrawer
+                    onClose={onCloseConnectDrawer}
+                    isOpen={isConnectDrawerOpen}
                     user={runtimeConfig.user}
                   />
                 </HideIfEnvironmentDisabled>
@@ -320,21 +308,19 @@ const NavMenuMobile = (props: {
                 <HideIfEnvironmentDisabled>
                   <ConnectMenuItem
                     width="100%"
-                    onClick={onOpenConnectModal}
+                    onClick={onOpenConnectDrawer}
                     mb={{ base: 0, lg: 6 }}
                   />
-                  {runtimeConfig.isOidcAvailable ? (
-                    <OidcConnectModal
-                      onClose={onCloseConnectModal}
-                      isOpen={isConnectModalOpen}
-                      auth={runtimeConfig.auth}
-                    />
-                  ) : (
-                    <PasswordConnectModal
-                      onClose={onCloseConnectModal}
-                      isOpen={isConnectModalOpen}
-                    />
-                  )}
+                  <ConnectDrawer
+                    onClose={onCloseConnectDrawer}
+                    isOpen={isConnectDrawerOpen}
+                    oidcEnabled={runtimeConfig.isOidcAvailable}
+                    auth={
+                      runtimeConfig.isOidcAvailable
+                        ? runtimeConfig.auth
+                        : undefined
+                    }
+                  />
                 </HideIfEnvironmentDisabled>
               )
             }

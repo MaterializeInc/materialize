@@ -3181,6 +3181,10 @@ where
         // In read-only mode we create a new shard for all migrated storage collections. So we
         // "trick" the write task into thinking that it's not in read-only mode so something is
         // advancing this new shard.
+        //
+        // This is the storage-side of forcing writes to a self-owned replacement shard while
+        // read-only. Migrated builtin MVs need the same treatment on their own write path; see
+        // `ComputeController::allow_writes_in_read_only`.
         let force_writable = self.read_only && self.migrated_storage_collections.contains(&id);
         if force_writable {
             assert!(id.is_system(), "unexpected non-system global id: {id:?}");

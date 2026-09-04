@@ -34,11 +34,11 @@ fn arbitrary_arm(seed: &[u8]) {
     }
     let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &buf);
     let mut runner = TestRunner::new_with_rng(Config::default(), rng);
-    let value =
-        match <AclItem as proptest::arbitrary::Arbitrary>::arbitrary().new_tree(&mut runner) {
-            Ok(tree) => tree.current(),
-            Err(_) => return,
-        };
+    let value = match <AclItem as proptest::arbitrary::Arbitrary>::arbitrary().new_tree(&mut runner)
+    {
+        Ok(tree) => tree.current(),
+        Err(_) => return,
+    };
 
     let proto = value.into_proto();
     let back = AclItem::from_proto(proto).expect("valid AclItem must round-trip");
@@ -56,8 +56,8 @@ fn raw_arm(data: &[u8]) {
 
     let proto2 = <ProtoAclItem as ProtoType<AclItem>>::from_rust(&orig);
     let bytes2 = proto2.encode_to_vec();
-    let proto3 = ProtoAclItem::decode(bytes2.as_slice())
-        .expect("re-encode of valid AclItem must decode");
+    let proto3 =
+        ProtoAclItem::decode(bytes2.as_slice()).expect("re-encode of valid AclItem must decode");
     let round: AclItem = proto3
         .into_rust()
         .expect("re-encoded AclItem must convert back to Rust");

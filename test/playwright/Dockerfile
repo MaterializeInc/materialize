@@ -9,5 +9,9 @@
 
 FROM node:24-trixie-slim
 
-RUN npx --yes playwright@1.58.2 install --with-deps chromium \
+# NOTE: Keep this version in sync with `@playwright/test` in
+# test/dataflow-visualizer/package.json. Each Playwright release pins its own
+# browser build, and the test run resolves the browser from this prebaked cache.
+# A mismatch fails at launch with "Executable doesn't exist", not at install.
+RUN npx --yes playwright@1.62.1 install --with-deps chromium \
     && rm -rf /root/.npm /var/lib/apt/lists/*

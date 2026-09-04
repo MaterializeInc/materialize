@@ -40,6 +40,7 @@ use mz_dyncfg::ConfigUpdates;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
+use mz_ore::cast::CastLossy;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
@@ -136,6 +137,7 @@ pub struct TestHarness {
     internal_console_redirect_url: Option<String>,
     metrics_registry: Option<MetricsRegistry>,
     code_version: semver::Version,
+    force_builtin_schema_migration: Option<String>,
     capture: Option<SharedStorage>,
     pub environment_id: EnvironmentId,
 }
@@ -241,6 +243,7 @@ impl Default for TestHarness {
                 ..Default::default()
             },
             code_version: crate::BUILD_INFO.semver_version(),
+            force_builtin_schema_migration: None,
             environment_id: EnvironmentId::for_tests(),
             capture: None,
         }
@@ -691,6 +694,13 @@ impl TestHarness {
         self
     }
 
+    /// Forces every builtin storage collection through the given migration mechanism,
+    /// `"evolution"` or `"replacement"`.
+    pub fn with_force_builtin_schema_migration(mut self, mechanism: &str) -> Self {
+        self.force_builtin_schema_migration = Some(mechanism.into());
+        self
+    }
+
     pub fn with_capture(mut self, storage: SharedStorage) -> Self {
         self.capture = Some(storage);
         self
@@ -943,7 +953,7 @@ impl Listeners {
                 helm_chart_version: None,
                 license_key: ValidatedLicenseKey::for_tests(),
                 external_login_password_mz_system: config.external_login_password_mz_system,
-                force_builtin_schema_migration: None,
+                force_builtin_schema_migration: config.force_builtin_schema_migration,
             })
             .await?;
 
@@ -1910,4 +1920,27 @@ impl Ca {
         fs::write(&key_path, pkey.private_key_to_pem_pkcs8()?)?;
         Ok((cert_path, key_path))
     }
+}
+
+/// Sums the counter series named `name` whose labels include all of `labels`.
+///
+/// Returns 0 when no series matches, which is how a labelled counter reads
+/// before its first increment.
+pub fn get_counter_value(registry: &MetricsRegistry, name: &str, labels: &[(&str, &str)]) -> u64 {
+    let Some(family) = registry.gather().into_iter().find(|m| m.name() == name) else {
+        return 0;
+    };
+    family
+        .get_metric()
+        .iter()
+        .filter(|metric| {
+            labels.iter().all(|(name, value)| {
+                metric
+                    .get_label()
+                    .iter()
+                    .any(|label| label.name() == *name && label.value() == *value)
+            })
+        })
+        .map(|metric| u64::cast_lossy(metric.get_counter().value()))
+        .sum()
 }

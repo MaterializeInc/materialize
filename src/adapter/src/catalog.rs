@@ -59,7 +59,6 @@ use mz_ore::result::ResultExt as _;
 use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
-use mz_repr::namespaces::MZ_TEMP_SCHEMA;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
@@ -649,6 +648,7 @@ impl Catalog {
 
         let OpenCatalogResult {
             catalog,
+            last_seen_version: _,
             migrated_storage_collections_0dt: _,
             new_builtin_collections: _,
             builtin_table_updates: _,
@@ -1163,35 +1163,34 @@ impl Catalog {
         self.state.try_get_role_auth_by_id(id)
     }
 
-    /// Creates a new schema in the `Catalog` for temporary items
-    /// indicated by the TEMPORARY or TEMP keywords.
-    pub fn create_temporary_schema(
-        &mut self,
-        conn_id: &ConnectionId,
-        owner_id: RoleId,
-    ) -> Result<(), Error> {
-        self.state.create_temporary_schema(conn_id, owner_id)
+    /// Registers the connection's temporary namespace: the `uuid` <->
+    /// `conn_id` mapping used to stamp and apply durable temporary items
+    /// owned by the session. The `mz_temp` schema itself is created when
+    /// the first temporary item is applied.
+    ///
+    /// The coordinator calls this at a session's first temporary-item
+    /// creation, strictly before the transaction that persists the item, and
+    /// guards on [`CatalogState::has_temporary_namespace`], so registering
+    /// an already-registered namespace is a bug.
+    pub fn register_temporary_namespace(&mut self, conn_id: &ConnectionId, uuid: Uuid) {
+        self.state
+            .temporary_namespaces
+            .register(conn_id.clone(), uuid);
     }
 
     fn item_exists_in_temp_schemas(&self, conn_id: &ConnectionId, item_name: &str) -> bool {
-        // Temporary schemas are created lazily, so it's valid for one to not exist yet.
+        // A temporary namespace is registered at the connection's first
+        // temporary-item creation, so it's valid for one to not exist yet.
         self.state
-            .temporary_schemas
-            .get(conn_id)
+            .temporary_namespaces
+            .schema(conn_id)
             .map(|schema| schema.items.contains_key(item_name))
             .unwrap_or(false)
     }
 
-    /// Drops schema for connection if it exists. Returns an error if it exists and has items.
-    /// Returns Ok if conn_id's temp schema does not exist.
-    pub fn drop_temporary_schema(&mut self, conn_id: &ConnectionId) -> Result<(), Error> {
-        let Some(schema) = self.state.temporary_schemas.remove(conn_id) else {
-            return Ok(());
-        };
-        if !schema.items.is_empty() {
-            return Err(Error::new(ErrorKind::SchemaNotEmpty(MZ_TEMP_SCHEMA.into())));
-        }
-        Ok(())
+    /// Removes the connection's temporary namespace, if it has one.
+    pub fn drop_temporary_namespace(&mut self, conn_id: &ConnectionId) {
+        self.state.temporary_namespaces.unregister(conn_id)
     }
 
     pub(crate) fn object_dependents(
@@ -1694,6 +1693,9 @@ pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType
         CommentObjectId::MaterializedView(_) => ObjectType::MaterializedView,
         CommentObjectId::Source(_) => ObjectType::Source,
         CommentObjectId::Sink(_) => ObjectType::Sink,
+        // Unreachable by construction: `COMMENT ON METRIC SINK` is rejected at parse, so no
+        // metric-sink comment id is ever built. The arm exists only for exhaustiveness.
+        CommentObjectId::MetricSink(_) => ObjectType::MetricSink,
         CommentObjectId::Index(_) => ObjectType::Index,
         CommentObjectId::Func(_) => ObjectType::Func,
         CommentObjectId::Connection(_) => ObjectType::Connection,
@@ -1724,6 +1726,7 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::MaterializedView => ObjectType::MaterializedView,
             mz_sql::catalog::ObjectType::Source => ObjectType::Source,
             mz_sql::catalog::ObjectType::Sink => ObjectType::Sink,
+            mz_sql::catalog::ObjectType::MetricSink => ObjectType::MetricSink,
             mz_sql::catalog::ObjectType::Index => ObjectType::Index,
             mz_sql::catalog::ObjectType::Type => ObjectType::Type,
             mz_sql::catalog::ObjectType::Role => ObjectType::Role,
@@ -2036,7 +2039,7 @@ impl SessionCatalog for ConnCatalog<'_> {
                 self.state
                     .ambient_schemas_by_id
                     .values()
-                    .chain(self.state.temporary_schemas.values())
+                    .chain(self.state.temporary_namespaces.schemas())
                     .map(|schema| schema as &dyn CatalogSchema),
             )
             .collect()
@@ -2789,17 +2792,17 @@ mod tests {
                 conn_catalog.effective_search_path(true),
                 conn_catalog.search_path
             );
+            // Because we lazily initialize the `mz_temp` schema,
+            // an explicit `mz_temp` search path before the first
+            // temporary item creation gets filtered out in
+            // `effective_search_path`.
             assert_eq!(
                 conn_catalog.effective_search_path(false),
-                vec![
-                    mz_catalog_schema.clone(),
-                    pg_catalog_schema.clone(),
-                    mz_temp_schema.clone()
-                ]
+                vec![mz_catalog_schema.clone(), pg_catalog_schema.clone(),]
             );
             assert_eq!(
                 conn_catalog.effective_search_path(true),
-                vec![mz_catalog_schema, pg_catalog_schema, mz_temp_schema]
+                vec![mz_temp_schema, mz_catalog_schema, pg_catalog_schema]
             );
             catalog.expire().await;
         })
@@ -2828,6 +2831,77 @@ mod tests {
                 r#"CREATE VIEW "materialize"."public"."foo" AS SELECT 1 AS "bar""#,
                 mz_sql::normalize::create_statement(scx, stmt).expect(""),
             );
+            catalog.expire().await;
+        })
+        .await;
+    }
+
+    /// Resolving a statement and resolving its normalized `create_sql` must
+    /// yield the same `ResolvedIds`.
+    ///
+    /// The in-memory catalog records the ids from the first resolution, while
+    /// a catalog reload re-derives them from the stored `create_sql`. Any
+    /// disagreement makes the reloaded catalog differ from the in-memory one.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // slow
+    async fn test_resolved_ids_survive_create_sql_round_trip() {
+        use mz_ore::collections::CollectionExt;
+        Catalog::with_debug(|catalog| async move {
+            let conn_catalog = catalog.for_system_session();
+            let scx = &mut StatementContext::new(None, &conn_catalog);
+
+            let resolve_and_normalize = |scx: &mut StatementContext, sql: &str| {
+                let parsed = mz_sql_parser::parser::parse_statements(sql)
+                    .expect("parses")
+                    .into_element()
+                    .ast;
+                let (stmt, ids) = names::resolve(scx.catalog, parsed).expect("resolves");
+                let normalized =
+                    mz_sql::normalize::create_statement(scx, stmt).expect("normalizes");
+                (ids, normalized)
+            };
+
+            const ARRAY_SUFFIX: &str = "create table public.t (a pg_catalog.int4[])";
+            const ARRAY_TYPE: &str = "create table public.t (a pg_catalog._int4)";
+            const ELEMENT_TYPE: &str = "create table public.t (a pg_catalog.int4)";
+
+            let mut ids_by_spelling: BTreeMap<&str, Vec<CatalogItemId>> = BTreeMap::new();
+            for sql in [
+                ARRAY_SUFFIX,
+                ARRAY_TYPE,
+                ELEMENT_TYPE,
+                "create table public.t (a pg_catalog.int4 list)",
+                "create view public.v as select null::pg_catalog.text[]",
+            ] {
+                let (ids, normalized) = resolve_and_normalize(scx, sql);
+                let (round_tripped_ids, _) = resolve_and_normalize(scx, &normalized);
+                assert_eq!(
+                    ids.items().collect::<Vec<_>>(),
+                    round_tripped_ids.items().collect::<Vec<_>>(),
+                    "resolving {normalized:?} produced different ids than {sql:?}",
+                );
+                ids_by_spelling.insert(sql, ids.items().copied().collect());
+            }
+
+            // `int4[]` and `_int4` name the same type, so both spellings must
+            // record the same ids. `int4[]` is only ever stored as `_int4`,
+            // so this is what keeps the reloaded catalog identical to the
+            // in-memory one.
+            assert_eq!(
+                ids_by_spelling[ARRAY_SUFFIX], ids_by_spelling[ARRAY_TYPE],
+                "{ARRAY_SUFFIX:?} and {ARRAY_TYPE:?} must resolve to the same ids",
+            );
+
+            // Neither spelling records the element type: an array reference
+            // names the array type alone.
+            let element_ids = &ids_by_spelling[ELEMENT_TYPE];
+            assert!(
+                ids_by_spelling[ARRAY_SUFFIX]
+                    .iter()
+                    .all(|id| !element_ids.contains(id)),
+                "{ARRAY_SUFFIX:?} recorded an element type id from {ELEMENT_TYPE:?}",
+            );
+
             catalog.expire().await;
         })
         .await;
@@ -3056,6 +3130,7 @@ mod tests {
                 array: u32,
                 input: u32,
                 receive: u32,
+                send: u32,
             }
 
             struct PgOper {
@@ -3095,7 +3170,7 @@ mod tests {
             let pg_type: BTreeMap<_, _> = query(
                 &client,
                 sql!(
-                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive FROM pg_type"
+                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive, typsend::oid as typsend FROM pg_type"
                 ),
                 &[],
             )
@@ -3111,6 +3186,7 @@ mod tests {
                         array: row.get("typarray"),
                         input: row.get("typinput"),
                         receive: row.get("typreceive"),
+                        send: row.get("typsend"),
                     };
                     (oid, pg_type)
                 })
@@ -3202,10 +3278,15 @@ mod tests {
                             ty.oid, pg_ty.name, ty.name,
                         );
 
-                        let (typinput_oid, typreceive_oid) = match &ty.details.pg_metadata {
-                            None => (0, 0),
-                            Some(pgmeta) => (pgmeta.typinput_oid, pgmeta.typreceive_oid),
-                        };
+                        let (typinput_oid, typreceive_oid, typsend_oid) =
+                            match &ty.details.pg_metadata {
+                                None => (0, 0, 0),
+                                Some(pgmeta) => (
+                                    pgmeta.typinput_oid,
+                                    pgmeta.typreceive_oid,
+                                    pgmeta.typsend_oid,
+                                ),
+                            };
                         assert_eq!(
                             typinput_oid, pg_ty.input,
                             "type {} has typinput OID {:?} in mz but {:?} in pg",
@@ -3215,6 +3296,15 @@ mod tests {
                             typreceive_oid, pg_ty.receive,
                             "type {} has typreceive OID {:?} in mz but {:?} in pg",
                             ty.name, typreceive_oid, pg_ty.receive,
+                        );
+                        // Unlike typinput and typreceive below, typsend is not also
+                        // checked against `func_oids`. Nothing resolves a typsend OID
+                        // to a name, so the corresponding `*send` functions are
+                        // deliberately not registered as builtins.
+                        assert_eq!(
+                            typsend_oid, pg_ty.send,
+                            "type {} has typsend OID {:?} in mz but {:?} in pg",
+                            ty.name, typsend_oid, pg_ty.send,
                         );
                         if typinput_oid != 0 {
                             assert!(

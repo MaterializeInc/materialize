@@ -50,6 +50,13 @@
         AND refs.source_id = s.id;
         ```
 
+        This list is recorded when the source is created. To update the list with
+        tables added to the upstream since source creation, run [`ALTER SOURCE
+        <source_name> REFRESH
+        REFERENCES`](/sql/alter-source/#refreshing-available-upstream-references).
+
+        The statement returns an error if the source's publication is empty.
+
     - name: "**WITH (<with_option>[,...])**"
       description: |
         The following `<with_option>`s are supported:

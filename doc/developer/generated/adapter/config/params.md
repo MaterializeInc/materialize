@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/config/params.rs
-revision: 7258dad07f
+revision: 8e2fe64727
 ---
 
 # adapter::config::params

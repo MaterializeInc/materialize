@@ -579,6 +579,13 @@ CREATE CONNECTION awsconn TO AWS (ACCESS KEY ID = 'id', ENDPOINT = 'endpoint', R
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("awsconn")]), connection_type: Aws, if_not_exists: false, values: [ConnectionOption { name: AccessKeyId, value: Some(Value(String("id"))) }, ConnectionOption { name: Endpoint, value: Some(Value(String("endpoint"))) }, ConnectionOption { name: Region, value: Some(Value(String("region"))) }, ConnectionOption { name: AssumeRoleArn, value: Some(Value(String("role-arn"))) }, ConnectionOption { name: SecretAccessKey, value: Some(Value(String("key"))) }, ConnectionOption { name: SessionToken, value: Some(Value(String("token"))) }], with_options: [] })
 
 parse-statement
+CREATE CONNECTION icebergconn TO ICEBERG CATALOG (CATALOG TYPE 'rest', URL 'https://example/api/catalog', CREDENTIAL 'id:secret', OAUTH2 SERVER URL 'https://example/oidc/v1/token', SCOPE 'all-apis', WAREHOUSE 'wh')
+----
+CREATE CONNECTION icebergconn TO ICEBERG CATALOG (CATALOG TYPE = 'rest', URL = 'https://example/api/catalog', CREDENTIAL = 'id:secret', OAUTH2 SERVER URL = 'https://example/oidc/v1/token', SCOPE = 'all-apis', WAREHOUSE = 'wh')
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("icebergconn")]), connection_type: IcebergCatalog, if_not_exists: false, values: [ConnectionOption { name: CatalogType, value: Some(Value(String("rest"))) }, ConnectionOption { name: Url, value: Some(Value(String("https://example/api/catalog"))) }, ConnectionOption { name: Credential, value: Some(Value(String("id:secret"))) }, ConnectionOption { name: Oauth2ServerUrl, value: Some(Value(String("https://example/oidc/v1/token"))) }, ConnectionOption { name: Scope, value: Some(Value(String("all-apis"))) }, ConnectionOption { name: Warehouse, value: Some(Value(String("wh"))) }], with_options: [] })
+
+parse-statement
 CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES ('use1-az1', 'use1-az4'))
 ----
 CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME = 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES = ('use1-az1', 'use1-az4'))
@@ -1104,6 +1111,34 @@ CREATE SINK bar FROM foo INTO ICEBERG CATALOG CONNECTION s3tables (NAMESPACE = '
 CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("bar")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("foo")])), connection: Iceberg { catalog_connection: Name(UnresolvedItemName([Ident("s3tables")])), aws_connection: Some(Name(UnresolvedItemName([Ident("aws_conn")]))), key: None, options: [IcebergSinkConfigOption { name: Namespace, value: Some(Value(String("testnamespace"))) }, IcebergSinkConfigOption { name: Table, value: Some(Value(String("daily_sales"))) }] }, format: None, envelope: None, mode: Some(Append), with_options: [] })
 
 parse-statement
+CREATE METRIC SINK m IN CLUSTER c FROM v
+----
+CREATE METRIC SINK m IN CLUSTER c FROM v
+=>
+CreateMetricSink(CreateMetricSinkStatement { name: UnresolvedItemName([Ident("m")]), in_cluster: Some(Unresolved(Ident("c"))), if_not_exists: false, from: Name(UnresolvedItemName([Ident("v")])), with_options: [] })
+
+parse-statement
+CREATE METRIC SINK IF NOT EXISTS m FROM v
+----
+CREATE METRIC SINK IF NOT EXISTS m FROM v
+=>
+CreateMetricSink(CreateMetricSinkStatement { name: UnresolvedItemName([Ident("m")]), in_cluster: None, if_not_exists: true, from: Name(UnresolvedItemName([Ident("v")])), with_options: [] })
+
+parse-statement
+CREATE METRIC SINK m IN CLUSTER c FROM v WITH (PREFIX = 'myapp_')
+----
+CREATE METRIC SINK m IN CLUSTER c FROM v WITH (PREFIX = 'myapp_')
+=>
+CreateMetricSink(CreateMetricSinkStatement { name: UnresolvedItemName([Ident("m")]), in_cluster: Some(Unresolved(Ident("c"))), if_not_exists: false, from: Name(UnresolvedItemName([Ident("v")])), with_options: [CreateMetricSinkOption { name: Prefix, value: Some(Value(String("myapp_"))) }] })
+
+parse-statement
+CREATE METRIC SINK m FROM v WITH (SNAPSHOT = false)
+----
+error: Expected PREFIX, found SNAPSHOT
+CREATE METRIC SINK m FROM v WITH (SNAPSHOT = false)
+                                  ^
+
+parse-statement
 CREATE INDEX foo ON myschema.bar (a, b)
 ----
 CREATE INDEX foo ON myschema.bar (a, b)
@@ -1326,6 +1361,13 @@ DROP SOURCE myschema.mydatasource
 DROP SOURCE myschema.mydatasource
 =>
 DropObjects(DropObjectsStatement { object_type: Source, if_exists: false, names: [Item(UnresolvedItemName([Ident("myschema"), Ident("mydatasource")]))], cascade: false })
+
+parse-statement
+DROP METRIC SINK m
+----
+DROP METRIC SINK m
+=>
+DropObjects(DropObjectsStatement { object_type: MetricSink, if_exists: false, names: [Item(UnresolvedItemName([Ident("m")]))], cascade: false })
 
 parse-statement
 DROP INDEX IF EXISTS myschema.myindex
@@ -2998,7 +3040,7 @@ CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("my
 parse-statement
 CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL (PUBLIC KEY 3 = nope)
 ----
-error: Expected one of ACCESS or ASSUME or AVAILABILITY or AWS or BROKER or BROKERS or CATALOG or CREDENTIAL or DATABASE or ENDPOINT or GCP or HOST or PASSWORD or PORT or PUBLIC or PROGRESS or REGION or REGISTRY or SASL or SCOPE or SECRET or SECURITY or SERVICE or SESSION or SSH or SSL or URL or USER or USERNAME or WAREHOUSE, found left parenthesis
+error: Expected one of ACCESS or ASSUME or AVAILABILITY or AWS or BROKER or BROKERS or CATALOG or CREDENTIAL or DATABASE or ENDPOINT or GCP or HOST or OAUTH2 or PASSWORD or PORT or PUBLIC or PROGRESS or REGION or REGISTRY or SASL or SCOPE or SECRET or SECURITY or SERVICE or SESSION or SSH or SSL or URL or USER or USERNAME or WAREHOUSE, found left parenthesis
 CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL (PUBLIC KEY 3 = nope)
                                                ^
 

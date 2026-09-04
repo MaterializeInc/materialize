@@ -59,6 +59,7 @@ rand = { workspace = true, features = ["small_rng"] }
 reqwest.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, optional = true }
+time.workspace = true
 timely.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true

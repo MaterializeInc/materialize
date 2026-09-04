@@ -71,7 +71,9 @@ use libfuzzer_sys::arbitrary::{Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
-use mz_sql_parser::ast::{AstInfo, Expr, Raw, Statement};
+use mz_sql_parser::ast::{
+    AlterRoleOption, AstInfo, Expr, Op, Raw, RoleAttribute, Statement, Value,
+};
 use mz_sql_parser::parser::parse_statements;
 use mz_sql_pretty::pretty_str_simple;
 
@@ -80,8 +82,12 @@ use mz_sql_pretty::pretty_str_simple;
 // ---------------------------------------------------------------------------
 
 /// Strip syntactic noise so AST equality reflects *semantic* fidelity:
-/// `Declare`/`Prepare` capture raw text, and `Expr::Nested` records parens that
-/// the printer is free to add or drop. See `parse_pretty_roundtrip` for detail.
+/// `Declare`/`Prepare` capture raw text, `Expr::Nested` records parens that the
+/// printer is free to add or drop, and a negative numeric literal is the same
+/// value whether the parser folded the sign in (`Number("-1")`) or left a unary
+/// op (`- 1`). The parser chooses by *context* (a leading `- 1` folds, `a + - 1`
+/// does not), so the two forms must compare equal. See `parse_pretty_roundtrip`
+/// for detail.
 fn normalize(stmt: &mut Statement<Raw>) {
     match stmt {
         Statement::Declare(d) => {
@@ -97,6 +103,38 @@ fn normalize(stmt: &mut Statement<Raw>) {
     RemoveParens.visit_statement_mut(stmt);
 }
 
+/// Rewrite every `PASSWORD '<secret>'` to the placeholder the `AstDisplay`
+/// printer emits in its place.
+///
+/// `RoleAttribute::Password(Some(_))` renders as the fixed string
+/// `PASSWORD '<REDACTED>'` in *every* `AstDisplay` format mode, so a password
+/// cannot survive an `AstDisplay` print/reparse cycle. Applying this to both
+/// sides of that comparison keeps the rest of the statement under the oracle
+/// rather than exempting the whole statement.
+///
+/// Only `check_display` needs this. The pretty printer deliberately preserves
+/// the value (`mz_sql_pretty`'s `doc_role_attribute`), so `check_pretty` compares
+/// passwords exactly and must keep doing so.
+fn redact_passwords(stmt: &mut Statement<Raw>) {
+    let attrs: &mut [RoleAttribute] = match stmt {
+        // `Declare`/`Prepare` print their inner statement through the same
+        // redacting printer, so a secret nested under them is affected too.
+        Statement::Declare(d) => return redact_passwords(&mut d.stmt),
+        Statement::Prepare(p) => return redact_passwords(&mut p.stmt),
+        Statement::CreateRole(c) => &mut c.options,
+        Statement::AlterRole(a) => match &mut a.option {
+            AlterRoleOption::Attributes(attrs) => attrs,
+            AlterRoleOption::Variable(_) => return,
+        },
+        _ => return,
+    };
+    for attr in attrs {
+        if let RoleAttribute::Password(Some(password)) = attr {
+            *password = "<REDACTED>".into();
+        }
+    }
+}
+
 struct RemoveParens;
 
 impl<'a, T: AstInfo> VisitMut<'a, T> for RemoveParens {
@@ -105,16 +143,20 @@ impl<'a, T: AstInfo> VisitMut<'a, T> for RemoveParens {
         if let Expr::Nested(inner) = expr {
             *expr = (**inner).clone();
         }
+        // Canonicalize a negative numeric literal to a unary minus over the bare
+        // number, so it compares equal to the unfolded `- <number>` form the
+        // parser produces in non-leading position. (Positive literals are never
+        // sign-prefixed by the parser, so only `-` needs handling.)
+        if let Expr::Value(Value::Number(n)) = expr {
+            if let Some(rest) = n.strip_prefix('-') {
+                *expr = Expr::Op {
+                    op: Op::bare("-"),
+                    expr1: Box::new(Expr::Value(Value::Number(rest.to_string()))),
+                    expr2: None,
+                };
+            }
+        }
     }
-}
-
-/// Reparse errors that are a known printer/parser asymmetry rather than a bug.
-fn benign_reparse_error(msg: &str) -> bool {
-    msg.contains("exceeds nested expression limit")
-        || msg.contains("Expected left square bracket")
-        || msg.contains("Expected left parenthesis")
-        || msg.contains("Expected IN, found")
-        || msg.contains("Expected arrow, found")
 }
 
 fn check_pretty(sql: &str, orig_ast: &Statement<Raw>) {
@@ -130,15 +172,16 @@ fn check_pretty(sql: &str, orig_ast: &Statement<Raw>) {
         let reparsed = match parse_statements(&pretty) {
             Ok(r) => r,
             Err(e) => {
-                if benign_reparse_error(&e.to_string()) {
-                    continue;
-                }
-                panic!("pretty output failed to reparse: pretty={pretty:?} width={width} err={e}");
+                panic!("pretty output failed to reparse: pretty={pretty:?} width={width} err={e}")
             }
         };
-        let Some(stmt) = reparsed.into_iter().next() else {
-            continue;
-        };
+        assert_eq!(
+            reparsed.len(),
+            1,
+            "pretty output reparsed to {} statements, expected 1\npretty: {pretty:?}\nwidth: {width}",
+            reparsed.len(),
+        );
+        let stmt = reparsed.into_iter().next().unwrap();
         let mut reparsed_ast = stmt.ast;
         normalize(&mut reparsed_ast);
         assert_eq!(
@@ -152,12 +195,7 @@ fn check_display(orig_ast: &Statement<Raw>) {
     let displayed = orig_ast.to_ast_string_simple();
     let reparsed = match parse_statements(&displayed) {
         Ok(r) => r,
-        Err(e) => {
-            if benign_reparse_error(&e.to_string()) {
-                return;
-            }
-            panic!("AstDisplay output failed to reparse: displayed={displayed:?} err={e}");
-        }
+        Err(e) => panic!("AstDisplay output failed to reparse: displayed={displayed:?} err={e}"),
     };
     // One statement must print as exactly one statement. Any other count means
     // the printer emitted text that reparses to a different number of
@@ -176,6 +214,11 @@ fn check_display(orig_ast: &Statement<Raw>) {
     // free to add or drop. Stripping them from both sides leaves a genuine
     // structural drift to still trip the assert.
     normalize(&mut reparsed_ast);
+    // `AstDisplay` prints a password as a fixed placeholder, so neither side can
+    // carry the original value through this comparison. See `redact_passwords`.
+    let mut orig_ast = orig_ast.clone();
+    redact_passwords(&mut orig_ast);
+    redact_passwords(&mut reparsed_ast);
     // Compare ASTs *structurally*, not by re-printed string. A printer that drops
     // a needed paren can map two distinct ASTs onto the same string (e.g.
     // `IsExpr(a, DistinctFrom(Or(b, c)))` and `Or(IsExpr(a, DistinctFrom(b)), c)`
@@ -183,7 +226,7 @@ fn check_display(orig_ast: &Statement<Raw>) {
     // to those collisions, but the structural comparison catches them. The stable
     // strings are still shown for a readable diff.
     assert_eq!(
-        *orig_ast,
+        orig_ast,
         reparsed_ast,
         "AstDisplay roundtrip drifted\ndisplayed: {displayed:?}\norig:     {}\nreparsed: {}",
         orig_ast.to_ast_string_stable(),
@@ -335,9 +378,51 @@ const BIN_OPS: &[&str] = &[
 /// (which must never panic on any input), and occasionally a valid-but-unusual
 /// statement the structured grammar wouldn't assemble.
 const NOISE: &[&str] = &[
-    "(", ")", "[", "]", "{", "}", ",", ";", ".", "::", ":", "*", "@", "?", "!", "\\", "\"", "'",
-    "->", "->>", "#>>", "||", "<>", "=>", "%", "~", "&", "|", "$1", "$$", "''", "\"\"", "/*", "*/",
-    "--", "  ", "\t", "\n", "1e999", "0x1", "-0", ".", "e", "E'\\x41'", "U&'\\0041'",
+    "(",
+    ")",
+    "[",
+    "]",
+    "{",
+    "}",
+    ",",
+    ";",
+    ".",
+    "::",
+    ":",
+    "*",
+    "@",
+    "?",
+    "!",
+    "\\",
+    "\"",
+    "'",
+    "->",
+    "->>",
+    "#>>",
+    "||",
+    "<>",
+    "=>",
+    "%",
+    "~",
+    "&",
+    "|",
+    "$1",
+    "$$",
+    "''",
+    "\"\"",
+    "/*",
+    "*/",
+    "--",
+    "  ",
+    "\t",
+    "\n",
+    "1e999",
+    "0x1",
+    "-0",
+    ".",
+    "e",
+    "E'\\x41'",
+    "U&'\\0041'",
 ];
 
 // The parser's AST source, embedded so the fuzzed connector option space stays
@@ -1236,12 +1321,72 @@ impl<'a, 'u> Gen<'a, 'u> {
         }
     }
 
+    fn kafka_aws_privatelink(&mut self) {
+        self.out.push_str("USING AWS PRIVATELINK ");
+        self.qualified_name();
+        match self.pick(4) {
+            0 => {}
+            1 => self.out.push_str(" (AVAILABILITY ZONE = 'use1-az1')"),
+            2 => self.out.push_str(" (PORT = 9092)"),
+            _ => {
+                self.out
+                    .push_str(" (AVAILABILITY ZONE = 'use1-az1', PORT = 9092)");
+            }
+        }
+    }
+
+    fn kafka_broker(&mut self) {
+        self.string_value();
+        match self.pick(3) {
+            0 => {}
+            1 => {
+                self.out.push_str(" USING SSH TUNNEL ");
+                self.qualified_name();
+            }
+            _ => {
+                self.out.push(' ');
+                self.kafka_aws_privatelink();
+            }
+        }
+    }
+
+    fn kafka_matching_broker_rule(&mut self) {
+        self.out.push_str("MATCHING ");
+        self.one_of(&["'*'", "'*.example.com:*'", "'broker:*'", "'a''b*'"]);
+        self.out.push(' ');
+        self.kafka_aws_privatelink();
+    }
+
+    fn kafka_brokers(&mut self) {
+        self.out.push_str(" = ");
+        let (open, close) = if self.chance(1, 2) {
+            ('(', ')')
+        } else {
+            ('[', ']')
+        };
+        self.out.push(open);
+        let n = 1 + self.pick(3);
+        for i in 0..n {
+            if i > 0 {
+                self.out.push_str(", ");
+            }
+            // Keep at least one static broker in every list. Additional entries
+            // exercise the distinct MATCHING-rule display path.
+            if i == 0 || self.chance(2, 3) {
+                self.kafka_broker();
+            } else {
+                self.kafka_matching_broker_rule();
+            }
+        }
+        self.out.push(close);
+    }
+
     /// One `NAME [= value]` config-option clause. Most options take the generic
     /// `option_value`. The handful with a dedicated value grammar the parser
     /// dispatches by name are special-cased: `PARTITION BY` (an expression),
     /// `RETAIN HISTORY` (`FOR '<interval>'`), `TEXT`/`EXCLUDE COLUMNS` (an ident
-    /// sequence), `BROKER` (a broker string), and the `… CONNECTION` / `SSH
-    /// TUNNEL` object references (an item name).
+    /// sequence), `BROKER`/`BROKERS` (broker values), and the `… CONNECTION` /
+    /// `SSH TUNNEL` object references (an item name).
     fn config_option(&mut self, name: &str) {
         self.out.push_str(name);
         match name {
@@ -1265,6 +1410,7 @@ impl<'a, 'u> Gen<'a, 'u> {
                 self.out.push(')');
             }
             "BROKER" => self.out.push_str(" 'localhost:9092'"),
+            "BROKERS" => self.kafka_brokers(),
             "AWS CONNECTION" | "GCP CONNECTION" | "SSH TUNNEL" => {
                 self.out.push_str(" = ");
                 self.ident();
@@ -1403,7 +1549,10 @@ impl<'a, 'u> Gen<'a, 'u> {
                     self.ident_list(1, 3);
                     if self.chance(1, 2) {
                         self.out.push_str(" WITH");
-                        self.config_option_list(option_names("AlterSourceAddSubsourceOptionName"), true);
+                        self.config_option_list(
+                            option_names("AlterSourceAddSubsourceOptionName"),
+                            true,
+                        );
                     }
                 } else {
                     self.out.push_str("VALIDATE CONNECTION ");

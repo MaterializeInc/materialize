@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/frontend_peek.rs
-revision: ff68428395
+revision: a1bcaebfe6
 ---
 
 # adapter::frontend_peek
@@ -15,3 +15,4 @@ The optimizer config is built by layering cluster features, then cluster-coheren
 The private `Execution` enum branches the post-optimization flow among `Peek`, `Subscribe`, `CopyToS3`, `ExplainPlan`, and `ExplainPushdown` variants.
 `frontend_determine_timestamp` mirrors the coordinator's `determine_timestamp`, acquiring read holds and computing a `TimestampDetermination` entirely within the session task. For bounded-staleness queries that do not respond immediately, it also records a `timestamp_difference_for_bounded_staleness_ms` session metric comparing the chosen timestamp against what serializable would have produced.
 When the first non-AS OF query in a multi-statement transaction determines the transaction timestamp, its read holds are stored in the coordinator via `Command::StoreTransactionReadHolds`. A timestamp-less determination (e.g. a constant query) does not pin the transaction timestamp, so its holds are not stored: only the statement that establishes the transaction timestamp may define the timedomain.
+`validate_selection_dependencies` passes `DependencyPolicy::UserDml` to the underlying dependency check, requiring every relation leaf to be a writable user table. Coordinator calls go through `CoordinatorClient`, which returns a `Result` wrapping the response; a dropped response channel propagates as an error rather than panicking.

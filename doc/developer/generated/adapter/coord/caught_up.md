@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/caught_up.rs
-revision: 9d0b66c63c
+revision: ed7294b842
 ---
 
 # adapter::coord::caught_up
@@ -12,3 +12,4 @@ A point-in-time hydration check is not sufficient: a crash- or OOM-looping repli
 `ClusterStabilityState::observe` folds in a `ClusterHealthSnapshot` (which captures `all_healthy`, `max_status_change`, and per-process `restart_counts` from the in-memory orchestrator mirror) and returns a `StabilityObservation` indicating whether the cluster has sustained the required period and, if not, which `StabilityBlocker` (`NotHealthy`, `StatusFlapped`, `Restarted`, or `WithinPeriod`) is holding it back.
 Only clusters whose replicas are all `Online`, whose `max_status_change` has not advanced since the last tick, and whose per-process restart counts have not changed accumulate streak time; any disruption resets `stable_since` to `None`.
 The `ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK` dyncfg controls whether the stability gate is enforced; `WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD` sets the required streak duration.
+For collections absent from the live-frontier snapshot (e.g. a table-to-MV conversion whose `GlobalId` remains a table on the leader), the caught-up check requires both full hydration and that the write frontier falls within the allowed lag of the current time — not merely that the write frontier is past the minimum. This prevents a fresh MV whose sink has advanced to frontier 1 after one batch from appearing caught up mid-hydration. There is no `cutoff` escape hatch on this path: a frontier frozen at the minimum blocks promotion until `with_0dt_deployment_max_wait` elapses.

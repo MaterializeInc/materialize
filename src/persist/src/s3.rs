@@ -44,6 +44,10 @@ use crate::location::{Blob, BlobMetadata, Determinate, ExternalError};
 use crate::metrics::S3BlobMetrics;
 
 /// Configuration for opening an [S3Blob].
+///
+/// NOTE: cloning shares the underlying `S3Client` and therefore its HTTP
+/// connection pool. Connection-pool isolation (as hedged gets require, see
+/// [crate::hedge]) needs a fresh [S3BlobConfig::new].
 #[derive(Clone, Debug)]
 pub struct S3BlobConfig {
     metrics: S3BlobMetrics,
@@ -974,7 +978,9 @@ impl MultipartConfig {
     }
 
     fn part_iter(&self, blob_len: usize) -> MultipartChunkIter {
-        debug_assert!(self.multipart_chunk_size >= MultipartConfig::MIN_UPLOAD_CHUNK_SIZE);
+        mz_ore::soft_assert_no_log!(
+            self.multipart_chunk_size >= MultipartConfig::MIN_UPLOAD_CHUNK_SIZE
+        );
         MultipartChunkIter::new(self.multipart_chunk_size, blob_len)
     }
 }
@@ -1123,6 +1129,76 @@ mod tests {
                 Some(b"foobar".to_vec().into())
             );
         }
+
+        Ok(())
+    }
+
+    /// Runs the conformance suite through [crate::hedge::HedgedBlob] with two
+    /// genuinely independent S3 clients (separate connection pools) pointed
+    /// at the same bucket/prefix, a hedge racing on every get. Ignored by
+    /// default like `s3_blob` above. When run against the external test
+    /// bucket, it is the one exercise of the real pool-isolation path.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5586
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+    #[ignore] // TODO: Reenable against minio so it can run locally
+    async fn s3_blob_hedged() -> Result<(), ExternalError> {
+        use crate::hedge::{
+            BLOB_HEDGED_GET_BUDGET_RATIO, BLOB_HEDGED_GET_DELAY, BLOB_HEDGED_GET_ENABLED,
+            HedgeSibling, HedgedBlob,
+        };
+        use crate::metrics::BlobHedgeMetrics;
+        use mz_dyncfg::{ConfigSet, ConfigUpdates};
+
+        let config = match S3BlobConfig::new_for_test().await? {
+            Some(client) => client,
+            None => return Ok(()),
+        };
+        // A second client with its own connection pool. Its generated prefix
+        // is discarded below: both sides must point at the same store.
+        let sibling = match S3BlobConfig::new_for_test().await? {
+            Some(client) => client,
+            None => return Ok(()),
+        };
+
+        let cfg = crate::cfg::all_dyn_configs(ConfigSet::default());
+        let mut updates = ConfigUpdates::default();
+        updates.add(&BLOB_HEDGED_GET_ENABLED, true);
+        updates.add(&BLOB_HEDGED_GET_DELAY, Duration::ZERO);
+        updates.add(&BLOB_HEDGED_GET_BUDGET_RATIO, 1.0);
+        updates.apply(&cfg);
+        let cfg = Arc::new(cfg);
+
+        blob_impl_test(move |path| {
+            let path = path.to_owned();
+            let config = config.clone();
+            let sibling = sibling.clone();
+            let cfg = Arc::clone(&cfg);
+            async move {
+                let prefix = format!("{}/s3_blob_hedged_test/{}", config.prefix, path);
+                let primary_config = S3BlobConfig {
+                    metrics: config.metrics.clone(),
+                    client: config.client.clone(),
+                    bucket: config.bucket.clone(),
+                    prefix: prefix.clone(),
+                };
+                let hedge_config = S3BlobConfig {
+                    metrics: sibling.metrics.clone(),
+                    client: sibling.client.clone(),
+                    bucket: config.bucket.clone(),
+                    prefix,
+                };
+                let primary: Arc<dyn Blob> = Arc::new(S3Blob::open(primary_config).await?);
+                let hedge: Arc<dyn Blob> = Arc::new(S3Blob::open(hedge_config).await?);
+                Ok(HedgedBlob::new(
+                    primary,
+                    HedgeSibling::Isolated(hedge),
+                    cfg,
+                    BlobHedgeMetrics::new(&MetricsRegistry::new()),
+                ))
+            }
+        })
+        .await?;
 
         Ok(())
     }

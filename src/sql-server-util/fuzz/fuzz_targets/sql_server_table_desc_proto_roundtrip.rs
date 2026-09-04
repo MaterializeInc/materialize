@@ -26,11 +26,21 @@
 //!
 //! 2. **Constraint-string arm.** Drives the *raw-ingest* path
 //!    `SqlServerTableConstraint::try_from(SqlServerTableConstraintRaw)`,
-//!    which parses the `constraint_type` *string* (`"PRIMARY KEY"` /
-//!    `"UNIQUE"` are accepted, everything else is rejected). It feeds both
-//!    the two valid strings and fuzzer-controlled garbage, and proto
-//!    round-trips any constraint that parses. This covers the
-//!    string-validation boundary that the proto oneof never sees.
+//!    which parses the `constraint_type` *string*. Only the exact spellings
+//!    `"PRIMARY KEY"` and `"UNIQUE"` are accepted. The arm asserts both
+//!    directions of that boundary and the variant each accepted spelling maps
+//!    to, then proto round-trips the constraint inside a table desc.
+//!
+//!    The assertions are the point of the arm, not decoration. Its input space
+//!    is only `CONSTRAINT_TYPES.len() * 4` fixed cases, so a round-trip-only
+//!    oracle would contribute nothing beyond "does not panic", and it would be
+//!    blind to all three ways this parser can regress: accepting a normalized
+//!    or unknown spelling, rejecting a valid one (which makes the whole arm
+//!    inert and indistinguishable from a passing arm), and swapping the two
+//!    variants (which a round trip preserves). The parsed variant drives
+//!    `is_primary` on the `TableConstraint::Unique` that purification writes
+//!    into the generated subsource DDL, so misparsing a non-unique upstream
+//!    constraint as `PrimaryKey` declares a key that does not hold.
 //!
 //! 3. **Decode-type arm.** Builds a `SqlServerColumnRaw` from a real SQL
 //!    Server type name (`bit`, `tinyint`, `uniqueidentifier`, `xml`,
@@ -46,17 +56,35 @@
 
 #![no_main]
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use libfuzzer_sys::fuzz_target;
 use mz_proto::{ProtoType, RustType};
+use mz_sql_server_util::ProtoSqlServerTableDesc;
 use mz_sql_server_util::desc::{
-    SqlServerColumnRaw, SqlServerTableConstraint, SqlServerTableConstraintRaw, SqlServerTableDesc,
+    SqlServerColumnDesc, SqlServerColumnRaw, SqlServerTableConstraint, SqlServerTableConstraintRaw,
+    SqlServerTableConstraintType, SqlServerTableDesc,
 };
-use mz_sql_server_util::{ProtoSqlServerColumnDesc, ProtoSqlServerTableDesc};
-use proptest::strategy::{Strategy, ValueTree};
+use proptest::strategy::{BoxedStrategy, Strategy, ValueTree};
 use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
 use prost::Message;
+
+// `Arbitrary::arbitrary()` rebuilds the entire boxed strategy graph on every
+// call: `SqlScalarType`'s ~31-variant `Union` plus a second copy of it for
+// `Array`, the `prop_recursive` wrapper, and a `.*` regex compile per
+// `any::<String>()` leaf. `Config::default()` re-reads the process environment.
+// Both are per-process constants, so pay for them once instead of once per
+// execution. libFuzzer runs a single execution at a time per process, so a
+// `thread_local` suffices for the non-`Sync` strategy.
+thread_local! {
+    static DESC_STRATEGY: BoxedStrategy<SqlServerTableDesc> =
+        <SqlServerTableDesc as proptest::arbitrary::Arbitrary>::arbitrary().boxed();
+}
+
+fn config() -> Config {
+    static CONFIG: OnceLock<Config> = OnceLock::new();
+    CONFIG.get_or_init(Config::default).clone()
+}
 
 /// Real SQL Server data-type spellings, chosen to exercise every branch of the
 /// product `parse_data_type` mapping and therefore every supported
@@ -68,8 +96,8 @@ const DATA_TYPES: &[&str] = &[
     "smallint",         // I16
     "int",              // I32
     "bigint",           // I64
-    "real",             // F32 (precision <= 24)
-    "float",            // F64
+    "real",             // F32, selected by max_length == 4
+    "float",            // F64, selected by max_length == 8
     "char",             // String
     "varchar",          // String
     "nvarchar",         // String
@@ -93,7 +121,8 @@ const DATA_TYPES: &[&str] = &[
 ];
 
 /// Constraint-type strings: the two the product accepts, plus garbage that
-/// `SqlServerTableConstraint::try_from` must reject.
+/// `SqlServerTableConstraint::try_from` must reject. Parsing is an exact match,
+/// so the near-misses (case, whitespace) belong in the rejected set.
 const CONSTRAINT_TYPES: &[&str] = &[
     "PRIMARY KEY",
     "UNIQUE",
@@ -108,6 +137,10 @@ const CONSTRAINT_TYPES: &[&str] = &[
 /// Assert that a `SqlServerTableDesc` survives a full Rust round-trip through
 /// its proto representation unchanged, including a re-encode/decode of the
 /// wire bytes.
+///
+/// This covers each column and constraint too: `into_proto`/`from_proto`
+/// delegate per element, and equality is structural, so a leaf that failed to
+/// round-trip would show up here.
 fn assert_rust_roundtrip(orig: &SqlServerTableDesc) {
     let proto = orig.into_proto();
     let bytes = proto.encode_to_vec();
@@ -149,47 +182,62 @@ fn craft_column(data: &[u8], idx: usize) -> SqlServerColumnRaw {
     // could, otherwise we trip the assertion on structurally-impossible input.
     // Every other type legitimately carries a range of lengths, so keep
     // fuzzing those across -1 (max), 16, and assorted small/arbitrary values.
+    //
+    // 4 and 8 are pinned because they are the *only* lengths that reach the
+    // `F32` and `F64` decode types: `real`/`float`/`double precision` choose by
+    // byte width rather than by name or precision. Leaving them to the two
+    // random branches made two documented decode types a coincidence.
     let max_length = if matches!(data_type, "text" | "ntext" | "image") {
         16
     } else {
-        match pick(2) % 4 {
+        match pick(2) % 6 {
             0 => -1,
             1 => 16,
-            2 => i16::from(pick(3)),
+            2 => 4,
+            3 => 8,
+            4 => i16::from(pick(3)),
             _ => i16::from_le_bytes([pick(3), pick(4)]),
         }
     };
+    // Modulo 45, not 39: `parse_data_type` rejects a `precision` above 39, and
+    // rejects a `scale` that `NumericMaxScale` cannot hold. Capping both at 38
+    // made those two branches unreachable by construction rather than merely
+    // rare. `SqlServerColumnDesc::new` turns either rejection into an
+    // `Unsupported` decode type, which still round-trips.
     SqlServerColumnRaw {
         name: format!("col{idx}").into(),
         data_type: data_type.into(),
         is_nullable: pick(1) & 1 == 0,
         max_length,
-        precision: pick(5) % 39,
-        scale: pick(6) % 39,
+        precision: pick(5) % 45,
+        scale: pick(6) % 45,
         is_computed: pick(7) & 1 == 0,
     }
 }
 
 fuzz_target!(|data: &[u8]| {
-    // Reserve the first byte as a mode selector and the next 32 bytes as the
-    // proptest seed. Everything after that feeds the raw-bytes / crafting
-    // logic so a single input can drive any arm.
+    // The first byte selects the arm. Every arm then reads from byte 1 on:
+    // only the proptest arm consumes a seed, and it is the one that consumes it,
+    // so there is no shared reservation to skip past. Carving out a fixed
+    // 32-byte seed window for all four arms would starve the other three, since
+    // libFuzzer grows inputs up from empty and their selector bytes would sit
+    // past the window at a length it takes a long time to reach. It would also
+    // decapitate any genuine encoded `ProtoSqlServerTableDesc` dropped into the
+    // corpus (which `--corpus-sync` accumulates) before the raw-bytes arm saw it.
     let mode = data.first().copied().unwrap_or(0);
-    let mut seed = [0u8; 32];
-    let seed_src = data.get(1..33).unwrap_or(&[]);
-    seed[..seed_src.len()].copy_from_slice(seed_src);
-    let rest = data.get(33..).unwrap_or(&[]);
+    let tail = data.get(1..).unwrap_or(&[]);
 
     match mode % 4 {
         0 => {
-            // Valid-value arm: drive proptest's Arbitrary from the seed.
-            let mut runner = TestRunner::new_with_rng(
-                Config::default(),
-                TestRng::from_seed(RngAlgorithm::ChaCha, &seed),
-            );
-            let value = match <SqlServerTableDesc as proptest::arbitrary::Arbitrary>::arbitrary()
-                .new_tree(&mut runner)
-            {
+            // Valid-value arm: drive proptest's Arbitrary from the seed. Padded
+            // with zeros rather than requiring all 32 bytes, so short inputs
+            // still steer generation instead of all reusing the zero seed.
+            let mut seed = [0u8; 32];
+            let n = tail.len().min(32);
+            seed[..n].copy_from_slice(&tail[..n]);
+            let mut runner =
+                TestRunner::new_with_rng(config(), TestRng::from_seed(RngAlgorithm::ChaCha, &seed));
+            let value = match DESC_STRATEGY.with(|s| s.new_tree(&mut runner)) {
                 Ok(tree) => tree.current(),
                 Err(_) => return,
             };
@@ -198,23 +246,56 @@ fuzz_target!(|data: &[u8]| {
         1 => {
             // Constraint-string arm: exercise the raw-ingest string parser for
             // both accepted and rejected `constraint_type` spellings.
-            let ty_idx = rest.first().copied().unwrap_or(0) as usize % CONSTRAINT_TYPES.len();
-            let n_cols = (rest.get(1).copied().unwrap_or(0) % 4) as usize;
-            let columns: Vec<String> = (0..n_cols).map(|i| format!("c{i}")).collect();
+            let ty_idx = tail.first().copied().unwrap_or(0) as usize % CONSTRAINT_TYPES.len();
+            let ty = CONSTRAINT_TYPES[ty_idx];
+            let n_cols = (tail.get(1).copied().unwrap_or(0) % 4) as usize;
+            let column_names: Vec<String> = (0..n_cols).map(|i| format!("c{i}")).collect();
             let raw = SqlServerTableConstraintRaw {
                 constraint_name: "fuzz_constraint".to_string(),
-                constraint_type: CONSTRAINT_TYPES[ty_idx].to_string(),
-                columns,
+                constraint_type: ty.to_string(),
+                columns: column_names.clone(),
             };
-            // Garbage strings must be rejected. Valid ones must parse and then
-            // survive a proto round-trip inside a table desc.
-            let Ok(constraint) = SqlServerTableConstraint::try_from(raw) else {
+            let parsed = SqlServerTableConstraint::try_from(raw);
+
+            let expected = match ty {
+                "PRIMARY KEY" => Some(SqlServerTableConstraintType::PrimaryKey),
+                "UNIQUE" => Some(SqlServerTableConstraintType::Unique),
+                _ => None,
+            };
+            let Some(expected) = expected else {
+                assert!(
+                    parsed.is_err(),
+                    "constraint_type {ty:?} must be rejected, parsed as {parsed:?}"
+                );
                 return;
             };
+            let constraint = parsed.expect("an accepted constraint_type must parse");
+            assert_eq!(
+                constraint.constraint_type, expected,
+                "constraint_type {ty:?} mapped to the wrong variant"
+            );
+
+            // Give the desc the columns its constraint names, so the descriptor
+            // is structurally consistent. A future consistency check in
+            // `from_proto` would otherwise report this arm's own inputs.
+            let columns: Box<[SqlServerColumnDesc]> = column_names
+                .iter()
+                .map(|name| {
+                    SqlServerColumnDesc::new(&SqlServerColumnRaw {
+                        name: name.as_str().into(),
+                        data_type: "int".into(),
+                        is_nullable: false,
+                        max_length: 4,
+                        precision: 0,
+                        scale: 0,
+                        is_computed: false,
+                    })
+                })
+                .collect();
             let desc = SqlServerTableDesc {
                 schema_name: "dbo".into(),
                 name: "fuzz".into(),
-                columns: Box::new([]),
+                columns,
                 constraints: vec![constraint],
             };
             assert_rust_roundtrip(&desc);
@@ -222,17 +303,17 @@ fuzz_target!(|data: &[u8]| {
         2 => {
             // Decode-type arm: run the product type-mapping over real type
             // spellings and round-trip the resulting columns.
-            let n_cols = 1 + (rest.first().copied().unwrap_or(0) % 6) as usize;
+            let n_cols = 1 + (tail.first().copied().unwrap_or(0) % 6) as usize;
             let mut columns = Vec::with_capacity(n_cols);
             for i in 0..n_cols {
                 // Give each column a distinct 8-byte window of the input.
                 let off = 1 + i * 8;
-                let window = rest.get(off..).unwrap_or(&[]);
+                let window = tail.get(off..).unwrap_or(&[]);
                 let raw = craft_column(window, i);
-                let mut desc = mz_sql_server_util::desc::SqlServerColumnDesc::new(&raw);
+                let mut desc = SqlServerColumnDesc::new(&raw);
                 // Occasionally populate the deprecated PK-constraint field so
                 // the `Option<Arc<str>>` round-trip is covered too.
-                if rest.get(off).copied().unwrap_or(0) & 0x80 != 0 {
+                if tail.get(off).copied().unwrap_or(0) & 0x80 != 0 {
                     desc.primary_key_constraint = Some(Arc::from("pk_fuzz"));
                 }
                 columns.push(desc);
@@ -244,20 +325,10 @@ fuzz_target!(|data: &[u8]| {
                 constraints: vec![],
             };
             assert_rust_roundtrip(&desc);
-
-            // Also assert the per-column proto leaf round-trips independently,
-            // which isolates the `decode_type` oneof + `column_type` mapping.
-            for col in desc.columns.iter() {
-                let proto: ProtoSqlServerColumnDesc = col.into_proto();
-                let back: mz_sql_server_util::desc::SqlServerColumnDesc = proto
-                    .into_rust()
-                    .expect("column desc must convert back to Rust");
-                assert_eq!(col, &back, "SqlServerColumnDesc changed across roundtrip");
-            }
         }
         _ => {
             // Raw-bytes arm: decode arbitrary bytes directly.
-            check_decoded(rest);
+            check_decoded(tail);
         }
     }
 });

@@ -18,16 +18,16 @@ use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
     MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
     MZ_HISTORY_RETENTION_STRATEGIES, MZ_INDEX_COLUMNS, MZ_LICENSE_KEYS, MZ_LIST_TYPES,
-    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_OBJECT_DEPENDENCIES,
-    MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH,
-    MZ_SESSIONS, MZ_SOURCE_REFERENCES, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TABLES,
-    MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS,
+    MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SOURCE_REFERENCES,
+    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TYPE_PG_METADATA, MZ_TYPES,
+    MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::durable::SourceReferences;
 use mz_catalog::memory::error::Error;
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, DataSourceDesc, Func, Index, MaterializedView, Table,
-    TableDataSource, Type, View,
+    TableDataSource, Type,
 };
 use mz_expr::MirScalarExpr;
 use mz_license_keys::ValidatedLicenseKey;
@@ -51,6 +51,7 @@ use mz_sql::names::SchemaSpecifier;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::client::TableData;
 use smallvec::smallvec;
+use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::active_compute_sink::ActiveSubscribe;
@@ -102,19 +103,6 @@ impl CatalogState {
         BuiltinTableUpdate { id, data }
     }
 
-    pub fn pack_depends_update(
-        &self,
-        depender: CatalogItemId,
-        dependee: CatalogItemId,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let row = Row::pack_slice(&[
-            Datum::String(&depender.to_string()),
-            Datum::String(&dependee.to_string()),
-        ]);
-        BuiltinTableUpdate::row(&*MZ_OBJECT_DEPENDENCIES, row, diff)
-    }
-
     pub(super) fn pack_role_auth_update(
         &self,
         id: RoleId,
@@ -162,13 +150,6 @@ impl CatalogState {
         let privileges = privileges_row.unpack_first();
         let mut updates = match entry.item() {
             CatalogItem::Index(index) => self.pack_index_update(id, index, diff),
-            CatalogItem::Table(table) => {
-                // Source-table metadata (mz_postgres/mysql/sql_server/kafka_source_tables)
-                // is now derived from the persisted create_sql by materialized
-                // views over mz_catalog_raw, so ingestion-export tables need no
-                // special packing here.
-                self.pack_table_update(id, oid, schema_id, name, owner_id, privileges, diff, table)
-            }
             CatalogItem::Source(source) => {
                 match &source.data_source {
                     DataSourceDesc::Webhook { .. } => {
@@ -185,9 +166,6 @@ impl CatalogState {
                     | DataSourceDesc::Catalog => vec![],
                 }
             }
-            CatalogItem::View(view) => {
-                self.pack_view_update(id, oid, schema_id, name, owner_id, privileges, view, diff)
-            }
             CatalogItem::MaterializedView(mview) => {
                 self.pack_materialized_view_update(id, mview, diff)
             }
@@ -200,21 +178,20 @@ impl CatalogState {
             CatalogItem::Func(func) => {
                 self.pack_func_update(id, schema_id, name, owner_id, func, diff)
             }
-            CatalogItem::Log(_) | CatalogItem::Secret(_) => vec![],
+            // Tables, views, and metric sinks are exposed through materialized
+            // views derived from `mz_catalog_raw`, and logs and secrets never
+            // had builtin-table rows, so none pack a row here.
+            CatalogItem::Table(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::MetricSink(_) => vec![],
             // Connection details (mz_kafka_connections, mz_ssh_tunnel_connections,
             // mz_aws_connections, mz_aws_privatelink_connections) are now derived
             // from the persisted create_sql by materialized views over
             // mz_catalog_raw, so connections need no special packing here.
             CatalogItem::Connection(_) => vec![],
         };
-
-        if !entry.item().is_temporary() {
-            // Populate or clean up the `mz_object_dependencies` table.
-            // TODO(jkosh44) Unclear if this table wants to include all uses or only references.
-            for dependee in entry.item().references().items() {
-                updates.push(self.pack_depends_update(id, *dependee, diff))
-            }
-        }
 
         // Always report the latest for an objects columns.
         if let Some(desc) = entry.relation_desc_latest() {
@@ -327,110 +304,6 @@ impl CatalogState {
             ]),
             diff,
         )
-    }
-
-    fn pack_table_update(
-        &self,
-        id: CatalogItemId,
-        oid: u32,
-        schema_id: &SchemaSpecifier,
-        name: &str,
-        owner_id: &RoleId,
-        privileges: Datum,
-        diff: Diff,
-        table: &Table,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let redacted = table.create_sql.as_ref().map(|create_sql| {
-            mz_sql::parse::parse(create_sql)
-                .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", create_sql))
-                .into_element()
-                .ast
-                .to_ast_string_redacted()
-        });
-        let source_id = if let TableDataSource::DataSource {
-            desc: DataSourceDesc::IngestionExport { ingestion_id, .. },
-            ..
-        } = &table.data_source
-        {
-            Some(ingestion_id.to_string())
-        } else {
-            None
-        };
-
-        vec![BuiltinTableUpdate::row(
-            &*MZ_TABLES,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::UInt32(oid),
-                Datum::String(&schema_id.to_string()),
-                Datum::String(name),
-                Datum::String(&owner_id.to_string()),
-                privileges,
-                if let Some(create_sql) = &table.create_sql {
-                    Datum::String(create_sql)
-                } else {
-                    Datum::Null
-                },
-                if let Some(redacted) = &redacted {
-                    Datum::String(redacted)
-                } else {
-                    Datum::Null
-                },
-                if let Some(source_id) = source_id.as_ref() {
-                    Datum::String(source_id)
-                } else {
-                    Datum::Null
-                },
-            ]),
-            diff,
-        )]
-    }
-
-    fn pack_view_update(
-        &self,
-        id: CatalogItemId,
-        oid: u32,
-        schema_id: &SchemaSpecifier,
-        name: &str,
-        owner_id: &RoleId,
-        privileges: Datum,
-        view: &View,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let create_stmt = mz_sql::parse::parse(&view.create_sql)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "create_sql cannot be invalid: `{}` --- error: `{}`",
-                    view.create_sql, e
-                )
-            })
-            .into_element()
-            .ast;
-        let query = match &create_stmt {
-            Statement::CreateView(stmt) => &stmt.definition.query,
-            _ => unreachable!(),
-        };
-
-        let mut query_string = query.to_ast_string_stable();
-        // PostgreSQL appends a semicolon in `pg_views.definition`, we
-        // do the same for compatibility's sake.
-        query_string.push(';');
-
-        vec![BuiltinTableUpdate::row(
-            &*MZ_VIEWS,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::UInt32(oid),
-                Datum::String(&schema_id.to_string()),
-                Datum::String(name),
-                Datum::String(&query_string),
-                Datum::String(&owner_id.to_string()),
-                privileges,
-                Datum::String(&view.create_sql),
-                Datum::String(&create_stmt.to_ast_string_redacted()),
-            ]),
-            diff,
-        )]
     }
 
     fn pack_materialized_view_update(
@@ -681,6 +554,7 @@ impl CatalogState {
                     Datum::String(&id.to_string()),
                     Datum::UInt32(pg_metadata.typinput_oid),
                     Datum::UInt32(pg_metadata.typreceive_oid),
+                    Datum::UInt32(pg_metadata.typsend_oid),
                 ]),
                 diff,
             ));
@@ -918,12 +792,13 @@ impl CatalogState {
         &self,
         id: GlobalId,
         subscribe: &ActiveSubscribe,
+        session_uuid: Uuid,
         diff: Diff,
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
         let mut row = Row::default();
         let mut packer = row.packer();
         packer.push(Datum::String(&id.to_string()));
-        packer.push(Datum::Uuid(subscribe.session_uuid));
+        packer.push(Datum::Uuid(session_uuid));
         packer.push(Datum::String(&subscribe.cluster_id.to_string()));
 
         let start_dt = mz_ore::now::to_datetime(subscribe.start_time);

@@ -1442,6 +1442,14 @@ impl RowColumnarEncoder {
 
                 // We name the Fields in Parquet with the column index, but for
                 // backwards compat use the column name for stats.
+                //
+                // NOTE: name-keyed stats are sound only while durable
+                // relations never carry duplicate column names (the planner
+                // enforces this) and a dropped column's name can never be
+                // reused by a later version (persist rejects schema
+                // migrations containing drops). Filter pushdown consults
+                // these stats by name; violating either invariant attaches
+                // one column's stats to another and yields wrong results.
                 let name = (col_idx.to_raw(), col_name.as_str().into());
 
                 (name, encoder)

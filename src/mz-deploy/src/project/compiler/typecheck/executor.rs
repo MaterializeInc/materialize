@@ -170,7 +170,7 @@ fn worker_loop<T, F>(
                 .get(dependent_id)
                 .expect("dependent has a bookkeeping entry");
             let prev = dep_bk.remaining_deps.fetch_sub(1, Ordering::AcqRel);
-            debug_assert!(prev >= 1, "remaining_deps underflow for {dependent_id:?}");
+            mz_ore::soft_assert_no_log!(prev >= 1, "remaining_deps underflow for {dependent_id:?}");
             if prev == 1 {
                 tx.send(Some(dependent_id.clone())).expect("channel open");
             }

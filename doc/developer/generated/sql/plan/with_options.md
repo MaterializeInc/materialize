@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/with_options.rs
-revision: 74f18a3354
+revision: f40272e177
 ---
 
 # mz-sql::plan::with_options
@@ -12,3 +12,4 @@ It implements `TryFromValue<WithOptionValue<Aug>>` by parsing a `Sequence` of `W
 `KafkaMatchingBrokerRule<Aug>` implements `TryFromValue<WithOptionValue<Aug>>` (extracts from `WithOptionValue::KafkaMatchingBrokerRule`) and `ImpliedValue` (bails with an error).
 In the generic `TryFromValue<WithOptionValue<Aug>>` fallback, `WithOptionValue::KafkaMatchingBrokerRule(_)` is excluded from generic scalar extraction alongside `ConnectionAwsPrivatelink`; the error label for `ConnectionAwsPrivatelink` is `"connection privatelink"`. `WithOptionValue::ClusterAutoScalingStrategyOptionValue(_)` is likewise excluded, with the error label `"cluster auto scaling strategy"`.
 `ClusterAutoScalingStrategyOptionValue` implements `TryFromValue<WithOptionValue<Aug>>` (extracts from `WithOptionValue::ClusterAutoScalingStrategyOptionValue`) and `ImpliedValue` (bails with an error requiring an explicit value).
+`IcebergAccessDelegation` implements `TryFromValue<WithOptionValue<Aug>>`: accepts the case-insensitive string `"vended-credentials"`, mapping it to `IcebergAccessDelegation::VendedCredentials`; any other string is rejected. `try_into_value` serializes via `as_header_value()`. `ImpliedValue` bails with an error requiring an explicit value.

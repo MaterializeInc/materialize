@@ -16,6 +16,7 @@ further restart scenarios.
 import copy
 import json
 import time
+from datetime import datetime
 from textwrap import dedent
 
 import requests
@@ -1232,6 +1233,503 @@ def workflow_arrangement_sizes_stale_snapshot_after_restart(c: Composition) -> N
                 f"rows recorded for indexes dropped just before the restart "
                 f"({dropped}); first 10: {stale_rows[:10]}"
             )
+
+
+def workflow_temporary_item_cleanup(c: Composition) -> None:
+    """Temporary tables and views are durable catalog items tagged with the
+    UUID of the session that created them (SQL-150), so they need explicit
+    cleanup on both paths out of a session.
+
+    Graceful close is handled by the session-close hook, which drops the
+    session's items in one catalog transaction. A crash never runs that hook,
+    so the items are instead reclaimed the next time the catalog is opened with
+    write intent, which fences out every previous owner and therefore every
+    session that could still own one.
+    """
+
+    def forget_cached_conns() -> None:
+        """Drop the connections `sql_query` caches.
+
+        A SIGKILL severs them, and reusing a dead socket surfaces as a spurious
+        "server closed the connection unexpectedly" rather than as a retry.
+        """
+        for conn in c.conns.values():
+            try:
+                conn.close()
+            except Exception:
+                pass
+        c.conns.clear()
+
+    def query(sql: str) -> list[tuple]:
+        try:
+            return c.sql_query(sql)
+        except OperationalError:
+            forget_cached_conns()
+            raise
+
+    def wait_for(sql: str, expected: list[tuple], what: str) -> None:
+        """Poll until `sql` returns `expected`."""
+        deadline = time.time() + 120
+        actual = None
+        while time.time() < deadline:
+            try:
+                actual = query(sql)
+                if actual == expected:
+                    return
+            except OperationalError:
+                # environmentd is still coming back up.
+                pass
+            time.sleep(0.5)
+        raise UIError(
+            f"timed out waiting for {what}: wanted {expected}, last saw {actual}"
+        )
+
+    # Temporary items report the temporary schema sentinel '0'.
+    temp_item_counts = """
+        SELECT
+          (SELECT count(*) FROM mz_tables WHERE name = 'tt' AND schema_id = '0'),
+          (SELECT count(*) FROM mz_views WHERE name = 'tv' AND schema_id = '0')
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    # Two sessions create temporary items of the same name. Name uniqueness is
+    # scoped by the owning session, so both must coexist, and mz_tables and
+    # mz_views report every item regardless of owner.
+    conn_a = c.sql_connection()
+    conn_b = c.sql_connection()
+    conn_ids = {}
+    for label, conn in (("a", conn_a), ("b", conn_b)):
+        cur = conn.cursor()
+        cur.execute("SELECT pg_backend_pid()")
+        conn_ids[label] = cur.fetchall()[0][0]
+        cur.execute("CREATE TEMP TABLE tt (a int)")
+        cur.execute("CREATE TEMP VIEW tv AS SELECT * FROM tt")
+
+    wait_for(temp_item_counts, [(2, 2)], "both sessions' temporary items to appear")
+
+    sessions = query(f"""SELECT count(*) FROM mz_internal.mz_sessions
+            WHERE connection_id IN ({conn_ids["a"]}, {conn_ids["b"]})""")
+    assert sessions == [(2,)], f"both sessions should be in mz_sessions, saw {sessions}"
+
+    # --- Graceful close: only the closing session's items go ------------------
+
+    conn_a.close()
+
+    wait_for(
+        temp_item_counts,
+        [(1, 1)],
+        "session a's temporary items to be dropped and session b's to survive",
+    )
+    wait_for(
+        f"""SELECT count(*) FROM mz_internal.mz_sessions
+            WHERE connection_id = {conn_ids["a"]}""",
+        [(0,)],
+        "session a's mz_sessions row to be retracted",
+    )
+
+    # Session b still owns and resolves its own items.
+    cur_b = conn_b.cursor()
+    cur_b.execute("INSERT INTO tt VALUES (1)")
+    cur_b.execute("SELECT count(*) FROM tv")
+    assert cur_b.fetchall() == [(1,)], "session b lost its own temporary items"
+
+    # A comment on a temporary item is a durable catalog row too, and item ids
+    # are reused, so reclamation must drop it or it can re-attach to an
+    # unrelated later object.
+    cur_b.execute("COMMENT ON TABLE tt IS 'crash victim'")
+    temp_comment_count = """
+        SELECT count(*) FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'Comment'
+          AND data->'value'->>'comment' = 'crash victim'
+    """
+    comments = c.sql_query(temp_comment_count, port=6877, user="mz_system")
+    assert comments == [(1,)], f"the temp table's comment was not written: {comments}"
+
+    # Capture the shard backing session b's temp table: the metadata row of
+    # the one remaining ephemeral item that has storage (the temp view has
+    # none). It is what boot-time reclamation must clean up after the kill.
+    shards = c.sql_query(
+        """SELECT m.data->'value'->>'shard'
+           FROM mz_internal.mz_catalog_raw m
+           WHERE m.data->>'kind' = 'StorageCollectionMetadata'
+             AND m.data->'key'->'id' IN (
+               SELECT i.data->'value'->'global_id'
+               FROM mz_internal.mz_catalog_raw i
+               WHERE i.data->>'kind' = 'Item'
+                 AND i.data->'value'->>'ephemeral_owner_session' IS NOT NULL)""",
+        port=6877,
+        user="mz_system",
+    )
+    assert len(shards) == 1, f"expected one ephemeral storage mapping: {shards}"
+    temp_shard = shards[0][0]
+
+    # --- kill -9, with session b's items still live ---------------------------
+
+    c.kill("materialized")
+    c.up("materialized")
+    forget_cached_conns()
+
+    wait_for(
+        temp_item_counts,
+        [(0, 0)],
+        "the crashed session's temporary items to be reclaimed at boot",
+    )
+    wait_for(
+        f"""SELECT count(*) FROM mz_internal.mz_sessions
+            WHERE connection_id IN ({conn_ids["a"]}, {conn_ids["b"]})""",
+        [(0,)],
+        "stale mz_sessions rows to be retracted at boot",
+    )
+
+    # mz_tables and mz_views are projections. Only mz_catalog_raw shows whether
+    # the durable rows themselves are gone, so a reclamation that merely stopped
+    # rendering the items would still be caught here. It is system-only.
+    ephemeral = c.sql_query(
+        """SELECT count(*) FROM mz_internal.mz_catalog_raw
+           WHERE data->>'kind' = 'Item'
+             AND data->'value'->>'ephemeral_owner_session' IS NOT NULL""",
+        port=6877,
+        user="mz_system",
+    )
+    assert ephemeral == [
+        (0,)
+    ], f"ephemeral catalog items survived the restart: {ephemeral}"
+
+    # The temp table's storage mapping must have moved to the finalization
+    # WAL in the same reclamation, else the metadata row and its persist
+    # shard would leak forever. Both rows are stable to assert on here: the
+    # metadata deletion is permanent, and the WAL row survives until the
+    # next committed catalog transaction, which cannot have happened because
+    # nothing has run DDL since the restart.
+    metadata = c.sql_query(
+        f"""SELECT count(*) FROM mz_internal.mz_catalog_raw
+            WHERE data->>'kind' = 'StorageCollectionMetadata'
+              AND data->'value'->>'shard' = '{temp_shard}'""",
+        port=6877,
+        user="mz_system",
+    )
+    assert metadata == [
+        (0,)
+    ], f"temp table's storage metadata survived the restart: {temp_shard}"
+    unfinalized = c.sql_query(
+        f"""SELECT count(*) FROM mz_internal.mz_catalog_raw
+            WHERE data->>'kind' = 'UnfinalizedShard'
+              AND data->'key'->>'shard' = '{temp_shard}'""",
+        port=6877,
+        user="mz_system",
+    )
+    assert unfinalized == [
+        (1,)
+    ], f"temp table's shard was not enqueued for finalization: {temp_shard}"
+
+    # The comment row dies with its item.
+    comments = c.sql_query(temp_comment_count, port=6877, user="mz_system")
+    assert comments == [
+        (0,)
+    ], f"the temp table's comment survived the restart: {comments}"
+
+    # conn_b's socket died with the process; closing is bookkeeping only.
+    try:
+        conn_b.close()
+    except Exception:
+        pass
+
+
+def workflow_hydration_history_survives_restart(c: Composition) -> None:
+    """Durable object and replica hydration rows outlive their writer.
+
+    Killing the service also restarts clusterd, so the replica hydrates again
+    and legitimately records fresh episodes: one when rehydration forms a
+    single episode, more when the introspection indexes complete before the
+    user dataflows install. What must hold is that the pre-restart episodes
+    are still there afterwards, unchanged, that every fresh episode starts
+    after every pre-restart finish, and that repeated sweeps do not duplicate
+    anything. Asserting exact row counts would instead assert on collection
+    timing.
+    """
+
+    def episodes(name: str = "hydration_history_i") -> list[list]:
+        return c.sql_query(f"""
+            SELECT h.installed_at::text, h.started_at::text,
+                   h.hydrated_at::text, h.status
+            FROM mz_internal.mz_object_hydration_history AS h
+            JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.object_id
+            JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+            WHERE o.name = '{name}'
+            ORDER BY h.installed_at""")
+
+    def replica_episodes() -> list[list]:
+        return c.sql_query("""
+            SELECT h.replica_id, h.started_at::text, h.finished_at::text,
+                   h.object_count::text, h.peak_memory_bytes::text,
+                   h.peak_disk_bytes::text, h.status
+            FROM mz_internal.mz_replica_hydration_history AS h
+            JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
+            JOIN mz_catalog.mz_clusters AS c ON c.id = h.cluster_id
+            WHERE r.name = 'r1' AND c.name = 'hydration_history'
+            ORDER BY h.started_at""")
+
+    def replica_episode_identities(episodes: list[list]) -> list[tuple[str, str]]:
+        return [(episode[0], episode[1]) for episode in episodes]
+
+    def parse_ts(text: str) -> datetime:
+        return datetime.fromisoformat(text)
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "hydration_history_collection_interval": "1s",
+                # Pin retention: CI randomizes it, and a short period would
+                # prune the episode this test restarts around.
+                "hydration_history_retention_period": "30d",
+            },
+            sanity_restart=False,
+        )
+    ):
+        c.up("materialized")
+        c.sql(dedent("""\
+            CREATE CLUSTER hydration_history SIZE 'scale=1,workers=2';
+            CREATE TABLE hydration_history_t (a int);
+            INSERT INTO hydration_history_t SELECT generate_series(1, 100000);
+            CREATE INDEX hydration_history_i
+                IN CLUSTER hydration_history ON hydration_history_t (a);
+            CREATE MATERIALIZED VIEW hydration_history_mv_a
+                IN CLUSTER hydration_history AS SELECT a + 1 AS a FROM hydration_history_t;
+            CREATE MATERIALIZED VIEW hydration_history_mv_b
+                IN CLUSTER hydration_history AS SELECT a + 2 AS a FROM hydration_history_t;
+            """))
+
+        deadline = time.time() + 120
+        before = []
+        while time.time() < deadline:
+            before = episodes()
+            if before:
+                break
+            time.sleep(0.5)
+        assert (
+            len(before) == 1
+        ), f"expected exactly one episode, got {before} (empty means it timed out)"
+
+        deadline = time.time() + 120
+        replica_before = []
+        while time.time() < deadline:
+            replica_before = replica_episodes()
+            if replica_before:
+                break
+            time.sleep(0.5)
+        assert replica_before, "replica hydration history timed out before restart"
+
+        # Prefer an MV whose persist-sink worker is off worker 0 instead of
+        # predicting it from user-ID allocation and hashing. Enough input data
+        # separates compute completion from the active worker's durable write,
+        # but a single MV is not a reliable trial: its sink can land on worker
+        # 0, and a fast snapshot write can collapse both workers' stamps into
+        # one logging batch. Either way the separation is unobservable on that
+        # MV, so once a trial is fully hydrated and disqualified, create
+        # another MV: a fresh id rolls the sink worker and a fresh snapshot
+        # write rolls the timing.
+        #
+        # Which worker holds the maximum is a dice roll, so it must not decide
+        # whether the test passes. Every fully hydrated trial is checked
+        # against the all-worker maximum below, and that is the property under
+        # test whichever worker holds the maximum. A run where no trial
+        # separates the workers still checks it, it only loses the ability to
+        # tell a worker-0-only implementation apart, and the query shape that
+        # separation guards against is pinned deterministically by
+        # `collect_requires_every_worker`.
+        deadline = time.time() + 240
+        mv_names = ["hydration_history_mv_a", "hydration_history_mv_b"]
+        max_mvs = 8
+        candidates = []
+        worker_rows = []
+        with c.sql_cursor(reuse_connection=True) as cursor:
+            try:
+                cursor.execute("SET cluster = hydration_history")
+                cursor.execute("SET cluster_replica = r1")
+                while time.time() < deadline:
+                    name_list = ", ".join(f"'{name}'" for name in mv_names)
+                    cursor.execute(f"""
+                        SELECT
+                            mv.name,
+                            max(h.hydrated_at)::text,
+                            (max(h.hydrated_at)
+                                FILTER (WHERE h.worker_id = 0))::text
+                        FROM mz_introspection.mz_compute_hydration_times_per_worker AS h
+                        JOIN mz_internal.mz_object_global_ids AS g
+                          ON g.global_id = h.export_id
+                        JOIN mz_catalog.mz_materialized_views AS mv ON mv.id = g.id
+                        WHERE mv.name IN ({name_list})
+                        GROUP BY mv.name
+                        HAVING count(*) = 2
+                           AND count(*) = count(h.hydrated_at)
+                        ORDER BY mv.name
+                        """.encode())
+                    worker_rows = cursor.fetchall()
+                    candidates = [
+                        row
+                        for row in worker_rows
+                        if row[1] is not None and row[2] != row[1]
+                    ]
+                    if candidates:
+                        break
+                    if len(worker_rows) == len(mv_names) and len(mv_names) < max_mvs:
+                        name = f"hydration_history_mv_{chr(ord('a') + len(mv_names))}"
+                        cursor.execute(f"""
+                            CREATE MATERIALIZED VIEW {name}
+                                IN CLUSTER hydration_history
+                                AS SELECT a + {len(mv_names) + 1} AS a
+                                FROM hydration_history_t
+                            """.encode())
+                        mv_names.append(name)
+                    time.sleep(0.5)
+            finally:
+                cursor.execute("RESET cluster_replica")
+                cursor.execute("RESET cluster")
+        assert worker_rows, (
+            "no trial materialized view hydrated on every worker, tried "
+            f"{len(mv_names)}"
+        )
+
+        # Every trial's history episode must use the all-worker maximum, not
+        # worker 0's possibly earlier compute-only finish. Separating trials go
+        # first so that a regression reports the trial that proves it.
+        trials = candidates + [row for row in worker_rows if row not in candidates]
+        for mv_name, latest_worker_finish, worker_zero_finish in trials:
+            deadline = time.time() + 120
+            mv_episodes = []
+            while time.time() < deadline:
+                mv_episodes = episodes(mv_name)
+                if mv_episodes:
+                    break
+                time.sleep(0.5)
+            assert len(mv_episodes) == 1, (
+                f"expected one materialized view episode for {mv_name}, "
+                f"got {mv_episodes}"
+            )
+            assert mv_episodes[0][2] == latest_worker_finish, (
+                f"durable finish {mv_episodes[0][2]} for {mv_name} did not "
+                f"match latest worker finish {latest_worker_finish}. "
+                f"worker 0 finished at {worker_zero_finish}"
+            )
+
+        # Re-read the pre-restart episodes immediately before the kill. The
+        # waits above leave minutes in which a further legitimate episode can
+        # be recorded, and the fresh-episode assertions after the restart
+        # assume this set is current. Two equal consecutive reads shrink the
+        # remaining window to a sweep that starts and commits within one poll
+        # gap.
+        deadline = time.time() + 120
+        replica_before = replica_episodes()
+        replica_before_settled = False
+        while time.time() < deadline:
+            time.sleep(2.0)
+            current = replica_episodes()
+            replica_before_settled = current == replica_before
+            if replica_before_settled:
+                break
+            replica_before = current
+        assert (
+            replica_before_settled
+        ), f"pre-restart replica episodes did not settle: {replica_before}"
+        replica_before_ids = replica_episode_identities(replica_before)
+        replica_before_started_at = {identity[1] for identity in replica_before_ids}
+        assert len(replica_before_ids) == len(
+            set(replica_before_ids)
+        ), f"duplicate replica hydration identities before restart: {replica_before}"
+        latest_before_finish = max(parse_ts(episode[2]) for episode in replica_before)
+
+        c.kill("materialized")
+        c.up("materialized")
+
+        # The pre-restart episode must remain byte-identical, and restarting the
+        # replica must produce exactly one episode with a fresh installation.
+        deadline = time.time() + 120
+        after = []
+        fresh = []
+        while time.time() < deadline:
+            after = episodes()
+            fresh = [episode for episode in after if episode[0] != before[0][0]]
+            if before[0] in after and len(fresh) == 1:
+                break
+            time.sleep(0.5)
+        assert (
+            before[0] in after
+        ), f"restart lost the pre-restart episode: had {before}, now {after}"
+        assert (
+            len(after) == 2 and len(fresh) == 1
+        ), f"expected one preserved and one fresh episode, got {after}"
+
+        deadline = time.time() + 120
+        replica_after = []
+        replica_after_ids = []
+        replica_fresh_ids = set()
+        while time.time() < deadline:
+            replica_after = replica_episodes()
+            replica_after_ids = replica_episode_identities(replica_after)
+            replica_fresh_ids = set(replica_after_ids) - set(replica_before_ids)
+            if set(replica_before_ids) <= set(replica_after_ids) and replica_fresh_ids:
+                break
+            time.sleep(0.5)
+        assert all(
+            episode in replica_after for episode in replica_before
+        ), f"restart changed replica episodes: had {replica_before}, now {replica_after}"
+        assert set(replica_before_ids) <= set(
+            replica_after_ids
+        ), f"restart lost replica episodes: had {replica_before}, now {replica_after}"
+        # Rehydration can record one fresh episode or several: the
+        # introspection indexes can finish before the user dataflows install,
+        # forming an earlier disconnected episode that is recorded on its own.
+        # The monotonic history guard orders them all after pre-restart
+        # history.
+        assert (
+            replica_fresh_ids
+        ), f"restart did not produce a fresh replica identity: {replica_after}"
+        assert all(
+            parse_ts(identity[1]) > latest_before_finish
+            for identity in replica_fresh_ids
+        ), f"fresh replica episode overlaps pre-restart history: {replica_after}"
+        assert all(
+            identity[1] not in replica_before_started_at
+            for identity in replica_fresh_ids
+        ), f"restart reused a replica hydration start: {replica_after}"
+        assert len(replica_after_ids) == len(
+            set(replica_after_ids)
+        ), f"restart produced duplicate replica hydration identities: {replica_after}"
+
+        # Let several sweeps run. The pre-restart episodes must not be
+        # duplicated, and everything recorded since the restart must stay
+        # ordered after them.
+        time.sleep(10)
+        settled = episodes()
+        assert (
+            before[0] in settled
+        ), f"pre-restart episode disappeared: had {before}, now {settled}"
+        assert len(settled) == len(
+            set(tuple(row) for row in settled)
+        ), f"sweeps duplicated a hydration episode: {settled}"
+        assert len(settled) == 2, f"expected two settled episodes, got {settled}"
+
+        replica_settled = replica_episodes()
+        replica_settled_ids = replica_episode_identities(replica_settled)
+        assert len(replica_settled_ids) == len(
+            set(replica_settled_ids)
+        ), f"sweeps duplicated a replica hydration identity: {replica_settled}"
+        assert set(replica_before_ids) <= set(
+            replica_settled_ids
+        ), f"pre-restart replica episodes disappeared: {replica_settled}"
+        assert all(
+            episode in replica_settled for episode in replica_before
+        ), f"pre-restart replica episodes changed: {replica_settled}"
+        assert replica_fresh_ids <= set(
+            replica_settled_ids
+        ), f"post-restart replica episodes disappeared: {replica_settled}"
+        assert all(
+            parse_ts(identity[1]) > latest_before_finish
+            for identity in set(replica_settled_ids) - set(replica_before_ids)
+        ), f"settled replica episodes overlap pre-restart history: {replica_settled}"
 
 
 def workflow_default(c: Composition) -> None:

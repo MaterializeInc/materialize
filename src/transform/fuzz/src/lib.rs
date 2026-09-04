@@ -36,6 +36,7 @@ use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{Datum, Diff, GlobalId, ReprColumnType, ReprRelationType, ReprScalarType, Row};
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::fold_constants::FoldConstants;
+use mz_transform::normalize_lets::NormalizeLets;
 use mz_transform::{Optimizer, Transform, TransformCtx, TransformError, typecheck};
 
 /// The scalar types the fuzz targets generate over.
@@ -233,6 +234,14 @@ fn gen_aggregate(u: &mut Unstructured, schema: &[Ty]) -> arbitrary::Result<(Aggr
 /// `Get` (and records its backing data on the side). Either way `leaf` returns a
 /// relation and its column schema; leaves are assumed non-negative.
 ///
+/// `leaf` must return **at least one column**. A zero-arity leaf makes the
+/// `Project` arm's `int_in_range(1..=arity)` an empty range and underflows
+/// `arity - 1`, and the `Reduce` fallback references `column(0)`. Worse than
+/// either, `MirRelationExpr::join_scalars` drops an arity-0 single-row input
+/// *after* `join` has computed the equivalences' global column offsets over the
+/// full input list, so both the equivalences and the schema returned here would
+/// silently point at the wrong columns.
+///
 /// The non-negativity flag is the contract `TopK` (and every dataflow reduction)
 /// requires of its input, so we only place a `TopK` directly over a non-negative
 /// subtree. See the `TopK` arm.
@@ -415,6 +424,59 @@ where
     })
 }
 
+/// The `OptimizerFeatures` every target here plans with: production's defaults.
+///
+/// NOTE: `OptimizerFeatures::default()` is all-`false`, which is *not* what any
+/// deployment runs. Several transforms branch on these, and
+/// `EquivalencePropagation` reads three of them, so planning with the derived
+/// default exercises only the legacy paths. `enable_eq_classes_withholding_errors`
+/// is the pointed one: it exists to stop equivalence propagation suppressing
+/// errors, and `gen_scalar` deliberately seeds error literals, so the one feature
+/// built for this generator's input class was the one turned off.
+///
+/// Only the flags whose production default is `true` are listed; the rest come
+/// from `Default`. A newly added flag therefore arrives here as `false`, which is
+/// wrong if it ships enabled, but the tripwire for that lives where it belongs:
+/// `mz_sql`'s `optimizer_features_no_enable_for_item_parsing` destructures
+/// `OptimizerFeatures` exhaustively, so a new field fails a fast unit test rather
+/// than this crate's multi-minute sanitizer build. Source of truth for the values
+/// is each flag's `default:` in `mz_sql::session::vars::definitions`.
+pub fn fuzz_features() -> OptimizerFeatures {
+    OptimizerFeatures {
+        enable_new_outer_join_lowering: true,
+        enable_reduce_mfp_fusion: true,
+        enable_variadic_left_join_lowering: true,
+        enable_letrec_fixpoint_analysis: true,
+        enable_projection_pushdown_after_relation_cse: true,
+        enable_less_reduce_in_eqprop: true,
+        enable_dequadratic_eqprop_map: true,
+        enable_eq_classes_withholding_errors: true,
+        enable_cast_elimination: true,
+        enable_simplify_quantified_comparisons: true,
+        enable_simplify_from_less_existence: true,
+        enable_coalesce_case_transform: true,
+        enable_will_distinct_propagation: true,
+        enable_fixed_correlated_cte_lowering: true,
+        persist_fast_path_limit: 25,
+        ..Default::default()
+    }
+}
+
+/// Row cap for the oracles' constant folding.
+///
+/// `FoldConstants`' join arm materializes the full cross product *before*
+/// applying equivalences, and `limit: None` disables its only size check, so an
+/// unbounded fold is the harness asking for a `Vec<(Row, Diff)>` bounded only by
+/// the product of every leaf's row count. Generated join trees nest, so that is
+/// reachable in principle and would surface as an `oom-*`/`timeout-*` artifact
+/// blamed on the optimizer.
+///
+/// Declining to fold is already a benign skip on both oracles, so a cap costs
+/// nothing: it is well above the largest product measured over these generators
+/// (~5e5 rows) while keeping peak allocation in the hundreds of MB against the
+/// runner's `-rss_limit_mb=4096`.
+pub const FOLD_ROW_LIMIT: usize = 1_000_000;
+
 /// Apply `transform` over the whole plan through its recursive driver
 /// (`Transform::transform` -> `actually_perform_transform`), not `action`.
 ///
@@ -427,7 +489,7 @@ pub fn apply_recursively<T: Transform>(
     transform: T,
     rel: &mut MirRelationExpr,
 ) -> Result<(), TransformError> {
-    let features = OptimizerFeatures::default();
+    let features = fuzz_features();
     let typecheck_ctx = typecheck::empty_typechecking_context();
     let mut df_meta = DataflowMetainfo::default();
     let mut ctx = TransformCtx::local(
@@ -442,8 +504,26 @@ pub fn apply_recursively<T: Transform>(
 
 /// Fold `rel`. If it reduces to a `Constant` of `Ok` rows, return the
 /// consolidated `(row, diff)` multiset, otherwise `None`.
+///
+/// `None` covers two benign cases: the plan did not fold all the way down to a
+/// `Constant`, and it folded to an `EvalError`. The latter is not a blind spot
+/// but a required tolerance. The optimizer is knowingly imprecise about error
+/// semantics, `predicate_pushdown` will push a predicate that can error into a
+/// join input and manufacture an error the unoptimized plan never raises (see
+/// the comment there and database-issues#6258), so one side folding to an error
+/// while the other yields rows is accepted behaviour and would otherwise fire
+/// roughly once in every 1,500 executions.
+///
+/// A `TransformError` is a different matter and panics, see [`optimize`].
 pub fn fold_to_multiset(mut rel: MirRelationExpr) -> Option<BTreeMap<Row, Diff>> {
-    apply_recursively(FoldConstants { limit: None }, &mut rel).ok()?;
+    if let Err(e) = apply_recursively(
+        FoldConstants {
+            limit: Some(FOLD_ROW_LIMIT),
+        },
+        &mut rel,
+    ) {
+        panic!("FoldConstants returned an error: {e}");
+    }
     let (Ok(rows), _) = rel.as_const()? else {
         return None;
     };
@@ -455,11 +535,60 @@ pub fn fold_to_multiset(mut rel: MirRelationExpr) -> Option<BTreeMap<Row, Diff>>
     Some(multiset)
 }
 
-/// Run the full logical optimizer. Returns `None` if it errors (e.g. the
-/// `Typecheck` pass rejects the plan). Only a panic is a finding here.
+/// True if `rel` has an erroring operand under a non-strict `AND`/`OR`/
+/// `error_if_null`, the shape of the open bug CLU-137.
+///
+/// Those three swallow an operand's error once another operand fixes the result:
+/// `Or::eval` returns `true` the moment it sees a true operand and drops any
+/// error it collected, `And::eval` does the same for `false`, and
+/// `error_if_null` evaluates its message operand only when the first operand is
+/// NULL. `reduce`'s generic variadic fold nonetheless replaces the whole call
+/// with an operand's literal error, and `undistribute_and_or` can recombine an
+/// erroring operand across the short-circuit boundary. Either way the optimizer
+/// can turn a row the plan should emit into an error, and, once the folded
+/// literal is typed non-nullable, into a *different* row: that is how the count
+/// of a nullable aggregate becomes the count of a non-nullable one.
+///
+/// CLU-137 tracks the fix (see the closed PR #37299 for a full one). Until it
+/// lands, the equivalence oracles skip these plans rather than rediscover it on
+/// every run.
+///
+/// Deliberately conservative. It asks whether an operand *could* error rather
+/// than whether it already holds a literal error, because `reduce` folds a
+/// column-free fallible operand (`9223372036854775807 + 1`, `1 / 0`) to a
+/// literal error first and absorbs it after. The cost is that a plan whose
+/// AND/OR operands merely *might* error is skipped even where the fold could not
+/// have fired: measured at 3.6% of `gen_rel(depth = 4)` plans.
+pub fn hits_non_strict_error_fold(rel: &MirRelationExpr) -> bool {
+    let mut hit = false;
+    rel.visit_scalars(&mut |scalar| {
+        // One definition of the shape, in `mz_expr` next to the fold it describes,
+        // so the several oracles that skip CLU-137 cannot drift apart on which
+        // functions count as non-strict. They already had: this predicate covered
+        // `ErrorIfNull` while `mir_scalar_reduce`'s copy did not.
+        hit |= scalar.could_hit_nonstrict_error_fold();
+    });
+    hit
+}
+
+/// Run the full logical optimizer.
+///
+/// NOTE: a `TransformError` from here is itself a finding, so this panics rather
+/// than reporting one. The tempting reading, that a plan shape the optimizer
+/// rejects comes back as an error to skip, is wrong in both directions.
+/// `Typecheck` returns `Ok(())` on every path and routes a type error through
+/// `type_error!(true, ..)` -> `soft_panic_or_log!`, and `Fixpoint`
+/// non-convergence does the same. Soft assertions default to
+/// `cfg!(debug_assertions)`, which cargo-fuzz enables, so a rejected plan is
+/// already a crash before it can reach us. What is left that can error are
+/// optimizer invariant violations: a `Let`/`Get` on an unbound local id, a `Let`
+/// whose type changed under it, an ANF rebinding that lost an identifier. Those
+/// surface to users as `internal error`, so swallowing them would leave this
+/// harness green through exactly the `normalize_lets`/`cse` regressions it is
+/// best placed to catch.
 #[allow(deprecated)]
-pub fn optimize(rel: MirRelationExpr) -> Option<MirRelationExpr> {
-    let features = OptimizerFeatures::default();
+pub fn optimize(rel: MirRelationExpr) -> MirRelationExpr {
+    let features = fuzz_features();
     let typecheck_ctx = typecheck::empty_typechecking_context();
     let mut df_meta = DataflowMetainfo::default();
     let mut ctx = TransformCtx::local(
@@ -470,8 +599,83 @@ pub fn optimize(rel: MirRelationExpr) -> Option<MirRelationExpr> {
         Some(GlobalId::Transient(1)),
     );
     let optimizer = Optimizer::logical_optimizer(&mut ctx);
-    optimizer
-        .optimize(rel, &mut ctx)
-        .ok()
-        .map(|o| o.into_inner())
+    match optimizer.optimize(rel, &mut ctx) {
+        Ok(optimized) => optimized.into_inner(),
+        Err(e) => panic!("logical optimizer returned an error: {e}"),
+    }
+}
+
+/// Outcome of trying to fold a (`Get`-free) plan all the way to a `Constant`.
+pub enum Collapse {
+    /// Reduced to a `Constant` of `Ok` rows. The consolidated `(row, diff)`
+    /// multiset is the actual result.
+    Const(BTreeMap<Row, Diff>),
+    /// Either folding reached a fixpoint that is not a constant (a legitimate
+    /// fold limitation), or it folded all the way to an `Err` constant.
+    ///
+    /// NOTE: those two are not the same thing, and the second is not a fold
+    /// limitation at all: an `EvalError` constant is a fully determined result.
+    /// They share a variant because neither yields a `(row, diff)` multiset to
+    /// compare. Splitting them would let an oracle notice a baseline of
+    /// `Ok(rows)` becoming an `Err` after optimization, but only in that
+    /// direction: `Err -> Ok` is legitimate, since `Demand` can drop an unused
+    /// erroring `Map` column. Even the `Ok -> Err` direction is not assertable
+    /// today, because `predicate_pushdown` knowingly manufactures errors the
+    /// unoptimized plan never raises (database-issues#6258).
+    StuckFixpoint,
+    /// Hit the iteration budget without reaching either a constant or a
+    /// fixpoint. The plan was still simplifying when we ran out of passes. Kept
+    /// distinct from `StuckFixpoint` only to name the two skip reasons.
+    /// `FoldConstants` does not promise a constant input collapses to a
+    /// `Constant` within any limit, so this is a conservative skip too.
+    BudgetExhausted,
+}
+
+/// Fold a (now `Get`-free) plan to a `Constant` by iterating `FoldConstants` +
+/// `NormalizeLets` (to collapse any `Let`s the optimizer's CSE introduced) until
+/// it either becomes a `Constant`, reaches a fixpoint, or exhausts the budget.
+///
+/// This loops to a genuine fixpoint (stops only when a pass leaves the plan
+/// unchanged), so a plan that just needs a few more passes converges rather than
+/// being dropped. The budget is a generous guard against a non-terminating
+/// rewrite.
+pub fn collapse(mut rel: MirRelationExpr) -> Collapse {
+    let features = fuzz_features();
+    const BUDGET: usize = 64;
+    for _ in 0..BUDGET {
+        let before = rel.clone();
+        // A `TransformError` here is an optimizer invariant violation, not a
+        // reason to give up on the plan. See `mz_transform_fuzz::optimize`.
+        if let Err(e) = apply_recursively(
+            FoldConstants {
+                limit: Some(FOLD_ROW_LIMIT),
+            },
+            &mut rel,
+        ) {
+            panic!("FoldConstants returned an error: {e}");
+        }
+        if rel.as_const().is_some() {
+            break;
+        }
+        if let Err(e) = NormalizeLets::new(true).action(&mut rel, &features) {
+            panic!("NormalizeLets returned an error: {e}");
+        }
+        // A full pass that changed nothing means we will never reach a constant.
+        if rel == before {
+            return Collapse::StuckFixpoint;
+        }
+    }
+    let Some(constant) = rel.as_const() else {
+        // Still simplifying when the budget ran out.
+        return Collapse::BudgetExhausted;
+    };
+    let (Ok(rows), _) = constant else {
+        return Collapse::StuckFixpoint;
+    };
+    let mut multiset: BTreeMap<Row, Diff> = BTreeMap::new();
+    for (row, diff) in rows {
+        *multiset.entry(row.clone()).or_insert(Diff::ZERO) += *diff;
+    }
+    multiset.retain(|_, d| *d != Diff::ZERO);
+    Collapse::Const(multiset)
 }

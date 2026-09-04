@@ -65,6 +65,36 @@ conn     dep_conn
 pg_conn ssh_conn
 
 
+# A function referenced both by id and by name in one statement yields a
+# single edge.
+
+$ set-from-sql var=gs-id
+SELECT DISTINCT id FROM mz_functions
+WHERE name = 'generate_series'
+  AND schema_id IN (SELECT id FROM mz_schemas WHERE name = 'pg_catalog')
+
+> CREATE VIEW dup_func_ref AS
+  SELECT by_id.g, by_name.h
+  FROM [${gs-id} AS pg_catalog.generate_series](1, 3) AS by_id(g),
+       generate_series(4, 6) AS by_name(h);
+
+# Both spellings persist and land in different reference buckets.
+> SELECT refs->'ids' ? '${gs-id}' AS by_id,
+         refs->'named_funcs' @> '[{"schema": "pg_catalog", "name": "generate_series"}]' AS by_name
+  FROM (
+    SELECT mz_internal.parse_catalog_item_references(create_sql) AS refs
+    FROM mz_views WHERE name = 'dup_func_ref'
+  );
+by_id by_name
+-------------
+true true
+
+# ... yet exactly one edge to the function.
+> SELECT count(*) FROM mz_internal.mz_object_dependencies
+  WHERE object_id = (SELECT id FROM mz_views WHERE name = 'dup_func_ref')
+    AND referenced_object_id = '${gs-id}';
+1
+
 # Assert that we actually are populating all the system objects.
 > SELECT COUNT(*) > 200 FROM mz_internal.mz_object_dependencies WHERE object_id LIKE 's%'
 true

@@ -233,12 +233,13 @@ pub enum ComputeCommand {
     /// After receiving a `Peek` command, the replica must eventually produce a single
     /// [`PeekResponse`]:
     ///
-    ///    * For peeks that were not cancelled: either [`Rows`] or [`Error`].
-    ///    * For peeks that were cancelled: either [`Rows`], or [`Error`], or [`Canceled`].
+    ///    * For peeks that were not cancelled: [`Rows`], [`Stashed`], or [`Error`].
+    ///    * For peeks that were cancelled: any response above, or [`Canceled`].
     ///
     /// [`PeekResponse`]: super::response::PeekResponse
     /// [`PeekResponse::Error`]: super::response::PeekResponse::Error
     /// [`Rows`]: super::response::PeekResponse::Rows
+    /// [`Stashed`]: super::response::PeekResponse::Stashed
     /// [`Error`]: super::response::PeekResponse::Error
     /// [`Canceled`]: super::response::PeekResponse::Canceled
     Peek(Box<Peek>),

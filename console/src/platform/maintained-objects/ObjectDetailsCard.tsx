@@ -21,7 +21,7 @@ import { Link as RouterLink } from "react-router-dom";
 
 import { createNamespace } from "~/api/materialize";
 import { OUTDATED_THRESHOLD_SECONDS } from "~/api/materialize/cluster/materializationLag";
-import StatusPill from "~/components/StatusPill";
+import StatusPill, { ConnectorStatusPill } from "~/components/StatusPill";
 import TextLink from "~/components/TextLink";
 import { DetailItem } from "~/platform/connectors/AsideBox";
 import { absoluteClusterPath } from "~/platform/routeHelpers";
@@ -91,7 +91,7 @@ export const ObjectDetailsCard = ({
             {item.name}
           </Text>
           <LagBadge lag={badgeLag} />
-          <HydrationBadge item={item} />
+          <StatusBadge item={item} />
         </HStack>
 
         <Text textStyle="heading-sm" color={colors.foreground.secondary}>
@@ -143,7 +143,22 @@ export const ObjectDetailsCard = ({
   );
 };
 
-const HydrationBadge = ({ item }: { item: MaintainedObjectListItem }) => {
+/** Mirrors the list's Status column: ingestion status for sources, replica
+ *  hydration for everything else. */
+const StatusBadge = ({ item }: { item: MaintainedObjectListItem }) => {
+  if (item.objectType === "source") {
+    if (!item.sourceStatus) return null;
+    return (
+      <ConnectorStatusPill
+        connector={{
+          status: item.sourceStatus.status,
+          type: item.sourceType ?? "",
+          snapshotCommitted: item.sourceStatus.snapshotCommitted,
+        }}
+        flexShrink={0}
+      />
+    );
+  }
   const bucket = bucketForHydration(item.hydratedReplicas, item.totalReplicas);
   if (!bucket) return null;
   return (

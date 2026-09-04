@@ -1188,6 +1188,11 @@ impl fmt::Display for IsRegexpMatch {
     Deserialize,
     Hash
 )]
+// The serde name distinguishes this precompiled-pattern function from the
+// generated struct of the dynamic-pattern variadic `regexp_match`, which is
+// also named `RegexpMatch`. The stable LIR schema registry requires container
+// names to be unique. Same for `RegexpSplitToArray` and `RegexpReplace` below.
+#[serde(rename = "RegexpMatchStatic")]
 pub struct RegexpMatch(pub Regex);
 
 impl LazyUnaryFunc for RegexpMatch {
@@ -1260,6 +1265,8 @@ impl fmt::Display for RegexpMatch {
     Deserialize,
     Hash
 )]
+// See `RegexpMatch` above for explanation.
+#[serde(rename = "RegexpSplitToArrayStatic")]
 pub struct RegexpSplitToArray(pub Regex);
 
 impl LazyUnaryFunc for RegexpSplitToArray {
@@ -1346,6 +1353,8 @@ fn quote_ident<'a>(a: &'a str) -> Result<String, EvalError> {
     Deserialize,
     Hash
 )]
+// See `RegexpMatch` above for explanation.
+#[serde(rename = "RegexpReplaceStatic")]
 pub struct RegexpReplace {
     pub regex: Regex,
     pub limit: usize,

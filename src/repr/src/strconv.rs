@@ -347,7 +347,7 @@ where
         FpCategory::Nan => buf.write_str("NaN"),
         FpCategory::Zero if f.is_sign_negative() => buf.write_str("-0"),
         _ => {
-            debug_assert!(f.is_finite());
+            mz_ore::soft_assert_no_log!(f.is_finite());
             let mut ryu_buf = ryu::Buffer::new();
             let mut s = ryu_buf.format_finite(f);
             if let Some(trimmed) = s.strip_suffix(".0") {
@@ -2073,6 +2073,18 @@ impl ElementEscaper for RecordElementEscaper {
     fn escape_char(c: u8) -> u8 {
         if c == b'"' { b'"' } else { b'\\' }
     }
+}
+
+/// Reports whether `elem` would be quoted by the list, map or record element
+/// escaper.
+///
+/// This is the union of the three, because one rendering can be nested in any of
+/// them. Returning [`Nestable::Yes`] is a promise that this is false, so a
+/// formatter's oracle can check the promise rather than restate the rules.
+pub fn element_needs_escaping(elem: &[u8]) -> bool {
+    ListElementEscaper::needs_escaping(elem)
+        || MapElementEscaper::needs_escaping(elem)
+        || RecordElementEscaper::needs_escaping(elem)
 }
 
 /// Escapes a list, record, or map element in place.

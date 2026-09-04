@@ -16,6 +16,13 @@
 //! that can't be serialized, corrupts/halts a sink, so encoding then serializing
 //! must never panic for any well-typed row.
 //!
+//! The blast radius is wider than the sinks. `TypedDatum::json` is also the
+//! result encoder for the HTTP `/api/sql` and WebSocket SQL APIs, which carry no
+//! `catch_unwind`, so a panic there aborts `environmentd` under
+//! `install_enhanced_handler` rather than just failing one sink task. Those
+//! callers pass `JsonNumberPolicy::ConvertNumberToString`, while
+//! `encode_datums_as_json` hardcodes `KeepAsNumber`, so we drive both.
+//!
 //! Beyond scalars, we generate *composite* column types (`List`, `Map`,
 //! `Record`, multi-dimensional `Array`, and `Jsonb`) plus the remaining scalar
 //! shapes with their own encode logic (`Uuid`, `Char`/`VarChar` padding,
@@ -33,15 +40,16 @@
 use chrono::{DateTime, NaiveTime, Utc};
 use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
-use mz_interchange::json::encode_datums_as_json;
+use mz_interchange::encode::TypedDatum;
+use mz_interchange::json::{JsonNumberPolicy, ToJson, encode_datums_as_json};
 use mz_repr::adt::char::CharLength;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbPacker;
-use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
-use mz_repr::adt::range::Range;
+use mz_repr::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
+use mz_repr::adt::range::{Range, RangeLowerBound, RangeUpperBound};
 use mz_repr::adt::system::Oid;
-use mz_repr::adt::timestamp::CheckedTimestamp;
+use mz_repr::adt::timestamp::{CheckedTimestamp, HIGH_DATE, LOW_DATE};
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::role_id::RoleId;
 use mz_repr::strconv::parse_numeric;
@@ -67,29 +75,40 @@ enum GType {
     Array(Vec<usize>, SqlScalarType),
 }
 
+/// Draw a `DateTime<Utc>` inside `CheckedTimestamp`'s bounds.
+///
+/// Drawing from the full `i64` (or even `±8e12`) second range spends most of the
+/// budget on values `from_timestamplike` rejects, and never lands on the
+/// boundary days. Drawing from `[LOW_DATE 00:00:00, HIGH_DATE 23:59:59]` instead
+/// makes every draw valid, so the two conversions below cannot fail: `secs` is
+/// well inside chrono's own year range, and `nanos` cannot carry past the end of
+/// `HIGH_DATE`.
+fn gen_ts(u: &mut Unstructured) -> arbitrary::Result<DateTime<Utc>> {
+    let low = LOW_DATE
+        .and_hms_opt(0, 0, 0)
+        .expect("midnight is a valid time")
+        .and_utc()
+        .timestamp();
+    let high = HIGH_DATE
+        .and_hms_opt(23, 59, 59)
+        .expect("23:59:59 is a valid time")
+        .and_utc()
+        .timestamp();
+    let secs = u.int_in_range(low..=high)?;
+    let nanos = u.int_in_range(0u32..=999_999_999)?;
+    Ok(DateTime::from_timestamp(secs, nanos).expect("secs drawn within chrono's range"))
+}
+
 fn gen_naive_ts(
     u: &mut Unstructured,
 ) -> arbitrary::Result<CheckedTimestamp<chrono::NaiveDateTime>> {
-    let secs = u.int_in_range(-8_000_000_000_000i64..=8_000_000_000_000)?;
-    let nanos = u.int_in_range(0u32..=999_999_999)?;
-    Ok(DateTime::from_timestamp(secs, nanos)
-        .and_then(|d| CheckedTimestamp::from_timestamplike(d.naive_utc()).ok())
-        .unwrap_or_else(|| {
-            CheckedTimestamp::from_timestamplike(
-                DateTime::from_timestamp(0, 0).unwrap().naive_utc(),
-            )
-            .unwrap()
-        }))
+    Ok(CheckedTimestamp::from_timestamplike(gen_ts(u)?.naive_utc())
+        .expect("drawn within CheckedTimestamp's bounds"))
 }
 
 fn gen_utc_ts(u: &mut Unstructured) -> arbitrary::Result<CheckedTimestamp<DateTime<Utc>>> {
-    let secs = u.int_in_range(-8_000_000_000_000i64..=8_000_000_000_000)?;
-    let nanos = u.int_in_range(0u32..=999_999_999)?;
-    Ok(DateTime::from_timestamp(secs, nanos)
-        .and_then(|d| CheckedTimestamp::from_timestamplike(d).ok())
-        .unwrap_or_else(|| {
-            CheckedTimestamp::from_timestamplike(DateTime::from_timestamp(0, 0).unwrap()).unwrap()
-        }))
+    Ok(CheckedTimestamp::from_timestamplike(gen_ts(u)?)
+        .expect("drawn within CheckedTimestamp's bounds"))
 }
 
 /// Generate a scalar type (a leaf of the composite tree, and the element type of
@@ -117,11 +136,27 @@ fn gen_scalar_type(u: &mut Unstructured) -> arbitrary::Result<SqlScalarType> {
         18 => SqlScalarType::MzTimestamp,
         19 => SqlScalarType::Uuid,
         20 => {
-            let length = CharLength::try_from(i64::from(u.int_in_range(1u8..=12)?)).ok();
+            // An unqualified `bpchar` (`length: None`) reaches `format_str_pad`'s
+            // no-padding branch, which a length-qualified `Char` never does.
+            let length = if u.ratio(1u8, 4u8)? {
+                None
+            } else {
+                Some(
+                    CharLength::try_from(i64::from(u.int_in_range(1u8..=12)?))
+                        .expect("1..=12 is a valid char length"),
+                )
+            };
             SqlScalarType::Char { length }
         }
         21 => {
-            let max_length = VarCharMaxLength::try_from(i64::from(u.int_in_range(1u8..=12)?)).ok();
+            let max_length = if u.ratio(1u8, 4u8)? {
+                None
+            } else {
+                Some(
+                    VarCharMaxLength::try_from(i64::from(u.int_in_range(1u8..=12)?))
+                        .expect("1..=12 is a valid varchar max length"),
+                )
+            };
             SqlScalarType::VarChar { max_length }
         }
         // Range over Int32. `unwrap_range().to_string()` is the only logic.
@@ -160,7 +195,15 @@ fn gen_type(u: &mut Unstructured, depth: u32) -> arbitrary::Result<GType> {
             let ndims = u.int_in_range(1usize..=3)?;
             let mut dims = Vec::with_capacity(ndims);
             for _ in 0..ndims {
-                dims.push(u.int_in_range(0usize..=3)?);
+                // A single zero-length axis collapses the cardinality to 0, so
+                // `encode_array` walks no elements at all. Drawing lengths
+                // uniformly from `0..=3` made that the outcome for ~45% of
+                // arrays, so keep it reachable but rare.
+                dims.push(if u.ratio(1u8, 16u8)? {
+                    0
+                } else {
+                    u.int_in_range(1usize..=3)?
+                });
             }
             GType::Array(dims, gen_scalar_type(u)?)
         }
@@ -201,6 +244,26 @@ fn to_scalar_type(ty: &GType) -> SqlScalarType {
 }
 
 /// Build a small, valid JSON string of bounded depth for the `Jsonb` path.
+///
+/// TODO: Generate serde_json's arbitrary-precision magic key here once SS-157 is
+/// fixed. `JsonbPacker`'s `KeyClassifier` recognises the object key
+/// `$serde_json::private::Number` and runs the payload through
+/// `strconv::parse_numeric`, which accepts positive quiet NaN, bypassing the
+/// `cast_jsonbable_to_jsonb` guard that the SQL cast path relies on. That is the
+/// only route by which a non-finite numeric enters a `Jsonb`, and
+/// `JsonbRef::to_serde_json` then panics on it, so the literal
+/// `{"$serde_json::private::Number":"NaN"}` (and that value nested inside an
+/// array or object, to cover `JsonbDatum::serialize`'s list/map recursion) is
+/// what this generator has to produce to guard the fix. It is left out until the
+/// fix lands, because this target is in the `FRUITFUL` set and would otherwise
+/// report the same known crash on every release-qualification run.
+///
+/// Adding it also requires relaxing the `pack_str` call in `push_typed`: `"NaN"`
+/// is the only payload `parse_numeric` accepts, so `Infinity`, `sNaN`, `1e5000`
+/// and the like make `pack_str` return `Err`, which today's `.expect()` would
+/// turn into a *harness* panic. `pack_str` collects its commands before touching
+/// the packer, so a rejection leaves the packer untouched and a valid
+/// `Datum::JsonNull` can be substituted instead.
 fn gen_json_text(u: &mut Unstructured) -> arbitrary::Result<String> {
     Ok(match u.int_in_range(0u8..=7)? {
         0 => "null".into(),
@@ -244,9 +307,9 @@ fn push_scalar(
         // represent, exactly the encoding edge we want to exercise.
         SqlScalarType::Float32 => packer.push(Datum::Float32(f32::arbitrary(u)?.into())),
         SqlScalarType::Float64 => packer.push(Datum::Float64(f64::arbitrary(u)?.into())),
-        SqlScalarType::String
-        | SqlScalarType::VarChar { .. }
-        | SqlScalarType::Char { .. } => packer.push(Datum::String(<&str>::arbitrary(u)?)),
+        SqlScalarType::String | SqlScalarType::VarChar { .. } | SqlScalarType::Char { .. } => {
+            packer.push(Datum::String(<&str>::arbitrary(u)?))
+        }
         SqlScalarType::Bytes => packer.push(Datum::Bytes(<&[u8]>::arbitrary(u)?)),
         SqlScalarType::Numeric { .. } => {
             let s = format!("{}.{}", i64::arbitrary(u)?, u32::arbitrary(u)?);
@@ -254,8 +317,10 @@ fn push_scalar(
             packer.push(Datum::Numeric(n));
         }
         SqlScalarType::Date => {
-            let d = Date::from_pg_epoch(i32::arbitrary(u)?)
-                .unwrap_or_else(|_| Date::from_pg_epoch(0).unwrap());
+            // Drawing from the full `i32` day range was rejected ~68% of the
+            // time and never reached the boundary days.
+            let days = u.int_in_range(Date::LOW_DAYS..=Date::HIGH_DAYS)?;
+            let d = Date::from_pg_epoch(days).expect("days drawn within Date's bounds");
             packer.push(Datum::Date(d));
         }
         SqlScalarType::Time => {
@@ -275,14 +340,57 @@ fn push_scalar(
             packer.push(Datum::MzTimestamp(Timestamp::from(u64::arbitrary(u)?)))
         }
         SqlScalarType::Uuid => packer.push(Datum::Uuid(Uuid::from_u128(u.arbitrary::<u128>()?))),
-        // The empty range is always valid and its `to_string` is exercised.
-        SqlScalarType::Range { .. } => packer.push(Datum::Range(Range { inner: None })),
+        // `Display for Range` short-circuits the empty range to the constant
+        // "empty", so only a finite range reaches `RangeInner`/`RangeBound`'s
+        // Display, where the actual rendering logic lives.
+        SqlScalarType::Range { .. } => {
+            if u.ratio(1u8, 8u8)? {
+                packer.push(Datum::Range(Range { inner: None }));
+            } else {
+                // `RangeBound::new` maps `Datum::Null` to an infinite bound.
+                let (a, b) = (i32::arbitrary(u)?, i32::arbitrary(u)?);
+                let lower = RangeLowerBound::new(
+                    if u.ratio(1u8, 8u8)? {
+                        Datum::Null
+                    } else {
+                        Datum::Int32(a.min(b))
+                    },
+                    bool::arbitrary(u)?,
+                );
+                let upper = RangeUpperBound::new(
+                    if u.ratio(1u8, 8u8)? {
+                        Datum::Null
+                    } else {
+                        Datum::Int32(a.max(b))
+                    },
+                    bool::arbitrary(u)?,
+                );
+                // `push_range` canonicalizes before it touches the packer, so a
+                // rejected range (an exclusive bound whose step oversteps
+                // `i32`) leaves the packer untouched and we can substitute the
+                // empty range.
+                if packer.push_range(Range::new(Some((lower, upper)))).is_err() {
+                    packer.push(Datum::Range(Range { inner: None }));
+                }
+            }
+        }
+        // `AclMode::empty()` renders no privilege bits at all, so fuzz the mode.
+        // `from_bits_truncate` drops undefined bits, which is what the row
+        // encoding round-trips.
         SqlScalarType::MzAclItem => {
-            let item = MzAclItem::empty(RoleId::User(u.arbitrary::<u64>()?), RoleId::Public);
+            let item = MzAclItem {
+                grantee: RoleId::User(u.arbitrary::<u64>()?),
+                grantor: RoleId::Public,
+                acl_mode: AclMode::from_bits_truncate(u64::arbitrary(u)?),
+            };
             packer.push(Datum::MzAclItem(item));
         }
         SqlScalarType::AclItem => {
-            let item = AclItem::empty(Oid(u.arbitrary::<u32>()?), Oid(u.arbitrary::<u32>()?));
+            let item = AclItem {
+                grantee: Oid(u.arbitrary::<u32>()?),
+                grantor: Oid(u.arbitrary::<u32>()?),
+                acl_mode: AclMode::from_bits_truncate(u64::arbitrary(u)?),
+            };
             packer.push(Datum::AclItem(item));
         }
         // `gen_scalar_type` never produces other types.
@@ -306,7 +414,10 @@ fn push_typed(
                 packer.push(Datum::Null);
             } else {
                 let text = gen_json_text(u)?;
-                // The text is always valid JSON by construction.
+                // The text is always valid JSON by construction, and every
+                // number it contains is one `strconv::parse_numeric` accepts.
+                // See `gen_json_text`'s TODO before generating a payload that
+                // `pack_str` can reject.
                 JsonbPacker::new(packer)
                     .pack_str(&text)
                     .expect("generated valid json");
@@ -381,7 +492,9 @@ fn push_typed(
             // The dims and element count match by construction, so this can't
             // return an error. If it somehow does, fall back to an empty array.
             if packer.try_push_array(&array_dims, elems).is_err() {
-                packer.try_push_array(&[], std::iter::empty::<Datum>()).unwrap();
+                packer
+                    .try_push_array(&[], std::iter::empty::<Datum>())
+                    .unwrap();
             }
         }
     }
@@ -420,7 +533,20 @@ fn run(u: &mut Unstructured) -> arbitrary::Result<()> {
     // Encode the row's datums as JSON (the sink path) and serialize the result.
     // Neither step may panic for any well-typed row.
     let value = encode_datums_as_json(row.iter(), &columns);
-    let _ = serde_json::to_vec(&value);
+    // Serialize the way the sink does: `JsonEncoder::encode_unchecked` calls
+    // `Value::to_string`, and `ToString` panics when the `Display` impl errors,
+    // which `Display for Value` does for any serialization failure. So a
+    // serialization error is a *panic* in production, where `to_vec` would only
+    // have returned an `Err` that an oracle could not see.
+    let _ = value.to_string();
+
+    // `encode_datums_as_json` hardcodes `KeepAsNumber`. The HTTP `/api/sql` and
+    // WebSocket SQL result encoders pass `ConvertNumberToString`, which recurses
+    // through every composite arm, so drive that policy too.
+    for (datum, (_, typ)) in row.iter().zip(&columns) {
+        let value = TypedDatum::new(datum, typ).json(&JsonNumberPolicy::ConvertNumberToString);
+        let _ = value.to_string();
+    }
     Ok(())
 }
 

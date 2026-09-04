@@ -34,7 +34,7 @@ import yaml
 from psycopg import sql as psycopg_sql
 from semver.version import Version
 
-from materialize import MZ_ROOT, buildkite, ci_util, git, spawn
+from materialize import MZ_ROOT, buildkite, ci_util, spawn
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
@@ -102,7 +102,7 @@ def get_tag(tag: str | None = None) -> str:
     # We can't use the mzbuild tag because it has a different fingerprint for
     # environmentd/clusterd/balancerd and the orchestratord depends on them
     # being identical.
-    return tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
+    return tag or ci_util.dev_docker_tag()
 
 
 def get_version(tag: str | None = None) -> MzVersion:

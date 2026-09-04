@@ -656,7 +656,8 @@
       description: |
         *Value:* `text`. Required.
 
-        The name of the AWS PrivateLink service.
+        The name of the AWS VPC endpoint service, which always starts with
+        `com.amazonaws.`.
     - name: "`AVAILABILITY ZONES`"
       description: |
         *Value:* `text[]`. Required.
@@ -777,6 +778,66 @@
 
         The name of a [GCP connection](#gcp) to use for authentication.
 
+- name: "syntax-iceberg-catalog-rest"
+  code: |
+    CREATE CONNECTION <connection_name> TO ICEBERG CATALOG (
+        CATALOG TYPE = 'rest',
+        URL = '<catalog_url>',
+        WAREHOUSE = '<warehouse>',
+        CREDENTIAL = SECRET <secret_name>,
+        OAUTH2 SERVER URL = '<token_url>',
+        SCOPE = '<scope>',
+        ACCESS DELEGATION = 'vended-credentials'
+    );
+  syntax_elements:
+    - name: "`<connection_name>`"
+      description: |
+        A name for the connection.
+    - name: "`URL`"
+      description: |
+        *Value:* `text`. Required.
+
+        The catalog's Iceberg REST endpoint, the path the catalog serves `/v1/`
+        under. Consult your catalog's documentation for the exact URL.
+    - name: "`WAREHOUSE`"
+      description: |
+        *Value:* `text`. Optional.
+
+        The warehouse to operate in. What this names is catalog-specific: some
+        catalogs expect a storage location, others the name of a catalog or
+        warehouse object.
+    - name: "`CREDENTIAL`"
+      description: |
+        *Value:* secret name or `text`. Required unless `GCP CONNECTION` is used.
+
+        OAuth2 client credentials as `<client_id>:<client_secret>`. A value with
+        no colon is sent as the client secret alone.
+    - name: "`OAUTH2 SERVER URL`"
+      description: |
+        *Value:* `text`. Optional.
+
+        The token endpoint to exchange `CREDENTIAL` at. Defaults to
+        `<url>/v1/oauth/tokens`, the endpoint the Iceberg REST specification
+        derives from the catalog URL.
+
+        Required for catalogs that serve their token endpoint elsewhere, or
+        behind an auth gateway that will not serve an unauthenticated exchange.
+    - name: "`SCOPE`"
+      description: |
+        *Value:* `text`. Optional.
+
+        The OAuth2 scope to request. Defaults to `catalog`, the scope the
+        Iceberg REST specification defines.
+    - name: "`ACCESS DELEGATION`"
+      description: |
+        *Value:* `'vended-credentials'`. Optional.
+
+        Requests temporary, table-scoped storage credentials from the catalog.
+        Required for catalogs that manage their own storage and vend credentials
+        as the only way to reach it.
+
+        See [Storage access delegation](/sql/create-connection/#iceberg-catalog-access-delegation).
+
 - name: "example-iceberg-catalog-connection"
   description: |
     The following example creates an [AWS connection](/sql/create-connection/#aws) and an [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) for AWS S3 Tables:
@@ -813,5 +874,43 @@
         URL = 'https://biglake.googleapis.com/iceberg/v1/restcatalog',
         WAREHOUSE = 'gs://<bucket>',
         GCP CONNECTION = gcp_connection
+    );
+  testable: false
+
+- name: "example-iceberg-catalog-rest-connection"
+  description: |
+    The following example creates an [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) for an [Apache Polaris](https://polaris.apache.org/) catalog backed by S3-compatible storage:
+  code: |
+    -- Store the OAuth2 client credentials as `<client_id>:<client_secret>`.
+    CREATE SECRET rest_catalog_oauth
+      AS '<client_id>:<client_secret>';
+
+    -- Create the Iceberg catalog connection pointing to the catalog's REST endpoint.
+    CREATE CONNECTION iceberg_catalog_connection TO ICEBERG CATALOG (
+        CATALOG TYPE = 'rest',
+        URL = 'https://<polaris_host>/api/catalog',
+        WAREHOUSE = '<catalog_name>',
+        CREDENTIAL = SECRET rest_catalog_oauth,
+        SCOPE = 'PRINCIPAL_ROLE:ALL'
+    );
+  testable: false
+
+- name: "example-iceberg-catalog-databricks-connection"
+  description: |
+    The following example creates an [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) for Databricks Unity Catalog:
+  code: |
+    -- Store the service principal's OAuth credentials as `<client_id>:<client_secret>`.
+    CREATE SECRET databricks_oauth
+      AS '<client_id>:<client_secret>';
+
+    -- Create the Iceberg catalog connection pointing to Unity Catalog.
+    CREATE CONNECTION iceberg_catalog_connection TO ICEBERG CATALOG (
+        CATALOG TYPE = 'rest',
+        URL = 'https://<workspace>.cloud.databricks.com/api/2.1/unity-catalog/iceberg-rest',
+        WAREHOUSE = '<catalog_name>',
+        CREDENTIAL = SECRET databricks_oauth,
+        OAUTH2 SERVER URL = 'https://<workspace>.cloud.databricks.com/oidc/v1/token',
+        SCOPE = 'all-apis',
+        ACCESS DELEGATION = 'vended-credentials'
     );
   testable: false

@@ -15,7 +15,7 @@ enum-kinds.workspace = true
 itertools.workspace = true
 mz-compute-types = { path = "../compute-types" }
 mz-expr = { path = "../expr" }
-mz-ore = { path = "../ore", features = ["differential-dataflow"] }
+mz-ore = { path = "../ore", features = ["differential-dataflow", "stack"] }
 mz-repr = { path = "../repr", features = ["tracing"] }
 mz-sql = { path = "../sql" }
 ordered-float.workspace = true

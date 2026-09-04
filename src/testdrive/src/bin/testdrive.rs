@@ -114,6 +114,9 @@ struct Args {
     /// Whether we skip coordinator and catalog consistency checks.
     #[clap(long, default_value_t = ConsistencyCheckLevel::default(), value_enum)]
     consistency_checks: ConsistencyCheckLevel,
+    /// How long a single consistency check may take before the test file fails.
+    #[clap(long, value_parser = humantime::parse_duration, default_value = "10min", value_name = "DURATION")]
+    consistency_check_timeout: Duration,
     /// Whether to run statement logging consistency checks (adds a few seconds at the end of every
     /// test file).
     #[clap(long, action = ArgAction::SetTrue)]
@@ -435,6 +438,7 @@ async fn main() {
         initial_backoff: args.initial_backoff,
         backoff_factor: args.backoff_factor,
         consistency_checks: args.consistency_checks,
+        consistency_check_timeout: args.consistency_check_timeout,
         check_statement_logging: args.check_statement_logging,
         rewrite_results: args.rewrite_results,
 

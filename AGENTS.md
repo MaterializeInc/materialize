@@ -157,4 +157,27 @@ works goes in an inline `//` at the decision point, or in a module-level `//!`
 when it is about how the pieces fit together. Document a struct field only when
 its meaning is subtle.
 
+Every fact gets exactly one owning comment: the decision point for reasoning,
+the mechanism for mechanism docs, the public setter or constant for config
+semantics. Everywhere else either points at the owner or says nothing. The
+tell is the same clause appearing near-verbatim in a module doc, a struct doc,
+and an inline comment; when that happens, pick the owner and cut the rest. In
+particular: don't restate a callee's documented contract at its call sites,
+don't narrate in one function's doc what a sibling's doc already owns, and
+don't duplicate an assert message in a comment on the same line.
+
+Budget doc-comment paragraphs by decisions: each paragraph should carry a
+distinct decision or invariant, not re-argue one documented elsewhere or
+enumerate the item's callers or fields. Skip speculative comments about what
+a future implementation could do (one `TODO` at the owning seam is enough),
+and skip comments explaining an absence when the surrounding docs already
+imply it. No ASCII section-divider banners (`// ----- helpers -----`); item
+placement carries the structure. Performance claims in comments should state
+a constraint or a measured number, not unverifiable color ("the compiler can
+autovectorize this").
+
+The same economy applies to tests: a test whose name and assert messages
+state the property needs no doc comment. Keep test docs for non-obvious
+setup, fixtures whose shape encodes the scenario, and multi-phase protocols.
+
 Mark counterintuitive gotchas with `NOTE:` and future work with `TODO:`.

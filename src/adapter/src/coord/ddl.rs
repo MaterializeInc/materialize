@@ -565,6 +565,17 @@ impl Coordinator {
         let catalog = Arc::make_mut(catalog);
         let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
 
+        // Register the session as an ephemeral owner (its uuid <-> connection
+        // mapping) at its first temporary-item creation.
+        if let Some(conn) = conn {
+            let creates_temp_item = ops.iter().any(
+                |op| matches!(op, catalog::Op::CreateItem { item, .. } if item.is_temporary()),
+            );
+            if creates_temp_item && !catalog.state().has_temporary_namespace(conn.conn_id()) {
+                catalog.register_temporary_namespace(conn.conn_id(), conn.uuid());
+            }
+        }
+
         // NOTE: This phase contains every durable `sync` and `commit` a catalog
         // transaction performs, which is what makes `transact` minus those two
         // histograms an estimate of the in-memory work. Two caveats. More than
@@ -708,6 +719,7 @@ impl Coordinator {
 
     pub(crate) fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
         self.drop_introspection_subscribes(replica_id);
+        self.drop_metric_sinks(replica_id);
 
         self.controller
             .drop_replica(cluster_id, replica_id)
@@ -1265,15 +1277,7 @@ impl Coordinator {
                     if cluster_id.is_user() {
                         *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) += 1;
                         if let ReplicaLocation::Managed(location) = &config.location {
-                            let replica_allocation = self
-                                .catalog()
-                                .cluster_replica_sizes()
-                                .0
-                                .get(location.size_for_billing())
-                                .expect(
-                                    "location size is validated against the cluster replica sizes",
-                                );
-                            new_credit_consumption_rate += replica_allocation.credits_per_hour
+                            new_credit_consumption_rate += self.replica_credits_per_hour(location);
                         }
                     }
                 }
@@ -1317,7 +1321,8 @@ impl Coordinator {
                         | CatalogItem::View(_)
                         | CatalogItem::Index(_)
                         | CatalogItem::Type(_)
-                        | CatalogItem::Func(_) => {}
+                        | CatalogItem::Func(_)
+                        | CatalogItem::MetricSink(_) => {}
                     }
                 }
                 Op::DropObjects(drop_object_infos) => {
@@ -1335,16 +1340,8 @@ impl Coordinator {
                                     if let ReplicaLocation::Managed(location) =
                                         &cluster.config.location
                                     {
-                                        let replica_allocation = self
-                                            .catalog()
-                                            .cluster_replica_sizes()
-                                            .0
-                                            .get(location.size_for_billing())
-                                            .expect(
-                                                "location size is validated against the cluster replica sizes",
-                                            );
                                         new_credit_consumption_rate -=
-                                            replica_allocation.credits_per_hour
+                                            self.replica_credits_per_hour(location);
                                     }
                                 }
                             }
@@ -1396,7 +1393,8 @@ impl Coordinator {
                                     | CatalogItem::View(_)
                                     | CatalogItem::Index(_)
                                     | CatalogItem::Type(_)
-                                    | CatalogItem::Func(_) => {}
+                                    | CatalogItem::Func(_)
+                                    | CatalogItem::MetricSink(_) => {}
                                 }
                             }
                         }
@@ -1426,7 +1424,8 @@ impl Coordinator {
                     | CatalogItem::View(_)
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
-                    | CatalogItem::Func(_) => {}
+                    | CatalogItem::Func(_)
+                    | CatalogItem::MetricSink(_) => {}
                 },
                 Op::AlterRole { .. }
                 | Op::AlterRetainHistory { .. }
