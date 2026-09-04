@@ -21,7 +21,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from materialize import MZ_ROOT, buildkite, git, spawn
-from materialize.cargo_bench.compare import CompareReport, compare, render_markdown
+from materialize.cargo_bench.compare import (
+    CompareReport,
+    Verdict,
+    compare,
+    render_markdown,
+)
 from materialize.cargo_bench.targets import (
     BenchTarget,
     bench_targets,
@@ -61,7 +66,13 @@ def resolve_ancestor() -> str:
 
 
 def target_dir() -> Path:
-    return Path(os.getenv("CARGO_TARGET_DIR", str(MZ_ROOT / "target"))).absolute()
+    """Resolve `CARGO_TARGET_DIR`, defaulting to `<MZ_ROOT>/target`.
+
+    A relative override is resolved against `MZ_ROOT`, not the process cwd,
+    since mzcompose workflows can be invoked from any directory.
+    """
+    value = Path(os.getenv("CARGO_TARGET_DIR", str(MZ_ROOT / "target")))
+    return value if value.is_absolute() else MZ_ROOT / value
 
 
 def load_targets(cwd: Path, packages: list[str]) -> list[BenchTarget]:
@@ -82,10 +93,20 @@ def run_targets(
 ) -> list[TargetFailure]:
     """Run each target on its own so one failure does not take down the rest. Returns the failures."""
     failures = []
+    base_criterion_home = Path(env["CRITERION_HOME"])
     for target in targets:
         print(f"--- Benchmarking {target.package}/{target.name} in {cwd}")
+        # Benchmark ids are only unique within a target, so a collision
+        # across targets sharing one criterion home would silently merge two
+        # unrelated benchmarks.
+        target_env = dict(
+            env,
+            CRITERION_HOME=str(base_criterion_home / target.package / target.name),
+        )
         try:
-            spawn.runv(cargo_bench_args(target, criterion_args), cwd=cwd, env=env)
+            spawn.runv(
+                cargo_bench_args(target, criterion_args), cwd=cwd, env=target_env
+            )
         except subprocess.CalledProcessError as e:
             print(f"^^^ +++ {target.package}/{target.name} failed with {e.returncode}")
             failures.append(TargetFailure(target, e.returncode))
@@ -96,10 +117,16 @@ def run_ancestor(
     ancestor: str,
     packages: list[str],
     env: dict[str, str],
-) -> tuple[list[BenchTarget], list[TargetFailure]]:
+) -> list[TargetFailure]:
+    """Build and bench every target at `ancestor` in a scratch worktree. Returns the failures."""
     worktree = Path(tempfile.mkdtemp(prefix="cargo-bench-ancestor-"))
     added = False
     try:
+        # A cancelled or timed-out job destroys the container's /tmp worktree
+        # before the `finally` block below runs to remove it, and CI agents
+        # reuse their checkout across jobs, so stale registrations would
+        # otherwise accumulate in `.git/worktrees`.
+        spawn.runv(["git", "worktree", "prune"], cwd=MZ_ROOT)
         # `git worktree add` can fail on a bad ancestor ref, in which case
         # there is no worktree to remove, only the scratch directory to clean up.
         spawn.runv(
@@ -108,13 +135,18 @@ def run_ancestor(
         )
         added = True
         targets = load_targets(worktree, packages)
-        failures = run_targets(targets, worktree, env, ["--save-baseline", BASELINE])
-        return targets, failures
+        return run_targets(targets, worktree, env, ["--save-baseline", BASELINE])
     finally:
         if added:
-            spawn.runv(
-                ["git", "worktree", "remove", "--force", str(worktree)], cwd=MZ_ROOT
-            )
+            try:
+                spawn.runv(
+                    ["git", "worktree", "remove", "--force", str(worktree)],
+                    cwd=MZ_ROOT,
+                )
+            except subprocess.CalledProcessError as e:
+                # A failing remove must not mask an in-flight exception from
+                # the try block above.
+                print(f"^^^ +++ removing worktree {worktree} failed: {e}")
         shutil.rmtree(worktree, ignore_errors=True)
 
 
@@ -177,6 +209,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="run only the current commit, no comparison",
     )
     args = parser.parse_args()
+    if args.skip_ancestor and args.ancestor:
+        parser.error("--ancestor has no effect with --skip-ancestor")
+
+    current_targets = load_targets(MZ_ROOT, args.package)
+    if not current_targets:
+        raise RuntimeError("no bench targets found")
 
     criterion_home = target_dir() / "criterion-compare"
     # Stale baselines from an earlier run would silently become the
@@ -195,11 +233,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ancestor = args.ancestor or resolve_ancestor()
         assert ancestor is not None
         print(f"--- Comparing against ancestor {ancestor}")
-        _, ancestor_failures = run_ancestor(ancestor, args.package, env)
+        ancestor_failures = run_ancestor(ancestor, args.package, env)
 
-    current_targets = load_targets(MZ_ROOT, args.package)
-    if not current_targets:
-        raise RuntimeError("no bench targets found")
+        # Criterion's --save-baseline leaves a `new/` copy of the ancestor
+        # run behind in addition to the baseline it saves. An id absent at
+        # HEAD would otherwise keep that copy and get reported as a HEAD
+        # result carrying the ancestor's numbers. Criterion recreates `new/`
+        # on the HEAD run and only reads `ancestor/estimates.json` and
+        # `ancestor/sample.json` for comparison, so removing it here is safe.
+        for d in criterion_home.rglob("new"):
+            if d.is_dir():
+                shutil.rmtree(d)
+
     current_failures = run_targets(
         current_targets, MZ_ROOT, env, ["--baseline-lenient", BASELINE]
     )
@@ -228,6 +273,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 cwd=MZ_ROOT,
             )
             buildkite.upload_artifact(REPORTS_ARTIFACT, cwd=MZ_ROOT)
+            (MZ_ROOT / REPORTS_ARTIFACT).unlink(missing_ok=True)
         except subprocess.CalledProcessError as e:
             print(f"^^^ +++ uploading criterion reports failed: {e}")
 
@@ -236,5 +282,5 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"{len(current_failures)} bench target(s) failed on the current commit"
         )
     if report.has_regressions:
-        regressions = [r.id for r in report.results if r.verdict.value == "regression"]
+        regressions = [r.id for r in report.results if r.verdict == Verdict.REGRESSION]
         raise RuntimeError(f"benchmark regressions: {', '.join(regressions)}")

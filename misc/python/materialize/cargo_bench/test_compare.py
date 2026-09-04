@@ -129,6 +129,18 @@ def test_stale_change_without_ancestor_is_ignored(tmp_path: Path) -> None:
     assert result.verdict == Verdict.NEW
 
 
+def test_ancestor_benchmark_json_not_double_counted(tmp_path: Path) -> None:
+    _bench(tmp_path, "d", "d", 110.0, 100.0, (0.10, 0.05, 0.15))
+    # Criterion copies benchmark.json into the baseline directory it saves,
+    # not just into "new/". A discovery loop keyed on "any benchmark.json"
+    # rather than the "new" directory name would count this id twice.
+    _write(tmp_path / "d" / "ancestor" / "benchmark.json", {"full_id": "d"})
+
+    report = compare(tmp_path, threshold=0.10)
+
+    assert len(report.results) == 1
+
+
 def test_no_regressions(tmp_path: Path) -> None:
     _bench(tmp_path, "b", "b", 101.0, 100.0, (0.01, -0.01, 0.03))
 

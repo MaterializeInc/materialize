@@ -79,8 +79,10 @@ def compare(criterion_dir: Path, threshold: float) -> CompareReport:
     results: list[BenchResult] = []
     warnings: list[str] = []
 
-    # Criterion's own discovery rule: a benchmark.json inside a directory
-    # named "new". Baseline directories never hold a benchmark.json.
+    # Criterion copies benchmark.json into every saved baseline directory,
+    # not just "new/", so the guard on new_dir.name below is what identifies
+    # the current result and prevents counting a benchmark once per baseline
+    # it has been copied into.
     for benchmark_json in sorted(criterion_dir.rglob("benchmark.json")):
         new_dir = benchmark_json.parent
         if new_dir.name != "new":
