@@ -40,13 +40,11 @@ def bench_targets(metadata: dict[str, Any]) -> list[BenchTarget]:
     return sorted(targets)
 
 
-def cargo_bench_args(
-    target: BenchTarget, criterion_args: Sequence[str]
-) -> list[str]:
+def cargo_bench_args(target: BenchTarget, criterion_args: Sequence[str]) -> list[str]:
     """Build the `cargo bench` argv for one target, passing `criterion_args` through to the bench binary."""
     args = ["cargo", "bench", "--package", target.package, "--bench", target.name]
-    # Cargo silently skips a target whose required features are off, so they
-    # must be enabled explicitly for the target to run at all.
+    # An explicitly named bench target whose required features are not enabled
+    # makes cargo fail instead of skipping it, so the features must be passed through.
     if target.required_features:
         args += ["--features", ",".join(target.required_features)]
     args.append("--")
