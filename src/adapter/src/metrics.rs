@@ -12,7 +12,8 @@ use std::borrow::Cow;
 use mz_controller_types::ClusterId;
 use mz_ore::metric;
 use mz_ore::metrics::{
-    MetricTag, MetricVisibility, MetricsRegistry, UIntGauge, remove_children_with_label,
+    MakeCollector, MakeCollectorOpts, MetricTag, MetricVisibility, MetricsRegistry, UIntGauge,
+    remove_children_with_label,
 };
 use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
@@ -414,48 +415,110 @@ where
 /// Adapter metrics whose series carry a cluster id label.
 ///
 /// Series are created on first observation, as for any labeled metric, and
-/// `remove_cluster` sweeps a dropped cluster's series out again.
+/// `remove_cluster` deletes a dropped cluster's series from every vec that
+/// `register` put here.
 #[derive(Debug, Clone)]
 pub struct ClusterLabeledMetrics {
     time_to_first_row_seconds: HistogramVec,
     determine_timestamp: IntCounterVec,
     timestamp_difference_for_bounded_staleness_ms: HistogramVec,
+    /// Every vec above with the label that carries its cluster id. `register`
+    /// is the only way in, so a vec registered any other way is not swept.
+    delete_on_cluster_drop: Vec<ClusterLabeledVec>,
+}
+
+/// A metric vec with the name of the label that carries the cluster id.
+#[derive(Debug, Clone)]
+enum ClusterLabeledVec {
+    Histogram(HistogramVec, &'static str),
+    Counter(IntCounterVec, &'static str),
+}
+
+impl ClusterLabeledVec {
+    fn delete_cluster(&self, cluster: &str) {
+        match self {
+            Self::Histogram(vec, label) => remove_children_with_label(vec, label, cluster),
+            Self::Counter(vec, label) => remove_children_with_label(vec, label, cluster),
+        }
+    }
 }
 
 impl ClusterLabeledMetrics {
     fn register_into(registry: &MetricsRegistry) -> Self {
+        let mut vecs = Vec::new();
         Self {
-            time_to_first_row_seconds: registry.register(metric! {
-                name: "mz_time_to_first_row_seconds",
-                help: "Latency of an execute for a successful query from pgwire's perspective",
-                var_labels: ["instance_id", "isolation_level", "strategy", "application_name"],
-                // NOTE: Measurements below 512 microseconds are negligible, so omit those buckets.
-                buckets: histogram_seconds_buckets(0.000_512, 32.0)
-            }),
-            determine_timestamp: registry.register(metric!(
-                name: "mz_determine_timestamp",
-                help: "The total number of calls to determine_timestamp.",
-                var_labels: ["respond_immediately", "isolation_level", "compute_instance"],
-            )),
-            timestamp_difference_for_bounded_staleness_ms: registry.register(metric!(
-                name: "mz_timestamp_difference_for_bounded_staleness_ms",
-                help: "How much older bounded-staleness timestamps are compared to serializable, in milliseconds. Measures the actual staleness incurred.",
-                var_labels: ["compute_instance"],
-                buckets: histogram_milliseconds_buckets(1., 8000.),
-            )),
+            time_to_first_row_seconds: Self::register(
+                registry,
+                &mut vecs,
+                ClusterLabeledVec::Histogram,
+                "instance_id",
+                metric! {
+                    name: "mz_time_to_first_row_seconds",
+                    help: "Latency of an execute for a successful query from pgwire's perspective",
+                    var_labels: ["instance_id", "isolation_level", "strategy", "application_name"],
+                    // NOTE: Measurements below 512 microseconds are negligible, so omit those buckets.
+                    buckets: histogram_seconds_buckets(0.000_512, 32.0)
+                },
+            ),
+            determine_timestamp: Self::register(
+                registry,
+                &mut vecs,
+                ClusterLabeledVec::Counter,
+                "compute_instance",
+                metric!(
+                    name: "mz_determine_timestamp",
+                    help: "The total number of calls to determine_timestamp.",
+                    var_labels: ["respond_immediately", "isolation_level", "compute_instance"],
+                ),
+            ),
+            timestamp_difference_for_bounded_staleness_ms: Self::register(
+                registry,
+                &mut vecs,
+                ClusterLabeledVec::Histogram,
+                "compute_instance",
+                metric!(
+                    name: "mz_timestamp_difference_for_bounded_staleness_ms",
+                    help: "How much older bounded-staleness timestamps are compared to serializable, in milliseconds. Measures the actual staleness incurred.",
+                    var_labels: ["compute_instance"],
+                    buckets: histogram_milliseconds_buckets(1., 8000.),
+                ),
+            ),
+            delete_on_cluster_drop: vecs,
         }
+    }
+
+    /// Registers `opts` and records it, wrapped by `wrap`, with `cluster_label`
+    /// as the label carrying its cluster id, so `remove_cluster` covers it.
+    ///
+    /// Panics if `cluster_label` is not a variable label of `opts`.
+    fn register<M: MakeCollector>(
+        registry: &MetricsRegistry,
+        vecs: &mut Vec<ClusterLabeledVec>,
+        wrap: fn(M, &'static str) -> ClusterLabeledVec,
+        cluster_label: &'static str,
+        opts: MakeCollectorOpts,
+    ) -> M {
+        assert!(
+            opts.opts
+                .variable_labels
+                .iter()
+                .any(|label| label == cluster_label),
+            "{cluster_label} is not a label of {}",
+            opts.opts.name
+        );
+        let vec: M = registry.register(opts);
+        // A metric vec is a handle onto shared state, so the clone sees the
+        // same children as the field.
+        vecs.push(wrap(vec.clone(), cluster_label));
+        vec
     }
 
     /// Deletes the series of `cluster_id`.
     pub(crate) fn remove_cluster(&self, cluster_id: ClusterId) {
         let cluster = cluster_id.to_string();
-        remove_children_with_label(&self.time_to_first_row_seconds, "instance_id", &cluster);
-        remove_children_with_label(&self.determine_timestamp, "compute_instance", &cluster);
-        remove_children_with_label(
-            &self.timestamp_difference_for_bounded_staleness_ms,
-            "compute_instance",
-            &cluster,
-        );
+        for vec in &self.delete_on_cluster_drop {
+            vec.delete_cluster(&cluster);
+        }
     }
 
     /// Statements without a cluster or strategy record under the "none" label value.
@@ -504,39 +567,33 @@ impl ClusterLabeledMetrics {
 mod tests {
     use std::collections::BTreeSet;
 
-    use prometheus::proto::MetricFamily;
-
     use super::*;
 
     const U1: ClusterId = ClusterId::User(1);
     const U2: ClusterId = ClusterId::User(2);
 
-    const CLUSTER_LABELED: [&str; 3] = [
-        "mz_time_to_first_row_seconds",
-        "mz_determine_timestamp",
-        "mz_timestamp_difference_for_bounded_staleness_ms",
-    ];
-
-    fn family(registry: &MetricsRegistry, name: &str) -> Option<MetricFamily> {
+    fn families(registry: &MetricsRegistry) -> BTreeSet<String> {
         registry
             .gather()
             .into_iter()
-            .find(|family| family.name() == name)
+            .map(|family| family.name().to_string())
+            .collect()
     }
 
-    /// The cluster label values across the series of `name`.
-    fn clusters_in(registry: &MetricsRegistry, name: &str) -> BTreeSet<String> {
-        family(registry, name)
-            .map(|family| {
+    /// Names of the families with a series carrying `value` under any label.
+    fn families_with_label_value(registry: &MetricsRegistry, value: &str) -> BTreeSet<String> {
+        registry
+            .gather()
+            .into_iter()
+            .filter(|family| {
                 family
                     .get_metric()
                     .iter()
                     .flat_map(|metric| metric.get_label())
-                    .filter(|label| ["instance_id", "compute_instance"].contains(&label.name()))
-                    .map(|label| label.value().to_string())
-                    .collect()
+                    .any(|label| label.value() == value)
             })
-            .unwrap_or_default()
+            .map(|family| family.name().to_string())
+            .collect()
     }
 
     fn observe_first_row(
@@ -572,24 +629,22 @@ mod tests {
         metrics
             .timestamp_difference_for_bounded_staleness_ms(U1)
             .observe(5.0);
-        for name in CLUSTER_LABELED {
-            assert!(
-                clusters_in(&registry, name).contains("u1"),
-                "{name} has no u1 series before the drop"
-            );
-        }
+        assert_eq!(
+            families_with_label_value(&registry, "u1"),
+            families(&registry),
+            "every registered family needs a u1 series for the drop to be exercised"
+        );
 
         metrics.remove_cluster(U1);
 
-        for name in CLUSTER_LABELED {
-            assert!(
-                !clusters_in(&registry, name).contains("u1"),
-                "{name} still has u1 series after the drop"
-            );
-        }
         assert_eq!(
-            clusters_in(&registry, "mz_time_to_first_row_seconds"),
-            BTreeSet::from(["u2".to_string()]),
+            families_with_label_value(&registry, "u1"),
+            BTreeSet::new(),
+            "u1 series survived the drop"
+        );
+        assert_eq!(
+            families_with_label_value(&registry, "u2"),
+            BTreeSet::from(["mz_time_to_first_row_seconds".to_string()]),
             "the other cluster's series must be untouched"
         );
     }
@@ -601,9 +656,27 @@ mod tests {
         observe_first_row(&metrics, None, Some(StatementExecutionStrategy::Constant));
         observe_first_row(&metrics, Some(U1), None);
         metrics.remove_cluster(U1);
+        assert_eq!(families_with_label_value(&registry, "u1"), BTreeSet::new());
         assert_eq!(
-            clusters_in(&registry, "mz_time_to_first_row_seconds"),
-            BTreeSet::from(["none".to_string()])
+            families_with_label_value(&registry, "none"),
+            BTreeSet::from(["mz_time_to_first_row_seconds".to_string()])
+        );
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "is not a label of mz_test")]
+    fn registering_under_a_label_the_metric_lacks_panics() {
+        let registry = MetricsRegistry::new();
+        let _: IntCounterVec = ClusterLabeledMetrics::register(
+            &registry,
+            &mut Vec::new(),
+            ClusterLabeledVec::Counter,
+            "cluster_id",
+            metric!(
+                name: "mz_test",
+                help: "test",
+                var_labels: ["compute_instance"],
+            ),
         );
     }
 }
