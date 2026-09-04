@@ -31,6 +31,8 @@ pub(super) struct PeekWalkMetrics {
     walks_inline: IntCounter,
     /// Counts walks that ended away from the timely worker.
     walks_offloaded: IntCounter,
+    /// Counts walks that answered from the peek response stash.
+    walks_stashed: IntCounter,
     error_scan_seconds: Histogram,
     cursor_setup_seconds: Histogram,
     row_iteration_seconds: Histogram,
@@ -50,6 +52,7 @@ impl PeekWalkMetrics {
         Self {
             walks_inline: metrics.index_peek_walks_inline.clone(),
             walks_offloaded: metrics.index_peek_walks_offloaded.clone(),
+            walks_stashed: metrics.index_peek_stashed_total.clone(),
             error_scan_seconds: metrics.index_peek_error_scan_seconds.clone(),
             cursor_setup_seconds: metrics.index_peek_cursor_setup_seconds.clone(),
             row_iteration_seconds: metrics.index_peek_row_iteration_seconds.clone(),
@@ -77,18 +80,27 @@ impl PeekWalkMetrics {
 
     /// Counts a walk that the timely worker drove to an outcome.
     ///
-    /// A peek diverted to the peek stash counts here, because the walk that decided that ran on
-    /// the worker. The stash's own walk of the same trace counts on neither substrate.
+    /// A walk that suspends leaves the worker rather than finishing here, so a peek answered from
+    /// the peek stash never counts here: the driver that writes to the stash is the offloaded one.
     pub(super) fn walked_inline(&self) {
         self.walks_inline.inc();
     }
 
     /// Counts a walk that an offloaded task drove to an outcome, whatever that outcome is.
     ///
-    /// A walk cancelled while queued or while running counts on neither substrate, so the two sum
-    /// to the walks that ended rather than to the walks that were admitted.
+    /// A walk cancelled while queued or while running counts on neither substrate, as does one
+    /// whose task died without an outcome, which the worker answers with an error of its own. The
+    /// two therefore sum to the walks that reached an outcome rather than to the peeks answered.
     pub(super) fn walked_offloaded(&self) {
         self.walks_offloaded.inc();
+    }
+
+    /// Counts a walk that answered with a handle to the peek response stash.
+    ///
+    /// Counted alongside [`Self::walked_offloaded`] rather than instead of it, so the two
+    /// substrates still sum to the walks that ended.
+    pub(super) fn walked_to_stash(&self) {
+        self.walks_stashed.inc();
     }
 
     /// Reports the phases that precede the walk over the ok trace.

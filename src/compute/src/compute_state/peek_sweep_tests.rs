@@ -11,11 +11,10 @@
 
 use mz_compute_types::dyncfgs::{
     ENABLE_INDEX_PEEK_OFFLOAD, INDEX_PEEK_ACTIVATION_BUDGET, INDEX_PEEK_INLINE_BUDGET,
-    PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES,
 };
 use mz_dyncfg::ConfigUpdates;
-use mz_persist_client::Schemas;
 use mz_persist_client::cache::PersistClientCache;
+use mz_repr::{IntoRowIterator, RowIterator, RowRef};
 use mz_secrets::InMemorySecretsController;
 use mz_storage_types::connections::ConnectionContext;
 use timely::WorkerConfig;
@@ -47,13 +46,13 @@ const WIDE_INDEX_KEYS: u64 = 2_000;
 /// on is how many peeks got a turn rather than how far each one walked.
 const SMALL_INDEX_KEYS: u64 = 6;
 
-/// How many rows a walk accumulates before its batch is full, in the tests that drive a
-/// hand-back.
+/// How many rows a walk accumulates before its batch is full, in the tests that drive a peek
+/// to the stash.
 ///
 /// More than the inline slice can accumulate within the production budget and fewer than the
 /// wide index holds, which is what puts the crossing after the offload rather than before it
 /// or never.
-const HAND_BACK_AT_ROWS: u64 = 1_500;
+const DIVERT_AT_ROWS: u64 = 1_500;
 
 /// How many activations a test drives before it declares a peek stuck.
 ///
@@ -182,7 +181,6 @@ impl Harness {
         Some(match peek {
             PendingPeek::Index(_) => "index",
             PendingPeek::Persist(_) => "persist",
-            PendingPeek::Stash(_) => "stash",
             PendingPeek::Offloaded(_) => "offloaded",
         })
     }
@@ -221,6 +219,26 @@ impl Harness {
             self.state.metrics.index_peek_walks_inline.get(),
             self.state.metrics.index_peek_walks_offloaded.get(),
         )
+    }
+
+    /// The walks the peek stash answered.
+    ///
+    /// A stashed answer and an inline answer carry the same rows, so this is what turns "the
+    /// stash path engaged" from an inference about the configuration into an assertion.
+    fn walks_stashed(&self) -> u64 {
+        self.state.metrics.index_peek_stashed_total.get()
+    }
+
+    /// The cursor positions the ok walks that ended here reported, and how many walks reported
+    /// them.
+    ///
+    /// A walk reports its positions once, wherever it ended, and the count is cumulative over
+    /// every slice it was cut into. A peek answered by two walks of the same trace would
+    /// report twice, or once at twice the positions, and would answer with the same rows
+    /// either way.
+    fn ok_walk_positions(&self) -> (u64, f64) {
+        let rows = &self.state.metrics.index_peek_row_iteration_rows;
+        (rows.get_sample_count(), rows.get_sample_sum())
     }
 
     /// Runs activations until nothing is pending, and reports the responses they produced.
@@ -521,7 +539,63 @@ async fn the_kill_switch_answers_the_same_scan_inline() {
     assert_eq!(
         harness.walks(),
         (1, 0),
-        "the kill switch offloads nothing, however far a peek walks"
+        "with nothing bound for the stash, the kill switch offloads nothing however far a \
+         peek walks"
+    );
+}
+
+/// With the kill switch off, a peek whose accumulated rows belong in the stash still leaves
+/// the worker, and is answered from the stash exactly as it is with the switch on.
+///
+/// The switch gates offload for latency, which is the placement it can revert. Offload for
+/// stashing is not: the driver that writes to the stash is the offloaded one, so a worker that
+/// kept such a peek would hold a scan that makes no progress until its batch is taken and
+/// answer the peek never. What the switch guarantees is that an ordinary peek runs where it
+/// used to, not that no peek ever leaves the worker.
+#[mz_ore::test(tokio::test)]
+async fn the_kill_switch_still_takes_a_stash_bound_peek_off_the_worker() {
+    let keys = wide_ok_rows(WIDE_INDEX_KEYS);
+    // The threshold is a size rather than a count, because the size of what a scan has
+    // accumulated is what it compares against. Summed over the rows it is meant to admit,
+    // rather than multiplied out, because a row's packed width follows the value it holds.
+    let threshold: usize = keys
+        .iter()
+        .take(usize::cast_from(DIVERT_AT_ROWS))
+        .map(peek_scan::entry_byte_len)
+        .sum();
+
+    // The offload is left where production ships it, and only the stash is turned on.
+    let mut harness = Harness::new(move |updates| {
+        updates.add(&ENABLE_PEEK_RESPONSE_STASH, true);
+        updates.add(&PEEK_RESPONSE_STASH_THRESHOLD_BYTES, threshold);
+    });
+    harness.state.peek_stash_persist_location = Some(PersistLocation::new_in_mem());
+    harness.add_pending(
+        index_peek_with_uuid(PEEK_A, None),
+        trace_bundle(&keys, cancelling_errors(0)),
+    );
+
+    harness.sweep();
+    assert_eq!(
+        harness.pending(PEEK_A),
+        Some("offloaded"),
+        "an unbounded slice walks until its rows belong in the stash, and then leaves"
+    );
+
+    let mut responses = harness.drain().await;
+    assert_eq!(responses.len(), 1, "the stashed peek answers once");
+    let (uuid, response) = responses.pop().expect("length checked");
+    assert_eq!(uuid, PEEK_A);
+    assert_eq!(stashed_rows(&harness, response).await, keys);
+    assert_eq!(
+        harness.walks(),
+        (0, 1),
+        "the offloaded driver is the one that writes to the stash, so it ended the walk"
+    );
+    assert_eq!(
+        harness.walks_stashed(),
+        1,
+        "the kill switch does not take the stash away from a peek that needs it"
     );
 }
 
@@ -850,13 +924,13 @@ async fn a_walk_cancelled_with_its_outcome_in_flight_is_counted() {
 /// A harness whose peek of the whole wide index is offloaded and whose offloaded walk then
 /// crosses the stash threshold, swept once so that the peek is already offloaded.
 ///
-/// `location` is the replica's peek stash location, which has to be present here whatever the
-/// hand-back is meant to find: a replica without one makes no scan stash-eligible, so its
-/// walks never fill a batch and never hand back at all.
-fn offloaded_walk_that_hands_back(keys: &[Row], location: PersistLocation) -> Harness {
+/// `location` is the replica's peek stash location, which has to be present: a replica without
+/// one makes no scan stash-eligible, so its walks never fill a batch and never reach the stash
+/// at all.
+fn offloaded_walk_that_crosses_the_threshold(keys: &[Row], location: PersistLocation) -> Harness {
     assert!(
-        u64::cast_from(*INDEX_PEEK_INLINE_BUDGET.default()) < HAND_BACK_AT_ROWS
-            && HAND_BACK_AT_ROWS < WIDE_INDEX_KEYS,
+        u64::cast_from(*INDEX_PEEK_INLINE_BUDGET.default()) < DIVERT_AT_ROWS
+            && DIVERT_AT_ROWS < WIDE_INDEX_KEYS,
         "the walk must cross the stash threshold after it is offloaded and before it ends"
     );
     // The threshold is a size rather than a count, because the size of what a scan has
@@ -864,7 +938,7 @@ fn offloaded_walk_that_hands_back(keys: &[Row], location: PersistLocation) -> Ha
     // rather than multiplied out, because a row's packed width follows the value it holds.
     let threshold: usize = keys
         .iter()
-        .take(usize::cast_from(HAND_BACK_AT_ROWS))
+        .take(usize::cast_from(DIVERT_AT_ROWS))
         .map(peek_scan::entry_byte_len)
         .sum();
 
@@ -888,160 +962,128 @@ fn offloaded_walk_that_hands_back(keys: &[Row], location: PersistLocation) -> Ha
     harness
 }
 
-/// Runs activations until the offloaded walk of `PEEK_A` has handed back.
+/// The rows a stashed peek response holds, read back the way the coordinator reads one, in
+/// [`Row`] order.
 ///
-/// Bounded, so a walk that never hands back fails here rather than hanging the suite. The pause
-/// between activations is what lets the offloaded walk run.
-async fn sweep_until_handed_back(harness: &mut Harness) {
-    for _ in 0..SWEEP_BOUND {
-        if harness.pending(PEEK_A) != Some("offloaded") {
-            return;
-        }
-        tokio::time::sleep(SWEEP_POLL).await;
-        harness.sweep();
-    }
-    panic!("the offloaded walk had not handed back after {SWEEP_BOUND} activations");
-}
-
-/// The rows a stashed peek response holds, read back out of `location` the way the coordinator
-/// reads one, in [`Row`] order.
-///
-/// A stashed response names a persist batch rather than carrying the answer, so what the peek
-/// owes its caller is only visible from the batch. The batch is ordered as persist consolidates
-/// it rather than as the peek would have answered, and the coordinator orders what it reads
-/// back, so the rows are sorted here and compared as the set they are.
-async fn stashed_rows(
-    harness: &Harness,
-    location: &PersistLocation,
-    response: PeekResponse,
-) -> Vec<Row> {
+/// A stashed response names a persist batch rather than carrying the whole answer, so what the
+/// peek owes its caller is the batch plus the rows the response carries inline, and both halves
+/// are here. The batch is ordered as persist consolidates it rather than as the peek would have
+/// answered, and the coordinator orders what it reads back, so the rows are sorted here and
+/// compared as the set they are.
+async fn stashed_rows(harness: &Harness, response: PeekResponse) -> Vec<Row> {
     let PeekResponse::Stashed(stashed) = response else {
         panic!("a peek taken to the stash answers with a stashed response, not {response:?}");
     };
 
-    // Opened out of the harness's own cache, because two `PersistLocation`s naming the same
-    // in-memory URI reach the same blob only through the cache that opened them.
-    let mut client = harness
-        .state
-        .persist_clients
-        .open(location.clone())
-        .await
-        .expect("the in-memory location opens");
-
-    let shard_id = stashed.shard_id;
-    let batches = stashed
-        .batches
-        .into_iter()
-        .map(|batch| client.batch_from_transmittable_batch(&shard_id, batch))
+    let mut rows: Vec<Row> = stashed
+        .inline_rows
+        .iter()
+        .flat_map(|rows| rows.clone().into_row_iter().map(RowRef::to_owned))
         .collect();
-    let read_schemas: Schemas<SourceData, ()> = Schemas {
-        id: None,
-        key: Arc::new(stashed.relation_desc),
-        val: Arc::new(UnitSchema),
-    };
-    let mut cursor = client
-        .read_batches_consolidated::<_, _, _, i64>(
-            shard_id,
-            Antichain::from_elem(Timestamp::default()),
-            read_schemas,
-            batches,
-            |_stats| true,
-            *PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES.default(),
-        )
-        .await
-        .expect("the batches are readable at the timestamp they were written at");
-
-    let mut rows = Vec::new();
-    while let Some(updates) = cursor.next().await {
-        for ((key, _val), _time, diff) in updates {
-            assert_eq!(diff, 1, "the index holds each key once");
-            rows.push(key.0.expect("the peek stash holds no errors"));
-        }
-    }
+    rows.extend(peek_stash::tests::stashed_rows(&harness.state.persist_clients, *stashed).await);
     rows.sort();
-
-    // Deleted as the coordinator deletes them once it has read them. A batch dropped without
-    // this leaves its blob keys behind and says so in a warning.
-    for batch in cursor.into_lease() {
-        batch.delete().await;
-    }
     rows
 }
 
-/// An offloaded walk that hands back with a stash location present takes the peek to the stash,
-/// which answers it with the rows the peek would have answered with inline.
+/// An offloaded walk whose accumulated rows cross the stash threshold writes them to the stash
+/// and answers the peek with the handle, without a second walk of the trace and without the
+/// peek ever leaving the driver that offloaded it.
 ///
-/// This is the arm every hand-back in production takes, because a replica's stash location is
-/// set once at instance creation and nothing clears it. The peek has to become pending on the
-/// stash rather than be answered where the hand-back arrives: the rows are produced by a
-/// second walk that the worker pumps over the activations that follow, and answering here
-/// would drop them.
+/// The rows the walk was still holding when the trace ran out go to the stash with the rest, so
+/// the handle is the whole answer and nothing rides beside it.
 #[mz_ore::test(tokio::test)]
-async fn an_offloaded_hand_back_takes_the_peek_to_the_stash() {
+async fn an_offloaded_walk_that_crosses_the_threshold_answers_from_the_stash() {
     // The wide keys carry the `UInt64` the peek's result description declares, which is the
     // schema the stash writes its batch under. The narrow fixture rows do not.
     let keys = wide_ok_rows(WIDE_INDEX_KEYS);
     let location = PersistLocation::new_in_mem();
-    let mut harness = offloaded_walk_that_hands_back(&keys, location.clone());
-
-    sweep_until_handed_back(&mut harness).await;
-
-    assert_eq!(
-        harness.pending(PEEK_A),
-        Some("stash"),
-        "the hand-back starts a stash upload and leaves the peek waiting on it"
-    );
-    assert_eq!(
-        harness.peek_responses(),
-        vec![],
-        "a peek handed to the stash is not answered where the hand-back arrives"
-    );
-    assert_eq!(
-        harness.walks(),
-        (0, 1),
-        "a hand-back is a terminal outcome of the offloaded walk"
-    );
+    let mut harness = offloaded_walk_that_crosses_the_threshold(&keys, location);
 
     let mut responses = harness.drain().await;
     assert_eq!(responses.len(), 1, "the stashed peek answers once");
     let (uuid, response) = responses.pop().expect("length checked");
     assert_eq!(uuid, PEEK_A);
+
+    let PeekResponse::Stashed(stashed) = &response else {
+        panic!("a peek taken to the stash answers with a handle, not {response:?}");
+    };
     assert_eq!(
-        stashed_rows(&harness, &location, response).await,
-        keys,
-        "the stash holds the rows the peek would have answered with inline"
+        stashed.num_rows_batches, WIDE_INDEX_KEYS,
+        "the walk wrote every row, the ones it still held when the trace ran out included"
     );
-}
-
-/// An offloaded walk that hands back with nowhere to write the rows answers the peek with an
-/// error rather than leaving it pending on a walk that has stopped.
-///
-/// This arm is defensive only. Reaching it takes a replica that loses its stash location
-/// between the offload and the hand-back, which nothing does, and the location is cleared
-/// here to stand in for that: `handle_create_instance` sets it and nothing clears it, while a
-/// replica that never had one makes no scan stash-eligible, so none of its walks fills a batch
-/// and hands back in the first place. The arm production takes is
-/// [`an_offloaded_hand_back_takes_the_peek_to_the_stash`]'s.
-#[mz_ore::test(tokio::test)]
-async fn an_offloaded_hand_back_answers_when_there_is_nowhere_to_write() {
-    let keys = wide_ok_rows(WIDE_INDEX_KEYS);
-    let mut harness = offloaded_walk_that_hands_back(&keys, PersistLocation::new_in_mem());
-
-    harness.state.peek_stash_persist_location = None;
-
     assert_eq!(
-        harness.drain().await,
-        vec![(
-            PEEK_A,
-            PeekResponse::Error(PeekError::unstructured(
-                "peek result is too large to answer inline and this replica has no peek stash \
-                 location"
-            ))
-        )]
+        inline_rows(stashed),
+        0,
+        "a stashed answer carries no rows inline"
+    );
+    assert_eq!(
+        stashed_rows(&harness, response).await,
+        keys,
+        "the stash holds the answer the peek would have given inline"
     );
     assert_eq!(
         harness.walks(),
         (0, 1),
-        "a hand-back is a terminal outcome of the offloaded walk"
+        "one offloaded walk produced the whole answer"
+    );
+    assert_eq!(harness.walks_stashed(), 1, "the stash answered the peek");
+    // The answer alone says nothing here: a walk that gave up at the threshold and started
+    // over would produce these very rows. What says the trace was walked once is the count of
+    // cursor positions the walk that ended reported.
+    assert_eq!(
+        harness.ok_walk_positions(),
+        (1, f64::cast_lossy(keys.len())),
+        "one walk evaluated each cursor position of the index once"
+    );
+}
+
+/// The rows a stashed response carries beside its batches.
+fn inline_rows(stashed: &mz_compute_client::protocol::response::StashedPeekResponse) -> usize {
+    stashed
+        .inline_rows
+        .iter()
+        .map(|rows| rows.clone().into_row_iter().count())
+        .sum()
+}
+
+/// Cancelling an offloaded peek bound for the stash answers it once, as cancelled, and the walk
+/// behind it produces no second answer.
+///
+/// Cancellation both removes the pending peek and aborts the walk, and it is the removal that
+/// has to be paired with the abort: a cancellation that answered without stopping the walk
+/// would answer the same peek again, the second time with a handle to a batch nothing will
+/// read.
+#[mz_ore::test(tokio::test)]
+async fn a_cancelled_stash_bound_peek_is_answered_once() {
+    let keys = wide_ok_rows(WIDE_INDEX_KEYS);
+    let mut harness =
+        offloaded_walk_that_crosses_the_threshold(&keys, PersistLocation::new_in_mem());
+
+    harness.active().handle_cancel_peek(PEEK_A);
+
+    assert_eq!(
+        harness.peek_responses(),
+        vec![(PEEK_A, PeekResponse::Canceled)]
+    );
+    assert_eq!(harness.pending(PEEK_A), None);
+
+    for _ in 0..SWEEP_BOUND {
+        tokio::time::sleep(SWEEP_POLL).await;
+        harness.sweep();
+    }
+    assert_eq!(
+        harness.peek_responses(),
+        vec![],
+        "a cancelled peek is answered once and never again"
+    );
+    assert_eq!(
+        harness.walks_stashed(),
+        0,
+        "a cancelled walk answers from no stash"
+    );
+    assert_eq!(
+        harness.walks(),
+        (0, 0),
+        "a cancelled walk reaches no outcome and counts on neither substrate"
     );
 }

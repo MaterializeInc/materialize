@@ -54,7 +54,7 @@ pub(super) fn rows_response(rows: RowBatch, order_by: &[ColumnOrder]) -> PeekRes
 }
 
 /// The byte size of a row's count, as an answer built from a [`RowBatch`] stores it.
-const COUNT_BYTE_SIZE: usize = size_of::<NonZeroUsize>();
+pub(super) const COUNT_BYTE_SIZE: usize = size_of::<NonZeroUsize>();
 
 /// The byte size of a row's offset into the answer's packed row data.
 const OFFSET_BYTE_SIZE: usize = size_of::<usize>();
@@ -93,6 +93,19 @@ pub(super) struct WalkPhases {
     pub rows_sorted: usize,
 }
 
+/// How a scan's rows may leave for the peek stash.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct StashBounds {
+    /// Whether the peek may divert its rows to the stash at all.
+    pub eligible: bool,
+    /// The accumulated size past which the first batch is handed over, which is where the answer
+    /// stops being an inline one.
+    pub threshold_bytes: usize,
+    /// The accumulated size past which every later batch is handed over. A batch is never smaller
+    /// than the threshold, so a value below it changes nothing.
+    pub batch_bytes: usize,
+}
+
 /// The outcome of a fueled [`PeekScan::step`].
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum ScanOutcome {
@@ -102,8 +115,8 @@ pub(super) enum ScanOutcome {
     /// The scan retains what it accumulated. A driver that can write rows collects them through
     /// [`PeekScan::take_batch`], and one that cannot is never handed rows it would have to drop.
     ///
-    /// A scan holding a full batch makes no progress when stepped, so a driver that declines a
-    /// batch has to ask [`PeekScan::batch_ready`] before it steps again or it spins forever.
+    /// A driver must take every batch it is offered. A scan holding one makes no progress when
+    /// stepped, so a driver that steps without taking spins forever.
     Suspended,
     /// The walk is over. `Ok` carries the rows accumulated since the last batch was taken, which
     /// together with the batches already taken are the peek's answer. `Err` is the peek's answer
@@ -130,9 +143,9 @@ enum ErrorPhase {
 /// The walk suspends between any two cursor positions. Both phases spend one budget: the ok walk
 /// gets what the error walk leaves.
 ///
-/// A stash-eligible scan retains at most `peek_stash_threshold_bytes`, plus the row that crossed
-/// it. A scan that cannot use the stash fills no batch, and `max_result_size` alone bounds its
-/// prefix.
+/// A stash-eligible scan retains at most the threshold before its first batch and the batch size
+/// after, plus the row that crossed either. A scan that cannot use the stash fills no batch, and
+/// `max_result_size` alone bounds its prefix.
 pub(super) struct PeekScan<Tr>
 where
     Tr: TraceReader<Batch: Navigable>,
@@ -152,18 +165,22 @@ where
     results: RowBatch,
     /// The byte size of `results`, as an answer built from them would store them.
     total_size: usize,
+    /// The rows the answer holds so far, batches already handed to a driver included, counted in
+    /// copies because that is what the finishing's limit counts. Thinning takes its drops back off.
+    answer_rows: u64,
     /// The ceiling on what the scan may hold, above which the peek fails.
     max_result_size: usize,
-    /// Whether this peek may divert its rows to the peek stash.
-    peek_stash_eligible: bool,
-    peek_stash_threshold_bytes: usize,
+    stash: StashBounds,
+    /// Whether a batch has been handed over, which is where the answer stopped being an inline
+    /// one and the batch size took over from the threshold.
+    stash_bound: bool,
     /// A bound on the rows the peek's finishing needs, `limit + offset`.
     ///
     /// Further limiting happens when the results are collected, so the scan does not have to hold
     /// exactly this many rows, just at least those that would have been returned.
     max_results: Option<usize>,
     /// Orders the rows that thinning keeps. `None` when the finishing imposes no ordering, in
-    /// which case thinning keeps any `max_results` of them.
+    /// which case the walk ends at the limit rather than thinning at all.
     comparator: Option<RowComparator>,
     /// Worker time the error walk spent, summed over the slices it was cut into.
     pub(super) error_scan_time: Duration,
@@ -199,8 +216,7 @@ where
         errs_handle: &mut ErrsHandle,
         oks_handle: &mut Tr,
         max_result_size: u64,
-        peek_stash_eligible: bool,
-        peek_stash_threshold_bytes: usize,
+        stash: StashBounds,
     ) -> Self {
         let error_scan = ErrorScan::new(errs_handle);
         let error_scan_time = error_scan.scan_time;
@@ -230,9 +246,10 @@ where
             ended: None,
             results: Vec::new(),
             total_size: 0,
+            answer_rows: 0,
             max_result_size: usize::cast_from(max_result_size),
-            peek_stash_eligible,
-            peek_stash_threshold_bytes,
+            stash,
+            stash_bound: false,
             max_results: peek.finishing.num_rows_needed(),
             comparator,
             error_scan_time,
@@ -293,12 +310,8 @@ where
         if !self.batch_ready() {
             return None;
         }
+        self.stash_bound = true;
         Some(self.take_results())
-    }
-
-    /// The collection this scan reads.
-    pub(super) fn target_id(&self) -> GlobalId {
-        self.target_id
     }
 
     /// The number of cursor positions the ok walk has evaluated.
@@ -327,13 +340,26 @@ where
         matches!(self.error_phase, ErrorPhase::Clean)
     }
 
+    /// Whether this scan may divert rows to the peek stash, and so whether it ever fills a batch.
+    ///
+    /// A driver reads this rather than deciding eligibility again, so it cannot end up holding a
+    /// batch it has nowhere to write. A scan holding an untaken batch makes no progress.
+    pub(super) fn stash_eligible(&self) -> bool {
+        self.stash.eligible
+    }
+
     /// Whether the accumulated rows have grown past what this peek may answer with inline, which
     /// is when [`PeekScan::take_batch`] hands them over.
     ///
-    /// This is how a driver tells a [`ScanOutcome::Suspended`] it can resume from one it cannot:
-    /// a scan holding a full batch stays where it stands until the batch is taken.
+    /// A scan whose batch is ready stays where it stands until the batch is taken, so this is also
+    /// whether stepping the scan again can make progress.
     pub(super) fn batch_ready(&self) -> bool {
-        self.peek_stash_eligible && self.total_size > self.peek_stash_threshold_bytes
+        let cut = if self.stash_bound {
+            self.stash.threshold_bytes.max(self.stash.batch_bytes)
+        } else {
+            self.stash.threshold_bytes
+        };
+        self.stash.eligible && self.total_size > cut
     }
 
     /// Takes the accumulated rows and the size accounted to them.
@@ -391,12 +417,29 @@ where
         }
     }
 
+    /// Whether the answer holds every row the peek's finishing can use.
+    ///
+    /// Only ever true without an ordering: an ordered finishing ranks rows against the whole
+    /// trace, so no prefix of the walk satisfies it.
+    fn finishing_satisfied(&self) -> bool {
+        self.comparator.is_none()
+            && self
+                .max_results
+                .is_some_and(|max_results| self.answer_rows >= u64::cast_from(max_results))
+    }
+
     /// Advances the walk over the ok trace, accumulating the rows it produces.
     fn step_ok_phase(
         &mut self,
         row_iteration_limit: Option<usize>,
         fuel: &mut usize,
     ) -> ScanOutcome {
+        // Ahead of the batch guard, so a scan whose last batch completed the answer ends here
+        // rather than walking one more row into a batch of its own.
+        if self.finishing_satisfied() {
+            return ScanOutcome::Finished(Ok(self.take_results()));
+        }
+
         // A scan holding a full batch stays where it is until the batch is taken, so the bound on
         // what one scan retains is the scan's own rather than a rule each driver keeps. Past the
         // stash threshold the result-size ceiling no longer bounds that growth either.
@@ -421,19 +464,26 @@ where
 
             // Rows bound for the stash are answered by a handle rather than by themselves, so the
             // ceiling on an inline answer does not apply to a prefix that has grown past the
-            // stash threshold.
-            if !batch_ready && self.total_size > self.max_result_size {
+            // stash threshold, nor to a scan whose first batch has already left: what that scan
+            // retains is bounded by the batch size, which may sit above the ceiling.
+            if !self.stash_bound && !batch_ready && self.total_size > self.max_result_size {
                 break self.fail(PeekError::ResultExceedsMaxSize {
                     max_result_size: self.max_result_size,
                 });
             }
 
+            // Positive here: the walk errors on a negative multiplicity rather than yielding it.
+            self.answer_rows = self.answer_rows.saturating_add(copies.get().unsigned_abs());
             self.results.push((row, copies));
 
             // Ahead of thinning, so that a row which both fills a batch and completes a thinned
             // answer leaves the peek to the stash rather than answering it from the prefix.
             if batch_ready {
                 break ScanOutcome::Suspended;
+            }
+
+            if self.finishing_satisfied() {
+                break ScanOutcome::Finished(Ok(self.take_results()));
             }
 
             if let Some(outcome) = self.thin() {
@@ -446,13 +496,16 @@ where
         outcome
     }
 
-    /// Thins the accumulated rows down towards the ones the peek's finishing needs, once the scan
-    /// holds many more than that.
+    /// Thins the accumulated rows down to the ones an ordered finishing ranks first, once the scan
+    /// holds many more than it needs.
     ///
-    /// Returns the outcome that ends the scan if thinning has produced every row the finishing
-    /// can use.
+    /// Does nothing without an ordering: such a scan ends at [`PeekScan::finishing_satisfied`]
+    /// instead of accumulating past its limit.
     fn thin(&mut self) -> Option<ScanOutcome> {
         let max_results = self.max_results?;
+        let Some(comparator) = &self.comparator else {
+            return None;
+        };
 
         // We use a threshold twice what we intend, to amortize the work across all of the
         // insertions. We could tighten this, but it works for the moment.
@@ -470,13 +523,6 @@ where
             return None;
         }
 
-        let Some(comparator) = &self.comparator else {
-            // Without an ordering, any `max_results` rows answer the peek, so the rows in hand are
-            // an answer and the rest of the trace does not have to be walked.
-            self.results.truncate(max_results);
-            return Some(ScanOutcome::Finished(Ok(self.take_results())));
-        };
-
         // We can sort `results` and then truncate to `max_results`. This has an effect similar to
         // a priority queue, without its interactive dequeueing properties.
         // TODO: Had we left these as `Vec<Datum>` we would avoid the unpacking; we should consider
@@ -490,12 +536,17 @@ where
         self.result_sort_time += sort_start.elapsed();
 
         let dropped = self.results.drain(max_results..);
-        let dropped_size = dropped
-            .into_iter()
-            .fold(0, |acc: usize, (row, _count): (Row, _)| {
-                acc.saturating_add(entry_byte_len(&row))
-            });
+        let (dropped_size, dropped_rows) = dropped.into_iter().fold(
+            (0usize, 0u64),
+            |(size, rows), (row, count): (Row, NonZeroI64)| {
+                (
+                    size.saturating_add(entry_byte_len(&row)),
+                    rows.saturating_add(count.get().unsigned_abs()),
+                )
+            },
+        );
         self.total_size = self.total_size.saturating_sub(dropped_size);
+        self.answer_rows = self.answer_rows.saturating_sub(dropped_rows);
 
         None
     }

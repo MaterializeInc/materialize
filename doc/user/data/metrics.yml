@@ -1144,6 +1144,10 @@ metrics:
   help: Time in seek_fulfillment method including frontier checks and data collection.
   source: src/compute/src/metrics.rs
   visibility: internal
+- name: mz_index_peek_stashed_total
+  help: The number of index peek walks that answered with a handle to the peek response stash, always a subset of the `offloaded` substrate of `mz_index_peek_walks_total`.
+  source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_index_peek_total_seconds_bucket
   help: Time one visit to an index peek spent on the timely worker. A peek whose walk was offloaded contributes only the inline slice that offloaded it, and its time away from the worker is `mz_index_peek_offload_seconds`.
   labels:
@@ -3708,25 +3712,6 @@ metrics:
   - build_type
   - version
   source: src/environmentd/src/environmentd/main.rs
-  visibility: internal
-- name: mz_stashed_peek_seconds_bucket
-  help: Time spent reading a peek result and stashing it in the peek result stash (aka. persist blob).
-  labels:
-  - le
-  - worker_id
-  source: src/compute/src/metrics.rs
-  visibility: internal
-- name: mz_stashed_peek_seconds_count
-  help: Time spent reading a peek result and stashing it in the peek result stash (aka. persist blob).
-  labels:
-  - worker_id
-  source: src/compute/src/metrics.rs
-  visibility: internal
-- name: mz_stashed_peek_seconds_sum
-  help: Time spent reading a peek result and stashing it in the peek result stash (aka. persist blob).
-  labels:
-  - worker_id
-  source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_statement_logging_actual_bytes
   help: The total amount of SQL text that was logged by statement logging.

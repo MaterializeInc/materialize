@@ -31,6 +31,20 @@ use super::*;
 /// The collection the peeks in these tests read.
 pub(crate) const TARGET_ID: GlobalId = GlobalId::User(1);
 
+/// A peek that may not use the stash.
+const NO_STASH: StashBounds = StashBounds {
+    eligible: false,
+    threshold_bytes: usize::MAX,
+    batch_bytes: 0,
+};
+
+/// A peek whose every row is bound for the stash.
+const STASH_EVERYTHING: StashBounds = StashBounds {
+    eligible: true,
+    threshold_bytes: 0,
+    batch_bytes: 0,
+};
+
 /// A trace agent over a trace holding exactly `batch`.
 ///
 /// The writer is dropped here, which seals the trace to the empty frontier. That is what lets
@@ -193,6 +207,7 @@ impl TestMetrics {
         BTreeMap::from([
             ("walks_inline", metrics.index_peek_walks_inline.get()),
             ("walks_offloaded", metrics.index_peek_walks_offloaded.get()),
+            ("walks_stashed", metrics.index_peek_stashed_total.get()),
             (
                 "error_scan_seconds",
                 metrics.index_peek_error_scan_seconds.get_sample_count(),
@@ -245,6 +260,7 @@ fn expected_observations(
     BTreeMap::from([
         ("walks_inline", walks_inline),
         ("walks_offloaded", 0),
+        ("walks_stashed", 0),
         ("error_scan_seconds", error_scan),
         ("cursor_setup_seconds", cursor_setup),
         ("row_iteration_seconds", rows),
@@ -262,7 +278,6 @@ fn expected_observations(
 #[derive(Debug, PartialEq)]
 enum Answer {
     NotReady,
-    UsePeekStash,
     Offload,
     Ready(PeekResponse),
 }
@@ -271,7 +286,6 @@ impl From<PeekStatus> for Answer {
     fn from(status: PeekStatus) -> Self {
         match status {
             PeekStatus::NotReady => Answer::NotReady,
-            PeekStatus::UsePeekStash => Answer::UsePeekStash,
             // The scan an offload carries has no comparison of its own. What is comparable
             // is that the walk left this driver rather than answering here.
             PeekStatus::Offload(_) => Answer::Offload,
@@ -318,8 +332,7 @@ fn a_completed_scan_answers_with_rows_and_reports_every_phase() {
 
     let answer = subject.collect_finished_data(
         u64::MAX,
-        false,
-        usize::MAX,
+        NO_STASH,
         None,
         &mut unbounded_fuel(),
         &metrics.as_metrics(),
@@ -345,8 +358,7 @@ fn an_error_answered_peek_reports_no_phase_timers() {
 
     let answer = subject.collect_finished_data(
         u64::MAX,
-        false,
-        usize::MAX,
+        NO_STASH,
         None,
         &mut unbounded_fuel(),
         &metrics.as_metrics(),
@@ -359,11 +371,14 @@ fn an_error_answered_peek_reports_no_phase_timers() {
     assert_eq!(metrics.observations(), expected_observations(1, 0, 0, 0));
 }
 
-/// A peek whose accumulated rows fill a batch is diverted to the stash rather than answered
-/// inline. The phases the walk did pass through are reported, and those only a peek answered
-/// inline reaches are not.
+/// A peek whose accumulated rows fill a batch leaves the worker, however much fuel the slice
+/// still had, and the walk it leaves with reports nothing.
+///
+/// A batch-ready suspension is an offload because the driver that finishes a walk is also the
+/// one that writes to the peek stash. Withholding it here would strand the peek: the scan
+/// makes no progress until its batch is taken, and this driver never takes one.
 #[mz_ore::test]
-fn a_scan_that_fills_a_batch_diverts_the_peek_to_the_stash() {
+fn a_scan_that_fills_a_batch_leaves_the_worker_with_fuel_to_spare() {
     let keys: Vec<Row> = (0..6).map(ok_row).collect();
     let mut subject = index_peek_over(
         index_peek(trivial_finishing(), None),
@@ -373,29 +388,25 @@ fn a_scan_that_fills_a_batch_diverts_the_peek_to_the_stash() {
     let metrics = TestMetrics::new();
 
     // A threshold of zero bytes is crossed by the first row, so the scan fills a batch well
-    // before the trace runs out.
+    // before the trace runs out and well before unbounded fuel could run out.
+    let mut fuel = unbounded_fuel();
     let answer = subject.collect_finished_data(
         u64::MAX,
-        true,
-        0,
+        STASH_EVERYTHING,
         None,
-        &mut unbounded_fuel(),
+        &mut fuel,
         &metrics.as_metrics(),
     );
 
-    assert_eq!(Answer::from(answer), Answer::UsePeekStash);
-    assert_eq!(metrics.observations(), expected_observations(1, 1, 1, 0));
+    assert_eq!(Answer::from(answer), Answer::Offload);
+    assert!(fuel > 0, "the slice stopped for the batch, not for fuel");
+    assert_eq!(metrics.observations(), expected_observations(0, 0, 0, 0));
 }
 
-/// A peek whose walk both fills a batch and runs out of fuel is diverted to the stash rather
-/// than offloaded, and the driver that diverted it accounts for the walk.
-///
-/// This is the livelock the placement policy is built around. An offloaded scan holding a full
-/// batch has nowhere to write it, so stepping it spends no fuel and advances no cursor, and a
-/// driver that resumed it would yield forever. The two causes of a suspension coincide here,
-/// which is the case an offload condition written as "the fuel ran out" would get wrong.
+/// A peek whose walk both fills a batch and runs out of fuel leaves the worker exactly as one
+/// that did only the first, so the two causes of a suspension need no telling apart.
 #[mz_ore::test]
-fn a_batch_ready_suspension_is_diverted_rather_than_offloaded() {
+fn a_batch_ready_suspension_out_of_fuel_is_offloaded_too() {
     let keys: Vec<Row> = (0..6).map(ok_row).collect();
     let mut subject = index_peek_over(
         index_peek(trivial_finishing(), None),
@@ -409,15 +420,20 @@ fn a_batch_ready_suspension_is_diverted_rather_than_offloaded() {
     // suspends holding a full batch and out of fuel, with both causes of a suspension in force
     // at once.
     let mut fuel = 1;
-    let answer =
-        subject.collect_finished_data(u64::MAX, true, 0, None, &mut fuel, &metrics.as_metrics());
-    assert_eq!(Answer::from(answer), Answer::UsePeekStash);
+    let answer = subject.collect_finished_data(
+        u64::MAX,
+        STASH_EVERYTHING,
+        None,
+        &mut fuel,
+        &metrics.as_metrics(),
+    );
+    assert_eq!(Answer::from(answer), Answer::Offload);
     assert_eq!(fuel, 0, "the slice spent every position it was given");
-    assert_eq!(metrics.observations(), expected_observations(1, 1, 1, 0));
+    assert_eq!(metrics.observations(), expected_observations(0, 0, 0, 0));
 }
 
 /// A peek whose walk outruns the fuel it was granted leaves the worker rather than being
-/// answered or diverted, and the walk it leaves with reports nothing.
+/// answered, and the walk it leaves with reports nothing.
 ///
 /// Reporting here as well as in the driver that finishes the walk would count one walk twice,
 /// on both substrates and in every phase histogram, and the numbers a scan carries are
@@ -435,14 +451,8 @@ fn a_scan_that_outruns_its_fuel_leaves_the_worker_reporting_nothing() {
     // An empty error trace is walked out within a position or two, so this fuel is spent
     // inside the ok walk with most of the six keys still ahead of it.
     let mut fuel = 2;
-    let answer = subject.collect_finished_data(
-        u64::MAX,
-        false,
-        usize::MAX,
-        None,
-        &mut fuel,
-        &metrics.as_metrics(),
-    );
+    let answer =
+        subject.collect_finished_data(u64::MAX, NO_STASH, None, &mut fuel, &metrics.as_metrics());
 
     assert_eq!(Answer::from(answer), Answer::Offload);
     assert_eq!(
@@ -474,8 +484,7 @@ fn an_ok_phase_failure_reports_the_phases_the_walk_reached() {
     let max_result_size = 1;
     let answer = subject.collect_finished_data(
         max_result_size,
-        false,
-        usize::MAX,
+        NO_STASH,
         None,
         &mut unbounded_fuel(),
         &metrics.as_metrics(),

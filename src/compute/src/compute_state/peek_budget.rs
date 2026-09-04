@@ -33,11 +33,9 @@ impl InlineBudgetConfig {
             return ActivationBudget::Unbounded;
         }
 
-        // Both floors keep the parameters monotone down to zero rather than wedging there. A
-        // per-peek budget of zero suspends every scan before it walks a position, and a suspension
-        // holding no full batch is an offload, so every point lookup would pay for a task and a
-        // permit to walk nothing. An aggregate of zero passes every peek over on every activation,
-        // and the activation a passed-over peek asks for finds the same empty budget.
+        // Zero must not wedge. A per-peek budget of zero suspends every scan before it walks a
+        // position, and every suspension is an offload, so point lookups would pay for a task and
+        // a permit to walk nothing. An aggregate of zero passes every peek over forever.
         ActivationBudget::Bounded {
             per_peek: self.per_peek.get().max(1),
             remaining: self.aggregate.get().max(1),
@@ -54,10 +52,12 @@ impl InlineBudgetConfig {
 ///
 /// Both count cursor positions, the unit the scan charges.
 enum ActivationBudget {
-    /// Every peek walks to completion where it started, and nothing is offloaded or passed over.
+    /// Every peek walks on the worker until it answers or until its rows belong in the peek stash,
+    /// and nothing is passed over.
     ///
-    /// What the kill switch restores. A scan suspends only out of fuel or holding a full batch,
-    /// so unbounded fuel leaves the batch as the only suspension and the peek takes the stash.
+    /// What the kill switch restores. A stash-bound peek still offloads, because the driver that
+    /// writes to the stash is the offloaded one, so this restores where an ordinary peek runs and
+    /// not a guarantee that none leaves the worker.
     Unbounded,
     /// A peek may spend `per_peek` before it is offloaded, and all peeks together may spend
     /// `remaining` before the rest of this activation's work gets the worker back.

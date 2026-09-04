@@ -64,11 +64,16 @@ fn expected(values: impl IntoIterator<Item = u64>) -> RowBatch {
         .collect()
 }
 
-/// A walk over an ok trace holding `keys`.
+/// A walk over an ok trace holding `keys`, each once.
 fn ok_iterator(keys: &[Row]) -> PeekResultIterator<TestTrace> {
+    ok_iterator_with_copies(keys, Diff::ONE)
+}
+
+/// A walk over an ok trace holding `copies` of each of `keys`.
+fn ok_iterator_with_copies(keys: &[Row], copies: Diff) -> PeekResultIterator<TestTrace> {
     let updates: Vec<((Row, Row), Timestamp, Diff)> = keys
         .iter()
-        .map(|key| ((key.clone(), Row::default()), Timestamp::MIN, Diff::ONE))
+        .map(|key| ((key.clone(), Row::default()), Timestamp::MIN, copies))
         .collect();
     let mut batcher = OrdValBatcher::<Row, Row, Timestamp, Diff>::new(None, 0);
     batcher.push_into(updates);
@@ -114,9 +119,14 @@ fn scan(error_phase: ErrorPhase, keys: &[Row]) -> PeekScan<TestTrace> {
         ended: None,
         results: Vec::new(),
         total_size: 0,
+        answer_rows: 0,
         max_result_size: usize::MAX,
-        peek_stash_eligible: false,
-        peek_stash_threshold_bytes: usize::MAX,
+        stash: StashBounds {
+            eligible: false,
+            threshold_bytes: usize::MAX,
+            batch_bytes: 0,
+        },
+        stash_bound: false,
         max_results: None,
         comparator: None,
         error_scan_time: Duration::ZERO,
@@ -251,9 +261,9 @@ fn the_row_iteration_limit_spans_both_phases() {
 fn take_batch_yields_only_past_the_stash_threshold() {
     let keys = rows(0..8);
     let mut subject = scan(ErrorPhase::Clean, &keys);
-    subject.peek_stash_eligible = true;
+    subject.stash.eligible = true;
     // Crossed by the fourth row, which leaves rows on either side of it.
-    subject.peek_stash_threshold_bytes = 3 * row_size();
+    subject.stash.threshold_bytes = 3 * row_size();
 
     let mut fuel = 2;
     assert_eq!(subject.step(None, &mut fuel), ScanOutcome::Suspended);
@@ -285,9 +295,9 @@ fn take_batch_yields_only_past_the_stash_threshold() {
 fn a_batch_ready_scan_does_not_grow_when_stepped_again() {
     let keys = rows(0..8);
     let mut subject = scan(ErrorPhase::Clean, &keys);
-    subject.peek_stash_eligible = true;
+    subject.stash.eligible = true;
     // Crossed by the third row, which leaves rows behind it in the trace.
-    subject.peek_stash_threshold_bytes = 2 * row_size();
+    subject.stash.threshold_bytes = 2 * row_size();
 
     let mut fuel = usize::MAX;
     assert_eq!(subject.step(None, &mut fuel), ScanOutcome::Suspended);
@@ -366,8 +376,8 @@ fn take_batch_yields_nothing_without_the_stash() {
     let mut subject = scan(ErrorPhase::Clean, &keys);
     // Every row crosses a zero threshold, so eligibility is the only thing that can keep the
     // scan from offering a batch.
-    assert!(!subject.peek_stash_eligible);
-    subject.peek_stash_threshold_bytes = 0;
+    assert!(!subject.stash.eligible);
+    subject.stash.threshold_bytes = 0;
 
     let mut fuel = usize::MAX;
     assert_eq!(
@@ -381,10 +391,10 @@ fn take_batch_yields_nothing_without_the_stash() {
     );
 }
 
-/// A finishing that imposes no ordering is answered by any `max_results` rows, so thinning
-/// truncates and the scan stops rather than walking the rest of the trace.
+/// A finishing that imposes no ordering is answered by any `max_results` rows, so the scan ends
+/// as soon as it holds that many rather than walking the rest of the trace.
 #[mz_ore::test]
-fn unordered_thinning_truncates_and_ends_the_scan() {
+fn unordered_thinning_ends_the_scan_at_the_limit() {
     let keys = rows(0..10);
     let mut subject = scan(ErrorPhase::Clean, &keys);
     subject.max_results = Some(2);
@@ -396,12 +406,40 @@ fn unordered_thinning_truncates_and_ends_the_scan() {
     );
     assert_eq!(
         subject.rows_processed(),
-        4,
-        "the scan must stop at the threshold rather than walk the trace out"
+        2,
+        "the scan must stop at the limit rather than walk the trace out"
     );
     assert_eq!(
         subject.total_size, 0,
         "the size accounted to rows that have left the scan must not stay behind"
+    );
+}
+
+/// The finishing's limit counts a row as often as the answer holds it, so a trace of few rows at
+/// a high multiplicity reaches the limit in fewer cursor positions than it has rows.
+#[mz_ore::test]
+fn the_limit_counts_copies_rather_than_distinct_rows() {
+    let keys = rows(0..10);
+    let mut subject = scan(ErrorPhase::Clean, &keys);
+    subject.oks = ok_iterator_with_copies(&keys, Diff::from(4));
+    subject.max_results = Some(6);
+
+    let mut fuel = usize::MAX;
+    let ScanOutcome::Finished(Ok(answer)) = subject.step(None, &mut fuel) else {
+        panic!("a scan that reaches its limit finishes");
+    };
+    assert_eq!(
+        answer,
+        vec![
+            (row(0), NonZeroI64::new(4).expect("non-zero")),
+            (row(1), NonZeroI64::new(4).expect("non-zero")),
+        ],
+        "the row that crosses the limit is answered with whole"
+    );
+    assert_eq!(
+        subject.rows_processed(),
+        2,
+        "eight copies of two rows is past a limit of six, so the walk stops there"
     );
 }
 
@@ -464,8 +502,8 @@ fn a_prefix_bound_for_the_stash_is_not_bound_by_the_result_size_ceiling() {
     let keys = rows(0..8);
     let mut subject = scan(ErrorPhase::Clean, &keys);
     subject.max_result_size = 3 * row_size();
-    subject.peek_stash_eligible = true;
-    subject.peek_stash_threshold_bytes = 2 * row_size();
+    subject.stash.eligible = true;
+    subject.stash.threshold_bytes = 2 * row_size();
 
     let mut collected = RowBatch::new();
     let mut completed = false;
@@ -493,6 +531,68 @@ fn a_prefix_bound_for_the_stash_is_not_bound_by_the_result_size_ceiling() {
     assert_eq!(collected, expected(0..8));
 }
 
+/// Once a batch has left, the ceiling on an inline answer no longer applies to what the scan
+/// retains, which the batch size bounds instead and may put above the ceiling.
+#[mz_ore::test]
+fn a_batch_size_above_the_ceiling_does_not_fail_a_stash_bound_scan() {
+    let keys = rows(0..8);
+    let mut subject = scan(ErrorPhase::Clean, &keys);
+    subject.max_result_size = 3 * row_size();
+    subject.stash.eligible = true;
+    subject.stash.threshold_bytes = 2 * row_size();
+    subject.stash.batch_bytes = 5 * row_size();
+
+    let mut fuel = usize::MAX;
+    assert_eq!(subject.step(None, &mut fuel), ScanOutcome::Suspended);
+    assert_eq!(subject.take_batch().expect("a full batch").len(), 3);
+
+    // The five rows left fit under the batch size and over the ceiling, so they end the walk in
+    // hand rather than failing it.
+    let mut fuel = usize::MAX;
+    assert_eq!(
+        subject.step(None, &mut fuel),
+        ScanOutcome::Finished(Ok(expected(3..8)))
+    );
+}
+
+/// The first batch is cut at the stash threshold, which decides that the answer is not an inline
+/// one, and every later batch at the batch size, so the placement decision and the size of a
+/// hand-over are set apart.
+#[mz_ore::test]
+fn later_batches_are_cut_at_the_batch_size_rather_than_the_threshold() {
+    let keys = rows(0..12);
+    let mut subject = scan(ErrorPhase::Clean, &keys);
+    subject.stash.eligible = true;
+    subject.stash.threshold_bytes = 2 * row_size();
+    subject.stash.batch_bytes = 4 * row_size();
+
+    let mut batches = Vec::new();
+    let mut rest = None;
+    for _ in 0..RESUMPTION_BOUND {
+        let mut fuel = usize::MAX;
+        match subject.step(None, &mut fuel) {
+            ScanOutcome::Suspended => batches.push(subject.take_batch().expect("a full batch")),
+            ScanOutcome::Finished(Ok(rows)) => {
+                rest = Some(rows);
+                break;
+            }
+            ScanOutcome::Finished(Err(error)) => panic!("scan failed: {error:?}"),
+        }
+    }
+    let rest = rest.expect("the scan must finish");
+
+    // Three rows cross a two-row threshold, five cross a four-row batch size, and the four that
+    // remain cross neither.
+    assert_eq!(
+        batches.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![3, 5],
+        "the first batch is threshold-sized and the next batch-sized"
+    );
+    assert_eq!(rest.len(), 4);
+    let collected: RowBatch = batches.into_iter().flatten().chain(rest).collect();
+    assert_eq!(collected, expected(0..12));
+}
+
 /// Opens a scan of `peek` over `bundle`, the way the peek path opens one: through
 /// [`PeekScan::new`], from the pair of handles [`TraceBundle::oks_errs_mut`] hands out.
 fn open(
@@ -508,8 +608,11 @@ fn open(
         errs,
         oks,
         max_result_size,
-        peek_stash_eligible,
-        peek_stash_threshold_bytes,
+        StashBounds {
+            eligible: peek_stash_eligible,
+            threshold_bytes: peek_stash_threshold_bytes,
+            batch_bytes: 0,
+        },
     )
 }
 
