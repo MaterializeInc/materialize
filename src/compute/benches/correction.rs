@@ -41,7 +41,7 @@ use timely::progress::Antichain;
 /// Default value of `compute_correction_v2_chain_proportionality`.
 const CHAIN_PROPORTIONALITY: f64 = 3.0;
 /// Default value of `compute_correction_v2_chunk_size`.
-const CHUNK_SIZE: usize = 8 * 1024;
+const CHUNK_SIZE: usize = 2 * 1024 * 1024;
 /// Default value of `consolidating_vec_growth_dampener`.
 const GROWTH_DAMPENER: usize = 1;
 
@@ -146,6 +146,14 @@ fn sink_metrics() -> SinkMetrics {
 }
 
 fn make_correction(version: Version, metrics: &SinkMetrics) -> Corr {
+    make_correction_with(version, metrics, CHUNK_SIZE)
+}
+
+/// Construct a correction buffer with an explicit `compute_correction_v2_chunk_size`.
+///
+/// The setting sizes V2's staging vector, so it controls how many updates accumulate before a
+/// chain is minted and pushed into the bucket chain. V1 ignores it.
+fn make_correction_with(version: Version, metrics: &SinkMetrics, chunk_size: usize) -> Corr {
     let worker_metrics = metrics.for_worker(0);
     match version {
         Version::V1 => Corr::V1(CorrectionV1::new(
@@ -158,7 +166,7 @@ fn make_correction(version: Version, metrics: &SinkMetrics) -> Corr {
             worker_metrics,
             None,
             CHAIN_PROPORTIONALITY,
-            CHUNK_SIZE,
+            chunk_size,
         )),
     }
 }
@@ -348,5 +356,64 @@ fn bench_correction(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_correction);
+/// Sweep `compute_correction_v2_chunk_size` against V2's insert and drain paths.
+///
+/// NOTE: the largest sizes here exceed the whole workload, so nothing ships during insert and
+/// the work moves to drain. Read the two halves of a large size's result together, or the
+/// insert number reads as a speedup that is really deferred work.
+fn bench_chunk_size(c: &mut Criterion) {
+    let metrics = sink_metrics();
+    let num_ts = 16384;
+    let pattern = Pattern::Append;
+    let batches = make_batches(num_ts, pattern);
+
+    let mut group = c.benchmark_group(format!("correction_chunk_size/{}", pattern.name()));
+    configure(&mut group);
+    for chunk_size in [
+        8 * 1024,
+        64 * 1024,
+        256 * 1024,
+        1024 * 1024,
+        4 * 1024 * 1024,
+        16 * 1024 * 1024,
+        64 * 1024 * 1024,
+    ] {
+        let label = format!("{}KiB", chunk_size / 1024);
+
+        group.bench_function(BenchmarkId::new(format!("insert/{label}"), num_ts), |b| {
+            b.iter_batched(
+                || {
+                    (
+                        make_correction_with(Version::V2, &metrics, chunk_size),
+                        batches.clone(),
+                    )
+                },
+                |(mut correction, mut batches)| {
+                    for batch in &mut batches {
+                        correction.insert(batch);
+                    }
+                    correction
+                },
+                BatchSize::PerIteration,
+            )
+        });
+
+        group.bench_function(BenchmarkId::new(format!("drain/{label}"), num_ts), |b| {
+            b.iter_batched(
+                || {
+                    let mut correction = make_correction_with(Version::V2, &metrics, chunk_size);
+                    for batch in &batches {
+                        correction.insert(&mut batch.clone());
+                    }
+                    correction
+                },
+                |correction| drain_stepwise(correction, num_ts),
+                BatchSize::PerIteration,
+            )
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_correction, bench_chunk_size);
 criterion_main!(benches);
