@@ -59,6 +59,12 @@ pub(super) async fn purify_source_exports(
     requested_references: &Option<ExternalReferences>,
     text_columns: &[UnresolvedItemName],
     excl_columns: &[UnresolvedItemName],
+    // NOTE: `exclude_constraints` and `exclude_all_constraints` are only ever
+    // non-empty/true for `CREATE TABLE .. FROM SOURCE`, which purifies exactly
+    // one export, so constraint names are validated against that single
+    // table's constraints.
+    exclude_constraints: &BTreeSet<String>,
+    exclude_all_constraints: bool,
     unresolved_source_name: &UnresolvedItemName,
     timeout: Duration,
     reference_policy: &SourceReferencePolicy,
@@ -259,6 +265,40 @@ pub(super) async fn purify_source_exports(
             Err(SqlServerSourcePurificationError::AllColumnsExcluded {
                 tbl_name: Arc::clone(&table.name),
             })?
+        }
+
+        // Validate requested constraint names against the table's full
+        // constraint set, then prune. An excluded constraint is never recorded
+        // as a key, so it does not become a Materialize relation key.
+        let dangling_constraints: Vec<_> = exclude_constraints
+            .iter()
+            .filter(|n| !table.constraints.iter().any(|c| &&c.constraint_name == n))
+            .cloned()
+            .collect();
+        if !dangling_constraints.is_empty() {
+            return Err(
+                SqlServerSourcePurificationError::DanglingExcludeConstraints {
+                    table: format!("{}.{}", table.schema_name, table.name),
+                    constraints: dangling_constraints,
+                }
+                .into(),
+            );
+        }
+        table
+            .constraints
+            .retain(|c| !exclude_constraints.contains(&c.constraint_name));
+        if exclude_all_constraints {
+            // No keys, and every column ingested as nullable. NOTE: unlike
+            // Postgres and MySQL, SQL Server detects incompatible upstream
+            // DDL via a textual scan of cdc.ddl_history rather than the
+            // descriptor, so an upstream ALTER COLUMN (including NOT NULL
+            // changes) still errors the table regardless of this option.
+            table.constraints.clear();
+            for column in &mut table.columns {
+                if let Some(column_type) = &mut column.column_type {
+                    column_type.nullable = true;
+                }
+            }
         }
 
         tables.push(requested.change_meta(table));
