@@ -400,7 +400,6 @@ cleanup() {
 
   if [ ! -s services.log ] \
     && [ "$BUILDKITE_LABEL" != ":rust: cargo-fuzz" ] \
-    && [ "$BUILDKITE_LABEL" != ":rust: Cargo bench against ancestor" ] \
     && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist" ] \
     && [ "$BUILDKITE_LABEL" != "Long single-node Maelstrom coverage of persist" ] \
     && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of txn-wal" ] \
@@ -413,7 +412,8 @@ cleanup() {
     && [ "$BUILDKITE_LABEL" != ":rust: Miri test (full)" ] \
     && [[ ! "$BUILDKITE_LABEL" =~ Terraform\ .* ]] \
     && [[ ! "$BUILDKITE_LABEL" =~ Orchestratord\ .* ]] \
-    && [[ ! "$BUILDKITE_LABEL" =~ Cluster\ spec\ sheet.* ]]; then
+    && [[ ! "$BUILDKITE_LABEL" =~ Cluster\ spec\ sheet.* ]] \
+    && [[ ! "$BUILDKITE_LABEL" =~ ^:rust:\ Cargo\ bench\ against\ ancestor ]]; then
       echo "+++ services.log is empty, failing"
       if [[ $CI_ANNOTATE_ERRORS_RESULT -ne 0 ]]; then
         # Keep the retryable code (128 for GHCR/DockerHub trouble, 199 for a

@@ -297,6 +297,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if not head_targets:
         raise RuntimeError("no bench targets found")
 
+    packages = sorted({t.package for t in head_targets})
+    # Sharding by package rather than by target keeps each shard to one
+    # dependency closure per checkout.
+    shard_packages = buildkite.shard_list(packages, lambda p: p)
+    if not shard_packages:
+        print("--- No bench packages assigned to this shard")
+        return
+    print(f"--- Bench packages in this shard: {', '.join(shard_packages)}")
+    head_targets = [t for t in head_targets if t.package in shard_packages]
+
     criterion_home = target_dir() / "criterion-compare"
     # Stale baselines from an earlier run would silently become the
     # comparison target, so start from an empty directory every time.
@@ -351,7 +361,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 env, CARGO_TARGET_DIR=str(target_dir() / "cargo-bench-ancestor")
             )
             ancestor_targets, ancestor_manifests = load_targets(
-                worktree, args.package, ancestor_env
+                worktree, shard_packages, ancestor_env
             )
             # Building ancestor before HEAD lets both build phases run at
             # full core parallelism back to back, then the run phase below
@@ -397,7 +407,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     failed = report.has_regressions or bool(current_failures)
     if buildkite.is_in_buildkite():
         buildkite.add_annotation(
-            "error" if failed else "info", "Cargo bench results", markdown
+            "error" if failed else "info",
+            f"Cargo bench results ({', '.join(shard_packages)})",
+            markdown,
         )
         try:
             spawn.runv(
