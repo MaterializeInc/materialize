@@ -86,84 +86,100 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 mut val_plan,
             } = key_val_plan;
             let key_arity = key_plan.projection.len();
-            let mut datums = DatumVec::new();
 
-            // Determine the columns we'll need from the row.
-            let mut demand = Vec::new();
-            demand.extend(key_plan.demand());
-            demand.extend(val_plan.demand());
-            demand.sort();
-            demand.dedup();
+            // A key that is the whole input row with no value columns (a distinct on all columns,
+            // or a count over them) needs no key formation: the row is the key. Decoding and
+            // re-encoding every row would cost about as much as decoding it from persist did.
+            let identity_key = key_plan.is_identity()
+                && val_plan.expressions.is_empty()
+                && val_plan.predicates.is_empty()
+                && val_plan.projection.is_empty();
 
-            // remap column references to the subset we use.
-            let mut demand_map = BTreeMap::new();
-            for column in demand.iter() {
-                demand_map.insert(*column, demand_map.len());
-            }
-            let demand_map_len = demand_map.len();
-            key_plan.permute_fn(|c| demand_map[&c], demand_map_len);
-            val_plan.permute_fn(|c| demand_map[&c], demand_map_len);
-            let max_demand = demand.iter().max().map(|x| *x + 1).unwrap_or(0);
-            let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
+            let (key_val_collection, err) = if identity_key {
+                let (oks, errs) = input
+                    .enter_region(inner)
+                    .as_specific_collection(input_key.as_deref(), &self.config_set);
+                (oks.map(|row| (row, Row::default())), errs)
+            } else {
+                let mut datums = DatumVec::new();
 
-            let (key_val_input, err) = input
-                .enter_region(inner)
-                .flat_map::<_, ConsolidatingContainerBuilder<Vec<((Row, Row), T, Diff)>>, _>(
-                    input_key.map(|k| (k, None)),
-                    max_demand,
-                    move |row_datums, time, diff, ok_session, err_session| {
-                        let mut row_builder = SharedRow::get();
-                        let temp_storage = RowArena::new();
+                // Determine the columns we'll need from the row.
+                let mut demand = Vec::new();
+                demand.extend(key_plan.demand());
+                demand.extend(val_plan.demand());
+                demand.sort();
+                demand.dedup();
 
-                        let mut row_iter = row_datums.drain(..);
-                        let mut datums_local = datums.borrow();
-                        // Unpack only the demanded columns.
-                        for skip in skips.iter() {
-                            datums_local.push(row_iter.nth(*skip).unwrap());
-                        }
+                // remap column references to the subset we use.
+                let mut demand_map = BTreeMap::new();
+                for column in demand.iter() {
+                    demand_map.insert(*column, demand_map.len());
+                }
+                let demand_map_len = demand_map.len();
+                key_plan.permute_fn(|c| demand_map[&c], demand_map_len);
+                val_plan.permute_fn(|c| demand_map[&c], demand_map_len);
+                let max_demand = demand.iter().max().map(|x| *x + 1).unwrap_or(0);
+                let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
 
-                        // Evaluate the key expressions.
-                        let key = key_plan.evaluate_into(
-                            &mut datums_local,
-                            &temp_storage,
-                            &mut row_builder,
-                        );
-                        let key = match key {
-                            Err(e) => {
-                                err_session.give((e.into(), time, diff));
-                                return 1;
+                let (key_val_input, err) = input
+                    .enter_region(inner)
+                    .flat_map::<_, ConsolidatingContainerBuilder<Vec<((Row, Row), T, Diff)>>, _>(
+                        input_key.map(|k| (k, None)),
+                        max_demand,
+                        move |row_datums, time, diff, ok_session, err_session| {
+                            let mut row_builder = SharedRow::get();
+                            let temp_storage = RowArena::new();
+
+                            let mut row_iter = row_datums.drain(..);
+                            let mut datums_local = datums.borrow();
+                            // Unpack only the demanded columns.
+                            for skip in skips.iter() {
+                                datums_local.push(row_iter.nth(*skip).unwrap());
                             }
-                            Ok(Some(key)) => key.clone(),
-                            Ok(None) => panic!("Row expected as no predicate was used"),
-                        };
 
-                        // Evaluate the value expressions.
-                        // The prior evaluation may have left additional columns we should delete.
-                        datums_local.truncate(skips.len());
-                        let val = val_plan.evaluate_into(
-                            &mut datums_local,
-                            &temp_storage,
-                            &mut row_builder,
-                        );
-                        let val = match val {
-                            Err(e) => {
-                                err_session.give((e.into(), time, diff));
-                                return 1;
-                            }
-                            Ok(Some(val)) => val.clone(),
-                            Ok(None) => panic!("Row expected as no predicate was used"),
-                        };
+                            // Evaluate the key expressions.
+                            let key = key_plan.evaluate_into(
+                                &mut datums_local,
+                                &temp_storage,
+                                &mut row_builder,
+                            );
+                            let key = match key {
+                                Err(e) => {
+                                    err_session.give((e.into(), time, diff));
+                                    return 1;
+                                }
+                                Ok(Some(key)) => key.clone(),
+                                Ok(None) => panic!("Row expected as no predicate was used"),
+                            };
 
-                        ok_session.give(((key, val), time, diff));
-                        1
-                    },
-                );
+                            // Evaluate the value expressions.
+                            // The prior evaluation may have left additional columns we should delete.
+                            datums_local.truncate(skips.len());
+                            let val = val_plan.evaluate_into(
+                                &mut datums_local,
+                                &temp_storage,
+                                &mut row_builder,
+                            );
+                            let val = match val {
+                                Err(e) => {
+                                    err_session.give((e.into(), time, diff));
+                                    return 1;
+                                }
+                                Ok(Some(val)) => val.clone(),
+                                Ok(None) => panic!("Row expected as no predicate was used"),
+                            };
+
+                            ok_session.give(((key, val), time, diff));
+                            1
+                        },
+                    );
+                (key_val_input.as_collection(), err)
+            };
 
             // Bucket the keyed `(key, val)` stream when lowering chose `TemporalBucketing`.
             // `Reduce` builds its own arrangement via `KeyValPlan`, bypassing
             // `ensure_collections`, so the strategy is plumbed through `PlanNode::Reduce`
             // rather than inferred at the arrangement site. No-op for `Direct`.
-            let key_val_collection = key_val_input.as_collection();
             let key_val_collection = if matches!(
                 temporal_bucketing_strategy,
                 ArrangementStrategy::TemporalBucketing
