@@ -415,17 +415,23 @@ where
                     "applied pushed diff {}. seqno {} -> {}.",
                     state.shard_id, seqno_before, state.seqno
                 );
-                self.shard_metrics.pubsub_push_diff_applied.inc();
+                self.metrics.pubsub_client.receiver.diff_applied.inc();
             } else {
                 debug!(
                     "failed to apply pushed diff {}. seqno {} vs diff {}",
                     state.shard_id, seqno_before, diff.seqno
                 );
                 if diff.seqno <= seqno_before {
-                    self.shard_metrics.pubsub_push_diff_not_applied_stale.inc();
+                    self.metrics
+                        .pubsub_client
+                        .receiver
+                        .diff_not_applied_stale
+                        .inc();
                 } else {
-                    self.shard_metrics
-                        .pubsub_push_diff_not_applied_out_of_order
+                    self.metrics
+                        .pubsub_client
+                        .receiver
+                        .diff_not_applied_out_of_order
                         .inc();
                 }
             }

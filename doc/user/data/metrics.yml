@@ -1688,24 +1688,15 @@ metrics:
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_backpressure_emitted_bytes
-  help: A counter with the number of emitted bytes.
-  labels:
-  - name
-  - shard
+  help: bytes emitted by backpressure operators
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_backpressure_last_backpressured_bytes
-  help: The last count of bytes we are waiting to be retired in the operator. This cannot be directly compared to `retired_bytes`, but CAN indicate that backpressure is happening.
-  labels:
-  - name
-  - shard
+  help: sum over backpressure operators of the inflight bytes each last stalled on; not comparable to retired bytes, but nonzero growth indicates backpressure is happening
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_backpressure_retired_bytes
-  help: A counter with the number of bytes retired by downstream processing.
-  labels:
-  - name
-  - shard
+  help: bytes retired by processing downstream of backpressure operators
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_blob_cache_evictions
@@ -2240,6 +2231,18 @@ metrics:
   help: count of grpc errors received
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
+- name: mz_persist_pubsub_client_receiver_diff_applied
+  help: number of diffs received via pubsub that applied
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_pubsub_client_receiver_diff_not_applied_out_of_order
+  help: number of diffs received via pubsub that did not apply due to out-of-order delivery
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_pubsub_client_receiver_diff_not_applied_stale
+  help: number of diffs received via pubsub that did not apply due to staleness
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_pubsub_client_receiver_state_push_diff_fast_path
   help: count fast-path state push_diff calls
   source: src/persist-client/src/internal/metrics.rs
@@ -2518,14 +2521,6 @@ metrics:
   - shard
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
-- name: mz_persist_shard_batch_part_version_bytes
-  help: total bytes in batch parts by shard and version
-  labels:
-  - name
-  - shard
-  - version
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
 - name: mz_persist_shard_batch_part_version_count
   help: count of batch parts by shard and version
   labels:
@@ -2615,20 +2610,6 @@ metrics:
   - shard
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
-- name: mz_persist_shard_inline_backpressure_count
-  help: count of CaA attempts retried because of inline backpressure
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_inline_part_bytes
-  help: total size of parts inline in shard metadata
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
 - name: mz_persist_shard_inline_part_count
   help: count of parts inline in shard metadata
   labels:
@@ -2643,43 +2624,8 @@ metrics:
   - shard
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
-- name: mz_persist_shard_live_writers
-  help: number of writers that have recently appended updates to this shard
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
 - name: mz_persist_shard_noncompact_batches
   help: number of batches in the shard that aren't compact and have no ongoing compaction
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_pubsub_diff_applied
-  help: number of diffs received via pubsub that applied
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_pubsub_diff_not_applied_out_of_order
-  help: number of diffs received via pubsub that did not apply due to out-of-order delivery
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_pubsub_diff_not_applied_stale
-  help: number of diffs received via pubsub that did not apply due to staleness
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_rewrite_part_count
-  help: count of batch parts with rewrites by shard
   labels:
   - name
   - shard
@@ -2699,13 +2645,6 @@ metrics:
   - shard
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
-- name: mz_persist_shard_schema_registry_version_count
-  help: count of versions in the schema registry
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
 - name: mz_persist_shard_seqnos_held
   help: maximum count of gc-ineligible states by shard
   labels:
@@ -2720,22 +2659,8 @@ metrics:
   - shard
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
-- name: mz_persist_shard_since
-  help: since by shard
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
 - name: mz_persist_shard_spine_batch_count
   help: count of spine batches by shard
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_stale_version
-  help: indicates whether the current version of the shard is less than the current version of the code
   labels:
   - name
   - shard
@@ -2750,13 +2675,6 @@ metrics:
   visibility: internal
 - name: mz_persist_shard_update_count
   help: count of updates by shard
-  labels:
-  - name
-  - shard
-  source: src/persist-client/src/internal/metrics.rs
-  visibility: internal
-- name: mz_persist_shard_upper
-  help: upper by shard
   labels:
   - name
   - shard

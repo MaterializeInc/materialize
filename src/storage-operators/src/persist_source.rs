@@ -64,7 +64,7 @@ use timely::scheduling::Activator;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{error, trace};
 
-use crate::metrics::BackpressureMetrics;
+use crate::metrics::BackpressureOperatorMetrics;
 
 /// This opaque token represents progress within a timestamp, allowing finer-grained frontier
 /// progress than would otherwise be possible.
@@ -188,21 +188,18 @@ pub fn persist_source<'scope, E>(
 where
     E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
 {
-    let shard_metrics = persist_clients.shard_metrics(&metadata.data_shard, &source_id.to_string());
-
     let mut tokens = vec![];
 
     let outer = scope.clone();
     let stream = scope.scoped(&format!("granular_backpressure({})", source_id), |scope| {
         let (flow_control, flow_control_probe) = match max_inflight_bytes {
             Some(max_inflight_bytes) => {
-                let backpressure_metrics = BackpressureMetrics {
-                    emitted_bytes: Arc::clone(&shard_metrics.backpressure_emitted_bytes),
-                    last_backpressured_bytes: Arc::clone(
-                        &shard_metrics.backpressure_last_backpressured_bytes,
-                    ),
-                    retired_bytes: Arc::clone(&shard_metrics.backpressure_retired_bytes),
-                };
+                let series = &persist_clients.metrics().backpressure;
+                let backpressure_metrics = BackpressureOperatorMetrics::new(
+                    series.emitted_bytes.clone(),
+                    series.last_backpressured_bytes.clone(),
+                    series.retired_bytes.clone(),
+                );
 
                 let probe = mz_timely_util::probe::Handle::default();
                 let progress_stream = mz_timely_util::probe::source(
@@ -773,7 +770,7 @@ pub struct FlowControl<'scope, T: timely::progress::Timestamp> {
     pub summary: T::Summary,
 
     /// Optional metrics for the `backpressure` operator to keep up-to-date.
-    pub metrics: Option<BackpressureMetrics>,
+    pub metrics: Option<BackpressureOperatorMetrics>,
 }
 
 /// Apply flow control to the `data` input, based on the given `FlowControl`.

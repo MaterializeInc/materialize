@@ -25,8 +25,7 @@ use mz_ore::instrument;
 use mz_ore::metric;
 use mz_ore::metrics::{
     ComputedGauge, ComputedIntGauge, ComputedUIntGauge, Counter, DeleteOnDropCounter,
-    DeleteOnDropGauge, IntCounter, MakeCollector, MetricVecExt, MetricsRegistry, UIntGauge,
-    UIntGaugeVec, raw,
+    DeleteOnDropGauge, IntCounter, MakeCollector, MetricsRegistry, UIntGauge, UIntGaugeVec, raw,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
@@ -36,7 +35,7 @@ use mz_persist::metrics::{BlobHedgeMetrics, ColumnarMetrics, S3BlobMetrics};
 use mz_persist::retry::RetryStream;
 use mz_persist_types::Codec64;
 use mz_postgres_client::metrics::PostgresClientMetrics;
-use prometheus::core::{AtomicI64, AtomicU64, Collector, Desc, GenericGauge};
+use prometheus::core::{AtomicU64, Collector, Desc, GenericGauge};
 use prometheus::proto::MetricFamily;
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
 use timely::progress::Antichain;
@@ -107,6 +106,8 @@ pub struct Metrics {
 
     /// Metrics for the persist sink.
     pub sink: SinkMetrics,
+    /// Metrics for the persist_source backpressure operator.
+    pub backpressure: BackpressureMetrics,
 
     /// Metrics for S3-backed blob implementation
     pub s3_blob: S3BlobMetrics,
@@ -169,6 +170,7 @@ impl Metrics {
             inline: InlineMetrics::new(registry),
             semaphore: SemaphoreMetrics::new(cfg.clone(), registry.clone()),
             sink: SinkMetrics::new(registry),
+            backpressure: BackpressureMetrics::new(registry),
             s3_blob,
             blob_hedge: BlobHedgeMetrics::new(registry),
             postgres_consensus: PostgresClientMetrics::new(registry, "mz_persist"),
@@ -1259,15 +1261,12 @@ pub struct ShardsMetrics {
     // the DeleteOnDrop wrappers. A process might stop using a shard (drop all
     // handles to it) but e.g. the set of commands never changes.
     _count: ComputedIntGauge,
-    since: mz_ore::metrics::IntGaugeVec,
-    upper: mz_ore::metrics::IntGaugeVec,
     encoded_rollup_size: mz_ore::metrics::UIntGaugeVec,
     encoded_diff_size: mz_ore::metrics::IntCounterVec,
     hollow_batch_count: mz_ore::metrics::UIntGaugeVec,
     spine_batch_count: mz_ore::metrics::UIntGaugeVec,
     batch_part_count: mz_ore::metrics::UIntGaugeVec,
     batch_part_version_count: mz_ore::metrics::UIntGaugeVec,
-    batch_part_version_bytes: mz_ore::metrics::UIntGaugeVec,
     update_count: mz_ore::metrics::UIntGaugeVec,
     rollup_count: mz_ore::metrics::UIntGaugeVec,
     largest_batch_size: mz_ore::metrics::UIntGaugeVec,
@@ -1283,25 +1282,13 @@ pub struct ShardsMetrics {
     usage_referenced_not_current_state_bytes: mz_ore::metrics::UIntGaugeVec,
     usage_not_leaked_not_referenced_bytes: mz_ore::metrics::UIntGaugeVec,
     usage_leaked_bytes: mz_ore::metrics::UIntGaugeVec,
-    pubsub_push_diff_applied: mz_ore::metrics::IntCounterVec,
-    pubsub_push_diff_not_applied_stale: mz_ore::metrics::IntCounterVec,
-    pubsub_push_diff_not_applied_out_of_order: mz_ore::metrics::IntCounterVec,
-    stale_version: mz_ore::metrics::UIntGaugeVec,
     blob_gets: mz_ore::metrics::IntCounterVec,
     blob_sets: mz_ore::metrics::IntCounterVec,
-    live_writers: mz_ore::metrics::UIntGaugeVec,
     unconsolidated_snapshot: mz_ore::metrics::IntCounterVec,
-    backpressure_emitted_bytes: IntCounterVec,
-    backpressure_last_backpressured_bytes: UIntGaugeVec,
-    backpressure_retired_bytes: IntCounterVec,
-    rewrite_part_count: UIntGaugeVec,
     inline_part_count: UIntGaugeVec,
-    inline_part_bytes: UIntGaugeVec,
     compact_batches: UIntGaugeVec,
     compacting_batches: UIntGaugeVec,
     noncompact_batches: UIntGaugeVec,
-    schema_registry_version_count: UIntGaugeVec,
-    inline_backpressure_count: IntCounterVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -1324,16 +1311,6 @@ impl ShardsMetrics {
                     ret
                 },
             ),
-            since: registry.register(metric!(
-                name: "mz_persist_shard_since",
-                help: "since by shard",
-                var_labels: ["shard", "name"],
-            )),
-            upper: registry.register(metric!(
-                name: "mz_persist_shard_upper",
-                help: "upper by shard",
-                var_labels: ["shard", "name"],
-            )),
             encoded_rollup_size: registry.register(metric!(
                 name: "mz_persist_shard_rollup_size_bytes",
                 help: "total encoded rollup size by shard",
@@ -1362,11 +1339,6 @@ impl ShardsMetrics {
             batch_part_version_count: registry.register(metric!(
                 name: "mz_persist_shard_batch_part_version_count",
                 help: "count of batch parts by shard and version",
-                var_labels: ["shard", "name", "version"],
-            )),
-            batch_part_version_bytes: registry.register(metric!(
-                name: "mz_persist_shard_batch_part_version_bytes",
-                help: "total bytes in batch parts by shard and version",
                 var_labels: ["shard", "name", "version"],
             )),
             update_count: registry.register(metric!(
@@ -1444,26 +1416,6 @@ impl ShardsMetrics {
                 help: "data reclaimable by a leaked blob detector",
                 var_labels: ["shard", "name"],
             )),
-            pubsub_push_diff_applied: registry.register(metric!(
-                name: "mz_persist_shard_pubsub_diff_applied",
-                help: "number of diffs received via pubsub that applied",
-                var_labels: ["shard", "name"],
-            )),
-            pubsub_push_diff_not_applied_stale: registry.register(metric!(
-                name: "mz_persist_shard_pubsub_diff_not_applied_stale",
-                help: "number of diffs received via pubsub that did not apply due to staleness",
-                var_labels: ["shard", "name"],
-            )),
-            pubsub_push_diff_not_applied_out_of_order: registry.register(metric!(
-                name: "mz_persist_shard_pubsub_diff_not_applied_out_of_order",
-                help: "number of diffs received via pubsub that did not apply due to out-of-order delivery",
-                var_labels: ["shard", "name"],
-            )),
-            stale_version: registry.register(metric!(
-                name: "mz_persist_shard_stale_version",
-                help: "indicates whether the current version of the shard is less than the current version of the code",
-                var_labels: ["shard", "name"],
-            )),
             blob_gets: registry.register(metric!(
                 name: "mz_persist_shard_blob_gets",
                 help: "number of Blob::get calls for this shard",
@@ -1474,46 +1426,14 @@ impl ShardsMetrics {
                 help: "number of Blob::set calls for this shard",
                 var_labels: ["shard", "name"],
             )),
-            live_writers: registry.register(metric!(
-                name: "mz_persist_shard_live_writers",
-                help: "number of writers that have recently appended updates to this shard",
-                var_labels: ["shard", "name"],
-            )),
             unconsolidated_snapshot: registry.register(metric!(
                 name: "mz_persist_shard_unconsolidated_snapshot",
                 help: "in snapshot_and_read, the number of times consolidating the raw data wasn't enough to produce consolidated output",
                 var_labels: ["shard", "name"],
             )),
-            backpressure_emitted_bytes: registry.register(metric!(
-                name: "mz_persist_backpressure_emitted_bytes",
-                help: "A counter with the number of emitted bytes.",
-                var_labels: ["shard", "name"],
-            )),
-            backpressure_last_backpressured_bytes: registry.register(metric!(
-                name: "mz_persist_backpressure_last_backpressured_bytes",
-                help: "The last count of bytes we are waiting to be retired in \
-                    the operator. This cannot be directly compared to \
-                    `retired_bytes`, but CAN indicate that backpressure is happening.",
-                var_labels: ["shard", "name"],
-            )),
-            backpressure_retired_bytes: registry.register(metric!(
-                name: "mz_persist_backpressure_retired_bytes",
-                help:"A counter with the number of bytes retired by downstream processing.",
-                var_labels: ["shard", "name"],
-            )),
-            rewrite_part_count: registry.register(metric!(
-                name: "mz_persist_shard_rewrite_part_count",
-                help: "count of batch parts with rewrites by shard",
-                var_labels: ["shard", "name"],
-            )),
             inline_part_count: registry.register(metric!(
                 name: "mz_persist_shard_inline_part_count",
                 help: "count of parts inline in shard metadata",
-                var_labels: ["shard", "name"],
-            )),
-            inline_part_bytes: registry.register(metric!(
-                name: "mz_persist_shard_inline_part_bytes",
-                help: "total size of parts inline in shard metadata",
                 var_labels: ["shard", "name"],
             )),
             compact_batches: registry.register(metric!(
@@ -1529,16 +1449,6 @@ impl ShardsMetrics {
             noncompact_batches: registry.register(metric!(
                 name: "mz_persist_shard_noncompact_batches",
                 help: "number of batches in the shard that aren't compact and have no ongoing compaction",
-                var_labels: ["shard", "name"],
-            )),
-            schema_registry_version_count: registry.register(metric!(
-                name: "mz_persist_shard_schema_registry_version_count",
-                help: "count of versions in the schema registry",
-                var_labels: ["shard", "name"],
-            )),
-            inline_backpressure_count: registry.register(metric!(
-                name: "mz_persist_shard_inline_backpressure_count",
-                help: "count of CaA attempts retried because of inline backpressure",
                 var_labels: ["shard", "name"],
             )),
             shards,
@@ -1586,8 +1496,6 @@ impl ShardsMetrics {
 pub struct ShardMetrics {
     pub shard_id: ShardId,
     pub name: String,
-    pub since: DeleteOnDropGauge<AtomicI64, Vec<String>>,
-    pub upper: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     pub largest_batch_size: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub latest_rollup_size: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub encoded_diff_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
@@ -1595,7 +1503,6 @@ pub struct ShardMetrics {
     pub spine_batch_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub batch_part_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     batch_part_version_count: mz_ore::metrics::UIntGaugeVec,
-    batch_part_version_bytes: mz_ore::metrics::UIntGaugeVec,
     batch_part_version_map: Mutex<BTreeMap<String, BatchPartVersionMetrics>>,
     pub update_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub rollup_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
@@ -1611,25 +1518,13 @@ pub struct ShardMetrics {
     pub gc_finished: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub compaction_applied: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub cmd_succeeded: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub pubsub_push_diff_applied: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub pubsub_push_diff_not_applied_stale: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub pubsub_push_diff_not_applied_out_of_order: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub stale_version: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub blob_gets: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub blob_sets: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub live_writers: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub unconsolidated_snapshot: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub backpressure_emitted_bytes: Arc<DeleteOnDropCounter<AtomicU64, Vec<String>>>,
-    pub backpressure_last_backpressured_bytes: Arc<DeleteOnDropGauge<AtomicU64, Vec<String>>>,
-    pub backpressure_retired_bytes: Arc<DeleteOnDropCounter<AtomicU64, Vec<String>>>,
-    pub rewrite_part_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub inline_part_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
-    pub inline_part_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub compact_batches: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub compacting_batches: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub noncompact_batches: DeleteOnDropGauge<AtomicU64, Vec<String>>,
-    pub schema_registry_version_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
-    pub inline_backpressure_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 }
 
 impl ShardMetrics {
@@ -1638,12 +1533,6 @@ impl ShardMetrics {
         ShardMetrics {
             shard_id: *shard_id,
             name: name.to_string(),
-            since: shards_metrics
-                .since
-                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
-            upper: shards_metrics
-                .upper
-                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             latest_rollup_size: shards_metrics
                 .encoded_rollup_size
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
@@ -1660,7 +1549,6 @@ impl ShardMetrics {
                 .batch_part_count
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             batch_part_version_count: shards_metrics.batch_part_version_count.clone(),
-            batch_part_version_bytes: shards_metrics.batch_part_version_bytes.clone(),
             batch_part_version_map: Mutex::new(BTreeMap::new()),
             update_count: shards_metrics
                 .update_count
@@ -1707,53 +1595,17 @@ impl ShardMetrics {
             usage_leaked_bytes: shards_metrics
                 .usage_leaked_bytes
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
-            pubsub_push_diff_applied: shards_metrics
-                .pubsub_push_diff_applied
-                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
-            pubsub_push_diff_not_applied_stale: shards_metrics
-                .pubsub_push_diff_not_applied_stale
-                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
-            pubsub_push_diff_not_applied_out_of_order: shards_metrics
-                .pubsub_push_diff_not_applied_out_of_order
-                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
-            stale_version: shards_metrics
-                .stale_version
-                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             blob_gets: shards_metrics
                 .blob_gets
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             blob_sets: shards_metrics
                 .blob_sets
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
-            live_writers: shards_metrics
-                .live_writers
-                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             unconsolidated_snapshot: shards_metrics
                 .unconsolidated_snapshot
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
-            backpressure_emitted_bytes: Arc::new(
-                shards_metrics
-                    .backpressure_emitted_bytes
-                    .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
-            ),
-            backpressure_last_backpressured_bytes: Arc::new(
-                shards_metrics
-                    .backpressure_last_backpressured_bytes
-                    .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
-            ),
-            backpressure_retired_bytes: Arc::new(
-                shards_metrics
-                    .backpressure_retired_bytes
-                    .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
-            ),
-            rewrite_part_count: shards_metrics
-                .rewrite_part_count
-                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             inline_part_count: shards_metrics
                 .inline_part_count
-                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
-            inline_part_bytes: shards_metrics
-                .inline_part_bytes
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             compact_batches: shards_metrics
                 .compact_batches
@@ -1763,27 +1615,13 @@ impl ShardMetrics {
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             noncompact_batches: shards_metrics
                 .noncompact_batches
-                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
-            schema_registry_version_count: shards_metrics
-                .schema_registry_version_count
-                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
-            inline_backpressure_count: shards_metrics
-                .inline_backpressure_count
                 .get_delete_on_drop_metric(vec![shard, name.to_string()]),
         }
     }
 
-    pub fn set_since<T: Codec64>(&self, since: &Antichain<T>) {
-        self.since.set(encode_ts_metric(since))
-    }
-
-    pub fn set_upper<T: Codec64>(&self, upper: &Antichain<T>) {
-        self.upper.set(encode_ts_metric(upper))
-    }
-
     pub(crate) fn set_batch_part_versions<'a>(
         &self,
-        batch_parts_by_version: impl Iterator<Item = (&'a str, usize)>,
+        batch_parts_by_version: impl Iterator<Item = &'a str>,
     ) {
         let mut map = self
             .batch_part_version_map
@@ -1797,12 +1635,11 @@ impl ShardMetrics {
         // map). First reset everything.
         for x in map.values() {
             x.batch_part_version_count.set(0);
-            x.batch_part_version_bytes.set(0);
         }
 
         // Then go through the iterator, creating new entries as necessary and
         // adding.
-        for (key, bytes) in batch_parts_by_version {
+        for key in batch_parts_by_version {
             if !map.contains_key(key) {
                 map.insert(
                     key.to_owned(),
@@ -1814,19 +1651,11 @@ impl ShardMetrics {
                                 self.name.clone(),
                                 key.to_owned(),
                             ]),
-                        batch_part_version_bytes: self
-                            .batch_part_version_bytes
-                            .get_delete_on_drop_metric(vec![
-                                self.shard_id.to_string(),
-                                self.name.clone(),
-                                key.to_owned(),
-                            ]),
                     },
                 );
             }
             let value = map.get(key).expect("inserted above");
             value.batch_part_version_count.inc();
-            value.batch_part_version_bytes.add(u64::cast_from(bytes));
         }
     }
 }
@@ -1834,7 +1663,6 @@ impl ShardMetrics {
 #[derive(Debug)]
 pub struct BatchPartVersionMetrics {
     pub batch_part_version_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
-    pub batch_part_version_bytes: DeleteOnDropGauge<AtomicU64, Vec<String>>,
 }
 
 /// Metrics recorded by audits of persist usage
@@ -2047,6 +1875,43 @@ impl SinkWorkerMetrics {
     }
 }
 
+/// Metrics for the `persist_source` backpressure operator, summed over every
+/// instance of the operator in the process. Like [SinkMetrics], these belong
+/// to a dataflow operator rather than the client, but the client owns the only
+/// registry the operator can reach.
+#[derive(Debug)]
+pub struct BackpressureMetrics {
+    /// Bytes emitted by backpressure operators.
+    pub emitted_bytes: IntCounter,
+    /// Sum over live operator instances of the inflight bytes each one most
+    /// recently stalled on. Instances contribute deltas, so the sum stays exact
+    /// as operators start and stop.
+    pub last_backpressured_bytes: UIntGauge,
+    /// Bytes retired by processing downstream of backpressure operators.
+    pub retired_bytes: IntCounter,
+}
+
+impl BackpressureMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        BackpressureMetrics {
+            emitted_bytes: registry.register(metric!(
+                name: "mz_persist_backpressure_emitted_bytes",
+                help: "bytes emitted by backpressure operators",
+            )),
+            last_backpressured_bytes: registry.register(metric!(
+                name: "mz_persist_backpressure_last_backpressured_bytes",
+                help: "sum over backpressure operators of the inflight bytes each last \
+                    stalled on; not comparable to retired bytes, but nonzero growth \
+                    indicates backpressure is happening",
+            )),
+            retired_bytes: registry.register(metric!(
+                name: "mz_persist_backpressure_retired_bytes",
+                help: "bytes retired by processing downstream of backpressure operators",
+            )),
+        }
+    }
+}
+
 /// A minimal set of metrics imported into honeycomb for alerting.
 #[derive(Debug)]
 pub struct AlertsMetrics {
@@ -2195,6 +2060,10 @@ pub struct PubSubClientReceiverMetrics {
     pub(crate) state_pushed_diff_fast_path: IntCounter,
     pub(crate) state_pushed_diff_slow_path_succeeded: IntCounter,
     pub(crate) state_pushed_diff_slow_path_failed: IntCounter,
+
+    pub(crate) diff_applied: IntCounter,
+    pub(crate) diff_not_applied_stale: IntCounter,
+    pub(crate) diff_not_applied_out_of_order: IntCounter,
 }
 
 impl PubSubClientReceiverMetrics {
@@ -2225,6 +2094,18 @@ impl PubSubClientReceiverMetrics {
             state_pushed_diff_slow_path_failed: registry.register(metric!(
                 name: "mz_persist_pubsub_client_receiver_state_push_diff_slow_path_failed",
                 help: "count of unsuccessful slow-path state push_diff calls",
+            )),
+            diff_applied: registry.register(metric!(
+                name: "mz_persist_pubsub_client_receiver_diff_applied",
+                help: "number of diffs received via pubsub that applied",
+            )),
+            diff_not_applied_stale: registry.register(metric!(
+                name: "mz_persist_pubsub_client_receiver_diff_not_applied_stale",
+                help: "number of diffs received via pubsub that did not apply due to staleness",
+            )),
+            diff_not_applied_out_of_order: registry.register(metric!(
+                name: "mz_persist_pubsub_client_receiver_diff_not_applied_out_of_order",
+                help: "number of diffs received via pubsub that did not apply due to out-of-order delivery",
             )),
         }
     }

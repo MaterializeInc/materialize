@@ -34,7 +34,7 @@ Worth adding to the sweep even though the panel omits them: `mz_persist_compacti
 | `mz_persist_compaction_seconds`, `_requested`, `_applied`, `_bytes`, `_goodbytes` | counter | Compaction. Requested minus applied equals the noop and dropped counts. |
 | `mz_persist_gc_seconds`, `_started`, `_finished`, `_noop`, `_skipped`, `_merged_reqs` | counter | Garbage collection. |
 | `mz_persist_retry_retries_count`, `_started_count`, `_finished_count`, `_sleep_seconds` | counter | The panel excludes `op="next_listen_batch"`, which has its own panel because it retries by design. |
-| `mz_persist_shard_upper` | gauge, per shard | Counting distinct `shard` labels gives the shard count. |
+| `mz_persist_shard_count` | gauge, per process | Shards the process holds a handle to. environmentd holds one per collection, so its value is the environment's shard count. |
 | `mz_persist_read_batch_part_bytes`, `_count` | counter, by `op` | The `op="unindexed"` slice is the `unindexed reads` panel. Rises by roughly 3x during rehydration. |
 | `mz_persist_pushdown_parts_filtered_count`, `_fetched_count`, `_inline_count`, `_faked_count` and their `_bytes` variants | counter | The ratio panels divide one by the sum of all four. |
 | `mz_persist_blob_cache_hits_bytes`, `_hits_blobs`, `_evictions` | counter | |
@@ -65,7 +65,7 @@ Each entry states a property that holds at any fleet size, followed by the measu
 
 **Persist reports its own build independently of `mz_version`.** `mz_persist_metadata_seconds` carries a `version` label, and the `# processes by version` panel counts by it. Use it to confirm a rollout reached the persist clients.
 
-**Counting distinct `shard` labels on `mz_persist_shard_upper` is how the shard count is obtained.** There is no shard-count gauge.
+**`mz_persist_shard_count` on the environmentd pod is the shard count.** Summing it across pods overcounts, because clusterd pods hold handles to the same shards.
 
 ## Order of magnitude
 
