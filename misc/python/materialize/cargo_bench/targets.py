@@ -70,10 +70,12 @@ def cargo_build_args(targets: Sequence[BenchTarget]) -> list[str]:
     package is selected. Output is `--message-format=json` so the caller can
     recover executable paths.
     """
+    if not targets:
+        raise ValueError("no bench targets to build")
     packages = sorted({t.package for t in targets})
     names = sorted({t.name for t in targets})
     features = sorted(
-        f"{t.package}/{feature}" for t in targets for feature in t.required_features
+        {f"{t.package}/{feature}" for t in targets for feature in t.required_features}
     )
     args = ["cargo", "bench", "--no-run", "--message-format=json"]
     for package in packages:

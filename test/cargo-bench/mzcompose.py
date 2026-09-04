@@ -106,6 +106,10 @@ def build_benches(
     makes recompiling the targets that already succeeded cheap.
     """
     print(f"--- Building {len(targets)} bench targets in {cwd}")
+    if not targets:
+        # An unrestricted `cargo bench --no-run` would build every bench
+        # target in the whole workspace instead of nothing.
+        return [], []
     try:
         output = spawn.capture(cargo_build_args(targets), cwd=cwd, env=env)
         return bench_executables(output.splitlines(), manifests), []

@@ -10,6 +10,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from materialize.cargo_bench.targets import (
     BenchTarget,
     BuiltBench,
@@ -84,11 +86,14 @@ def test_cargo_build_args_single_package_no_features() -> None:
 
 def test_cargo_build_args_multi_package_features() -> None:
     # Given in a deliberately unsorted order: the output must sort packages,
-    # bench names, and features regardless of input order.
+    # bench names, and features regardless of input order. "region" is
+    # required by both "bytes" and "region_probe" in mz-ore, so "mz-ore/region"
+    # must still appear exactly once in the output.
     targets = [
         BenchTarget("mz-ore", "pager", ("pager",)),
         BenchTarget("mz-compute", "correction", ("bench",)),
         BenchTarget("mz-ore", "bytes", ("bytes", "region", "tracing")),
+        BenchTarget("mz-ore", "region_probe", ("region",)),
         BenchTarget("mz-ore", "id_gen", ()),
     ]
     assert cargo_build_args(targets) == [
@@ -108,9 +113,16 @@ def test_cargo_build_args_multi_package_features() -> None:
         "id_gen",
         "--bench",
         "pager",
+        "--bench",
+        "region_probe",
         "--features",
         "mz-compute/bench,mz-ore/bytes,mz-ore/pager,mz-ore/region,mz-ore/tracing",
     ]
+
+
+def test_cargo_build_args_rejects_empty() -> None:
+    with pytest.raises(ValueError, match="no bench targets to build"):
+        cargo_build_args([])
 
 
 def test_bench_executables_filters_and_resolves_package() -> None:
