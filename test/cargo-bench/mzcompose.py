@@ -433,8 +433,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # Cargo derives a unit's hash from absolute paths, so the ancestor and
     # current checkouts must build at the same checkout path and the same
-    # target dir path for identical source to produce identical binaries;
-    # the identical-binary skip in `run_benches` depends on that. Both sides
+    # target dir path for identical source to produce identical binaries.
+    # The identical-binary skip in `run_benches` depends on that. Both sides
     # therefore build one after another at these fixed paths instead of at a
     # fresh temporary worktree each, and each side's target dir and checkout
     # are parked under a side-specific name between runs so cargo's caches
@@ -447,13 +447,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ancestor_src = root / "ancestor-src"
 
     # A cancelled or timed-out job can leave a previous run's worktrees
-    # registered and their directories in place; clear both before reusing
+    # registered and their directories in place. Clear both before reusing
     # the fixed paths.
     spawn.runv(["git", "worktree", "prune"], cwd=MZ_ROOT)
     for leftover in (src, ancestor_src):
         if leftover.exists():
             remove_worktree(leftover)
             shutil.rmtree(leftover, ignore_errors=True)
+    # A hard kill (OOM, SIGKILL) skips the `finally` below and can leave
+    # `target` populated with whichever side's build was in flight. Which
+    # side that was is no longer known, and the next rename onto this path
+    # would fail with the destination already existing, so discarding the
+    # cache is the only safe option.
+    if target.exists():
+        shutil.rmtree(target)
 
     ancestor: str | None = None
     ancestor_targets: list[BenchTarget] = []
@@ -500,7 +507,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 for b in ancestor_built_raw
             ]
 
-        # Only the committed HEAD is measured here; uncommitted local changes
+        # Only the committed HEAD is measured here. Uncommitted local changes
         # in MZ_ROOT are not part of the checkout built below.
         head = spawn.capture(["git", "rev-parse", "HEAD"], cwd=MZ_ROOT).strip()
         spawn.runv(["git", "worktree", "add", "--detach", str(src), head], cwd=MZ_ROOT)
@@ -531,13 +538,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         if args.skip_ancestor:
             ancestor_run_failures, current_run_failures, identical = run_benches(
-                head_built, [], head_targets, [], env, criterion_home
+                head_built, [], current_targets, [], env, criterion_home
             )
         else:
             ancestor_run_failures, current_run_failures, identical = run_benches(
                 head_built,
                 ancestor_built,
-                head_targets,
+                current_targets,
                 ancestor_targets,
                 env,
                 criterion_home,
