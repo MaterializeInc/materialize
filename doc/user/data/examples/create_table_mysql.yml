@@ -8,6 +8,8 @@
     [WITH (
         TEXT COLUMNS (<column_name> [, ...])
       | EXCLUDE COLUMNS (<column_name> [, ...])
+      | EXCLUDE CONSTRAINTS ('<constraint_name>' [, ...])
+      | EXCLUDE ALL CONSTRAINTS
       | PARTITION BY (<column_name> [, ...])
       [, ...]
     )]
@@ -63,6 +65,8 @@
         |--------|-------------|
         | `TEXT COLUMNS (<column_name> [, ...])` | *Optional.* If specified, decode data as `text` for the listed column(s), such as for unsupported data types. See also [supported types](#supported-data-types). |
         | `EXCLUDE COLUMNS (<column_name> [, ...])` | *Optional.* If specified, exclude the listed column(s) from the table, such as for unsupported data types. See also [supported types](#supported-data-types). |
+        | `EXCLUDE CONSTRAINTS ('<constraint_name>' [, ...])` | *Optional.* If specified, do not record the listed upstream unique indexes as keys of the table, so that dropping them upstream does not put the table into an error state. Index names are string literals matched exactly, including case; the primary key's index is named `PRIMARY`. See [Constraints](/ingest-data/constraints/). |
+        | `EXCLUDE ALL CONSTRAINTS` | *Optional.* If specified, record no upstream constraints at all: the table has no keys and every column is ingested as nullable, so dropping any `PRIMARY KEY`, `UNIQUE`, or `NOT NULL` constraint upstream does not put the table into an error state. See [Constraints](/ingest-data/constraints/). |
         | `PARTITION BY (<column_name> [, ...])` | {{< include-md file="content/headless/partition-by-option-description.md" >}} |
   results: |
     {{< include-md

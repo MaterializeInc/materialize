@@ -70,12 +70,26 @@ ingestion.
 Dropping a `NOT NULL`, `UNIQUE`, or `PRIMARY KEY` constraint that existed when
 the table was created puts the affected table into an error state.
 
+To drop such a constraint upstream without interrupting ingestion, first
+recreate the Materialize table excluding the constraint, using the `EXCLUDE
+CONSTRAINTS` option (for a named `PRIMARY KEY` or `UNIQUE` constraint) or the
+`EXCLUDE ALL CONSTRAINTS` option (which also covers `NOT NULL`). See
+[Constraints](/ingest-data/constraints/) for the full workflow, including how
+to recover a table that is already in an error state.
+
 {{ else -}}
 Materialize ignores foreign key and `CHECK` constraint changes. You can add or
 drop them without affecting ingestion.
 
 Adding a `UNIQUE` constraint does not affect ingestion. Dropping a `UNIQUE`
 constraint puts the affected table into an error state.
+
+To drop a `UNIQUE` constraint upstream without interrupting ingestion, first
+recreate the Materialize table excluding the constraint, using the `EXCLUDE
+CONSTRAINTS` or `EXCLUDE ALL CONSTRAINTS` option. See
+[Constraints](/ingest-data/constraints/). Note that upstream `ALTER COLUMN`
+operations still put the table into an error state regardless of these
+options.
 
 SQL Server does not allow dropping a `PRIMARY KEY` from a table while change data
 capture is enabled on it. A primary key that existed when Materialize began
