@@ -1144,7 +1144,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             };
             self.collection = Some((CollectionEdge::Vec(oks), errs));
         }
-        for (key, _, thinning) in collections.arranged {
+        for (key, permutation, thinning) in collections.arranged {
             if !self.arranged.contains_key(&key) {
                 // TODO: Consider allowing more expressive names.
                 let name = format!("ArrangeBy[{:?}]", key);
@@ -1176,8 +1176,14 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     oks
                 };
                 let batcher = ArrangementBatcher::from_config(config_set);
-                let (oks, errs_keyed, passthrough) =
-                    Self::arrange_collection(&name, oks, key.clone(), thinning.clone(), batcher);
+                let (oks, errs_keyed, passthrough) = Self::arrange_collection(
+                    &name,
+                    oks,
+                    key.clone(),
+                    thinning.clone(),
+                    permutation.len(),
+                    batcher,
+                );
                 let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
                 self.collection = Some((CollectionEdge::Vec(passthrough), errs));
                 let errs =
@@ -1211,12 +1217,26 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         oks: VecCollection<'scope, T, Row, Diff>,
         key: Vec<LirScalarExpr>,
         thinning: Vec<usize>,
+        arity: usize,
         batcher: ArrangementBatcher,
     ) -> (
         Arranged<'scope, RowRowAgent<T, Diff>>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
         VecCollection<'scope, T, Row, Diff>,
     ) {
+        // When the key is the leading columns in order and the value the remaining columns in
+        // order, key and value are byte ranges of the encoded row: only the first `key.len()`
+        // datums need decoding, to find the boundary, and nothing is re-encoded.
+        let prefix_len = key.len();
+        let split_prefix = key
+            .iter()
+            .enumerate()
+            .all(|(i, e)| matches!(e, LirScalarExpr::Column(c, _) if *c == i))
+            && thinning
+                .iter()
+                .enumerate()
+                .all(|(i, c)| *c == prefix_len + i)
+            && prefix_len + thinning.len() == arity;
         // This operator implements a `map_fallible`, but produces columnar updates for the ok
         // stream. The `map_fallible` cannot be used here because the closure cannot return
         // references, which is what we need to push into columnar streams. Instead, we use a
@@ -1246,6 +1266,13 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     let mut ok_session = ok_output.session_with_builder(&time);
                     let mut err_session = err_output.session(&time);
                     for (row, time, diff) in data.iter() {
+                        if split_prefix {
+                            let (key_part, val_part) = row.split_at_datum(prefix_len);
+                            key_buf.packer().extend_by_row_ref(key_part);
+                            val_buf.packer().extend_by_row_ref(val_part);
+                            ok_session.give(((&*key_buf, &*val_buf), time, diff));
+                            continue;
+                        }
                         temp_storage.clear();
                         let datums = datums.borrow_with(row);
                         let key_iter = key.iter().map(|k| k.eval(&datums, &temp_storage));

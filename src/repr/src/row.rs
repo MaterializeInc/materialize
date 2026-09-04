@@ -753,6 +753,32 @@ impl RowRef {
         &self.0
     }
 
+    /// Splits the row after its first `n` datums into two rows: the first `n` datums and the
+    /// rest. Datums are encoded back to back, so both halves are complete row encodings and no
+    /// datum is re-encoded. Only the first `n` datums are decoded, to find the boundary.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the row has fewer than `n` datums.
+    pub fn split_at_datum(&self, n: usize) -> (&RowRef, &RowRef) {
+        let mut rest: &[u8] = &self.0;
+        for _ in 0..n {
+            assert!(!rest.is_empty(), "row has fewer than {n} datums");
+            // SAFETY: `rest` is a suffix of a valid row encoding at a datum boundary.
+            unsafe {
+                read_datum(&mut rest);
+            }
+        }
+        let boundary = self.0.len() - rest.len();
+        // SAFETY: both halves start and end at datum boundaries of a valid row encoding.
+        unsafe {
+            (
+                RowRef::from_slice(&self.0[..boundary]),
+                RowRef::from_slice(&self.0[boundary..]),
+            )
+        }
+    }
+
     /// True iff there is no data in this [`RowRef`].
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
@@ -4749,5 +4775,32 @@ mod tests {
 
         assert_eq!(map_1.cmp(&map_null), Ordering::Less);
         assert_eq!(map_null.cmp(&map_1), Ordering::Greater);
+    }
+
+    #[mz_ore::test]
+    fn split_at_datum_yields_whole_rows() {
+        let datums = [
+            Datum::Int64(7),
+            Datum::Null,
+            Datum::String("a longer string that is not inline"),
+            Datum::False,
+        ];
+        let row = Row::pack_slice(&datums);
+        for n in 0..=datums.len() {
+            let (head, tail) = row.split_at_datum(n);
+            assert_eq!(head.iter().collect::<Vec<_>>(), &datums[..n]);
+            assert_eq!(tail.iter().collect::<Vec<_>>(), &datums[n..]);
+            assert_eq!(
+                head.byte_len() + tail.byte_len(),
+                row.as_row_ref().byte_len()
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "fewer than")]
+    fn split_at_datum_past_the_end_panics() {
+        let row = Row::pack_slice(&[Datum::Int64(1)]);
+        let _ = row.split_at_datum(2);
     }
 }
