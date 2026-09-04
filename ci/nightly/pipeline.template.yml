@@ -304,6 +304,7 @@ steps:
         # Annotation-only while the noise floor on this hardware is being
         # calibrated. Remove after 2026-09-18 so regressions fail the build.
         soft_fail: true
+        parallelism: 9
         inputs:
           - Cargo.lock
           - Cargo.toml
@@ -314,9 +315,10 @@ steps:
               composition: cargo-bench
               ci-builder: stable
         agents:
-          # Dedicated hardware for stable timings. 48 cores because the step
-          # builds the bench targets twice in the bench profile.
-          queue: hetzner-x86-64-dedi-48cpu-192gb
+          # Dedicated hardware for stable timings, one shard per package with
+          # bench targets, so `parallelism` should track that package count.
+          # Extra shards exit as no-ops, fewer shards double up packages.
+          queue: hetzner-x86-64-dedi-8cpu-32gb
 
       - id: workload-replay
         topics: [iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
