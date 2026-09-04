@@ -9,7 +9,6 @@
 
 //! A source that reads from an a persist shard.
 
-use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
@@ -595,12 +594,14 @@ impl PendingWork {
         map_filter_project: Option<&MfpPlan>,
         datum_vec: &mut DatumVec,
         row_builder: &mut Row,
+        // A plain capacity builder: parts arrive sorted and `next_with_storage` already sums
+        // adjacent duplicates, so re-sorting and consolidating each output chunk found nothing
+        // to fold and cost about 30ns per row. Consumers that need consolidated data (arrangements,
+        // the peek response) consolidate themselves.
         output: &mut OutputBuilderSession<
             '_,
             (mz_repr::Timestamp, Subtime),
-            ConsolidatingContainerBuilder<
-                Vec<(Result<Row, E>, (mz_repr::Timestamp, Subtime), Diff)>,
-            >,
+            CapacityContainerBuilder<Vec<(Result<Row, E>, (mz_repr::Timestamp, Subtime), Diff)>>,
         >,
     ) -> bool
     where
