@@ -182,6 +182,8 @@ pub struct HttpConfig {
     pub dyncfgs: Arc<ConfigSet>,
     pub metrics: Metrics,
     pub metrics_registry: MetricsRegistry,
+    /// Records the encoded size of `/metrics` responses.
+    pub metrics_export_filter: mz_metrics::ExportFilter,
     pub mcp_metrics: mcp_metrics::McpMetrics,
     pub oauth_metadata_metrics: oauth_metadata::OauthMetadataMetrics,
     pub internal_route_config: Arc<InternalRouteConfig>,
@@ -242,6 +244,7 @@ impl HttpServer {
             dyncfgs,
             metrics,
             metrics_registry,
+            metrics_export_filter,
             mcp_metrics,
             oauth_metadata_metrics,
             internal_route_config,
@@ -489,8 +492,11 @@ impl HttpServer {
                 .route(
                     "/metrics",
                     routing::get(move |headers: HeaderMap| async move {
-                        mz_http_util::handle_prometheus(&metrics_registry_for_handler, headers)
-                            .await
+                        mz_http_util::handle_prometheus_with(
+                            &metrics_registry_for_handler,
+                            headers,
+                            |bytes| metrics_export_filter.record_encoded_bytes(bytes),
+                        )
                     }),
                 )
                 .route(

@@ -2941,6 +2941,14 @@ class FlipFlagsAction(Action):
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_public_metrics_endpoint"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["metrics_export_disabled_families"] = [
+            "''",
+            "'mz_export_filter_ci_probe_*'",
+        ]
+        self.flags_with_values["metrics_export_max_series_per_family"] = [
+            "0",
+            "1000000",
+        ]
         self.flags_with_values["persist_batch_structured_key_lower_len"] = [
             "0",
             "1",
@@ -3393,6 +3401,8 @@ class FlipFlagsAction(Action):
             "mz_metrics_lgalloc_refresh_interval",
             "mz_metrics_rusage_refresh_interval",
             "mz_metrics_usage_refresh_interval",
+            "metrics_export_cluster_allowlist",
+            "metrics_export_replica_allowlist",
             "compute_peek_stash_num_batches",
             "compute_peek_stash_batch_size",
             "compute_peek_response_stash_batch_max_runs",
