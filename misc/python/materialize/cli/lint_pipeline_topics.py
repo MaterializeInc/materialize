@@ -72,6 +72,8 @@ EXTRA_STEP_TOPICS = {
     # Iceberg sinks against the real AWS/GCP catalogs, no local Polaris.
     "aws-real": {"iceberg"},
     "gcp-real": {"iceberg"},
+    # Iceberg sink against the real Databricks Unity Catalog, no local Polaris.
+    "databricks-real": {"iceberg"},
 }
 
 

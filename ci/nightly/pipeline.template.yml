@@ -1106,6 +1106,30 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: gcp
 
+  - group: Databricks
+    key: databricks
+    steps:
+      - id: databricks-real
+        topics: [iceberg]
+        label: Databricks Unity Catalog (Real)
+        depends_on: build-aarch64
+        # The sink has to outlive a real OAuth token, which Databricks issues
+        # for 3600s and iceberg-rust re-mints 600s early, so the workflow runs
+        # for ~60 minutes. It enforces its own budget well inside this timeout,
+        # because a step timeout kills the container before it can drop the
+        # Unity Catalog table it created.
+        timeout_in_minutes: 100
+        # Runs share one Unity Catalog schema, and Unity Catalog rate-limits
+        # commits per metastore.
+        concurrency: 1
+        concurrency_group: 'databricks-unity-catalog'
+        agents:
+          # because of Databricks access
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: databricks
+
   - group: "Platform checks"
     key: platform-checks
     steps:
