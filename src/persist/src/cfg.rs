@@ -59,9 +59,8 @@ pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
 ///
 /// Errors opening the sibling degrade to [HedgeSibling::Unavailable] with a
 /// warning rather than failing: persist must come up even if hedging cannot.
-/// A process that hits this keeps hedging unavailable until restart, visible
-/// as `mz_persist_blob_hedges_skipped{reason="unavailable"}` and
-/// `mz_persist_blob_hedge_armed` staying 0.
+/// What a caller does with that is its own contract, see
+/// [crate::hedge::HedgedBlob::new_arming].
 pub async fn open_hedge_sibling(
     url: &SensitiveUrl,
     knobs: Box<dyn BlobKnobs>,
