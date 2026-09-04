@@ -4576,6 +4576,7 @@ pub enum WithOptionValue<T: AstInfo> {
     ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink<T>),
     KafkaMatchingBrokerRule(KafkaMatchingBrokerRule<T>),
     RetainHistoryFor(Value),
+    RetainHistoryPinAt(Value),
     Refresh(RefreshOptionValue<T>),
     ClusterScheduleOptionValue(ClusterScheduleOptionValue),
     ClusterAutoScalingStrategyOptionValue(ClusterAutoScalingStrategyOptionValue),
@@ -4593,6 +4594,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 | WithOptionValue::Sequence(_)
                 | WithOptionValue::Map(_)
                 | WithOptionValue::RetainHistoryFor(_)
+                | WithOptionValue::RetainHistoryPinAt(_)
                 | WithOptionValue::Refresh(_)
                 | WithOptionValue::Expr(_) => {
                     // These are redact-aware.
@@ -4673,6 +4675,10 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
             }
             WithOptionValue::RetainHistoryFor(value) => {
                 f.write_str("FOR ");
+                f.write_node(value);
+            }
+            WithOptionValue::RetainHistoryPinAt(value) => {
+                f.write_str("PIN AT ");
                 f.write_node(value);
             }
             WithOptionValue::Refresh(opt) => f.write_node(opt),

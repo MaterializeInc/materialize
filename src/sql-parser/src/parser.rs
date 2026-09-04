@@ -4290,6 +4290,11 @@ impl<'a> Parser<'a> {
 
     fn parse_retain_history(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
         let _ = self.consume_token(&Token::Eq);
+        if self.parse_keyword(PIN) {
+            self.expect_keyword(AT)?;
+            let value = self.parse_value()?;
+            return Ok(WithOptionValue::RetainHistoryPinAt(value));
+        }
         self.expect_keyword(FOR)?;
         let value = self.parse_value()?;
         Ok(WithOptionValue::RetainHistoryFor(value))
