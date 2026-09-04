@@ -1,12 +1,12 @@
 ---
 source: src/adapter/src/coord/sequencer/inner/cluster.rs
-revision: b2419281fb
+revision: 4e9badff87
 ---
 
 # adapter::coord::sequencer::inner::cluster
 
 Implements sequencing for cluster-related DDL: `CREATE CLUSTER`, `CREATE CLUSTER REPLICA`, `DROP CLUSTER`, `DROP CLUSTER REPLICA`, `ALTER CLUSTER`, and `ALTER CLUSTER REPLICA RENAME`.
-Handles managed and unmanaged replica configurations, validates size parameters against the allowed replica-size map, and drives the scheduling-policy state after cluster alteration. Managed cluster variants carry `auto_scaling_strategy`, `reconfiguration`, and `burst` fields (all `None` by default) in addition to the existing scheduling and optimizer-override fields. The durable `ReplicaLocation::Managed` record stores a list of availability zones (`availability_zones: Vec<String>`) rather than an optional single zone; user-pinned `AVAILABILITY ZONE` clauses produce a one-element list, and the cluster's AZ pool is stamped in at provisioning time.
+Handles managed and unmanaged replica configurations, validates size parameters against the allowed replica-size map, and drives the scheduling-policy state after cluster alteration. `ensure_valid_billed_as_size` validates that a `BILLED AS` override names a known replica size (one present in the replica size map); unlike `SIZE`, the billing size may be a disabled size and need not be in the role's allowed sizes, so the check is separate from `concretize_replica_location`. It is called at both `CREATE CLUSTER` (for managed replicas) and `CREATE CLUSTER REPLICA` sequencing time. Managed cluster variants carry `auto_scaling_strategy`, `reconfiguration`, and `burst` fields (all `None` by default) in addition to the existing scheduling and optimizer-override fields. The durable `ReplicaLocation::Managed` record stores a list of availability zones (`availability_zones: Vec<String>`) rather than an optional single zone; user-pinned `AVAILABILITY ZONE` clauses produce a one-element list, and the cluster's AZ pool is stamped in at provisioning time.
 `CREATE CLUSTER` and `CREATE CLUSTER REPLICA` accept an `IF NOT EXISTS` clause. When the named cluster or replica already exists, the statement succeeds and emits an `ObjectAlreadyExists` notice (SQLSTATE 42710) rather than an error; the existing object is left completely untouched.
 Replica IDs are pre-allocated out-of-band via `Catalog::allocate_replica_ids` before the catalog transaction, dispatching to user or system ID space based on the owning cluster's ID type. This mirrors how cluster and item IDs are allocated, so nothing allocates a replica ID in-apply.
 Cluster and replica creation and deletion are applied through the catalog implications pipeline rather than directly in this module.

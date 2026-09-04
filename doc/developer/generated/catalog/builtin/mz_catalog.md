@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/builtin/mz_catalog.rs
-revision: c317ceee3c
+revision: 7053f0b019
 ---
 
 # catalog::builtin::mz_catalog
