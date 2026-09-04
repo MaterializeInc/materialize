@@ -10,6 +10,14 @@
 """
 Runs every criterion benchmark at an ancestor commit and at the current commit,
 then fails when a benchmark regressed beyond a threshold.
+
+The ancestor and current checkouts both build at the same fixed checkout path
+and the same fixed `CARGO_TARGET_DIR`, one after the other, because cargo
+derives a unit's hash from absolute paths and two builds at different paths
+produce different bytes even from identical source. Locally this means the
+current-commit build does not reuse the developer's own `target/` cache; the
+first run compiles it from scratch into a parked target dir and later runs
+reuse that.
 """
 
 import hashlib
@@ -17,7 +25,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -77,6 +84,29 @@ def target_dir() -> Path:
     """
     value = Path(os.getenv("CARGO_TARGET_DIR", str(MZ_ROOT / "target")))
     return value if value.is_absolute() else MZ_ROOT / value
+
+
+def cargo_bench_dir() -> Path:
+    """Directory holding every checkout and target dir this workflow builds at.
+
+    It sits under `target_dir()` so parking a target dir between runs (a
+    rename between `target` and `ancestor-target` or `current-target`) stays
+    on one filesystem instead of copying.
+    """
+    return target_dir() / "cargo-bench"
+
+
+def remove_worktree(path: Path) -> None:
+    """Remove the git worktree at `path`, tolerating and logging failure.
+
+    Used both for leftover cleanup from a crashed prior run, where `path` may
+    not be a registered worktree at all, and in a `finally` block, where a
+    failure here must not mask an exception already in flight.
+    """
+    try:
+        spawn.runv(["git", "worktree", "remove", "--force", str(path)], cwd=MZ_ROOT)
+    except subprocess.CalledProcessError as e:
+        print(f"^^^ +++ removing worktree {path} failed: {e}")
 
 
 def load_targets(
@@ -364,7 +394,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.skip_ancestor and args.ancestor:
         parser.error("--ancestor has no effect with --skip-ancestor")
 
-    head_targets, head_manifests = load_targets(MZ_ROOT, args.package)
+    # Manifests are re-enumerated from `src` below, once the checkout that
+    # will actually be built exists at its fixed path, so cargo's build
+    # output (which reports manifest paths under that checkout) can be
+    # resolved back to package names.
+    head_targets, _ = load_targets(MZ_ROOT, args.package)
     if not head_targets:
         raise RuntimeError("no bench targets found")
 
@@ -389,63 +423,109 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # storage, so the benches run as they do locally and skip those variants.
     env.pop("CI", None)
 
+    # Cargo derives a unit's hash from absolute paths, so the ancestor and
+    # current checkouts must build at the same checkout path and the same
+    # target dir path for identical source to produce identical binaries;
+    # the identical-binary skip in `run_benches` depends on that. Both sides
+    # therefore build one after another at these fixed paths instead of at a
+    # fresh temporary worktree each, and each side's target dir and checkout
+    # are parked under a side-specific name between runs so cargo's caches
+    # and the ancestor's fixtures survive across invocations of this workflow.
+    root = cargo_bench_dir()
+    src = root / "src"
+    target = root / "target"
+    ancestor_target = root / "ancestor-target"
+    current_target = root / "current-target"
+    ancestor_src = root / "ancestor-src"
+
+    # A cancelled or timed-out job can leave a previous run's worktrees
+    # registered and their directories in place; clear both before reusing
+    # the fixed paths.
+    spawn.runv(["git", "worktree", "prune"], cwd=MZ_ROOT)
+    for leftover in (src, ancestor_src):
+        if leftover.exists():
+            remove_worktree(leftover)
+            shutil.rmtree(leftover, ignore_errors=True)
+
     ancestor: str | None = None
-    if args.skip_ancestor:
-        head_built, current_build_failures = build_benches(
-            MZ_ROOT, head_targets, head_manifests, env
-        )
-        ancestor_run_failures, current_run_failures, identical = run_benches(
-            head_built, [], head_targets, [], env, criterion_home
-        )
-        ancestor_failures = ancestor_run_failures
-        current_failures = current_build_failures + current_run_failures
-    else:
-        ancestor = args.ancestor or resolve_ancestor()
-        assert ancestor is not None
-        print(f"--- Comparing against ancestor {ancestor}")
-        worktree = Path(tempfile.mkdtemp(prefix="cargo-bench-ancestor-"))
-        added = False
-        try:
-            # A cancelled or timed-out job destroys the container's /tmp
-            # worktree before the `finally` block below runs to remove it,
-            # and CI agents reuse their checkout across jobs, so stale
-            # registrations would otherwise accumulate in `.git/worktrees`.
-            spawn.runv(["git", "worktree", "prune"], cwd=MZ_ROOT)
-            # `git worktree add` can fail on a bad ancestor ref, in which
-            # case there is no worktree to remove, only the scratch
-            # directory to clean up.
+    ancestor_targets: list[BenchTarget] = []
+    ancestor_built: list[BuiltBench] = []
+    ancestor_build_failures: list[TargetFailure] = []
+    # Tracks which parked target dir currently owns `target`, so the
+    # `finally` below can park it back even if a build raises partway through.
+    target_owner: str | None = None
+    try:
+        if not args.skip_ancestor:
+            ancestor = args.ancestor or resolve_ancestor()
+            assert ancestor is not None
+            print(f"--- Comparing against ancestor {ancestor}")
             spawn.runv(
-                ["git", "worktree", "add", "--detach", str(worktree), ancestor],
+                ["git", "worktree", "add", "--detach", str(src), ancestor],
                 cwd=MZ_ROOT,
             )
-            added = True
-            # Cargo hashes workspace members by their path relative to the
-            # workspace root, so the ancestor worktree and the HEAD checkout,
-            # being two copies of the same workspace at different paths,
-            # would alias each other's units and fingerprints in a shared
-            # target dir. That is what let a build script binary compiled for
-            # the ancestor worktree's manifest directory get reused when
-            # building HEAD, and it failed once the ancestor worktree was
-            # removed. Building the ancestor into its own target dir avoids
-            # the aliasing.
-            ancestor_env = dict(
-                env, CARGO_TARGET_DIR=str(target_dir() / "cargo-bench-ancestor")
-            )
+            if ancestor_target.exists():
+                ancestor_target.rename(target)
+            target_owner = "ancestor"
+            ancestor_env = dict(env, CARGO_TARGET_DIR=str(target))
             ancestor_targets, ancestor_manifests = load_targets(
-                worktree, shard_packages, ancestor_env
+                src, shard_packages, ancestor_env
             )
-            # Building ancestor before HEAD lets both build phases run at
-            # full core parallelism back to back, then the run phase below
-            # benchmarks matching targets ancestor then HEAD while the
-            # worktree the ancestor binaries were compiled against is still
-            # present. Bench binaries read fixtures relative to their
-            # manifest dir, so the worktree must outlive the run phase.
-            ancestor_built, ancestor_build_failures = build_benches(
-                worktree, ancestor_targets, ancestor_manifests, ancestor_env
+            ancestor_built_raw, ancestor_build_failures = build_benches(
+                src, ancestor_targets, ancestor_manifests, ancestor_env
             )
-            head_built, current_build_failures = build_benches(
-                MZ_ROOT, head_targets, head_manifests, env
+            target.rename(ancestor_target)
+            target_owner = None
+            # Keeps the checkout registered and valid so its bench binaries,
+            # which read fixtures relative to their manifest dir, keep
+            # running against those fixtures once `src` is reused below.
+            spawn.runv(
+                ["git", "worktree", "move", str(src), str(ancestor_src)],
+                cwd=MZ_ROOT,
             )
+            ancestor_built = [
+                BuiltBench(
+                    package=b.package,
+                    name=b.name,
+                    executable=ancestor_target / b.executable.relative_to(target),
+                    manifest_dir=ancestor_src / b.manifest_dir.relative_to(src),
+                )
+                for b in ancestor_built_raw
+            ]
+
+        # Only the committed HEAD is measured here; uncommitted local changes
+        # in MZ_ROOT are not part of the checkout built below.
+        head = spawn.capture(["git", "rev-parse", "HEAD"], cwd=MZ_ROOT).strip()
+        spawn.runv(["git", "worktree", "add", "--detach", str(src), head], cwd=MZ_ROOT)
+        if current_target.exists():
+            current_target.rename(target)
+        target_owner = "current"
+        current_env = dict(env, CARGO_TARGET_DIR=str(target))
+        # Enumerated from `src`, not MZ_ROOT, so the manifest paths this
+        # returns match the paths cargo reports for the build below, even
+        # though both are the same commit.
+        current_targets, current_manifests = load_targets(
+            src, shard_packages, current_env
+        )
+        head_built_raw, current_build_failures = build_benches(
+            src, current_targets, current_manifests, current_env
+        )
+        target.rename(current_target)
+        target_owner = None
+        head_built = [
+            BuiltBench(
+                package=b.package,
+                name=b.name,
+                executable=current_target / b.executable.relative_to(target),
+                manifest_dir=b.manifest_dir,
+            )
+            for b in head_built_raw
+        ]
+
+        if args.skip_ancestor:
+            ancestor_run_failures, current_run_failures, identical = run_benches(
+                head_built, [], head_targets, [], env, criterion_home
+            )
+        else:
             ancestor_run_failures, current_run_failures, identical = run_benches(
                 head_built,
                 ancestor_built,
@@ -454,20 +534,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 env,
                 criterion_home,
             )
-            ancestor_failures = ancestor_build_failures + ancestor_run_failures
-            current_failures = current_build_failures + current_run_failures
-        finally:
-            if added:
-                try:
-                    spawn.runv(
-                        ["git", "worktree", "remove", "--force", str(worktree)],
-                        cwd=MZ_ROOT,
-                    )
-                except subprocess.CalledProcessError as e:
-                    # A failing remove must not mask an in-flight exception
-                    # from the try block above.
-                    print(f"^^^ +++ removing worktree {worktree} failed: {e}")
-            shutil.rmtree(worktree, ignore_errors=True)
+        ancestor_failures = ancestor_build_failures + ancestor_run_failures
+        current_failures = current_build_failures + current_run_failures
+    finally:
+        if target_owner is not None and target.exists():
+            target.rename(
+                ancestor_target if target_owner == "ancestor" else current_target
+            )
+        for path in (src, ancestor_src):
+            if path.exists():
+                remove_worktree(path)
+        shutil.rmtree(src, ignore_errors=True)
+        shutil.rmtree(ancestor_src, ignore_errors=True)
 
     report = compare(criterion_home, args.threshold)
     markdown = render_report(
