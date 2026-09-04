@@ -157,6 +157,7 @@ pub mod iceberg;
 pub mod optimizer_metrics;
 pub mod parse;
 pub mod plan;
+pub mod postgres;
 pub mod pure;
 pub mod rbac;
 pub mod session;

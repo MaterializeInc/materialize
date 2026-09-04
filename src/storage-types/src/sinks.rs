@@ -848,6 +848,10 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergSinkConnection, R>
 pub struct PostgresSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection_id: CatalogItemId,
     pub connection: C::Pg,
+    /// The schema holding the target table.
+    pub schema: String,
+    /// The table to write into.
+    pub table: String,
     pub relation_key_indices: Option<Vec<usize>>,
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
 }
@@ -870,6 +874,8 @@ impl<C: ConnectionAccess> PostgresSinkConnection<C> {
         let PostgresSinkConnection {
             connection_id,
             connection,
+            schema,
+            table,
             relation_key_indices,
             key_desc_and_indices,
         } = self;
@@ -880,6 +886,8 @@ impl<C: ConnectionAccess> PostgresSinkConnection<C> {
                 connection.alter_compatible(id, &other.connection).is_ok(),
                 "connection",
             ),
+            (schema == &other.schema, "schema"),
+            (table == &other.table, "table"),
             (
                 relation_key_indices == &other.relation_key_indices,
                 "relation_key_indices",
@@ -912,12 +920,16 @@ impl<R: ConnectionResolver> IntoInlineConnection<PostgresSinkConnection, R>
         let PostgresSinkConnection {
             connection_id,
             connection,
+            schema,
+            table,
             relation_key_indices,
             key_desc_and_indices,
         } = self;
         PostgresSinkConnection {
             connection_id,
             connection: r.resolve_connection(connection).unwrap_pg(),
+            schema,
+            table,
             relation_key_indices,
             key_desc_and_indices,
         }
