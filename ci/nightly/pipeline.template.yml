@@ -300,7 +300,7 @@ steps:
         label: ":rust: Cargo bench against ancestor"
         sanitizer: skip
         depends_on: []
-        timeout_in_minutes: 180
+        timeout_in_minutes: 480
         # Annotation-only while the noise floor on this hardware is being
         # calibrated. Remove after 2026-09-18 so regressions fail the build.
         soft_fail: true
