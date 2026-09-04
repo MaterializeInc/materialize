@@ -79,11 +79,13 @@ def target_dir() -> Path:
 
 
 def load_targets(
-    cwd: Path, packages: list[str]
+    cwd: Path, packages: list[str], env: dict[str, str] | None = None
 ) -> tuple[list[BenchTarget], dict[str, str]]:
     """Enumerate bench targets and package manifest paths for one checkout via `cargo metadata`."""
     metadata = json.loads(
-        spawn.capture(["cargo", "metadata", "--no-deps", "--format-version=1"], cwd=cwd)
+        spawn.capture(
+            ["cargo", "metadata", "--no-deps", "--format-version=1"], cwd=cwd, env=env
+        )
     )
     targets = bench_targets(metadata)
     if packages:
@@ -197,6 +199,11 @@ def run_benches(
         target_home = criterion_home / head_bin.package / head_bin.name
         ancestor_bin = ancestor_by_key.get(key)
         if ancestor_bin is not None:
+            if ancestor_bin.executable == head_bin.executable:
+                raise RuntimeError(
+                    f"{head_bin.package}/{head_bin.name}: ancestor and current bench "
+                    f"binaries resolve to the same file {head_bin.executable}"
+                )
             rc = run_bench(
                 ancestor_bin,
                 ["--save-baseline", BASELINE],
@@ -331,7 +338,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 cwd=MZ_ROOT,
             )
             added = True
-            ancestor_targets, ancestor_manifests = load_targets(worktree, args.package)
+            # Cargo hashes workspace members by their path relative to the
+            # workspace root, so the ancestor worktree and the HEAD checkout,
+            # being two copies of the same workspace at different paths,
+            # would alias each other's units and fingerprints in a shared
+            # target dir. That is what let a build script binary compiled for
+            # the ancestor worktree's manifest directory get reused when
+            # building HEAD, and it failed once the ancestor worktree was
+            # removed. Building the ancestor into its own target dir avoids
+            # the aliasing.
+            ancestor_env = dict(
+                env, CARGO_TARGET_DIR=str(target_dir() / "cargo-bench-ancestor")
+            )
+            ancestor_targets, ancestor_manifests = load_targets(
+                worktree, args.package, ancestor_env
+            )
             # Building ancestor before HEAD lets both build phases run at
             # full core parallelism back to back, then the run phase below
             # benchmarks matching targets ancestor then HEAD while the
@@ -339,7 +360,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             # present. Bench binaries read fixtures relative to their
             # manifest dir, so the worktree must outlive the run phase.
             ancestor_built, ancestor_build_failures = build_benches(
-                worktree, ancestor_targets, ancestor_manifests, env
+                worktree, ancestor_targets, ancestor_manifests, ancestor_env
             )
             head_built, current_build_failures = build_benches(
                 MZ_ROOT, head_targets, head_manifests, env
