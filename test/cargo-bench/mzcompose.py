@@ -98,15 +98,24 @@ def run_ancestor(
     env: dict[str, str],
 ) -> tuple[list[BenchTarget], list[TargetFailure]]:
     worktree = Path(tempfile.mkdtemp(prefix="cargo-bench-ancestor-"))
-    spawn.runv(
-        ["git", "worktree", "add", "--detach", str(worktree), ancestor], cwd=MZ_ROOT
-    )
+    added = False
     try:
+        # `git worktree add` can fail on a bad ancestor ref, in which case
+        # there is no worktree to remove, only the scratch directory to clean up.
+        spawn.runv(
+            ["git", "worktree", "add", "--detach", str(worktree), ancestor],
+            cwd=MZ_ROOT,
+        )
+        added = True
         targets = load_targets(worktree, packages)
         failures = run_targets(targets, worktree, env, ["--save-baseline", BASELINE])
         return targets, failures
     finally:
-        spawn.runv(["git", "worktree", "remove", "--force", str(worktree)], cwd=MZ_ROOT)
+        if added:
+            spawn.runv(
+                ["git", "worktree", "remove", "--force", str(worktree)], cwd=MZ_ROOT
+            )
+        shutil.rmtree(worktree, ignore_errors=True)
 
 
 def render_report(
@@ -183,13 +192,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ancestor: str | None = None
     ancestor_failures: list[TargetFailure] = []
     if not args.skip_ancestor:
-        # Annotated `str`, not `str | None`: `args.ancestor` is `Any`, and
-        # assigning an `Any` value into `ancestor` would otherwise narrow to
-        # its declared `str | None`, which `run_ancestor` below rejects.
-        resolved_ancestor: str = args.ancestor or resolve_ancestor()
-        ancestor = resolved_ancestor
-        print(f"--- Comparing against ancestor {resolved_ancestor}")
-        _, ancestor_failures = run_ancestor(resolved_ancestor, args.package, env)
+        ancestor = args.ancestor or resolve_ancestor()
+        assert ancestor is not None
+        print(f"--- Comparing against ancestor {ancestor}")
+        _, ancestor_failures = run_ancestor(ancestor, args.package, env)
 
     current_targets = load_targets(MZ_ROOT, args.package)
     if not current_targets:
@@ -209,18 +215,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         buildkite.add_annotation(
             "error" if failed else "info", "Cargo bench results", markdown
         )
-        spawn.runv(
-            [
-                "tar",
-                "-caf",
-                REPORTS_ARTIFACT,
-                "-C",
-                str(criterion_home.parent),
-                criterion_home.name,
-            ],
-            cwd=MZ_ROOT,
-        )
-        buildkite.upload_artifact(REPORTS_ARTIFACT, cwd=MZ_ROOT)
+        try:
+            spawn.runv(
+                [
+                    "tar",
+                    "-caf",
+                    REPORTS_ARTIFACT,
+                    "-C",
+                    str(criterion_home.parent),
+                    criterion_home.name,
+                ],
+                cwd=MZ_ROOT,
+            )
+            buildkite.upload_artifact(REPORTS_ARTIFACT, cwd=MZ_ROOT)
+        except subprocess.CalledProcessError as e:
+            print(f"^^^ +++ uploading criterion reports failed: {e}")
 
     if current_failures:
         raise RuntimeError(
