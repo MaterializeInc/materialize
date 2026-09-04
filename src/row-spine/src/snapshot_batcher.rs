@@ -643,7 +643,19 @@ mod tests {
             }
             let k = i64::try_from(k).expect("fits after the shift");
             let key = Row::pack_slice(&[Datum::Int64(k)]);
-            let val = Row::pack_slice(&[Datum::Int64(i64::try_from(i).expect("row count fits"))]);
+            let pad: usize = std::env::var("BENCH_PAD")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            let padding = "x".repeat(pad);
+            let val = if pad == 0 {
+                Row::pack_slice(&[Datum::Int64(i64::try_from(i).expect("row count fits"))])
+            } else {
+                Row::pack_slice(&[
+                    Datum::Int64(i64::try_from(i).expect("row count fits")),
+                    Datum::String(&padding),
+                ])
+            };
             cur.push(((key, val), Timestamp::from(1u64), 1i64));
             if cur.len() == per_container {
                 containers.push(std::mem::take(&mut cur));
