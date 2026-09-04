@@ -173,9 +173,13 @@ def loaded_image_digest(executable: Path, scratch: Path) -> str:
     """Return the sha256 hex digest of the bytes a loader actually maps for `executable`.
 
     Two builds of identical source from different checkouts still differ in
-    debug info, symbol names, and the build-id note, none of which the loader
-    maps into memory. Stripping those out before hashing judges identity on
-    the loaded program rather than on incidental build-location bytes.
+    debug info, symbol names, the build-id note, and `.comment` (compiler and
+    linker version strings, which vary if the system's C toolchain changed
+    between builds), none of which the loader maps into memory. Stripping
+    those out before hashing judges identity on the loaded program rather
+    than on incidental build-environment bytes. `--strip-all` removes symbol
+    tables and debug info but leaves `.comment` behind, so it is named
+    explicitly.
     """
     stripped = scratch / executable.name
     spawn.runv(
@@ -183,6 +187,7 @@ def loaded_image_digest(executable: Path, scratch: Path) -> str:
             "strip",
             "--strip-all",
             "--remove-section=.note.gnu.build-id",
+            "--remove-section=.comment",
             "-o",
             str(stripped),
             str(executable),
