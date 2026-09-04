@@ -254,6 +254,7 @@ impl Coordinator {
         let mut vpc_endpoints_to_drop = vec![];
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
+        let mut cluster_replicas_to_create = vec![];
         let mut active_compute_sinks_to_drop = BTreeMap::new();
         let mut peeks_to_drop = vec![];
         let mut copies_to_drop = vec![];
@@ -721,15 +722,14 @@ impl Coordinator {
                     let cluster = self.catalog().get_cluster(cluster_id);
                     let cluster_name = cluster.name.clone();
                     let cluster_role = cluster.role();
-                    self.handle_create_cluster_replica(
+                    cluster_replicas_to_create.push((
                         cluster_id,
                         replica_id,
                         cluster_role,
                         cluster_name,
                         replica.name.clone(),
                         replica.config.clone(),
-                    )
-                    .await;
+                    ));
                 }
                 CatalogImplication::ClusterReplica(CatalogImplicationKind::Altered {
                     prev: _prev_replica,
@@ -755,6 +755,42 @@ impl Coordinator {
                     );
                 }
             }
+        }
+
+        let clusters_with_replica_creates = cluster_replicas_to_create
+            .iter()
+            .map(|(cluster_id, ..)| *cluster_id)
+            .collect();
+        let (replacement_drops, deferred_drops) = partition_cluster_replica_drops(
+            &clusters_with_replica_creates,
+            cluster_replicas_to_drop,
+        );
+        cluster_replicas_to_drop = deferred_drops;
+
+        // A same-cluster mixed drop/create batch replaces the replica set, as a
+        // forced cut-over does. Catalog resource accounting charges its net, so
+        // controller side effects must preserve the same contract. Queue the
+        // old replicas' drops before creates. If orchestration needs time to
+        // release a physical quota, a later ensure can retry without blocking
+        // the drop behind it.
+        if !replacement_drops.is_empty() {
+            fail::fail_point!("after_catalog_drop_replica");
+            for (cluster_id, replica_id) in replacement_drops {
+                self.drop_replica(cluster_id, replica_id);
+            }
+        }
+        for (cluster_id, replica_id, role, cluster_name, replica_name, config) in
+            cluster_replicas_to_create
+        {
+            self.handle_create_cluster_replica(
+                cluster_id,
+                replica_id,
+                role,
+                cluster_name,
+                replica_name,
+                config,
+            )
+            .await;
         }
 
         if !source_collections_to_create.is_empty() {
@@ -1927,6 +1963,15 @@ impl CatalogImplication {
     impl_absorb_method!(absorb_cluster_replica, ClusterReplica, ClusterReplica);
 }
 
+fn partition_cluster_replica_drops(
+    clusters_with_creates: &BTreeSet<ClusterId>,
+    drops: Vec<(ClusterId, ReplicaId)>,
+) -> (Vec<(ClusterId, ReplicaId)>, Vec<(ClusterId, ReplicaId)>) {
+    drops
+        .into_iter()
+        .partition(|(cluster_id, _)| clusters_with_creates.contains(cluster_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1949,6 +1994,21 @@ mod tests {
             is_retained_metrics_object: false,
             data_source: TableDataSource::TableWrites { defaults: vec![] },
         }
+    }
+
+    #[mz_ore::test]
+    fn mixed_replica_drops_are_applied_before_creates() {
+        let c1 = ClusterId::user(1).expect("valid id");
+        let c2 = ClusterId::user(2).expect("valid id");
+        let r1 = ReplicaId::User(1);
+        let r2 = ReplicaId::User(2);
+        let creates = BTreeSet::from([c1]);
+
+        let (before_creates, deferred) =
+            partition_cluster_replica_drops(&creates, vec![(c1, r1), (c2, r2)]);
+
+        assert_eq!(before_creates, vec![(c1, r1)]);
+        assert_eq!(deferred, vec![(c2, r2)]);
     }
 
     #[mz_ore::test]
