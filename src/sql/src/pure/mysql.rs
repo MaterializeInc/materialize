@@ -338,6 +338,12 @@ pub(super) async fn purify_source_exports(
     requested_references: &Option<ExternalReferences>,
     text_columns: Vec<UnresolvedItemName>,
     exclude_columns: Vec<UnresolvedItemName>,
+    // NOTE: `exclude_constraints` and `exclude_all_constraints` are only ever
+    // non-empty/true for `CREATE TABLE .. FROM SOURCE`, which purifies exactly
+    // one export, so constraint names are validated against that single
+    // table's keys.
+    exclude_constraints: &BTreeSet<String>,
+    exclude_all_constraints: bool,
     unresolved_source_name: &UnresolvedItemName,
     initial_gtid_set: String,
     reference_policy: &SourceReferencePolicy,
@@ -402,6 +408,24 @@ pub(super) async fn purify_source_exports(
         .map(|requested_export| {
             let table = requested_export.meta.mysql_table().expect("is mysql");
             let table_ref = table.table_ref();
+
+            // Validate requested constraint names against the table's full,
+            // pre-pruning key set, so that a key whose columns are also
+            // excluded via EXCLUDE COLUMNS is still accepted. Note that
+            // MySQL's primary key index is literally named "PRIMARY".
+            let dangling_constraints: Vec<_> = exclude_constraints
+                .iter()
+                .filter(|n| !table.keys.iter().any(|k| &&k.name == n))
+                .cloned()
+                .collect();
+            if !dangling_constraints.is_empty() {
+                return Err(MySqlSourcePurificationError::DanglingExcludeConstraints {
+                    table: format!("{}.{}", table.schema_name, table.name),
+                    constraints: dangling_constraints,
+                }
+                .into());
+            }
+
             // we are cloning the BTreeSet<&str> so we can avoid a borrow on `table` here
             let text_cols = text_cols_map.get(&table_ref).map(|s| s.clone());
             let exclude_columns = exclude_columns_map.get(&table_ref).map(|s| s.clone());
@@ -426,6 +450,25 @@ pub(super) async fn purify_source_exports(
                     )),
                     _ => err.into(),
                 })?;
+            let mut parsed_table = parsed_table;
+            // An excluded constraint is never recorded as a key, so it neither
+            // becomes a Materialize relation key nor participates in the
+            // runtime schema compatibility check. Its later upstream drop is
+            // then a non-event.
+            parsed_table
+                .keys
+                .retain(|k| !exclude_constraints.contains(&k.name));
+            if exclude_all_constraints {
+                // No keys, and every column ingested as nullable, so dropping
+                // any PRIMARY KEY, UNIQUE, or NOT NULL constraint upstream is
+                // a non-event.
+                parsed_table.keys.clear();
+                for c in &mut parsed_table.columns {
+                    if let Some(column_type) = &mut c.column_type {
+                        column_type.nullable = true;
+                    }
+                }
+            }
             Ok(requested_export.change_meta(parsed_table))
         })
         .collect::<Result<Vec<_>, PlanError>>()?;

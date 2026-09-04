@@ -181,11 +181,25 @@ impl MySqlTableSchema {
             })?;
         }
 
+        // A key naming an excluded column can never be re-verified against
+        // upstream, since the column (and any index on it) can be dropped
+        // independently of the columns we still track. Drop such keys now
+        // rather than carrying a stale key that will look like an incompatible
+        // schema change once the excluded column disappears.
+        let keys = match &exclude_columns {
+            Some(excluded) => self
+                .keys
+                .into_iter()
+                .filter(|k| k.columns.iter().all(|c| !excluded.contains(&c.as_str())))
+                .collect(),
+            None => self.keys,
+        };
+
         Ok(MySqlTableDesc {
             schema_name: self.schema_name,
             name: self.name,
             columns,
-            keys: self.keys,
+            keys,
         })
     }
 }

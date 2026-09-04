@@ -84,6 +84,11 @@ impl MySqlTableDesc {
     /// exceptions:
     /// - `self`'s columns are a prefix of `other`'s columns.
     /// - `self`'s keys are all present in `other`
+    ///
+    /// On incompatibility, the error describes the first mismatch found and,
+    /// where possible, how to recover from it. The error text becomes the
+    /// permanent, user-visible error for the stalled table, so it must stand
+    /// on its own.
     pub fn determine_compatibility(
         &self,
         other: &MySqlTableDesc,
@@ -93,13 +98,18 @@ impl MySqlTableDesc {
             return Ok(());
         }
 
+        let table = format!("{}.{}", self.schema_name, self.name);
+
         if self.schema_name != other.schema_name || self.name != other.name {
             bail!(
-                "table name mismatch: self: {}.{}, other: {}.{}",
-                self.schema_name,
-                self.name,
+                "source table {} was renamed or replaced upstream (it is now {}.{}). \
+                 Materialize binds a table to the upstream table's identity and cannot \
+                 follow this change. To resume ingesting, create a replacement table \
+                 against the new upstream table in a new versioned schema and swap your \
+                 views to it.",
+                table,
                 other.schema_name,
-                other.name
+                other.name,
             );
         }
 
@@ -126,30 +136,65 @@ impl MySqlTableDesc {
                     .position(|oc| oc.name.as_str() == self_column.name.as_str())
             };
 
+            let dropped_column_error = || {
+                // We could not find a column in the incoming row that matches this
+                // descriptor column. This is an error as the column is not ignored
+                // (ignored columns have already been skipped).
+                anyhow::anyhow!(
+                    "column {} of source table {} was dropped or renamed upstream. \
+                     To resume ingesting, create a replacement table in a new versioned \
+                     schema (its snapshot captures the current upstream schema), swap \
+                     your views to it, and drop this table. To make a planned column \
+                     drop a non-event, create the replacement table with \
+                     WITH (EXCLUDE COLUMNS (\"{}\")) before the upstream drop.",
+                    self_column.name,
+                    table,
+                    self_column.name,
+                )
+            };
             let wire_idx = match wire_idx {
                 Some(idx) => idx,
-                None => {
-                    // We could not find a column in the incoming row that matches this descriptor column.
-                    // This is an error as the column is not ignored (ignored columns have already been skipped).
-                    return Err(anyhow::anyhow!(
-                        "column {} no longer present in table {}",
-                        self_column.name,
-                        self.name
-                    ));
-                }
+                None => return Err(dropped_column_error()),
             };
-            let other_column = other.columns.get(wire_idx).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "column {} no longer present in table {}",
-                    self_column.name,
-                    self.name
-                )
-            })?;
+            let other_column = other
+                .columns
+                .get(wire_idx)
+                .ok_or_else(dropped_column_error)?;
             if !self_column.is_compatible(other_column) {
+                let nullability_only_change =
+                    match (&self_column.column_type, &other_column.column_type) {
+                        (Some(self_type), Some(other_type)) => {
+                            self_column.name == other_column.name
+                                && !self_type.nullable
+                                && other_type.nullable
+                                && self_type.scalar_type == other_type.scalar_type
+                                && self_column.meta.is_compatible(&other_column.meta)
+                        }
+                        _ => false,
+                    };
+                if nullability_only_change {
+                    bail!(
+                        "the NOT NULL constraint on column {} of source table {} was \
+                         dropped upstream. Materialize relies on this constraint and \
+                         cannot continue ingesting the table. To resume ingesting, create \
+                         a replacement table in a new versioned schema (its snapshot \
+                         captures the current upstream schema, where the column is \
+                         nullable), swap your views to it, and drop this table. To make \
+                         planned constraint drops a non-event, create the replacement \
+                         table with WITH (EXCLUDE ALL CONSTRAINTS).",
+                        self_column.name,
+                        table,
+                    );
+                }
                 bail!(
-                    "column {} in table {} has been altered",
+                    "column {} of source table {} was altered upstream (its type, \
+                     nullability, or type metadata changed incompatibly). To ingest the \
+                     column as text regardless of its upstream type, create a replacement \
+                     table with WITH (TEXT COLUMNS (\"{}\")) in a new versioned schema and \
+                     swap your views to it.",
                     self_column.name,
-                    self.name
+                    table,
+                    self_column.name,
                 );
             }
         }
@@ -161,12 +206,27 @@ impl MySqlTableDesc {
         // up of columns (a, b) and key2 made up of columns (a, c) but now the table only has a
         // single unique key of just the column a then it's compatible because {a} ⊆ {a, b} and
         // {a} ⊆ {a, c}.
-        if self.keys.difference(&other.keys).next().is_some() {
+        if let Some(key) = self.keys.difference(&other.keys).next() {
+            // MySQL names the primary key's index literally "PRIMARY".
+            let kind = if key.is_primary {
+                "PRIMARY KEY"
+            } else {
+                "UNIQUE"
+            };
             bail!(
-                "keys in table {} have been altered: self: {:?}, other: {:?}",
-                self.name,
-                self.keys,
-                other.keys
+                "{} constraint \"{}\" ({}) on source table {} was dropped or altered \
+                 upstream. Materialize relies on this constraint and cannot continue \
+                 ingesting the table. To resume ingesting, create a replacement table in \
+                 a new versioned schema (its snapshot captures the current upstream \
+                 schema, without this constraint), swap your views to it, and drop this \
+                 table. To make a planned constraint drop a non-event, create the \
+                 replacement table with WITH (EXCLUDE CONSTRAINTS ('{}')) before the \
+                 upstream drop.",
+                kind,
+                key.name,
+                key.columns.join(", "),
+                table,
+                key.name,
             );
         }
 
