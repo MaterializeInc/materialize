@@ -39,7 +39,7 @@ use mz_ore::retry::Retry;
 use mz_ore::tracing::TracingHandle;
 use mz_ore::{assert_contains, assert_err, assert_ok, task};
 use mz_server_core::TlsCertConfig;
-use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
+use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -201,7 +201,13 @@ async fn test_balancer() {
             None,
             None,
             TracingHandle::disabled(),
-            vec![],
+            // Advertise HTTP/2 via ALPN. This defaults off in production so a
+            // balancerd that upgrades ahead of environmentd does not offer h2
+            // to clients before environmentd can parse it.
+            vec![(
+                "balancerd_https_enable_http2_alpn".to_string(),
+                "true".to_string(),
+            )],
         );
         let balancer_server = BalancerService::new(balancer_cfg).await.unwrap();
         let balancer_pgwire_listen = balancer_server.pgwire.0.local_addr();
@@ -288,6 +294,43 @@ async fn test_balancer() {
         let resp_x509 = X509::from_der(tlsinfo.peer_certificate().unwrap()).unwrap();
         let server_x509 = X509::from_pem(&std::fs::read(&server_cert).unwrap()).unwrap();
         assert_eq!(resp_x509, server_x509);
+        assert_eq!(resp.version(), reqwest::Version::HTTP_11);
+        assert_contains!(resp.text().await.unwrap(), "12234");
+
+        // With `balancerd_https_enable_http2_alpn` set, balancerd offers h2 to
+        // clients that ask for it. reqwest's native-tls backend does not, hence
+        // the HTTP/1.1 responses either side of this.
+        assert_eq!(
+            alpn_selected(balancer_https_listen, b"\x02h2\x08http/1.1")
+                .await
+                .as_deref(),
+            Some(&b"h2"[..])
+        );
+        assert_eq!(
+            alpn_selected(balancer_https_listen, b"\x08http/1.1")
+                .await
+                .as_deref(),
+            Some(&b"http/1.1"[..])
+        );
+
+        // HTTP/1.1-only clients are still served.
+        let http1_client = reqwest::Client::builder()
+            .add_root_certificate(
+                reqwest::Certificate::from_pem(&ca.cert.to_pem().unwrap()).unwrap(),
+            )
+            .pool_max_idle_per_host(0)
+            .http1_only()
+            .build()
+            .unwrap();
+        let resp = http1_client
+            .post(&https_url)
+            .header("Content-Type", "application/json")
+            .basic_auth(frontegg_user, Some(&frontegg_password))
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.version(), reqwest::Version::HTTP_11);
         assert_contains!(resp.text().await.unwrap(), "12234");
 
         // Generate new certs. Install only the key, reload, and make sure the old cert is still in
@@ -406,5 +449,39 @@ async fn test_balancer() {
             })
             .await
             .unwrap();
+
+        // The internal HTTP server serves h2c (HTTP/2 with prior knowledge)
+        // alongside HTTP/1.1.
+        let h2c_client = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+        let resp = h2c_client.get(&metrics_url).send().await.unwrap();
+        assert_eq!(resp.version(), reqwest::Version::HTTP_2);
+        assert!(resp.status().is_success());
     }
+}
+
+/// Returns the protocol the TLS server at `addr` selects for a client offering
+/// `alpn`, in OpenSSL wire format (length-prefixed protocol names).
+async fn alpn_selected(addr: SocketAddr, alpn: &'static [u8]) -> Option<Vec<u8>> {
+    // The handshake is blocking, and the server shares this runtime.
+    mz_ore::task::spawn_blocking(
+        || "alpn_probe",
+        move || {
+            let mut connector = SslConnector::builder(SslMethod::tls()).unwrap();
+            connector.set_verify(SslVerifyMode::NONE);
+            connector.set_alpn_protos(alpn).unwrap();
+            let stream = connector
+                .build()
+                .configure()
+                .unwrap()
+                .verify_hostname(false)
+                .use_server_name_indication(false)
+                .connect("", std::net::TcpStream::connect(addr).unwrap())
+                .unwrap();
+            stream.ssl().selected_alpn_protocol().map(<[u8]>::to_vec)
+        },
+    )
+    .await
 }
