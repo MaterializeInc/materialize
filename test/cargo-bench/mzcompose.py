@@ -12,6 +12,7 @@ Runs every criterion benchmark at an ancestor commit and at the current commit,
 then fails when a benchmark regressed beyond a threshold.
 """
 
+import hashlib
 import json
 import os
 import shutil
@@ -138,6 +139,7 @@ def run_bench(
     env: dict[str, str],
     target_home: Path,
     label: str,
+    header_suffix: str = "",
 ) -> int | None:
     """Run one compiled bench binary directly and return its exit code on failure, else `None`.
 
@@ -149,7 +151,7 @@ def run_bench(
     also what `CARGO_MANIFEST_DIR` would otherwise expand to at build time,
     so both are set here for a binary that inspects either at runtime.
     """
-    print(f"--- Benchmarking {built.package}/{built.name} ({label})")
+    print(f"--- Benchmarking {built.package}/{built.name} ({label}){header_suffix}")
     target_env = dict(
         env,
         CARGO_MANIFEST_DIR=str(built.manifest_dir),
@@ -167,6 +169,31 @@ def run_bench(
         return e.returncode
 
 
+def loaded_image_digest(executable: Path, scratch: Path) -> str:
+    """Return the sha256 hex digest of the bytes a loader actually maps for `executable`.
+
+    Two builds of identical source from different checkouts still differ in
+    debug info, symbol names, and the build-id note, none of which the loader
+    maps into memory. Stripping those out before hashing judges identity on
+    the loaded program rather than on incidental build-location bytes.
+    """
+    stripped = scratch / executable.name
+    spawn.runv(
+        [
+            "strip",
+            "--strip-all",
+            "--remove-section=.note.gnu.build-id",
+            "-o",
+            str(stripped),
+            str(executable),
+        ]
+    )
+    try:
+        return hashlib.sha256(stripped.read_bytes()).hexdigest()
+    finally:
+        stripped.unlink(missing_ok=True)
+
+
 def run_benches(
     head_built: list[BuiltBench],
     ancestor_built: list[BuiltBench],
@@ -174,7 +201,7 @@ def run_benches(
     ancestor_targets: list[BenchTarget],
     env: dict[str, str],
     criterion_home: Path,
-) -> tuple[list[TargetFailure], list[TargetFailure]]:
+) -> tuple[list[TargetFailure], list[TargetFailure], list[BuiltBench]]:
     """Run every HEAD bench binary, its ancestor counterpart first when one was built for the same target.
 
     Interleaving ancestor and HEAD per target, rather than running every
@@ -188,9 +215,12 @@ def run_benches(
     ancestor_by_key = {(b.package, b.name): b for b in ancestor_built}
     ancestor_target_by_key = {(t.package, t.name): t for t in ancestor_targets}
     head_target_by_key = {(t.package, t.name): t for t in head_targets}
+    scratch = criterion_home / "stripped"
+    scratch.mkdir(parents=True, exist_ok=True)
 
     ancestor_failures: list[TargetFailure] = []
     current_failures: list[TargetFailure] = []
+    identical: list[BuiltBench] = []
     for head_bin in sorted(head_built, key=lambda b: (b.package, b.name)):
         key = (head_bin.package, head_bin.name)
         # Benchmark ids are only unique within a target, so a collision
@@ -198,12 +228,28 @@ def run_benches(
         # unrelated benchmarks.
         target_home = criterion_home / head_bin.package / head_bin.name
         ancestor_bin = ancestor_by_key.get(key)
+        header_suffix = ""
         if ancestor_bin is not None:
             if ancestor_bin.executable == head_bin.executable:
                 raise RuntimeError(
                     f"{head_bin.package}/{head_bin.name}: ancestor and current bench "
                     f"binaries resolve to the same file {head_bin.executable}"
                 )
+            # A target whose loaded program is identical between ancestor and
+            # current cannot have changed in any way that affects the
+            # benchmark, and running it anyway only costs time and risks a
+            # false regression from shared CI hardware.
+            ancestor_digest = loaded_image_digest(ancestor_bin.executable, scratch)
+            head_digest = loaded_image_digest(head_bin.executable, scratch)
+            if ancestor_digest == head_digest:
+                print(
+                    f"--- Skipping {head_bin.package}/{head_bin.name}: identical binaries"
+                )
+                identical.append(head_bin)
+                continue
+            header_suffix = (
+                f" ancestor={ancestor_digest[:12]} current={head_digest[:12]}"
+            )
             rc = run_bench(
                 ancestor_bin,
                 ["--save-baseline", BASELINE],
@@ -224,11 +270,16 @@ def run_benches(
                 if d.is_dir():
                     shutil.rmtree(d)
         rc = run_bench(
-            head_bin, ["--baseline-lenient", BASELINE], env, target_home, "current"
+            head_bin,
+            ["--baseline-lenient", BASELINE],
+            env,
+            target_home,
+            "current",
+            header_suffix,
         )
         if rc is not None:
             current_failures.append(TargetFailure(head_target_by_key[key], rc))
-    return ancestor_failures, current_failures
+    return ancestor_failures, current_failures, identical
 
 
 def render_report(
@@ -237,6 +288,7 @@ def render_report(
     report: CompareReport,
     ancestor_failures: list[TargetFailure],
     current_failures: list[TargetFailure],
+    identical: list[BuiltBench],
 ) -> str:
     sections = []
     if ancestor is not None:
@@ -263,6 +315,11 @@ def render_report(
         )
     if report.warnings:
         sections.append("Warnings:\n" + "\n".join(f"* {w}" for w in report.warnings))
+    if identical:
+        sections.append(
+            "Bench targets with identical binaries at ancestor and current (not run):\n"
+            + "\n".join(f"* `{b.package}/{b.name}`" for b in identical)
+        )
     sections.append(render_markdown(report))
     return "\n\n".join(sections)
 
@@ -323,7 +380,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         head_built, current_build_failures = build_benches(
             MZ_ROOT, head_targets, head_manifests, env
         )
-        ancestor_run_failures, current_run_failures = run_benches(
+        ancestor_run_failures, current_run_failures, identical = run_benches(
             head_built, [], head_targets, [], env, criterion_home
         )
         ancestor_failures = ancestor_run_failures
@@ -375,7 +432,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             head_built, current_build_failures = build_benches(
                 MZ_ROOT, head_targets, head_manifests, env
             )
-            ancestor_run_failures, current_run_failures = run_benches(
+            ancestor_run_failures, current_run_failures, identical = run_benches(
                 head_built,
                 ancestor_built,
                 head_targets,
@@ -400,7 +457,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     report = compare(criterion_home, args.threshold)
     markdown = render_report(
-        ancestor, args.threshold, report, ancestor_failures, current_failures
+        ancestor,
+        args.threshold,
+        report,
+        ancestor_failures,
+        current_failures,
+        identical,
     )
     print(markdown)
 
