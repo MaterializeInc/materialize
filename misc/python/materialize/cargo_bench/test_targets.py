@@ -52,9 +52,7 @@ def test_bench_targets_filters_kind_and_sorts() -> None:
 
 def test_bench_targets_tolerates_missing_required_features_key() -> None:
     metadata = {
-        "packages": [
-            {"name": "p", "targets": [{"name": "b", "kind": ["bench"]}]}
-        ]
+        "packages": [{"name": "p", "targets": [{"name": "b", "kind": ["bench"]}]}]
     }
     assert bench_targets(metadata) == [BenchTarget("p", "b", ())]
 
