@@ -96,8 +96,8 @@
         The following `<with_option>`s are supported:
         | Option  | Description |
         |--------|-------------|
-        | `WAIT UNTIL READY(...)`    | ***Private preview.** This option has known performance or stability issues and is under active development.* {{< include-from-yaml data="examples/alter_cluster" name="wait-until-ready-cmd-option" >}} |
-        | `WAIT FOR` |  ***Private preview.** This option has known performance or stability issues and is under active development.* Equivalent to `WAIT UNTIL READY` with `ON TIMEOUT = 'ROLLBACK'`. Materialize cuts over once the new replicas hydrate. When Materialize processes an expired timeout, it rolls back the resize and keeps the current size if the target replicas are still unhydrated.|
+        | `WAIT UNTIL READY(...)`    | {{< include-from-yaml data="examples/alter_cluster" name="wait-until-ready-cmd-option" >}} |
+        | `WAIT FOR` | Equivalent to `WAIT UNTIL READY` with `ON TIMEOUT = 'ROLLBACK'`. Materialize cuts over once the new replicas hydrate. When Materialize processes an expired timeout, it rolls back the resize and keeps the current size if the target replicas are still unhydrated.|
 
 - name: "syntax-reset-to-default"
   code: |
