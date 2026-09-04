@@ -159,7 +159,11 @@ def render_markdown(report: CompareReport) -> str:
         "| --- | --- | --- | --- | --- | --- |",
     ]
     for r in report.results:
-        ancestor = format_duration(r.ancestor_mean_ns) if r.ancestor_mean_ns is not None else ""
+        ancestor = (
+            format_duration(r.ancestor_mean_ns)
+            if r.ancestor_mean_ns is not None
+            else ""
+        )
         change = _pct(r.change_mean) if r.change_mean is not None else ""
         ci = (
             f"[{_pct(r.change_lower)}, {_pct(r.change_upper)}]"
