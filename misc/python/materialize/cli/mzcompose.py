@@ -167,7 +167,7 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     # Convert to a list of the members: shtab renders them via str(), and
     # argparse still accepts the type-converted member, which converting to
     # name strings would not (the member never compares equal to its name).
-    for action in parser._actions:  # noqa: SLF001
+    for action in parser._actions:
         if isinstance(action.choices, type) and issubclass(action.choices, enum.Enum):
             action.choices = list(action.choices)
 

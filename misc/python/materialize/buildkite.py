@@ -13,13 +13,11 @@ import os
 from collections.abc import Callable
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 import yaml
 
 from materialize import git, spawn, ui
-
-T = TypeVar("T")
 
 
 class BuildkiteEnvVar(Enum):
@@ -229,7 +227,7 @@ def notify_qa_team_about_failure(failure: str) -> None:
     )
 
 
-def shard_list(items: list[T], to_identifier: Callable[[T], str]) -> list[T]:
+def shard_list[T](items: list[T], to_identifier: Callable[[T], str]) -> list[T]:
     if len(items) == 0:
         return []
 

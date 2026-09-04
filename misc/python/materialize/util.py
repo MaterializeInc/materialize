@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from threading import Thread
-from typing import Protocol, TypeVar
+from typing import Protocol
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import psycopg
@@ -37,10 +37,7 @@ def nonce(digits: int) -> str:
     return "".join(random.choice("0123456789abcdef") for _ in range(digits))
 
 
-T = TypeVar("T")
-
-
-def all_subclasses(cls: type[T]) -> set[type[T]]:
+def all_subclasses[T](cls: type[T]) -> set[type[T]]:
     """Returns a recursive set of all subclasses of a class"""
     sc = cls.__subclasses__()
     return set(sc).union([subclass for c in sc for subclass in all_subclasses(c)])
@@ -126,10 +123,7 @@ class HasName(Protocol):
     name: str
 
 
-U = TypeVar("U", bound=HasName)
-
-
-def selected_by_name(selected: list[str], objs: list[U]) -> Iterator[U]:
+def selected_by_name[U: HasName](selected: list[str], objs: list[U]) -> Iterator[U]:
     for name in selected:
         for obj in objs:
             if obj.name == name:

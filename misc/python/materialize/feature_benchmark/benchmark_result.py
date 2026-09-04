@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import Generic, TypeVar
+from typing import TypeVar
 
 from materialize.feature_benchmark.measurement import MeasurementType, MeasurementUnit
 from materialize.feature_benchmark.scenario import Scenario
@@ -56,7 +56,7 @@ class BenchmarkScenarioResult:
         return None
 
 
-class BenchmarkScenarioMetric(Generic[T]):
+class BenchmarkScenarioMetric[T]:
     def __init__(
         self, scenario_class: type[Scenario], measurement_type: MeasurementType
     ) -> None:
