@@ -227,5 +227,8 @@ pub struct BasicTopKPlan {
     /// The number of columns in the input and output.
     pub arity: usize,
     /// Bucket sizes for hierarchical stages of TopK.  Should be decreasing.
+    ///
+    /// Empty when the query's group size hint is at most sixteen, the fan-in of one stage; the
+    /// renderer reads that as a promise that groups are small.
     pub buckets: Vec<u64>,
 }

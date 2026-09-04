@@ -262,6 +262,16 @@ pub const ENABLE_SYNC_MV_SINK: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether a TopK stage may emit the rows it keeps instead of negations of the rows it drops,
+/// when the expected group size says the kept rows are fewer. Read at dataflow rendering time.
+pub const ENABLE_COMPUTE_TOPK_RETAINED_STAGES: Config<bool> = Config::new(
+    "enable_compute_topk_retained_stages",
+    false,
+    "Whether a TopK stage may emit the rows it keeps instead of negations of the rows it drops, \
+     when the expected group size says the kept rows are fewer.",
+    ParameterScope::Replica,
+);
+
 /// Whether rendering should use the new MV sink correction buffer implementation.
 pub const ENABLE_CORRECTION_V2: Config<bool> = Config::new(
     "enable_compute_correction_v2",
@@ -793,6 +803,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_ERROR_DISTINCT)
         .add(&ENABLE_MZ_JOIN_CORE)
         .add(&ENABLE_SYNC_MV_SINK)
+        .add(&ENABLE_COMPUTE_TOPK_RETAINED_STAGES)
         .add(&ENABLE_CORRECTION_V2)
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
         .add(&CORRECTION_V2_CHUNK_SIZE)
