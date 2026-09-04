@@ -274,7 +274,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     let (result, errs) = self.build_topk_stage(
                         thinned,
                         order_key,
-                        1u64,
+                        Some(1),
                         0,
                         limit,
                         arity,
@@ -354,13 +354,20 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
     ) {
         let pairer = Pairer::new(1);
         let mut datum_vec = mz_repr::DatumVec::new();
+        // Key each row for the first stage directly: its bucket of the row hash, or zero when
+        // the only stage is the final one and the hash would be discarded anyway.
+        let first_modulus = buckets.first().copied().unwrap_or(1);
         let mut collection = collection.map({
             move |row| {
                 let group_row = {
-                    let row_hash = row.hashed();
+                    let bucket = if first_modulus == 1 {
+                        0
+                    } else {
+                        row.hashed() % first_modulus
+                    };
                     let datums = datum_vec.borrow_with(&row);
                     let iterator = group_key.iter().map(|i| datums[*i]);
-                    pairer.merge(std::iter::once(Datum::from(row_hash)), iterator)
+                    pairer.merge(std::iter::once(Datum::from(bucket)), iterator)
                 };
                 (group_row, row)
             }
@@ -388,6 +395,8 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                 StageOutput::Dropped
             }
         };
+        // The input arrives keyed for the first stage; later stages rekey it.
+        let mut first = true;
         let mut validating = true;
         let mut err_collection: Option<VecCollection<'s, T, _, _>> = None;
 
@@ -426,13 +435,14 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                 let (oks, errs) = self.build_topk_stage(
                     collection,
                     order_key.clone(),
-                    bucket,
+                    (!first).then_some(bucket),
                     0,
                     Some(limit.clone()),
                     arity,
                     validating,
                     stage_output(bucket),
                 );
+                first = false;
                 collection = oks;
                 if validating {
                     err_collection = errs;
@@ -448,7 +458,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         let (oks, errs) = self.build_topk_stage(
             collection,
             order_key,
-            1u64,
+            (!first).then_some(1),
             offset,
             limit,
             arity,
@@ -509,7 +519,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         &self,
         collection: VecCollection<'s, T, (Row, Row), Diff>,
         order_key: Vec<mz_expr::ColumnOrder>,
-        modulus: u64,
+        modulus: Option<u64>,
         offset: usize,
         limit: Option<LirScalarExpr>,
         arity: usize,
@@ -519,14 +529,17 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         VecCollection<'s, T, (Row, Row), Diff>,
         Option<VecCollection<'s, T, DataflowErrorSer, Diff>>,
     ) {
-        // Form appropriate input by updating the `hash` column (first datum in `hash_key`) by
-        // applying `modulus`.
-        let input = collection.map(move |(hash_key, row)| {
-            let mut hash_key_iter = hash_key.iter();
-            let hash = hash_key_iter.next().unwrap().unwrap_uint64() % modulus;
-            let hash_key = SharedRow::pack(std::iter::once(hash.into()).chain(hash_key_iter));
-            (hash_key, row)
-        });
+        // Rekey the input by applying `modulus` to the hash column (first datum in `hash_key`),
+        // unless the input already arrives keyed for this stage.
+        let input = match modulus {
+            Some(modulus) => collection.map(move |(hash_key, row)| {
+                let mut hash_key_iter = hash_key.iter();
+                let hash = hash_key_iter.next().unwrap().unwrap_uint64() % modulus;
+                let hash_key = SharedRow::pack(std::iter::once(hash.into()).chain(hash_key_iter));
+                (hash_key, row)
+            }),
+            None => collection,
+        };
 
         // If validating: demux errors, otherwise we cannot produce errors.
         let (input, oks, errs) = if validating {
