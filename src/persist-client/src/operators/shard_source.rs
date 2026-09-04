@@ -20,7 +20,6 @@ use std::hash::{Hash, Hasher};
 use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
 
 use anyhow::anyhow;
 use arrow::array::ArrayRef;
@@ -511,6 +510,9 @@ where
         let coalesce_target = u64::cast_from(SOURCE_HYDRATION_FRONTIER_COALESCE_BYTES.get(&cfg));
         // Encoded bytes emitted since the last forwarded progress.
         let mut coalesced_bytes: u64 = 0;
+        // Encoded bytes handed to each worker so far, so each part can go to the least
+        // loaded worker.
+        let mut worker_bytes: Vec<u64> = vec![0; num_workers];
 
         // If `until.less_equal(current_frontier)`, it means that all subsequent batches will contain only
         // times greater or equal to `until`, which means they can be dropped in their entirety.
@@ -598,15 +600,22 @@ where
                     }
                 }
 
-                // Give the part to a random worker. This isn't round robin in an attempt to avoid
-                // skew issues: if your parts alternate size large, small, then you'll end up only
-                // using half of your workers.
-                //
-                // There's certainly some other things we could be doing instead here, but this has
-                // seemed to work okay so far. Continue to revisit as necessary.
-                let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
-                batch_bytes =
-                    batch_bytes.saturating_add(u64::cast_from(part_desc.encoded_size_bytes()));
+                // Give the part to the worker that has received the fewest encoded bytes so
+                // far. Round robin fails when parts alternate large and small, leaving half the
+                // workers idle; random placement avoids that but accepts balls-in-bins
+                // imbalance, which with the tens of parts a snapshot typically has leaves the
+                // busiest worker with two to three times the bytes of the least busy one, and
+                // hydration waits for the busiest. Placing by load handles both, and is
+                // deterministic for a given part sequence.
+                let part_bytes = u64::cast_from(part_desc.encoded_size_bytes());
+                let worker_idx = worker_bytes
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(idx, bytes)| (**bytes, *idx))
+                    .map(|(idx, _)| idx)
+                    .expect("at least one worker");
+                worker_bytes[worker_idx] = worker_bytes[worker_idx].saturating_add(part_bytes);
+                batch_bytes = batch_bytes.saturating_add(part_bytes);
                 let (part, lease) = part_desc.into_exchangeable_part();
                 leases.borrow_mut().push_at(current_ts.clone(), lease);
                 descs_output.give(&session_cap, (worker_idx, part));
@@ -808,6 +817,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use super::*;
     use std::sync::Arc;
 
