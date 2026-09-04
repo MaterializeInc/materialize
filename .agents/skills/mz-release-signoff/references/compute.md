@@ -15,7 +15,9 @@ Cluster-level panels split into two families with different label names for the 
 | Family | Cluster label | Replica label |
 |---|---|---|
 | Controller, protocol, peeks, and `v2_mz_*` replica metrics | `instance_id` | `replica_id` |
-| `mz_arrangement_*`, `mz_dataflow_replica_*`, `mz_subscribe_*`, `mz_cluster_*` | `cluster_environmentd_materialize_cloud_cluster_id` | `cluster_environmentd_materialize_cloud_replica_id` |
+| `mz_arrangement_*`, `mz_dataflow_replica_*`, `mz_subscribe_*`, `mz_cluster_*`, `mz_compute_replica_history_*` | `cluster_environmentd_materialize_cloud_cluster_id` | `cluster_environmentd_materialize_cloud_replica_id` |
+
+The second family is everything scraped from `clusterd`, so membership follows which process exports the metric rather than the panel row it appears under. `mz_compute_replica_history_command_count` sits there despite its `mz_compute_` prefix and its neighbours on the `[history]` panels, because the replica keeps that history itself. Writing its system-cluster filter as `instance_id=~"s[0-9]+"` matches nothing and the sweep reads the empty result as a healthy zero.
 
 System clusters are `s` followed by digits in either family, and `.*cluster-s[0-9]+-replica-.*` in the pod name.
 
@@ -26,10 +28,10 @@ System clusters are `s` followed by digits in either family, and `.*cluster-s[0-
 | Metric | Type | Notes |
 |---|---|---|
 | `container_cpu_usage_seconds_total` | counter | Needs `cpu="total"`. Divide by `container_spec_cpu_quota` for percent of limit. |
-| `container_memory_working_set_bytes` | gauge | Resident plus active file. The primary memory signal. |
+| `container_memory_working_set_bytes` | gauge | Resident plus active file. Not comparable across a boundary on its own, see hazards. |
 | `container_memory_rss` | gauge | Tracks working set closely; a divergence between them is itself a finding. |
-| `container_memory_swap` | gauge | Limit is `container_spec_memory_swap_limit_bytes`. Grows with process age on swap-enabled nodes. |
-| `mz_memory_limiter_memory_usage_bytes` | gauge | Memory plus swap, the quantity the limiter enforces. Divide by `mz_memory_limiter_memory_limit_bytes`. |
+| `container_memory_swap` | gauge | Limit is `container_spec_memory_swap_limit_bytes`. Grows with process age on swap-enabled nodes, and trades against working set at a restart. |
+| `mz_memory_limiter_memory_usage_bytes` | gauge | Memory plus swap, the quantity the limiter enforces, and the tightest memory reading across a boundary. Present only on replicas that run the limiter, see hazards. Divide by `mz_memory_limiter_memory_limit_bytes`. |
 | `mz_metrics_libc_ru_maxrss_bytes` | gauge, monotone per process | Peak resident set. Resets to zero on restart, so it measures the current generation only. |
 | `kubelet_volume_stats_used_bytes` | gauge | Scratch disk. Limit is `kubelet_volume_stats_capacity_bytes`. |
 | `container_start_time_seconds` | gauge | Source of the uptime panel, and the cheapest way to establish restart age. |
@@ -49,7 +51,7 @@ System clusters are `s` followed by digits in either family, and `.*cluster-s[0-
 | `mz_compute_commands_total`, `mz_compute_responses_total` | counter | Protocol volume. Doubles for one bucket during a zero-downtime upgrade. |
 | `mz_compute_command_message_bytes_total`, `mz_compute_response_message_bytes_total` | counter | Protocol bytes. Worth checking when a change touches command encoding. |
 | `mz_compute_controller_history_command_count`, `_history_dataflow_count` | gauge | Controller-side command history, which should be reduced and not grow without bound. |
-| `mz_compute_replica_history_command_count`, `_history_dataflow_count` | gauge | Replica-side equivalent. |
+| `mz_compute_replica_history_command_count`, `_history_dataflow_count` | gauge | Replica-side equivalent, on the `cluster_environmentd_*` labels. Also carries `command_type` and `worker_id`, so any sum of it is worker-weighted and moves with worker count. |
 | `mz_compute_peeks_total` | counter | Label `result`. Successes are `rows` and `rows_stashed`; anything else is an error or a cancellation. |
 | `mz_compute_peek_duration_seconds_bucket` | histogram | Quantiles need `sum by (le)` after any namespace join. |
 | `v2_mz_dataflow_elapsed_seconds_total` | counter | Compute time. Strongly workload-shaped, and often the noisiest series on the dashboard. |
@@ -73,9 +75,15 @@ Each entry states a property that holds at any fleet size, followed by the measu
 
 **Working set falls at every upgrade.** In production canary us-east-1 the sum fell from about 290 GB to about 236 GB at the v26.37.0 rollout with no change in the code that mattered, purely because arrangements were rebuilt fresh. Judge memory by the slope within a release, not the step across one.
 
+**Working set and swap redistribute across a restart at a conserved total, so neither half is comparable across a boundary on its own.** On swap-enabled nodes the kernel repartitions a process's pages between resident and swapped at the restart, in either direction and by large fractions, while memory plus swap stays put. Two production canary replicas moved opposite ways across the v26.40.0-rc.3 rollout and both conserved `mz_memory_limiter_memory_usage_bytes` to within 0.1%: one went from 75.7 GB resident and 138.9 GB swap to 6.8 and 200.2 at 203.2 GB then 201.2 GB total, the other from 75.5 and 45.6 to 85.1 and 34.8 at 115.6 GB then 115.5 GB total. Either half alone therefore shows a 13% to 90% step with no change in footprint, which reads as a memory regression on the working-set panel and as an improvement on the swap panel. The direction is not predictable from the release, so a step in one half is only a finding once the total moves with it.
+
+**The limiter gauges cover only the replicas that run the memory limiter, so a fleet `sum()` of them is not a fleet total.** `mz_memory_limiter_*` is registered by `start_limiter` (`src/compute/src/memory_limiter.rs`), which `clusterd` calls only when it was given `--heap-limit`, which the controller passes only for a replica whose size has swap enabled, a memory limit, and a non-zero disk limit (`src/controller/src/clusters.rs`). A size requests unlimited swap by declaring a zero disk limit, so even swap-enabled replicas can run without the limiter, and non-swap sizes export no series at all. Measured in September 2026: the production canary is fully covered, 34 to 36 of 34 to 36 clusterd replica pods, while staging us-east-1 covered 167 to 440 of 202 to 615, so 14% to 28% of its replicas were missing. Use the limiter total where it exists, since it is the tightest reading, and fall back to `container_memory_working_set_bytes + container_memory_swap` for whole-fleet work, which covers every pod and held to within 1% and 3.5% on the two replicas above. Comparing a limiter sum against a working-set sum over the same selector compares different fleets.
+
 **Arrangement gauges are bimodal.** `v2_mz_arrangement_record_count` and `v2_mz_arrangement_size_bytes` swing by a factor of three to ten as periodic dataflows rebuild. In August 2026 staging us-east-1 alternated between 0.72e9 and 2.86e9 records with no release involvement. Compare low state against low state, because spike heights are not comparable.
 
-**Peak resident set and swap are restart-sensitive.** Both reset or decay at an upgrade, so a level drop across the boundary is the restart and not the release. Peak resident set therefore describes the current generation only.
+**Peak resident set resets at an upgrade,** so it describes the current generation only and a level drop across the boundary is the restart rather than the release. Swap is restart-sensitive for a different reason, covered by the conserved-total entry above.
+
+**Major fault rate follows the resident/swap split, not the release.** Production canary major faults went from about 10/s to 74&#8211;106/s across the v26.40.0-rc.3 boundary, with more of the working set living in swap and additional replicas hydrating. Read it alongside whichever conserved total the selector supports, and treat a rise with a flat total as paging behaviour.
 
 **Arrangement maintenance ramps after a restart.** Measured at 0.020 s/s one day after an upgrade and 0.030 s/s three days later on the same release, so an apparent increase across a boundary can be nothing more than a difference in age.
 
