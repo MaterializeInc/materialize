@@ -20,9 +20,15 @@
 //! on equal prefixes, and emits the sorted, consolidated chain in one copy pass. The first chunk
 //! carrying a second time hands everything held to a [`MergeBatcher`], and the batcher stays on
 //! that path from then on, so steady-state behaviour is the merge batcher's.
+//!
+//! [`UnsortedChunker`] pairs with it: chunks arrive in arrival order, since sorting them ahead
+//! of a batcher that sorts everything at `seal` is wasted, and the batcher sorts and
+//! consolidates each chunk itself before handing it to the merge batcher on the fallback path.
 
 use std::cmp::Ordering;
+use std::collections::VecDeque;
 
+use columnar::{Columnar, Index, Len};
 use columnation::Columnation;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -30,8 +36,9 @@ use differential_dataflow::logging::Logger;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::{Batcher, Description};
 use mz_repr::Row;
+use mz_timely_util::columnar::Column;
 use mz_timely_util::columnation::{ColInternalMerger, ColumnationStack};
-use timely::container::PushInto;
+use timely::container::{ContainerBuilder, PushInto};
 use timely::progress::Timestamp;
 use timely::progress::frontier::{Antichain, AntichainRef};
 
@@ -101,6 +108,35 @@ where
         } else {
             1
         }
+    }
+
+    /// Sort and consolidate one chunk, for handing to the general path, which requires it.
+    fn sort_chunk(chunk: Chunk<D, T, R>) -> Chunk<D, T, R> {
+        let mut index: Vec<usize> = (0..chunk.len()).collect();
+        index.sort_unstable_by(|&a, &b| {
+            let (da, ta, _) = &chunk[a];
+            let (db, tb, _) = &chunk[b];
+            (da, ta).cmp(&(db, tb))
+        });
+        let mut out: Chunk<D, T, R> = ColumnationStack::with_capacity(chunk.len());
+        let mut iter = index.iter().peekable();
+        while let Some(&i) = iter.next() {
+            let (d, t, r) = &chunk[i];
+            let mut diff = r.clone();
+            while let Some(&&j) = iter.peek() {
+                let (d2, t2, r2) = &chunk[j];
+                if (d2, t2).cmp(&(d, t)) == Ordering::Equal {
+                    diff.plus_equals(r2);
+                    iter.next();
+                } else {
+                    break;
+                }
+            }
+            if !diff.is_zero() {
+                out.copy_destructured(d, t, &diff);
+            }
+        }
+        out
     }
 
     /// Sort and consolidate everything pending into a chain of chunks, in one copy pass.
@@ -243,15 +279,132 @@ where
                 self.pending.push(chunk);
                 return;
             }
-            // A second time: hand everything held to the general path, for good.
+            // A second time: hand everything held to the general path, for good. The merge
+            // batcher needs sorted, consolidated chunks, which the chunker did not provide.
             self.general = true;
             self.time = None;
             self.pending_len = 0;
             for held in self.pending.drain(..) {
-                self.inner.push_into(held);
+                self.inner.push_into(Self::sort_chunk(held));
             }
         }
-        self.inner.push_into(chunk);
+        self.inner.push_into(Self::sort_chunk(chunk));
+    }
+}
+
+/// A chunker that packs incoming updates into [`ColumnationStack`] chunks in arrival order.
+///
+/// The sorting chunkers sort and consolidate every input container before the batcher sees
+/// it. A [`SnapshotBatcher`] sorts everything it holds at `seal`, so that work is wasted on
+/// its fast path; on the fallback path it sorts the held chunks itself (see
+/// [`SnapshotBatcher::sort_chunk`]). Only pair this chunker with that batcher.
+pub struct UnsortedChunker<D, T, R>
+where
+    D: Columnation,
+    T: Columnation,
+    R: Columnation,
+{
+    pending: Vec<(D, T, R)>,
+    ready: VecDeque<ColumnationStack<(D, T, R)>>,
+    empty: Option<ColumnationStack<(D, T, R)>>,
+}
+
+impl<D, T, R> Default for UnsortedChunker<D, T, R>
+where
+    D: Columnation,
+    T: Columnation,
+    R: Columnation,
+{
+    fn default() -> Self {
+        Self {
+            pending: Vec::new(),
+            ready: VecDeque::new(),
+            empty: None,
+        }
+    }
+}
+
+impl<D, T, R> UnsortedChunker<D, T, R>
+where
+    D: Columnation,
+    T: Columnation,
+    R: Columnation,
+{
+    /// Records per chunk, matching the merge batcher's 64 KiB chunks.
+    fn chunk_capacity() -> usize {
+        const BUFFER_SIZE_BYTES: usize = 64 << 10;
+        let size = std::mem::size_of::<(D, T, R)>();
+        if size == 0 {
+            BUFFER_SIZE_BYTES
+        } else if size <= BUFFER_SIZE_BYTES {
+            BUFFER_SIZE_BYTES / size
+        } else {
+            1
+        }
+    }
+
+    fn form_chunks(&mut self, all: bool) {
+        let cap = Self::chunk_capacity();
+        while self.pending.len() >= cap || (all && !self.pending.is_empty()) {
+            let take = std::cmp::min(self.pending.len(), cap);
+            let mut chunk = ColumnationStack::with_capacity(cap);
+            for item in self.pending.drain(..take) {
+                chunk.copy(&item);
+            }
+            self.ready.push_back(chunk);
+        }
+    }
+}
+
+impl<'a, D, T, R> PushInto<&'a mut Vec<(D, T, R)>> for UnsortedChunker<D, T, R>
+where
+    D: Columnation,
+    T: Columnation,
+    R: Columnation,
+{
+    fn push_into(&mut self, container: &'a mut Vec<(D, T, R)>) {
+        self.pending.append(container);
+        self.form_chunks(false);
+    }
+}
+
+impl<'a, D, T, R> PushInto<&'a mut Column<(D, T, R)>> for UnsortedChunker<D, T, R>
+where
+    D: Columnar + Columnation,
+    T: Columnar + Columnation,
+    R: Columnar + Columnation,
+{
+    fn push_into(&mut self, container: &'a mut Column<(D, T, R)>) {
+        let borrowed = container.borrow();
+        self.pending.reserve(borrowed.len());
+        for (d, t, r) in borrowed.into_index_iter() {
+            self.pending
+                .push((D::into_owned(d), T::into_owned(t), R::into_owned(r)));
+        }
+        self.form_chunks(false);
+    }
+}
+
+impl<D, T, R> ContainerBuilder for UnsortedChunker<D, T, R>
+where
+    D: Columnation + Clone + 'static,
+    T: Columnation + Clone + 'static,
+    R: Columnation + Clone + 'static,
+{
+    type Container = ColumnationStack<(D, T, R)>;
+
+    fn extract(&mut self) -> Option<&mut Self::Container> {
+        if let Some(ready) = self.ready.pop_front() {
+            self.empty = Some(ready);
+            self.empty.as_mut()
+        } else {
+            None
+        }
+    }
+
+    fn finish(&mut self) -> Option<&mut Self::Container> {
+        self.form_chunks(true);
+        self.extract()
     }
 }
 
@@ -348,6 +501,45 @@ mod tests {
         let (chain, _) = b.seal(upper(3));
         assert_eq!(collect(&chain), vec![(8, 2, 1), (9, 2, 1)]);
         assert!(!b.general);
+    }
+
+    /// A chunk in arrival order, as [`UnsortedChunker`] produces.
+    fn unsorted(updates: &[(i64, u64, i64)]) -> Chunk<(Row, ()), u64, i64> {
+        let mut out = ColumnationStack::with_capacity(updates.len());
+        for (k, t, r) in updates {
+            out.copy(&((Row::pack_slice(&[Datum::Int64(*k)]), ()), *t, *r));
+        }
+        out
+    }
+
+    #[mz_ore::test]
+    fn unsorted_chunks_on_both_paths() {
+        let mut b = B::new(None, 0);
+        b.push_into(unsorted(&[(3, 1, 1), (1, 1, 1), (3, 1, 1)]));
+        let (chain, _) = b.seal(upper(2));
+        assert_eq!(collect(&chain), vec![(1, 1, 1), (3, 1, 2)]);
+        b.push_into(unsorted(&[(9, 3, 1), (2, 3, 1), (9, 3, -1)]));
+        b.push_into(unsorted(&[(5, 4, 1), (2, 3, 1)]));
+        let (chain, _) = b.seal(upper(5));
+        assert!(b.general);
+        assert_eq!(collect(&chain), vec![(2, 3, 2), (5, 4, 1)]);
+    }
+
+    #[mz_ore::test]
+    fn unsorted_chunker_keeps_arrival_order_and_chunk_size() {
+        let mut c: UnsortedChunker<(Row, ()), u64, i64> = UnsortedChunker::default();
+        let mut input: Vec<((Row, ()), u64, i64)> = (0..5)
+            .rev()
+            .map(|k| ((Row::pack_slice(&[Datum::Int64(k)]), ()), 1, 1))
+            .collect();
+        c.push_into(&mut input);
+        assert!(c.extract().is_none(), "below chunk capacity, nothing ready");
+        let chunk = c.finish().expect("finish flushes");
+        let keys: Vec<i64> = chunk
+            .iter()
+            .map(|((k, ()), _, _)| k.iter().next().unwrap().unwrap_int64())
+            .collect();
+        assert_eq!(keys, vec![4, 3, 2, 1, 0]);
     }
 
     #[mz_ore::test]

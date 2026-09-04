@@ -1282,7 +1282,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             >(exchange, name),
             ArrangementBatcher::Columnation => ok_stream.mz_arrange_core::<
                 _,
-                batcher::Chunker<_>,
+                mz_row_spine::snapshot_batcher::UnsortedChunker<_, _, _>,
                 mz_row_spine::RowRowBatcher<_, _>,
                 RowRowBuilder<_, _>,
                 RowRowSpine<_, _>,

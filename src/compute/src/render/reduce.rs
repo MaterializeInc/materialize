@@ -301,7 +301,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
         let arranged = collection
             .mz_arrange::<
-                ColumnationChunker<_>,
+                mz_row_spine::snapshot_batcher::UnsortedChunker<_, _, _>,
                 RowRowBatcher<_, _>,
                 RowRowBuilder<_, _>,
                 RowRowSpine<_, _>,
@@ -411,7 +411,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
         let arranged = differential_dataflow::collection::concatenate(input.scope(), to_collect)
             .mz_arrange::<
-                ColumnationChunker<_>,
+                mz_row_spine::snapshot_batcher::UnsortedChunker<_, _, _>,
                 RowValBatcher<_, _, _>,
                 RowValBuilder<_, _, _>,
                 RowValSpine<_, _, _>,
@@ -577,7 +577,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         };
         let arranged = partial
             .mz_arrange::<
-                ColumnationChunker<_>,
+                mz_row_spine::snapshot_batcher::UnsortedChunker<_, _, _>,
                 RowRowBatcher<_, _>,
                 RowRowBuilder<_, _>,
                 RowRowSpine<_, _>,
@@ -806,7 +806,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
         let input: KeyCollection<_, _, _> = input.into();
         let arranged = input.mz_arrange::<
-            ColumnationChunker<_>,
+            mz_row_spine::snapshot_batcher::UnsortedChunker<_, _, _>,
             RowBatcher<_, _>,
             RowBuilder<_, _>,
             RowSpine<_, _>,
@@ -941,7 +941,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 // view mz_introspection.mz_expected_group_size_advice.
                 let arranged = partial
                     .mz_arrange::<
-                        ColumnationChunker<_>,
+                        mz_row_spine::snapshot_batcher::UnsortedChunker<_, _, _>,
                         RowRowBatcher<_, _>,
                         RowRowBuilder<_, _>,
                         RowRowSpine<_, _>,
@@ -1152,7 +1152,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         // view mz_introspection.mz_expected_group_size_advice.
         let arranged_input = input
             .mz_arrange::<
-                ColumnationChunker<_>,
+                mz_row_spine::snapshot_batcher::UnsortedChunker<_, _, _>,
                 RowRowBatcher<_, _>,
                 RowRowBuilder<_, _>,
                 RowRowSpine<_, _>,
@@ -1285,7 +1285,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let partial: KeyCollection<_, _, _> = partial.into();
         let arranged = partial
             .mz_arrange::<
-                ColumnationChunker<_>,
+                mz_row_spine::snapshot_batcher::UnsortedChunker<_, _, _>,
                 RowBatcher<_, _>,
                 RowBuilder<_, _>,
                 RowSpine<_, Vec<ReductionMonoid>>,
@@ -1441,7 +1441,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     (pairer.merge(&key, std::iter::once(value)), ())
                 })
                 .mz_arrange::<
-                    ColumnationChunker<_>,
+                    mz_row_spine::snapshot_batcher::UnsortedChunker<_, _, _>,
                     RowBatcher<_, _>,
                     RowBuilder<_, _>,
                     RowSpine<_, _>,
@@ -1484,7 +1484,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let err_full_aggrs = full_aggrs.clone();
         let arranged = collection
             .mz_arrange::<
-                ColumnationChunker<_>,
+                mz_row_spine::snapshot_batcher::UnsortedChunker<_, _, _>,
                 RowBatcher<_, _>,
                 RowBuilder<_, _>,
                 RowSpine<_, (Vec<Accum>, Diff)>,

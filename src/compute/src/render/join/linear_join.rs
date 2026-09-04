@@ -405,7 +405,7 @@ where
                 >(exchange, "JoinStage"),
                 ArrangementBatcher::Columnation => keyed.mz_arrange_core::<
                     _,
-                    batcher::Chunker<_>,
+                    mz_row_spine::snapshot_batcher::UnsortedChunker<_, _, _>,
                     mz_row_spine::RowRowBatcher<_, _>,
                     RowRowBuilder<_, _>,
                     RowRowSpine<_, _>,
