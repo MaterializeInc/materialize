@@ -71,6 +71,7 @@ For more information, see:
 - **Query History for Self-Managed**: Self-Managed deployments can now use the Console's Query History view to debug latency and performance.
 - **Bounded staleness isolation is generally available**: The [`bounded staleness <duration>`](/reference/isolation-level/#bounded-staleness) transaction [isolation level](/reference/isolation-level/) is out of public preview and is now a supported part of the [`transaction_isolation`](/reference/isolation-level/#setting-isolation-level) surface. See [when to use bounded staleness](/reference/isolation-level/#when-to-use-bounded-staleness) and its [restrictions](/reference/isolation-level/#restrictions).
 - **Replica resource usage introspection**: A new `mz_introspection.mz_cluster_replica_resource_usage` relation reports each replica process's own memory, swap, and disk observations at a higher cadence than the roughly once-a-minute orchestrator samples, so a spike between two samples is no longer invisible.
+- **Self-Managed: Automatic rollouts on GKE node pool upgrades**: The Materialize operator can now detect GKE node pool upgrades and automatically trigger rollouts to move workloads onto the new nodes, preventing outages from automatic node evictions. Deployments that use the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules) (v9.0.0 and later) get this configured for them, with no action needed; for all other deployments, see [GKE node pool upgrades](/self-managed-deployments/deployment-guidelines/gke-node-pool-upgrades/) for the setup steps.
 
 ### Agent Skills {#v26.40-agent-skills}
 - **mz-optimize-memory**: A new skill that works top-down from a cluster's largest arrangements to a table of memory-reducing fixes — index changes, outer-join and subquery rewrites, window-function patterns, and arrangement size hints — with rules for estimating each saving before making the change and verifying it afterwards.
@@ -225,7 +226,6 @@ For more information, see:
 ### Improvements {#v26.36-improvements}
 - **`dbt-materialize`: `AUTO SCALING STRATEGY` support**: The dbt adapter now supports the `AUTO SCALING STRATEGY` cluster option, so you can speed up cluster hydration from your dbt workflows. You can set, reset, and disable it on a cluster, and `deploy_init` will automatically copy strategy configuration during blue/green deploys.
 - **Updated timezone data**: The IANA timezone database has been updated from 2022g to 2025b, correcting timezone rules for Egypt, Kazakhstan, Paraguay, and Greenland that changed since 2023. Numeric timezone abbreviations (e.g., `+05`) now render correctly in `pg_timezone_names`.
-- **Self-Managed: Automatic rollouts on GKE node pool upgrades**: The Materialize operator can now detect GKE node pool upgrades and automatically trigger rollouts to move workloads onto the new nodes, preventing outages from automatic node evictions.
 
 ### Bug Fixes {#v26.36-bug-fixes}
 - Fixed a coordinator panic when a client abandoned a connection attempt that had already failed, such as an HTTP request that disconnects or times out.
