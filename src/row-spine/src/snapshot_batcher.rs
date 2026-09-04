@@ -35,6 +35,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::logging::Logger;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::{Batcher, Description};
+use mz_ore::cast::CastFrom;
 use mz_repr::Row;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnation::{ColInternalMerger, ColumnationStack};
@@ -153,40 +154,61 @@ where
         let get = |e: &(u64, u32, u32)| {
             &pending[usize::try_from(e.1).unwrap()][usize::try_from(e.2).unwrap()]
         };
-        // Full comparisons only on equal prefixes, which `sort_prefix` guarantees agree with the
-        // row order otherwise.
-        index.sort_unstable_by(|a, b| {
-            a.0.cmp(&b.0).then_with(|| {
-                let (da, ta, _) = get(a);
-                let (db, tb, _) = get(b);
-                (da, ta).cmp(&(db, tb))
-            })
-        });
+        // Sort by prefix alone; equal prefixes are settled by full comparison as they are gathered,
+        // which `sort_prefix` guarantees agrees with the row order otherwise.
+        radix_sort_by_prefix(&mut index);
 
         let cap = Self::chunk_capacity();
         let mut output = Vec::with_capacity(self.pending_len / cap + 1);
         let mut result: Chunk<D, T, R> = ColumnationStack::with_capacity(cap);
-        let mut iter = index.iter().peekable();
-        while let Some(e) = iter.next() {
-            let (d, t, r) = get(e);
-            let mut diff = r.clone();
-            while let Some(n) = iter.peek() {
-                let (d2, t2, r2) = get(n);
-                if (d2, t2).cmp(&(d, t)) == Ordering::Equal {
-                    diff.plus_equals(r2);
-                    iter.next();
-                } else {
-                    break;
-                }
+        // The sorted order visits the held rows at random, so each row is a cache miss. Touching
+        // the row `LOOKAHEAD` entries ahead lets that miss overlap the work on this row. The
+        // value read is unused.
+        const LOOKAHEAD: usize = 16;
+        let n = index.len();
+        let mut i = 0;
+        while i < n {
+            if i + LOOKAHEAD < n {
+                let (d, _, _) = get(&index[i + LOOKAHEAD]);
+                // SAFETY: `d` is a live element of a held chunk.
+                unsafe { std::ptr::read_volatile(std::ptr::from_ref(d).cast::<u8>()) };
             }
-            if !diff.is_zero() {
-                if result.len() == cap {
-                    output.push(std::mem::replace(
-                        &mut result,
-                        ColumnationStack::with_capacity(cap),
-                    ));
+            // A run of equal prefixes is the only place rows can compare equal, and the only
+            // place the prefix order leaves undecided. Order the run by full comparison first.
+            let prefix = index[i].0;
+            let mut end = i + 1;
+            while end < n && index[end].0 == prefix {
+                end += 1;
+            }
+            if end - i > 1 {
+                index[i..end].sort_unstable_by(|a, b| {
+                    let (da, ta, _) = get(a);
+                    let (db, tb, _) = get(b);
+                    (da, ta).cmp(&(db, tb))
+                });
+            }
+            while i < end {
+                let (d, t, r) = get(&index[i]);
+                let mut diff = r.clone();
+                i += 1;
+                while i < end {
+                    let (d2, t2, r2) = get(&index[i]);
+                    if (d2, t2).cmp(&(d, t)) == Ordering::Equal {
+                        diff.plus_equals(r2);
+                        i += 1;
+                    } else {
+                        break;
+                    }
                 }
-                result.copy_destructured(d, t, &diff);
+                if !diff.is_zero() {
+                    if result.len() == cap {
+                        output.push(std::mem::replace(
+                            &mut result,
+                            ColumnationStack::with_capacity(cap),
+                        ));
+                    }
+                    result.copy_destructured(d, t, &diff);
+                }
             }
         }
         if !result.is_empty() {
@@ -195,6 +217,55 @@ where
         self.pending.clear();
         self.pending_len = 0;
         output
+    }
+}
+
+/// Sorts `index` by its `u64` prefix with a least-significant-digit radix sort, skipping the
+/// byte positions on which every prefix agrees.
+///
+/// Row prefixes share their length and leading tag bytes, so typically three or four of the
+/// eight passes run. Each pass streams the index once, against the log-factor of a comparison
+/// sort over a 16-byte-entry index that no longer fits in cache. Small inputs use the
+/// comparison sort, whose constant is lower.
+fn radix_sort_by_prefix(index: &mut Vec<(u64, u32, u32)>) {
+    const RADIX_MIN: usize = 1 << 16;
+    let n = index.len();
+    if n < RADIX_MIN {
+        index.sort_unstable_by_key(|e| e.0);
+        return;
+    }
+    let mut histograms = [[0u32; 256]; 8];
+    for (prefix, _, _) in index.iter() {
+        for (digit, histogram) in histograms.iter_mut().enumerate() {
+            histogram[usize::cast_from((prefix >> (8 * digit)) & 0xFF)] += 1;
+        }
+    }
+    let mut scratch: Vec<(u64, u32, u32)> = vec![(0, 0, 0); n];
+    let mut in_index = true;
+    for (digit, histogram) in histograms.iter().enumerate() {
+        if histogram.iter().any(|&count| usize::cast_from(count) == n) {
+            continue;
+        }
+        let mut offsets = [0usize; 256];
+        let mut sum = 0;
+        for (bucket, &count) in histogram.iter().enumerate() {
+            offsets[bucket] = sum;
+            sum += usize::cast_from(count);
+        }
+        let (src, dst) = if in_index {
+            (&*index, &mut scratch)
+        } else {
+            (&scratch, &mut *index)
+        };
+        for entry in src.iter() {
+            let bucket = usize::cast_from((entry.0 >> (8 * digit)) & 0xFF);
+            dst[offsets[bucket]] = *entry;
+            offsets[bucket] += 1;
+        }
+        in_index = !in_index;
+    }
+    if !in_index {
+        std::mem::swap(index, &mut scratch);
     }
 }
 
@@ -540,6 +611,136 @@ mod tests {
             .map(|((k, ()), _, _)| k.iter().next().unwrap().unwrap_int64())
             .collect();
         assert_eq!(keys, vec![4, 3, 2, 1, 0]);
+    }
+
+    /// Timing of the snapshot path on exchange-shaped input. Run with
+    /// `cargo test --profile optimized -p mz-row-spine -- --ignored --nocapture bench_snapshot`;
+    /// `BENCH_ROWS` and `BENCH_KEY_MOD` (0 for full-range keys) shape the input.
+    #[mz_ore::test]
+    #[ignore]
+    fn bench_snapshot_path() {
+        use differential_dataflow::trace::Builder;
+        use mz_repr::Timestamp;
+        use std::time::Instant;
+
+        let rows_n: usize = std::env::var("BENCH_ROWS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(10_000_000);
+        let key_mod: u64 = std::env::var("BENCH_KEY_MOD")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let per_container = 200;
+        let mut containers: Vec<Vec<((Row, Row), Timestamp, i64)>> = Vec::new();
+        let mut cur = Vec::with_capacity(per_container);
+        for i in 0..rows_n {
+            let mut k = u64::cast_from(i).wrapping_mul(0x9E3779B97F4A7C15) >> 1;
+            if key_mod > 0 {
+                k %= key_mod;
+            }
+            let k = i64::try_from(k).expect("fits after the shift");
+            let key = Row::pack_slice(&[Datum::Int64(k)]);
+            let val = Row::pack_slice(&[Datum::Int64(i64::try_from(i).expect("row count fits"))]);
+            cur.push(((key, val), Timestamp::from(1u64), 1i64));
+            if cur.len() == per_container {
+                containers.push(std::mem::take(&mut cur));
+            }
+        }
+        if !cur.is_empty() {
+            containers.push(cur);
+        }
+        println!(
+            "{} rows in {} containers, key_mod {}",
+            rows_n,
+            containers.len(),
+            key_mod
+        );
+        let upper = Antichain::from_elem(Timestamp::from(2u64));
+
+        for round in 0..2 {
+            let t = Instant::now();
+            let mut ch: UnsortedChunker<(Row, Row), Timestamp, i64> = Default::default();
+            let mut b: SnapshotBatcher<(Row, Row), Timestamp, i64> = Batcher::new(None, 0);
+            for c in containers.iter() {
+                let mut c = c.clone();
+                ch.push_into(&mut c);
+                while let Some(chunk) = ch.extract() {
+                    b.push_into(std::mem::take(chunk));
+                }
+            }
+            while let Some(chunk) = ch.finish() {
+                b.push_into(std::mem::take(chunk));
+            }
+            let t_push = t.elapsed();
+            let (mut chain, desc) = b.seal(upper.clone());
+            let t_seal = t.elapsed() - t_push;
+            let batch = crate::RowRowBuilder::<Timestamp, i64>::seal(&mut chain, desc);
+            let t_build = t.elapsed() - t_push - t_seal;
+            println!(
+                "round {round}: chunk {:?} seal {:?} build {:?} total {:?} ({} updates)",
+                t_push,
+                t_seal,
+                t_build,
+                t.elapsed(),
+                differential_dataflow::trace::BatchReader::len(&batch)
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn radix_sort_matches_comparison_sort() {
+        // Above the radix threshold, with two constant byte positions to skip and ties.
+        let mut index: Vec<(u64, u32, u32)> = (0..100_000u32)
+            .map(|i| {
+                let scrambled = u64::from(i).wrapping_mul(0x9E3779B97F4A7C15);
+                let prefix =
+                    (0x0009 << 48) | (scrambled & 0x0000_00FF_FFFF_0000) | (u64::from(i % 7) << 8);
+                (prefix, i / 1000, i % 1000)
+            })
+            .collect();
+        let mut expected = index.clone();
+        expected.sort_unstable();
+        radix_sort_by_prefix(&mut index);
+        assert!(
+            index.windows(2).all(|w| w[0].0 <= w[1].0),
+            "sorted by prefix"
+        );
+        index.sort_unstable();
+        assert_eq!(index, expected, "a permutation of the input");
+    }
+
+    #[mz_ore::test]
+    fn equal_prefixes_are_ordered_by_full_comparison() {
+        // Two-column rows sharing the first column share the six-byte prefix; the second column
+        // must still order them, and equal rows must still consolidate.
+        let mut updates: Vec<((Row, ()), u64, i64)> = Vec::new();
+        for y in [5i64, -3, 9, 0, 5, 9] {
+            let row = Row::pack_slice(&[Datum::Int64(1 << 40), Datum::Int64(y)]);
+            updates.push(((row, ()), 1, 1));
+        }
+        let mut b = B::new(None, 0);
+        let mut chunk = ColumnationStack::with_capacity(updates.len());
+        for u in &updates {
+            chunk.copy(u);
+        }
+        b.push_into(chunk);
+        let (chain, _) = b.seal(upper(2));
+        let sealed: Vec<(Row, i64)> = chain
+            .iter()
+            .flat_map(|c| c.iter())
+            .map(|((k, ()), _, r)| (k.clone(), *r))
+            .collect();
+        let mut expected: Vec<(Row, i64)> = Vec::new();
+        let mut rows: Vec<Row> = updates.iter().map(|((k, ()), _, _)| k.clone()).collect();
+        rows.sort();
+        for row in rows {
+            match expected.last_mut() {
+                Some((prev, r)) if *prev == row => *r += 1,
+                _ => expected.push((row, 1)),
+            }
+        }
+        assert_eq!(sealed, expected);
     }
 
     #[mz_ore::test]
