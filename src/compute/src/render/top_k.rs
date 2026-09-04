@@ -304,7 +304,6 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     mut limit,
                     arity,
                     buckets,
-                    expected_group_size,
                 }) => {
                     // Must permute `limit` to reference `group_key` elements as if in order.
                     if let Some(expr) = limit.as_mut() {
@@ -316,14 +315,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     }
 
                     let (oks, errs) = self.build_topk(
-                        ok_input,
-                        group_key,
-                        order_key,
-                        offset,
-                        limit,
-                        arity,
-                        buckets,
-                        expected_group_size,
+                        ok_input, group_key, order_key, offset, limit, arity, buckets,
                     );
                     err_collection = err_collection.concat(errs);
                     CollectionBundle::from_collections(oks, err_collection)
@@ -347,7 +339,6 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         limit: Option<LirScalarExpr>,
         arity: usize,
         buckets: Vec<u64>,
-        expected_group_size: Option<u64>,
     ) -> (
         VecCollection<'s, T, Row, Diff>,
         VecCollection<'s, T, DataflowErrorSer, Diff>,
@@ -397,15 +388,19 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
             .map(|l| l.saturating_add(u64::cast_from(offset)));
         let retain_allowed = ENABLE_COMPUTE_TOPK_RETAINED_STAGES.get(&self.config_set);
         // Whether a stage emits kept rows or negated dropped rows. Kept rows cost less state when
-        // a key's group holds at least twice what the stage keeps, which only the hint can say:
-        // at a stage with modulus `m` a group spreads over `m` keys. Without a hint every stage
-        // emits dropped rows, since a kept-row stage whose keys hold a single row each would copy
-        // its whole input into its output arrangement.
-        let stage_output = |modulus: u64| -> StageOutput {
-            let (Some(kept), Some(group_size)) = (kept_per_key, expected_group_size) else {
+        // a key's group holds at least twice what the stage keeps. The plan carries the group
+        // size hint only as its bucket list: an empty list means the hint was at most sixteen,
+        // the fan-in of one stage, so the lone final stage keeps rows when twice its kept count
+        // fits in sixteen. With bucket stages the hint is unknown here (or absent, in which case
+        // the planner assumed billions), and every stage emits dropped rows, since a kept-row
+        // stage whose keys hold a single row each would copy its whole input into its output
+        // arrangement.
+        let single_stage = buckets.is_empty();
+        let stage_output = |_modulus: u64| -> StageOutput {
+            let Some(kept) = kept_per_key else {
                 return StageOutput::Dropped;
             };
-            if retain_allowed && kept.saturating_mul(2) <= group_size / modulus.max(1) {
+            if retain_allowed && single_stage && kept.saturating_mul(2) <= 16 {
                 StageOutput::Kept
             } else {
                 StageOutput::Dropped

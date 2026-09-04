@@ -89,7 +89,6 @@ impl TopKPlan {
                 limit,
                 arity,
                 buckets: bucketing_of_expected_group_size(expected_group_size),
-                expected_group_size,
             })
         }
     }
@@ -150,7 +149,6 @@ impl TopKPlan {
                 arity: _,
                 offset: _,
                 buckets: _,
-                expected_group_size: _,
             }) => limit.as_ref(),
         }
     }
@@ -229,9 +227,8 @@ pub struct BasicTopKPlan {
     /// The number of columns in the input and output.
     pub arity: usize,
     /// Bucket sizes for hierarchical stages of TopK.  Should be decreasing.
+    ///
+    /// Empty when the query's group size hint is at most sixteen, the fan-in of one stage; the
+    /// renderer reads that as a promise that groups are small.
     pub buckets: Vec<u64>,
-    /// The expected number of rows per group, when the query gave a hint. The renderer uses it,
-    /// together with `limit` and `offset`, to decide per stage whether emitting the kept rows or
-    /// the dropped rows is cheaper.
-    pub expected_group_size: Option<u64>,
 }
