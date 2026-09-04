@@ -1054,9 +1054,9 @@ pub fn remove_children_with_label<V: MetricVec_ + Collector>(vec: &V, name: &str
                 .iter()
                 .map(|label| labels.get(label.as_str()).copied().unwrap_or_default())
                 .collect();
-            // `Err` means a concurrent removal got there first. The only other
-            // cause, a label count mismatch, cannot happen because the tuple is
-            // built from the vec's own desc.
+            // `remove_label_values` fails when the series is already gone, which happens
+            // if another caller removed it between the `collect` snapshot above and now.
+            // That is the state we wanted, so the error is ignored.
             let _ = vec.remove_label_values(&values);
         }
     }
@@ -1143,8 +1143,9 @@ mod tests {
 
         let exec_histogram = exec_metric[0].get_histogram();
         assert_eq!(exec_histogram.get_sample_count(), 1);
-        // This future will normally complete very quickly, but it's hard to guarantee any particular
-        // timing in an arbitrary test environment, so we don't assert on it here.
+        // This future will normally complete very quickly, but it's hard to guarantee any
+        // particular timing in an arbitrary test environment, so we don't assert on it
+        // here.
 
         let wall_family = reports
             .iter()
