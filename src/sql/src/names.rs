@@ -2213,6 +2213,17 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 as_of: self.fold_expr(as_of),
                 alias: alias.map(|alias| self.fold_table_alias(alias)),
             },
+            AsOfSystemTime {
+                name,
+                time,
+                since,
+                alias,
+            } => AsOfSystemTime {
+                name: self.fold_item_name(name),
+                time: self.fold_expr(time),
+                since: self.fold_expr(since),
+                alias: alias.map(|alias| self.fold_table_alias(alias)),
+            },
             Function {
                 function,
                 alias,

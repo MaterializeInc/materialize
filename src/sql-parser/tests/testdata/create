@@ -717,3 +717,18 @@ CREATE TABLE t (x int, y text VERSION ADDED '10000')
 error: Expected literal unsigned integer, found string literal "10000"
 CREATE TABLE t (x int, y text VERSION ADDED '10000')
                                             ^
+
+parse-statement roundtrip
+CREATE MATERIALIZED VIEW mv WITH (RETAIN HISTORY = PIN AT 1700000000000) AS SELECT 1
+----
+CREATE MATERIALIZED VIEW mv WITH (RETAIN HISTORY = PIN AT 1700000000000) AS SELECT 1
+
+parse-statement roundtrip
+CREATE TABLE t (a int) WITH (RETAIN HISTORY = PIN AT '2026-09-01 00:00:00')
+----
+CREATE TABLE t (a int4) WITH (RETAIN HISTORY = PIN AT '2026-09-01 00:00:00')
+
+parse-statement roundtrip
+ALTER MATERIALIZED VIEW mv SET (RETAIN HISTORY = PIN AT 1700000000000)
+----
+ALTER MATERIALIZED VIEW mv SET (RETAIN HISTORY PIN AT 1700000000000)

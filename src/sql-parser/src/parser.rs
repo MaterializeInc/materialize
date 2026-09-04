@@ -8736,6 +8736,20 @@ impl<'a> Parser<'a> {
                     alias,
                     with_ordinality,
                 })
+            } else if self.peek_keywords(&[AS, OF, SYSTEM, TIME]) {
+                for kw in [AS, OF, SYSTEM, TIME] {
+                    self.expect_keyword(kw)?;
+                }
+                let time = self.parse_expr()?;
+                self.expect_keyword(SINCE)?;
+                let since = self.parse_expr()?;
+                let alias = self.parse_optional_table_alias()?;
+                Ok(TableFactor::AsOfSystemTime {
+                    name,
+                    time,
+                    since,
+                    alias,
+                })
             } else {
                 Ok(TableFactor::Table {
                     name,
