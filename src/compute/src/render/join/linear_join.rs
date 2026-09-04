@@ -101,6 +101,7 @@ impl LinearJoinSpec {
         arranged1: Arranged<'s, Tr1>,
         arranged2: Arranged<'s, Tr2>,
         result: L,
+        consolidate_output: bool,
     ) -> VecCollection<'s, T, I::Item, Diff>
     where
         T: Lattice + timely::progress::Timestamp,
@@ -122,19 +123,23 @@ impl LinearJoinSpec {
             (Materialize, Some(work_limit), Some(time_limit)) => {
                 let yield_fn =
                     move |start: Instant, work| work >= work_limit || start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
+                mz_join_core(arranged1, arranged2, result, yield_fn, consolidate_output)
+                    .as_collection()
             }
             (Materialize, Some(work_limit), None) => {
                 let yield_fn = move |_start, work| work >= work_limit;
-                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
+                mz_join_core(arranged1, arranged2, result, yield_fn, consolidate_output)
+                    .as_collection()
             }
             (Materialize, None, Some(time_limit)) => {
                 let yield_fn = move |start: Instant, _work| start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
+                mz_join_core(arranged1, arranged2, result, yield_fn, consolidate_output)
+                    .as_collection()
             }
             (Materialize, None, None) => {
                 let yield_fn = |_start, _work| false;
-                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
+                mz_join_core(arranged1, arranged2, result, yield_fn, consolidate_output)
+                    .as_collection()
             }
         }
     }
@@ -498,24 +503,61 @@ where
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
 
+        if closure.is_identity() {
+            // The output row is the key, the stream value and the lookup value in that order,
+            // so when all three are row-encoded the bytes can be concatenated without a trip
+            // through datums. Distinct input pairs give distinct outputs, so the join core need
+            // not consolidate them.
+            let oks = self.linear_join_spec.render(
+                prev_keyed,
+                next_input,
+                move |key, old, new| match (key.as_row_ref(), old.as_row_ref(), new.as_row_ref()) {
+                    (Some(key), Some(old), Some(new)) => {
+                        let mut row =
+                            Row::with_capacity(key.byte_len() + old.byte_len() + new.byte_len());
+                        let mut packer = row.packer();
+                        packer.extend_by_row_ref(key);
+                        packer.extend_by_row_ref(old);
+                        packer.extend_by_row_ref(new);
+                        Some(row)
+                    }
+                    _ => {
+                        let temp_storage = RowArena::new();
+                        let mut datums_local = datums.borrow();
+                        key.extend_datums(&temp_storage, &mut datums_local, None);
+                        old.extend_datums(&temp_storage, &mut datums_local, None);
+                        new.extend_datums(&temp_storage, &mut datums_local, None);
+                        Some(Row::pack(datums_local.iter()))
+                    }
+                },
+                false,
+            );
+            return (oks, None);
+        }
+
         if closure.could_error() {
             let (oks, err) = self
                 .linear_join_spec
-                .render(prev_keyed, next_input, move |key, old, new| {
-                    let mut row_builder = SharedRow::get();
-                    let temp_storage = RowArena::new();
+                .render(
+                    prev_keyed,
+                    next_input,
+                    move |key, old, new| {
+                        let mut row_builder = SharedRow::get();
+                        let temp_storage = RowArena::new();
 
-                    let mut datums_local = datums.borrow();
-                    key.extend_datums(&temp_storage, &mut datums_local, None);
-                    old.extend_datums(&temp_storage, &mut datums_local, None);
-                    new.extend_datums(&temp_storage, &mut datums_local, None);
+                        let mut datums_local = datums.borrow();
+                        key.extend_datums(&temp_storage, &mut datums_local, None);
+                        old.extend_datums(&temp_storage, &mut datums_local, None);
+                        new.extend_datums(&temp_storage, &mut datums_local, None);
 
-                    closure
-                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                        .map(|row| row.cloned())
-                        .map_err(DataflowErrorSer::from)
-                        .transpose()
-                })
+                        closure
+                            .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                            .map(|row| row.cloned())
+                            .map_err(DataflowErrorSer::from)
+                            .transpose()
+                    },
+                    true,
+                )
                 .inner
                 .ok_err(|(x, t, d)| {
                     // TODO(mcsherry): consider `ok_err()` for `Collection`.
@@ -527,9 +569,10 @@ where
 
             (oks.as_collection(), Some(err.as_collection()))
         } else {
-            let oks = self
-                .linear_join_spec
-                .render(prev_keyed, next_input, move |key, old, new| {
+            let oks = self.linear_join_spec.render(
+                prev_keyed,
+                next_input,
+                move |key, old, new| {
                     let mut row_builder = SharedRow::get();
                     let temp_storage = RowArena::new();
 
@@ -542,7 +585,9 @@ where
                         .apply(&mut datums_local, &temp_storage, &mut row_builder)
                         .expect("Closure claimed to never error")
                         .cloned()
-                });
+                },
+                true,
+            );
 
             (oks, None)
         }
