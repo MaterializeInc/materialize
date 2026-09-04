@@ -234,7 +234,7 @@ pub const MYSQL_REPLICATION_HEARTBEAT_INTERVAL: Config<Duration> = Config::new(
 /// whole by a single worker.
 pub static MYSQL_SOURCE_SNAPSHOT_PARALLELISM: Config<bool> = Config::new(
     "mysql_source_snapshot_parallelism",
-    false,
+    true,
     "Whether to split MySQL snapshot reads across workers by primary-key ranges.",
     ParameterScope::Replica,
 );
