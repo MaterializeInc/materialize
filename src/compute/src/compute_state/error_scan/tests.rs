@@ -17,27 +17,28 @@ use timely::container::PushInto;
 use timely::progress::Antichain;
 
 use crate::render::errors::DataflowErrorSer;
-use crate::typedefs::{ErrBatcher, ErrBuilder};
+use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine};
 
 use super::*;
 
 /// The time at which the peeks in these tests read.
-const PEEK_TIMESTAMP: Timestamp = Timestamp::new(1);
+pub(crate) const PEEK_TIMESTAMP: Timestamp = Timestamp::new(1);
+
+/// The updates that make up an error trace, in the form its batcher takes them.
+pub(crate) type ErrorUpdates = Vec<((DataflowErrorSer, ()), Timestamp, Diff)>;
 
 /// A distinct error for `index`.
 ///
 /// The order of the serialized form does not follow `index`, so a test that cares where a
 /// key falls in the walk sorts the errors and picks by position.
-fn error(index: usize) -> DataflowErrorSer {
+pub(crate) fn error(index: usize) -> DataflowErrorSer {
     DataflowErrorSer::from(EvalError::Internal(format!("error {index}").into()))
 }
 
-/// Builds a walk over a single-batch error trace holding `updates`, bounded by
-/// `row_iteration_limit`.
-fn error_scan(
-    updates: Vec<((DataflowErrorSer, ()), Timestamp, Diff)>,
-    row_iteration_limit: Option<usize>,
-) -> ErrorScan {
+/// Builds a single batch holding `updates`, covering `[0, Timestamp::MAX)`.
+pub(crate) fn error_batch(
+    updates: ErrorUpdates,
+) -> <ErrSpine<Timestamp, Diff> as TraceReader>::Batch {
     let mut batcher = ErrBatcher::<Timestamp, Diff>::new(None, 0);
     let mut chunk = ColumnationStack::with_capacity(updates.len());
     for update in updates {
@@ -45,15 +46,17 @@ fn error_scan(
     }
     batcher.push_into(chunk);
     let (mut chain, description) = batcher.seal(Antichain::from_elem(Timestamp::MAX));
-    let batch = ErrBuilder::<Timestamp, Diff>::seal(&mut chain, description);
-    let storage = vec![batch];
+    ErrBuilder::<Timestamp, Diff>::seal(&mut chain, description)
+}
+
+/// Builds a walk over a single-batch error trace holding `updates`, bounded by
+/// `row_iteration_limit`.
+pub(crate) fn error_scan(updates: ErrorUpdates, row_iteration_limit: Option<usize>) -> ErrorScan {
+    let storage = vec![error_batch(updates)];
     let cursor = CursorList::new(vec![storage[0].cursor()], &storage);
-    ErrorScan {
-        cursor,
-        storage,
-        row_iteration_tracker: PeekRowIterationTracker::new(row_iteration_limit, 0),
-        scan_time: Duration::ZERO,
-    }
+    let mut scan = ErrorScan::from_cursor(cursor, storage);
+    scan.set_row_iteration_limit(row_iteration_limit);
+    scan
 }
 
 /// Updates that put `error` in the trace at a multiplicity that cancels to zero at
@@ -61,11 +64,17 @@ fn error_scan(
 ///
 /// The two updates sit at different times so that they survive consolidation: a key whose
 /// updates consolidate away is not in the trace at all, and the walk never sees it.
-fn cancelling(error: &DataflowErrorSer) -> Vec<((DataflowErrorSer, ()), Timestamp, Diff)> {
+pub(crate) fn cancelling(error: &DataflowErrorSer) -> ErrorUpdates {
     vec![
         ((error.clone(), ()), Timestamp::new(0), Diff::ONE),
         ((error.clone(), ()), PEEK_TIMESTAMP, Diff::MINUS_ONE),
     ]
+}
+
+/// Updates that put `error` in the trace at a multiplicity of one at [`PEEK_TIMESTAMP`], so
+/// that a walk reaching this key answers the peek with it.
+pub(crate) fn holding(error: &DataflowErrorSer) -> ErrorUpdates {
+    vec![((error.clone(), ()), Timestamp::new(0), Diff::ONE)]
 }
 
 /// Runs `scan` to an answer in slices of `fuel_per_step` units, and returns that answer, the

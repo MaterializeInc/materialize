@@ -194,6 +194,29 @@ where
         rows_iterated: usize,
     ) -> Self {
         let (cursor, storage) = trace_reader.cursor();
+        Self::from_cursor(
+            target_id,
+            map_filter_project,
+            peek_timestamp,
+            literal_constraints,
+            cursor,
+            storage,
+            row_iteration_limit,
+            rows_iterated,
+        )
+    }
+
+    /// Builds an iterator over an already-opened cursor.
+    pub(super) fn from_cursor(
+        target_id: GlobalId,
+        map_filter_project: mz_expr::SafeMfpPlan,
+        peek_timestamp: mz_repr::Timestamp,
+        literal_constraints: Option<&mut [Row]>,
+        cursor: TraceCursor<Tr>,
+        storage: TraceStorage<Tr>,
+        row_iteration_limit: Option<usize>,
+        rows_iterated: usize,
+    ) -> Self {
         let literals = literal_constraints.map(Literals::new);
 
         Self {
@@ -214,6 +237,18 @@ where
     /// Returns the number of rows evaluated by the iterator.
     pub fn rows_processed(&self) -> usize {
         self.rows_processed
+    }
+
+    /// Adopts the row-iteration limit that is in effect, without forgetting the rows the walk has
+    /// already examined.
+    pub(super) fn set_row_iteration_limit(&mut self, limit: Option<usize>) {
+        self.row_iteration_tracker.set_limit(limit);
+    }
+
+    /// Adopts the rows a walk that ran before this one examined, so that the row-iteration limit
+    /// bounds the peek rather than either walk alone.
+    pub(super) fn add_rows_iterated(&mut self, rows_iterated: usize) {
+        self.row_iteration_tracker.add_rows_iterated(rows_iterated);
     }
 
     /// Returns `true` if the iterator has no more literals to process, or if there are no literals at all.
