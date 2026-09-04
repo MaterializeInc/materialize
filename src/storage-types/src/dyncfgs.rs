@@ -413,12 +413,16 @@ pub const STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING: Config<Option<usize>> = C
 ///
 /// Enabling it also installs the process buffer pool (via compute's config
 /// handler, which reads this flag from the aggregate dyncfg set), so
-/// storage-only spilling needs no compute-side gate.
+/// storage-only spilling needs no compute-side gate. Because the chunk spill
+/// gate is shared, it also lets compute's chunk consumers spill: the
+/// column-paged batcher and the MV sink correction buffer's chunk bodies.
 pub const ENABLE_UPSERT_PAGED_SPILL: Config<bool> = Config::new(
     "enable_upsert_paged_spill",
     false,
     "Allow the upsert-v2 stash to spill out of RSS, through the buffer pool (chunked stash \
-     flavor) or the column pager (paged stash flavor).",
+     flavor) or the column pager (paged stash flavor). The chunk spill gate is shared with \
+     `enable_column_paged_batcher_spill`, so this also spills the column-paged batcher's and \
+     the MV sink correction buffer's chunk bodies.",
     ParameterScope::Replica,
 );
 
