@@ -77,13 +77,13 @@ use mz_sql_parser::ast::{
     MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, NetworkPolicyOption,
     NetworkPolicyOptionName, NetworkPolicyRuleDefinition, NetworkPolicyRuleOption,
     NetworkPolicyRuleOptionName, OnHydrationOptionValue, PgConfigOption, PgConfigOptionName,
-    ProtobufSchema, QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue,
-    RefreshOptionValue, ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute,
-    SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption,
-    SqlServerConfigOptionName, Statement, TableConstraint, TableFromSourceColumns,
-    TableFromSourceOption, TableFromSourceOptionName, TableOption, TableOptionName,
-    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
-    ViewDefinition, WithOptionValue,
+    PostgresSinkConfigOption, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
+    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
+    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
+    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
+    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -91,7 +91,7 @@ use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{Connection, KafkaTopicOptions};
 use mz_storage_types::sinks::{
     IcebergSinkConnection, KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType,
-    SinkEnvelope, StorageSinkConnection, iceberg_type_overrides,
+    PostgresSinkConnection, SinkEnvelope, StorageSinkConnection, iceberg_type_overrides,
 };
 use mz_storage_types::sources::encoding::{
     AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding, RegexEncoding,
@@ -168,6 +168,7 @@ use crate::plan::{
     TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
     WebhookHeaders, WebhookValidation, literal, plan_utils, query, transform_ast,
 };
+use crate::postgres::PostgresSinkConfigOptionExtracted;
 use crate::session::vars::{
     self, ENABLE_AUTO_SCALING_STRATEGY, ENABLE_CLUSTER_SCHEDULE_REFRESH,
     ENABLE_COLLECTION_PARTITION_BY, ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS,
@@ -3308,6 +3309,19 @@ fn plan_sink(
         (CreateSinkConnection::Iceberg { .. }, Some(_), _) => {
             sql_bail!("ENVELOPE is not supported for Iceberg sinks, use MODE instead")
         }
+        // Postgres sinks use ENVELOPE, like Kafka
+        (CreateSinkConnection::Postgres { .. }, Some(ast::SinkEnvelope::Upsert), None) => {
+            SinkEnvelope::Upsert
+        }
+        (CreateSinkConnection::Postgres { .. }, Some(ast::SinkEnvelope::Debezium), None) => {
+            sql_bail!("ENVELOPE DEBEZIUM is not supported for Postgres sinks")
+        }
+        (CreateSinkConnection::Postgres { .. }, None, None) => {
+            sql_bail!("ENVELOPE clause is required")
+        }
+        (CreateSinkConnection::Postgres { .. }, _, Some(_)) => {
+            sql_bail!("MODE is not supported for Postgres sinks, use ENVELOPE instead")
+        }
     };
 
     let from_name = &from;
@@ -3344,7 +3358,8 @@ fn plan_sink(
         .ok_or_else(|| sql_err!("item does not have a relation description"))?;
     let key_indices = match &connection {
         CreateSinkConnection::Kafka { key: Some(key), .. }
-        | CreateSinkConnection::Iceberg { key: Some(key), .. } => {
+        | CreateSinkConnection::Iceberg { key: Some(key), .. }
+        | CreateSinkConnection::Postgres { key: Some(key), .. } => {
             let key_columns = key
                 .key_columns
                 .clone()
@@ -3459,7 +3474,8 @@ fn plan_sink(
             Some(indices)
         }
         CreateSinkConnection::Kafka { key: None, .. }
-        | CreateSinkConnection::Iceberg { key: None, .. } => None,
+        | CreateSinkConnection::Iceberg { key: None, .. }
+        | CreateSinkConnection::Postgres { key: None, .. } => None,
     };
 
     if key_indices.is_some() && envelope == SinkEnvelope::Append {
@@ -3580,6 +3596,17 @@ fn plan_sink(
             key_desc_and_indices,
             commit_interval,
             &desc,
+        )?,
+        CreateSinkConnection::Postgres {
+            connection,
+            options,
+            ..
+        } => postgres_sink_builder(
+            scx,
+            connection,
+            options,
+            relation_key_indices,
+            key_desc_and_indices,
         )?,
     };
 
@@ -3818,6 +3845,45 @@ fn iceberg_sink_builder(
         storage_connection: storage_connection_id,
         table,
         namespace,
+        relation_key_indices,
+        key_desc_and_indices,
+    }))
+}
+
+fn postgres_sink_builder(
+    scx: &StatementContext,
+    connection: ResolvedItemName,
+    options: Vec<PostgresSinkConfigOption<Aug>>,
+    relation_key_indices: Option<Vec<usize>>,
+    key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
+) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
+    let connection_item = scx.get_item_by_resolved_name(&connection)?;
+    let connection_id = connection_item.id();
+    if !matches!(connection_item.connection()?, Connection::Postgres(_)) {
+        sql_bail!(
+            "{} is not a postgres connection",
+            scx.catalog
+                .resolve_full_name(connection_item.name())
+                .to_string()
+                .quoted()
+        );
+    };
+
+    let PostgresSinkConfigOptionExtracted {
+        schema,
+        table,
+        seen: _,
+    }: PostgresSinkConfigOptionExtracted = options.try_into()?;
+
+    let Some(table) = table else {
+        sql_bail!("Postgres sink must specify TABLE");
+    };
+
+    Ok(StorageSinkConnection::Postgres(PostgresSinkConnection {
+        connection_id,
+        connection: connection_id,
+        schema,
+        table,
         relation_key_indices,
         key_desc_and_indices,
     }))
