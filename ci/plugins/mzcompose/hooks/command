@@ -400,6 +400,7 @@ cleanup() {
 
   if [ ! -s services.log ] \
     && [ "$BUILDKITE_LABEL" != ":rust: cargo-fuzz" ] \
+    && [ "$BUILDKITE_LABEL" != ":rust: Cargo bench against ancestor" ] \
     && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist" ] \
     && [ "$BUILDKITE_LABEL" != "Long single-node Maelstrom coverage of persist" ] \
     && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of txn-wal" ] \
