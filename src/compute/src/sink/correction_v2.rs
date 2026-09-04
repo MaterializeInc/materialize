@@ -143,7 +143,7 @@
 //! so we instead materialize the affected updates, advance their times, and sort and consolidate
 //! them in one O(U log U) pass.
 
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
@@ -151,6 +151,7 @@ use std::sync::atomic::{self, AtomicUsize};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use columnar::{Columnar, Index, Len, Ref};
+use itertools::Itertools;
 use mz_ore::cast::CastLossy;
 use mz_ore::soft_assert_or_log;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
@@ -168,23 +169,13 @@ use crate::sink::correction::{ChannelLogging, SizeMetrics};
 ///
 /// `D` is constrained to be `Columnar`, so that updates can be stored in a single columnar
 /// region per chunk, and the variable-length payload (e.g. `Row` bytes) lives in the same
-/// allocation as the rest of the chunk. The `Ref`-level `Eq + Ord` bounds let the merge/heap
-/// code compare updates directly through the columnar borrow, avoiding `into_owned` clones
-/// on the hot path.
+/// allocation as the rest of the chunk. [`DataContainer`] carries the bounds on that container.
 pub trait Data:
-    differential_dataflow::Data
-    + Columnar<Container: Send + Sync + Clone + for<'a> columnar::Borrow<Ref<'a>: Eq + Ord>>
-    + DataBytes
-    + Send
-    + Sync
+    differential_dataflow::Data + Columnar<Container: DataContainer> + DataBytes + Send + Sync
 {
 }
 impl<D> Data for D where
-    D: differential_dataflow::Data
-        + Columnar<Container: Send + Sync + Clone + for<'a> columnar::Borrow<Ref<'a>: Eq + Ord>>
-        + DataBytes
-        + Send
-        + Sync
+    D: differential_dataflow::Data + Columnar<Container: DataContainer> + DataBytes + Send + Sync
 {
 }
 
@@ -202,6 +193,27 @@ impl DataBytes for Row {
         self.byte_len()
     }
 }
+
+/// The bounds [`Data`] places on its columnar container.
+///
+/// The `Ref`-level `Eq + Ord` bounds let the merge/heap code compare updates directly through
+/// the columnar borrow, avoiding `into_owned` clones on the hot path. The `Borrowed`-level
+/// `Send` bound lets a hoisted `Chunk::view` travel with the iterators that
+/// [`CorrectionV2::updates_before`] hands across the persist writer's `await`.
+pub trait DataContainer:
+    Send + Sync + Clone + for<'a> columnar::Borrow<Ref<'a>: Eq + Ord, Borrowed<'a>: Send>
+{
+}
+impl<C> DataContainer for C where
+    C: Send + Sync + Clone + for<'a> columnar::Borrow<Ref<'a>: Eq + Ord, Borrowed<'a>: Send>
+{
+}
+
+/// A borrowed view over a [`Chunk`]'s column.
+///
+/// Obtained from [`Chunk::view`] and indexed with `get`.
+type ChunkView<'a, D> =
+    <<(D, Timestamp, Diff) as Columnar>::Container as columnar::Borrow>::Borrowed<'a>;
 
 /// A data structure used to store corrections in the MV sink implementation.
 ///
@@ -652,39 +664,51 @@ fn merge_2<D: Data>(cursor1: Cursor<D>, cursor2: Cursor<D>) -> Chain<D> {
     let mut rest2 = Some(cursor2);
     let mut merged = ChainBuilder::default();
 
-    loop {
-        match (rest1, rest2) {
-            (Some(c1), Some(c2)) => {
-                let (d1, t1, r1) = c1.get();
-                let (d2, t2, r2) = c2.get();
+    // One borrow per chunk pair, not per update: `Chunk::view` re-decodes the column header on
+    // every call. The inner loop runs until either cursor crosses into its next chunk, at which
+    // point the outer loop re-borrows both.
+    while rest1.is_some() && rest2.is_some() {
+        let chunk1 = rest1.as_ref().expect("checked above").chunk_handle();
+        let chunk2 = rest2.as_ref().expect("checked above").chunk_handle();
+        let view1 = chunk1.view();
+        let view2 = chunk2.view();
 
-                match (t1, d1).cmp(&(t2, d2)) {
-                    Ordering::Less => {
-                        merged.push_ref((d1, t1, r1));
-                        rest1 = c1.step();
-                        rest2 = Some(c2);
-                    }
-                    Ordering::Greater => {
-                        merged.push_ref((d2, t2, r2));
-                        rest1 = Some(c1);
-                        rest2 = c2.step();
-                    }
-                    Ordering::Equal => {
-                        let r = r1 + r2;
-                        if r != Diff::ZERO {
-                            merged.push_ref((d1, t1, r));
-                        }
-                        rest1 = c1.step();
-                        rest2 = c2.step();
-                    }
-                }
-            }
-            (Some(c), None) | (None, Some(c)) => {
-                merged.push_cursor(c);
+        loop {
+            let (Some(c1), Some(c2)) = (rest1.as_ref(), rest2.as_ref()) else {
+                break;
+            };
+            if !c1.reads_from(&chunk1) || !c2.reads_from(&chunk2) {
                 break;
             }
-            (None, None) => break,
+
+            let (d1, t1, r1) = c1.get_with(&view1);
+            let (d2, t2, r2) = c2.get_with(&view2);
+
+            match refs_cmp::<D>((t1, d1), (t2, d2)) {
+                Ordering::Less => {
+                    merged.push_ref((d1, t1, r1));
+                    rest1 = rest1.take().expect("checked above").step();
+                }
+                Ordering::Greater => {
+                    merged.push_ref((d2, t2, r2));
+                    rest2 = rest2.take().expect("checked above").step();
+                }
+                Ordering::Equal => {
+                    let r = r1 + r2;
+                    if r != Diff::ZERO {
+                        merged.push_ref((d1, t1, r));
+                    }
+                    rest1 = rest1.take().expect("checked above").step();
+                    rest2 = rest2.take().expect("checked above").step();
+                }
+            }
         }
+    }
+
+    match (rest1, rest2) {
+        (Some(c), None) | (None, Some(c)) => merged.push_cursor(c),
+        (Some(_), Some(_)) => unreachable!("loop runs while both cursors are live"),
+        (None, None) => (),
     }
 
     merged.finish()
@@ -692,23 +716,66 @@ fn merge_2<D: Data>(cursor1: Cursor<D>, cursor2: Cursor<D>) -> Chain<D> {
 
 /// Merge the given cursors using a k-way merge with a binary heap.
 fn merge_many<D: Data>(cursors: Vec<Cursor<D>>) -> Chain<D> {
-    let mut heap = MergeHeap::from_iter(cursors);
+    let mut cursors: Vec<Option<Cursor<D>>> = cursors.into_iter().map(Some).collect();
     let mut merged = ChainBuilder::default();
-    while let Some(cursor1) = heap.pop() {
-        let (data, time, mut diff) = cursor1.get();
 
-        while let Some((cursor2, r)) = heap.pop_equal(data, time) {
-            diff += r;
-            if let Some(cursor2) = cursor2.step() {
-                heap.push(cursor2);
+    // One borrow per chunk, not per update, as in `merge_2`. Each round borrows the current chunk
+    // of every live cursor, and merges until a cursor crosses into its next chunk, whose updates
+    // the round's heap cannot hold. The next round re-borrows.
+    while cursors.iter().any(Option::is_some) {
+        let chunks: Vec<Option<Rc<Chunk<D>>>> = cursors
+            .iter()
+            .map(|c| c.as_ref().map(Cursor::chunk_handle))
+            .collect();
+        let views: Vec<Option<ChunkView<'_, D>>> = chunks
+            .iter()
+            .map(|c| c.as_deref().map(Chunk::view))
+            .collect();
+
+        // Keyed by `(time, data)`, the merge order, with the cursor index as a tie breaker.
+        let mut heap = BinaryHeap::new();
+        for (i, (cursor, view)) in cursors.iter().zip_eq(&views).enumerate() {
+            if let (Some(cursor), Some(view)) = (cursor, view) {
+                let (d, t, _) = cursor.get_with(view);
+                heap.push(Reverse((t, d, i)));
             }
         }
 
-        if diff != Diff::ZERO {
-            merged.push_ref((data, time, diff));
-        }
-        if let Some(cursor1) = cursor1.step() {
-            heap.push(cursor1);
+        while let Some(Reverse((time, data, first))) = heap.pop() {
+            let mut diff = Diff::ZERO;
+            let mut crossed = false;
+            let mut next = Some(first);
+            while let Some(i) = next {
+                let view = views[i].as_ref().expect("live cursors have a view");
+                let cursor = cursors[i].take().expect("heap entries are live cursors");
+                diff += cursor.get_with(view).2;
+                cursors[i] = cursor.step();
+                if let Some(cursor) = &cursors[i] {
+                    let chunk = chunks[i].as_ref().expect("live cursors have a chunk");
+                    if cursor.reads_from(chunk) {
+                        let (d, t, _) = cursor.get_with(view);
+                        heap.push(Reverse((t, d, i)));
+                    } else {
+                        crossed = true;
+                    }
+                }
+
+                // Every cursor at the same update contributes to it before it is pushed, so a
+                // round only ends between distinct updates.
+                next = match heap.peek() {
+                    Some(Reverse((t, d, _))) if *t == time && *d == data => {
+                        heap.pop().map(|Reverse((_, _, j))| j)
+                    }
+                    _ => None,
+                };
+            }
+
+            if diff != Diff::ZERO {
+                merged.push_ref((data, time, diff));
+            }
+            if crossed {
+                break;
+            }
         }
     }
 
@@ -1071,8 +1138,9 @@ impl<D: Data> Chain<D> {
     /// Return an iterator over the contained updates.
     fn iter(&self) -> impl Iterator<Item = (D, Timestamp, Diff)> + '_ {
         self.chunks.iter().flat_map(|c| {
+            let view = c.view();
             (0..c.len()).map(move |i| {
-                let (d, t, r) = c.index(i);
+                let (d, t, r) = view.get(i);
                 (D::into_owned(d), t, r)
             })
         })
@@ -1143,16 +1211,17 @@ impl<D: Data> Chain<D> {
                 let idx = chunk
                     .find_time_greater_than(skip_ts)
                     .expect("straddles time");
+                let view = chunk.view();
                 let mut builder = ChainBuilder::default();
                 for i in 0..idx {
-                    builder.push_ref(chunk.index(i));
+                    builder.push_ref(view.get(i));
                 }
                 for part in builder.finish().chunks {
                     lower.push_chunk(part);
                 }
                 let mut builder = ChainBuilder::default();
                 for i in idx..chunk.len() {
-                    builder.push_ref(chunk.index(i));
+                    builder.push_ref(view.get(i));
                 }
                 for part in builder.finish().chunks {
                     upper.push_chunk(part);
@@ -1198,10 +1267,19 @@ impl<D: Data> ChainBuilder<D> {
     /// Push the updates produced by a cursor into the builder.
     fn push_cursor(&mut self, cursor: Cursor<D>) {
         let mut rest = Some(cursor);
+        // One borrow per chunk: see `Chunk::view` for why this must not move into the inner loop.
         while let Some(cursor) = rest.take() {
-            let update = cursor.get();
-            self.push_ref(update);
-            rest = cursor.step();
+            let chunk = cursor.chunk_handle();
+            let view = chunk.view();
+            rest = Some(cursor);
+
+            while let Some(cursor) = rest.as_ref() {
+                if !cursor.reads_from(&chunk) {
+                    break;
+                }
+                self.push_ref(cursor.get_with(&view));
+                rest = rest.take().expect("checked above").step();
+            }
         }
     }
 
@@ -1306,11 +1384,41 @@ impl<D: Data> Cursor<D> {
     }
 
     /// Get a reference to the current update.
+    ///
+    /// Single-access only. A loop over a cursor must hoist [`Cursor::chunk_handle`]'s
+    /// [`Chunk::view`] and read through [`Cursor::get_with`] instead.
     fn get(&self) -> Ref<'_, (D, Timestamp, Diff)> {
         let chunk = self.get_chunk();
         let (d, t, r) = chunk.index(self.chunk_offset);
         let t = self.overwrite_ts.unwrap_or(t);
         (d, t, r)
+    }
+
+    /// Get a reference to the current update, reading through an already-borrowed view.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `view` is not a view of the cursor's current chunk. Guard loops with
+    /// [`Cursor::reads_from`], which is how a caller learns the cursor has crossed into the next
+    /// chunk and the view must be refreshed.
+    fn get_with<'a>(&self, view: &ChunkView<'a, D>) -> Ref<'a, (D, Timestamp, Diff)> {
+        debug_assert_eq!(view.len(), self.get_chunk().len(), "view of another chunk");
+        let (d, t, r) = view.get(self.chunk_offset);
+        let t = self.overwrite_ts.unwrap_or(t);
+        (d, t, r)
+    }
+
+    /// A shared handle on the chunk the cursor currently reads from.
+    ///
+    /// Held by callers that hoist a [`Chunk::view`], so the view's borrow outlives the cursor
+    /// steps taken against it.
+    fn chunk_handle(&self) -> Rc<Chunk<D>> {
+        Rc::clone(&self.chunks[0])
+    }
+
+    /// Whether the cursor still reads from `chunk`.
+    fn reads_from(&self, chunk: &Rc<Chunk<D>>) -> bool {
+        Rc::ptr_eq(&self.chunks[0], chunk)
     }
 
     /// Get a reference to the current chunk.
@@ -1584,13 +1692,25 @@ impl<D: Data> Chunk<D> {
         self.len
     }
 
+    /// Borrow the chunk's column, paging it in if necessary.
+    ///
+    /// Any caller that touches more than one update must hoist this out of its loop and index the
+    /// returned view. `Column::borrow` on a serialized column rebuilds the struct-of-arrays view
+    /// from the serialized header on every call, so borrowing per element pays that decode per
+    /// element.
+    fn view(&self) -> ChunkView<'_, D> {
+        self.column().borrow()
+    }
+
     /// Return the update at the given index, paging the chunk in if necessary.
+    ///
+    /// Single-access only. Indexing a hoisted [`Chunk::view`] is the loop form.
     ///
     /// # Panics
     ///
     /// Panics if the given index is not populated.
     fn index(&self, idx: usize) -> Ref<'_, (D, Timestamp, Diff)> {
-        self.column().borrow().get(idx)
+        self.view().get(idx)
     }
 
     /// Return the first update in the chunk, paging the chunk in if necessary.
@@ -1623,11 +1743,12 @@ impl<D: Data> Chunk<D> {
             return None;
         }
 
+        let view = self.view();
         let mut lower = 0;
         let mut upper = self.len;
         while lower < upper {
             let idx = (lower + upper) / 2;
-            if self.index(idx).1 > time {
+            if view.get(idx).1 > time {
                 upper = idx;
             } else {
                 lower = idx + 1;
@@ -1886,86 +2007,20 @@ fn consolidate<D: Data>(updates: &mut Vec<(D, Timestamp, Diff)>) {
     updates.truncate(offset);
 }
 
-/// Compare two columnar refs that have unrelated input lifetimes.
+/// Compare two `(time, data)` pairs of columnar refs that have unrelated input lifetimes.
 ///
 /// `<D::Container as Borrow>::Ref<'a>` is an associated-type projection through a trait, so
 /// the compiler treats it as invariant in `'a` and won't auto-shorten the inputs by variance.
 /// We instead explicitly reborrow both to a fresh, local lifetime `'x` via
-/// [`Columnar::reborrow`] before letting the inner `==` pick up the `for<'a> Ref<'a>: Eq`
+/// [`Columnar::reborrow`] before letting the inner `cmp` pick up the `for<'a> Ref<'a>: Ord`
 /// bound on [`Data`].
 #[inline]
-fn refs_eq<D: Data>(a: Ref<'_, D>, b: Ref<'_, D>) -> bool {
+fn refs_cmp<D: Data>(a: (Timestamp, Ref<'_, D>), b: (Timestamp, Ref<'_, D>)) -> Ordering {
     #[inline]
-    fn eq<'x, D: Data>(a: Ref<'x, D>, b: Ref<'x, D>) -> bool {
-        a == b
+    fn cmp<'x, D: Data>(a: (Timestamp, Ref<'x, D>), b: (Timestamp, Ref<'x, D>)) -> Ordering {
+        a.cmp(&b)
     }
-    eq::<D>(D::reborrow(a), D::reborrow(b))
-}
-
-/// A binary heap specialized for merging [`Cursor`]s.
-struct MergeHeap<D: Data>(BinaryHeap<MergeCursor<D>>);
-
-impl<D: Data> FromIterator<Cursor<D>> for MergeHeap<D> {
-    fn from_iter<I: IntoIterator<Item = Cursor<D>>>(cursors: I) -> Self {
-        let inner = cursors.into_iter().map(MergeCursor).collect();
-        Self(inner)
-    }
-}
-
-impl<D: Data> MergeHeap<D> {
-    /// Pop the next cursor (the one yielding the least update) from the heap.
-    fn pop(&mut self) -> Option<Cursor<D>> {
-        self.0.pop().map(|MergeCursor(c)| c)
-    }
-
-    /// Pop the next cursor from the heap, provided the data and time of its current update are
-    /// equal to the given values.
-    ///
-    /// Returns both the cursor and the diff corresponding to `data` and `time`.
-    fn pop_equal(&mut self, data: Ref<'_, D>, time: Timestamp) -> Option<(Cursor<D>, Diff)> {
-        let r = {
-            let MergeCursor(cursor) = self.0.peek()?;
-            let (d, t, r) = cursor.get();
-            if t != time || !refs_eq::<D>(d, data) {
-                return None;
-            }
-            r
-        };
-        let cursor = self.pop().expect("checked above");
-        Some((cursor, r))
-    }
-
-    /// Push a cursor onto the heap.
-    fn push(&mut self, cursor: Cursor<D>) {
-        self.0.push(MergeCursor(cursor));
-    }
-}
-
-/// A wrapper for [`Cursor`]s on a [`MergeHeap`].
-///
-/// Implements the cursor ordering required for merging cursors.
-struct MergeCursor<D: Data>(Cursor<D>);
-
-impl<D: Data> PartialEq for MergeCursor<D> {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other).is_eq()
-    }
-}
-
-impl<D: Data> Eq for MergeCursor<D> {}
-
-impl<D: Data> PartialOrd for MergeCursor<D> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<D: Data> Ord for MergeCursor<D> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        let (d1, t1, _) = self.0.get();
-        let (d2, t2, _) = other.0.get();
-        (t1, d1).cmp(&(t2, d2)).reverse()
-    }
+    cmp::<D>((a.0, D::reborrow(a.1)), (b.0, D::reborrow(b.1)))
 }
 
 #[cfg(test)]
@@ -2041,6 +2096,53 @@ mod tests {
         fn data_bytes(&self) -> usize {
             std::mem::size_of::<Self>()
         }
+    }
+
+    /// A k-way merge over chains of several chunks each consolidates across all of them, with
+    /// its rounds ending wherever any input crosses a chunk boundary.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // slow under Miri
+    fn merge_many_consolidates_across_chunks() {
+        // Large enough that the sparsest chain still spans several chunks.
+        let count = 600_000_i64;
+        // Chain `k` holds the updates of `inputs[k]`, sorted by (time, data).
+        let inputs: [Vec<(i64, Timestamp, Diff)>; 3] = [
+            (0..count)
+                .map(|d| (d, Timestamp::new(0), Diff::ONE))
+                .collect(),
+            (0..count)
+                .filter(|d| d % 2 == 0)
+                .map(|d| (d, Timestamp::new(0), Diff::ONE))
+                .collect(),
+            (0..count)
+                .filter(|d| d % 3 == 0)
+                .map(|d| (d, Timestamp::new(0), -Diff::ONE))
+                .collect(),
+        ];
+
+        let mut expected = std::collections::BTreeMap::new();
+        for (d, _, r) in inputs.iter().flatten() {
+            *expected.entry(*d).or_insert(Diff::ZERO) += *r;
+        }
+        expected.retain(|_, r| *r != Diff::ZERO);
+
+        let cursors = inputs
+            .iter()
+            .map(|updates| {
+                let mut builder = ChainBuilder::<i64>::default();
+                for update in updates {
+                    builder.push_owned(update);
+                }
+                let chain = builder.finish();
+                assert!(chain.chunks.len() > 1, "expected multiple minted chunks");
+                chain.into_cursor().expect("non-empty")
+            })
+            .collect();
+        let merged = merge_many(cursors);
+
+        let actual: Vec<_> = merged.iter().map(|(d, _, r)| (d, r)).collect();
+        let expected: Vec<_> = expected.into_iter().collect();
+        assert_eq!(actual, expected);
     }
 
     fn sink_metrics() -> SinkMetrics {
