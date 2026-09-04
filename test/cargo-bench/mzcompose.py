@@ -422,6 +422,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # or S3 endpoint is configured. This step measures code, not network
     # storage, so the benches run as they do locally and skip those variants.
     env.pop("CI", None)
+    # A vendored C dependency such as OpenSSL embeds its own build timestamp
+    # unless SOURCE_DATE_EPOCH is set, and a timestamp difference alone would
+    # defeat the identical-binary skip below even when the compiled source is
+    # otherwise byte-for-byte the same between the ancestor and current build.
+    env["SOURCE_DATE_EPOCH"] = "0"
 
     # Cargo derives a unit's hash from absolute paths, so the ancestor and
     # current checkouts must build at the same checkout path and the same
