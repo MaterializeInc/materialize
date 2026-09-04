@@ -497,7 +497,7 @@ disruptions: list[Disruption] = [
     PgDisruption(
         name="alter-postgres",
         breakage=lambda c, _: alter_pg_table(c),
-        expected_error="source table source1 with oid .+ has been altered",
+        expected_error='column "f1" of source table .+source1 was dropped or renamed upstream',
         fixage=None,
     ),
     PgDisruption(

@@ -42,6 +42,9 @@ tunnel = [
     "mz-ore",
 ]
 
+[dev-dependencies]
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }
+
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build.workspace = true
