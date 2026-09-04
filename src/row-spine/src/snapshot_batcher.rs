@@ -296,8 +296,8 @@ where
 ///
 /// The sorting chunkers sort and consolidate every input container before the batcher sees
 /// it. A [`SnapshotBatcher`] sorts everything it holds at `seal`, so that work is wasted on
-/// its fast path; on the fallback path it sorts the held chunks itself (see
-/// [`SnapshotBatcher::sort_chunk`]). Only pair this chunker with that batcher.
+/// its fast path; on the fallback path it sorts the held chunks itself before handing them to
+/// the merge batcher. Only pair this chunker with that batcher.
 pub struct UnsortedChunker<D, T, R>
 where
     D: Columnation,
