@@ -426,7 +426,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # unless SOURCE_DATE_EPOCH is set, and a timestamp difference alone would
     # defeat the identical-binary skip below even when the compiled source is
     # otherwise byte-for-byte the same between the ancestor and current build.
-    env["SOURCE_DATE_EPOCH"] = "0"
+    # The value must not be "0": the OpenSSL version this workspace resolves
+    # reads it with Perl's `||`, which treats the string "0" as false and
+    # falls back to the real time, so any other fixed non-zero value is used.
+    env["SOURCE_DATE_EPOCH"] = "1"
 
     # Cargo derives a unit's hash from absolute paths, so the ancestor and
     # current checkouts must build at the same checkout path and the same
