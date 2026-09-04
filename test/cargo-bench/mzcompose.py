@@ -66,9 +66,7 @@ def target_dir() -> Path:
 
 def load_targets(cwd: Path, packages: list[str]) -> list[BenchTarget]:
     metadata = json.loads(
-        spawn.capture(
-            ["cargo", "metadata", "--no-deps", "--format-version=1"], cwd=cwd
-        )
+        spawn.capture(["cargo", "metadata", "--no-deps", "--format-version=1"], cwd=cwd)
     )
     targets = bench_targets(metadata)
     if packages:
@@ -105,14 +103,10 @@ def run_ancestor(
     )
     try:
         targets = load_targets(worktree, packages)
-        failures = run_targets(
-            targets, worktree, env, ["--save-baseline", BASELINE]
-        )
+        failures = run_targets(targets, worktree, env, ["--save-baseline", BASELINE])
         return targets, failures
     finally:
-        spawn.runv(
-            ["git", "worktree", "remove", "--force", str(worktree)], cwd=MZ_ROOT
-        )
+        spawn.runv(["git", "worktree", "remove", "--force", str(worktree)], cwd=MZ_ROOT)
 
 
 def render_report(
@@ -124,7 +118,9 @@ def render_report(
 ) -> str:
     sections = []
     if ancestor is not None:
-        sections.append(f"Ancestor: `{ancestor}`, regression threshold: {threshold:.0%}")
+        sections.append(
+            f"Ancestor: `{ancestor}`, regression threshold: {threshold:.0%}"
+        )
     else:
         sections.append("Ancestor run skipped, no comparison performed")
     if current_failures:
@@ -187,9 +183,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ancestor: str | None = None
     ancestor_failures: list[TargetFailure] = []
     if not args.skip_ancestor:
-        ancestor = args.ancestor or resolve_ancestor()
-        print(f"--- Comparing against ancestor {ancestor}")
-        _, ancestor_failures = run_ancestor(ancestor, args.package, env)
+        # Annotated `str`, not `str | None`: `args.ancestor` is `Any`, and
+        # assigning an `Any` value into `ancestor` would otherwise narrow to
+        # its declared `str | None`, which `run_ancestor` below rejects.
+        resolved_ancestor: str = args.ancestor or resolve_ancestor()
+        ancestor = resolved_ancestor
+        print(f"--- Comparing against ancestor {resolved_ancestor}")
+        _, ancestor_failures = run_ancestor(resolved_ancestor, args.package, env)
 
     current_targets = load_targets(MZ_ROOT, args.package)
     if not current_targets:
