@@ -357,17 +357,33 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         // Key each row for the first stage directly: its bucket of the row hash, or zero when
         // the only stage is the final one and the hash would be discarded anyway.
         let first_modulus = buckets.first().copied().unwrap_or(1);
+        // A group key that is the row's leading columns is a byte prefix of the row.
+        let prefix_len = group_key
+            .iter()
+            .enumerate()
+            .all(|(index, column)| *column == index)
+            .then_some(group_key.len());
         let mut collection = collection.map({
             move |row| {
-                let group_row = {
-                    let bucket = if first_modulus == 1 {
-                        0
-                    } else {
-                        row.hashed() % first_modulus
-                    };
-                    let datums = datum_vec.borrow_with(&row);
-                    let iterator = group_key.iter().map(|i| datums[*i]);
-                    pairer.merge(std::iter::once(Datum::from(bucket)), iterator)
+                let bucket = if first_modulus == 1 {
+                    0
+                } else {
+                    row.hashed() % first_modulus
+                };
+                let group_row = match prefix_len {
+                    Some(prefix_len) => {
+                        let (group, _) = row.split_at_datum(prefix_len);
+                        let mut group_row = Row::default();
+                        let mut packer = group_row.packer();
+                        packer.push(Datum::from(bucket));
+                        packer.extend_by_row_ref(group);
+                        group_row
+                    }
+                    None => {
+                        let datums = datum_vec.borrow_with(&row);
+                        let iterator = group_key.iter().map(|i| datums[*i]);
+                        pairer.merge(std::iter::once(Datum::from(bucket)), iterator)
+                    }
                 };
                 (group_row, row)
             }
