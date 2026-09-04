@@ -35,7 +35,7 @@ gives you the following benefits:
 
 When a source is created, Materialize parallelizes the initial snapshot
 across the cluster's workers and can split the read of large tables that meet
-certain requirements {{< private-preview-inline />}}. See [Snapshot
+certain requirements. See [Snapshot
 parallelism](/ingest-data/mysql/snapshot-parallelism/).
 
 ## Supported versions and services
