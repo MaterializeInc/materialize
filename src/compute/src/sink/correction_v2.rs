@@ -150,15 +150,18 @@ use std::rc::Rc;
 use std::sync::atomic::{self, AtomicUsize};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use columnar::bytes::indexed;
 use columnar::{Columnar, Index, Len, Ref};
 use mz_ore::cast::CastLossy;
+use mz_ore::pool::ChunkHandle;
 use mz_ore::soft_assert_or_log;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
-use mz_timely_util::column_pager::{self, PagedColumn};
 use mz_timely_util::columnar::Column;
+use mz_timely_util::columnar::chunk;
 use mz_timely_util::temporal::{Bucket, BucketChain};
 use timely::PartialOrder;
+use timely::container::{PushInto, SizableContainer};
 use timely::dataflow::channels::ContainerBytes;
 use timely::progress::Antichain;
 
@@ -1179,14 +1182,16 @@ impl<D: Data> Default for ChainBuilder<D> {
 impl<D: Data> ChainBuilder<D> {
     /// Push a reference-form update into the builder.
     fn push_ref(&mut self, update: Ref<'_, (D, Timestamp, Diff)>) {
-        self.builder.push(update);
-        self.drain();
+        if let Some(chunk) = self.builder.push(update) {
+            self.chain.push_chunk(chunk);
+        }
     }
 
     /// Push an owned-form update into the builder.
     fn push_owned(&mut self, update: &(D, Timestamp, Diff)) {
-        self.builder.push(update);
-        self.drain();
+        if let Some(chunk) = self.builder.push(update) {
+            self.chain.push_chunk(chunk);
+        }
     }
 
     /// Push the updates produced by a cursor into the builder.
@@ -1208,20 +1213,11 @@ impl<D: Data> ChainBuilder<D> {
         }
     }
 
-    /// Move any minted chunks from the builder into the chain.
-    fn drain(&mut self) {
-        while let Some(chunk) = self.builder.pop() {
-            self.chain.push_chunk(chunk);
-        }
-    }
-
     /// Finish building, returning the assembled [`Chain`].
     fn finish(self) -> Chain<D> {
         let Self { builder, mut chain } = self;
-        for chunk in builder.finish() {
-            if chunk.len() > 0 {
-                chain.push_chunk(chunk);
-            }
+        if let Some(chunk) = builder.finish() {
+            chain.push_chunk(chunk);
         }
         chain
     }
@@ -1534,24 +1530,30 @@ impl<D: Data> Cursor<D> {
 /// boundary (~2 MiB, matching the ship granularity used elsewhere in the codebase), so each
 /// chunk corresponds to a single, predictably sized allocation.
 struct Chunk<D: Data> {
-    /// The paged-out form, taken on first materialization.
+    /// The body in the buffer pool, which may spill it.
+    ///
+    /// Empty when the body stays on the heap, which is what
+    /// [`mz_timely_util::columnar::chunk::try_spill_ref`] decides, and emptied again by
+    /// [`Chunk::column`]: a materialized chunk holds its body on the heap for the rest of its
+    /// life, so keeping the pool's copy alive would only double the footprint and hold budget
+    /// the pool could give to a chunk that still needs it.
     ///
     /// A `Mutex` (not `RefCell`) keeps the chunk `Sync`: cursors hold chunks behind a shared
     /// `Rc`, and the iterator returned by [`CorrectionV2::updates_before`] borrows them across
     /// the persist writer's `await`, so `&Chunk` must be `Send`. The lock is taken once, at
     /// materialization, and is otherwise uncontended (the sink runs single-threaded per worker).
-    paged: Mutex<Option<PagedColumn<(D, Timestamp, Diff)>>>,
+    pooled: Mutex<Option<ChunkHandle>>,
     /// The materialized form, populated lazily by [`Chunk::column`] on first access.
     ///
-    /// An `OnceLock` (not `OnceCell`) for the same `Sync` reason. Once set the slot is never
-    /// cleared, so its address is stable and [`Chunk::index`] can hand out `Ref<'_>` borrows tied
-    /// to `&self`. The allocation is freed when the chunk drops, which bounds resident memory to
-    /// the chunks under an active merge front.
+    /// An `OnceLock` for the same `Sync` reason as `pooled`. Once set the slot is never
+    /// cleared, so its address is stable and [`Chunk::index`] can hand out `Ref<'_>` borrows
+    /// tied to `&self`. The allocation is freed when the chunk drops, which bounds resident
+    /// memory to the chunks under an active merge front.
     resident: OnceLock<Column<(D, Timestamp, Diff)>>,
     /// Number of updates, cached so `len` and chain bookkeeping never page the chunk in.
     len: usize,
-    /// Serialized size of the body in bytes, cached so size accounting never pages it in.
-    size: usize,
+    /// Serialized size of the body in words, cached so size accounting never pages it in.
+    body_words: usize,
     /// Time of the first update, cached so boundary checks (`split_at_time`, `can_accept`) route
     /// a resting chunk without materializing it.
     first_time: Timestamp,
@@ -1566,49 +1568,76 @@ impl<D: Data> fmt::Debug for Chunk<D> {
 }
 
 impl<D: Data> Chunk<D> {
-    /// Page the given non-empty column out into a chunk.
+    /// Mint a chunk from the given non-empty column, emptying it.
     ///
-    /// Reads the cached metadata (length, boundary times) while the column is still resident, then
-    /// hands it to the global column pager. The policy decides whether it actually spills; either
-    /// way the chunk is born paged and materializes lazily on first read.
+    /// Reads the metadata a resting chunk must answer (length, size, boundary times) while the
+    /// column is still in hand, then offers the body to the buffer pool. A body the pool takes
+    /// is encoded straight into its slot, which leaves the column's allocation behind for the
+    /// caller to refill, and materializes lazily on first read. A body the pool declines is
+    /// taken from the column instead, because a resident chunk has to own it.
     ///
     /// # Panics
     ///
-    /// Panics if the column is empty. Chunks are non-empty by construction; [`ChunkBuilder`] only
-    /// ever builds a chunk from a populated column.
-    fn from_column(mut data: Column<(D, Timestamp, Diff)>) -> Self {
+    /// Panics if the column is empty. Chunks are non-empty by construction; [`ChunkBuilder`]
+    /// only ever mints from a populated column.
+    fn mint(column: &mut Column<(D, Timestamp, Diff)>) -> Self {
         let (len, first_time, last_time) = {
-            let borrowed = data.borrow();
+            let borrowed = Column::borrow(column);
             let len = borrowed.len();
             assert!(len > 0, "chunks are non-empty");
             (len, borrowed.get(0).1, borrowed.get(len - 1).1)
         };
-        let size = data.length_in_bytes();
+        let body_words = column.length_in_bytes() / std::mem::size_of::<u64>();
 
-        let paged = column_pager::global_pager().page(&mut data);
+        // Depth 0: a correction chunk is rewritten by the next merge that reaches it, so the
+        // pool stores it uncompressed and in its hottest eviction band.
+        // TODO: chunks resting in the far-future buckets outlive that assumption and want a
+        // depth that reflects how long they have gone untouched.
+        let (pooled, resident) = match chunk::try_spill_ref(column, 0) {
+            Some(spilled) => {
+                column.clear();
+                (Mutex::new(Some(spilled.handle)), OnceLock::new())
+            }
+            None => {
+                // Serialize into an exactly sized vector, which leaves the column's allocation
+                // in place for the caller and keeps the typed container's spare capacity out
+                // of a body that is held for the rest of the chunk's life.
+                let mut words = Vec::with_capacity(body_words);
+                indexed::encode(&mut words, &Column::borrow(column));
+                column.clear();
+                let cell = OnceLock::new();
+                if cell.set(Column::Align(words)).is_err() {
+                    unreachable!("cell is fresh");
+                }
+                (Mutex::new(None), cell)
+            }
+        };
         Self {
-            paged: Mutex::new(Some(paged)),
-            resident: OnceLock::new(),
+            pooled,
+            body_words,
+            resident,
             len,
-            size,
             first_time,
             last_time,
         }
     }
 
-    /// Materialize the chunk's column, paging it in on first access.
+    /// Materialize the chunk's column, taking it out of the pool on first access.
     ///
     /// The returned reference is valid for as long as `&self`: the `OnceLock` slot is never
-    /// cleared once populated, so its contents have a stable address.
+    /// cleared once populated, so its contents have a stable address. Taking the body frees the
+    /// pool's copy, so the chunk holds exactly one.
     fn column(&self) -> &Column<(D, Timestamp, Diff)> {
         self.resident.get_or_init(|| {
-            let paged = self
-                .paged
+            let handle = self
+                .pooled
                 .lock()
-                .expect("pager mutex poisoned")
+                .expect("pool handle mutex poisoned")
                 .take()
-                .expect("paged form present until materialized");
-            column_pager::global_pager().take(paged)
+                .expect("a chunk the pool declined is materialized at construction");
+            let mut words = Vec::new();
+            handle.take(&mut words);
+            Column::Align(words)
         })
     }
 
@@ -1685,80 +1714,56 @@ impl<D: Data> Chunk<D> {
 
     /// Return the serialized size of the chunk's body in bytes, for use in metrics.
     ///
-    /// This is the logical size of the body, spilled or not. Whether the body is currently
-    /// resident is the pager's business, and it changes without telling the chunk, so a
-    /// resident-byte figure would have to page the chunk in or lock the pager to be right.
+    /// The chunk holds exactly one copy of its body, in the pool or on the heap, so this is its
+    /// size either way. It is not a resident-byte number: what the pool has evicted is the
+    /// pool's business, and it publishes `resident_bytes` itself (`mz_ore::pool::PoolStats`).
     fn size(&self) -> usize {
-        self.size
+        self.body_words * std::mem::size_of::<u64>()
     }
 }
 
-/// Builder that produces a stream of fixed-size [`Chunk`]s.
+/// Builder that mints fixed-size [`Chunk`]s from a stream of updates.
 ///
-/// Wraps [`mz_timely_util::columnar::builder::ColumnBuilder`], which mints a new
-/// [`Column::Align`] chunk whenever its in-progress columnar container reaches a fixed
-/// serialized byte boundary (~2 MiB, matching the ship granularity used elsewhere in the
-/// codebase). Each minted chunk is therefore a single, predictably-sized aligned allocation.
+/// Updates accumulate in one column, which is minted into a chunk as soon as the column reports
+/// itself at capacity, so every chunk is a single, predictably sized body. Minting a spilled body
+/// leaves the column's allocation in place, so a builder that mints many chunks grows one column
+/// once.
 struct ChunkBuilder<D: Data> {
-    inner: mz_timely_util::columnar::builder::ColumnBuilder<(D, Timestamp, Diff)>,
+    /// The updates pushed since the last mint.
+    current: Column<(D, Timestamp, Diff)>,
 }
 
 impl<D: Data> Default for ChunkBuilder<D> {
     fn default() -> Self {
         Self {
-            inner: Default::default(),
+            current: Default::default(),
         }
     }
 }
 
 impl<D: Data> ChunkBuilder<D> {
-    /// Push an update into the builder.
+    /// Push an update, returning a chunk if the push completed one.
     ///
-    /// Accepts whatever the inner [`ColumnBuilder`]'s [`PushInto`] impl accepts — both the
+    /// Accepts whatever [`Column`]'s [`PushInto`] impl accepts, both the
     /// `Ref<'_, (D, T, R)>` refs produced by cursors and `&(D, T, R)` references to owned
     /// tuples drained from the staging buffer.
     ///
-    /// [`ColumnBuilder`]: mz_timely_util::columnar::builder::ColumnBuilder
     /// [`PushInto`]: timely::container::PushInto
     #[inline]
-    fn push<T>(&mut self, item: T)
+    fn push<T>(&mut self, item: T) -> Option<Chunk<D>>
     where
-        mz_timely_util::columnar::builder::ColumnBuilder<(D, Timestamp, Diff)>:
-            timely::container::PushInto<T>,
+        Column<(D, Timestamp, Diff)>: PushInto<T>,
     {
-        timely::container::PushInto::push_into(&mut self.inner, item);
+        PushInto::push_into(&mut self.current, item);
+        // The ship test walks the column's slice lengths, so it costs per push, not per byte.
+        self.current
+            .at_capacity()
+            .then(|| Chunk::mint(&mut self.current))
     }
 
-    /// Pop a finished chunk, if one is available.
-    fn pop(&mut self) -> Option<Chunk<D>> {
-        use timely::container::ContainerBuilder;
-        // `ColumnBuilder::extract` stashes the popped chunk in its `finished` slot so the
-        // caller can read it through `&mut`; move it out with `mem::take` so we own it
-        // (leaves `Column::Typed(Default::default())` behind, which the next `extract`
-        // overwrites).
-        self.inner
-            .extract()
-            .map(|c| Chunk::from_column(std::mem::take(c)))
-    }
-
-    /// Finalize the builder: flush any in-progress updates as a typed chunk and drain pending.
-    fn finish(mut self) -> impl Iterator<Item = Chunk<D>> {
-        use timely::container::ContainerBuilder;
-        // `ColumnBuilder::finish` flushes the in-progress container into the pending queue
-        // (as `Column::Typed`) and returns the first pending entry. Subsequent calls drain
-        // the rest until `None`. Translate that into an owning iterator.
-        //
-        // `finish` can hand back an empty column (e.g. when the last shipped chunk landed exactly
-        // on the boundary). Skip those: `Chunk::from_column` requires a non-empty column, and an
-        // empty chunk would needlessly engage the pager.
-        std::iter::from_fn(move || {
-            loop {
-                let col = std::mem::take(self.inner.finish()?);
-                if !col.is_empty() {
-                    return Some(Chunk::from_column(col));
-                }
-            }
-        })
+    /// Mint the updates pushed since the last mint, if any.
+    fn finish(mut self) -> Option<Chunk<D>> {
+        (!self.current.is_empty()).then(|| Chunk::mint(&mut self.current))
     }
 }
 
@@ -2310,43 +2315,46 @@ mod tests {
         );
     }
 
-    /// A [`PagingPolicy`] that always spills to the swap backend, uncompressed.
-    ///
-    /// The default global pager keeps every chunk resident; installing this drives the actual
-    /// spill path so the tests exercise [`Chunk::column`]'s page-in through [`mz_ore::pager`].
-    ///
-    /// [`PagingPolicy`]: column_pager::PagingPolicy
-    struct ForceSwap;
-
-    impl column_pager::PagingPolicy for ForceSwap {
-        fn decide(&self, _hint: column_pager::PageHint) -> column_pager::PageDecision {
-            column_pager::PageDecision::Page {
-                backend: mz_ore::pager::Backend::Swap,
-                codec: None,
-            }
-        }
-        fn record(&self, _event: column_pager::PageEvent) {}
+    /// One pool shared by every test in the module. A pool reserves a large slab of address
+    /// space, so one per test exhausts the VM map under parallel test threads.
+    fn test_pool() -> mz_ore::pool::Pool {
+        static POOL: std::sync::OnceLock<mz_ore::pool::Pool> = std::sync::OnceLock::new();
+        POOL.get_or_init(|| mz_ore::pool::Pool::new().expect("pool reservation"))
+            .clone()
     }
 
-    /// Install a global pager that spills every chunk to swap for the duration of `f`, then
-    /// restore the default (disabled) pager. The global pager is process-wide; concurrent tests
-    /// only ever observe a correct round-trip regardless of backend, so racing on it is benign.
-    fn with_swap_pager<R>(f: impl FnOnce() -> R) -> R {
-        use std::sync::Arc;
-        column_pager::set_global_pager(column_pager::ColumnPager::new(Arc::new(ForceSwap)));
+    /// Route this thread's chunk spills through the test pool for the duration of `f`.
+    ///
+    /// Without an override no pool is installed and every chunk stays resident, so the tests
+    /// would not exercise [`Chunk::column`]'s read-back at all. The override is thread-scoped,
+    /// so concurrently running tests do not race on it.
+    fn with_spill_pool<R>(f: impl FnOnce() -> R) -> R {
+        chunk::set_spill_override(Some(test_pool()));
         let result = f();
-        column_pager::set_global_pager(column_pager::ColumnPager::disabled());
+        chunk::set_spill_override(None);
         result
     }
 
-    /// Build a chain crossing the mint boundary while every chunk is spilled to swap, then assert
-    /// `iter()` (the read path behind `updates_before`) pages each chunk back in and roundtrips
-    /// values, order, and diffs.
+    /// Assert every chunk in the chain went to the pool, so a read must fetch it back.
+    fn assert_all_spilled<D: Data>(chain: &Chain<D>) {
+        assert!(
+            chain
+                .chunks
+                .iter()
+                .all(|c| c.pooled.lock().expect("not poisoned").is_some()),
+            "expected every chunk to spill, got {:?}",
+            chain.chunks,
+        );
+    }
+
+    /// Build a chain crossing the mint boundary while every chunk spills, then assert `iter()`
+    /// (the read path behind `updates_before`) reads each chunk back and roundtrips values,
+    /// order, and diffs.
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // madvise on the swap backend is unsupported under miri
-    fn iter_roundtrips_through_swap_backend() {
+    #[cfg_attr(miri, ignore)] // the pool's mapped regions are unsupported under miri
+    fn iter_roundtrips_through_pool() {
         let count = 200_000_u64;
-        with_swap_pager(|| {
+        with_spill_pool(|| {
             let mut builder = ChainBuilder::<i64>::default();
             for i in 0..count {
                 let d = i64::try_from(i).expect("fits");
@@ -2355,6 +2363,7 @@ mod tests {
             let chain = builder.finish();
             assert!(chain.chunks.len() > 1, "expected multiple minted chunks");
             assert_eq!(chain.update_count, usize::try_from(count).expect("fits"));
+            assert_all_spilled(&chain);
 
             let mut expected = 0_u64;
             for (d, t, r) in chain.iter() {
@@ -2368,13 +2377,13 @@ mod tests {
     }
 
     /// Drive a [`Cursor`] over a spilled, multi-chunk chain to completion (the access pattern
-    /// merges use). Each step pages the front chunk back in via [`Chunk::column`]; assert the
+    /// merges use). Each step reads the front chunk back via [`Chunk::column`]; assert the
     /// cursor yields every update in order.
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // madvise on the swap backend is unsupported under miri
-    fn cursor_steps_through_swap_backend() {
+    #[cfg_attr(miri, ignore)] // the pool's mapped regions are unsupported under miri
+    fn cursor_steps_through_pool() {
         let count = 200_000_u64;
-        with_swap_pager(|| {
+        with_spill_pool(|| {
             let mut builder = ChainBuilder::<i64>::default();
             for i in 0..count {
                 let d = i64::try_from(i).expect("fits");
@@ -2382,6 +2391,7 @@ mod tests {
             }
             let chain = builder.finish();
             assert!(chain.chunks.len() > 1, "expected multiple minted chunks");
+            assert_all_spilled(&chain);
 
             let mut rest = chain.into_cursor();
             let mut expected = 0_u64;

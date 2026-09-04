@@ -121,7 +121,7 @@ impl<C: Columnar> Column<C> {
     }
 
     /// Borrows the container as a reference.
-    #[inline]
+    #[inline(always)]
     pub fn borrow(&self) -> <C::Container as Borrow>::Borrowed<'_> {
         match self {
             Column::Typed(t) => t.borrow(),
@@ -209,7 +209,7 @@ const SHIP_WORDS: usize = 1 << 18;
 /// ship point, lifted out so the builder, the merger, and the
 /// `SizableContainer` impl agree on the signal.
 #[inline]
-pub(crate) fn at_serialized_capacity<'a, A>(borrow: &A) -> bool
+pub fn at_serialized_capacity<'a, A>(borrow: &A) -> bool
 where
     A: columnar::AsBytes<'a>,
 {

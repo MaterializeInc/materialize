@@ -173,6 +173,13 @@ fn codec_for_depth(depth: u8) -> (&'static dyn ExtentCodec, bool) {
     }
 }
 
+/// The pool a body of `len_bytes` spills into, or `None` when it stays resident.
+///
+/// The one place the spill decision lives: the gates, the installed pool, and the size floor.
+fn spill_target(len_bytes: usize) -> Option<Pool> {
+    spill_pool().filter(|_| len_bytes >= SPILL_MIN_BYTES)
+}
+
 /// The pool committed chunks spill to, if any.
 fn spill_pool() -> Option<Pool> {
     if let Some(pool) = SPILL_OVERRIDE.with(|cell| cell.borrow().clone()) {
@@ -393,12 +400,10 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
         T: Timestamp,
     {
         mz_ore::soft_assert_no_log!(!column.is_empty(), "chunks must be non-empty");
-        if let Some(pool) = spill_pool() {
-            if column.length_in_bytes() >= SPILL_MIN_BYTES {
-                return Self::spill_body(column, &pool, depth);
-            }
+        match spill_target(column.length_in_bytes()) {
+            Some(pool) => Self::spill_body(column, &pool, depth),
+            None => ColumnChunk::Resident(Rc::new(column), depth),
         }
-        ColumnChunk::Resident(Rc::new(column), depth)
     }
 
     /// Spill a non-empty column into `pool` unconditionally, capturing the
@@ -420,7 +425,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
         let mut fences = D::Container::default();
         fences.push(view.0.get(0));
         fences.push(view.0.get(records - 1));
-        let handle = spill_column(column, pool, len_bytes, ChunkHints { depth }, codec);
+        let handle = spill_column(&column, pool, len_bytes, ChunkHints { depth }, codec);
         ColumnChunk::Spilled(
             Rc::new(SpilledBody {
                 records,
@@ -563,33 +568,56 @@ impl ExtentCodec for Lz4Codec {
     }
 }
 
-/// Serialize a column into a pool slot. The `Align` variant is already the
-/// serialized form and copies in directly. Other variants write their
-/// [`ContainerBytes`] encoding through a cursor over the slot memory. Sizing
-/// is exact, so a short or overlong write is a contract violation and panics.
+/// Serialize a column into a pool slot, writing its [`ContainerBytes`] encoding through a
+/// cursor over the slot memory. The `Align` variant is already the serialized form, so its
+/// encoding is one copy. Sizing is exact, so a short or overlong write is a contract violation
+/// and panics.
 fn spill_column<C: Columnar>(
-    column: Column<C>,
+    column: &Column<C>,
     pool: &Pool,
     len_bytes: usize,
     hints: ChunkHints,
     codec: &'static dyn ExtentCodec,
 ) -> ChunkHandle {
     mz_ore::soft_assert_eq_no_log!(len_bytes % 8, 0);
-    match column {
-        Column::Align(words) => {
-            pool.insert_with(words.len(), hints, codec, |dst| dst.copy_from_slice(&words))
-        }
-        other => pool.insert_with(len_bytes / 8, hints, codec, |dst| {
-            let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst);
-            let mut cursor = std::io::Cursor::new(bytes);
-            other.into_bytes(&mut cursor);
-            assert_eq!(
-                usize::try_from(cursor.position()).expect("usize position"),
-                len_bytes,
-                "serialized body must fill the chunk exactly",
-            );
-        }),
-    }
+    pool.insert_with(len_bytes / 8, hints, codec, |dst| {
+        let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst);
+        let mut cursor = std::io::Cursor::new(bytes);
+        column.into_bytes(&mut cursor);
+        assert_eq!(
+            usize::try_from(cursor.position()).expect("usize position"),
+            len_bytes,
+            "serialized body must fill the chunk exactly",
+        );
+    })
+}
+
+/// A body the pool accepted, and whether its stored form is compressed.
+pub struct Spilled {
+    /// The pool chunk holding the serialized column.
+    pub handle: ChunkHandle,
+    /// Whether the body was inserted under the compressing codec.
+    pub compressed: bool,
+}
+
+/// Spill a serialized copy of `column` into the process pool, leaving `column` untouched, or
+/// `None` when the body stays resident.
+///
+/// A body stays resident when spilling is off for this process, when no pool is installed, or
+/// when it is smaller than `SPILL_MIN_BYTES`. `depth` is the body's generational depth: it
+/// selects the stored codec and the pool's eviction band.
+///
+/// For consumers that keep their own chunk representation and so cannot use [`ColumnChunk`];
+/// the two share the spill decision through `spill_target`. The encode writes straight into
+/// the pool slot, so a spilled body costs no intermediate allocation and the caller can
+/// [`Column::clear`] and keep its allocation. A caller that gets `None` back still owns the
+/// body and must keep it resident itself.
+pub fn try_spill_ref<C: Columnar>(column: &Column<C>, depth: u8) -> Option<Spilled> {
+    let len_bytes = column.length_in_bytes();
+    let pool = spill_target(len_bytes)?;
+    let (codec, compressed) = codec_for_depth(depth);
+    let handle = spill_column(column, &pool, len_bytes, ChunkHints { depth }, codec);
+    Some(Spilled { handle, compressed })
 }
 
 /// A column is `Typed`, or becomes one by copy. Merge and settle accumulate
