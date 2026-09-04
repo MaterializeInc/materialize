@@ -262,6 +262,22 @@ pub const ENABLE_SYNC_MV_SINK: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether `Distinct` reductions render a second reduce over their arranged input that reports
+/// non-positive multiplicities as dataflow errors.
+///
+/// The output arrangement of a `Distinct` holds `Row`s and cannot carry an error, so surfacing
+/// the condition to queries needs a second full pass over the keys, which costs about as much as
+/// the reduction itself. With the check off, a non-positive multiplicity is logged and the key is
+/// omitted from the output. Off in production, on in CI so the condition stays observable in
+/// tests. Read at dataflow rendering time.
+pub const ENABLE_COMPUTE_DISTINCT_ERROR_CHECK: Config<bool> = Config::new(
+    "enable_compute_distinct_error_check",
+    false,
+    "Whether Distinct reductions render a second reduce that reports non-positive multiplicities \
+     as dataflow errors. When off, they are logged and the key is omitted from the output.",
+    ParameterScope::Replica,
+);
+
 /// Whether rendering should use the new MV sink correction buffer implementation.
 pub const ENABLE_CORRECTION_V2: Config<bool> = Config::new(
     "enable_compute_correction_v2",
@@ -704,6 +720,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_ERROR_DISTINCT)
         .add(&ENABLE_MZ_JOIN_CORE)
         .add(&ENABLE_SYNC_MV_SINK)
+        .add(&ENABLE_COMPUTE_DISTINCT_ERROR_CHECK)
         .add(&ENABLE_CORRECTION_V2)
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
         .add(&CORRECTION_V2_CHUNK_SIZE)
