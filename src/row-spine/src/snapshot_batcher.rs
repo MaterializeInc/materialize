@@ -375,7 +375,8 @@ where
     T: Columnation,
     R: Columnation,
 {
-    pending: Vec<(D, T, R)>,
+    /// The chunk being filled; updates are copied into it as they arrive.
+    open: ColumnationStack<(D, T, R)>,
     ready: VecDeque<ColumnationStack<(D, T, R)>>,
     empty: Option<ColumnationStack<(D, T, R)>>,
 }
@@ -388,7 +389,7 @@ where
 {
     fn default() -> Self {
         Self {
-            pending: Vec::new(),
+            open: ColumnationStack::default(),
             ready: VecDeque::new(),
             empty: None,
         }
@@ -414,15 +415,13 @@ where
         }
     }
 
-    fn form_chunks(&mut self, all: bool) {
+    /// Moves the open chunk to `ready` once it is full.
+    #[inline]
+    fn roll_if_full(&mut self) {
         let cap = Self::chunk_capacity();
-        while self.pending.len() >= cap || (all && !self.pending.is_empty()) {
-            let take = std::cmp::min(self.pending.len(), cap);
-            let mut chunk = ColumnationStack::with_capacity(cap);
-            for item in self.pending.drain(..take) {
-                chunk.copy(&item);
-            }
-            self.ready.push_back(chunk);
+        if self.open.len() >= cap {
+            let full = std::mem::replace(&mut self.open, ColumnationStack::with_capacity(cap));
+            self.ready.push_back(full);
         }
     }
 }
@@ -434,8 +433,10 @@ where
     R: Columnation,
 {
     fn push_into(&mut self, container: &'a mut Vec<(D, T, R)>) {
-        self.pending.append(container);
-        self.form_chunks(false);
+        for item in container.drain(..) {
+            self.open.copy(&item);
+            self.roll_if_full();
+        }
     }
 }
 
@@ -446,13 +447,11 @@ where
     R: Columnar + Columnation,
 {
     fn push_into(&mut self, container: &'a mut Column<(D, T, R)>) {
-        let borrowed = container.borrow();
-        self.pending.reserve(borrowed.len());
-        for (d, t, r) in borrowed.into_index_iter() {
-            self.pending
-                .push((D::into_owned(d), T::into_owned(t), R::into_owned(r)));
+        for (d, t, r) in container.borrow().into_index_iter() {
+            self.open
+                .copy_destructured(&D::into_owned(d), &T::into_owned(t), &R::into_owned(r));
+            self.roll_if_full();
         }
-        self.form_chunks(false);
     }
 }
 
@@ -474,7 +473,10 @@ where
     }
 
     fn finish(&mut self) -> Option<&mut Self::Container> {
-        self.form_chunks(true);
+        if !self.open.is_empty() {
+            let open = std::mem::take(&mut self.open);
+            self.ready.push_back(open);
+        }
         self.extract()
     }
 }
