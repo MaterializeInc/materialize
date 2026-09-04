@@ -14,6 +14,10 @@ import React from "react";
 import { HydrationBucket } from "~/platform/maintained-objects/filters";
 
 import { HYDRATION_COLUMN_ID, hydrationFilterLabel } from "./hydrationFilters";
+import {
+  REPLICA_COLUMN_ID,
+  replicaCountFilterLabel,
+} from "./replicaCountFilters";
 import { utilizationFilterLabel } from "./utilizationFilters";
 
 interface Chip {
@@ -61,6 +65,25 @@ const hydrationChips = <TData,>(table: Table<TData>): Chip[] => {
   }));
 };
 
+/**
+ * The replica count minimum in force. Removing the chip drops the minimum
+ * entirely, which is the only way back to the clusters with no replicas once
+ * the default minimum has hidden them.
+ */
+const replicaCountChips = <TData,>(table: Table<TData>): Chip[] => {
+  const column = table.getColumn(REPLICA_COLUMN_ID);
+  const minimum = column?.getFilterValue() as number | undefined;
+  if (!column || minimum === undefined) return [];
+
+  return [
+    {
+      key: REPLICA_COLUMN_ID,
+      label: replicaCountFilterLabel(minimum),
+      onRemove: () => column.setFilterValue(undefined),
+    },
+  ];
+};
+
 export interface ClusterFilterChipsProps<TData> {
   table: Table<TData>;
   /** The utilization columns, in the order their chips should appear. */
@@ -80,6 +103,7 @@ export const ClusterFilterChips = <TData,>({
   utilizationColumns,
 }: ClusterFilterChipsProps<TData>) => {
   const chips = [
+    ...replicaCountChips(table),
     ...utilizationChips(table, utilizationColumns),
     ...hydrationChips(table),
   ];
