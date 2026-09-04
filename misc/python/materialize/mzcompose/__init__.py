@@ -312,8 +312,8 @@ def get_variable_system_parameters(
         ),
         # Varied for the same reason, and because it reaches past the arrange
         # sites: it installs the process buffer pool and enables the column pager
-        # the MV sink's correction buffer and storage's upsert stash draw from, so
-        # defaulting it on would move several subsystems' memory behavior at once.
+        # storage's upsert stash draws from, so defaulting it on would move several
+        # subsystems' memory behavior at once.
         VariableSystemParameter(
             "enable_column_paged_batcher_spill", "false", ["true", "false"]
         ),
@@ -321,6 +321,11 @@ def get_variable_system_parameters(
         # is off in production while it earns trust.
         VariableSystemParameter(
             "enable_columnar_accumulable_diff", "true", ["true", "false"]
+        ),
+        # On by default so CI exercises correction chunks spilling through the
+        # buffer pool, which is off in production while it earns trust.
+        VariableSystemParameter(
+            "enable_compute_correction_v2_spill", "true", ["true", "false"]
         ),
         VariableSystemParameter(
             "compute_peek_response_stash_threshold_bytes",

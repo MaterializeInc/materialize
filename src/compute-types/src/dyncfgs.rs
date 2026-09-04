@@ -112,15 +112,15 @@ pub const ENABLE_COLUMNAR_ACCUMULABLE_DIFF: Config<bool> = Config::new(
 /// the arrange batchers read when [`ENABLE_COLUMN_PAGED_BATCHER`] is `true`.
 /// With the gate clear every chunk stays resident regardless of budget.
 ///
-/// This flag (or the storage-side `enable_upsert_paged_spill`) also gates
-/// installation of the process buffer pool (`mz_ore::pool`): the first
-/// configuration tick with either gate on reserves the pool's virtual
+/// This flag (or the storage-side `enable_upsert_paged_spill`, or
+/// [`ENABLE_CORRECTION_V2_SPILL`]) also gates installation of the process
+/// buffer pool (`mz_ore::pool`): the first configuration tick with any of
+/// these gates on reserves the pool's virtual
 /// address space and spawns its spill threads. Turning the gates back off
 /// stops retuning but does not tear the installed pool down.
 ///
-/// It additionally enables the process-global column pager, which the MV
-/// sink's correction buffer and storage's paged upsert stash draw from, so
-/// it is not exclusive to the arrange path.
+/// It additionally enables the process-global column pager, which storage's
+/// paged upsert stash draws from, so it is not exclusive to the arrange path.
 ///
 /// Off by default, even when the batcher path itself is on, so the
 /// no-pressure case stays a pure resident operation. Tune the budget via
@@ -306,6 +306,21 @@ pub const CORRECTION_V2_CHUNK_SIZE: Config<usize> = Config::new(
     "The byte size of the staging area in the correction V2 buffer, heap bytes of the staged \
      updates included, which sets how much it accumulates before minting a chain (the name \
      predates that meaning; chunk bodies themselves are fixed at the columnar ship size).",
+    ParameterScope::Replica,
+);
+
+/// Allow the correction V2 buffer's chunk bodies to spill to the process
+/// buffer pool under memory pressure.
+///
+/// A gate of its own, so enabling the arrange or upsert spill flags does not
+/// move the MV sinks' memory behavior. Turning it on also installs the pool,
+/// budgeted by [`COLUMN_PAGED_BATCHER_BUDGET_FRACTION`]. Takes effect for
+/// chunks minted after the next configuration tick.
+pub const ENABLE_CORRECTION_V2_SPILL: Config<bool> = Config::new(
+    "enable_compute_correction_v2_spill",
+    false,
+    "Allow the MV sink correction V2 buffer's chunk bodies to spill to the process buffer pool \
+     under memory pressure.",
     ParameterScope::Replica,
 );
 
@@ -814,6 +829,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_CORRECTION_V2)
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
         .add(&CORRECTION_V2_CHUNK_SIZE)
+        .add(&ENABLE_CORRECTION_V2_SPILL)
         .add(&ENABLE_COMPUTE_TEMPORAL_BUCKETING)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
         .add(&LINEAR_JOIN_YIELDING)

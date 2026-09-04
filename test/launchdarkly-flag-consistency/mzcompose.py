@@ -251,6 +251,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_coalesce_case_transform
     enable_columnar_accumulable_diff
     enable_columnar_merge_batcher
+    enable_compute_correction_v2_spill
     enable_compute_half_join2
     enable_compute_index_peek_offload
     enable_compute_peek_row_iteration_limit
