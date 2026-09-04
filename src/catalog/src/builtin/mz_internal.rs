@@ -2709,8 +2709,8 @@ WHERE
     }
 });
 
-pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY: LazyLock<BuiltinSource> =
-    LazyLock::new(|| BuiltinSource {
+pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| {
+    BuiltinSource {
         name: "mz_cluster_replica_metrics_history",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_CLUSTER_REPLICA_METRICS_HISTORY_OID,
@@ -2723,8 +2723,11 @@ pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY: LazyLock<BuiltinSource> =
                 "cpu_nano_cores",
                 "Approximate CPU usage, in billionths of a vCPU core.",
             ),
-            ("memory_bytes", "Approximate memory usage, in bytes."),
-            ("disk_bytes", "Approximate disk usage, in bytes."),
+            ("memory_bytes", "Approximate RAM usage, in bytes."),
+            (
+                "disk_bytes",
+                "Approximate disk usage, in bytes. On replicas whose disk is provided as swap, this includes swap usage.",
+            ),
             (
                 "occurred_at",
                 "Wall-clock timestamp at which the event occurred.",
@@ -2738,7 +2741,8 @@ pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY: LazyLock<BuiltinSource> =
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: None,
-    });
+    }
+});
 
 pub static MZ_CLUSTER_REPLICA_METRICS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_cluster_replica_metrics",
@@ -2762,7 +2766,10 @@ pub static MZ_CLUSTER_REPLICA_METRICS: LazyLock<BuiltinView> = LazyLock::new(|| 
             "Approximate CPU usage, in billionths of a vCPU core.",
         ),
         ("memory_bytes", "Approximate RAM usage, in bytes."),
-        ("disk_bytes", "Approximate disk usage, in bytes."),
+        (
+            "disk_bytes",
+            "Approximate disk usage, in bytes. On replicas whose disk is provided as swap, this includes swap usage.",
+        ),
         (
             "heap_bytes",
             "Approximate heap (RAM + swap) usage, in bytes.",
@@ -2897,7 +2904,7 @@ pub static MZ_WALLCLOCK_LAG_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| 
         ),
         (
             "lag",
-            "The amount of time the object's write frontier lags behind wallclock time.",
+            "The maximum time the object's write frontier lagged behind wallclock time during the recording interval (60 seconds by default), rounded down to whole seconds.",
         ),
         (
             "occurred_at",
@@ -3058,7 +3065,7 @@ pub static MZ_WALLCLOCK_GLOBAL_LAG: LazyLock<BuiltinView> = LazyLock::new(|| Bui
         ),
         (
             "lag",
-            "The amount of time the object's write frontier lags behind wallclock time.",
+            "The smallest wallclock lag observed for the object across its replicas during the most recent minute.",
         ),
     ]),
     sql: "
@@ -5435,7 +5442,7 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION: LazyLock<BuiltinView> = LazyLock::new
         ),
         (
             "disk_percent",
-            "Approximate disk usage, in percent of the total allocation.",
+            "Approximate disk usage, in percent of the total allocation. On replicas whose disk is provided as swap, this includes swap usage.",
         ),
         (
             "heap_percent",
@@ -5474,8 +5481,8 @@ FROM
     }),
 });
 
-pub static MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY: LazyLock<BuiltinView> =
-    LazyLock::new(|| BuiltinView {
+pub static MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
         name: "mz_cluster_replica_utilization_history",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY_OID,
@@ -5504,7 +5511,7 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY: LazyLock<BuiltinView> =
             ),
             (
                 "disk_percent",
-                "Approximate disk usage, in percent of the total allocation.",
+                "Approximate disk usage, in percent of the total allocation. On replicas whose disk is provided as swap, this includes swap usage.",
             ),
             (
                 "heap_percent",
@@ -5530,7 +5537,8 @@ FROM
         JOIN mz_internal.mz_cluster_replica_metrics_history AS m ON m.replica_id = r.id",
         access: vec![PUBLIC_SELECT],
         ontology: None,
-    });
+    }
+});
 
 pub static MZ_INDEX_ADVICE: LazyLock<BuiltinView> = LazyLock::new(|| {
     BuiltinView {
@@ -7547,7 +7555,7 @@ pub static MZ_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| Built
     column_comments: BTreeMap::from_iter([
         (
             "object_id",
-            "The ID of a dataflow-powered object. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, `mz_internal.mz_subscriptions`, `mz_catalog.mz_sources.id`, or `mz_catalog.mz_sinks.id`.",
+            "The ID of a dataflow-powered object. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, `mz_catalog.mz_sources.id`, or `mz_catalog.mz_sinks.id`.",
         ),
         ("replica_id", "The ID of a cluster replica."),
         ("hydrated", "Whether the object is hydrated on the replica."),
@@ -8819,7 +8827,7 @@ pub static MZ_SOURCE_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| {
         column_comments: BTreeMap::from_iter([
             (
                 "id",
-                "The ID of the source. Corresponds to `mz_catalog.mz_sources.id`.",
+                "The ID of the source or table for which statistics are reported. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`.",
             ),
             (
                 "replica_id",
