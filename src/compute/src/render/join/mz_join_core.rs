@@ -59,6 +59,7 @@ pub(super) fn mz_join_core<'scope, T, Tr1, Tr2, L, I, YFn, C>(
     arranged2: Arranged<'scope, Tr2>,
     result: L,
     yield_fn: YFn,
+    consolidate_output: bool,
 ) -> Stream<'scope, T, C>
 where
     T: timely::progress::Timestamp + Lattice,
@@ -107,9 +108,12 @@ where
             // cursor against trace2's merged cursor, and vice versa for input 2.
             let mut todo1 = Work::<BatchCursor<Tr1>, CursorList<BatchCursor<Tr2>>, _, _>::new(
                 Rc::clone(&result_fn),
+                consolidate_output,
             );
-            let mut todo2 =
-                Work::<CursorList<BatchCursor<Tr1>>, BatchCursor<Tr2>, _, _>::new(result_fn);
+            let mut todo2 = Work::<CursorList<BatchCursor<Tr1>>, BatchCursor<Tr2>, _, _>::new(
+                result_fn,
+                consolidate_output,
+            );
 
             // We'll unload the initial batches here, to put ourselves in a less non-deterministic state to start.
             trace1.map_batches(|batch1| {
@@ -519,6 +523,10 @@ where
     ///
     /// Used with `yield_fn` to inform when `Work::process` should yield.
     produced: Rc<Cell<usize>>,
+    /// Whether to consolidate each chunk of produced results before emitting it. Worth it when
+    /// the closure can map distinct input pairs to equal results, as a projection does; wasted
+    /// sorting when it cannot, as with an identity closure over consolidated inputs.
+    consolidate_output: bool,
 
     _cursors: PhantomData<(C1, C2)>,
 }
@@ -531,12 +539,13 @@ where
     L: FnMut(C1::Key<'_>, C1::Val<'_>, C2::Val<'_>) -> I + 'static,
     I: IntoIterator<Item = D> + 'static,
 {
-    fn new(result_fn: Rc<RefCell<L>>) -> Self {
+    fn new(result_fn: Rc<RefCell<L>>, consolidate_output: bool) -> Self {
         Self {
             todo: Default::default(),
             result_fn,
             output: Default::default(),
             produced: Default::default(),
+            consolidate_output,
             _cursors: PhantomData,
         }
     }
@@ -597,13 +606,12 @@ where
 
             // Drain the produced join results.
             let mut output_buf = self.output.borrow_mut();
-
-            // Consolidating here is important when the join closure produces data that
-            // consolidates well, for example when projecting columns.
-            let old_len = output_buf.len();
-            consolidate_updates(&mut output_buf);
-            let recovered = old_len - output_buf.len();
-            self.produced.update(|x| x - recovered);
+            if self.consolidate_output {
+                let old_len = output_buf.len();
+                consolidate_updates(&mut output_buf);
+                let recovered = old_len - output_buf.len();
+                self.produced.update(|x| x - recovered);
+            }
 
             output.session(&cap).give_iterator(output_buf.drain(..));
 
