@@ -72,6 +72,10 @@ pub struct ComputeMetrics {
     index_peek_result_sort_rows: Histogram,
     index_peek_frontier_check_seconds: Histogram,
     index_peek_row_collection_seconds: Histogram,
+    index_peek_walks_total: raw::IntCounterVec,
+    index_peek_permit_queue_depth: UIntGauge,
+    index_peek_permit_wait_seconds: Histogram,
+    index_peek_offload_seconds: Histogram,
 
     // memory usage
     shared_row_heap_capacity_bytes: raw::UIntGaugeVec,
@@ -217,7 +221,7 @@ impl ComputeMetrics {
             ), role)),
             index_peek_total_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_total_seconds",
-                help: "Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.",
+                help: "Time one visit to an index peek spent on the timely worker. A peek whose walk was offloaded contributes only the inline slice that offloaded it, and its time away from the worker is `mz_index_peek_offload_seconds`.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_seek_fulfillment_seconds: registry.register(with_role(metric!(
@@ -227,17 +231,17 @@ impl ComputeMetrics {
             ), role)),
             index_peek_error_scan_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_error_scan_seconds",
-                help: "Time scanning the error trace for errors. Sums the worker time of the calls the scan was sliced into, so it excludes the gaps between them. Only scans that find no error are observed.",
+                help: "Time scanning the error trace for errors, summed over the slices the scan was cut into and observed only for scans that find no error.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_cursor_setup_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_cursor_setup_seconds",
-                help: "Time opening the trace cursor and sorting the literal constraints. Excludes seeking the cursor to the literals, which is part of row iteration.",
+                help: "Time opening the trace cursor and sorting the literal constraints, excluding the seek to those literals.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_row_iteration_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_row_iteration_seconds",
-                help: "Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP. Sums the worker time of the calls the walk was sliced into, so it excludes the gaps between them.",
+                help: "Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP, summed over the slices the walk was cut into.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_row_iteration_rows: registry.register(with_role(metric!(
@@ -263,6 +267,25 @@ impl ComputeMetrics {
             index_peek_row_collection_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_row_collection_seconds",
                 help: "Time constructing RowCollection from peek results, including converting the row counts the scan produced.",
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            ), role)),
+            index_peek_walks_total: registry.register(with_role(metric!(
+                name: "mz_index_peek_walks_total",
+                help: "The number of index peek walks that reached an outcome, by the substrate they ended on: `inline` on the timely worker, `offloaded` away from it.",
+                var_labels: ["substrate"],
+            ), role)),
+            index_peek_permit_queue_depth: registry.register(with_role(metric!(
+                name: "mz_index_peek_permit_queue_depth",
+                help: "The number of offloaded index peek walks waiting for a permit to run.",
+            ), role)),
+            index_peek_permit_wait_seconds: registry.register(with_role(metric!(
+                name: "mz_index_peek_permit_wait_seconds",
+                help: "Time an offloaded index peek walk waited for a permit, observed only for walks that were admitted.",
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            ), role)),
+            index_peek_offload_seconds: registry.register(with_role(metric!(
+                name: "mz_index_peek_offload_seconds",
+                help: "Wall-clock time an offloaded index peek walk spent away from the timely worker, including the wait for a permit.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             replica_expiration_timestamp_seconds: registry.register(with_role(metric!(
@@ -320,6 +343,13 @@ impl ComputeMetrics {
         let index_peek_result_sort_rows = self.index_peek_result_sort_rows.clone();
         let index_peek_frontier_check_seconds = self.index_peek_frontier_check_seconds.clone();
         let index_peek_row_collection_seconds = self.index_peek_row_collection_seconds.clone();
+        let index_peek_walks_inline = self.index_peek_walks_total.with_label_values(&["inline"]);
+        let index_peek_walks_offloaded = self
+            .index_peek_walks_total
+            .with_label_values(&["offloaded"]);
+        let index_peek_permit_queue_depth = self.index_peek_permit_queue_depth.clone();
+        let index_peek_permit_wait_seconds = self.index_peek_permit_wait_seconds.clone();
+        let index_peek_offload_seconds = self.index_peek_offload_seconds.clone();
         let replica_expiration_timestamp_seconds = self
             .replica_expiration_timestamp_seconds
             .with_label_values(&[&worker]);
@@ -349,6 +379,11 @@ impl ComputeMetrics {
             index_peek_result_sort_rows,
             index_peek_frontier_check_seconds,
             index_peek_row_collection_seconds,
+            index_peek_walks_inline,
+            index_peek_walks_offloaded,
+            index_peek_permit_queue_depth,
+            index_peek_permit_wait_seconds,
+            index_peek_offload_seconds,
             replica_expiration_timestamp_seconds,
             replica_expiration_remaining_seconds,
             shared_row_heap_capacity_bytes,
@@ -398,6 +433,20 @@ pub struct WorkerMetrics {
     pub(crate) index_peek_frontier_check_seconds: Histogram,
     /// Histogram of index peek row collection construction durations.
     pub(crate) index_peek_row_collection_seconds: Histogram,
+    /// Counts index peek walks that ran on the timely worker.
+    ///
+    /// Both substrate series are resolved when the worker's metrics are built, so each exists at
+    /// zero before its first walk. A series at zero says the offload never engaged, where an absent
+    /// series says nothing.
+    pub(crate) index_peek_walks_inline: IntCounter,
+    /// Counts index peek walks that ran away from the timely worker.
+    pub(crate) index_peek_walks_offloaded: IntCounter,
+    /// How many offloaded index peek walks are waiting for a permit.
+    pub(crate) index_peek_permit_queue_depth: UIntGauge,
+    /// Histogram of how long an offloaded index peek walk waited for its permit.
+    pub(crate) index_peek_permit_wait_seconds: Histogram,
+    /// Histogram of how long an offloaded index peek walk was away from the worker.
+    pub(crate) index_peek_offload_seconds: Histogram,
     /// The timestamp of replica expiration.
     pub(crate) replica_expiration_timestamp_seconds: UIntGauge,
     /// Remaining seconds until replica expiration.

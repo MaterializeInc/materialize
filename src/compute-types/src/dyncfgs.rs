@@ -659,6 +659,90 @@ pub const PEEK_ROW_ITERATION_LIMIT: Config<usize> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether a fast-path index peek may move its walk off the timely worker.
+///
+/// Off, a peek walks to completion on the worker that owns it, delaying every other message that
+/// worker serves. On, a peek that outruns [`INDEX_PEEK_INLINE_BUDGET`] finishes away from it.
+///
+/// The kill switch for the whole mechanism.
+pub const ENABLE_INDEX_PEEK_OFFLOAD: Config<bool> = Config::new(
+    "enable_compute_index_peek_offload",
+    false,
+    "Whether a fast-path index peek may move its walk off the timely worker.",
+    ParameterScope::Replica,
+);
+
+/// How far one peek may walk on the worker before it is offloaded, in consumed cursor positions.
+///
+/// A peek that exceeds it has been measured expensive, not predicted to be, so a point lookup over
+/// a skewed hot key offloads without a special case.
+///
+/// Counted in cursor positions, not rows returned: the result iterator steps the cursor without
+/// returning anything whenever the MFP rejects a row, so a selective filter over a large
+/// arrangement would never spend a row-counted budget. No wall-clock component, since under memory
+/// pressure a time bound anti-correlates with progress, one major fault consuming a whole slice.
+///
+/// Zero walks one position, not none: a peek granted no fuel would suspend having walked nowhere
+/// and be offloaded for it.
+pub const INDEX_PEEK_INLINE_BUDGET: Config<usize> = Config::new(
+    "compute_index_peek_inline_budget",
+    1024,
+    "How far one index peek may walk on the timely worker, in consumed cursor positions, before it is offloaded.",
+    ParameterScope::Replica,
+);
+
+/// What all peeks together may spend in one worker activation, in consumed cursor positions.
+///
+/// Every activation visits every pending peek, so a per-peek budget with no aggregate lets N
+/// pending peeks cost N times [`INDEX_PEEK_INLINE_BUDGET`] in one pass, unbounded in N. Peeks that
+/// get no turn are served first on the next activation.
+///
+/// Raising the ratio to the inline budget drains a burst in fewer activations, lowering it caps
+/// how long one activation withholds the worker.
+pub const INDEX_PEEK_ACTIVATION_BUDGET: Config<usize> = Config::new(
+    "compute_index_peek_activation_budget",
+    8 * 1024,
+    "What all index peeks together may spend in one timely worker activation, in consumed cursor positions.",
+    ParameterScope::Replica,
+);
+
+/// How often an offloaded scan checks for cancellation and re-reads its configuration, in
+/// consumed cursor positions.
+///
+/// At a plausible 100ns to 1us per position this bounds cancellation latency to single-digit
+/// milliseconds. Larger than [`INDEX_PEEK_INLINE_BUDGET`] because an offloaded scan is off the
+/// worker's critical path, so its slices answer to cancellation latency rather than to the
+/// worker's availability. A check is a few loads and no hand-off, so a finer granularity costs
+/// little.
+pub const INDEX_PEEK_YIELD_GRANULARITY: Config<usize> = Config::new(
+    "compute_index_peek_yield_granularity",
+    10000,
+    "How often an offloaded index peek scan checks for cancellation, in consumed cursor positions.",
+    ParameterScope::Replica,
+);
+
+/// How many offloaded index peek scans may run at once, as a fraction of the timely workers a
+/// compute runtime runs.
+///
+/// A fraction so the bound scales with the replica instead of being retuned per size. `1.0` admits
+/// one scan per worker, `0.5` one per two workers, and the bound is never below one scan. One per
+/// worker is the default because a peek walking on its worker occupies one core, so peek CPU is
+/// already capped at one core per worker today.
+///
+/// Per compute runtime, not global: a process running a maintenance and an interactive runtime
+/// admits it once per runtime.
+///
+/// This bounds running scans only. Scans that do not fit queue, costing a queue entry holding a
+/// suspended scan instead of a thread. Queue depth is a signal to alert on, not a second bound,
+/// since capping it would mean failing peeks.
+pub const INDEX_PEEK_PERMIT_FRACTION: Config<f64> = Config::new(
+    "compute_index_peek_permit_fraction",
+    1.0,
+    "How many offloaded index peek scans may run at once in one compute runtime, as a fraction of \
+     the timely workers it runs. Never below one scan.",
+    ParameterScope::Replica,
+);
+
 /// The collection interval for the Prometheus metrics introspection source.
 ///
 /// Set to zero to disable scraping and retract any existing data.
@@ -746,6 +830,11 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PEEK_STASH_BATCH_SIZE)
         .add(&ENABLE_PEEK_ROW_ITERATION_LIMIT)
         .add(&PEEK_ROW_ITERATION_LIMIT)
+        .add(&ENABLE_INDEX_PEEK_OFFLOAD)
+        .add(&INDEX_PEEK_INLINE_BUDGET)
+        .add(&INDEX_PEEK_ACTIVATION_BUDGET)
+        .add(&INDEX_PEEK_YIELD_GRANULARITY)
+        .add(&INDEX_PEEK_PERMIT_FRACTION)
         .add(&COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL)
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
         .add(&MV_SINK_ADVANCE_PERSIST_FRONTIERS)
