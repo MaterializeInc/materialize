@@ -226,6 +226,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         CARGO_TARGET_DIR=str(target_dir()),
         CRITERION_HOME=str(criterion_home),
     )
+    # Persist's test storage configs panic under CI when no external Postgres
+    # or S3 endpoint is configured. This step measures code, not network
+    # storage, so the benches run as they do locally and skip those variants.
+    env.pop("CI", None)
 
     ancestor: str | None = None
     ancestor_failures: list[TargetFailure] = []
