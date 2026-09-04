@@ -433,6 +433,70 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         "storage and compute must have equal workers-per-process",
     );
 
+    // SPIKE(unified-cluster): Host storage objects on the compute Timely cluster instead of
+    // building a separate storage cluster. The storage and compute controller protocols are
+    // served unchanged, from the same cluster. Default on; set MZ_UNIFIED_CLUSTER=0 to fall
+    // back to separate storage and compute clusters.
+    let unified_cluster = std::env::var("MZ_UNIFIED_CLUSTER").map_or(true, |v| v != "0");
+    if unified_cluster {
+        info!("SPIKE: running with a unified timely cluster");
+
+        let (compute_client_builder, storage_client_builder) = mz_compute::server::serve_unified(
+            compute_timely_config,
+            ComputeRuntimeRole::Solo,
+            &metrics_registry,
+            persist_clients,
+            txns_ctx,
+            tracing_handle,
+            ComputeInstanceContext {
+                scratch_directory: args.scratch_directory.clone(),
+                worker_core_affinity: args.worker_core_affinity,
+                connection_context: connection_context.clone(),
+            },
+            SYSTEM_TIME.clone(),
+            connection_context,
+            StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit),
+        )
+        .await?;
+
+        info!(
+            "listening for storage controller connections on {}",
+            args.storage_controller_listen_addr
+        );
+        mz_ore::task::spawn(
+            || "storage_server",
+            transport::serve(
+                args.storage_controller_listen_addr,
+                BUILD_INFO.semver_version(),
+                grpc_host.clone(),
+                Duration::MAX,
+                storage_client_builder,
+                cluster_server_metrics.for_server("storage"),
+            )
+            .instrument(info_span!("ctp", name = "storage")),
+        );
+
+        info!(
+            "listening for compute controller connections on {}",
+            args.compute_controller_listen_addr
+        );
+        mz_ore::task::spawn(
+            || "compute_server",
+            transport::serve(
+                args.compute_controller_listen_addr,
+                BUILD_INFO.semver_version(),
+                grpc_host,
+                Duration::MAX,
+                compute_client_builder,
+                cluster_server_metrics.for_server("compute"),
+            )
+            .instrument(info_span!("ctp", name = "compute")),
+        );
+
+        // Block forever.
+        return future::pending().await;
+    }
+
     // Create per-worker bridges for forwarding storage timely logging events to compute.
     let (storage_log_writers, storage_log_readers) = if args.enable_storage_introspection_logs {
         (0..storage_timely_config.workers)

@@ -168,6 +168,56 @@ impl<'w> Worker<'w> {
         let (internal_cmd_tx, internal_cmd_rx) =
             internal_control::setup_command_sequencer(timely_worker);
 
+        let storage_state = StorageState::new_guest(
+            timely_worker.index(),
+            timely_worker.peers(),
+            internal_cmd_tx,
+            internal_cmd_rx,
+            metrics,
+            now,
+            connection_context,
+            instance_context,
+            persist_clients,
+            txns_ctx,
+            tracing_handle,
+            shared_rocksdb_write_buffer_manager,
+        );
+
+        // TODO(aljoscha): We might want `async_worker` and `internal_cmd_tx` to
+        // be fields of `Worker` instead of `StorageState`, but at least for the
+        // command flow sources and sinks need access to that. We can refactor
+        // this once we have a clearer boundary between what sources/sinks need
+        // and the full "power" of the internal command flow, which should stay
+        // internal to the worker/not be exposed to source/sink implementations.
+        Self {
+            timely_worker,
+            client_rx,
+            storage_state,
+        }
+    }
+}
+
+impl StorageState {
+    /// SPIKE(unified-cluster): Creates per-worker storage state, for hosting on any Timely worker.
+    ///
+    /// The caller provides the internal command channel endpoints: the native storage worker wires
+    /// them to the sequencer dataflow, a foreign host wires them to its own sequencing channel.
+    /// Must be called on the hosting worker's thread, because the async worker unparks the
+    /// creating thread.
+    pub fn new_guest(
+        timely_worker_index: usize,
+        timely_worker_peers: usize,
+        internal_cmd_tx: InternalCommandSender,
+        internal_cmd_rx: InternalCommandReceiver,
+        metrics: StorageMetrics,
+        now: NowFn,
+        connection_context: ConnectionContext,
+        instance_context: StorageInstanceContext,
+        persist_clients: Arc<PersistClientCache>,
+        txns_ctx: TxnsContext,
+        tracing_handle: Arc<TracingHandle>,
+        shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
+    ) -> Self {
         let storage_configuration =
             StorageConfiguration::new(connection_context, mz_dyncfgs::all_dyncfgs());
 
@@ -212,8 +262,8 @@ impl<'w> Worker<'w> {
             exports: BTreeMap::new(),
             oneshot_ingestions: BTreeMap::new(),
             now,
-            timely_worker_index: timely_worker.index(),
-            timely_worker_peers: timely_worker.peers(),
+            timely_worker_index,
+            timely_worker_peers,
             instance_context,
             persist_clients,
             txns_ctx,
@@ -221,8 +271,8 @@ impl<'w> Worker<'w> {
             sink_write_frontiers: BTreeMap::new(),
             dropped_ids: Vec::new(),
             aggregated_statistics: AggregatedStatistics::new(
-                timely_worker.index(),
-                timely_worker.peers(),
+                timely_worker_index,
+                timely_worker_peers,
             ),
             shared_status_updates: Default::default(),
             latest_status_updates: Default::default(),
@@ -241,17 +291,7 @@ impl<'w> Worker<'w> {
             server_maintenance_interval: Duration::ZERO,
         };
 
-        // TODO(aljoscha): We might want `async_worker` and `internal_cmd_tx` to
-        // be fields of `Worker` instead of `StorageState`, but at least for the
-        // command flow sources and sinks need access to that. We can refactor
-        // this once we have a clearer boundary between what sources/sinks need
-        // and the full "power" of the internal command flow, which should stay
-        // internal to the worker/not be exposed to source/sink implementations.
-        Self {
-            timely_worker,
-            client_rx,
-            storage_state,
-        }
+        storage_state
     }
 }
 
@@ -979,13 +1019,14 @@ impl<'w> Worker<'w> {
     }
 
     /// Send a response to the coordinator.
-    fn send_storage_response(&self, response_tx: &ResponseSender, response: StorageResponse) {
+    pub fn send_storage_response(&self, response_tx: &ResponseSender, response: StorageResponse) {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
         let _ = response_tx.send(response);
     }
 
-    fn process_oneshot_ingestions(&mut self, response_tx: &ResponseSender) {
+    /// Forward completed oneshot ingestion results to the coordinator.
+    pub fn process_oneshot_ingestions(&mut self, response_tx: &ResponseSender) {
         for (ingestion_id, ingestion_state) in &mut self.storage_state.oneshot_ingestions {
             loop {
                 match ingestion_state.results.try_recv() {
@@ -1012,8 +1053,6 @@ impl<'w> Worker<'w> {
     /// reflect those commands. If the worker can not be made to reflect the
     /// commands, return an error.
     fn reconcile(&mut self, command_rx: &mut CommandReceiver) -> Result<(), ()> {
-        let worker_id = self.timely_worker.index();
-
         // To initialize the connection, we want to drain all commands until we
         // receive a `StorageCommand::InitializationComplete` command to form a
         // target command state.
@@ -1024,6 +1063,16 @@ impl<'w> Worker<'w> {
                 command => commands.push(command),
             }
         }
+
+        self.reconcile_commands(commands);
+        Ok(())
+    }
+
+    /// SPIKE(unified-cluster): Reconciles the worker state with the given target command state,
+    /// which the caller has drained from a new client connection up to (exclusive) the
+    /// `InitializationComplete` marker.
+    pub fn reconcile_commands(&mut self, mut commands: Vec<StorageCommand>) {
+        let worker_id = self.timely_worker.index();
 
         // Track which frontiers this envd expects; we will also set their
         // initial timestamp to the minimum timestamp to reset them as we don't
@@ -1301,8 +1350,6 @@ impl<'w> Worker<'w> {
         for command in commands {
             self.storage_state.handle_storage_command(command);
         }
-
-        Ok(())
     }
 }
 
