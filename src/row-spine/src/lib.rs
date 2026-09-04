@@ -18,12 +18,14 @@ pub use self::dictionary::DatumContainer;
 pub use self::dictionary::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{
-    ArcOrdKeyBuilder, ArcOrdKeySpine, ArcOrdValBuilder, ArcOrdValSpine, RowBatcher, RowBuilder,
-    RowRowBatcher, RowRowBuilder, RowRowColPagedBuilder, RowRowSpine, RowSpine, RowValBatcher,
-    RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder, ValRowColPagedBuilder, ValRowSpine,
+    ArcOrdKeyBuilder, ArcOrdKeySpine, ArcOrdValBuilder, ArcOrdValSpine, KeyBatcher, RowBatcher,
+    RowBuilder, RowRowBatcher, RowRowBuilder, RowRowColPagedBuilder, RowRowSpine, RowSpine,
+    RowValBatcher, RowValBuilder, RowValSpine, ValRowBatcher, ValRowBuilder, ValRowColPagedBuilder,
+    ValRowSpine,
 };
 
 mod arc_batch;
+pub mod snapshot_batcher;
 
 use differential_dataflow::trace::implementations::OffsetList;
 
@@ -51,10 +53,11 @@ mod spines {
     /// Batcher matching `mz_compute::typedefs::KeyValBatcher`, redeclared
     /// locally so this crate does not need to depend on `mz_compute`.
     type KeyValBatcher<K, V, T, D> = MergeBatcher<ColInternalMerger<(K, V), T, D>>;
-    type KeyBatcher<K, T, D> = KeyValBatcher<K, (), T, D>;
+    /// Batcher for collections consolidated by their data, for data led by a `Row`.
+    pub type KeyBatcher<K, T, R> = crate::snapshot_batcher::SnapshotBatcher<(K, ()), T, R>;
 
     pub type RowRowSpine<T, R> = Spine<ArcBatch<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>>;
-    pub type RowRowBatcher<T, R> = KeyValBatcher<Row, Row, T, R>;
+    pub type RowRowBatcher<T, R> = crate::snapshot_batcher::SnapshotBatcher<(Row, Row), T, R>;
     pub type RowRowBuilder<T, R> = ArcBuilder<crate::dictionary::builders::RowRowBuilder<T, R>>;
 
     /// `RowRowBuilder` variant that consumes [`Column`] chunks. Pairs with any
@@ -72,12 +75,12 @@ mod spines {
         ArcBuilder<crate::dictionary::builders::RowRowColPagedBuilder<T, R>>;
 
     pub type RowValSpine<V, T, R> = Spine<ArcBatch<OrdValBatch<RowValLayout<((Row, V), T, R)>>>>;
-    pub type RowValBatcher<V, T, R> = KeyValBatcher<Row, V, T, R>;
+    pub type RowValBatcher<V, T, R> = crate::snapshot_batcher::SnapshotBatcher<(Row, V), T, R>;
     pub type RowValBuilder<V, T, R> =
         ArcBuilder<crate::dictionary::builders::RowValBuilder<V, T, R>>;
 
     pub type RowSpine<T, R> = Spine<ArcBatch<OrdKeyBatch<RowLayout<((Row, ()), T, R)>>>>;
-    pub type RowBatcher<T, R> = KeyBatcher<Row, T, R>;
+    pub type RowBatcher<T, R> = crate::snapshot_batcher::SnapshotBatcher<(Row, ()), T, R>;
     pub type RowBuilder<T, R> = ArcBuilder<crate::dictionary::builders::RowBuilder<T, R>>;
 
     pub type ValRowSpine<K, T, R> = Spine<ArcBatch<OrdValBatch<ValRowLayout<((K, Row), T, R)>>>>;

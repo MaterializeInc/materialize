@@ -54,12 +54,12 @@ use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
 use crate::render::{ArrangementFlavor, Pairer, RenderTimestamp};
 use crate::typedefs::{
-    ErrBatcher, ErrBuilder, KeyBatcher, RowErrBuilder, RowErrSpine, RowRowAgent, RowRowArrangement,
+    ErrBatcher, ErrBuilder, RowErrBuilder, RowErrSpine, RowRowAgent, RowRowArrangement,
     RowRowSpine, RowSpine, RowValSpine,
 };
 use mz_row_spine::{
-    DatumContainer, DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher,
-    RowValBuilder,
+    DatumContainer, DatumSeq, KeyBatcher, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder,
+    RowValBatcher, RowValBuilder,
 };
 
 /// Key container of trace `Tr`'s batch cursor.
