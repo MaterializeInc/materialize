@@ -871,17 +871,25 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 let first_mod = buckets.get(0).copied().unwrap_or(1);
                 let aggregations = aggr_funcs.len();
 
-                // Gather the relevant keys with their hashes along with values ordered by aggregation_index.
+                // Gather the relevant keys with their hashes along with values ordered by
+                // aggregation_index. The values are the row's leading datums and the key goes
+                // behind the hash unchanged, so both are byte copies rather than datum round
+                // trips.
                 let mut stage = input.map(move |(key, row)| {
-                    let mut row_builder = SharedRow::get();
-                    let mut row_packer = row_builder.packer();
-                    row_packer.extend(row.iter().take(aggregations));
-                    let values = row_builder.clone();
+                    let (values, _) = row.split_at_datum(aggregations);
+                    let values = values.to_owned();
 
-                    // Apply the initial mod here.
-                    let hash = values.hashed() % first_mod;
-                    let hash_key =
-                        row_builder.pack_using(std::iter::once(Datum::from(hash)).chain(&key));
+                    // Apply the initial mod here; a lone final stage keys everything by zero
+                    // and need not hash at all.
+                    let hash = if first_mod == 1 {
+                        0
+                    } else {
+                        values.hashed() % first_mod
+                    };
+                    let mut hash_key = Row::default();
+                    let mut packer = hash_key.packer();
+                    packer.push(Datum::from(hash));
+                    packer.extend_by_row_ref(&key);
                     (hash_key, values)
                 });
 
