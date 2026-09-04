@@ -498,6 +498,37 @@ where
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
 
+        if closure.is_identity() {
+            // The output row is the key, the stream value and the lookup value in that order,
+            // so when all three are row-encoded the bytes can be concatenated without a trip
+            // through datums.
+            let oks = self
+                .linear_join_spec
+                .render(prev_keyed, next_input, move |key, old, new| {
+                    match (key.as_row_ref(), old.as_row_ref(), new.as_row_ref()) {
+                        (Some(key), Some(old), Some(new)) => {
+                            let mut row = Row::with_capacity(
+                                key.byte_len() + old.byte_len() + new.byte_len(),
+                            );
+                            let mut packer = row.packer();
+                            packer.extend_by_row_ref(key);
+                            packer.extend_by_row_ref(old);
+                            packer.extend_by_row_ref(new);
+                            Some(row)
+                        }
+                        _ => {
+                            let temp_storage = RowArena::new();
+                            let mut datums_local = datums.borrow();
+                            key.extend_datums(&temp_storage, &mut datums_local, None);
+                            old.extend_datums(&temp_storage, &mut datums_local, None);
+                            new.extend_datums(&temp_storage, &mut datums_local, None);
+                            Some(Row::pack(datums_local.iter()))
+                        }
+                    }
+                });
+            return (oks, None);
+        }
+
         if closure.could_error() {
             let (oks, err) = self
                 .linear_join_spec

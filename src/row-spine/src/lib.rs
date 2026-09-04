@@ -1778,6 +1778,17 @@ mod dictionary {
                 }
             }
         }
+
+        #[inline]
+        fn as_row_ref(&self) -> Option<&RowRef> {
+            if self.iter.index.is_none() {
+                // SAFETY: without a codec the iterator's bytes are exactly one row encoding,
+                // which is what `extend_datums` reads them as above.
+                Some(unsafe { RowRef::from_slice(self.iter.data) })
+            } else {
+                None
+            }
+        }
     }
 }
 

@@ -11,7 +11,7 @@
 //! `Row` is the most obvious implementor, but other trace types that may use more advanced
 //! representations only need to commit to implementing this trait.
 
-use crate::{Datum, Row, RowArena};
+use crate::{Datum, Row, RowArena, RowRef};
 
 /// A helper trait for types that can append their datums to a `Vec<Datum>`.
 pub trait ExtendDatums {
@@ -32,6 +32,15 @@ pub trait ExtendDatums {
         target: &mut Vec<Datum<'a>>,
         max: Option<usize>,
     );
+
+    /// The datums as one row encoding, when they are stored as such.
+    ///
+    /// `None` means the datums are not available as contiguous row-encoded bytes (for example
+    /// a dictionary-coded representation), and the caller must go through `extend_datums`.
+    #[inline]
+    fn as_row_ref(&self) -> Option<&RowRef> {
+        None
+    }
 }
 
 impl<T: ExtendDatums + ?Sized> ExtendDatums for &T {
@@ -44,6 +53,11 @@ impl<T: ExtendDatums + ?Sized> ExtendDatums for &T {
     ) {
         // Forward to T's impl so an override isn't lost behind a reference.
         (**self).extend_datums(arena, target, max)
+    }
+
+    #[inline]
+    fn as_row_ref(&self) -> Option<&RowRef> {
+        (**self).as_row_ref()
     }
 }
 
@@ -60,5 +74,10 @@ impl ExtendDatums for Row {
             Some(max) => target.extend(self.iter().take(max)),
             None => target.extend(self.iter()),
         }
+    }
+
+    #[inline]
+    fn as_row_ref(&self) -> Option<&RowRef> {
+        Some(Row::as_row_ref(self))
     }
 }
