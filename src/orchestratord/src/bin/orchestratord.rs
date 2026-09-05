@@ -16,7 +16,7 @@ use std::{
 };
 
 use axum_server::tls_rustls::RustlsConfig;
-use futures::future::{Either, join4, select};
+use futures::future::{Either, join5, select};
 use http::HeaderValue;
 use k8s_openapi::{
     api::{
@@ -139,6 +139,8 @@ pub struct Args {
     create_balancers: bool,
     #[clap(long)]
     create_console: bool,
+    #[clap(long)]
+    create_debug_collectors: bool,
     #[clap(long)]
     helm_chart_version: Option<String>,
     #[clap(long, default_value = "kubernetes")]
@@ -321,6 +323,11 @@ pub struct Args {
 
     #[clap(long, default_value = "8080")]
     console_http_port: u16,
+
+    #[clap(long, value_parser = parse_resources)]
+    debug_collector_default_resources: Option<ResourceRequirements>,
+    #[clap(long, default_value = "8080")]
+    debug_collector_http_port: u16,
 
     #[clap(long, default_value = "{}")]
     default_certificate_specs: DefaultCertificateSpecs,
@@ -642,6 +649,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             region: args.region,
             create_balancers: args.create_balancers,
             create_console: args.create_console,
+            create_debug_collectors: args.create_debug_collectors,
             helm_chart_version: args.helm_chart_version,
             secrets_controller: args.secrets_controller,
             collect_pod_metrics: args.collect_pod_metrics,
@@ -810,7 +818,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             enable_security_context: args.enable_security_context,
             enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
             image_pull_policy: args.image_pull_policy,
-            scheduler_name: args.scheduler_name,
+            scheduler_name: args.scheduler_name.clone(),
             console_node_selector: args.console_node_selector,
             console_affinity: args.console_affinity,
             console_tolerations: args.console_tolerations,
@@ -866,6 +874,50 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             })
         }
     };
+    let make_materialize_debug_controller = {
+        let client = client.clone();
+        let config = controller::materialize_debug::Config {
+            enable_security_context: args.enable_security_context,
+            image_pull_policy: args.image_pull_policy,
+            scheduler_name: args.scheduler_name,
+            default_resources: args.debug_collector_default_resources,
+            collector_http_port: args.debug_collector_http_port,
+        };
+        move || {
+            k8s_controller::Controller::namespaced_all(
+                client.clone(),
+                controller::materialize_debug::Context::new(config.clone()),
+                watcher::Config::default().timeout(29),
+            )
+            .with_controller(|controller| {
+                controller
+                    .owns(
+                        Api::<Deployment>::all(client.clone()),
+                        watcher::Config::default()
+                            .labels("materialize.cloud/mz-resource-id")
+                            .timeout(29),
+                    )
+                    .owns(
+                        Api::<Service>::all(client.clone()),
+                        watcher::Config::default()
+                            .labels("materialize.cloud/mz-resource-id")
+                            .timeout(29),
+                    )
+                    .owns(
+                        Api::<ServiceAccount>::all(client.clone()),
+                        watcher::Config::default()
+                            .labels("materialize.cloud/mz-resource-id")
+                            .timeout(29),
+                    )
+                    .owns(
+                        Api::<RoleBinding>::all(client.clone()),
+                        watcher::Config::default()
+                            .labels("materialize.cloud/mz-resource-id")
+                            .timeout(29),
+                    )
+            })
+        }
+    };
     let make_gcp_node_upgrade_watcher = {
         let client = client.clone();
         move || {
@@ -900,7 +952,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             // outlives the lease.
             let controllers = Box::pin(leader_election.with_lease(async {
                 metrics.leadership_acquired();
-                join4(
+                join5(
                     mz_ore::task::spawn(
                         || "materialize controller",
                         make_materialize_controller().run(),
@@ -910,6 +962,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                         .abort_on_drop(),
                     mz_ore::task::spawn(|| "console controller", make_console_controller().run())
                         .abort_on_drop(),
+                    mz_ore::task::spawn(
+                        || "materialize debug controller",
+                        make_materialize_debug_controller().run(),
+                    )
+                    .abort_on_drop(),
                     mz_ore::task::spawn(
                         || "gcp node upgrade watcher",
                         make_gcp_node_upgrade_watcher(),

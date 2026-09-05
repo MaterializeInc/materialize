@@ -137,6 +137,9 @@ spec:
         {{- if .Values.console.enabled }}
         - "--create-console"
         {{- end }}
+        {{- if .Values.debugCollector.enabled }}
+        - "--create-debug-collectors"
+        {{- end }}
         - "--console-image-tag-default={{ .Values.operator.image.tag }}"
         {{- range $key, $value := .Values.console.imageTagMapOverride }}
         - "--console-image-tag-map={{ $key }}={{ $value }}"
@@ -239,6 +242,9 @@ spec:
         {{- end }}
         {{- if .Values.console.defaultResources }}
         - '--console-default-resources={{ toJson .Values.console.defaultResources }}'
+        {{- end }}
+        {{- if .Values.debugCollector.defaultResources }}
+        - '--debug-collector-default-resources={{ toJson .Values.debugCollector.defaultResources }}'
         {{- end }}
         {{- if .Values.storage.storageClass.name }}
         - "--ephemeral-volume-class={{ .Values.storage.storageClass.name }}"

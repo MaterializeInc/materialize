@@ -118,25 +118,25 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         'ALTER SYSTEM SET ALLOWED_CLUSTER_REPLICA_SIZES="scale=1,workers=1"',
-        port="internal",
+        port="internal-sql",
         user="mz_system",
     )
     try:
         mz.environmentd.sql(
             'CREATE CLUSTER mzsizetest (SIZE="scale=1,workers=2")',
-            port="internal",
+            port="internal-sql",
             user="mz_system",
         )
 
         mz.environmentd.sql(
             "DROP CLUSTER mzsizetest CASCADE",
-            port="internal",
+            port="internal-sql",
             user="mz_system",
         )
     finally:
         mz.environmentd.sql(
             "ALTER SYSTEM RESET ALLOWED_CLUSTER_REPLICA_SIZES",
-            port="internal",
+            port="internal-sql",
             user="mz_system",
         )
 
@@ -148,7 +148,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         """
         ALTER SYSTEM SET cluster_controller_tick_interval = '5ms';
         """,
-        port="internal",
+        port="internal-sql",
         user="mz_system",
     )
 
@@ -209,7 +209,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     # - fails to alter replication factor beyond max_replicas_per_cluster
     mz.environmentd.sql(
         'CREATE CLUSTER zdtaltertest ( SIZE = "scale=1,workers=1" )',
-        port="internal",
+        port="internal-sql",
         user="mz_system",
     )
     wait_for_replica_names(["r1"])
@@ -221,7 +221,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         """
         ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=2' ) WITH ( WAIT UNTIL READY (TIMEOUT '1ms', ON TIMEOUT 'COMMIT') )
         """,
-        port="internal",
+        port="internal-sql",
         user="mz_system",
     )
     wait_for_replica_names(["r2"])
@@ -237,7 +237,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         """
         ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 2 ) WITH ( WAIT UNTIL READY (TIMEOUT '1ms', ON TIMEOUT 'COMMIT') )
         """,
-        port="internal",
+        port="internal-sql",
         user="mz_system",
     )
     wait_for_replica_names(["r3", "r4"])
@@ -248,7 +248,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         """
         ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 1 ) WITH ( WAIT UNTIL READY (TIMEOUT '1ms', ON TIMEOUT 'COMMIT') )
         """,
-        port="internal",
+        port="internal-sql",
         user="mz_system",
     )
     wait_for_replica_names(["r3"])
@@ -258,7 +258,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         """
         ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=2', REPLICATION FACTOR 2 ) WITH ( WAIT UNTIL READY (TIMEOUT '1ms', ON TIMEOUT 'COMMIT') )
         """,
-        port="internal",
+        port="internal-sql",
         user="mz_system",
     )
     wait_for_replica_names(["r4", "r5"])
@@ -267,7 +267,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         """
         ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 1 ) WITH ( WAIT UNTIL READY (TIMEOUT '1ms', ON TIMEOUT 'COMMIT') )
         """,
-        port="internal",
+        port="internal-sql",
         user="mz_system",
     )
     wait_for_replica_names(["r6"])
@@ -323,7 +323,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         """
         ALTER CLUSTER zdtaltertest SET (SIZE = 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '5s', ON TIMEOUT 'COMMIT'))
         """,
-        port="internal",
+        port="internal-sql",
         user="mz_system",
     )
     for _ in range(240):
@@ -351,14 +351,14 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
         CREATE CLUSTER cluster1 ( SIZE = 'scale=1,workers=1');
         """,
-        port="internal",
+        port="internal-sql",
         user="mz_system",
     )
     wait_for_replica_names(["r1"], cluster="cluster1")
 
     # We need persistent connection that we can later issue a cancel backend to
     conn = mz.environmentd.sql_conn(
-        port="internal",
+        port="internal-sql",
         user="mz_system",
     )
     conn.autocommit = True
@@ -388,7 +388,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     )
     mz.environmentd.sql(
         f"select pg_cancel_backend({pid});",
-        port="internal",
+        port="internal-sql",
         user="mz_system",
     )
 
@@ -405,7 +405,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
         DROP CLUSTER IF EXISTS zdtaltertest CASCADE;
         """,
-        port="internal",
+        port="internal-sql",
         user="mz_system",
     )
 
@@ -413,7 +413,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     # durable objects may only depend on under this flag.
     mz.environmentd.sql(
         "ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true",
-        port="internal",
+        port="internal-sql",
         user="mz_system",
     )
 

@@ -13,53 +13,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Port forwards k8s service via Kubectl
+//! Port forwards a k8s service via kubectl.
 
-use std::collections::BTreeMap;
-
-use anyhow::{Context, Result};
-use k8s_openapi::api::apps::v1::StatefulSet;
-use k8s_openapi::api::core::v1::{Pod, Service, ServicePort};
-use kube::api::ListParams;
-use kube::{Api, Client};
+use anyhow::Result;
 use tokio::io::AsyncBufReadExt;
-
 use tracing::info;
-
-/// A Kubernetes resource that `kubectl port-forward` can target.
-///
-/// Forwarding a `Service` lets Kubernetes pick one arbitrary backing pod, which
-/// is what you want when any pod will do (for example the environmentd SQL
-/// listener, where the service routes to the active leader). Forwarding a `Pod`
-/// reaches one specific process, which is what profiling a multi-pod (scaled)
-#[derive(Debug, Clone)]
-pub enum PortForwardTarget {
-    Service(String),
-    Pod(String),
-}
-
-impl PortForwardTarget {
-    /// The `kubectl` resource argument, for example `services/foo` or
-    /// `pods/foo`.
-    fn kubectl_arg(&self) -> String {
-        match self {
-            PortForwardTarget::Service(name) => format!("services/{name}"),
-            PortForwardTarget::Pod(name) => format!("pods/{name}"),
-        }
-    }
-
-    /// The bare resource name, for logging and error messages.
-    pub fn name(&self) -> &str {
-        match self {
-            PortForwardTarget::Service(name) | PortForwardTarget::Pod(name) => name,
-        }
-    }
-}
 
 #[derive(Debug)]
 pub struct KubectlPortForwarder {
     pub namespace: String,
-    pub target: PortForwardTarget,
+    pub service_name: String,
     pub target_port: i32,
     pub context: Option<String>,
 }
@@ -80,7 +43,7 @@ impl KubectlPortForwarder {
     /// the port forward is established.
     pub async fn spawn_port_forward(&self) -> Result<PortForwardConnection, anyhow::Error> {
         let port_arg_str = format!(":{}", self.target_port);
-        let target_arg_str = self.target.kubectl_arg();
+        let target_arg_str = format!("services/{}", self.service_name);
         let mut args = vec![
             "port-forward",
             &target_arg_str,
@@ -134,11 +97,8 @@ impl KubectlPortForwarder {
 
                 if let (Some(local_address), Some(local_port)) = (local_address, local_port) {
                     info!(
-                        "Port forwarding established for {} from ports {}:{} -> {}",
-                        self.target.name(),
-                        local_address,
-                        local_port,
-                        &self.target_port
+                        "Port forwarding established for service {} from ports {}:{} -> {}",
+                        self.service_name, local_address, local_port, &self.target_port
                     );
                     return Ok(PortForwardConnection {
                         _lines: lines,
@@ -155,205 +115,4 @@ impl KubectlPortForwarder {
         }
         Err(anyhow::anyhow!("Failed to spawn port forwarding process"))
     }
-}
-
-#[derive(Debug)]
-pub struct ServiceInfo {
-    pub service_name: String,
-    pub service_ports: Vec<ServicePort>,
-    pub namespace: String,
-    /// The service's pod selector, used to enumerate the pods it fronts. A
-    /// scaled replica's service selects more than one pod.
-    pub selector: BTreeMap<String, String>,
-}
-
-/// Returns ServiceInfo for balancerd
-pub async fn find_environmentd_service(
-    client: &Client,
-    k8s_namespace: &String,
-    mz_instance_name: &String,
-) -> Result<ServiceInfo> {
-    let services_api: Api<Service> = Api::namespaced(client.clone(), k8s_namespace);
-
-    let label_filter = format!(
-        // mz-resource-id is used to identify environmentd services
-        "materialize.cloud/mz-resource-id,materialize.cloud/organization-name={}",
-        mz_instance_name
-    );
-
-    let services = services_api
-        .list(&ListParams::default().labels(&label_filter))
-        .await
-        .with_context(|| format!("Failed to list services in namespace {}", k8s_namespace))?;
-
-    // Find the first sql service that contains environmentd
-    let maybe_service =
-        services
-            .iter()
-            .find_map(|service| match (&service.metadata.name, &service.spec) {
-                (Some(service_name), Some(spec)) => {
-                    // TODO (debug_tool3): This could match both the generation service and the globally active one. We should use the active one.
-                    if !service_name.to_lowercase().contains("environmentd") {
-                        return None;
-                    }
-
-                    if let Some(ports) = &spec.ports {
-                        Some(ServiceInfo {
-                            service_name: service_name.clone(),
-                            service_ports: ports.clone(),
-                            namespace: k8s_namespace.clone(),
-                            selector: spec.selector.clone().unwrap_or_default(),
-                        })
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            });
-
-    if let Some(service) = maybe_service {
-        return Ok(service);
-    }
-
-    Err(anyhow::anyhow!("Could not find environmentd service"))
-}
-
-/// Returns Vec<(service_name, ports)> for cluster services
-pub async fn find_cluster_services(
-    client: &Client,
-    k8s_namespace: &String,
-    mz_instance_name: &String,
-) -> Result<Vec<ServiceInfo>> {
-    let services: Api<Service> = Api::namespaced(client.clone(), k8s_namespace);
-    let services = services
-        .list(&ListParams::default())
-        .await
-        .with_context(|| format!("Failed to list services in namespace {}", k8s_namespace))?;
-
-    let statefulsets_api: Api<StatefulSet> = Api::namespaced(client.clone(), k8s_namespace);
-
-    let organization_name_filter =
-        format!("materialize.cloud/organization-name={}", mz_instance_name);
-
-    let statefulsets = statefulsets_api
-        .list(&ListParams::default().labels(&organization_name_filter))
-        .await
-        .with_context(|| format!("Failed to list services in namespace {}", k8s_namespace))?;
-
-    let cluster_services: Vec<ServiceInfo> = services
-        .iter()
-        .filter_map(|service| {
-            let name = service.metadata.name.clone()?;
-            let spec = service.spec.clone()?;
-            let selector = spec.selector?;
-            let ports = spec.ports?;
-
-            // Check if this is a cluster service
-            if selector.get("environmentd.materialize.cloud/namespace")? != "cluster" {
-                return None;
-            }
-
-            // Check if the owner reference points to environmentd StatefulSet in the same mz instance
-            let envd_statefulset_reference_name = service
-                .metadata
-                .owner_references
-                .as_ref()?
-                .iter()
-                //  There should only be one StatefulSet reference to environmentd
-                .find(|owner_reference| owner_reference.kind == "StatefulSet")?
-                .name
-                .clone();
-
-            if !statefulsets
-                .iter()
-                .filter_map(|statefulset| statefulset.metadata.name.clone())
-                .any(|name| name == envd_statefulset_reference_name)
-            {
-                return None;
-            }
-
-            Some(ServiceInfo {
-                service_name: name,
-                service_ports: ports,
-                namespace: k8s_namespace.clone(),
-                selector,
-            })
-        })
-        .collect();
-
-    if !cluster_services.is_empty() {
-        return Ok(cluster_services);
-    }
-
-    Err(anyhow::anyhow!("Could not find cluster services"))
-}
-
-/// Creates a port forwarder for the external pg wire port of environmentd.
-pub async fn create_pg_wire_port_forwarder(
-    client: &Client,
-    k8s_context: &Option<String>,
-    k8s_namespace: &String,
-    mz_instance_name: &String,
-) -> Result<KubectlPortForwarder> {
-    let service_info = find_environmentd_service(client, k8s_namespace, mz_instance_name)
-        .await
-        .with_context(|| "Cannot find ports for environmentd service")?;
-
-    let maybe_external_sql_port = service_info.service_ports.iter().find_map(|port_info| {
-        if let Some(port_name) = &port_info.name {
-            let port_name = port_name.to_lowercase();
-            if port_name == "sql" {
-                return Some(port_info);
-            }
-        }
-        None
-    });
-
-    if let Some(external_sql_port) = maybe_external_sql_port {
-        Ok(KubectlPortForwarder {
-            context: k8s_context.clone(),
-            namespace: service_info.namespace,
-            target: PortForwardTarget::Service(service_info.service_name),
-            target_port: external_sql_port.port,
-        })
-    } else {
-        Err(anyhow::anyhow!(
-            "No SQL port forwarding info found. Set --mz-connection-url to a Materialize instance."
-        ))
-    }
-}
-
-/// Lists the names of the pods a service contains, matched by its `selector`.
-///
-/// A service with `scale > 1` contains multiple pods, 1 per process.
-/// The names of the pods are returned sorted so output is deterministic across runs.
-pub async fn find_service_pods(
-    client: &Client,
-    k8s_namespace: &str,
-    selector: &BTreeMap<String, String>,
-) -> Result<Vec<String>> {
-    // An empty selector would match every pod in the namespace, which is never
-    // what a caller means. Treat it as "no pods".
-    if selector.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let label_filter = selector
-        .iter()
-        .map(|(k, v)| format!("{k}={v}"))
-        .collect::<Vec<_>>()
-        .join(",");
-
-    let pods_api: Api<Pod> = Api::namespaced(client.clone(), k8s_namespace);
-    let pods = pods_api
-        .list(&ListParams::default().labels(&label_filter))
-        .await
-        .with_context(|| format!("Failed to list pods in namespace {}", k8s_namespace))?;
-
-    let mut pod_names: Vec<String> = pods
-        .iter()
-        .filter_map(|pod| pod.metadata.name.clone())
-        .collect();
-    pod_names.sort();
-    Ok(pod_names)
 }

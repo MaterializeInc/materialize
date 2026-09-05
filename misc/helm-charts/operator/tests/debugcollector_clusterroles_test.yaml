@@ -1,0 +1,87 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+suite: test debug collector clusterroles
+templates:
+  - debugcollector-clusterroles.yaml
+tests:
+  - it: should create both collector clusterroles when RBAC is enabled
+    set:
+      rbac.create: true
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: ClusterRole
+      - equal:
+          path: metadata.name
+          value: materialize-debug-collector
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: materialize-debug-collector-cluster
+        documentIndex: 1
+
+  # The collector's permissions are pinned exactly: they are read-only, never
+  # include secrets, and the cluster-scoped grant covers only cluster-scoped
+  # kinds. Widening either role is a deliberate change that must show up here.
+  - it: should grant the namespaced role exactly the read-only kinds the collector dumps
+    set:
+      rbac.create: true
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: ["pods", "pods/log", "services", "configmaps", "persistentvolumeclaims", "serviceaccounts", "events", "endpoints"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["apps"]
+              resources: ["deployments", "statefulsets", "replicasets", "daemonsets"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["networking.k8s.io"]
+              resources: ["networkpolicies"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["rbac.authorization.k8s.io"]
+              resources: ["roles", "rolebindings"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["materialize.cloud"]
+              resources: ["materializes", "materializedebugs"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["cert-manager.io"]
+              resources: ["certificates"]
+              verbs: ["get", "list", "watch"]
+        documentIndex: 0
+
+  - it: should grant the cluster-scoped role exactly the read-only cluster-scoped kinds
+    set:
+      rbac.create: true
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: ["nodes", "persistentvolumes"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["storage.k8s.io"]
+              resources: ["storageclasses"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["admissionregistration.k8s.io"]
+              resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["apiextensions.k8s.io"]
+              resources: ["customresourcedefinitions"]
+              verbs: ["get", "list", "watch"]
+        documentIndex: 1
+
+  - it: should not create the clusterroles when RBAC is disabled
+    set:
+      rbac.create: false
+    asserts:
+      - hasDocuments:
+          count: 0

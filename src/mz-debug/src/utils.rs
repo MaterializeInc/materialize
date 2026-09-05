@@ -12,21 +12,14 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use anyhow::Context as AnyhowContext;
-
 use std::fs::{File, create_dir_all, remove_dir_all};
 use std::io::{BufWriter, copy};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
-use kube::{Api, Client};
-use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
-use mz_server_core::listeners::AuthenticatorKind;
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
-
-use crate::{AuthMode, PasswordAuthCredentials};
 
 /// Formats the base path for the output of the debug tool.
 pub fn format_base_path(date_time: DateTime<Utc>) -> PathBuf {
@@ -49,7 +42,9 @@ pub fn create_tracing_log_file(dir: PathBuf) -> Result<File, std::io::Error> {
     file
 }
 
-/// Zips a folder
+/// Zips `folder_path` into `zip_file_name`. Entries are rooted at the
+/// folder's own name, so extracting the zip recreates the folder wherever it
+/// is extracted, regardless of where it lived when zipped.
 pub fn zip_debug_folder(zip_file_name: PathBuf, folder_path: &PathBuf) -> std::io::Result<()> {
     // Delete the zip file if it already exists
     if zip_file_name.exists() {
@@ -58,12 +53,16 @@ pub fn zip_debug_folder(zip_file_name: PathBuf, folder_path: &PathBuf) -> std::i
     let zip_file = File::create(&zip_file_name)?;
     let mut zip_writer = ZipWriter::new(BufWriter::new(zip_file));
 
+    let root = folder_path.parent().unwrap_or_else(|| Path::new(""));
     for entry in walkdir::WalkDir::new(folder_path) {
         let entry = entry?;
         let path = entry.path();
 
         if path.is_file() {
-            zip_writer.start_file(path.to_string_lossy(), SimpleFileOptions::default())?;
+            let name = path
+                .strip_prefix(root)
+                .expect("walked paths start with the folder path");
+            zip_writer.start_file(name.to_string_lossy(), SimpleFileOptions::default())?;
             let mut file = File::open(path)?;
             copy(&mut file, &mut zip_writer)?;
         }
@@ -71,48 +70,4 @@ pub fn zip_debug_folder(zip_file_name: PathBuf, folder_path: &PathBuf) -> std::i
 
     zip_writer.finish()?;
     Ok(())
-}
-
-pub async fn get_k8s_auth_mode(
-    mz_username: Option<String>,
-    mz_password: Option<String>,
-    k8s_client: &Client,
-    k8s_namespace: &String,
-    mz_instance_name: &String,
-) -> Result<AuthMode, anyhow::Error> {
-    let materialize_api = Api::<Materialize>::namespaced(k8s_client.clone(), k8s_namespace);
-
-    let materialize_cr = materialize_api
-        .get(mz_instance_name)
-        .await
-        .with_context(|| {
-            format!(
-                "Could not find Materialize CR with name: {}",
-                mz_instance_name
-            )
-        })?;
-
-    let authenticator_kind = materialize_cr.spec.authenticator_kind;
-
-    match authenticator_kind {
-        AuthenticatorKind::None => Ok(AuthMode::None),
-        // Sasl and Oidc both authenticate with a username and password, so they
-        // are handled identically to Password here.
-        AuthenticatorKind::Password | AuthenticatorKind::Sasl | AuthenticatorKind::Oidc => {
-            if let (Some(mz_username), Some(mz_password)) = (&mz_username, &mz_password) {
-                Ok(AuthMode::Password(PasswordAuthCredentials {
-                    username: mz_username.clone(),
-                    password: mz_password.clone(),
-                }))
-            } else {
-                Err(anyhow::anyhow!(
-                    "mz_username and mz_password are required for password authentication"
-                ))
-            }
-        }
-        AuthenticatorKind::Frontegg => Err(anyhow::anyhow!(
-            "Unsupported authenticator kind: {:?}",
-            authenticator_kind
-        )),
-    }
 }

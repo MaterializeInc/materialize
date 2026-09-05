@@ -17,6 +17,24 @@ rows:
 
       Defaults to `true`.
 
+  - Option: "`--dump-cpu-profiles <boolean>`"
+    Description: |
+
+      <a name="dump-cpu-profiles"></a> If `true`, capture CPU profiles
+      (.pprof.gz) from your Materialize instance. While a CPU profile is
+      captured, memory profiling is temporarily disabled on that process and
+      restored afterwards.
+
+      Defaults to `true`.
+
+  - Option: "`--cpu-profile-duration-seconds <SECONDS>`"
+    Description: |
+
+      <a name="cpu-profile-duration-seconds"></a> How long to sample each CPU
+      profile.
+
+      Defaults to `10`.
+
   - Option: "`--dump-system-catalog <boolean>`"
     Description: |
 

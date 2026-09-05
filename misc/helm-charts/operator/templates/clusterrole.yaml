@@ -67,6 +67,19 @@ rules:
   - get
   - list
   - watch
+# The operator creates ClusterRoleBindings only for the debug collector, and
+# the `bind` rule below restricts what it may bind them to.
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources:
+  - clusterrolebindings
+  verbs:
+  - create
+  - update
+  - patch
+  - delete
+  - get
+  - list
+  - watch
 - apiGroups: ["rbac.authorization.k8s.io"]
   resources:
   - clusterroles
@@ -74,6 +87,8 @@ rules:
   - bind
   resourceNames:
   - environmentd
+  - materialize-debug-collector
+  - materialize-debug-collector-cluster
 - apiGroups: ["apps"]
   resources:
   - deployments
@@ -106,6 +121,8 @@ rules:
   - balancers/status
   - consoles
   - consoles/status
+  - materializedebugs
+  - materializedebugs/status
   - vpcendpoints
   verbs:
   - create

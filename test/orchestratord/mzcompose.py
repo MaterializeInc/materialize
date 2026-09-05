@@ -14,6 +14,7 @@ Test `orchestratord`
 import argparse
 import copy
 import datetime
+import glob
 import json
 import os
 import random
@@ -23,6 +24,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+import zipfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from enum import Enum
@@ -82,20 +84,49 @@ SERVICES = [
 KIND_CLUSTER_NAME = "kind"
 
 
+MZ_INSTANCE_NAME = "12345678-1234-1234-1234-123456789012"
+MZ_INSTANCE_NAMESPACE = "materialize-environment"
+
+
 def run_mz_debug() -> None:
-    # TODO: Hangs a lot in CI
-    # Only using capture because it's too noisy
-    # spawn.capture(
-    #     [
-    #         "./mz-debug",
-    #         "self-managed",
-    #         "--k8s-namespace",
-    #         "materialize-environment",
-    #         "--mz-instance-name",
-    #         "12345678-1234-1234-1234-123456789012",
-    #     ]
-    # )
-    pass
+    """Downloads a fresh snapshot from the instance's debug collector with the
+    CLI and checks that it holds every category."""
+    # The collector is created at the end of the instance's reconcile, so it
+    # may still be starting when the instance itself reports up to date.
+    spawn.runv(
+        [
+            "kubectl",
+            "wait",
+            "--for=condition=Ready",
+            f"materializedebug/{MZ_INSTANCE_NAME}",
+            "-n",
+            MZ_INSTANCE_NAMESPACE,
+            "--timeout=300s",
+        ]
+    )
+    zips_before = set(glob.glob("mz_debug_*.zip"))
+    spawn.runv(
+        [
+            "./mz-debug",
+            "self-managed",
+            "--k8s-namespace",
+            MZ_INSTANCE_NAMESPACE,
+            "--mz-instance-name",
+            MZ_INSTANCE_NAME,
+            "--cpu-profile-duration-seconds=1",
+            "--snapshot-timeout-seconds=600",
+        ]
+    )
+    new_zips = set(glob.glob("mz_debug_*.zip")) - zips_before
+    assert len(new_zips) == 1, f"expected one new snapshot zip, got {new_zips}"
+    (zip_path,) = new_zips
+    with zipfile.ZipFile(zip_path) as archive:
+        names = archive.namelist()
+    for directory in ["materializes/", "logs/", "prom_metrics/", "system_catalog/"]:
+        assert any(
+            f"/{directory}" in name for name in names
+        ), f"{zip_path} has no {directory} entries: {names[:20]}"
+    print(f"mz-debug snapshot {zip_path} holds {len(names)} files")
 
 
 def get_tag(tag: str | None = None) -> str:
@@ -4579,6 +4610,8 @@ def setup(c: Composition, args) -> dict[str, Any]:
             "clusterd",
             "console",
             "balancerd",
+            # The operator runs the debug collector from the mz-debug image.
+            "mz-debug",
         ]
         c.pull_images(*services)
         for service in services:
@@ -4621,6 +4654,9 @@ def setup(c: Composition, args) -> dict[str, Any]:
     # definition["operator"]["networkPolicies"]["ingress"]["enabled"] = True
     # TODO: Remove when fixed: error: unexpected argument '--disable-license-key-checks' found
     definition["operator"]["operator"]["args"]["enableLicenseKeyChecks"] = True
+    # Off by default in the chart; on here so every scenario runs a debug
+    # collector, which `run_mz_debug` downloads a snapshot from.
+    definition["operator"]["debugCollector"]["enabled"] = True
     definition["operator"]["clusterd"]["nodeSelector"][
         "workload"
     ] = "materialize-instance"

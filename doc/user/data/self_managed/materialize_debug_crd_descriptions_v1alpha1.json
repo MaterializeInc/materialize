@@ -1,0 +1,205 @@
+[
+  [
+    "MaterializeDebugSpec",
+    [
+      {
+        "name": "materializeName",
+        "type": "String",
+        "description": "The name of the Materialize resource, in the same namespace, to\ncollect diagnostics from.",
+        "default": null,
+        "required": true,
+        "deprecated": false
+      },
+      {
+        "name": "additionalNamespaces",
+        "type": "Array<String>",
+        "description": "Namespaces other than the instance's whose resources and pod logs\nare included in snapshots, for example the operator's namespace.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "bufferSizeLimit",
+        "type": "io.k8s.apimachinery.pkg.api.resource.Quantity",
+        "description": "The total size of retained snapshots above which the oldest are\nevicted. Defaults to `2Gi`. The collector's buffer volume is sized\nsomewhat above this to leave room for the snapshot being taken.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "collect",
+        "type": "DebugCollectionConfig",
+        "description": "Which categories periodic snapshots collect.",
+        "default": {
+          "k8s": true,
+          "systemCatalog": true,
+          "heapProfiles": true,
+          "prometheusMetrics": true,
+          "cpuProfiles": false,
+          "cpuProfileDurationSeconds": 10
+        },
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "collectorImageRef",
+        "type": "String",
+        "description": "The mz-debug image to run. Defaults to the `mz-debug` image with\nthe same registry and tag as the instance's environmentd image.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "podAnnotations",
+        "type": "Map<String, String>",
+        "description": "Annotations to apply to the collector pod.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "podLabels",
+        "type": "Map<String, String>",
+        "description": "Labels to apply to the collector pod.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "resourceId",
+        "type": "String",
+        "description": "Overrides the randomly chosen resource id. The operator sets this\nto the instance's resource id so the collector pod is covered by\nthe instance's network policies.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "resourceRequirements",
+        "type": "io.k8s.api.core.v1.ResourceRequirements",
+        "description": "Resource requirements for the collector pod.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "retainedSnapshots",
+        "type": "Integer",
+        "description": "How many snapshots to keep. The oldest are evicted first.\nDefaults to 12.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "snapshotInterval",
+        "type": "SnapshotInterval",
+        "description": "How often to take a periodic snapshot, as a human-readable\nduration such as `30m` or `1h 30m`. Defaults to `30m`; an\nunparseable value also falls back to that default.",
+        "default": "30m",
+        "required": false,
+        "deprecated": false
+      }
+    ]
+  ],
+  [
+    "io.k8s.api.core.v1.ResourceRequirements",
+    [
+      {
+        "name": "claims",
+        "type": "Array<io.k8s.api.core.v1.ResourceClaim>",
+        "description": "Claims lists the names of resources, defined in spec.resourceClaims, that are used by this container.\n\nThis field depends on the DynamicResourceAllocation feature gate.\n\nThis field is immutable. It can only be set for containers.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "limits",
+        "type": "Map<String, io.k8s.apimachinery.pkg.api.resource.Quantity>",
+        "description": "Limits describes the maximum amount of compute resources allowed. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "requests",
+        "type": "Map<String, io.k8s.apimachinery.pkg.api.resource.Quantity>",
+        "description": "Requests describes the minimum amount of compute resources required. If Requests is omitted for a container, it defaults to Limits if that is explicitly specified, otherwise to an implementation-defined value. Requests cannot exceed Limits. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      }
+    ]
+  ],
+  [
+    "io.k8s.api.core.v1.ResourceClaim",
+    [
+      {
+        "name": "name",
+        "type": "String",
+        "description": "Name must match the name of one entry in pod.spec.resourceClaims of the Pod where this field is used. It makes that resource available inside a container.",
+        "default": null,
+        "required": true,
+        "deprecated": false
+      },
+      {
+        "name": "request",
+        "type": "String",
+        "description": "Request is the name chosen for a request in the referenced claim. If empty, everything from the claim is made available, otherwise only the result of this request.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      }
+    ]
+  ],
+  [
+    "DebugCollectionConfig",
+    [
+      {
+        "name": "cpuProfileDurationSeconds",
+        "type": "Integer",
+        "description": "How long each CPU profile samples for.",
+        "default": 10,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "cpuProfiles",
+        "type": "Bool",
+        "description": "CPU profiles of environmentd and every clusterd process. Off by\ndefault: a capture disables memory profiling on the process for\nits duration and adds sampling load, which is not worth paying\nevery interval unasked. Snapshots requested through the CLI\ninclude CPU profiles regardless of this setting.",
+        "default": false,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "heapProfiles",
+        "type": "Bool",
+        "description": "Heap profiles of environmentd and every clusterd process.",
+        "default": true,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "k8s",
+        "type": "Bool",
+        "description": "Kubernetes resources, their describe output, and pod logs.",
+        "default": true,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "prometheusMetrics",
+        "type": "Bool",
+        "description": "Prometheus metrics of environmentd and every clusterd process.",
+        "default": true,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "systemCatalog",
+        "type": "Bool",
+        "description": "System catalog relations, as CSV.",
+        "default": true,
+        "required": false,
+        "deprecated": false
+      }
+    ]
+  ]
+]

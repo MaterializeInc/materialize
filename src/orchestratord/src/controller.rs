@@ -10,3 +10,4 @@
 pub mod balancer;
 pub mod console;
 pub mod materialize;
+pub mod materialize_debug;

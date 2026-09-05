@@ -32,6 +32,7 @@ use uuid::Uuid;
 use crate::{
     Error,
     controller::materialize::generation::V161,
+    controller::materialize_debug::DEBUG_COLLECTOR_MIN_VERSION,
     k8s::{apply_resource, delete_resource},
     matching_image_from_environmentd_image_ref,
     metrics::Metrics,
@@ -45,6 +46,7 @@ use mz_cloud_resources::crd::{
     console::v1alpha1::{BalancerdRef, Console, ConsoleSpec, HttpConnectionScheme},
     materialize::MaterializeRolloutStrategy,
     materialize::v1alpha1::{Materialize, MaterializeStatus},
+    materialize_debug::v1alpha1::{MaterializeDebug, MaterializeDebugSpec},
 };
 use mz_license_keys::validate;
 use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
@@ -60,6 +62,7 @@ pub struct Config {
     pub region: String,
     pub create_balancers: bool,
     pub create_console: bool,
+    pub create_debug_collectors: bool,
     pub helm_chart_version: Option<String>,
     pub secrets_controller: String,
     pub collect_pod_metrics: bool,
@@ -283,6 +286,7 @@ impl k8s_controller::Context for Context {
         let mz_api: Api<Materialize> = Api::namespaced(client.clone(), &mz.namespace());
         let balancer_api: Api<Balancer> = Api::namespaced(client.clone(), &mz.namespace());
         let console_api: Api<Console> = Api::namespaced(client.clone(), &mz.namespace());
+        let debug_api: Api<MaterializeDebug> = Api::namespaced(client.clone(), &mz.namespace());
         let secret_api: Api<Secret> = Api::namespaced(client.clone(), &mz.namespace());
 
         let status = mz.status();
@@ -885,13 +889,34 @@ impl k8s_controller::Context for Context {
                         ),
                     },
                     authenticator_kind: mz.spec.authenticator_kind,
-                    resource_id: Some(status.resource_id),
+                    resource_id: Some(status.resource_id.clone()),
                 },
                 status: None,
             };
             apply_resource(&console_api, &console).await?;
         } else {
             delete_resource(&console_api, &mz.name_unchecked()).await?;
+        }
+
+        // The debug collector reads from the instance but nothing depends on
+        // it, so it is created last and its readiness gates nothing. Everything
+        // else about it is derived from the Materialize by the debug
+        // controller, which also tracks later changes to the instance.
+        if self.config.create_debug_collectors
+            && mz.meets_minimum_version(&DEBUG_COLLECTOR_MIN_VERSION)
+        {
+            let debug = MaterializeDebug {
+                metadata: mz.managed_resource_meta(mz.name_unchecked()),
+                spec: MaterializeDebugSpec {
+                    materialize_name: mz.name_unchecked(),
+                    resource_id: Some(status.resource_id),
+                    ..Default::default()
+                },
+                status: None,
+            };
+            apply_resource(&debug_api, &debug).await?;
+        } else {
+            delete_resource(&debug_api, &mz.name_unchecked()).await?;
         }
 
         Ok(result)

@@ -7,25 +7,88 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import glob
-import os
-import subprocess
+"""Tests of the mz-debug collector against a cloudtest instance.
+
+cloudtest runs the collector directly (see
+`materialize.cloudtest.k8s.debug_collector`) since it has no operator, so
+these tests drive the collector's HTTP API the way `mz-debug self-managed`
+does: request a snapshot, wait for it, download the zip, inspect it.
+"""
+
+import io
 import time
+import zipfile
+from typing import Any
 
 import pytest
+import requests
 
-from materialize import MZ_ROOT, spawn
-from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME, DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.util.cluster import cluster_pod_name
 from materialize.cloudtest.util.wait import wait
 
-# environmentd runs as a single-replica StatefulSet, so mz-debug profiles it as
-# the pod `environmentd-0`.
+# environmentd runs as a single-replica StatefulSet, so the collector profiles
+# it as the pod `environmentd-0`.
 ENVIRONMENTD_POD = "environmentd-0"
 
+# A snapshot of every category on a small instance takes a minute or two; the
+# system catalog dump dominates.
+SNAPSHOT_TIMEOUT_SECS = 600
 
-def test_successful_zip_creation(mz: MaterializeApplication) -> None:
+
+def _take_snapshot(
+    mz: MaterializeApplication, request: dict[str, Any]
+) -> zipfile.ZipFile:
+    """Requests an on-demand snapshot with the given category overrides, waits
+    for the collector to complete it, and returns the downloaded zip."""
+    base_url = mz.debug_collector.base_url()
+    wait(condition="condition=Available", resource="deployment/debug-collector")
+
+    response = requests.post(f"{base_url}/api/snapshots", json=request, timeout=30)
+    response.raise_for_status()
+    snapshot_id = response.json()["id"]
+    print(f"-- Requested snapshot {snapshot_id}")
+
+    deadline = time.time() + SNAPSHOT_TIMEOUT_SECS
+    while True:
+        listing = requests.get(f"{base_url}/api/snapshots", timeout=30)
+        listing.raise_for_status()
+        body = listing.json()
+        if any(meta["id"] == snapshot_id for meta in body["snapshots"]):
+            break
+        queued = [
+            status["id"]
+            for status in (body["in_progress"], body["pending"])
+            if status is not None
+        ]
+        assert snapshot_id in queued, (
+            f"snapshot {snapshot_id} is neither complete nor queued; "
+            f"last error: {body['last_error']}"
+        )
+        assert time.time() < deadline, f"snapshot {snapshot_id} did not complete"
+        time.sleep(2)
+
+    download = requests.get(f"{base_url}/api/snapshots/{snapshot_id}", timeout=300)
+    download.raise_for_status()
+    assert download.headers["x-mz-debug-snapshot-id"] == snapshot_id
+    archive = zipfile.ZipFile(io.BytesIO(download.content))
+    root = f"mz_debug_{snapshot_id}/"
+    assert all(
+        name.startswith(root) for name in archive.namelist()
+    ), f"every entry must sit under {root}: {archive.namelist()[:10]}"
+    return archive
+
+
+def _entries(archive: zipfile.ZipFile, directory: str) -> list[str]:
+    """The entries under `directory` (relative to the snapshot root), with the
+    root and directory stripped."""
+    prefix = f"/{directory}/"
+    return sorted(
+        name.split(prefix, 1)[1] for name in archive.namelist() if prefix in name
+    )
+
+
+def test_snapshot_contains_every_category(mz: MaterializeApplication) -> None:
     # Wait until the Materialize instance is ready
     wait(
         condition="condition=Ready",
@@ -33,68 +96,25 @@ def test_successful_zip_creation(mz: MaterializeApplication) -> None:
         label="cluster.environmentd.materialize.cloud/cluster-id=u1",
     )
 
-    print("-- Port forwarding the internal SQL port")
-    subprocess.Popen(
-        [
-            "kubectl",
-            "--context",
-            DEFAULT_K8S_CONTEXT_NAME,
-            "port-forward",
-            "pods/environmentd-0",
-            "6877:6877",
-        ]
-    )
+    # CPU profiles are exercised by the profiling test; leave them out here so
+    # the full-category snapshot stays quick.
+    archive = _take_snapshot(mz, {"cpu_profiles": False})
+    names = archive.namelist()
+    print(f"snapshot entries: {len(names)}")
 
-    print("-- Running mz-debug")
-    spawn.runv(
-        [
-            "cargo",
-            "run",
-            "--bin",
-            "mz-debug",
-            "--",
-            "self-managed",
-            "--k8s-context",
-            DEFAULT_K8S_CONTEXT_NAME,
-            "--k8s-namespace",
-            DEFAULT_K8S_NAMESPACE,
-            "--mz-instance-name",
-            mz.instance_identity.organization_name,
-            "--mz-connection-url",
-            "postgresql://mz_system@localhost:6877/materialize",
-        ],
-        cwd=MZ_ROOT,
-    )
-
-    print("-- Looking for mz-debug zip files")
-    zip_files = glob.glob(str(MZ_ROOT / "mz_debug*.zip"))
-    assert len(zip_files) > 0, "No mz-debug zip file was created"
-
-
-def _newest_dump_dir() -> str:
-    """The most recently written `mz_debug_<timestamp>` directory in MZ_ROOT,
-    where mz-debug writes its output. Tests run sequentially against the shared
-    (session-scoped) instance, so the newest directory belongs to the mz-debug
-    run this test just made."""
-    dump_dirs = [d for d in glob.glob(str(MZ_ROOT / "mz_debug_*")) if os.path.isdir(d)]
-    assert dump_dirs, "mz-debug did not create an mz_debug_* output directory"
-    return max(dump_dirs, key=os.path.getmtime)
-
-
-def _profile_names(profiles_dir: str, kind: str, written_after: float) -> list[str]:
-    """Basenames of the `<pod>.<kind>.pprof.gz` profiles written after
-    `written_after`, a `time.time()` timestamp taken before the mz-debug run
-    under test. `kind` is `cpuprof` or `memprof`.
-
-    mz-debug names its output directory after the current minute, so runs a few
-    seconds apart share one and a run overwrites what an earlier run captured for
-    the same pod. Ignoring profiles older than the run keeps a failure to capture
-    from being masked by an earlier run's leftovers."""
-    return sorted(
-        os.path.basename(p)
-        for p in glob.glob(os.path.join(profiles_dir, f"*.{kind}.pprof.gz"))
-        if os.path.getmtime(p) >= written_after
-    )
+    assert any(name.endswith("/snapshot.json") for name in names), names[:20]
+    pods = _entries(archive, "pods/materialize")
+    assert f"{ENVIRONMENTD_POD}.yaml" in pods, pods
+    assert "describe.txt" in pods, pods
+    logs = _entries(archive, "logs/materialize")
+    assert f"{ENVIRONMENTD_POD}.current.log" in logs, logs
+    metrics = _entries(archive, "prom_metrics")
+    assert f"{ENVIRONMENTD_POD}.metrics.txt" in metrics, metrics
+    profiles = _entries(archive, "profiles")
+    assert f"{ENVIRONMENTD_POD}.memprof.pprof.gz" in profiles, profiles
+    assert not any(name.endswith(".cpuprof.pprof.gz") for name in profiles), profiles
+    catalog = _entries(archive, "system_catalog")
+    assert "mz_clusters.csv" in catalog, catalog
 
 
 @pytest.mark.parametrize(
@@ -110,8 +130,8 @@ def test_self_managed_profiles(
     mz: MaterializeApplication, scale: int, replication_factor: int
 ) -> None:
     """
-    mz-debug must capture both a CPU and a heap profile from environmentd and
-    from every clusterd pod of a cluster.
+    The collector must capture both a CPU and a heap profile from environmentd
+    and from every clusterd pod of a cluster.
 
     A `scale=N` replica is a single Kubernetes service with N processes, but
     contains one pod per process. A cluster of replication factor N is N such
@@ -153,58 +173,36 @@ def test_self_managed_profiles(
     for pod_resource in pod_resources:
         wait(condition="condition=Ready", resource=pod_resource)
 
-    print("-- Running mz-debug (CPU and heap profiles)")
-    # Filesystems can store modification times at a coarser resolution than
-    # `time.time()` reports, so leave a second of slack for a profile written
-    # right after the run starts.
-    run_started = time.time() - 1
-    # Capture only profiles to keep the run focused.
-    spawn.runv(
-        [
-            "cargo",
-            "run",
-            "--bin",
-            "mz-debug",
-            "--",
-            "self-managed",
-            "--k8s-context",
-            DEFAULT_K8S_CONTEXT_NAME,
-            "--k8s-namespace",
-            DEFAULT_K8S_NAMESPACE,
-            "--mz-instance-name",
-            mz.instance_identity.organization_name,
-            "--mz-connection-url",
-            "postgresql://mz_system@localhost:6877/materialize",
-            "--dump-k8s=false",
-            "--dump-system-catalog=false",
-            "--dump-prometheus-metrics=false",
-            "--dump-heap-profiles=true",
-            "--dump-cpu-profiles=true",
-            "--cpu-profile-duration-seconds=1",
-        ],
-        cwd=MZ_ROOT,
+    print("-- Taking a snapshot with CPU and heap profiles")
+    # Capture only profiles to keep the snapshot focused.
+    archive = _take_snapshot(
+        mz,
+        {
+            "k8s": False,
+            "system_catalog": False,
+            "prometheus_metrics": False,
+            "heap_profiles": True,
+            "cpu_profiles": True,
+            "cpu_profile_duration_seconds": 1,
+        },
     )
 
-    # mz-debug writes `<pod>.cpuprof.pprof.gz` and `<pod>.memprof.pprof.gz` under
-    # the run's `profiles/` directory. Both kinds must be there for environmentd
-    # and for every clusterd pod of every replica, each named after the pod it
-    # came from.
-    profiles_dir = os.path.join(_newest_dump_dir(), "profiles")
+    # The collector writes `<pod>.cpuprof.pprof.gz` and `<pod>.memprof.pprof.gz`
+    # under the snapshot's `profiles/` directory. Both kinds must be there for
+    # environmentd and for every clusterd pod of every replica, each named
+    # after the pod it came from.
+    profiles = _entries(archive, "profiles")
     expected_pods = [ENVIRONMENTD_POD] + [
         pod_resource.removeprefix("pod/") for pod_resource in pod_resources
     ]
-
     for kind in ("cpuprof", "memprof"):
-        names = _profile_names(profiles_dir, kind, run_started)
-        print(f"{kind} profiles: {names}")
-
         missing = [
-            pod for pod in expected_pods if f"{pod}.{kind}.pprof.gz" not in names
+            pod for pod in expected_pods if f"{pod}.{kind}.pprof.gz" not in profiles
         ]
         assert not missing, (
-            f"mz-debug captured no {kind} profile for {missing}. Every pod of "
+            f"the collector captured no {kind} profile for {missing}. Every pod of "
             f"every replica must be profiled, under a name that identifies the "
-            f"pod. {kind} profiles: {names}"
+            f"pod. profiles: {profiles}"
         )
 
     mz.environmentd.sql(f"DROP CLUSTER {cluster_name} CASCADE")

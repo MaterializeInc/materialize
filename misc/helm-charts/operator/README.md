@@ -125,6 +125,9 @@ The following table lists the configurable parameters of the Materialize operato
 | `console.imageTagMapOverride` | Override the mapping of environmentd versions to console versions | ``{}`` |
 | `console.nodeSelector` | Node selector to use for console pods spawned by the operator | ``{}`` |
 | `console.tolerations` | Tolerations to use for console pods spawned by the operator | ``{}`` |
+| `debugCollector.defaultResources.limits` | Default resource limits for the debug collector's CPU and memory if not set in the MaterializeDebug CR | ``{"memory":"1Gi"}`` |
+| `debugCollector.defaultResources.requests` | Default resources requested for the debug collector's CPU and memory if not set in the MaterializeDebug CR | ``{"cpu":"100m","memory":"256Mi"}`` |
+| `debugCollector.enabled` | Flag to indicate whether to run an in-cluster debug collector for each Materialize instance. The collector continuously snapshots diagnostics (Kubernetes resources, logs, profiles, metrics, the system catalog) into a ring buffer for `mz-debug self-managed` to download. | ``false`` |
 | `environmentd.affinity` | Affinity to use for environmentd pods spawned by the operator | ``{}`` |
 | `environmentd.defaultResources.limits` | Default resource limits for environmentd's CPU and memory if not set in the Materialize CR | ``{"memory":"4Gi"}`` |
 | `environmentd.defaultResources.requests` | Default resources requested for environmentd's CPU and memory if not set in the Materialize CR | ``{"cpu":"1","memory":"4095Mi"}`` |

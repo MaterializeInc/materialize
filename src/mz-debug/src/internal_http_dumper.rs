@@ -16,18 +16,14 @@ use reqwest::StatusCode;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::fs::{File, create_dir_all};
 use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
 use url::Url;
 
-use crate::kubectl_port_forwarder::{
-    KubectlPortForwarder, PortForwardConnection, PortForwardTarget, ServiceInfo,
-    find_cluster_services, find_environmentd_service, find_service_pods,
-};
-use crate::{AuthMode, Context, EmulatorContext, PasswordAuthCredentials, SelfManagedContext};
+use crate::collector::targets::{HttpTarget, ServiceType};
+use crate::{AuthMode, DumpConfig, EmulatorContext, PasswordAuthCredentials};
 
 static PROFILES_DIR: &str = "profiles";
 static PROM_METRICS_DIR: &str = "prom_metrics";
@@ -64,12 +60,6 @@ const INTERNAL_HTTP_PORT_LABEL: &str = "internal-http";
 /// The label for the external HTTP port.
 // Even when not using TLS, the external HTTP port is labeled as "https".
 const EXTERNAL_HTTP_PORT_LABEL: &str = "https";
-
-#[derive(Debug, Clone, Copy)]
-enum ServiceType {
-    Clusterd,
-    Environmentd,
-}
 
 fn get_profile_endpoint(service_type: &ServiceType) -> &'static str {
     match service_type {
@@ -163,7 +153,7 @@ fn get_default_port(auth_mode: &AuthMode) -> HttpDefaultPorts {
 
 /// A struct that handles downloading and saving profile data from HTTP endpoints.
 pub struct HttpDumpClient<'n> {
-    context: &'n Context,
+    config: &'n DumpConfig,
     auth_mode: &'n AuthMode,
     http_client: &'n reqwest::Client,
 }
@@ -171,12 +161,12 @@ pub struct HttpDumpClient<'n> {
 /// A struct that handles downloading and exporting data from our internal HTTP endpoints.
 impl<'n> HttpDumpClient<'n> {
     pub fn new(
-        context: &'n Context,
+        config: &'n DumpConfig,
         auth_mode: &'n AuthMode,
         http_client: &'n reqwest::Client,
     ) -> Self {
         Self {
-            context,
+            config,
             auth_mode,
             http_client,
         }
@@ -284,7 +274,7 @@ impl<'n> HttpDumpClient<'n> {
 
     /// Downloads and saves heap profile data
     pub async fn dump_heap_profile(&self, relative_url: &str, service_name: &str) -> Result<()> {
-        let output_dir = self.context.base_path.join(PROFILES_DIR);
+        let output_dir = self.config.base_path.join(PROFILES_DIR);
         create_dir_all(&output_dir).await.with_context(|| {
             format!(
                 "Failed to create output directory: {}",
@@ -322,7 +312,7 @@ impl<'n> HttpDumpClient<'n> {
         service_name: &str,
         duration_secs: u64,
     ) -> Result<()> {
-        let output_dir = self.context.base_path.join(PROFILES_DIR);
+        let output_dir = self.config.base_path.join(PROFILES_DIR);
         create_dir_all(&output_dir).await.with_context(|| {
             format!(
                 "Failed to create output directory: {}",
@@ -380,7 +370,7 @@ impl<'n> HttpDumpClient<'n> {
         relative_url: &str,
         service_name: &str,
     ) -> Result<()> {
-        let output_dir = self.context.base_path.join(PROM_METRICS_DIR);
+        let output_dir = self.config.base_path.join(PROM_METRICS_DIR);
         create_dir_all(&output_dir).await.with_context(|| {
             format!(
                 "Failed to create output directory: {}",
@@ -499,17 +489,17 @@ async fn dump_cpu_profile_and_verify_memory(
 
 // TODO (debug_tool3): Scrape cluster profiles through a proxy when (database-issues#7049) is implemented
 pub async fn dump_emulator_http_resources(
-    context: &Context,
+    config: &DumpConfig,
     emulator_context: &EmulatorContext,
 ) -> Result<()> {
     let http_client = reqwest::Client::new();
     let dump_task = HttpDumpClient::new(
-        context,
+        config,
         &emulator_context.http_connection_auth_mode,
         &http_client,
     );
 
-    if context.dump_heap_profiles {
+    if config.dump_heap_profiles {
         let resource_name = "environmentd".to_string();
 
         // We assume the emulator is exposed on the local network and uses port 6878.
@@ -529,7 +519,7 @@ pub async fn dump_emulator_http_resources(
         }
     }
 
-    if context.dump_prometheus_metrics {
+    if config.dump_prometheus_metrics {
         let resource_name = "environmentd".to_string();
 
         if let Err(e) = dump_task
@@ -550,7 +540,7 @@ pub async fn dump_emulator_http_resources(
 
     // Capture the CPU profile after memory profiling, since the capture
     // temporarily disables memory profiling on the service.
-    if context.dump_cpu_profiles {
+    if config.dump_cpu_profiles {
         let resource_name = "environmentd".to_string();
         let port = get_default_port(&emulator_context.http_connection_auth_mode).heap_profile_port;
         let cpu_endpoint = format!(
@@ -568,14 +558,14 @@ pub async fn dump_emulator_http_resources(
 
         info!(
             "Capturing CPU profile for {} seconds. Memory profiling is temporarily disabled during the capture and restored afterwards.",
-            context.cpu_profile_duration_secs
+            config.cpu_profile_duration_secs
         );
         dump_cpu_profile_and_verify_memory(
             &dump_task,
             &cpu_endpoint,
             &mode_endpoint,
             &resource_name,
-            context.cpu_profile_duration_secs,
+            config.cpu_profile_duration_secs,
         )
         .await;
     }
@@ -583,282 +573,119 @@ pub async fn dump_emulator_http_resources(
     Ok(())
 }
 
-/// One pod to dump HTTP resources from, expanded from the service that fronts
-/// it. A scaled replica's service fronts more than one such pod.
-struct PodDumpTarget {
-    pod_name: String,
-    namespace: String,
-    /// Ports are taken from the fronting service. We assume the service port
-    /// equals the pod's container port for these HTTP endpoints, which holds
-    /// for clusterd and environmentd.
-    service_ports: Vec<ServicePort>,
-    service_type: ServiceType,
-}
-
-/// Spawns a `kubectl port-forward` against a specific pod (not its service),
-/// so a scaled replica's individual processes can each be reached.
-async fn spawn_pod_port_forward(
-    self_managed_context: &SelfManagedContext,
-    pod_target: &PodDumpTarget,
-    target_port: i32,
-) -> Result<PortForwardConnection> {
-    KubectlPortForwarder {
-        context: self_managed_context.k8s_context.clone(),
-        namespace: pod_target.namespace.clone(),
-        target: PortForwardTarget::Pod(pod_target.pod_name.clone()),
-        target_port,
-    }
-    .spawn_port_forward()
-    .await
-}
-
-pub async fn dump_self_managed_http_resources(
-    context: &Context,
-    self_managed_context: &SelfManagedContext,
+/// Dumps heap profiles, Prometheus metrics and CPU profiles from processes
+/// reached directly, without port forwarding: the collector runs inside the
+/// cluster, so every target's `host:port` is routable as is.
+///
+/// A failure on one target is logged and skipped so one unreachable pod does
+/// not cost every other pod's data.
+pub async fn dump_in_cluster_http_resources(
+    config: &DumpConfig,
+    targets: &[HttpTarget],
+    auth_mode: &AuthMode,
+    http_client: &reqwest::Client,
 ) -> Result<()> {
-    let http_client = reqwest::Client::new();
-    let dump_task = HttpDumpClient::new(
-        context,
-        &self_managed_context.http_connection_auth_mode,
-        &http_client,
-    );
+    let dump_task = HttpDumpClient::new(config, auth_mode, http_client);
 
-    let cluster_services = find_cluster_services(
-        &self_managed_context.k8s_client,
-        &self_managed_context.k8s_namespace,
-        &self_managed_context.mz_instance_name,
-    )
-    .await
-    .with_context(|| "Failed to find cluster services")?;
+    let port_for = |target: &HttpTarget, label: &'static str| -> Option<i32> {
+        target
+            .service_ports
+            .iter()
+            .find_map(|port_info| find_http_port_by_label(port_info, label))
+            .map(|port| port.port)
+    };
 
-    let environmentd_service = find_environmentd_service(
-        &self_managed_context.k8s_client,
-        &self_managed_context.k8s_namespace,
-        &self_managed_context.mz_instance_name,
-    )
-    .await
-    .with_context(|| "Failed to find environmentd service")?;
-
-    let services: Vec<(&ServiceInfo, ServiceType)> = cluster_services
-        .iter()
-        .map(|service| (service, ServiceType::Clusterd))
-        .chain(std::iter::once((
-            &environmentd_service,
-            ServiceType::Environmentd,
-        )))
-        .collect();
-
-    // A replica with `scale > 1` is a single service containing multiple clusterd
-    // pods. Expand every service into the pods it contains and dump each pod
-    // individually so no process is silently skipped.
-    let mut pod_targets: Vec<PodDumpTarget> = Vec::new();
-    for &(service_info, service_type) in &services {
-        let pod_names = match find_service_pods(
-            &self_managed_context.k8s_client,
-            &self_managed_context.k8s_namespace,
-            &service_info.selector,
-        )
-        .await
-        {
-            Ok(pod_names) => pod_names,
-            Err(e) => {
-                warn!(
-                    "Failed to list pods for service {}: {:#}",
-                    service_info.service_name, e
-                );
-                continue;
-            }
-        };
-        if pod_names.is_empty() {
-            warn!(
-                "Found no pods for service {}, skipping",
-                service_info.service_name
-            );
-            continue;
-        }
-        for pod_name in pod_names {
-            pod_targets.push(PodDumpTarget {
-                pod_name,
-                namespace: service_info.namespace.clone(),
-                service_ports: service_info.service_ports.clone(),
-                service_type,
-            });
-        }
-    }
-
-    // Scrape each pod for heap profiles and prometheus metrics. A failure on
-    // one pod is logged and skipped rather than aborting the whole dump, so one
-    // unreachable pod does not cost us every other pod's data.
-    for pod_target in &pod_targets {
-        let service_type = pod_target.service_type;
-        let profiling_endpoint = get_profile_endpoint(&service_type);
+    for target in targets {
         let HttpPortLabels {
             heap_profile_port_label,
             prom_metrics_port_label,
-        } = get_port_labels(
-            &self_managed_context.http_connection_auth_mode,
-            &service_type,
-        );
-
-        let maybe_heap_profile_port = pod_target
-            .service_ports
-            .iter()
-            .find_map(|port_info| find_http_port_by_label(port_info, heap_profile_port_label));
-        let maybe_prom_metrics_port = pod_target
-            .service_ports
-            .iter()
-            .find_map(|port_info| find_http_port_by_label(port_info, prom_metrics_port_label));
-        let (Some(heap_profile_port), Some(prom_metrics_port)) =
-            (maybe_heap_profile_port, maybe_prom_metrics_port)
-        else {
+        } = get_port_labels(auth_mode, &target.service_type);
+        let (Some(heap_profile_port), Some(prom_metrics_port)) = (
+            port_for(target, heap_profile_port_label),
+            port_for(target, prom_metrics_port_label),
+        ) else {
             warn!(
-                "Failed to find HTTP port for pod {}, heap_profile_port_label={}, prom_metrics_port_label={}",
-                pod_target.pod_name, heap_profile_port_label, prom_metrics_port_label
+                "Failed to find HTTP port for {}, heap_profile_port_label={}, prom_metrics_port_label={}",
+                target.name, heap_profile_port_label, prom_metrics_port_label
             );
             continue;
         };
 
-        let heap_profile_http_connection =
-            match spawn_pod_port_forward(self_managed_context, pod_target, heap_profile_port.port)
-                .await
-            {
-                Ok(connection) => Arc::new(connection),
-                Err(e) => {
-                    warn!(
-                        "Failed to spawn port forwarder for pod {}: {:#}",
-                        pod_target.pod_name, e
-                    );
-                    continue;
-                }
-            };
-        let prom_metrics_http_connection = if heap_profile_port == prom_metrics_port {
-            Arc::clone(&heap_profile_http_connection)
-        } else {
-            match spawn_pod_port_forward(self_managed_context, pod_target, prom_metrics_port.port)
-                .await
-            {
-                Ok(connection) => Arc::new(connection),
-                Err(e) => {
-                    warn!(
-                        "Failed to spawn port forwarder for pod {}: {:#}",
-                        pod_target.pod_name, e
-                    );
-                    continue;
-                }
-            }
-        };
-
-        if context.dump_heap_profiles {
-            let profiling_endpoint = format!(
+        if config.dump_heap_profiles {
+            let endpoint = format!(
                 "{}:{}/{}",
-                heap_profile_http_connection.local_address,
-                heap_profile_http_connection.local_port,
-                profiling_endpoint
+                target.host,
+                heap_profile_port,
+                get_profile_endpoint(&target.service_type)
             );
-
-            info!("Dumping heap profile for pod {}", pod_target.pod_name);
-            if let Err(e) = dump_task
-                .dump_heap_profile(&profiling_endpoint, &pod_target.pod_name)
-                .await
-            {
-                warn!(
-                    "Failed to dump heap profile for pod {}: {:#}",
-                    pod_target.pod_name, e
-                );
+            info!("Dumping heap profile for {}", target.name);
+            if let Err(e) = dump_task.dump_heap_profile(&endpoint, &target.name).await {
+                warn!("Failed to dump heap profile for {}: {:#}", target.name, e);
             }
         }
 
-        if context.dump_prometheus_metrics {
-            let prom_metrics_endpoint = format!(
+        if config.dump_prometheus_metrics {
+            let endpoint = format!(
                 "{}:{}/{}",
-                prom_metrics_http_connection.local_address,
-                prom_metrics_http_connection.local_port,
-                PROM_METRICS_ENDPOINT
+                target.host, prom_metrics_port, PROM_METRICS_ENDPOINT
             );
-            info!("Dumping prometheus metrics for pod {}", pod_target.pod_name);
+            info!("Dumping prometheus metrics for {}", target.name);
             if let Err(e) = dump_task
-                .dump_prometheus_metrics(&prom_metrics_endpoint, &pod_target.pod_name)
+                .dump_prometheus_metrics(&endpoint, &target.name)
                 .await
             {
                 warn!(
-                    "Failed to dump prometheus metrics for pod {}: {:#}",
-                    pod_target.pod_name, e
+                    "Failed to dump prometheus metrics for {}: {:#}",
+                    target.name, e
                 );
             }
         }
     }
 
     // Capture CPU profiles after memory profiling, since each capture
-    // temporarily disables memory profiling on its pod. The captures run in
-    // parallel, and a failure on one pod does not abort the others.
-    if context.dump_cpu_profiles {
+    // temporarily disables memory profiling on its process. The captures run
+    // in parallel, and a failure on one does not abort the others.
+    if config.dump_cpu_profiles {
         info!(
-            "Capturing CPU profiles for {} seconds. Memory profiling is temporarily disabled on each pod during its capture and restored afterwards.",
-            context.cpu_profile_duration_secs
+            "Capturing CPU profiles for {} seconds. Memory profiling is temporarily disabled on each process during its capture and restored afterwards.",
+            config.cpu_profile_duration_secs
         );
-
-        let cpu_profile_futures = pod_targets.iter().map(|pod_target| {
-            let service_type = pod_target.service_type;
-            // The CPU and mode endpoints are served on the same port as the heap
-            // profile endpoint.
-            let port_label = get_port_labels(
-                &self_managed_context.http_connection_auth_mode,
-                &service_type,
-            )
-            .heap_profile_port_label;
+        let cpu_profile_futures = targets.iter().map(|target| {
+            // The CPU and mode endpoints are served on the same port as the
+            // heap profile endpoint.
+            let port_label =
+                get_port_labels(auth_mode, &target.service_type).heap_profile_port_label;
             let dump_task = &dump_task;
-            let duration_secs = context.cpu_profile_duration_secs;
-
             async move {
-                let Some(port) = pod_target
-                    .service_ports
-                    .iter()
-                    .find_map(|port_info| find_http_port_by_label(port_info, port_label))
-                else {
+                let Some(port) = port_for(target, port_label) else {
                     warn!(
-                        "Failed to find HTTP port `{}` for CPU profiling of pod {}",
-                        port_label, pod_target.pod_name
+                        "Failed to find HTTP port `{}` for CPU profiling of {}",
+                        port_label, target.name
                     );
                     return;
                 };
-
-                let connection =
-                    match spawn_pod_port_forward(self_managed_context, pod_target, port.port).await
-                    {
-                        Ok(connection) => connection,
-                        Err(e) => {
-                            warn!(
-                                "Failed to spawn port forwarder for CPU profiling of pod {}: {:#}",
-                                pod_target.pod_name, e
-                            );
-                            return;
-                        }
-                    };
-
                 let cpu_endpoint = format!(
                     "{}:{}/{}",
-                    connection.local_address,
-                    connection.local_port,
-                    get_cpu_profile_endpoint(&service_type)
+                    target.host,
+                    port,
+                    get_cpu_profile_endpoint(&target.service_type)
                 );
                 let mode_endpoint = format!(
                     "{}:{}/{}",
-                    connection.local_address,
-                    connection.local_port,
-                    get_prof_mode_endpoint(&service_type)
+                    target.host,
+                    port,
+                    get_prof_mode_endpoint(&target.service_type)
                 );
-
                 dump_cpu_profile_and_verify_memory(
                     dump_task,
                     &cpu_endpoint,
                     &mode_endpoint,
-                    &pod_target.pod_name,
-                    duration_secs,
+                    &target.name,
+                    config.cpu_profile_duration_secs,
                 )
                 .await;
             }
         });
-
         join_all(cpu_profile_futures).await;
     }
 

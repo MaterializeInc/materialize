@@ -135,7 +135,7 @@ class EnvironmentdService(K8sService):
         super().__init__(namespace)
         service_port = V1ServicePort(name="sql", port=6875)
         http_port = V1ServicePort(name="http", port=6876)
-        internal_port = V1ServicePort(name="internal", port=6877)
+        internal_port = V1ServicePort(name="internal-sql", port=6877)
         internal_http_port = V1ServicePort(name="internal-http", port=6878)
         self.service = V1Service(
             api_version="v1",
