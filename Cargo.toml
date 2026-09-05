@@ -482,7 +482,7 @@ rocksdb = { version = "0.24.0", default-features = false, features = ["lz4", "sn
 ropey = "1.6.1"
 rustls = "0.23.38"
 rpassword = "7.5.1"
-rusqlite = { version = "0.32.1", features = ["bundled"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 ryu = "1.0.23"
 schemars = { version = "1.2.1", features = ["uuid1"] }
 scopeguard = "1.2.0"
