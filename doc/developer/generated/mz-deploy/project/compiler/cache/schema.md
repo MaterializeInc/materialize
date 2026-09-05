@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/project/compiler/cache/schema.rs
-revision: a647094cc4
+revision: cd5706442d
 ---
 
 # mz-deploy::project::compiler::cache::schema

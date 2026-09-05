@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/open.rs
-revision: ed7294b842
+revision: 1d0992ac41
 ---
 
 # adapter::catalog::open
@@ -12,4 +12,4 @@ After applying all updates, `state.system_config().sync_dyncfgs()` is called exp
 `add_new_remove_old_builtin_clusters_migration` emits audit log events when creating or dropping builtin clusters so those operations are visible in `mz_audit_events`.
 `reconcile_builtin_cluster_replicas` reconciles each builtin cluster's replica set against the cluster's own durable `replication_factor`, creating missing replicas (allocating IDs via `txn.allocate_system_replica_id()`, single-source and safe because there is no coordinator at that point) and dropping surplus ones. Bootstrap flags seed `size` and `replication_factor` only when a cluster is first created, so an `ALTER CLUSTER` against a builtin cluster persists across restarts. Audit log events are emitted for every create and drop so those operations are visible in `mz_audit_events`.
 `InitializeStateResult` and `OpenCatalogResult` carry `last_seen_version: Option<Version>` (the version of the binary that last committed catalog migrations, or `None` for a freshly initialized catalog). During a 0dt deployment while this environment is read-only, this is the leader's version because the read-only catalog transaction is a savepoint that never lands. `migrated_storage_collections_0dt` contains only `Replacement`-migrated items; `Evolution`-migrated items reuse the leader's live shard and are excluded.
-`remove_pending_cluster_replicas_migration` emits audit log events when dropping pending replicas so the drops are visible in `mz_audit_events`.
+`remove_pending_cluster_replicas_migration` drops replicas left durably marked `pending` and emits audit log events so the drops are visible in `mz_audit_events`. No runtime path creates pending replicas anymore; this sweep handles replicas left by an upgrade from a version whose staged reconfiguration machine crashed between the pending-create commit and the finalize.

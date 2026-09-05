@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/sink/iceberg.rs
-revision: f4ed781373
+revision: 2dbeae007a
 ---
 
 # mz-storage::sink::iceberg
@@ -10,6 +10,7 @@ Implements the `SinkRender` trait for `IcebergSinkConnection`.
 The batch minting operator maintains a sliding window of future batch descriptions (controlled by `INITIAL_DESCRIPTIONS_TO_MINT`) so writers can start streaming data before earlier batches complete.
 When a sink begins from a source snapshot (resume upper is `Timestamp::minimum()`), the mint operator immediately emits a snapshot batch description covering `[as_of, as_of + 1)` before entering its main loop, so the write operator can begin streaming snapshot data without waiting for the frontier to advance.
 All three operators that connect to the catalog (`mint_batch_descriptions`, `write_data_files`, and `commit_to_iceberg`) pass the table's `TableIdent` to `connect()` so catalog-vended storage credentials are refreshed for the correct table.
+`load_or_create_table` validates the schema of an existing Iceberg table against the expected schema (comparing both the struct fields and identifier field IDs) and returns an error if they do not match, preventing a panic during Parquet writing when a schema mismatch is detected on sink or cluster restart.
 Data file writing is envelope-specific, dispatched through the `EnvelopeHandler` trait with two implementations:
 - `UpsertEnvelopeHandler` uses an Iceberg `DeltaWriter` (data files + position and equality delete files) to express upsert semantics. Equality delete file writing uses `EqualityDeleteWriterConfig` projected to the key columns. For snapshot batches, `DeltaWriter` is configured with `max_seen_rows = 0` to disable seen-row tracking and save memory; for incremental batches, `max_seen_rows = usize::MAX` to prevent eviction (evicting a row inserted in the same session would silently drop its delete).
 - `AppendEnvelopeHandler` writes plain data files only, appending `_mz_diff` (Int32) and `_mz_timestamp` (Int64) columns to each row so consumers can reconstruct the full change stream.

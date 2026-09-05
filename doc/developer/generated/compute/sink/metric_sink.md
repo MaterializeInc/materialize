@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/sink/metric_sink.rs
-revision: d7b0d9eb90
+revision: 41e1741ca3
 ---
 
 # mz-compute::sink::metric_sink
@@ -15,11 +15,11 @@ The operator routes all data to one worker per process (chosen by hashing the si
 
 **`SinkState`** — the full working and published state for one metric sink. Incoming updates are buffered by timestamp in `pending_ok`/`pending_err` and folded into `working` only once the combined ok+err frontier has closed that timestamp. `working` holds a signed multiplicity per full row identity (`RowKey`). `published` is rebuilt from the live set of `working` on each healthy activation.
 
-**`RowKey`** — `(metric_name, labels, value_bits, metric_kind, name_valid, help)`. Labels are `Vec<(String, Option<String>)>` where `None` represents a null label value (distinct from an empty string). The name and labels lead the tuple so that a `BTreeMap<RowKey, _>` keeps all rows of one `(metric_name, labels)` series adjacent for efficient collision detection.
+**`RowKey`** — `(metric_name, labels, value_bits, metric_kind, name_valid, help)`. Labels are `Vec<(String, Option<String>)>` where `None` represents a null label value (distinct from an empty string). `metric_kind` is `Option<MetricKind>` where `None` represents any unsupported `metric_type`; two rows differing only in their unsupported type share one identity rather than two. The name and labels lead the tuple so that a `BTreeMap<RowKey, _>` keeps all rows of one `(metric_name, labels)` series adjacent for efficient collision detection.
 
-**`MetricKind`** — `Gauge` or `Counter`, recovered from the `metric_kind` column the planner's `shape_metric_sink_source` already computed (`0` = gauge, `1` = counter).
+**`MetricKind`** — `Gauge` or `Counter`, recovered from the `metric_kind` column the planner's `shape_metric_sink_source` already computed (`0` = gauge, `1` = counter). Any other datum (including `NULL`) produces `None`, representing an unsupported metric type.
 
-**`SinkCollector`** — a `prometheus::core::Collector` that exposes six companion gauges (`mz_metric_sink_frontier_ms`, `mz_metric_sink_errors`, `mz_metric_sink_skipped`, `mz_metric_sink_conflicts`, `mz_metric_sink_collisions`, `mz_metric_sink_null_values`) plus the user-defined series built dynamically as `MetricFamily` protos. The companion gauges carry a `sink` const label so each sink instance has distinct `Desc` ids at registration time.
+**`SinkCollector`** — a `prometheus::core::Collector` that exposes six companion gauges (`mz_compute_metric_sink_frontier_ms`, `mz_compute_metric_sink_errors`, `mz_compute_metric_sink_skipped`, `mz_compute_metric_sink_conflicts`, `mz_compute_metric_sink_collisions`, `mz_compute_metric_sink_null_values`) plus the user-defined series built dynamically as `MetricFamily` protos. The companion gauges carry a `sink` const label (taken from `MetricSinkConnection::label`) so each sink instance has distinct `Desc` ids at registration time.
 
 ## Collision and conflict semantics
 
@@ -35,4 +35,4 @@ While the sink's error count (`errors`) is nonzero, `published` is not rebuilt; 
 
 ## Planner contract
 
-The source relation is expected to carry the seven canonical columns produced by `mz_adapter::optimize::metric_sink::shape_metric_sink_source`: `metric_name`, `metric_type`, `labels` (non-null), `value`, `help` (non-null), `metric_kind`, and `name_valid`. `ColumnIndices::resolve` panics if a required column is missing; the SQL planner enforces this contract once the `CREATE METRIC SINK` planning path exists.
+The source relation is expected to carry the six canonical columns resolved by `ColumnIndices::resolve`: `metric_name`, `labels` (non-null by construction), `value`, `help` (non-null by construction), `metric_kind`, and `name_valid`. These are produced by `mz_adapter::optimize::metric_sink::shape_metric_sink_source`, which also computes the `metric_kind` and `name_valid` classification columns so this module does not re-parse `metric_type` strings or re-validate `metric_name`. `ColumnIndices::resolve` panics if a required column is missing; the SQL planner enforces this contract.

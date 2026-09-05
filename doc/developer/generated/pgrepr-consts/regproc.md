@@ -1,6 +1,6 @@
 ---
 source: src/pgrepr-consts/src/regproc.rs
-revision: c317ceee3c
+revision: 7053f0b019
 ---
 
 # `pgrepr_consts::regproc`

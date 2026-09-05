@@ -1,23 +1,25 @@
 ---
 source: src/adapter/src/coord/hydration_history.rs
-revision: a1bcaebfe6
+revision: 46f729653a
 ---
 
 # `adapter::coord::hydration_history`
 
-Durable history collection for completed compute-object hydration episodes.
+Durable history collection for completed object and replica hydration episodes.
 
 ## Overview
 
-Each sweep visits one user replica, installs a replica-targeted subscribe that diffs that replica's live hydration timestamps against the durable history table, and appends missing rows through the timestamped OCC write path. Including the history table in the read expression makes the write idempotent across concurrent `environmentd` processes: two collectors that compute the same row race for one write timestamp, and the loser observes the winner's append through its own subscribe and finds nothing left to write.
+Each sweep visits one user replica, installs a replica-targeted subscribe that diffs that replica's live hydration timestamps against the durable history tables, and appends missing rows through the timestamped OCC write path. Including each history table in its read expression makes the write idempotent across concurrent `environmentd` processes: two collectors that compute the same row race for one write timestamp, and the loser observes the winner's append through its own subscribe and finds nothing left to write.
 
-One replica is sampled per interval, so an environment with N eligible replicas revisits each one approximately every `N * interval`. Collection is sampling, not an event log. An episode whose live row is retracted before its replica's turn in the sweep is not recorded because the evidence is gone.
+One replica is sampled per interval, so an environment with N eligible replicas revisits each one approximately every `N * interval`. Collection is sampling, not an event log. Replica history records only the latest completed episode visible in a sweep. Intermediate episodes and intervals retracted before collection leave no evidence and are not recorded.
 
 ## Key Types
 
-**`Sweep`** — Context for one sweep run, holding the `PeekClient`, catalog reference, history table ID, metrics handle, wall time, and a `cutoff` string (RFC 3339 timestamp). The two operations are:
-- `collect` — appends one replica's completed episodes that the history table is missing
-- `retain` — retracts one bounded batch of rows that have aged out of the retention window
+**`ReplicaTarget`** — A user replica eligible for one collection step, carrying `cluster_id`, `replica_id`, and `process_count`. The `process_count` is used by `replica_collection_sql` to gate the write on all configured processes having reported resource usage.
+
+**`Sweep`** — Context for one sweep run, holding the `PeekClient`, catalog reference, `object_history_id` and `replica_history_id` table IDs, metrics handle, wall time, and a `cutoff` string (RFC 3339 timestamp). The two operations are:
+- `collect` — appends one replica's completed object and replica episodes that their respective history tables are missing
+- `retain` — retracts one bounded batch of rows from each history table that have aged out of the retention window
 
 ## Scheduling
 
@@ -25,13 +27,17 @@ One replica is sampled per interval, so an environment with N eligible replicas 
 
 `Coordinator::run_hydration_history_collection` dispatches the sweep as a background task. The task runs `collect` against the selected user replica and `retain` against the catalog server cluster, then reschedules. The sweep handle is stored on the `Coordinator` so it is aborted when the coordinator drops.
 
-## Collection Query
+## Collection Queries
 
-`collect_sql` builds a `SELECT` that joins `mz_compute_hydration_times_per_worker` against `mz_object_hydration_history` with an anti-join, filtering to fully-hydrated objects (all workers have a `hydrated_at`) whose episodes are not yet recorded. The cutoff and the anti-join sit outside the aggregate so they do not interfere with the per-worker completeness check.
+`object_collection_sql` builds a `SELECT` that joins `mz_compute_hydration_times_per_worker` against `mz_object_hydration_history` with an anti-join, filtering to fully-hydrated user indexes and materialized views (all workers have a `hydrated_at`) whose episodes are not yet recorded. The cutoff and the anti-join sit outside the aggregate so they do not interfere with the per-worker completeness check.
+
+`replica_collection_sql` implements a gaps-and-islands algorithm over compute export hydration intervals to find the latest completed hydration episode that is disconnected from any still-open interval. Transient exports (those with IDs starting with `t`) are excluded. The query also waits until every configured replica process (`process_count`) has reported resource usage before committing the episode, capturing `peak_memory_bytes` (cgroup `memory_peak`) and `peak_disk_bytes` (statvfs `fs_used_peak`, falling back to cgroup `swap_peak`).
 
 ## Retention
 
-`retention_sql` returns a bounded batch (`RETENTION_BATCH_SIZE` = 1000) of the oldest rows aged past the cutoff, using a subquery so the `LIMIT` applies inside the relation expression rather than as a top-level `RowSetFinishing` that the OCC path cannot apply.
+`object_retention_sql` returns a bounded batch (`RETENTION_BATCH_SIZE` = 1000) of the oldest `mz_object_hydration_history` rows aged past the cutoff.
+`replica_retention_sql` returns the same bounded batch for `mz_replica_hydration_history`.
+Both use a subquery so the `LIMIT` applies inside the relation expression rather than as a top-level `RowSetFinishing` that the OCC path cannot apply.
 
 ## Constants
 
@@ -44,6 +50,6 @@ One replica is sampled per interval, so an environment with N eligible replicas 
 
 ## Helper Functions
 
-- `next_replica` — advances a cursor through replicas sorted by ID, wrapping at the end, so each sweep visits a different replica
+- `next_replica` — advances a cursor through `ReplicaTarget` entries sorted by ID, wrapping at the end, so each sweep visits a different replica
 - `environment_schedule_offset` — derives a stable per-environment offset from a SHA-256 hash of the environment ID
 - `plan_mutation` — plans a `SELECT` statement as the read side of a `ReadThenWritePlan`, and validates that the selection's column types match the target table

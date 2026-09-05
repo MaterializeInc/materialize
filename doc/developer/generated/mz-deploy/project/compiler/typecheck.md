@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/project/compiler/typecheck.rs
-revision: 673fdb9d44
+revision: cd5706442d
 ---
 
 # mz-deploy::project::compiler::typecheck
