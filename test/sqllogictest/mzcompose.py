@@ -1009,6 +1009,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/postgres/pgcrypto/*.slt",
         "test/sqllogictest/introspection/cluster_log_compaction.slt",
         # Depends on unstable dependencies.
+        "test/sqllogictest/interactive_runtime.slt",
         "test/sqllogictest/introspection/relations.slt",
     }
 
@@ -1088,6 +1089,8 @@ def compileSlowSltConfig() -> SltRunConfig:
         # Selects from temporary objects, which cannot be wrapped in the
         # persistent indexed views that --auto-index-selects creates.
         "test/sqllogictest/rename.slt",
+        # Provisions its own cluster with a pinned flag.
+        "test/sqllogictest/interactive_runtime.slt",
         # pg_typeof contains public schema name in views
         "test/sqllogictest/cast.slt",
         "test/sqllogictest/map.slt",
