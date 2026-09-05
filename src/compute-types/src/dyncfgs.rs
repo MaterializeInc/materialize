@@ -278,11 +278,13 @@ pub const CORRECTION_V2_CHAIN_PROPORTIONALITY: Config<f64> = Config::new(
     ParameterScope::Replica,
 );
 
-/// The byte size of chunks in the correction V2 buffer.
+/// The byte size of the correction V2 buffer's staging area.
 pub const CORRECTION_V2_CHUNK_SIZE: Config<usize> = Config::new(
     "compute_correction_v2_chunk_size",
-    8 * 1024,
-    "The byte size of chunks in the correction V2 buffer.",
+    2 * 1024 * 1024,
+    "The byte size of the staging area in the correction V2 buffer, which sets how much it \
+     accumulates before minting a chain (the name predates that meaning; chunk bodies \
+     themselves are fixed at the columnar ship size).",
     ParameterScope::Replica,
 );
 
