@@ -19,6 +19,16 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.40.1
+*Released to Materialize Cloud: 2026-09-05* <br>
+*Released to Materialize Self-Managed: 2026-09-06* <br>
+
+### Improvements {#v26.40.1-improvements}
+- **Smaller Prometheus scrape payloads**: `environmentd` no longer exports the unused `mz_timestamp_difference_for_strict_serializable_ms` metric, which accounted for roughly 7% of one large environment's `/metrics` response, and `mz_time_to_first_row_seconds` drops two sub-millisecond buckets that held 12 observations out of 16.1 million in that same environment.
+
+### Bug Fixes {#v26.40.1-bug-fixes}
+- Fixed per-cluster `mz_time_to_first_row_seconds` series accumulating indefinitely for clusters that had already been dropped, which inflated `/metrics` responses in environments with high cluster churn; these series are now reclaimed when the cluster is dropped.
+
 ## v26.40.0
 *Released to Materialize Cloud: 2026-09-02* <br>
 *Released to Materialize Self-Managed: 2026-09-03* <br>
