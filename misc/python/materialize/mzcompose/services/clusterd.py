@@ -39,6 +39,7 @@ class Clusterd(Service):
         workers: int = 1,
         process_names: list[str] = [],
         mz_service: str = "materialized",
+        unlimited_swap: bool = False,
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
@@ -102,6 +103,13 @@ class Clusterd(Service):
             if cpu:
                 limits["cpus"] = cpu
             config["deploy"] = {"resources": {"limits": limits}}
+
+        # With a memory limit, Docker caps swap at the same amount again by default, so a
+        # container is OOM-killed at twice its limit. Lifting the cap lets it page out as far as
+        # the host's swap goes, which is what a test of an overcommitted replica needs.
+        if unlimited_swap:
+            assert memory, "unlimited_swap needs a memory limit to overcommit"
+            config["memswap_limit"] = -1
 
         config.update(
             {

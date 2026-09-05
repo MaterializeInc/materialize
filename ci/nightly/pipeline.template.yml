@@ -546,6 +546,19 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: bounded-memory
+      - id: bounded-memory-swap
+        label: "Bounded Memory (paging into swap)"
+        sanitizer: skip
+        depends_on: build-x86_64
+        timeout_in_minutes: 150
+        parallelism: 2
+        agents:
+          # The dedicated hosts have swap; the cloud instances do not.
+          queue: hetzner-x86-64-dedi-16cpu-64gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: bounded-memory
+              run: swap
       - id: bounded-memory-search
         topics: [copy-to-s3, iceberg, kafka, mysql, postgres]
         label: "Bounded Memory Search (materialized only)"
