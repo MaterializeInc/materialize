@@ -273,6 +273,55 @@ pub enum PurifiedExportDetails {
     },
 }
 
+/// The existing source a statement drives, and how the statement uses it.
+///
+/// Resolved from the statement rather than from `ResolvedIds`: `ALTER SOURCE`
+/// carries its target as an `UnresolvedItemName` that name resolution never
+/// records.
+#[derive(Debug, Clone, Copy)]
+pub enum StatementSource {
+    Altered(CatalogItemId),
+    Read(CatalogItemId),
+}
+
+impl StatementSource {
+    pub fn id(&self) -> CatalogItemId {
+        match self {
+            StatementSource::Altered(id) | StatementSource::Read(id) => *id,
+        }
+    }
+}
+
+/// Resolves the existing source that `stmt` drives, mirroring how the
+/// purification paths below resolve it themselves.
+///
+/// `None` means the statement drives no such source: it names its connection
+/// outright (`CREATE SOURCE`, `CREATE SINK`), or the name does not resolve to a
+/// source. Purification reports the latter itself, and bails on it before
+/// opening any connection. A [`Statement`] variant that instead reaches
+/// upstream through an existing catalog item needs an arm here, or callers see
+/// no source at all.
+pub fn statement_source(
+    catalog: &impl SessionCatalog,
+    stmt: &Statement<Aug>,
+) -> Option<StatementSource> {
+    let scx = StatementContext::new(None, catalog);
+    match stmt {
+        Statement::AlterSource(stmt) => {
+            let item = scx
+                .resolve_item(RawItemName::Name(stmt.source_name.clone()))
+                .ok()?;
+            (item.item_type() == CatalogItemType::Source)
+                .then(|| StatementSource::Altered(item.id()))
+        }
+        Statement::CreateTableFromSource(stmt) => {
+            let item = scx.get_item_by_resolved_name(&stmt.source).ok()?;
+            (item.item_type() == CatalogItemType::Source).then(|| StatementSource::Read(item.id()))
+        }
+        _ => None,
+    }
+}
+
 /// Purifies a statement, removing any dependencies on external state.
 ///
 /// See the section on [purification](crate#purification) in the crate
