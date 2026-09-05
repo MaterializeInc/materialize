@@ -518,7 +518,7 @@ subtle = "2.6.1"
 supports-color = "3.0.2"
 syn = { version = "2.0.119", features = ["extra-traits", "full", "parsing", "printing"] }
 sysctl = "0.7.1"
-sysinfo = "0.29.11"
+sysinfo = "0.39.6"
 tabled = "0.21.0"
 tar = "0.4.46"
 tempfile = "3.27.0"
