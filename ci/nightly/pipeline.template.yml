@@ -2046,6 +2046,18 @@ steps:
               composition: rqg
               args: ["banking", "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: rqg-char-varchar
+        topics: [postgres]
+        label: "RQG char-varchar workload"
+        depends_on: build-aarch64
+        timeout_in_minutes: 45
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: rqg
+              args: ["char-varchar", "--seed=$BUILDKITE_JOB_ID"]
+
       - id: rqg-left-join-stacks
         topics: [postgres]
         label: "RQG left join stacks workload"
