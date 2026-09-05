@@ -27,14 +27,14 @@ use mz_persist_client::cli::admin::{
 };
 use mz_persist_types::codec_impls::VecU8Schema;
 use mz_persist_types::{Codec, ShardId};
-use mz_repr::GlobalId;
 use mz_repr::optimize::OptimizerFeatures;
+use mz_repr::{GlobalId, RelationVersion};
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 #[derive(
     Debug,
@@ -57,6 +57,8 @@ enum ExpressionType {
 pub struct LocalExpressions {
     pub local_mir: OptimizedMirRelationExpr,
     pub optimizer_features: OptimizerFeatures,
+    /// See [`latest_item_version`].
+    pub item_version: RelationVersion,
 }
 
 /// The data that is cached per catalog object as a result of global optimizations.
@@ -66,6 +68,8 @@ pub struct GlobalExpressions {
     pub physical_plan: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
     pub dataflow_metainfos: DataflowMetainfo<Arc<OptimizerNotice>>,
     pub optimizer_features: OptimizerFeatures,
+    /// See [`latest_item_version`].
+    pub item_version: RelationVersion,
 }
 
 impl GlobalExpressions {
@@ -75,6 +79,25 @@ impl GlobalExpressions {
             .keys()
             .chain(self.physical_plan.index_imports.keys())
     }
+}
+
+/// The version to record with an item's cached expressions: the latest of `versions`.
+///
+/// Entries are keyed by `GlobalId`, but applying a materialized view replacement changes the
+/// item's definition while the item keeps its `GlobalId`s, bumping its [`RelationVersion`]
+/// instead. Recording the version lets [`ExpressionCache::open`] drop entries optimized for an
+/// earlier definition, whichever process wrote them. This also covers the replacement's own
+/// entries, recorded at its root version before the apply makes its id a later version of the
+/// target.
+///
+/// Invalidating or rewriting the entries as part of the apply cannot stand on its own, because
+/// it only reaches entries under the applying process's build version. A 0dt deployment in its
+/// read-only phase caches under its own build version and reads those entries again when it
+/// reboots after promotion.
+pub fn latest_item_version(versions: &BTreeMap<RelationVersion, GlobalId>) -> RelationVersion {
+    versions
+        .last_key_value()
+        .map_or_else(RelationVersion::root, |(version, _)| *version)
 }
 
 #[derive(
@@ -123,13 +146,25 @@ impl DurableCacheCodec for ExpressionCodec {
     }
 }
 
+/// Why [`ExpressionCache::open`] removed entries, for its reconciliation log line.
+#[derive(Debug, Default)]
+struct RemovedEntries {
+    unreadable: usize,
+    dropped_item: usize,
+    item_version_mismatch: usize,
+    dropped_index_import: usize,
+    prior_build_version: usize,
+}
+
 /// Configuration needed to initialize an [`ExpressionCache`].
 #[derive(Debug, Clone)]
 pub struct ExpressionCacheConfig {
     pub build_version: Version,
     pub persist: PersistClient,
     pub shard_id: ShardId,
-    pub current_ids: BTreeSet<GlobalId>,
+    /// Every `GlobalId` that may have entries, mapped to the latest version of the item it
+    /// belongs to.
+    pub current_items: BTreeMap<GlobalId, RelationVersion>,
     pub remove_prior_versions: bool,
     pub compact_shard: bool,
     pub dyncfgs: ConfigSet,
@@ -143,8 +178,9 @@ pub struct ExpressionCache {
 
 impl ExpressionCache {
     /// Creates a new [`ExpressionCache`] and reconciles all entries in current build version.
-    /// Reconciliation will remove all entries that are not in `current_ids` and remove all
-    /// entries that have optimizer features that are not equal to `optimizer_features`.
+    /// Reconciliation removes entries whose id is not in `current_items` or whose recorded
+    /// item version differs from the current one, and global entries that import an index
+    /// that is not in `current_items`.
     ///
     /// If `remove_prior_versions` is `true`, then all previous versions are durably removed from the
     /// cache.
@@ -158,7 +194,7 @@ impl ExpressionCache {
             build_version,
             persist,
             shard_id,
-            current_ids,
+            current_items,
             remove_prior_versions,
             compact_shard,
             dyncfgs,
@@ -177,7 +213,12 @@ impl ExpressionCache {
         const RETRIES: usize = 100;
         for _ in 0..RETRIES {
             match cache
-                .try_open(&current_ids, remove_prior_versions, compact_shard, &dyncfgs)
+                .try_open(
+                    &current_items,
+                    remove_prior_versions,
+                    compact_shard,
+                    &dyncfgs,
+                )
                 .await
             {
                 Ok((local_expressions, global_expressions)) => {
@@ -192,7 +233,7 @@ impl ExpressionCache {
 
     async fn try_open(
         &mut self,
-        current_ids: &BTreeSet<GlobalId>,
+        current_items: &BTreeMap<GlobalId, RelationVersion>,
         remove_prior_versions: bool,
         compact_shard: bool,
         dyncfgs: &ConfigSet,
@@ -206,6 +247,7 @@ impl ExpressionCache {
         let mut keys_to_remove = Vec::new();
         let mut local_expressions = BTreeMap::new();
         let mut global_expressions = BTreeMap::new();
+        let mut removed = RemovedEntries::default();
 
         for (key, expressions) in self.durable_cache.entries_local() {
             let build_version = match key.build_version.parse::<Version>() {
@@ -227,14 +269,26 @@ impl ExpressionCache {
                                 soft_panic_or_log!(
                                     "unable to deserialize local expressions: ({key:?}, {expressions:?}): {err:?}"
                                 );
+                                // An entry this build cannot read is useless. Drop it rather
+                                // than report it on every boot.
+                                removed.unreadable += 1;
+                                keys_to_remove.push((key.clone(), None));
                                 continue;
                             }
                         };
-                        // Remove dropped IDs.
-                        if !current_ids.contains(&key.id) {
-                            keys_to_remove.push((key.clone(), None));
-                        } else {
-                            local_expressions.insert(key.id, expressions);
+                        match current_items.get(&key.id) {
+                            None => {
+                                removed.dropped_item += 1;
+                                keys_to_remove.push((key.clone(), None));
+                            }
+                            // The entry was optimized for another definition of the item.
+                            Some(version) if *version != expressions.item_version => {
+                                removed.item_version_mismatch += 1;
+                                keys_to_remove.push((key.clone(), None));
+                            }
+                            Some(_) => {
+                                local_expressions.insert(key.id, expressions);
+                            }
                         }
                     }
                     ExpressionType::Global => {
@@ -245,32 +299,63 @@ impl ExpressionCache {
                                 soft_panic_or_log!(
                                     "unable to deserialize global expressions: ({key:?}, {expressions:?}): {err:?}"
                                 );
+                                removed.unreadable += 1;
+                                keys_to_remove.push((key.clone(), None));
                                 continue;
                             }
                         };
-                        // Remove dropped IDs and expressions that rely on dropped indexes.
-                        let index_dependencies: BTreeSet<_> =
-                            expressions.index_imports().cloned().collect();
-                        if !current_ids.contains(&key.id)
-                            || !index_dependencies.is_subset(current_ids)
-                        {
-                            keys_to_remove.push((key.clone(), None));
-                        } else {
-                            global_expressions.insert(key.id, expressions);
+                        match current_items.get(&key.id) {
+                            None => {
+                                removed.dropped_item += 1;
+                                keys_to_remove.push((key.clone(), None));
+                            }
+                            Some(version) if *version != expressions.item_version => {
+                                removed.item_version_mismatch += 1;
+                                keys_to_remove.push((key.clone(), None));
+                            }
+                            Some(_)
+                                if !expressions
+                                    .index_imports()
+                                    .all(|id| current_items.contains_key(id)) =>
+                            {
+                                removed.dropped_index_import += 1;
+                                keys_to_remove.push((key.clone(), None));
+                            }
+                            Some(_) => {
+                                global_expressions.insert(key.id, expressions);
+                            }
                         }
                     }
                 }
             } else if remove_prior_versions {
-                // Remove expressions from previous versions.
+                removed.prior_build_version += 1;
                 keys_to_remove.push((key.clone(), None));
             }
         }
-
         let keys_to_remove: Vec<_> = keys_to_remove
             .iter()
             .map(|(key, expressions)| (key, expressions.as_ref()))
             .collect();
         self.durable_cache.try_set_many(&keys_to_remove).await?;
+        let RemovedEntries {
+            unreadable,
+            dropped_item,
+            item_version_mismatch,
+            dropped_index_import,
+            prior_build_version,
+        } = removed;
+        info!(
+            build_version = %self.build_version,
+            remove_prior_versions,
+            kept_local = local_expressions.len(),
+            kept_global = global_expressions.len(),
+            removed_unreadable = unreadable,
+            removed_dropped_item = dropped_item,
+            removed_item_version_mismatch = item_version_mismatch,
+            removed_dropped_index_import = dropped_index_import,
+            removed_prior_build_version = prior_build_version,
+            "reconciled the expression cache"
+        );
 
         if remove_prior_versions {
             // We've purged old versions from the cache; upgrade the backing Persist version as well.
@@ -365,6 +450,63 @@ impl ExpressionCache {
             .collect();
         self.durable_cache.set_many(&entries).await
     }
+
+    /// See [`ExpressionCacheHandle::restamp`].
+    async fn restamp(
+        &mut self,
+        global_id: GlobalId,
+        local_id: GlobalId,
+        item_version: RelationVersion,
+        invalidate_ids: BTreeSet<GlobalId>,
+    ) {
+        let build_version = self.build_version.to_string();
+        let key = |expr_type| CacheKey {
+            id: global_id,
+            build_version: build_version.clone(),
+            expr_type,
+        };
+        let local = self
+            .durable_cache
+            .get_local(&key(ExpressionType::Local))
+            .and_then(|expressions| bincode::deserialize::<LocalExpressions>(expressions).ok())
+            .map(|expressions| {
+                (
+                    local_id,
+                    LocalExpressions {
+                        item_version,
+                        ..expressions
+                    },
+                )
+            });
+        let global = self
+            .durable_cache
+            .get_local(&key(ExpressionType::Global))
+            .and_then(|expressions| bincode::deserialize::<GlobalExpressions>(expressions).ok())
+            .map(|expressions| {
+                (
+                    global_id,
+                    GlobalExpressions {
+                        item_version,
+                        ..expressions
+                    },
+                )
+            });
+        info!(
+            %global_id,
+            %local_id,
+            ?item_version,
+            moved_local = local.is_some(),
+            moved_global = global.is_some(),
+            invalidated = invalidate_ids.len(),
+            "restamped a replacement's expressions"
+        );
+        self.update(
+            local.into_iter().collect(),
+            global.into_iter().collect(),
+            invalidate_ids,
+        )
+        .await
+    }
 }
 
 /// Operations to perform on the cache.
@@ -373,6 +515,14 @@ enum CacheOperation {
     Update {
         new_local_expressions: Vec<(GlobalId, LocalExpressions)>,
         new_global_expressions: Vec<(GlobalId, GlobalExpressions)>,
+        invalidate_ids: BTreeSet<GlobalId>,
+        trigger: trigger::Trigger,
+    },
+    /// See [`ExpressionCache::restamp`].
+    Restamp {
+        global_id: GlobalId,
+        local_id: GlobalId,
+        item_version: RelationVersion,
         invalidate_ids: BTreeSet<GlobalId>,
         trigger: trigger::Trigger,
     },
@@ -414,6 +564,17 @@ impl ExpressionCacheHandle {
                             )
                             .await
                     }
+                    CacheOperation::Restamp {
+                        global_id,
+                        local_id,
+                        item_version,
+                        invalidate_ids,
+                        trigger: _trigger,
+                    } => {
+                        cache
+                            .restamp(global_id, local_id, item_version, invalidate_ids)
+                            .await
+                    }
                 }
             }
         });
@@ -431,6 +592,36 @@ impl ExpressionCacheHandle {
         let op = CacheOperation::Update {
             new_local_expressions,
             new_global_expressions,
+            invalidate_ids,
+            trigger,
+        };
+        // If the send fails, then we must be shutting down.
+        let _ = self.tx.send(op);
+        trigger_rx
+    }
+
+    /// Moves `global_id`'s entries in the current build version to `item_version`, the local one
+    /// under `local_id` and the global one under `global_id`, and removes every other entry of
+    /// `invalidate_ids`. An entry that is unreadable, or missing from this process's view of the
+    /// cache, is skipped and removed, leaving the next open to re-optimize what it would have
+    /// served.
+    ///
+    /// The read and the rewrite are not atomic against another process of the same build
+    /// version. That is safe because ids are never reused: whatever such a process writes under
+    /// `global_id` describes the definition this one is adopting, so at worst an older
+    /// optimization of it survives in place of a newer one.
+    pub fn restamp(
+        &self,
+        global_id: GlobalId,
+        local_id: GlobalId,
+        item_version: RelationVersion,
+        invalidate_ids: BTreeSet<GlobalId>,
+    ) -> impl Future<Output = ()> + use<> {
+        let (trigger, trigger_rx) = trigger::channel();
+        let op = CacheOperation::Restamp {
+            global_id,
+            local_id,
+            item_version,
             invalidate_ids,
             trigger,
         };
@@ -464,27 +655,31 @@ mod tests {
         let persist = PersistClient::new_for_tests().await;
         let shard_id = ShardId::new();
 
-        let mut current_ids = BTreeSet::new();
+        let mut current_items = BTreeMap::new();
         let mut remove_prior_versions = false;
         // Compacting the shard takes too long, so we leave it to integration tests.
         let compact_shard = false;
         let dyncfgs = &mz_persist_client::cfg::all_dyncfgs(ConfigSet::default());
+        let spawn = |build_version: &Version,
+                     current_items: &BTreeMap<GlobalId, RelationVersion>,
+                     remove_prior_versions: bool| {
+            ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
+                build_version: build_version.clone(),
+                persist: persist.clone(),
+                shard_id,
+                current_items: current_items.clone(),
+                remove_prior_versions,
+                compact_shard,
+                dyncfgs: dyncfgs.clone(),
+            })
+        };
 
         let mut next_id = 0;
 
         let (mut local_exps, mut global_exps) = {
             // Open a new empty cache.
             let (cache, local_exprs, global_exprs) =
-                ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
-                    build_version: first_version.clone(),
-                    persist: persist.clone(),
-                    shard_id,
-                    current_ids: current_ids.clone(),
-                    remove_prior_versions,
-                    compact_shard,
-                    dyncfgs: dyncfgs.clone(),
-                })
-                .await;
+                spawn(&first_version, &current_items, remove_prior_versions).await;
             assert_eq!(local_exprs, BTreeMap::new(), "new cache should be empty");
             assert_eq!(global_exprs, BTreeMap::new(), "new cache should be empty");
 
@@ -504,8 +699,12 @@ mod tests {
                     )
                     .await;
 
-                current_ids.insert(id);
-                current_ids.extend(global_exp.index_imports());
+                current_items.insert(id, RelationVersion::root());
+                current_items.extend(
+                    global_exp
+                        .index_imports()
+                        .map(|id| (*id, RelationVersion::root())),
+                );
                 local_exps.insert(id, local_exp);
                 global_exps.insert(id, global_exp);
 
@@ -517,16 +716,7 @@ mod tests {
         {
             // Re-open the cache.
             let (_cache, local_entries, global_entries) =
-                ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
-                    build_version: first_version.clone(),
-                    persist: persist.clone(),
-                    shard_id,
-                    current_ids: current_ids.clone(),
-                    remove_prior_versions,
-                    compact_shard,
-                    dyncfgs: dyncfgs.clone(),
-                })
-                .await;
+                spawn(&first_version, &current_items, remove_prior_versions).await;
             assert_eq!(
                 local_entries, local_exps,
                 "local expression with non-matching optimizer features should be removed during reconciliation"
@@ -540,22 +730,13 @@ mod tests {
         {
             // Simulate dropping an object.
             let id_to_remove = local_exps.keys().next().expect("not empty").clone();
-            current_ids.remove(&id_to_remove);
+            current_items.remove(&id_to_remove);
             let _removed_local_exp = local_exps.remove(&id_to_remove);
             let _removed_global_exp = global_exps.remove(&id_to_remove);
 
             // Re-open the cache.
             let (_cache, local_entries, global_entries) =
-                ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
-                    build_version: first_version.clone(),
-                    persist: persist.clone(),
-                    shard_id,
-                    current_ids: current_ids.clone(),
-                    remove_prior_versions,
-                    compact_shard,
-                    dyncfgs: dyncfgs.clone(),
-                })
-                .await;
+                spawn(&first_version, &current_items, remove_prior_versions).await;
             assert_eq!(
                 local_entries, local_exps,
                 "dropped local objects should be removed during reconciliation"
@@ -564,6 +745,109 @@ mod tests {
                 global_entries, global_exps,
                 "dropped global objects should be removed during reconciliation"
             );
+        }
+
+        {
+            // Simulate applying a replacement: the item keeps its id at a bumped version.
+            let id_to_bump = global_exps.keys().next_back().expect("not empty").clone();
+            current_items.insert(id_to_bump, RelationVersion::root().bump());
+            let _removed_local_exp = local_exps.remove(&id_to_bump);
+            let _removed_global_exp = global_exps.remove(&id_to_bump);
+
+            // Re-open the cache.
+            let (_cache, local_entries, global_entries) =
+                spawn(&first_version, &current_items, remove_prior_versions).await;
+            assert_eq!(
+                local_entries, local_exps,
+                "local expressions of an earlier item version should be removed during reconciliation"
+            );
+            assert_eq!(
+                global_entries, global_exps,
+                "global expressions of an earlier item version should be removed during reconciliation"
+            );
+
+            // The removal is durable: restoring the version does not bring the entries back.
+            current_items.insert(id_to_bump, RelationVersion::root());
+            let (_cache, local_entries, global_entries) =
+                spawn(&first_version, &current_items, remove_prior_versions).await;
+            assert_eq!(
+                local_entries, local_exps,
+                "local expressions of an earlier item version should be durably removed"
+            );
+            assert_eq!(
+                global_entries, global_exps,
+                "global expressions of an earlier item version should be durably removed"
+            );
+        }
+
+        {
+            // Simulate applying a replacement with the cache open: the replacement's entries move
+            // to the target's ids at the bumped version, and the entries of the item's other ids
+            // are removed whether or not the version check would drop them.
+            let target = GlobalId::User(next_id);
+            let replacement = GlobalId::User(next_id + 1);
+            let other = GlobalId::User(next_id + 2);
+            next_id += 3;
+            let (cache, _, _) = spawn(&first_version, &current_items, remove_prior_versions).await;
+            let mut exps = BTreeMap::new();
+            for id in [target, replacement, other] {
+                let local_exp = gen_local_expressions();
+                let global_exp = gen_global_expressions();
+                cache
+                    .update(
+                        vec![(id, local_exp.clone())],
+                        vec![(id, global_exp.clone())],
+                        BTreeSet::new(),
+                    )
+                    .await;
+                current_items.insert(id, RelationVersion::root());
+                exps.insert(id, (local_exp, global_exp));
+            }
+            let new_version = RelationVersion::root().bump();
+            cache
+                .restamp(
+                    replacement,
+                    target,
+                    new_version,
+                    [target, replacement, other].into_iter().collect(),
+                )
+                .await;
+            current_items.insert(target, new_version);
+            current_items.insert(replacement, new_version);
+            let (local_exp, global_exp) = exps.remove(&replacement).expect("inserted above");
+            local_exps.insert(
+                target,
+                LocalExpressions {
+                    item_version: new_version,
+                    ..local_exp
+                },
+            );
+            global_exps.insert(
+                replacement,
+                GlobalExpressions {
+                    item_version: new_version,
+                    ..global_exp
+                },
+            );
+
+            // Re-open the cache.
+            let (_cache, local_entries, global_entries) =
+                spawn(&first_version, &current_items, remove_prior_versions).await;
+            assert_eq!(
+                local_entries, local_exps,
+                "the replacement's local expressions should move to the target's root id"
+            );
+            assert_eq!(
+                global_entries, global_exps,
+                "the replacement's global expressions should stay under its id at the new version"
+            );
+
+            // Leave the later steps the ids they started with.
+            for id in [target, replacement, other] {
+                current_items.remove(&id);
+            }
+            local_exps.remove(&target);
+            global_exps.remove(&replacement);
         }
 
         {
@@ -576,7 +860,7 @@ mod tests {
                 .index_imports()
                 .next()
                 .expect("generator always makes non-empty index imports");
-            current_ids.remove(dependency_to_remove);
+            current_items.remove(dependency_to_remove);
 
             // If the dependency is also tracked in the cache remove it.
             let _removed_local_exp = local_exps.remove(dependency_to_remove);
@@ -589,16 +873,7 @@ mod tests {
 
             // Re-open the cache.
             let (_cache, local_entries, global_entries) =
-                ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
-                    build_version: first_version.clone(),
-                    persist: persist.clone(),
-                    shard_id,
-                    current_ids: current_ids.clone(),
-                    remove_prior_versions,
-                    compact_shard,
-                    dyncfgs: dyncfgs.clone(),
-                })
-                .await;
+                spawn(&first_version, &current_items, remove_prior_versions).await;
             assert_eq!(
                 local_entries, local_exps,
                 "dropped object dependencies should NOT remove local expressions"
@@ -612,16 +887,7 @@ mod tests {
         let (new_gen_local_exps, new_gen_global_exps) = {
             // Open the cache at a new version.
             let (cache, local_entries, global_entries) =
-                ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
-                    build_version: second_version.clone(),
-                    persist: persist.clone(),
-                    shard_id,
-                    current_ids: current_ids.clone(),
-                    remove_prior_versions,
-                    compact_shard,
-                    dyncfgs: dyncfgs.clone(),
-                })
-                .await;
+                spawn(&second_version, &current_items, remove_prior_versions).await;
             assert_eq!(
                 local_entries,
                 BTreeMap::new(),
@@ -649,8 +915,12 @@ mod tests {
                     )
                     .await;
 
-                current_ids.insert(id);
-                current_ids.extend(global_exp.index_imports());
+                current_items.insert(id, RelationVersion::root());
+                current_items.extend(
+                    global_exp
+                        .index_imports()
+                        .map(|id| (*id, RelationVersion::root())),
+                );
                 local_exps.insert(id, local_exp);
                 global_exps.insert(id, global_exp);
 
@@ -662,16 +932,7 @@ mod tests {
         {
             // Re-open the cache at the first version.
             let (_cache, local_entries, global_entries) =
-                ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
-                    build_version: first_version.clone(),
-                    persist: persist.clone(),
-                    shard_id,
-                    current_ids: current_ids.clone(),
-                    remove_prior_versions,
-                    compact_shard,
-                    dyncfgs: dyncfgs.clone(),
-                })
-                .await;
+                spawn(&first_version, &current_items, remove_prior_versions).await;
             assert_eq!(
                 local_entries, local_exps,
                 "Previous version local expressions should still exist"
@@ -686,16 +947,7 @@ mod tests {
             // Open the cache at a new version and clear previous versions.
             remove_prior_versions = true;
             let (_cache, local_entries, global_entries) =
-                ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
-                    build_version: second_version.clone(),
-                    persist: persist.clone(),
-                    shard_id,
-                    current_ids: current_ids.clone(),
-                    remove_prior_versions,
-                    compact_shard,
-                    dyncfgs: dyncfgs.clone(),
-                })
-                .await;
+                spawn(&second_version, &current_items, remove_prior_versions).await;
             assert_eq!(
                 local_entries, new_gen_local_exps,
                 "new version local expressions should be persisted"
@@ -709,16 +961,7 @@ mod tests {
         {
             // Re-open the cache at the first version.
             let (_cache, local_entries, global_entries) =
-                ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
-                    build_version: first_version.clone(),
-                    persist: persist.clone(),
-                    shard_id,
-                    current_ids: current_ids.clone(),
-                    remove_prior_versions,
-                    compact_shard,
-                    dyncfgs: dyncfgs.clone(),
-                })
-                .await;
+                spawn(&first_version, &current_items, remove_prior_versions).await;
             assert_eq!(
                 local_entries,
                 BTreeMap::new(),
@@ -784,6 +1027,7 @@ mod tests {
                 ReprRelationType::new(vec![ReprScalarType::UInt64.nullable(false)]),
             )),
             optimizer_features: Default::default(),
+            item_version: RelationVersion::root(),
         }
     }
 
@@ -819,6 +1063,7 @@ mod tests {
             physical_plan,
             dataflow_metainfos: Default::default(),
             optimizer_features: Default::default(),
+            item_version: RelationVersion::root(),
         }
     }
 }

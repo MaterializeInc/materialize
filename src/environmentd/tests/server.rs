@@ -4590,14 +4590,30 @@ fn test_durable_oids() {
     }
 }
 
-// Applying a materialized view replacement retains the target's existing
-// GlobalIds as prior versions while swapping in the replacement's definition.
-// The durable expression cache is keyed by GlobalId under the invariant that
-// the definition behind a GlobalId never changes, so the apply must invalidate
-// the cached expressions of the retained GlobalIds. If it doesn't, the next
-// bootstrap installs the stale optimized expression for the item, and if the
-// old definition's dependencies have since been dropped, timeline resolution
-// panics with "catalog out of sync" on every startup.
+/// Creates `mv` over `v1`/`t1` plus an unapplied replacement `rp` over `v2`/`t2`.
+/// The inputs retain history so that a restart cannot trip the as-of hard
+/// constraint of CPU-95.
+#[allow(clippy::disallowed_methods)]
+fn create_replacement_fixture(client: &mut postgres::Client) {
+    for stmt in [
+        "CREATE TABLE t1 (a int) WITH (RETAIN HISTORY FOR '1 hour')",
+        "INSERT INTO t1 VALUES (1)",
+        "CREATE VIEW v1 AS SELECT a FROM t1",
+        "CREATE MATERIALIZED VIEW mv AS SELECT a FROM v1",
+        "CREATE TABLE t2 (a int) WITH (RETAIN HISTORY FOR '1 hour')",
+        "INSERT INTO t2 VALUES (2)",
+        "CREATE VIEW v2 AS SELECT a FROM t2",
+        "CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a FROM v2",
+    ] {
+        client.batch_execute(stmt).unwrap();
+    }
+}
+
+// Applying a materialized view replacement changes the definition behind the
+// target's retained GlobalIds (see `mz_catalog::expr_cache::latest_item_version`).
+// If the next bootstrap installs the expressions cached before the apply, and
+// the old definition's dependencies have since been dropped, timeline
+// resolution panics with "catalog out of sync" on every startup.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]
@@ -4608,27 +4624,141 @@ fn test_replacement_materialized_view_invalidates_expression_cache() {
         .with_system_parameter_default(
             "enable_replacement_materialized_views".to_string(),
             "true".to_string(),
+        )
+        .with_system_parameter_default(
+            "enable_logical_compaction_window".to_string(),
+            "true".to_string(),
         );
 
     {
         let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
-        client.batch_execute("CREATE TABLE t1 (a int)").unwrap();
-        client.batch_execute("INSERT INTO t1 VALUES (1)").unwrap();
+        create_replacement_fixture(&mut client);
         client
-            .batch_execute("CREATE VIEW v1 AS SELECT a FROM t1")
+            .batch_execute("ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp")
+            .unwrap();
+        client.batch_execute("DROP VIEW v1").unwrap();
+        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
+        assert_eq!(row.get::<_, i32>(0), 2, "pre-restart");
+    }
+
+    {
+        let server = harness.start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
+        assert_eq!(row.get::<_, i32>(0), 2);
+    }
+}
+
+// The boot after an apply reuses the replacement's cached plan. An index
+// created after the replacement was planned is therefore not adopted at boot,
+// while a re-optimization would read the input through it. That adoption is
+// what the assertion rests on: a cached plan installs with the imports it was
+// planned with.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_replacement_materialized_view_expression_cache_hit_after_apply() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default()
+        .data_directory(data_dir.path())
+        .with_system_parameter_default(
+            "enable_replacement_materialized_views".to_string(),
+            "true".to_string(),
+        )
+        .with_system_parameter_default(
+            "enable_logical_compaction_window".to_string(),
+            "true".to_string(),
+        );
+    // NOTE: user items get the same number as item id and global id, so the
+    // dataflow ids of `mz_compute_dependencies` join to the catalog ids.
+    let dependencies_query = "SELECT count(*), coalesce(bool_or(i.name = 't2_idx'), false) \
+        FROM mz_internal.mz_compute_dependencies d \
+        JOIN mz_catalog.mz_materialized_views mv ON d.object_id = mv.id \
+        LEFT JOIN mz_catalog.mz_indexes i ON d.dependency_id = i.id \
+        WHERE mv.name = 'mv'";
+    let reads_through_index = |client: &mut postgres::Client| -> bool {
+        Retry::default()
+            .max_duration(Duration::from_secs(60))
+            .clamp_backoff(Duration::from_secs(1))
+            .retry(|_| {
+                // An empty result means the dependencies are not recorded
+                // yet, not that the view reads no index.
+                let row = client.query_one(dependencies_query, &[]).unwrap();
+                let count: i64 = row.get(0);
+                if count == 0 {
+                    Err("no dependencies recorded yet")
+                } else {
+                    Ok(row.get::<_, bool>(1))
+                }
+            })
+            .unwrap()
+    };
+
+    {
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        create_replacement_fixture(&mut client);
+        client
+            .batch_execute("CREATE INDEX t2_idx ON t2 (a)")
             .unwrap();
         client
-            .batch_execute("CREATE MATERIALIZED VIEW mv AS SELECT a FROM v1")
+            .batch_execute("ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp")
             .unwrap();
-        client.batch_execute("CREATE TABLE t2 (a int)").unwrap();
-        client.batch_execute("INSERT INTO t2 VALUES (2)").unwrap();
-        client
-            .batch_execute("CREATE VIEW v2 AS SELECT a FROM t2")
-            .unwrap();
-        client
-            .batch_execute("CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a FROM v2")
-            .unwrap();
+        assert!(
+            !reads_through_index(&mut client),
+            "the replacement was planned before the index"
+        );
+    }
+
+    {
+        let server = harness.start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
+        assert_eq!(row.get::<_, i32>(0), 2);
+        assert!(
+            !reads_through_index(&mut client),
+            "the boot should reuse the cached plan"
+        );
+    }
+}
+
+// A process that applies the replacement with the expression cache disabled
+// neither reads nor invalidates the entries the first process wrote, standing
+// in for a writer the apply-time invalidation cannot reach (see
+// `mz_catalog::expr_cache::latest_item_version`). The next boot with the cache
+// enabled must not use the entries recorded before the apply.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_replacement_materialized_view_stale_expression_cache_entry_dropped_on_open() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default()
+        .data_directory(data_dir.path())
+        .with_system_parameter_default(
+            "enable_replacement_materialized_views".to_string(),
+            "true".to_string(),
+        )
+        .with_system_parameter_default(
+            "enable_logical_compaction_window".to_string(),
+            "true".to_string(),
+        );
+
+    {
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        create_replacement_fixture(&mut client);
+    }
+
+    {
+        let server = harness
+            .clone()
+            .with_system_parameter_default(
+                "enable_expression_cache".to_string(),
+                "false".to_string(),
+            )
+            .start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
         client
             .batch_execute("ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp")
             .unwrap();
