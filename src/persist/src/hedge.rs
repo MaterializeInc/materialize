@@ -46,8 +46,10 @@
 //! connection-poisoning log lines), because the hung request is cancelled
 //! before they trigger. The `hedges_won` counter is the replacement signal.
 
-use std::sync::Arc;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -57,7 +59,7 @@ use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastLossy;
 use mz_ore::task::AbortOnDropHandle;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::location::{BLOB_GET_LIVENESS_KEY, Blob, BlobMetadata, ExternalError};
 use crate::metrics::BlobHedgeMetrics;
@@ -97,9 +99,10 @@ pub(crate) const BLOB_HEDGED_GET_BUDGET_RATIO: Config<f64> = Config::new(
     ParameterScope::Environment,
 );
 
-// NOTE: the warmer only runs while hedging is enabled, so `enabled` stops
-// its traffic too. Setting this knob to 0 additionally stops the warmer
-// while keeping hedging on, which is why it must be changeable at runtime.
+// NOTE: the warmer, and any retries of a failed sibling open, only run while
+// hedging is enabled, so `enabled` stops the sibling's traffic too. Setting
+// this knob to 0 additionally stops the warmer while keeping hedging on,
+// which is why it must be changeable at runtime.
 pub(crate) const BLOB_HEDGED_GET_WARM_INTERVAL: Config<Duration> = Config::new(
     "persist_blob_hedged_get_warm_interval",
     Duration::from_secs(20),
@@ -121,6 +124,12 @@ const HEDGE_COST_MICRO_TOKENS: u64 = 1_000_000;
 /// `budget_ratio = 0` still permits ~32 banked hedges before draining. It is
 /// not an instant stop, `enabled` is.
 const BUDGET_BURST_MICRO_TOKENS: u64 = 32 * HEDGE_COST_MICRO_TOKENS;
+
+/// Backoff between sibling open attempts. A failed open means the blob store
+/// or the credential chain was unhealthy, which heals on the order of seconds
+/// to minutes, so a one-minute ceiling loses little.
+const SIBLING_OPEN_RETRY_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
+const SIBLING_OPEN_RETRY_MAX_BACKOFF: Duration = Duration::from_secs(60);
 
 /// Why a hedge was not fired for a get that exceeded the delay.
 enum HedgeRefused {
@@ -210,22 +219,41 @@ pub enum HedgeSibling {
     /// would observe a different store): hedge on the primary instance
     /// itself, with nothing to warm.
     SharedWithPrimary,
-    /// Opening the sibling failed: hedging is unavailable for this process
-    /// lifetime.
+    /// Opening the sibling failed. Hedging stays unavailable until a later
+    /// attempt succeeds (see [HedgedBlob::new_arming]).
     Unavailable,
 }
+
+/// Opens the sibling handle for a store. A [HedgedBlob] built with
+/// [HedgedBlob::new_arming] calls it until it returns something other than
+/// [HedgeSibling::Unavailable]. See [crate::cfg::open_hedge_sibling].
+pub type HedgeSiblingOpener =
+    Box<dyn Fn() -> Pin<Box<dyn Future<Output = HedgeSibling> + Send>> + Send>;
 
 /// A [Blob] decorator that hedges slow `get` requests, per the module docs.
 #[derive(Debug)]
 pub struct HedgedBlob {
     primary: Arc<dyn Blob>,
-    /// The handle hedge requests run on. `None` = hedging unavailable,
-    /// visible as `hedges_skipped{reason="unavailable"}`.
-    hedge: Option<Arc<dyn Blob>>,
+    /// The handle hedge requests run on. Empty = hedging unavailable,
+    /// visible as `hedges_skipped{reason="unavailable"}`. Shared with the
+    /// sibling task, which installs the handle once the sibling is open.
+    hedge: Arc<OnceLock<Arc<dyn Blob>>>,
     cfg: Arc<ConfigSet>,
     metrics: BlobHedgeMetrics,
     budget: HedgeBudget,
-    _warmer: Option<AbortOnDropHandle<()>>,
+    /// Opens the sibling and keeps it warm. Absent when there is nothing to
+    /// warm: a sibling that is the primary itself, or none at all.
+    _sibling_task: Option<AbortOnDropHandle<()>>,
+}
+
+/// How often an idle sibling loop re-reads the dyncfgs, so a flip takes
+/// effect without a restart: the warm interval, or its default while
+/// warming is set to 0.
+fn recheck_interval(cfg: &ConfigSet) -> Duration {
+    match BLOB_HEDGED_GET_WARM_INTERVAL.get(cfg) {
+        Duration::ZERO => *BLOB_HEDGED_GET_WARM_INTERVAL.default(),
+        interval => interval,
+    }
 }
 
 /// Keeps the sibling's connection pool warm with periodic concurrent
@@ -235,90 +263,174 @@ pub struct HedgedBlob {
 /// and the sibling sees no traffic at all, so a freshly enabled flag can
 /// find a cold pool for up to one warm interval plus a handshake. Hedges
 /// in that window are merely no better than no hedge, never worse.
-fn spawn_warmer(
-    hedge: Arc<dyn Blob>,
+async fn warm(hedge: Arc<dyn Blob>, cfg: Arc<ConfigSet>, metrics: BlobHedgeMetrics) {
+    loop {
+        let interval = BLOB_HEDGED_GET_WARM_INTERVAL.get(&cfg);
+        if !BLOB_HEDGED_GET_ENABLED.get(&cfg) || interval == Duration::ZERO {
+            // Nothing to keep warm.
+            tokio::time::sleep(recheck_interval(&cfg)).await;
+            continue;
+        }
+        // Ping first, sleep second, so the pool is warm from process
+        // start. As many concurrent pings as hedges can run at once
+        // (HTTP/1.1 allows one in-flight request per connection, so N
+        // concurrent pings force N warm sockets).
+        let start = Instant::now();
+        let sockets = BLOB_HEDGED_GET_MAX_CONCURRENT.get(&cfg);
+        let pings = (0..sockets).map(|_| hedge.get(BLOB_GET_LIVENESS_KEY));
+        let pings = futures_util::future::join_all(pings);
+        // Bound the cycle: an unbounded hung ping would block warming
+        // past hyper's pool idle eviction, going cold exactly during the
+        // correlated events warming exists for. The timeout also drops
+        // the hung request, which closes its dying socket.
+        match tokio::time::timeout(interval, pings).await {
+            Ok(results) if results.iter().all(|r| r.is_ok()) => {
+                metrics.rtt_latency.set(start.elapsed().as_secs_f64());
+            }
+            Ok(_) | Err(_) => {
+                // A failing or hung warm path means hedges cannot be
+                // trusted to be fast. Surface it, and do not update the
+                // gauge: a fast failure must not report as a fast
+                // healthy path.
+                metrics.warm_errors.inc();
+            }
+        }
+        tokio::time::sleep(interval).await;
+    }
+}
+
+/// Installs the sibling into `slot` once `opener` yields one, then keeps it
+/// warm. See [HedgedBlob::new_arming] for the retry contract.
+async fn arm_then_warm(
+    primary: Arc<dyn Blob>,
+    opener: HedgeSiblingOpener,
+    slot: Arc<OnceLock<Arc<dyn Blob>>>,
     cfg: Arc<ConfigSet>,
     metrics: BlobHedgeMetrics,
-) -> AbortOnDropHandle<()> {
-    mz_ore::task::spawn(|| "persist::blob_hedge_warmer", async move {
-        loop {
-            let interval = BLOB_HEDGED_GET_WARM_INTERVAL.get(&cfg);
-            if !BLOB_HEDGED_GET_ENABLED.get(&cfg) || interval == Duration::ZERO {
-                // Nothing to keep warm. Re-check at the configured cadence
-                // (or its default while warming is set to 0), so a dyncfg
-                // flip takes effect without a restart.
-                let recheck = if interval == Duration::ZERO {
-                    *BLOB_HEDGED_GET_WARM_INTERVAL.default()
-                } else {
-                    interval
-                };
-                tokio::time::sleep(recheck).await;
-                continue;
+) {
+    let mut backoff = SIBLING_OPEN_RETRY_INITIAL_BACKOFF;
+    let mut attempts = 0u64;
+    let hedge = loop {
+        attempts += 1;
+        match opener().await {
+            HedgeSibling::Isolated(hedge) => break hedge,
+            HedgeSibling::SharedWithPrimary => {
+                install(&slot, &metrics, primary);
+                return;
             }
-            // Ping first, sleep second, so the pool is warm from process
-            // start. As many concurrent pings as hedges can run at once
-            // (HTTP/1.1 allows one in-flight request per connection, so N
-            // concurrent pings force N warm sockets).
-            let start = Instant::now();
-            let sockets = BLOB_HEDGED_GET_MAX_CONCURRENT.get(&cfg);
-            let pings = (0..sockets).map(|_| hedge.get(BLOB_GET_LIVENESS_KEY));
-            let pings = futures_util::future::join_all(pings);
-            // Bound the cycle: an unbounded hung ping would block warming
-            // past hyper's pool idle eviction, going cold exactly during the
-            // correlated events warming exists for. The timeout also drops
-            // the hung request, which closes its dying socket.
-            match tokio::time::timeout(interval, pings).await {
-                Ok(results) if results.iter().all(|r| r.is_ok()) => {
-                    metrics.rtt_latency.set(start.elapsed().as_secs_f64());
-                }
-                Ok(_) | Err(_) => {
-                    // A failing or hung warm path means hedges cannot be
-                    // trusted to be fast. Surface it, and do not update the
-                    // gauge: a fast failure must not report as a fast
-                    // healthy path.
-                    metrics.warm_errors.inc();
+            // The opener logs the cause of each failure.
+            HedgeSibling::Unavailable => {
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(SIBLING_OPEN_RETRY_MAX_BACKOFF);
+                // Retries are sibling traffic too, so `enabled` stops them
+                // like it stops the warmer. The first attempt above runs
+                // regardless, which is what keeps enablement restart-free.
+                while !BLOB_HEDGED_GET_ENABLED.get(&cfg) {
+                    tokio::time::sleep(recheck_interval(&cfg)).await;
                 }
             }
-            tokio::time::sleep(interval).await;
         }
-    })
-    .abort_on_drop()
+    };
+    if attempts > 1 {
+        info!(
+            attempts,
+            "hedged blob gets armed after retrying the sibling open"
+        );
+    }
+    install(&slot, &metrics, Arc::clone(&hedge));
+    warm(hedge, cfg, metrics).await
+}
+
+fn install(slot: &OnceLock<Arc<dyn Blob>>, metrics: &BlobHedgeMetrics, hedge: Arc<dyn Blob>) {
+    if slot.set(hedge).is_err() {
+        mz_ore::soft_panic_or_log!("hedge sibling installed twice");
+    }
+    metrics.armed.set(1);
 }
 
 impl HedgedBlob {
-    /// Returns a new [HedgedBlob].
+    /// Returns a new [HedgedBlob] from an already-open sibling, for tests that
+    /// need arming to be synchronous.
     ///
     /// Must be called from within a tokio runtime: it spawns the sibling
     /// warming task.
-    pub fn new(
+    #[cfg(test)]
+    pub(crate) fn new(
         primary: Arc<dyn Blob>,
         sibling: HedgeSibling,
         cfg: Arc<ConfigSet>,
         metrics: BlobHedgeMetrics,
     ) -> HedgedBlob {
-        let (hedge, warmer) = match sibling {
+        let slot = Arc::new(OnceLock::new());
+        let task = match sibling {
             HedgeSibling::Isolated(h) => {
-                let warmer = spawn_warmer(Arc::clone(&h), Arc::clone(&cfg), metrics.clone());
-                (Some(h), Some(warmer))
+                install(&slot, &metrics, Arc::clone(&h));
+                Some(
+                    mz_ore::task::spawn(
+                        || "persist::blob_hedge_warmer",
+                        warm(h, Arc::clone(&cfg), metrics.clone()),
+                    )
+                    .abort_on_drop(),
+                )
             }
-            HedgeSibling::SharedWithPrimary => (Some(Arc::clone(&primary)), None),
-            HedgeSibling::Unavailable => (None, None),
+            HedgeSibling::SharedWithPrimary => {
+                install(&slot, &metrics, Arc::clone(&primary));
+                None
+            }
+            HedgeSibling::Unavailable => None,
         };
-        metrics.armed.set(i64::from(hedge.is_some()));
         HedgedBlob {
             primary,
-            hedge,
+            hedge: slot,
             cfg,
             metrics,
             budget: HedgeBudget::new(),
-            _warmer: warmer,
+            _sibling_task: task,
+        }
+    }
+
+    /// Returns a new [HedgedBlob] whose sibling is opened in the background.
+    ///
+    /// `opener` is called from a spawned task, so this constructor never waits
+    /// on the blob store. While it returns [HedgeSibling::Unavailable] the task
+    /// retries with backoff, but only while hedging is enabled, so a disabled
+    /// process makes exactly one attempt until the flag flips. Until an attempt
+    /// succeeds gets are not hedged, visible as
+    /// `hedges_skipped{reason="unavailable"}` and `hedge_armed` at 0.
+    ///
+    /// Must be called from within a tokio runtime.
+    pub fn new_arming(
+        primary: Arc<dyn Blob>,
+        opener: HedgeSiblingOpener,
+        cfg: Arc<ConfigSet>,
+        metrics: BlobHedgeMetrics,
+    ) -> HedgedBlob {
+        let slot: Arc<OnceLock<Arc<dyn Blob>>> = Arc::new(OnceLock::new());
+        let task = mz_ore::task::spawn(
+            || "persist::blob_hedge_sibling",
+            arm_then_warm(
+                Arc::clone(&primary),
+                opener,
+                Arc::clone(&slot),
+                Arc::clone(&cfg),
+                metrics.clone(),
+            ),
+        )
+        .abort_on_drop();
+        HedgedBlob {
+            primary,
+            hedge: slot,
+            cfg,
+            metrics,
+            budget: HedgeBudget::new(),
+            _sibling_task: Some(task),
         }
     }
 
     /// Returns the sibling handle and a budget guard, or `None` (having
     /// already recorded why) if this get must not hedge.
     fn admit(&self) -> Option<(&Arc<dyn Blob>, HedgeGuard<'_>)> {
-        let Some(hedge_blob) = &self.hedge else {
+        let Some(hedge_blob) = self.hedge.get() else {
             self.metrics.skipped_unavailable.inc();
             return None;
         };
@@ -806,10 +918,110 @@ mod tests {
             test_cfg(|_| {}),
             metrics(),
         );
-        assert!(blob._warmer.is_none());
+        assert!(blob._sibling_task.is_none());
         assert_eq!(blob.metrics.armed.get(), 1);
         tokio::time::sleep(SECS(60)).await;
         assert_eq!(primary.gets.load(Ordering::SeqCst), 0);
+    }
+
+    /// An opener that reports the sibling unavailable `failures` times before
+    /// returning `hedge`, counting attempts.
+    fn flaky_opener(
+        hedge: &Arc<TestBlob>,
+        failures: usize,
+        attempts: &Arc<AtomicUsize>,
+    ) -> HedgeSiblingOpener {
+        let hedge: Arc<dyn Blob> = Arc::<TestBlob>::clone(hedge);
+        let attempts = Arc::clone(attempts);
+        Box::new(move || {
+            let hedge = Arc::clone(&hedge);
+            let attempts = Arc::clone(&attempts);
+            Box::pin(async move {
+                if attempts.fetch_add(1, Ordering::SeqCst) < failures {
+                    HedgeSibling::Unavailable
+                } else {
+                    HedgeSibling::Isolated(hedge)
+                }
+            })
+        })
+    }
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn arming_retries_until_sibling_opens() {
+        let primary = TestBlob::new(SECS(3), Ok(Some("primary")));
+        let hedge = TestBlob::new(SECS(0), Ok(Some("hedge")));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let cfg = test_cfg(|_| {});
+        let sockets = BLOB_HEDGED_GET_MAX_CONCURRENT.get(&cfg);
+        let primary_blob: Arc<dyn Blob> = Arc::<TestBlob>::clone(&primary);
+        let blob = HedgedBlob::new_arming(
+            primary_blob,
+            flaky_opener(&hedge, 3, &attempts),
+            cfg,
+            metrics(),
+        );
+        tokio::task::yield_now().await;
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(blob.metrics.armed.get(), 0);
+        // Unarmed: a slow get is not hedged, and says so.
+        let res = blob.get("k").await.unwrap().expect("some");
+        assert_eq!(res.into_contiguous(), b"primary".to_vec());
+        assert_eq!(blob.metrics.skipped_unavailable.get(), 1);
+        // Backoff 1s, 2s, 4s: the fourth attempt succeeds at 7s, and the get
+        // above already spent 3s of it.
+        tokio::time::sleep(SECS(5)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(attempts.load(Ordering::SeqCst), 4);
+        assert_eq!(blob.metrics.armed.get(), 1);
+        // Armed: the same slow get is hedged and the hedge wins.
+        let res = blob.get("k").await.unwrap().expect("some");
+        assert_eq!(res.into_contiguous(), b"hedge".to_vec());
+        assert_eq!(blob.metrics.won.get(), 1);
+        // The arming task continued into the warm loop: one ping per socket
+        // at install time, plus the winning hedge.
+        assert_eq!(hedge.gets.load(Ordering::SeqCst), sockets + 1);
+    }
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn arming_shared_with_primary() {
+        let primary = TestBlob::new(SECS(0), Ok(None));
+        let primary_blob: Arc<dyn Blob> = Arc::<TestBlob>::clone(&primary);
+        let opener: HedgeSiblingOpener =
+            Box::new(|| Box::pin(async { HedgeSibling::SharedWithPrimary }));
+        let blob = HedgedBlob::new_arming(primary_blob, opener, test_cfg(|_| {}), metrics());
+        tokio::task::yield_now().await;
+        assert_eq!(blob.metrics.armed.get(), 1);
+        // Nothing to warm: the primary sees no pings.
+        tokio::time::sleep(SECS(60)).await;
+        assert_eq!(primary.gets.load(Ordering::SeqCst), 0);
+    }
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn arming_retries_only_while_enabled() {
+        let primary = TestBlob::new(SECS(0), Ok(None));
+        let hedge = TestBlob::new(SECS(0), Ok(None));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let cfg = test_cfg(|u| u.add(&BLOB_HEDGED_GET_ENABLED, false));
+        let primary_blob: Arc<dyn Blob> = Arc::<TestBlob>::clone(&primary);
+        let blob = HedgedBlob::new_arming(
+            primary_blob,
+            flaky_opener(&hedge, 1, &attempts),
+            Arc::clone(&cfg),
+            metrics(),
+        );
+        // Disabled: the first attempt runs and fails, then nothing.
+        tokio::time::sleep(SECS(600)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(blob.metrics.armed.get(), 0);
+        // Enabling at runtime resumes the retries within one recheck.
+        let mut updates = ConfigUpdates::default();
+        updates.add(&BLOB_HEDGED_GET_ENABLED, true);
+        updates.apply(&cfg);
+        tokio::time::sleep(*BLOB_HEDGED_GET_WARM_INTERVAL.default() + SECS(1)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(blob.metrics.armed.get(), 1);
     }
 
     /// A test [Blob] that delays gets so the hedge (delay 0) fires and wins
