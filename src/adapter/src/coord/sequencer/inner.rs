@@ -25,6 +25,7 @@ use mz_adapter_types::dyncfgs::{
     ENABLE_EXPRESSION_CACHE, ENABLE_PASSWORD_AUTH, FRONTEND_READ_THEN_WRITE,
     READ_THEN_WRITE_MAX_DEPENDENCIES,
 };
+use mz_catalog::expr_cache::latest_item_version;
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
@@ -38,6 +39,7 @@ use mz_expr::{
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::future::OreFutureExt;
+use mz_ore::soft_panic_or_log;
 use mz_ore::task::{self, JoinHandle, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{assert_none, instrument};
@@ -5052,26 +5054,53 @@ impl Coordinator {
             "finishing materialized view replacement application",
         );
 
-        // Applying a replacement changes the target's definition while it
-        // keeps its GlobalIds, so the cached expressions under those ids are
-        // stale. Entries record the item's version and `ExpressionCache::open`
-        // drops them on the next boot; invalidating here only reclaims them
-        // eagerly.
-        let invalidate_ids = self.catalog().get_entry(&id).global_ids().collect();
-        self.catalog()
-            .update_expression_cache(Vec::new(), Vec::new(), invalidate_ids)
-            .await;
-
         let ops = vec![catalog::Op::AlterMaterializedViewApplyReplacement { id, replacement_id }];
         match self
             .catalog_transact(Some(ctx.ctx().session_mut()), ops)
             .await
         {
-            Ok(()) => ctx.retire(Ok(ExecuteResponse::AlteredObject(
-                ObjectType::MaterializedView,
-            ))),
+            Ok(()) => {
+                // The surviving item carries the replacement's item id and the
+                // target's global ids.
+                self.cache_applied_replacement_expressions(replacement_id)
+                    .await;
+                ctx.retire(Ok(ExecuteResponse::AlteredObject(
+                    ObjectType::MaterializedView,
+                )))
+            }
             Err(err) => ctx.retire(Err(err)),
         }
+    }
+
+    /// Moves the replacement's expression cache entries, which describe the
+    /// definition the surviving item holds now, to the item's ids at its new
+    /// version, and removes the item's other entries.
+    ///
+    /// The moved entries keep the optimizer features that produced them, so a
+    /// feature change between the replacement's creation and the apply makes
+    /// the next boot re-optimize the view, as for any other item.
+    ///
+    /// Nothing depends on the write landing: entries recorded before the apply
+    /// carry the old version, so the next open drops them either way.
+    async fn cache_applied_replacement_expressions(&self, id: CatalogItemId) {
+        let entry = self.catalog().get_entry(&id);
+        let Some(mv) = entry.materialized_view() else {
+            soft_panic_or_log!("replacement applied to a non-materialized-view item: {id}");
+            return;
+        };
+        // Local entries are keyed by the durable item's `global_id`, the root
+        // version's. Global entries are keyed by the writing id, which is the
+        // replacement's own id now.
+        self.catalog()
+            .restamp_expression_cache(
+                mv.global_id_writes(),
+                *mv.collections
+                    .get(&RelationVersion::root())
+                    .expect("materialized views have a root version"),
+                latest_item_version(&mv.collections),
+                entry.global_ids().collect(),
+            )
+            .await;
     }
 
     pub(super) async fn statistics_oracle(
