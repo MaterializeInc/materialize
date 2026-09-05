@@ -17,10 +17,11 @@ use aws_config::SdkConfig;
 use aws_sdk_secretsmanager::Client;
 use aws_sdk_secretsmanager::config::Builder as SecretsManagerConfigBuilder;
 use aws_sdk_secretsmanager::error::SdkError;
+use aws_sdk_secretsmanager::operation::get_secret_value::GetSecretValueError;
 use aws_sdk_secretsmanager::primitives::Blob;
 use aws_sdk_secretsmanager::types::{Filter, FilterNameStringType, Tag};
 use mz_repr::CatalogItemId;
-use mz_secrets::{SecretsController, SecretsReader};
+use mz_secrets::{SecretsController, SecretsReader, validate_internal_secret_name};
 use tracing::info;
 use uuid::Uuid;
 
@@ -64,16 +65,14 @@ impl AwsSecretsController {
             .map(|(key, value)| Tag::builder().key(key).value(value).build())
             .collect()
     }
-}
 
-#[async_trait]
-impl SecretsController for AwsSecretsController {
-    async fn ensure(&self, id: CatalogItemId, contents: &[u8]) -> Result<(), anyhow::Error> {
+    /// Creates or updates the secret with the given full name.
+    async fn ensure_by_name(&self, name: String, contents: &[u8]) -> Result<(), anyhow::Error> {
         match self
             .client
             .client
             .create_secret()
-            .name(self.client.secret_name(id))
+            .name(&name)
             .kms_key_id(self.kms_key_alias.clone())
             .secret_binary(Blob::new(contents))
             .set_tags(Some(self.tags()))
@@ -85,7 +84,7 @@ impl SecretsController for AwsSecretsController {
                 self.client
                     .client
                     .put_secret_value()
-                    .secret_id(self.client.secret_name(id))
+                    .secret_id(&name)
                     .secret_binary(Blob::new(contents))
                     .send()
                     .await?;
@@ -95,12 +94,14 @@ impl SecretsController for AwsSecretsController {
         Ok(())
     }
 
-    async fn delete(&self, id: CatalogItemId) -> Result<(), anyhow::Error> {
+    /// Deletes the secret with the given full name. Deleting a nonexistent secret is not an
+    /// error.
+    async fn delete_by_name(&self, name: String) -> Result<(), anyhow::Error> {
         match self
             .client
             .client
             .delete_secret()
-            .secret_id(self.client.secret_name(id))
+            .secret_id(name)
             .force_delete_without_recovery(true)
             .send()
             .await
@@ -108,10 +109,31 @@ impl SecretsController for AwsSecretsController {
             Ok(_) => Ok(()),
             // Secret is already deleted.
             Err(SdkError::ServiceError(e)) if e.err().is_resource_not_found_exception() => Ok(()),
-            Err(e) => {
-                return Err(e.into());
-            }
+            Err(e) => Err(e.into()),
         }
+    }
+}
+
+#[async_trait]
+impl SecretsController for AwsSecretsController {
+    async fn ensure(&self, id: CatalogItemId, contents: &[u8]) -> Result<(), anyhow::Error> {
+        self.ensure_by_name(self.client.secret_name(id), contents)
+            .await
+    }
+
+    async fn ensure_internal(&self, name: &str, contents: &[u8]) -> Result<(), anyhow::Error> {
+        validate_internal_secret_name(name)?;
+        self.ensure_by_name(self.client.internal_secret_name(name), contents)
+            .await
+    }
+
+    async fn delete(&self, id: CatalogItemId) -> Result<(), anyhow::Error> {
+        self.delete_by_name(self.client.secret_name(id)).await
+    }
+
+    async fn delete_internal(&self, name: &str) -> Result<(), anyhow::Error> {
+        self.delete_by_name(self.client.internal_secret_name(name))
+            .await
     }
 
     async fn list(&self) -> Result<Vec<CatalogItemId>, anyhow::Error> {
@@ -203,23 +225,30 @@ impl AwsSecretsClient {
         format!("{}{}", self.secret_name_prefix, id)
     }
 
+    /// The AWS secret name for an internal secret.
+    ///
+    /// The `internal-` infix keeps internal secrets disjoint from user secrets, whose
+    /// unprefixed names are numeric catalog item IDs, and excludes them from
+    /// [`SecretsController::list`], whose parser only recognizes ID names.
+    fn internal_secret_name(&self, name: &str) -> String {
+        format!("{}internal-{}", self.secret_name_prefix, name)
+    }
+
     fn id_from_secret_name(&self, name: &str) -> Option<CatalogItemId> {
         name.strip_prefix(&self.secret_name_prefix)
             .and_then(|id| id.parse().ok())
     }
-}
 
-#[async_trait]
-impl SecretsReader for AwsSecretsClient {
-    async fn read(&self, id: CatalogItemId) -> Result<Vec<u8>, anyhow::Error> {
+    /// Reads the secret with the given full name.
+    async fn read_by_name(&self, name: String) -> Result<Vec<u8>, anyhow::Error> {
         let op_id = Uuid::new_v4();
-        info!(secret_id = %id, %op_id, "reading secret from AWS");
+        info!(secret_name = %name, %op_id, "reading secret from AWS");
         let start = Instant::now();
         let secret = async {
             Ok(self
                 .client
                 .get_secret_value()
-                .secret_id(self.secret_name(id))
+                .secret_id(name)
                 .send()
                 .await?
                 .secret_binary()
@@ -230,5 +259,24 @@ impl SecretsReader for AwsSecretsClient {
         .await;
         info!(%op_id, success = %secret.is_ok(), "secret read in {:?}", start.elapsed());
         secret
+    }
+}
+
+#[async_trait]
+impl SecretsReader for AwsSecretsClient {
+    async fn read(&self, id: CatalogItemId) -> Result<Vec<u8>, anyhow::Error> {
+        self.read_by_name(self.secret_name(id)).await
+    }
+
+    async fn read_internal(&self, name: &str) -> Result<Option<Vec<u8>>, anyhow::Error> {
+        match self.read_by_name(self.internal_secret_name(name)).await {
+            Ok(contents) => Ok(Some(contents)),
+            Err(e) => match e.downcast_ref::<SdkError<GetSecretValueError>>() {
+                Some(SdkError::ServiceError(e)) if e.err().is_resource_not_found_exception() => {
+                    Ok(None)
+                }
+                _ => Err(e),
+            },
+        }
     }
 }
