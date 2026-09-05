@@ -42,6 +42,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Id::Local;
 use crate::explain::{HumanizedExpr, HumanizerMode};
+use crate::predicate::Predicate;
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::row::{RowCollection, RowCollectionIter};
 use crate::scalar::columns::Columns;
@@ -202,7 +203,7 @@ pub enum MirRelationExpr {
         /// The source collection.
         input: Box<MirRelationExpr>,
         /// Predicates, each of which must be true.
-        predicates: Vec<MirScalarExpr>,
+        predicates: Vec<Predicate>,
     },
     /// Join several collections, where some columns must be equal.
     ///
@@ -474,7 +475,7 @@ impl MirRelationExpr {
 
                 // Set as nonnull any columns where null values would cause
                 // any predicate to evaluate to null.
-                for column in non_nullable_columns(predicates) {
+                for column in non_nullable_columns_of(predicates) {
                     result[column].nullable = false;
                 }
                 result
@@ -703,7 +704,7 @@ impl MirRelationExpr {
                     // of the lesser.
                     let mut union_find = Vec::new();
 
-                    for expr in predicates.iter() {
+                    for expr in predicates.iter().map(|p| &p.expr) {
                         if let MirScalarExpr::CallBinary {
                             func: crate::BinaryFunc::Eq(_),
                             expr1,
@@ -1197,9 +1198,18 @@ impl MirRelationExpr {
     }
 
     /// Retain only the rows satisfying each of several predicates.
-    pub fn filter<I>(mut self, predicates: I) -> Self
+    pub fn filter<I>(self, predicates: I) -> Self
     where
         I: IntoIterator<Item = MirScalarExpr>,
+    {
+        self.filter_leveled(predicates.into_iter().map(Predicate::unconstrained))
+    }
+
+    /// Retains rows satisfying all `predicates`, each carrying its own security
+    /// level.
+    pub fn filter_leveled<I>(mut self, predicates: I) -> Self
+    where
+        I: IntoIterator<Item = Predicate>,
     {
         // Extract existing predicates
         let mut new_predicates = if let MirRelationExpr::Filter { input, predicates } = self {
@@ -2166,6 +2176,22 @@ impl MirRelationExpr {
 /// Augment non-nullability of columns, by observing either
 /// 1. Predicates that explicitly test for null values, and
 /// 2. Columns that if null would make a predicate be null.
+/// Columns that a `Predicate` list requires to be non-null.
+///
+/// The [`Predicate`] slice counterpart of [`non_nullable_columns`].
+pub fn non_nullable_columns_of(predicates: &[Predicate]) -> BTreeSet<usize> {
+    non_nullable_columns(
+        &predicates
+            .iter()
+            .map(|p| p.expr.clone())
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// Columns that a predicate list requires to be non-null.
+///
+/// A column is included when some predicate would evaluate to null, and so
+/// reject the row, were that column null.
 pub fn non_nullable_columns(predicates: &[MirScalarExpr]) -> BTreeSet<usize> {
     let mut nonnull_required_columns = BTreeSet::new();
     for predicate in predicates {

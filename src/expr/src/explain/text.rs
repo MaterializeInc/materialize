@@ -244,7 +244,7 @@ where
         }
         // render `filter` field iff predicates are present
         if !predicates.is_empty() {
-            let predicates = predicates.iter().map(|(_, p)| self.child(p));
+            let predicates = predicates.iter().map(|(_, p)| self.child(&p.expr));
             let predicates = separated(" AND ", predicates);
             writeln!(f, "{}filter=({})", ctx.as_mut(), predicates)?;
         }
@@ -286,7 +286,11 @@ impl<'a, M: HumanizerMode, E: OptimizableExpr + HumanizeDisplay>
 
         // render `filter` field iff predicates are present
         if !self.expr.predicates.is_empty() {
-            let predicates = self.expr.predicates.iter().map(|(_, p)| self.child(p));
+            let predicates = self
+                .expr
+                .predicates
+                .iter()
+                .map(|(_, p)| self.child(&p.expr));
             let predicates = separated(" AND ", predicates);
             writeln!(f, "{}Filter: {predicates}", ctx.indent)?;
         }
@@ -576,9 +580,22 @@ impl MirRelationExpr {
                             write!(f, "{}Filter", ctx.indent)?;
                         } else {
                             let cols = input.column_names(ctx);
-                            let predicates = mode.seq(predicates, cols);
+                            let exprs = predicates
+                                .iter()
+                                .map(|p| p.expr.clone())
+                                .collect::<Vec<_>>();
+                            let predicates_levels =
+                                predicates.iter().map(|p| p.level()).collect::<Vec<_>>();
+                            let predicates = mode.seq(&exprs, cols);
                             let predicates = separated(" AND ", predicates);
                             write!(f, "{}Filter {}", ctx.indent, predicates)?;
+                            // Surface the ordering constraint when there is one,
+                            // so that a security barrier is visible in a plan.
+                            // Surface the ordering constraint when there is
+                            // one, so a security barrier is visible in a plan.
+                            if predicates_levels.iter().any(|l| *l > 0) {
+                                write!(f, " [levels: {:?}]", predicates_levels)?;
+                            }
                         }
                         self.fmt_analyses(f, ctx)
                     },

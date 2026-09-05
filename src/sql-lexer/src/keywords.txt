@@ -60,6 +60,7 @@ Auto
 Availability
 Avro
 Aws
+Barrier
 Batch
 Begin
 Between

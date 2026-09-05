@@ -470,6 +470,7 @@ fn rewrite_sources_to_tables(
                         definition: ViewDefinition {
                             name: progress_name,
                             columns: vec![],
+                            with_options: vec![],
                             query: Query {
                                 ctes: CteBlock::Simple(vec![]),
                                 body: SetExpr::Table(RawItemName::Id(

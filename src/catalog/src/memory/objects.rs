@@ -1401,6 +1401,14 @@ pub struct View {
     pub resolved_ids: ResolvedIds,
     /// All of the catalog objects that are referenced by this view.
     pub dependencies: DependencyIds,
+    /// Whether this view is a security barrier.
+    ///
+    /// A barrier view is never inlined into a reading dataflow, and only
+    /// leakproof predicates from a reader are pushed into its plan, so no
+    /// reader-supplied expression is evaluated against a row the view's own
+    /// filters would have excluded. See
+    /// `doc/developer/design/20260828_security_barrier_views.md`.
+    pub security_barrier: bool,
 }
 
 impl View {

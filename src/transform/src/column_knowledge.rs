@@ -259,7 +259,7 @@ impl ColumnKnowledge {
                         )?;
                     }
                     // If any predicate tests a column for equality, truth, or is_null, we learn stuff.
-                    for predicate in predicates.iter() {
+                    for predicate in predicates.iter().map(|p| &p.expr) {
                         // Equality tests allow us to unify the column knowledge of each input.
                         if let MirScalarExpr::CallBinary {
                             func: mz_expr::BinaryFunc::Eq(_),

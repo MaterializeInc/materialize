@@ -17,7 +17,7 @@ use itertools::Itertools;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode};
 use mz_expr::{
     AggregateExpr, ColumnOrder, Id, JoinImplementation, LocalId, MirRelationExpr, MirScalarExpr,
-    RECURSION_LIMIT, non_nullable_columns,
+    RECURSION_LIMIT,
 };
 use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
@@ -1005,7 +1005,7 @@ impl Typecheck {
 
                 // Set as nonnull any columns where null values would cause
                 // any predicate to evaluate to null.
-                for column in non_nullable_columns(predicates) {
+                for column in mz_expr::non_nullable_columns_of(predicates) {
                     t_in[column].nullable = false;
                 }
 

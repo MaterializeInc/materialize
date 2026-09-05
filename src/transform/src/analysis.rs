@@ -1709,7 +1709,7 @@ mod cardinality {
 
         fn filter(
             &self,
-            predicates: &Vec<MirScalarExpr>,
+            predicates: &Vec<mz_expr::Predicate>,
             keys: &Vec<Vec<usize>>,
             input: CardinalityEstimate,
         ) -> CardinalityEstimate {

@@ -213,6 +213,50 @@ where
 ///
 /// Additionally, it also removes IS NOT NULL predicates if there is another
 /// null rejecting predicate for the same sub-expression.
+/// Canonicalize predicates that carry security levels.
+///
+/// Canonicalization reduces, splits, cross-reduces, sorts, and deduplicates,
+/// every one of which would otherwise launder a level away: splitting a
+/// conjunction loses which half was constrained, cross-reduction lets a
+/// constrained predicate simplify an unconstrained one, and dedup collapses two
+/// levels into whichever it happened to keep.
+///
+/// Canonicalizing each level in isolation sidesteps all of that. The only thing
+/// given up is simplification *across* levels, which is exactly the interaction
+/// a level exists to forbid.
+pub fn canonicalize_leveled_predicates(
+    predicates: &mut Vec<crate::relation::Predicate>,
+    repr_column_types: &[ReprColumnType],
+) {
+    let mut levels: std::collections::BTreeMap<u8, Vec<MirScalarExpr>> = Default::default();
+    for predicate in predicates.drain(..) {
+        levels
+            .entry(predicate.level())
+            .or_default()
+            .push(predicate.expr);
+    }
+    for (level, mut exprs) in levels {
+        canonicalize_predicates(&mut exprs, repr_column_types);
+        predicates.extend(
+            exprs
+                .into_iter()
+                .map(|expr| crate::predicate::Predicate::at_level(expr, level)),
+        );
+    }
+}
+
+/// Canonicalize predicates of a filter.
+///
+/// This function reduces and canonicalizes the structure of each individual
+/// predicate. Then, it transforms predicates of the form "A and B" into two: "A"
+/// and "B". Afterwards, it reduces predicates based on information from other
+/// predicates in the set. Finally, it sorts and deduplicates the predicates.
+///
+/// Additionally, it also removes IS NOT NULL predicates if there is another
+/// null rejecting predicate for the same sub-expression.
+///
+/// Every predicate here is treated as sharing one security level. Use
+/// [`canonicalize_leveled_predicates`] where that is not guaranteed.
 pub fn canonicalize_predicates(
     predicates: &mut Vec<MirScalarExpr>,
     repr_column_types: &[ReprColumnType],

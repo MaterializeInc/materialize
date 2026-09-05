@@ -1704,31 +1704,34 @@ SELECT x * 5 FROM cte WHERE x = 5
           [
             2,
             {
-              "CallBinary": {
-                "func": {
-                  "Eq": null
-                },
-                "expr1": {
-                  "Column": [
-                    1,
-                    "x"
-                  ]
-                },
-                "expr2": {
-                  "Literal": [
-                    {
-                      "Ok": {
-                        "data": [
-                          45,
-                          5
-                        ]
+              "level": 0,
+              "expr": {
+                "CallBinary": {
+                  "func": {
+                    "Eq": null
+                  },
+                  "expr1": {
+                    "Column": [
+                      1,
+                      "x"
+                    ]
+                  },
+                  "expr2": {
+                    "Literal": [
+                      {
+                        "Ok": {
+                          "data": [
+                            45,
+                            5
+                          ]
+                        }
+                      },
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": false
                       }
-                    },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": false
-                    }
-                  ]
+                    ]
+                  }
                 }
               }
             }
@@ -9864,31 +9867,34 @@ WHERE a = c AND d = e AND b + d > 42
                                 [
                                   4,
                                   {
-                                    "CallBinary": {
-                                      "func": {
-                                        "Gt": null
-                                      },
-                                      "expr1": {
-                                        "Column": [
-                                          3,
-                                          null
-                                        ]
-                                      },
-                                      "expr2": {
-                                        "Literal": [
-                                          {
-                                            "Ok": [
-                                              10,
-                                              2,
-                                              24,
-                                              42
-                                            ]
-                                          },
-                                          {
-                                            "scalar_type": "Int32",
-                                            "nullable": false
-                                          }
-                                        ]
+                                    "level": 0,
+                                    "expr": {
+                                      "CallBinary": {
+                                        "func": {
+                                          "Gt": null
+                                        },
+                                        "expr1": {
+                                          "Column": [
+                                            3,
+                                            null
+                                          ]
+                                        },
+                                        "expr2": {
+                                          "Literal": [
+                                            {
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                24,
+                                                42
+                                              ]
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": false
+                                            }
+                                          ]
+                                        }
                                       }
                                     }
                                   }
@@ -9977,20 +9983,23 @@ WHERE a = c AND d = e AND b + d > 42
           [
             1,
             {
-              "CallUnary": {
-                "func": {
-                  "Not": null
-                },
-                "expr": {
-                  "CallUnary": {
-                    "func": {
-                      "IsNull": null
-                    },
-                    "expr": {
-                      "Column": [
-                        0,
-                        "c"
-                      ]
+              "level": 0,
+              "expr": {
+                "CallUnary": {
+                  "func": {
+                    "Not": null
+                  },
+                  "expr": {
+                    "CallUnary": {
+                      "func": {
+                        "IsNull": null
+                      },
+                      "expr": {
+                        "Column": [
+                          0,
+                          "c"
+                        ]
+                      }
                     }
                   }
                 }
@@ -10000,20 +10009,23 @@ WHERE a = c AND d = e AND b + d > 42
           [
             2,
             {
-              "CallUnary": {
-                "func": {
-                  "Not": null
-                },
-                "expr": {
-                  "CallUnary": {
-                    "func": {
-                      "IsNull": null
-                    },
-                    "expr": {
-                      "Column": [
-                        1,
-                        "d"
-                      ]
+              "level": 0,
+              "expr": {
+                "CallUnary": {
+                  "func": {
+                    "Not": null
+                  },
+                  "expr": {
+                    "CallUnary": {
+                      "func": {
+                        "IsNull": null
+                      },
+                      "expr": {
+                        "Column": [
+                          1,
+                          "d"
+                        ]
+                      }
                     }
                   }
                 }
@@ -10038,20 +10050,23 @@ WHERE a = c AND d = e AND b + d > 42
           [
             1,
             {
-              "CallUnary": {
-                "func": {
-                  "Not": null
-                },
-                "expr": {
-                  "CallUnary": {
-                    "func": {
-                      "IsNull": null
-                    },
-                    "expr": {
-                      "Column": [
-                        0,
-                        "e"
-                      ]
+              "level": 0,
+              "expr": {
+                "CallUnary": {
+                  "func": {
+                    "Not": null
+                  },
+                  "expr": {
+                    "CallUnary": {
+                      "func": {
+                        "IsNull": null
+                      },
+                      "expr": {
+                        "Column": [
+                          0,
+                          "e"
+                        ]
+                      }
                     }
                   }
                 }
@@ -10186,20 +10201,23 @@ WHERE a = c AND d = e AND f = a
                                       [
                                         1,
                                         {
-                                          "CallUnary": {
-                                            "func": {
-                                              "Not": null
-                                            },
-                                            "expr": {
-                                              "CallUnary": {
-                                                "func": {
-                                                  "IsNull": null
-                                                },
-                                                "expr": {
-                                                  "Column": [
-                                                    0,
-                                                    "c"
-                                                  ]
+                                          "level": 0,
+                                          "expr": {
+                                            "CallUnary": {
+                                              "func": {
+                                                "Not": null
+                                              },
+                                              "expr": {
+                                                "CallUnary": {
+                                                  "func": {
+                                                    "IsNull": null
+                                                  },
+                                                  "expr": {
+                                                    "Column": [
+                                                      0,
+                                                      "c"
+                                                    ]
+                                                  }
                                                 }
                                               }
                                             }
@@ -10209,20 +10227,23 @@ WHERE a = c AND d = e AND f = a
                                       [
                                         2,
                                         {
-                                          "CallUnary": {
-                                            "func": {
-                                              "Not": null
-                                            },
-                                            "expr": {
-                                              "CallUnary": {
-                                                "func": {
-                                                  "IsNull": null
-                                                },
-                                                "expr": {
-                                                  "Column": [
-                                                    1,
-                                                    "d"
-                                                  ]
+                                          "level": 0,
+                                          "expr": {
+                                            "CallUnary": {
+                                              "func": {
+                                                "Not": null
+                                              },
+                                              "expr": {
+                                                "CallUnary": {
+                                                  "func": {
+                                                    "IsNull": null
+                                                  },
+                                                  "expr": {
+                                                    "Column": [
+                                                      1,
+                                                      "d"
+                                                    ]
+                                                  }
                                                 }
                                               }
                                             }
@@ -10362,20 +10383,23 @@ WHERE a = c AND d = e AND f = a
                                       [
                                         1,
                                         {
-                                          "CallUnary": {
-                                            "func": {
-                                              "Not": null
-                                            },
-                                            "expr": {
-                                              "CallUnary": {
-                                                "func": {
-                                                  "IsNull": null
-                                                },
-                                                "expr": {
-                                                  "Column": [
-                                                    0,
-                                                    "e"
-                                                  ]
+                                          "level": 0,
+                                          "expr": {
+                                            "CallUnary": {
+                                              "func": {
+                                                "Not": null
+                                              },
+                                              "expr": {
+                                                "CallUnary": {
+                                                  "func": {
+                                                    "IsNull": null
+                                                  },
+                                                  "expr": {
+                                                    "Column": [
+                                                      0,
+                                                      "e"
+                                                    ]
+                                                  }
                                                 }
                                               }
                                             }
@@ -10385,20 +10409,23 @@ WHERE a = c AND d = e AND f = a
                                       [
                                         2,
                                         {
-                                          "CallUnary": {
-                                            "func": {
-                                              "Not": null
-                                            },
-                                            "expr": {
-                                              "CallUnary": {
-                                                "func": {
-                                                  "IsNull": null
-                                                },
-                                                "expr": {
-                                                  "Column": [
-                                                    1,
-                                                    "f"
-                                                  ]
+                                          "level": 0,
+                                          "expr": {
+                                            "CallUnary": {
+                                              "func": {
+                                                "Not": null
+                                              },
+                                              "expr": {
+                                                "CallUnary": {
+                                                  "func": {
+                                                    "IsNull": null
+                                                  },
+                                                  "expr": {
+                                                    "Column": [
+                                                      1,
+                                                      "f"
+                                                    ]
+                                                  }
                                                 }
                                               }
                                             }
@@ -10757,20 +10784,23 @@ WHERE a = c and a = e
                             [
                               1,
                               {
-                                "CallUnary": {
-                                  "func": {
-                                    "Not": null
-                                  },
-                                  "expr": {
-                                    "CallUnary": {
-                                      "func": {
-                                        "IsNull": null
-                                      },
-                                      "expr": {
-                                        "Column": [
-                                          0,
-                                          "a"
-                                        ]
+                                "level": 0,
+                                "expr": {
+                                  "CallUnary": {
+                                    "func": {
+                                      "Not": null
+                                    },
+                                    "expr": {
+                                      "CallUnary": {
+                                        "func": {
+                                          "IsNull": null
+                                        },
+                                        "expr": {
+                                          "Column": [
+                                            0,
+                                            "a"
+                                          ]
+                                        }
                                       }
                                     }
                                   }
