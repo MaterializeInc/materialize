@@ -60,11 +60,26 @@ fn handle_explain(
     // Create OptimizerFeatures and override from the config overrides layer.
     let features = OptimizerFeatures::default().override_from(&config.features);
 
+    // Optional cardinality statistics, given as `stats=(<source>-<count>,...)`.
+    let mut cardinality_stats = std::collections::BTreeMap::new();
+    for stat in args.get("stats").map_or(&[][..], |stats| &stats[..]) {
+        let Some((name, count)) = stat.rsplit_once('-') else {
+            return format!("malformed `stats` entry: {stat}");
+        };
+        let Some((id, _, _)) = catalog.get(name) else {
+            return format!("unknown source in `stats` entry: {name}");
+        };
+        let Ok(count) = count.parse::<usize>() else {
+            return format!("malformed count in `stats` entry: {stat}");
+        };
+        cardinality_stats.insert(*id, count);
+    }
+
     let context = ExplainContext {
         config: &config,
         features: &features,
         humanizer: catalog,
-        cardinality_stats: Default::default(), // empty stats
+        cardinality_stats,
         used_indexes: Default::default(),
         finishing: Default::default(),
         duration: Default::default(),
@@ -327,6 +342,7 @@ fn apply_transforms(
 fn parse_explain_config(mut flags: BTreeSet<String>) -> Result<ExplainConfig, String> {
     let result = ExplainConfig {
         arity: flags.remove("arity"),
+        cardinality: flags.remove("cardinality"),
         humanized_exprs: flags.remove("humanized_exprs"),
         column_names: flags.remove("column_names"),
         keys: flags.remove("keys"),

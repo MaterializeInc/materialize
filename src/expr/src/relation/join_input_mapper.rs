@@ -13,6 +13,7 @@ use std::ops::Range;
 use itertools::Itertools;
 use mz_repr::ReprRelationType;
 
+use crate::relation::unique_keys::UniqueKeySets;
 use crate::scalar::columns::Columns;
 use crate::scalar::func::variadic::{And, Or};
 use crate::visit::Visit;
@@ -99,11 +100,11 @@ impl JoinInputMapper {
     /// can remain unique.
     pub fn global_keys<'a, I>(
         &self,
-        mut local_keys: I,
+        local_keys: I,
         equivalences: &[Vec<MirScalarExpr>],
-    ) -> Vec<Vec<usize>>
+    ) -> UniqueKeySets
     where
-        I: Iterator<Item = &'a Vec<Vec<usize>>>,
+        I: Iterator<Item = &'a UniqueKeySets>,
     {
         // A relation's uniqueness constraint holds if there is a
         // sequence of the other relations such that each one has
@@ -113,14 +114,34 @@ impl JoinInputMapper {
         // Currently, we only:
         // 1. test for whether the uniqueness constraints for the first input will hold
         // 2. try one sequence, namely the inputs in order
-        // 3. check that the column themselves are used in the join constraints
-        //    Technically uniqueness constraint would still hold if a 1-to-1
-        //    expression on a unique key is used in the join constraint.
+        // 3. check that the columns themselves, or columns equivalent to them,
+        //    are used in the join constraints
 
-        // for inputs `1..self.total_inputs()`, store a set of columns from that
-        // input that exist in join constraints that have expressions belonging to
-        // earlier inputs.
-        let mut column_with_prior_bound_by_input = vec![BTreeSet::new(); self.total_inputs() - 1];
+        // Embed each input's keys and equivalences into the global column
+        // space, and collect the equivalences of all inputs together with the
+        // column equalities imposed by the join constraints.
+        let inputs_global = local_keys
+            .enumerate()
+            .map(|(index, keys)| keys.offset_columns(self.prior_arities[index]))
+            .collect::<Vec<_>>();
+        let mut result = UniqueKeySets::none();
+        for input in &inputs_global {
+            result.merge(&input.equivalences_only());
+        }
+        for equivalence in equivalences {
+            let mut columns = equivalence.iter().filter_map(|expr| expr.as_column());
+            if let Some(first) = columns.next() {
+                for col in columns {
+                    result.equate(first, col);
+                }
+            }
+        }
+
+        // for inputs `1..self.total_inputs()`, store a set of global columns
+        // (as their representatives) from that input that exist in join
+        // constraints that have expressions belonging to earlier inputs.
+        let mut column_with_prior_bound_by_input =
+            vec![BTreeSet::new(); self.total_inputs().saturating_sub(1)];
         for equivalence in equivalences {
             // do a scan to find the first input represented in the constraint
             let min_bound_input = equivalence
@@ -132,9 +153,9 @@ impl JoinInputMapper {
                     // then store all columns in the constraint that don't come
                     // from the first input
                     if let MirScalarExpr::Column(c, _name) = expr {
-                        let (col, input) = self.map_column_to_local(*c);
+                        let (_col, input) = self.map_column_to_local(*c);
                         if input > min_bound_input {
-                            column_with_prior_bound_by_input[input - 1].insert(col);
+                            column_with_prior_bound_by_input[input - 1].insert(result.rep(*c));
                         }
                     }
                 }
@@ -142,22 +163,24 @@ impl JoinInputMapper {
         }
 
         if self.total_inputs() > 0 {
-            let first_input_keys = local_keys.next().unwrap().clone();
-            // for inputs `1..self.total_inputs()`, checks the keys belong to each
-            // input against the storage of columns that exist in join constraints
-            // that have expressions belonging to earlier inputs.
-            let remains_unique = local_keys.enumerate().all(|(index, keys)| {
-                keys.iter().any(|ks| {
-                    ks.iter()
-                        .all(|k| column_with_prior_bound_by_input[index].contains(k))
+            // for inputs `1..self.total_inputs()`, checks the keys belonging to
+            // each input against the storage of columns that exist in join
+            // constraints that have expressions belonging to earlier inputs.
+            let remains_unique = inputs_global[1..].iter().enumerate().all(|(index, keys)| {
+                keys.keys().iter().any(|key| {
+                    key.iter().all(|col| {
+                        column_with_prior_bound_by_input[index].contains(&result.rep(*col))
+                    })
                 })
             });
 
             if remains_unique {
-                return first_input_keys;
+                for key in inputs_global[0].keys() {
+                    result.add_key(key.clone());
+                }
             }
         }
-        vec![]
+        result
     }
 
     /// returns the arity for a particular input

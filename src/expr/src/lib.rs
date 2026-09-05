@@ -40,6 +40,7 @@ pub use relation::func::{
     NaiveOneByOneAggr, OneByOneAggr, TableFunc,
 };
 pub use relation::join_input_mapper::JoinInputMapper;
+pub use relation::unique_keys::UniqueKeySets;
 pub use relation::{
     AccessStrategy, AggregateExpr, CollectionPlan, ColumnOrder, JoinImplementation,
     JoinInputCharacteristics, LetRecLimit, MirRelationExpr, RECURSION_LIMIT, RowComparator,
