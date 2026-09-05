@@ -1,0 +1,21 @@
+- name: "syntax"
+  code: |
+    CREATE API [IF NOT EXISTS] <name>
+      FORMAT PROMETHEUS
+      [IN CLUSTER <cluster_name>];
+  syntax_elements:
+    - name: "`IF NOT EXISTS`"
+      description: |
+        If specified, do not generate an error if an API of the same name
+        already exists.
+    - name: "`<name>`"
+      description: |
+        The identifier for the API.
+    - name: "`FORMAT PROMETHEUS`"
+      description: |
+        The exposition format served at `/api/metrics/custom/...` for the API.
+        `PROMETHEUS` is the only supported format today.
+    - name: "`IN CLUSTER <cluster_name>`"
+      description: |
+        The cluster that scrapes the API's metrics will run on. If omitted,
+        the session's active cluster is used.
