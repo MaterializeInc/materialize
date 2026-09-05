@@ -15,8 +15,12 @@ image provides, which is what the comparison should measure.
 """
 
 from materialize.feature_benchmark.action import Action, TdAction
-from materialize.feature_benchmark.measurement_source import MeasurementSource, Td
-from materialize.feature_benchmark.scenario import Scenario
+from materialize.feature_benchmark.measurement_source import (
+    Lambda,
+    MeasurementSource,
+    Td,
+)
+from materialize.feature_benchmark.scenario import BenchmarkingSequence, Scenario
 
 
 class InteractiveRuntime(Scenario):
@@ -169,6 +173,113 @@ true
 {reads}
 
 > SELECT 1
+  /* B */
+1
+""")
+
+
+class ManyIndexes(InteractiveRuntime):
+    """Group parent: `INDEXES` indexed views over one table, plus a view over all of them for a
+    read that answers only once every index has hydrated.
+
+    Each view is a distinct relation, so each index is its own arrangement with its own
+    publication. An index that repeats an existing index's relation and key re-exports that
+    arrangement instead, which `ManyReexportsIdle` prices separately."""
+
+    SCALE = 5
+    INDEXES = 200
+
+    def init(self) -> list[Action]:
+        views = "\n".join(
+            f"> CREATE VIEW v_{i} AS SELECT f1 FROM t WHERE f1 % {self.INDEXES} = {i}\n"
+            f"> CREATE DEFAULT INDEX ON v_{i}\n"
+            for i in range(self.INDEXES)
+        )
+        union = " UNION ALL ".join(f"SELECT f1 FROM v_{i}" for i in range(self.INDEXES))
+        return [
+            self.table_ten(),
+            TdAction(f"""
+> CREATE TABLE t (f1 INTEGER)
+
+> INSERT INTO t SELECT {self.unique_values()} FROM {self.join()}
+
+{views}
+
+> CREATE VIEW all_v AS SELECT count(*) AS c FROM ({union})
+
+> SELECT c FROM all_v
+{self.n()}
+"""),
+        ]
+
+
+class ManyIndexesIdle(ManyIndexes):
+    """One lookup with many published indexes in place. The wallclock is the lookup; the
+    clusterd memory measurement is the resident cost of publishing `INDEXES` arrangements.
+    """
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(f"""
+> SELECT 1
+  /* A */
+1
+
+> SELECT count(*) FROM v_0
+  /* B */
+{self.n() // self.INDEXES}
+""")
+
+
+class ManyIndexesRestart(ManyIndexes):
+    """Restart with many indexes, timed until a read importing all of them answers. Every index
+    is rendered and published again on the way up, and the read binds every publication.
+    """
+
+    def benchmark(self) -> BenchmarkingSequence:
+        return [
+            Lambda(lambda e: e.RestartMzClusterd()),
+            Td(f"""
+> SELECT c FROM all_v
+  /* B */
+{self.n()}
+"""),
+        ]
+
+
+class ManyReexportsIdle(InteractiveRuntime):
+    """One lookup with many re-exported indexes in place: `INDEXES` indexes on one relation and
+    key share one arrangement, and each publishes it under its own id. The clusterd memory
+    measurement is the resident cost of `INDEXES` publications of the same arrangement.
+    """
+
+    SCALE = 5
+    INDEXES = 200
+
+    def init(self) -> list[Action]:
+        indexes = "\n".join(
+            f"> CREATE INDEX t_f1_{i} ON t (f1)\n" for i in range(self.INDEXES)
+        )
+        return [
+            self.table_ten(),
+            TdAction(f"""
+> CREATE TABLE t (f1 INTEGER)
+
+> INSERT INTO t SELECT {self.unique_values()} FROM {self.join()}
+
+{indexes}
+
+> SELECT count(*) FROM t
+{self.n()}
+"""),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td("""
+> SELECT 1
+  /* A */
+1
+
+> SELECT f1 FROM t WHERE f1 = 1
   /* B */
 1
 """)
