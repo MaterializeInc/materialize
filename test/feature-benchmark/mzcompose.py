@@ -78,6 +78,7 @@ from materialize.feature_benchmark.scenarios.benchmark_main import (
 )
 from materialize.feature_benchmark.scenarios.concurrency import *  # noqa: F401 F403
 from materialize.feature_benchmark.scenarios.customer import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.interactive_runtime import *  # noqa: F401 F403
 from materialize.feature_benchmark.scenarios.optbench import *  # noqa: F401 F403
 from materialize.feature_benchmark.scenarios.scale import *  # noqa: F401 F403
 from materialize.feature_benchmark.scenarios.skew import *  # noqa: F401 F403
@@ -394,7 +395,11 @@ def create_clusterd_service(
     default_size: int,
     additional_system_parameter_defaults: dict[str, str] | None,
 ) -> Clusterd:
-    return Clusterd(image=clusterd_image)
+    # `cluster_default` is an unmanaged replica backed by this container, so
+    # `enable_compute_interactive_runtime` never reaches it and the second runtime has
+    # to be configured here. An image without the option ignores the variable and
+    # stays single-runtime.
+    return Clusterd(image=clusterd_image, interactive_compute=True)
 
 
 def start_overridden_mz_clusterd_and_cockroach(
