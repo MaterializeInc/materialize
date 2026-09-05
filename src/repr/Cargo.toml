@@ -18,6 +18,10 @@ name = "strconv"
 harness = false
 
 [[bench]]
+name = "borrow_with"
+harness = false
+
+[[bench]]
 name = "packed"
 harness = false
 
