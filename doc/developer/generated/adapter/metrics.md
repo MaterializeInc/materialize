@@ -1,14 +1,17 @@
 ---
 source: src/adapter/src/metrics.rs
-revision: 5a8b0f34da
+revision: 6cef38c018
 ---
 
 # adapter::metrics
 
 Registers and vends all Prometheus metrics for the adapter and coordinator.
 `Metrics` is the top-level struct holding counters, gauges, and histograms covering query counts, active sessions, subscribe/COPY-TO activity, timestamp determination, statement logging, message handling latency, and more; `SessionMetrics` is a lightweight subset scoped to a single session.
-`Metrics` includes a `timestamp_difference_for_bounded_staleness_ms` histogram (per-compute-instance label) that records how much older bounded-staleness timestamps are compared to serializable, measuring the actual staleness incurred. `SessionMetrics` exposes this via `timestamp_difference_for_bounded_staleness_ms`.
-The `mz_time_to_first_row_seconds` histogram carries an `application_name` label in addition to `instance_id`, `isolation_level`, and `strategy`. Its lowest bucket starts at 512 microseconds; measurements below that threshold are negligible. The histogram retains series for dropped `instance_id` label values.
+`Metrics` includes a `by_cluster: ClusterLabeledMetrics` field grouping all metrics whose series carry a cluster id label. `SessionMetrics` exposes this via `by_cluster()`.
+`ClusterLabeledMetrics` holds `time_to_first_row_seconds`, `determine_timestamp`, and `timestamp_difference_for_bounded_staleness_ms`. It registers each vec with knowledge of which label carries the cluster id, so `remove_cluster(cluster_id)` can delete all series for a dropped cluster from every registered vec at once. Series are created on first observation, as for any labeled metric.
+`ClusterLabeledMetrics::time_to_first_row_seconds` is a `HistogramVec` labeled by `instance_id`, `isolation_level`, `strategy`, and `application_name`. Statements without a cluster or strategy record under the `"none"` label value. Its lowest bucket starts at 512 microseconds; measurements below that threshold are negligible.
+`ClusterLabeledMetrics::determine_timestamp` is an `IntCounterVec` labeled by `respond_immediately`, `isolation_level`, and `compute_instance`, counting calls to timestamp determination.
+`ClusterLabeledMetrics::timestamp_difference_for_bounded_staleness_ms` is a `HistogramVec` labeled by `compute_instance` that records how much older bounded-staleness timestamps are compared to serializable, measuring the actual staleness incurred.
 `Metrics` tracks catalog snapshot cache behavior via `catalog_snapshot_seconds` (a `HistogramVec` labeled by `context`, observed only on cache misses) and `catalog_snapshot_cache` (an `IntCounterVec` labeled by `context` and `result`, counting hits and misses). `catalog_arc_strong_count` and `catalog_arc_weak_count` are `UIntGauge` metrics tracking the number of strong and weak references to the current catalog snapshot `Arc`, respectively.
 `Metrics` includes `catalog_transact_seconds` (a `HistogramVec` labeled by `method`) for timing catalog transact methods, `catalog_transact_phase_seconds` (a `HistogramVec` labeled by `phase`) for fine-grained per-phase timing within a catalog transaction (phases overlap and do not sum to `catalog_transact_seconds`), `apply_catalog_implications_seconds` for timing catalog implication application, and `group_commit_catalog_upper_seconds` for timing catalog shard upper advances during group commits and table register/forget operations.
 Several public metrics carry `MetricTag` annotations for categorization: `mz_query_total`, `mz_active_sessions`, `mz_active_subscribes`, and `mz_adapter_commands` carry `MetricTag::Environment`.

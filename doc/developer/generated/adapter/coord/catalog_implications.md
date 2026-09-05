@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/catalog_implications.rs
-revision: 41e1741ca3
+revision: 6cef38c018
 ---
 
 # adapter::coord::catalog_implications
@@ -8,6 +8,7 @@ revision: 41e1741ca3
 Derives and applies downstream effects from catalog state changes following the pipeline `StateUpdateKind -> ParsedStateUpdate -> CatalogImplication`.
 `ParsedStateUpdate` enriches raw catalog diffs with in-memory object representations; `CatalogImplication` is both a state machine for absorbing multiple updates to the same object and the final command applied to controllers.
 `apply_catalog_implications` reacts to consolidated catalog updates by creating or dropping compute dataflows and storage collections, updating read policies, advancing compaction frontiers, managing VPC endpoints, creating and dropping clusters and replicas, applying source alterations, cancelling affected peeks and subscribes, and sending builtin-table updates. When any `ReplicaSystemConfiguration` update is present in the batch, `apply_catalog_implications` calls `push_replica_dyncfg_overrides` after cluster creation but before replica creation, re-pushing the complete per-replica dyncfg override layer from the catalog working copy so new replicas receive their overrides on their first configuration. When any `SystemConfiguration` update is present in the batch, `apply_catalog_implications` calls `notify_all_callbacks` on `SystemVars` to re-run all registered callbacks against the committed values, including on follower `environmentd` instances that only replay the committed diff.
+When a batch contains both replica drops and replica creates for the same cluster, `apply_catalog_implications` applies the drops first via `partition_cluster_replica_drops`, then the creates. This preserves the same resource-accounting contract as catalog-level net accounting: the old replicas release their physical quota before the new ones claim it. After dropping replicas, `apply_catalog_implications` removes per-cluster peek-series metrics via `by_cluster.remove_cluster` for any cluster that ends up with no replicas (either because it was dropped entirely or because all its replicas were dropped without a concurrent create).
 After applying implications, `apply_catalog_implications` calls `reconcile_now.notify_one()` when `should_reconcile_now` returns true, waking the cluster controller task to reconcile immediately rather than waiting out its tick interval. `should_reconcile_now` returns true when any committed diff contains a `Cluster` or `ClusterReplica` update, keying the wake off the committed diff so it fires regardless of whether this node or another writer applied the change. Environment-wide system-config changes are not represented as cluster-controller wakeup triggers and do not trigger a wake; the controller picks those up on its next tick.
 When cancelling peeks due to a dropped dependency, the cancel reason is constructed as `PeekResponse::Error(PeekError::unstructured(dep.query_terminated_error()))`, using the structured `PeekError` type rather than a raw string.
 The child module `parsed_state_updates` handles the parsing step.

@@ -1,6 +1,6 @@
 ---
 source: src/compute-types/src/dyncfgs.rs
-revision: c69fde3d50
+revision: 82e054569f
 ---
 
 # compute-types::dyncfgs
@@ -11,10 +11,11 @@ Declares all dynamic configuration (`dyncfg`) constants for the compute layer. K
 - **MV sink**: `ENABLE_SYNC_MV_SINK`, `ENABLE_CORRECTION_V2`, `CONSOLIDATING_VEC_GROWTH_DAMPENER`, `CORRECTION_V2_CHAIN_PROPORTIONALITY`, `CORRECTION_V2_CHUNK_SIZE`, `MV_SINK_ADVANCE_PERSIST_FRONTIERS`.
 - **Memory management**: `ENABLE_LGALLOC` (replica-scoped), `ENABLE_LGALLOC_EAGER_RECLAMATION`, `LGALLOC_BACKGROUND_INTERVAL`, `LGALLOC_FILE_GROWTH_DAMPENER`, `LGALLOC_LOCAL_BUFFER_BYTES`, `LGALLOC_SLOW_CLEAR_BYTES`, `ENABLE_COLUMNATION_LGALLOC`, `MEMORY_LIMITER_INTERVAL`, `MEMORY_LIMITER_USAGE_BIAS`, `MEMORY_LIMITER_BURST_FACTOR`.
 - **Backpressure**: `DATAFLOW_MAX_INFLIGHT_BYTES`, `DATAFLOW_MAX_INFLIGHT_BYTES_CC`, `ENABLE_COMPUTE_LOGICAL_BACKPRESSURE`, `COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES`, `COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK`.
-- **Peek stash**: `ENABLE_PEEK_RESPONSE_STASH`, `PEEK_RESPONSE_STASH_THRESHOLD_BYTES`, `PEEK_RESPONSE_STASH_BATCH_MAX_RUNS`, `PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES`, `PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES`, `PEEK_STASH_NUM_BATCHES`, `PEEK_STASH_BATCH_SIZE`.
-- **Peek row iteration limit**: `ENABLE_PEEK_ROW_ITERATION_LIMIT` (environment-scoped, default false) gates the feature; `PEEK_ROW_ITERATION_LIMIT` (environment-scoped, default 1000) sets the maximum number of rows a peek may examine per worker. The limit does not apply once a peek's results move to the peek stash.
+- **Peek stash**: `ENABLE_PEEK_RESPONSE_STASH`, `PEEK_RESPONSE_STASH_THRESHOLD_BYTES`, `PEEK_RESPONSE_STASH_BATCH_BYTES` (replica-scoped, default 1 MiB; the size at which an in-progress stash upload hands accumulated rows to the batch builder after the first threshold batch), `PEEK_RESPONSE_STASH_BATCH_MAX_RUNS`, `PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES`, `PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES`. The former `PEEK_STASH_NUM_BATCHES` and `PEEK_STASH_BATCH_SIZE` constants have been removed.
+- **Peek row iteration limit**: `ENABLE_PEEK_ROW_ITERATION_LIMIT` (environment-scoped, default false) gates the feature; `PEEK_ROW_ITERATION_LIMIT` (environment-scoped, default 1000) sets the maximum number of rows a peek may examine per worker. The count spans the peek's whole walk including rows written to the peek stash.
+- **Index peek offload**: `ENABLE_INDEX_PEEK_OFFLOAD` (replica-scoped, default false) gates moving a peek's walk off the timely worker for latency; `INDEX_PEEK_INLINE_BUDGET` (replica-scoped, default 1024 cursor positions) is how far one peek may walk on the worker before offloading; `INDEX_PEEK_ACTIVATION_BUDGET` (replica-scoped, default 8 192 cursor positions) caps what all peeks together spend in one activation; `INDEX_PEEK_YIELD_GRANULARITY` (replica-scoped, default 10 000 cursor positions) controls how often an offloaded scan checks for cancellation; `INDEX_PEEK_PERMIT_FRACTION` (replica-scoped, default 1.0) is the maximum number of concurrent offloaded scans as a fraction of the timely workers in one compute runtime, never below one.
 - **Other**: `HYDRATION_CONCURRENCY`, `COMPUTE_SERVER_MAINTENANCE_INTERVAL`, `ENABLE_COMPUTE_REPLICA_EXPIRATION`, `COMPUTE_REPLICA_EXPIRATION_OFFSET`, `COPY_TO_S3_*`, `COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL`, `SUBSCRIBE_SNAPSHOT_OPTIMIZATION`, `ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA`.
 
-Constants declare their `ParameterScope` as a required argument to `Config::new` (previously via a `.scoped()` builder call). Constants that carry `ParameterScope::Replica` are eligible for per-replica override through the scoped feature flags mechanism; those with `ParameterScope::Environment` apply environment-wide.
+Constants declare their `ParameterScope` as a required argument to `Config::new`. Constants that carry `ParameterScope::Replica` are eligible for per-replica override through the scoped feature flags mechanism; those with `ParameterScope::Environment` apply environment-wide.
 
 `all_dyncfgs` registers all constants into a `ConfigSet`.

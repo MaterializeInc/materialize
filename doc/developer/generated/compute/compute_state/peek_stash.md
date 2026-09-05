@@ -1,10 +1,13 @@
 ---
 source: src/compute/src/compute_state/peek_stash.rs
-revision: c69fde3d50
+revision: 82e054569f
 ---
 
 # mz-compute::compute_state::peek_stash
 
-Implements `StashingPeek`, which uploads peek results to a per-peek persist shard and returns a `PeekResponse::Stashed` handle instead of sending rows inline in `ComputeResponse`.
-`start_upload` creates a `PeekResultIterator` from the trace bundle (with no row iteration limit, since the stash restarts the scan in bounded bursts) and spawns an async background task connected via an `mpsc` channel. The channel type carries `Result<Vec<(Row, NonZeroI64)>, PeekError>` to propagate structured errors from the iterator. The worker thread's `pump_rows` method feeds batches of `(Row, NonZeroI64)` from the iterator through the channel; the background task writes them into a persist batch builder with a configurable `batch_max_runs` consolidation target.
-This mechanism offloads large peek results from the command/response path and allows the controller to retrieve them from persist at its own pace. The `AbortOnDropHandle` ensures the background task is cancelled if the peek is no longer needed.
+Implements incremental stash upload machinery for writing large peek results to a per-peek persist shard, returning a `PeekResponse::Stashed` handle instead of sending rows inline in `ComputeResponse`.
+`StashUpload` owns the IO a stash write needs. It is opened with `StashUpload::open`, which connects to the persist location and creates a batch builder. Rows are pushed incrementally via `push(rows: RowBatch)`, which writes each row to the builder and tracks `num_rows` and whether persist has taken any parts to blob storage (`wrote_parts`). `finish` completes the batch and builds the `PeekResponse::Stashed` response; `abandon` schedules deletion of any parts already written and drops the builder. `Drop for StashUpload` calls `abandon`, so an upload that is cancelled mid-write cleans up after itself.
+`StashError` names the failure modes: `OpenLocation`, `WriteRow`, `FinishBatch`, and `LostFinishTask`. The caller reports these as the peek's error.
+`DeliveredBatch` wraps a finished `Batch` and deletes it from blob storage on drop if it is never claimed, covering cases where a delivery is sent to a dropped receiver or where the receiver drops between the send and the take.
+`StashTarget` is a lightweight descriptor (persist clients, location, peek UUID, relation desc) held by a driver that may or may not reach the stash threshold. Opening an upload is deferred to `StashTarget::open` so that a walk that answers inline opens no shard and writes no byte.
+The batch builder is finished in a detached task spawned via `spawn_named`, so a cancellation that arrives while the builder is flushing its buffered part cannot cancel the finish task; whoever holds the resulting `DeliveredBatch` last deletes the batch.

@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sql.rs
-revision: a1bcaebfe6
+revision: 1d0992ac41
 ---
 
 # adapter::coord::sql
