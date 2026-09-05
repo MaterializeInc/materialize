@@ -572,6 +572,7 @@ which = "8"
 yansi = "1.0.1"
 zeroize = { version = "1.8.2", features = ["derive", "serde"] }
 zip = { version = "6.0.0", default-features = false, features = ["deflate-flate2"] }
+zstd = { version = "0.13.3", default-features = false }
 
 [profile.dev]
 split-debuginfo = "unpacked"
