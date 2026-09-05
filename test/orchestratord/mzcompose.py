@@ -1744,6 +1744,46 @@ class BalancerdExternalDnsNames(Modification):
         retry(check, 360)
 
 
+class ConsoleAppearance(Modification):
+    # The operator copies the Materialize CR's `consoleAppearance` into the
+    # console's `app-config.json`, which is how the console learns which
+    # instance it is pointed at.
+    APPEARANCE = {"displayName": "prod"}
+
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [None, cls.APPEARANCE]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is not None:
+            definition["materialize"]["spec"]["consoleAppearance"] = self.value
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        # `consoleAppearance` was added in v26.41; older orchestratord builds
+        # drop the field.
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v26.41.0-dev.0"
+        ):
+            return
+        # Without a console there's no app config to inspect.
+        if not mods[ConsoleEnabled]:
+            return
+
+        def check() -> None:
+            app_config = get_console_app_config()
+            actual = app_config.get("appearance")
+            assert (
+                actual == self.value
+            ), f"Expected appearance {self.value}, but got {actual}: {app_config}"
+
+        # The console is reconciled last and the configmap update is async.
+        retry(check, 360)
+
+
 class RecommendedK8sLabels(Modification):
     @classmethod
     def values(cls, version: MzVersion) -> list[Any]:

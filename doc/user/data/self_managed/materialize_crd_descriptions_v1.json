@@ -51,6 +51,14 @@
         "deprecated": false
       },
       {
+        "name": "consoleAppearance",
+        "type": "ConsoleAppearance",
+        "description": "Appearance overrides for this instance's console.\n\nThis field is excluded from the rollout hash and changes will not trigger a rollout.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
         "name": "consoleExternalCertificateSpec",
         "type": "MaterializeCertSpec",
         "description": "The configuration for generating an x509 certificate using cert-manager for the console\nto present to incoming connections.\nThe `dnsNames` and `issuerRef` fields are required.\nNot yet implemented.\n\nThis field is excluded from the rollout hash and changes will not trigger a rollout.",
@@ -325,6 +333,19 @@
         "name": "kind",
         "type": "String",
         "description": "Kind of the resource being referred to.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      }
+    ]
+  ],
+  [
+    "ConsoleAppearance",
+    [
+      {
+        "name": "displayName",
+        "type": "String",
+        "description": "A short name for this instance, such as `dev` or `prod`. The console\nappends it to its browser tab title.",
         "default": null,
         "required": false,
         "deprecated": false
