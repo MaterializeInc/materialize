@@ -1,0 +1,159 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Reads served by the interactive compute runtime.
+#
+# The flag is read when a replica is provisioned, so it is pinned before the cluster is created
+# rather than inherited from the environment, and the replica has two workers so every shared read
+# crosses a multi-worker registry.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_interactive_runtime = true;
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER ir REPLICAS (r1 (SIZE 'scale=1,workers=2'))
+
+statement ok
+SET cluster = ir
+
+statement ok
+CREATE TABLE t (k int, v int)
+
+statement ok
+INSERT INTO t VALUES (1, 10), (2, 20), (3, 0)
+
+# Two indexes on one key. The second re-exports the first's arrangement and shares its publication
+# point under its own id.
+statement ok
+CREATE INDEX t_k1 ON t (k)
+
+statement ok
+CREATE INDEX t_k2 ON t (k)
+
+query II
+SELECT k, v FROM t WHERE k = 2
+----
+2  20
+
+query I
+SELECT count(*) FROM t
+----
+3
+
+# Dropping the original leaves the alias serving.
+statement ok
+DROP INDEX t_k1
+
+query II
+SELECT k, v FROM t WHERE k = 2
+----
+2  20
+
+# A third index on the same key re-exports the alias.
+statement ok
+CREATE INDEX t_k3 ON t (k)
+
+query II rowsort
+SELECT k, v FROM t WHERE k >= 2
+----
+2  20
+3  0
+
+# A write after the indexes exist: the shared arrangements advance and compact behind the reads.
+statement ok
+INSERT INTO t VALUES (4, 40)
+
+query II
+SELECT k, v FROM t WHERE k = 4
+----
+4  40
+
+query I
+SELECT sum(v) FROM t
+----
+70
+
+# An error result rides the errs arrangement, on the fast path and through a peek dataflow.
+statement ok
+CREATE VIEW e AS SELECT k, 100 / v AS q FROM t
+
+statement ok
+CREATE INDEX e_k ON e (k)
+
+query error db error: ERROR: Evaluation error: division by zero
+SELECT * FROM e WHERE k = 1
+
+query error db error: ERROR: Evaluation error: division by zero
+SELECT sum(q) FROM e
+
+# Once the offending row is gone the same index answers.
+statement ok
+DELETE FROM t WHERE v = 0
+
+query II
+SELECT k, q FROM e WHERE k = 1
+----
+1  10
+
+# A join over two shared indexes cannot take the fast path, so it builds a peek dataflow that
+# imports both.
+query III rowsort
+SELECT a.k, a.v, b.q FROM t a JOIN e b ON a.k = b.k
+----
+1  10  10
+2  20  5
+4  40  2
+
+# Strict serializable reads wait for the shared arrangements' frontiers rather than the local ones.
+statement ok
+SET transaction_isolation = 'strict serializable'
+
+statement ok
+INSERT INTO t VALUES (5, 50)
+
+query II
+SELECT k, v FROM t WHERE k = 5
+----
+5  50
+
+query I
+SELECT count(*) FROM t a JOIN t b ON a.k = b.k
+----
+4
+
+# Dropping and recreating the cluster re-provisions both runtimes. Still strict serializable: a
+# serializable read on the fresh index may pick a timestamp before the insert above.
+statement ok
+DROP CLUSTER ir CASCADE
+
+statement ok
+CREATE CLUSTER ir REPLICAS (r1 (SIZE 'scale=1,workers=2'))
+
+statement ok
+CREATE INDEX t_k4 ON t (k)
+
+query II
+SELECT k, v FROM t WHERE k = 5
+----
+5  50
+
+query I
+SELECT count(*) FROM t
+----
+4
+
+statement ok
+DROP TABLE t CASCADE
+
+statement ok
+DROP CLUSTER ir CASCADE
