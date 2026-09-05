@@ -1591,8 +1591,16 @@ impl<D: Data> ChunkBuilder<D> {
 struct Stage<D> {
     /// The contained updates.
     ///
-    /// This vector has a fixed capacity equal to the [`Chunk`] capacity.
+    /// Grows into `chunk_capacity` rather than being allocated at it, so a sink that never
+    /// stages that much never holds it. One of these exists per sink and worker, which is why
+    /// the eager allocation is worth avoiding even though a staging area is small.
     data: Vec<(D, Timestamp, Diff)>,
+    /// How many updates to accumulate before shipping a batch, from
+    /// `compute_correction_v2_chunk_size`.
+    ///
+    /// Shipping less often costs staging memory and saves inserts: it is the number of chains
+    /// minted per update, and every chain minted is a chain some later read has to merge.
+    chunk_capacity: usize,
     /// Introspection logging.
     ///
     /// We want to report the number of records in the stage. To do so, we pretend that the stage
@@ -1609,7 +1617,8 @@ impl<D: Data> Stage<D> {
         }
 
         Self {
-            data: Vec::with_capacity(chunk_capacity),
+            data: Vec::new(),
+            chunk_capacity,
             logging,
         }
     }
@@ -1628,7 +1637,7 @@ impl<D: Data> Stage<D> {
 
         // Determine how many chunks we can fill with the available updates.
         let update_count = self.data.len() + updates.len();
-        let chunk_capacity = self.data.capacity();
+        let chunk_capacity = self.chunk_capacity;
         let chunk_count = update_count / chunk_capacity;
 
         let mut new_updates = updates.drain(..);
@@ -1669,9 +1678,7 @@ impl<D: Data> Stage<D> {
             return None;
         }
 
-        let capacity = self.data.capacity();
-        let data = std::mem::replace(&mut self.data, Vec::with_capacity(capacity));
-        Some(data)
+        Some(std::mem::take(&mut self.data))
     }
 
     /// Advance the times of staged updates by the given `since`.
