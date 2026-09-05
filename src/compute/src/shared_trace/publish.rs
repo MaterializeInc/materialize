@@ -264,9 +264,9 @@ where
                         .writer_logical
                         .clone()
                         .unwrap_or_else(|| initial_logical.clone());
-                    // I1c comes with the standing hold being one of the accumulated holds: the
-                    // frontier is at or below it, so the arrangement compacts only as fast as the
-                    // slowest runtime's command stream.
+                    // The standing hold is one of the accumulated holds, so this frontier is at or
+                    // below it and the arrangement compacts only as fast as the slowest runtime's
+                    // command stream.
                     let held = state.logical_compaction.frontier().to_owned();
                     // An empty accumulation means every hold released, the standing one included.
                     // Forwarding it would tell the agent to compact everything, and the agent's

@@ -96,8 +96,7 @@ pub(super) struct SharedTraceState<Tr: TraceReader> {
     /// compaction the importing one has not. An importing dataflow whose `CreateDataflow` is still
     /// queued there has registered no hold, and would be built against an arrangement already
     /// compacted past its `as_of`. This hold forbids that: a shared arrangement compacts only as fast
-    /// as the slowest runtime's stream position. See
-    /// `doc/developer/design/20260720_two_runtime_compute/design.md`.
+    /// as the slowest runtime's stream position.
     ///
     /// Joins, so it only ever rises.
     /// [`PublishArrangement::adopt`](crate::shared_trace::publish::PublishArrangement::adopt) seeds it.
