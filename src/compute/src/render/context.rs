@@ -21,8 +21,7 @@ use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
-    ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION, ENABLE_COMPUTE_TEMPORAL_BUCKETING,
-    TEMPORAL_BUCKETING_SUMMARY,
+    ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION, TEMPORAL_BUCKETING_SUMMARY,
 };
 use mz_compute_types::plan::scalar::{LirScalarExpr, mfp_mir_to_lir_plan, mfp_plan_lir_to_mir};
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
@@ -1130,9 +1129,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             } else {
                 ArrangementStrategy::Direct
             };
-            let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing)
-                && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
-            {
+            let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing) {
                 let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
                     .get(config_set)
                     .try_into()
@@ -1163,9 +1160,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 } else {
                     strategy
                 };
-                let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing)
-                    && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
-                {
+                let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing) {
                     let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
                         .get(config_set)
                         .try_into()
