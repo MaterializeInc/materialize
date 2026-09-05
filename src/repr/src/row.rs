@@ -36,6 +36,7 @@ use proptest::prelude::*;
 #[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use uuid::Uuid;
 
 use crate::adt::array::{
@@ -817,6 +818,68 @@ pub struct RowPacker<'a> {
     row: &'a mut Row,
 }
 
+/// Builds a [`DatumMap`] one `(key, value)` entry at a time for
+/// [`RowPacker::push_indexed_dict_with`], capturing each entry's start offset as
+/// it is written so the in-map index can be appended without a second pass over
+/// the entries.
+pub struct DictBuilder<'a, 'row> {
+    packer: &'a mut RowPacker<'row>,
+    /// Start of the entries region within `packer.row.data`.
+    entries_start: usize,
+    /// Start offset of each entry pushed so far, relative to `entries_start`.
+    /// The inline capacity covers typical JSON objects without a heap
+    /// allocation, keeping the common case allocation-free.
+    offsets: SmallVec<[u32; 32]>,
+}
+
+impl Debug for DictBuilder<'_, '_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DictBuilder")
+            .field("entries_start", &self.entries_start)
+            .field("entries_pushed", &self.offsets.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl DictBuilder<'_, '_> {
+    /// Pushes one `(key, value)` entry, recording its start offset for the
+    /// index. `value` is run with the underlying packer to write the value,
+    /// which may itself be a nested list or dict.
+    ///
+    /// Keys must be pushed in ascending order, per the [`DatumMap`] contract.
+    /// Violating that makes [`DatumMap::get`] miss keys that are present, since
+    /// it binary searches, so the order is checked here under soft assertions
+    /// rather than only when the map is later iterated.
+    pub fn push_entry<F, R>(&mut self, key: &str, value: F) -> R
+    where
+        F: FnOnce(&mut RowPacker) -> R,
+    {
+        // Read the previous entry's key back out of the buffer instead of
+        // keeping a copy, so the check needs no extra state. Both borrows end
+        // before the push below takes `data` mutably.
+        if mz_ore::assert::soft_assertions_enabled() {
+            if let Some(&prev_offset) = self.offsets.last() {
+                let at = self.entries_start + usize::cast_from(prev_offset);
+                let mut cursor: &[u8] = &self.packer.row.data[at..];
+                // SAFETY: `cursor` points at the key datum written by the
+                // preceding `push_entry`.
+                let prev_key = unsafe { read_datum(&mut cursor) }.unwrap_str();
+                mz_ore::soft_assert_no_log!(
+                    prev_key < key,
+                    "Dict keys must be unique and given in ascending order: \
+                     {prev_key} came before {key}"
+                );
+            }
+        }
+
+        let offset = self.packer.row.data.len() - self.entries_start;
+        self.offsets
+            .push(u32::try_from(offset).expect("map larger than 4 GiB cannot be indexed"));
+        self.packer.push(Datum::String(key));
+        value(self.packer)
+    }
+}
+
 /// Infallible conversion from a [`Datum`] to a typed value.
 ///
 /// Used by [`DatumList::typed_iter`] to yield elements as `T` rather than
@@ -990,6 +1053,32 @@ impl<T> PartialOrd for DatumList<'_, T> {
 
 /// A mapping from string keys to Datums
 ///
+/// # Payload layout
+///
+/// `data` points at the map's serialized payload, which carries a small index
+/// *suffix* so that a key can be located with a binary search instead of a
+/// linear scan. For a map with `n > 0` entries the layout is:
+///
+/// ```text
+/// [ entries.. ][ offset_1: W ] .. [ offset_{n-1}: W ][ count_word: u32 ]
+/// ```
+///
+/// where the entries are `(key, value)` datum pairs **sorted in ascending key
+/// order**, `offset_i` is the start of entry `i` relative to the first entry
+/// (entry 0 is always at offset 0 and so is omitted), and `count_word` packs
+/// the entry count `n` in its low 30 bits with the offset-width class in its top
+/// two bits.
+///
+/// Offsets are stored at width `W` ∈ {1, 2, 4} bytes: the smallest that holds
+/// any offset, chosen from the entries' total byte length (`≤256 → u8`,
+/// `≤65536 → u16`, else `u32`). Because `W` is a deterministic function of the
+/// (fixed) entry bytes, equal maps pick the same width and encode identically.
+/// The suffix is thus `W * (n - 1) + 4` bytes, so the entries occupy the leading
+/// `data.len() - 4 - W * (n - 1)` bytes. The index lives at the end so the
+/// packer can append it (rather than splice it in front) once the entries are
+/// written. An empty map has an empty payload (no suffix), keeping its encoding
+/// canonical.
+///
 /// The type parameter `T` represents the value type of the map. It is a
 /// phantom parameter — the actual values are stored as serialized bytes and
 /// `T` is not enforced at runtime. It is up to the caller to ensure `T`
@@ -999,7 +1088,8 @@ impl<T> PartialOrd for DatumList<'_, T> {
 /// See `doc/developer/design/20260311_sqlfunc_generic.md` for the design
 /// behind the generic type parameter.
 pub struct DatumMap<'a, T = Datum<'a>> {
-    /// Points at the serialized datums, which should be sorted in key order
+    /// Points at the serialized payload (index header followed by the
+    /// key-sorted entries). See the type-level docs for the layout.
     data: &'a [u8],
     _phantom: PhantomData<fn() -> T>,
 }
@@ -1308,6 +1398,171 @@ fn read_untagged_bytes<'a>(data: &mut &'a [u8]) -> &'a [u8] {
     let (bytes, next) = data.split_at(len);
     *data = next;
     bytes
+}
+
+/// Number of low bits of the index count word that hold the entry count; the
+/// top two bits hold the offset-width class. See [`DatumMap`].
+const DICT_COUNT_BITS: u32 = 30;
+/// Mask selecting the entry count out of the index count word.
+const DICT_COUNT_MASK: u32 = (1 << DICT_COUNT_BITS) - 1;
+
+/// The width in bytes of each stored offset for a map whose entries occupy
+/// `entries_len` bytes. Offsets are positions in `0..entries_len`, so the
+/// width is the smallest that can hold `entries_len - 1`. Chosen purely from
+/// `entries_len` (a deterministic function of the entries' bytes) so that equal
+/// maps always pick the same width and encode identically.
+fn offset_width(entries_len: usize) -> usize {
+    if entries_len <= 0x100 {
+        1
+    } else if entries_len <= 0x1_0000 {
+        2
+    } else {
+        4
+    }
+}
+
+/// The width class (0/1/2) packed into the high bits of the count word for an
+/// offset width of 1/2/4 bytes.
+fn offset_width_class(width: usize) -> u32 {
+    match width {
+        1 => 0,
+        2 => 1,
+        4 => 2,
+        _ => unreachable!("offset width is 1, 2, or 4"),
+    }
+}
+
+/// Inverse of [`offset_width_class`].
+fn offset_width_for_class(class: u32) -> usize {
+    match class {
+        0 => 1,
+        1 => 2,
+        2 => 4,
+        _ => unreachable!("offset width class is 0, 1, or 2"),
+    }
+}
+
+/// Appends a single offset of `width` bytes (little-endian).
+fn append_offset(data: &mut CompactBytes, offset: usize, width: usize) {
+    let offset = u32::try_from(offset).expect("map larger than 4 GiB cannot be indexed");
+    match width {
+        1 => data.push(u8::try_from(offset).expect("offset fits in u8 for this width class")),
+        2 => data.extend_from_slice(
+            &u16::try_from(offset)
+                .expect("offset fits in u16 for this width class")
+                .to_le_bytes(),
+        ),
+        _ => data.extend_from_slice(&offset.to_le_bytes()),
+    }
+}
+
+/// Appends the trailing count word: the entry count in the low [`DICT_COUNT_BITS`]
+/// bits, with the offset-width class in the top two bits.
+fn append_count_word(data: &mut CompactBytes, count: usize, width: usize) {
+    assert!(
+        u64::cast_from(count) <= u64::from(DICT_COUNT_MASK),
+        "jsonb map with more than {DICT_COUNT_MASK} entries cannot be indexed"
+    );
+    let count = u32::try_from(count).expect("count <= DICT_COUNT_MASK, checked above");
+    let word = (offset_width_class(width) << DICT_COUNT_BITS) | count;
+    data.extend_from_slice(&word.to_le_bytes());
+}
+
+/// Builds the in-map index for a dictionary the packer has just written.
+///
+/// On entry, `data[entries_start..]` holds the dictionary's entries as a
+/// sequence of sorted `(key, value)` datum pairs. This walks those entries to
+/// recover the byte offset of each one, then appends the index *suffix*
+/// documented on [`DatumMap`].
+///
+/// A closure passed to [`RowPacker::push_dict_with`] may fail between pushing a
+/// key and pushing its value, which leaves a trailing key with no value. Such an
+/// entry is dropped: the walk stops at the last complete pair and the orphaned
+/// key is truncated away, so the map stays readable. The caller is abandoning the
+/// row on that path anyway, and reading past the orphan would walk off the end of
+/// the entries.
+///
+/// Empty dictionaries are left untouched so that they keep a canonical,
+/// header-free encoding (identical to [`DatumMap::empty`]). This keeps the
+/// encoding of any given map value deterministic, which `Row`'s byte-based
+/// equality relies on.
+fn finish_dict(data: &mut CompactBytes, entries_start: usize) {
+    let entries_end = data.len();
+    if entries_end == entries_start {
+        return;
+    }
+
+    // Walk the entries read-only, collecting each one's start offset, then hand
+    // off to the shared appender. Nothing is written until the walk is done, so
+    // the offsets never have to be revised once a truncated entry turns up.
+    // Offsets accumulate in an inline `SmallVec`, so typical maps stay
+    // allocation-free.
+    let mut offsets: SmallVec<[u32; 32]> = SmallVec::new();
+    let mut p = entries_start;
+    let mut prev_key: Option<&str> = None;
+    while p < entries_end {
+        let mut cursor: &[u8] = &data[p..entries_end];
+        let before = cursor.len();
+        // SAFETY: `cursor` points at the key/value datums just written by the
+        // packer, which are well-formed per `push_dict_with`'s contract.
+        let key = unsafe { read_datum(&mut cursor) };
+        if cursor.is_empty() {
+            // A key with no value: the closure failed mid-entry. Stop before it.
+            break;
+        }
+        // SAFETY: as above, and the key was followed by at least one byte.
+        unsafe { read_datum(&mut cursor) };
+
+        // Out-of-order keys make `DatumMap::get` miss keys that are present,
+        // since it binary searches. Check here so a caller that violates
+        // `push_dict_with`'s contract is caught where the map is built, rather
+        // than only if something later iterates it.
+        if mz_ore::assert::soft_assertions_enabled() {
+            let key = key.unwrap_str();
+            if let Some(prev_key) = prev_key {
+                mz_ore::soft_assert_no_log!(
+                    prev_key < key,
+                    "Dict keys must be unique and given in ascending order: \
+                     {prev_key} came before {key}"
+                );
+            }
+            prev_key = Some(key);
+        }
+
+        offsets.push(
+            u32::try_from(p - entries_start).expect("map larger than 4 GiB cannot be indexed"),
+        );
+        p += before - cursor.len();
+    }
+
+    // Discard a truncated trailing entry, if the walk found one.
+    data.truncate(p);
+    finish_dict_from_offsets(data, entries_start, &offsets);
+}
+
+/// Appends the in-map index suffix from offsets captured while the entries were
+/// written, instead of re-walking them as [`finish_dict`] does.
+///
+/// `entries_start` is the offset of the entries region within `data`, and
+/// `offsets[i]` is the start of entry `i` relative to it. This produces a
+/// byte-identical suffix to [`finish_dict`]: the width is chosen from the same
+/// `entries_len` and the offsets are the same positions, so the two builders
+/// are interchangeable and `Row`'s byte equality is preserved.
+///
+/// Empty dictionaries are left untouched, matching [`finish_dict`] and
+/// [`DatumMap::empty`].
+fn finish_dict_from_offsets(data: &mut CompactBytes, entries_start: usize, offsets: &[u32]) {
+    let n = offsets.len();
+    if n == 0 {
+        return;
+    }
+    let width = offset_width(data.len() - entries_start);
+    // Append the start offsets of entries `1..n` (entry 0 is always at offset 0
+    // and is omitted), then the count word. See [`DatumMap`] for the layout.
+    for &offset in &offsets[1..] {
+        append_offset(data, usize::cast_from(offset), width);
+    }
+    append_count_word(data, n, width);
 }
 
 /// Read a data whose length is encoded in the row before its contents.
@@ -2494,6 +2749,12 @@ impl RowPacker<'_> {
 
         let res = f(self);
 
+        // Build an in-map index over the entries that were just written, so
+        // that individual keys can be located with a binary search rather than
+        // a linear scan. See [`DatumMap`] for the payload layout. This must
+        // happen before the length is fixed up, as it changes the payload size.
+        finish_dict(&mut self.row.data, start + size_of::<u64>());
+
         let len = u64::cast_from(self.row.data.len() - start - size_of::<u64>());
         // fix up the len
         self.row.data[start..start + size_of::<u64>()].copy_from_slice(&len.to_le_bytes());
@@ -2507,6 +2768,48 @@ impl RowPacker<'_> {
         F: FnOnce(&mut RowPacker) -> Result<(), E>,
     {
         self.push_dict_with(f)
+    }
+
+    /// Pushes a [`DatumMap`] built one `(key, value)` entry at a time via a
+    /// [`DictBuilder`].
+    ///
+    /// This is equivalent to [`push_dict_with`](Self::push_dict_with) but builds
+    /// the in-map index from offsets captured as each entry is written, rather
+    /// than walking the entries a second time afterwards. Callers that already
+    /// iterate entry-by-entry (JSON packing, the columnar/proto decode paths)
+    /// should prefer this to avoid the redundant pass on the hot decode path.
+    ///
+    /// The same contract as [`push_dict_with`](Self::push_dict_with) applies:
+    /// entries **must** be pushed with keys in ascending order, and the closure
+    /// **must not** call [`clear`](Self::clear), [`truncate`](Self::truncate),
+    /// or [`truncate_datums`](Self::truncate_datums).
+    pub fn push_indexed_dict_with<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut DictBuilder<'_, '_>) -> R,
+    {
+        self.row.data.push(Tag::Dict.into());
+        let start = self.row.data.len();
+        // Write a dummy len, fixed up below.
+        self.row.data.extend_from_slice(&[0; size_of::<u64>()]);
+        let entries_start = self.row.data.len();
+
+        let mut builder = DictBuilder {
+            packer: self,
+            entries_start,
+            offsets: SmallVec::new(),
+        };
+        let res = f(&mut builder);
+        let offsets = std::mem::take(&mut builder.offsets);
+        // Drop the builder to release its borrow of `self` before we touch the
+        // row buffer again.
+        drop(builder);
+
+        finish_dict_from_offsets(&mut self.row.data, entries_start, &offsets);
+
+        let len = u64::cast_from(self.row.data.len() - start - size_of::<u64>());
+        self.row.data[start..start + size_of::<u64>()].copy_from_slice(&len.to_le_bytes());
+
+        res
     }
 
     /// Convenience function to construct an array from an iter of `Datum`s.
@@ -2764,10 +3067,9 @@ impl RowPacker<'_> {
         I: IntoIterator<Item = (&'a str, D)>,
         D: Borrow<Datum<'a>>,
     {
-        self.push_dict_with(|packer| {
+        self.push_indexed_dict_with(|builder| {
             for (k, v) in iter {
-                packer.push(Datum::String(k));
-                packer.push(*v.borrow())
+                builder.push_entry(k, |packer| packer.push(*v.borrow()));
             }
         })
     }
@@ -3053,9 +3355,104 @@ impl<'a, T: FromDatum<'a>> Iterator for DatumListTypedIter<'a, T> {
 }
 
 impl<'a, T> DatumMap<'a, T> {
+    /// Reads the index header (the trailing count word) for a non-empty map,
+    /// returning `(n, offset_width)`. See [`DatumMap`] for the layout and how
+    /// the width is packed into the count's high bits.
+    fn header(&self) -> Option<(usize, usize)> {
+        if self.data.is_empty() {
+            return None;
+        }
+        let n = self.data.len();
+        let word = u32::from_le_bytes(self.data[n - size_of::<u32>()..].try_into().unwrap());
+        let count = usize::cast_from(word & DICT_COUNT_MASK);
+        let width = offset_width_for_class(word >> DICT_COUNT_BITS);
+        Some((count, width))
+    }
+
+    /// The number of entries in the map.
+    pub fn len(&self) -> usize {
+        self.header().map_or(0, |(count, _)| count)
+    }
+
+    /// Whether the map has no entries.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The number of bytes the entries occupy, i.e. the payload minus the index
+    /// suffix. The suffix is `n - 1` offsets of `width` bytes plus the count
+    /// `u32`.
+    fn entries_len_for(&self, count: usize, width: usize) -> usize {
+        self.data.len() - size_of::<u32>() - width * (count - 1)
+    }
+
+    /// The slice holding the entries, with the index suffix stripped off.
+    ///
+    /// See the type-level docs for the payload layout.
+    fn entries(&self) -> &'a [u8] {
+        match self.header() {
+            None => self.data,
+            Some((count, width)) => &self.data[..self.entries_len_for(count, width)],
+        }
+    }
+
+    /// The start offset of entry `i` relative to the start of the entries
+    /// region. Entry 0 is implicitly at offset 0; the rest are read from the
+    /// index suffix (offsets of `width` bytes beginning at `entries_len`). `i`
+    /// must be in `0..count`.
+    fn entry_offset(&self, entries_len: usize, width: usize, i: usize) -> usize {
+        if i == 0 {
+            return 0;
+        }
+        let at = entries_len + width * (i - 1);
+        let bytes = &self.data[at..at + width];
+        match width {
+            1 => usize::from(bytes[0]),
+            2 => usize::from(u16::from_le_bytes(bytes.try_into().unwrap())),
+            _ => usize::cast_from(u32::from_le_bytes(bytes.try_into().unwrap())),
+        }
+    }
+
+    /// Looks up `key`, returning its value if present.
+    ///
+    /// Runs in `O(log n)` over the `n` entries by binary searching the
+    /// key-sorted index, rather than the `O(n)` linear scan of [`Self::iter`].
+    pub fn get(&self, key: &str) -> Option<Datum<'a>> {
+        let (n, width) = self.header()?;
+        let entries_len = self.entries_len_for(n, width);
+        let entries = &self.data[..entries_len];
+
+        let mut lo = 0;
+        let mut hi = n;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let mut cursor = &entries[self.entry_offset(entries_len, width, mid)..];
+            // SAFETY: `cursor` points at a well-formed entry (a string key
+            // followed by its value), per the `DatumMap` payload contract.
+            let mid_key = unsafe { read_datum(&mut cursor) }.unwrap_str();
+            match key.cmp(mid_key) {
+                Ordering::Equal => return Some(unsafe { read_datum(&mut cursor) }),
+                Ordering::Less => hi = mid,
+                Ordering::Greater => lo = mid + 1,
+            }
+        }
+        None
+    }
+
+    /// Looks up `key`, returning its value converted via [`FromDatum`].
+    ///
+    /// The typed counterpart to [`Self::get`], as [`Self::typed_iter`] is to
+    /// [`Self::iter`].
+    pub fn get_typed(&self, key: &str) -> Option<T>
+    where
+        T: FromDatum<'a>,
+    {
+        self.get(key).map(T::from_datum)
+    }
+
     pub fn iter(&self) -> DatumDictIter<'a> {
         DatumDictIter {
-            data: self.data,
+            data: self.entries(),
             prev_key: None,
         }
     }
@@ -4279,6 +4676,217 @@ mod tests {
         assert_eq!(dict.next(), None);
 
         Ok(())
+    }
+
+    #[mz_ore::test]
+    fn test_datum_map_get() {
+        // For maps of various sizes, `DatumMap::get` (binary search over the
+        // in-map index) must agree with a linear scan for both present keys and
+        // misses, and `len`/`is_empty` must report the right cardinality.
+        for n in [0_usize, 1, 2, 3, 7, 16, 50] {
+            let keys: Vec<String> = (0..n).map(|i| format!("k{i:03}")).collect();
+            let mut row = Row::default();
+            row.packer().push_dict_with(|row| {
+                // `push_dict_with` requires keys in ascending order; `keys` is
+                // already sorted.
+                for (i, k) in keys.iter().enumerate() {
+                    row.push(Datum::String(k));
+                    row.push(Datum::Int64(i64::try_from(i).unwrap() * 10));
+                }
+            });
+            let datum = row.unpack_first();
+            let map = datum.unwrap_map();
+
+            assert_eq!(map.len(), n);
+            assert_eq!(map.is_empty(), n == 0);
+
+            // Every present key resolves to its value.
+            for (i, k) in keys.iter().enumerate() {
+                assert_eq!(
+                    map.get(k),
+                    Some(Datum::Int64(i64::try_from(i).unwrap() * 10)),
+                    "present key {k:?} with n={n}",
+                );
+            }
+
+            // Misses (before, between, and after the keys) agree with a scan.
+            for probe in ["", "k", "k000a", "k999", "zzz"] {
+                let linear = map.iter().find(|(k, _)| *k == probe).map(|(_, v)| v);
+                assert_eq!(map.get(probe), linear, "probe {probe:?} with n={n}");
+            }
+        }
+
+        // Exercise all three offset widths (u8/u16/u32) by padding the values so
+        // the entries region crosses the 256- and 65536-byte thresholds. A wrong
+        // width choice would corrupt offset reads.
+        for value_len in [1_usize, 80, 90, 300, 70_000] {
+            let keys = ["a", "b", "c"];
+            let val = "x".repeat(value_len);
+            let mut row = Row::default();
+            row.packer().push_dict_with(|row| {
+                for k in keys {
+                    row.push(Datum::String(k));
+                    row.push(Datum::String(val.as_str()));
+                }
+            });
+            let datum = row.unpack_first();
+            let map = datum.unwrap_map();
+            assert_eq!(map.len(), keys.len(), "value_len={value_len}");
+            for k in keys {
+                assert_eq!(
+                    map.get(k),
+                    Some(Datum::String(val.as_str())),
+                    "key {k:?} with value_len={value_len}",
+                );
+            }
+            assert_eq!(map.get("zzz"), None, "miss with value_len={value_len}");
+        }
+
+        // A nested value is returned intact via `get`.
+        let mut row = Row::default();
+        row.packer().push_dict_with(|row| {
+            row.push(Datum::String("list"));
+            row.push_list_with(|row| {
+                row.push(Datum::Int64(1));
+                row.push(Datum::Int64(2));
+            });
+            row.push(Datum::String("scalar"));
+            row.push(Datum::Int64(7));
+        });
+        let datum = row.unpack_first();
+        let map = datum.unwrap_map();
+        assert_eq!(map.get("scalar"), Some(Datum::Int64(7)));
+        assert_eq!(
+            map.get("list")
+                .unwrap()
+                .unwrap_list()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Datum::Int64(1), Datum::Int64(2)],
+        );
+        assert_eq!(map.get("missing"), None);
+    }
+
+    #[mz_ore::test]
+    fn test_dict_with_failed_entry_is_readable() {
+        // A fallible closure can fail after pushing a key and before pushing its
+        // value. The index build must not walk off the end of that half-entry,
+        // and the map it leaves behind must still be readable, since callers
+        // that go on to inspect the row (a fuzz target, a `Debug` impl in an
+        // error path) would otherwise read past the entries.
+        for complete in [0_usize, 1, 2, 40] {
+            let mut row = Row::default();
+            let res: Result<(), &str> = row.packer().push_dict_with(|packer| {
+                for i in 0..complete {
+                    packer.push(Datum::String(&format!("k{i:03}")));
+                    packer.push(Datum::Int64(i64::try_from(i).unwrap()));
+                }
+                // The orphaned key, sorting after every complete entry.
+                packer.push(Datum::String("zzz"));
+                Err("value push failed")
+            });
+            assert_eq!(res, Err("value push failed"), "complete={complete}");
+
+            let datum = row.unpack_first();
+            let map = datum.unwrap_map();
+            assert_eq!(map.len(), complete, "complete={complete}");
+            assert_eq!(map.iter().count(), complete, "complete={complete}");
+            for i in 0..complete {
+                let key = format!("k{i:03}");
+                assert_eq!(
+                    map.get(&key),
+                    Some(Datum::Int64(i64::try_from(i).unwrap())),
+                    "complete={complete}",
+                );
+            }
+            // The orphaned entry is gone, not half-present.
+            assert_eq!(map.get("zzz"), None, "complete={complete}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_dict_builders_agree() {
+        // The two index builders must emit byte-identical maps: `finish_dict`
+        // (the closure path) and `finish_dict_from_offsets` (the push-time
+        // path). `Row` equality is byte equality, so a mismatch would make the
+        // same logical map compare unequal depending on which code packed it,
+        // breaking joins, dedup, and arrangement keys across paths that use
+        // different builders.
+        let cases: Vec<Vec<(String, String)>> = vec![
+            // Empty, single, and small maps.
+            vec![],
+            vec![("a".into(), "1".into())],
+            (0..3).map(|i| (format!("k{i}"), format!("v{i}"))).collect(),
+            // Straddles all three offset widths: u8, u16, then u32.
+            (0..50)
+                .map(|i| (format!("k{i:02}"), format!("v{i:02}")))
+                .collect(),
+            (0..5).map(|i| (format!("k{i}"), "x".repeat(100))).collect(),
+            (0..5)
+                .map(|i| (format!("k{i}"), "x".repeat(20_000)))
+                .collect(),
+            (0..500)
+                .map(|i| (format!("k{i:03}"), format!("{i}")))
+                .collect(),
+        ];
+
+        for entries in &cases {
+            let mut via_closure = Row::default();
+            via_closure.packer().push_dict_with(|packer| {
+                for (k, v) in entries {
+                    packer.push(Datum::String(k));
+                    packer.push(Datum::String(v));
+                }
+            });
+
+            let mut via_builder = Row::default();
+            via_builder.packer().push_indexed_dict_with(|builder| {
+                for (k, v) in entries {
+                    builder.push_entry(k, |packer| packer.push(Datum::String(v)));
+                }
+            });
+
+            assert_eq!(
+                via_closure.data.as_slice(),
+                via_builder.data.as_slice(),
+                "builders disagree for {} entries",
+                entries.len(),
+            );
+        }
+
+        // Nested maps and lists, built both ways.
+        let mut via_closure = Row::default();
+        via_closure.packer().push_dict_with(|packer| {
+            packer.push(Datum::String("inner"));
+            packer.push_dict_with(|packer| {
+                packer.push(Datum::String("x"));
+                packer.push(Datum::Int64(1));
+            });
+            packer.push(Datum::String("list"));
+            packer.push_list_with(|packer| {
+                packer.push(Datum::Int64(1));
+                packer.push(Datum::Int64(2));
+            });
+        });
+        let mut via_builder = Row::default();
+        via_builder.packer().push_indexed_dict_with(|builder| {
+            builder.push_entry("inner", |packer| {
+                packer.push_indexed_dict_with(|inner| {
+                    inner.push_entry("x", |packer| packer.push(Datum::Int64(1)));
+                })
+            });
+            builder.push_entry("list", |packer| {
+                packer.push_list_with(|packer| {
+                    packer.push(Datum::Int64(1));
+                    packer.push(Datum::Int64(2));
+                })
+            });
+        });
+        assert_eq!(
+            via_closure.data.as_slice(),
+            via_builder.data.as_slice(),
+            "builders disagree for a nested map",
+        );
     }
 
     #[mz_ore::test]

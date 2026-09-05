@@ -1137,10 +1137,9 @@ impl DatumColumnDecoder {
                     .try_into()
                     .expect("unexpected negative offset");
 
-                packer.push_dict_with(|packer| {
+                packer.push_indexed_dict_with(|builder| {
                     for idx in start..end {
-                        packer.push(Datum::String(keys.value(idx)));
-                        vals.get(idx, packer);
+                        builder.push_entry(keys.value(idx), |packer| vals.get(idx, packer));
                     }
                 });
 
@@ -2128,31 +2127,32 @@ impl RowPacker<'_> {
                 }
                 .map_err(|err| err.to_string())?
             }
-            Some(DatumType::Dict(x)) => self.push_dict_with(|row| -> Result<(), String> {
-                let mut prev_key: Option<&str> = None;
-                for e in x.elements.iter() {
-                    // Map keys must be unique and strictly ascending; iterating a
-                    // map that violates this trips a debug_assert. A crafted
-                    // proto can, so reject it as a decode error here instead.
-                    if let Some(prev) = prev_key
-                        && e.key.as_str() <= prev
-                    {
-                        return Err(format!(
-                            "dict keys must be unique and in ascending order, \
-                             but {:?} came after {:?}",
-                            e.key, prev,
-                        ));
+            Some(DatumType::Dict(x)) => {
+                self.push_indexed_dict_with(|builder| -> Result<(), String> {
+                    let mut prev_key: Option<&str> = None;
+                    for e in x.elements.iter() {
+                        // Map keys must be unique and strictly ascending; iterating a
+                        // map that violates this trips a debug_assert. A crafted
+                        // proto can, so reject it as a decode error here instead.
+                        if let Some(prev) = prev_key
+                            && e.key.as_str() <= prev
+                        {
+                            return Err(format!(
+                                "dict keys must be unique and in ascending order, \
+                                 but {:?} came after {:?}",
+                                e.key, prev,
+                            ));
+                        }
+                        prev_key = Some(e.key.as_str());
+                        let val = e
+                            .val
+                            .as_ref()
+                            .ok_or_else(|| format!("missing val for key: {}", e.key))?;
+                        builder.push_entry(e.key.as_str(), |row| row.try_push_proto(val))?;
                     }
-                    prev_key = Some(e.key.as_str());
-                    row.push(Datum::from(e.key.as_str()));
-                    let val = e
-                        .val
-                        .as_ref()
-                        .ok_or_else(|| format!("missing val for key: {}", e.key))?;
-                    row.try_push_proto(val)?;
-                }
-                Ok(())
-            })?,
+                    Ok(())
+                })?
+            }
             Some(DatumType::Numeric(x)) => {
                 // Reminder that special values like NaN, PosInf, and NegInf are
                 // represented as variants of ProtoDatumOther.

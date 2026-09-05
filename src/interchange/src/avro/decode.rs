@@ -432,17 +432,18 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
             map.insert(name, f.decode_field(ValueDecoder)?);
         }
         self.packer
-            .push_dict_with(|packer| -> Result<(), AvroError> {
+            .push_indexed_dict_with(|builder| -> Result<(), AvroError> {
                 for (key, val) in map {
-                    packer.push(Datum::String(key.as_str()));
-                    give_value(
-                        AvroFlatDecoder {
-                            packer,
-                            buf: &mut vec![],
-                            is_top: false,
-                        },
-                        &val,
-                    )?;
+                    builder.push_entry(key.as_str(), |packer| {
+                        give_value(
+                            AvroFlatDecoder {
+                                packer,
+                                buf: &mut vec![],
+                                is_top: false,
+                            },
+                            &val,
+                        )
+                    })?;
                 }
                 Ok(())
             })?;

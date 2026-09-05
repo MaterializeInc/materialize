@@ -358,10 +358,9 @@ impl CastFunc {
                 pairs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
                 pairs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);
                 Ok(arena.make_datum(|packer| {
-                    packer.push_dict_with(|packer| {
+                    packer.push_indexed_dict_with(|builder| {
                         for (k, v) in pairs {
-                            packer.push(Datum::String(&k));
-                            packer.push(v);
+                            builder.push_entry(&k, |packer| packer.push(v));
                         }
                     })
                 }))

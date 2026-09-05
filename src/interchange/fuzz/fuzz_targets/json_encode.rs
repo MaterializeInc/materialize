@@ -441,12 +441,13 @@ fn push_typed(
                 packer.push(Datum::Null);
             } else {
                 let n = u.int_in_range(0usize..=4)?;
-                packer.push_dict_with(|packer| {
+                packer.push_indexed_dict_with(|builder| {
                     // Keys must be pushed in ascending order and be unique. The
                     // zero-padded counter is lexically ascending.
                     for i in 0..n {
-                        packer.push(Datum::String(&format!("k{i:03}")));
-                        push_typed(packer, u, value, *value_nullable)?;
+                        builder.push_entry(&format!("k{i:03}"), |packer| {
+                            push_typed(packer, u, value, *value_nullable)
+                        })?;
                     }
                     Ok::<_, arbitrary::Error>(())
                 })?;

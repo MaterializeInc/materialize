@@ -232,7 +232,12 @@ a
 $ s3-verify-data bucket=copytos3 key=test/3 sort-rows=true
 "{1,2}",f,Infinity,"{""s"":""abc""}",1,32767,2147483647,9223372036854775807,12345678901234567890123.4567890123456789,2010-10-10,10:10:10,2010-10-10 10:10:10,2010-10-10 08:10:10+00,00:00:00,aaaa,\x5c7841414141,това е,\xd182d0b5d0bad181d182
 
+# Two files are written here for the same reason as test/2_5 above: rows are
+# exchanged to files by their hash modulo the batch count, and worker 0 always
+# emits batch 0's file (here empty, just a header). The single row hashes to a
+# non-zero batch, so its file carries the second header plus the data.
 $ s3-verify-data bucket=copytos3 key=test/4_5 sort-rows=true
+array;int4;jsonb;timestamp
 array;int4;jsonb;timestamp
 {1,2};83647;`{"s":"ab``c"}`;2010-10-10 10:10:10
 
