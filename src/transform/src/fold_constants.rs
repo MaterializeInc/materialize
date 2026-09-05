@@ -634,7 +634,7 @@ impl FoldConstants {
     }
 
     fn fold_filter_constant(
-        predicates: &[MirScalarExpr],
+        predicates: &[mz_expr::Predicate],
         rows: &[(Row, Diff)],
     ) -> Result<Vec<(Row, Diff)>, EvalError> {
         let mut new_rows = Vec::new();

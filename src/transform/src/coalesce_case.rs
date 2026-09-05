@@ -61,8 +61,12 @@ impl CoalesceCase {
             // don't mess with arrangements, even though their keys have MSEs in them
             // these _mostly_ shouldn't occur, since we run before join implementation, but some may be inserted earlier for us
             MirRelationExpr::ArrangeBy { .. } => (),
+            MirRelationExpr::Filter { predicates, .. } => {
+                for predicate in predicates.iter_mut() {
+                    self.rewrite_scalar(&mut predicate.expr);
+                }
+            }
             MirRelationExpr::Map { scalars: exprs, .. } |
-            MirRelationExpr::Filter { predicates: exprs, .. } |
             MirRelationExpr::FlatMap { exprs, .. } => {
                 // NB TableFunc doesn't ever hold an MSE
                 for expr in exprs.iter_mut() {

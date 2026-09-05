@@ -22,7 +22,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
 use mz_expr::JoinImplementation::IndexedFilter;
-use mz_expr::canonicalize::canonicalize_predicates;
 use mz_expr::func::variadic::{And, Or};
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{BinaryFunc, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, VariadicFunc};
@@ -200,7 +199,7 @@ impl LiteralConstraints {
                         mfp = MapFilterProject::new(inp_typ.arity() + key.len())
                             .project(0..inp_typ.arity()) // make the join semi
                             .map(map)
-                            .filter(filter)
+                            .filter_leveled(filter)
                             .project(project);
                         mfp.optimize()
                     }
@@ -597,13 +596,22 @@ impl LiteralConstraints {
         // predicates also have a "before" field, which we need to update. (`filter` will recompute
         // these.)
         let (map, _predicates, project) = mfp.as_map_filter_project();
-        let new_predicates = vec![MirScalarExpr::call_variadic(
-            And,
-            mfp.predicates.iter().map(|(_, p)| p.clone()).collect(),
+        let level = mfp
+            .predicates
+            .iter()
+            .map(|(_, p)| p.level())
+            .min()
+            .unwrap_or(0);
+        let new_predicates = vec![mz_expr::Predicate::at_level(
+            MirScalarExpr::call_variadic(
+                And,
+                mfp.predicates.iter().map(|(_, p)| p.expr.clone()).collect(),
+            ),
+            level,
         )];
         *mfp = MapFilterProject::new(mfp.input_arity)
             .map(map)
-            .filter(new_predicates)
+            .filter_leveled(new_predicates)
             .project(project);
     }
 
@@ -618,11 +626,14 @@ impl LiteralConstraints {
             .clone()
             .map(map.clone())
             .typ_with_input_types(&[relation_type]);
-        canonicalize_predicates(&mut predicates, &typ_after_map.column_types);
+        mz_expr::canonicalize::canonicalize_leveled_predicates(
+            &mut predicates,
+            &typ_after_map.column_types,
+        );
         // Rebuild the MFP with the new predicates.
         *mfp = MapFilterProject::new(mfp.input_arity)
             .map(map)
-            .filter(predicates)
+            .filter_leveled(predicates)
             .project(project);
     }
 
@@ -656,6 +667,7 @@ impl LiteralConstraints {
     /// overlapping undistribution opportunities, see comment there.
     fn distribute_and_over_or(mfp: &mut MapFilterProject) -> Result<(), RecursionLimitError> {
         mfp.predicates.iter_mut().try_for_each(|(_, p)| {
+            let p = &mut p.expr;
             let mut old_p = MirScalarExpr::column(0);
             while old_p != *p {
                 let size = p.size();

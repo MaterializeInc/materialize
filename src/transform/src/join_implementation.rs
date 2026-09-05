@@ -216,11 +216,12 @@ impl JoinImplementation {
 
             // We figure out what predicates from mfp_above could be pushed to which input.
             // We won't actually push these down now; this just informs FilterCharacteristics.
-            let (map, mut filter, _) = mfp_above.as_map_filter_project();
+            let (map, filter, _) = mfp_above.as_map_filter_project();
             let all_errors = filter.iter().all(|p| p.is_literal_err());
+            let mut filter_exprs: Vec<_> = filter.iter().map(|p| p.expr.clone()).collect();
             let (_, pushed_through_map) = PredicatePushdown::push_filters_through_map(
                 &map,
-                &mut filter,
+                &mut filter_exprs,
                 mfp_above.input_arity,
                 all_errors,
             )?;
@@ -244,7 +245,9 @@ impl JoinImplementation {
                 //   (In LIR, these will be executed right after the join path executes the join
                 //   for this input.)
                 // - (No need to look behind Gets, see the inline_mfp argument of RelationCSE.)
-                let mut characteristics = FilterCharacteristics::filter_characteristics(&filter)?;
+                let filter_exprs: Vec<_> = filter.iter().map(|p| p.expr.clone()).collect();
+                let mut characteristics =
+                    FilterCharacteristics::filter_characteristics(&filter_exprs)?;
                 if matches!(
                     input,
                     MirRelationExpr::Join {
@@ -262,7 +265,9 @@ impl JoinImplementation {
                     let (mfp, input) =
                         MapFilterProject::extract_non_errors_from_expr(arrange_by_input);
                     let (_, filter, _) = mfp.as_map_filter_project();
-                    characteristics |= FilterCharacteristics::filter_characteristics(&filter)?;
+                    let filter_exprs: Vec<_> = filter.iter().map(|p| p.expr.clone()).collect();
+                    characteristics |=
+                        FilterCharacteristics::filter_characteristics(&filter_exprs)?;
                     if matches!(
                         input,
                         MirRelationExpr::Join {
@@ -920,7 +925,7 @@ fn implement_arrangements<'a>(
     (
         combined_mfp
             .map(combined_map)
-            .filter(combined_filter)
+            .filter_leveled(combined_filter)
             .project(combined_project),
         lifted_projections,
     )
@@ -977,7 +982,7 @@ fn install_lifted_mfp(new_join: &mut MirRelationExpr, mfp: MapFilterProject) {
             //  used to insert Projections that were marking some columns to be
             //  identical, when Demand used to run after `JoinImplementation`.)
             let canonicalizer_map = mz_expr::canonicalize::get_canonicalizer_map(equivalences);
-            for expr in map.iter_mut().chain(filter.iter_mut()) {
+            for expr in map.iter_mut().chain(filter.iter_mut().map(|p| &mut p.expr)) {
                 expr.visit_mut_post(&mut |e| {
                     if let Some(canonical_expr) = canonicalizer_map.get(e) {
                         *e = canonical_expr.clone();
@@ -985,7 +990,11 @@ fn install_lifted_mfp(new_join: &mut MirRelationExpr, mfp: MapFilterProject) {
                 })
             }
         }
-        *new_join = new_join.clone().map(map).filter(filter).project(project);
+        *new_join = new_join
+            .clone()
+            .map(map)
+            .filter_leveled(filter)
+            .project(project);
     }
 }
 

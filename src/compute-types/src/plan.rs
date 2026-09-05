@@ -781,7 +781,7 @@ impl LirRelationExpr {
                                                 (row_arity..row_arity + key_len).chain(thinning),
                                             )
                                             .map(m)
-                                            .filter(f)
+                                            .filter_leveled(f)
                                             .project(p);
                                         closure.before =
                                             mfp.into_plan().unwrap().into_nontemporal().unwrap();

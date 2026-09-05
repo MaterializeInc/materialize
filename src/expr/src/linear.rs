@@ -12,6 +12,7 @@ use std::fmt::Display;
 use mz_repr::{Datum, Row};
 use serde::{Deserialize, Serialize};
 
+use crate::predicate::Predicate;
 use crate::scalar::optimizable::OptimizableExpr;
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr};
@@ -57,8 +58,12 @@ pub struct MapFilterProject<E: OptimizableExpr = MirScalarExpr> {
     /// in the predicate's support, but it could be larger to implement
     /// guarded evaluation of predicates.
     ///
-    /// This list should be sorted by the first field.
-    pub predicates: Vec<(usize, E)>,
+    /// Evaluation walks this list in order and stops at the first predicate
+    /// that fails, so the list order *is* the evaluation order. It is sorted by
+    /// security level first and position second, which is what keeps a
+    /// predicate constrained by a security barrier from observing a row that
+    /// the barrier itself would have rejected.
+    pub predicates: Vec<(usize, Predicate<E>)>,
     /// A sequence of column identifiers whose data form the output row.
     pub projection: Vec<usize>,
     /// The expected number of input columns.
@@ -79,7 +84,7 @@ impl<E: OptimizableExpr + Display> Display for MapFilterProject<E> {
         writeln!(f, "  predicates:")?;
         self.predicates
             .iter()
-            .try_for_each(|(before, p)| writeln!(f, "    <before: {}> {},", before, p))?;
+            .try_for_each(|(before, p)| writeln!(f, "    <before: {}> {},", before, p.expr))?;
         writeln!(f, "  projection: {:?}", self.projection)?;
         writeln!(f, "  input_arity: {}", self.input_arity)?;
         writeln!(f, ")")
@@ -103,7 +108,7 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
     /// from how function composition is usually written in mathematics.
     pub fn compose(before: Self, after: Self) -> Self {
         let (m, f, p) = after.into_map_filter_project();
-        before.map(m).filter(f).project(p)
+        before.map(m).filter_leveled(f).project(p)
     }
 
     /// True if the operator describes the identity transformation.
@@ -128,9 +133,18 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
     /// This method introduces predicates as eagerly as they can be evaluated,
     /// which may not be desired for predicates that may cause exceptions.
     /// If fine manipulation is required, the predicates can be added manually.
-    pub fn filter<I>(mut self, predicates: I) -> Self
+    pub fn filter<I>(self, predicates: I) -> Self
     where
         I: IntoIterator<Item = E>,
+    {
+        self.filter_leveled(predicates.into_iter().map(Predicate::unconstrained))
+    }
+
+    /// Retain only rows satisfying these predicates, each carrying its own
+    /// security level.
+    pub fn filter_leveled<I>(mut self, predicates: I) -> Self
+    where
+        I: IntoIterator<Item = Predicate<E>>,
     {
         for mut predicate in predicates {
             // Correct column references.
@@ -154,12 +168,25 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
                 .unwrap_or(0);
             self.predicates.push((max_support, predicate))
         }
-        // Stable sort predicates by position at which they take effect.
-        // We put literal errors at the end as a stop-gap to avoid erroring
-        // before we are able to evaluate any predicates that might prevent it.
-        self.predicates
-            .sort_by_key(|(position, predicate)| (E::is_literal_err(predicate), *position));
+        // fallthrough to the shared sort below
+        self.sort_predicates();
         self
+    }
+
+    /// Orders predicates for evaluation.
+    ///
+    /// Security level first, because a predicate a barrier constrains must not
+    /// observe a row the barrier would have rejected, and that is a correctness
+    /// requirement rather than a preference. Literal errors next, as a stop-gap
+    /// against erroring before a predicate that would have prevented it. Then
+    /// position, so each predicate is applied as early as its inputs allow.
+    /// Expression order breaks remaining ties, which keeps plans deterministic.
+    fn sort_predicates(&mut self) {
+        self.predicates.sort_by(|(pos_a, a), (pos_b, b)| {
+            (a.level(), E::is_literal_err(a), *pos_a)
+                .cmp(&(b.level(), E::is_literal_err(b), *pos_b))
+                .then_with(|| a.expr.cmp(&b.expr))
+        });
     }
 
     /// Append the result of evaluating expressions to each row.
@@ -189,7 +216,7 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
     }
 
     /// Like [`MapFilterProject::as_map_filter_project`], but consumes `self` rather than cloning.
-    pub fn into_map_filter_project(self) -> (Vec<E>, Vec<E>, Vec<usize>) {
+    pub fn into_map_filter_project(self) -> (Vec<E>, Vec<Predicate<E>>, Vec<usize>) {
         let predicates = self
             .predicates
             .into_iter()
@@ -202,7 +229,7 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
     ///
     /// In principle, this operator can be implemented as a sequence of
     /// more elemental operators, likely less efficiently.
-    pub fn as_map_filter_project(&self) -> (Vec<E>, Vec<E>, Vec<usize>) {
+    pub fn as_map_filter_project(&self) -> (Vec<E>, Vec<Predicate<E>>, Vec<usize>) {
         self.clone().into_map_filter_project()
     }
 }
@@ -216,7 +243,7 @@ impl MapFilterProject<MirScalarExpr> {
                 func: crate::BinaryFunc::Eq(_),
                 expr1,
                 expr2,
-            } = predicate
+            } = &predicate.expr
             {
                 if let Some(Ok(datum1)) = expr1.as_literal() {
                     if &**expr2 == expr {
@@ -274,7 +301,7 @@ impl MapFilterProject<MirScalarExpr> {
             }
             MirRelationExpr::Filter { input, predicates } => {
                 let (mfp, expr) = Self::extract_from_expression(input);
-                (mfp.filter(predicates.iter().cloned()), expr)
+                (mfp.filter_leveled(predicates.iter().cloned()), expr)
             }
             MirRelationExpr::Project { input, outputs } => {
                 let (mfp, expr) = Self::extract_from_expression(input);
@@ -307,7 +334,7 @@ impl MapFilterProject<MirScalarExpr> {
                 if predicates.iter().all(|p| !p.is_literal_err()) =>
             {
                 let (mfp, expr) = Self::extract_non_errors_from_expr(input);
-                (mfp.filter(predicates.iter().cloned()), expr)
+                (mfp.filter_leveled(predicates.iter().cloned()), expr)
             }
             MirRelationExpr::Project { input, outputs } => {
                 let (mfp, expr) = Self::extract_non_errors_from_expr(input);
@@ -348,7 +375,7 @@ impl MapFilterProject<MirScalarExpr> {
                     if predicates.iter().all(|p| !p.is_literal_err()) =>
                 {
                     let (mfp, expr) = Self::extract_non_errors_from_expr_ref_mut(input);
-                    (mfp.filter(predicates.iter().cloned()), expr)
+                    (mfp.filter_leveled(predicates.iter().cloned()), expr)
                 }
                 MirRelationExpr::Project { input, outputs } => {
                     let (mfp, expr) = Self::extract_non_errors_from_expr_ref_mut(input);
@@ -385,7 +412,7 @@ impl MapFilterProject<MirScalarExpr> {
                 if predicates.iter().all(|p| !p.is_literal_err()) =>
             {
                 let mfp = Self::extract_non_errors_from_expr_mut(input)
-                    .filter(predicates.iter().cloned());
+                    .filter_leveled(predicates.iter().cloned());
                 *expr = input.take_dangerous();
                 mfp
             }
@@ -405,7 +432,7 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
     pub fn has_temporal_predicates(&self) -> bool {
         self.predicates
             .iter()
-            .any(|(_, predicate)| OptimizableExpr::contains_temporal(predicate))
+            .any(|(_, predicate)| OptimizableExpr::contains_temporal(&predicate.expr))
     }
 
     /// Extracts temporal predicates into their own `Self`.
@@ -435,7 +462,7 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
         // Extract temporal predicates from `self.predicates`.
         let mut temporal_predicates = Vec::new();
         self.predicates.retain(|(_position, predicate)| {
-            if OptimizableExpr::contains_temporal(predicate) {
+            if OptimizableExpr::contains_temporal(&predicate.expr) {
                 temporal_predicates.push(predicate.clone());
                 false
             } else {
@@ -467,7 +494,7 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
 
         // Form a new `Self` containing the temporal predicates to return.
         Self::new(self.projection.len())
-            .filter(temporal_predicates)
+            .filter_leveled(temporal_predicates)
             .project(0..old_projection_len)
     }
 
@@ -575,14 +602,14 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
                     let mut prev: BTreeSet<_> = mfps[0]
                         .predicates
                         .iter()
-                        .map(|(_, e)| e)
+                        .map(|(_, p)| &p.expr)
                         .filter(|e| e.support().last() < Some(&input_arity))
                         .collect();
                     let mut next = BTreeSet::default();
                     for mfp in mfps[1..].iter() {
-                        for (_, expr) in mfp.predicates.iter() {
-                            if prev.contains(expr) {
-                                next.insert(expr);
+                        for (_, p) in mfp.predicates.iter() {
+                            if prev.contains(&p.expr) {
+                                next.insert(&p.expr);
                             }
                         }
                         std::mem::swap(&mut prev, &mut next);
@@ -598,7 +625,7 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
                 result_mfp.predicates.extend(
                     common_preds
                         .into_iter()
-                        .map(|e| (result_mfp.projection.len(), e)),
+                        .map(|e| (result_mfp.projection.len(), Predicate::unconstrained(e))),
                 );
 
                 // Then, look for unused columns and project them away.
@@ -856,11 +883,11 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
         // Form and return the before and after MapFilterProject instances.
         let before = Self::new(input_arity)
             .map(before_expr)
-            .filter(before_pred)
+            .filter_leveled(before_pred)
             .project(before_proj.clone());
         let after = Self::new(self.input_arity + (before_proj.len() - input_arity))
             .map(after_expr)
-            .filter(after_pred)
+            .filter_leveled(after_pred)
             .project(after_proj);
         (before, after)
     }
@@ -921,7 +948,7 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
         }
         *self = Self::new(new_input_arity)
             .map(map)
-            .filter(filter)
+            .filter_leveled(filter)
             .project(project)
     }
 }
@@ -1014,7 +1041,7 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
             // count of one, and then removes any expressions that are not
             // referenced.
             self.memoize_expressions();
-            self.predicates.sort();
+            self.sort_predicates();
             self.predicates.dedup();
             self.inline_expressions();
             self.remove_undemanded();
@@ -1023,7 +1050,7 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
             let (map, filter, project) = self.as_map_filter_project();
             *self = Self::new(self.input_arity)
                 .map(map)
-                .filter(filter)
+                .filter_leveled(filter)
                 .project(project);
 
             self_size = self.size();
@@ -1039,7 +1066,7 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
             + self
                 .predicates
                 .iter()
-                .map(|(_, e)| OptimizableExpr::size(e))
+                .map(|(_, p)| OptimizableExpr::size(&p.expr))
                 .sum::<usize>()
     }
 
@@ -1167,8 +1194,8 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
                 new_expressions.push(self.expressions[expression].clone());
                 expression += 1;
             }
-            predicate.permute_map(&remaps);
-            memoize_expr(predicate, &mut new_expressions, self.input_arity);
+            predicate.expr.permute_map(&remaps);
+            memoize_expr(&mut predicate.expr, &mut new_expressions, self.input_arity);
         }
         while expression < self.expressions.len() {
             self.expressions[expression].permute_map(&remaps);
@@ -1425,8 +1452,8 @@ impl<E: OptimizableExpr> MapFilterProject<E> {
                 e.permute_map(&remap);
                 e
             }))
-            .filter(predicates.into_iter().map(|mut p| {
-                p.permute_map(&remap);
+            .filter_leveled(predicates.into_iter().map(|mut p| {
+                p.expr.permute_map(&remap);
                 p
             }))
             .project(projection.into_iter().map(|c| remap[&c]));
@@ -1685,7 +1712,7 @@ pub mod plan {
                     datums.push(self.mfp.expressions[expression].eval(&datums[..], arena)?);
                     expression += 1;
                 }
-                if predicate.eval(&datums[..], arena)? != Datum::True {
+                if predicate.expr.eval(&datums[..], arena)? != Datum::True {
                     return Ok(false);
                 }
             }
@@ -1773,8 +1800,8 @@ pub mod plan {
 
             let mut temporal = Vec::new();
             mfp.predicates.retain(|(_position, predicate)| {
-                if OptimizableExpr::contains_temporal(predicate) {
-                    temporal.push(predicate.clone());
+                if OptimizableExpr::contains_temporal(&predicate.expr) {
+                    temporal.push(predicate.expr.clone());
                     false
                 } else {
                     true
@@ -1834,7 +1861,7 @@ pub mod plan {
         /// The order of iteration is unspecified.
         pub fn iter_nontemporal_exprs(&mut self) -> impl Iterator<Item = &mut E> {
             iter::empty()
-                .chain(self.mfp.mfp.predicates.iter_mut().map(|(_, expr)| expr))
+                .chain(self.mfp.mfp.predicates.iter_mut().map(|(_, p)| &mut p.expr))
                 .chain(&mut self.mfp.mfp.expressions)
                 .chain(&mut self.lower_bounds)
                 .chain(&mut self.upper_bounds)
@@ -1876,7 +1903,10 @@ pub mod plan {
                     .max()
                     .map(|c| c + 1)
                     .unwrap_or(0);
-                mfp.predicates.push((support, predicate));
+                mfp.predicates.push((
+                    support,
+                    crate::predicate::Predicate::unconstrained(predicate),
+                ));
             }
             for ub in upper_bounds {
                 // mz_now() < ub
@@ -1887,7 +1917,10 @@ pub mod plan {
                     .max()
                     .map(|c| c + 1)
                     .unwrap_or(0);
-                mfp.predicates.push((support, predicate));
+                mfp.predicates.push((
+                    support,
+                    crate::predicate::Predicate::unconstrained(predicate),
+                ));
             }
 
             mfp

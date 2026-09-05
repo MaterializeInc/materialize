@@ -425,21 +425,87 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                     },
                     "predicates": [
                       {
-                        "CallVariadic": {
-                          "func": {
-                            "And": null
-                          },
-                          "exprs": [
-                            {
-                              "CallVariadic": {
-                                "func": {
-                                  "And": null
-                                },
-                                "exprs": [
-                                  {
+                        "level": 0,
+                        "expr": {
+                          "CallVariadic": {
+                            "func": {
+                              "And": null
+                            },
+                            "exprs": [
+                              {
+                                "CallVariadic": {
+                                  "func": {
+                                    "And": null
+                                  },
+                                  "exprs": [
+                                    {
+                                      "CallBinary": {
+                                        "func": {
+                                          "Gt": null
+                                        },
+                                        "expr1": {
+                                          "Column": [
+                                            0,
+                                            "a"
+                                          ]
+                                        },
+                                        "expr2": {
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  44
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": false
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "CallBinary": {
+                                        "func": {
+                                          "Lt": null
+                                        },
+                                        "expr1": {
+                                          "Column": [
+                                            1,
+                                            "b"
+                                          ]
+                                        },
+                                        "expr2": {
+                                          "Literal": [
+                                            {
+                                              "Ok": {
+                                                "data": [
+                                                  44
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "scalar_type": "Int32",
+                                              "nullable": false
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              },
+                              {
+                                "CallBinary": {
+                                  "func": {
+                                    "Gt": null
+                                  },
+                                  "expr1": {
                                     "CallBinary": {
                                       "func": {
-                                        "Gt": null
+                                        "AddInt32": null
                                       },
                                       "expr1": {
                                         "Column": [
@@ -448,95 +514,32 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                                         ]
                                       },
                                       "expr2": {
-                                        "Literal": [
-                                          {
-                                            "Ok": {
-                                              "data": [
-                                                44
-                                              ]
-                                            }
-                                          },
-                                          {
-                                            "scalar_type": "Int32",
-                                            "nullable": false
-                                          }
-                                        ]
-                                      }
-                                    }
-                                  },
-                                  {
-                                    "CallBinary": {
-                                      "func": {
-                                        "Lt": null
-                                      },
-                                      "expr1": {
                                         "Column": [
                                           1,
                                           "b"
                                         ]
+                                      }
+                                    }
+                                  },
+                                  "expr2": {
+                                    "Literal": [
+                                      {
+                                        "Ok": {
+                                          "data": [
+                                            44
+                                          ]
+                                        }
                                       },
-                                      "expr2": {
-                                        "Literal": [
-                                          {
-                                            "Ok": {
-                                              "data": [
-                                                44
-                                              ]
-                                            }
-                                          },
-                                          {
-                                            "scalar_type": "Int32",
-                                            "nullable": false
-                                          }
-                                        ]
+                                      {
+                                        "scalar_type": "Int32",
+                                        "nullable": false
                                       }
-                                    }
+                                    ]
                                   }
-                                ]
-                              }
-                            },
-                            {
-                              "CallBinary": {
-                                "func": {
-                                  "Gt": null
-                                },
-                                "expr1": {
-                                  "CallBinary": {
-                                    "func": {
-                                      "AddInt32": null
-                                    },
-                                    "expr1": {
-                                      "Column": [
-                                        0,
-                                        "a"
-                                      ]
-                                    },
-                                    "expr2": {
-                                      "Column": [
-                                        1,
-                                        "b"
-                                      ]
-                                    }
-                                  }
-                                },
-                                "expr2": {
-                                  "Literal": [
-                                    {
-                                      "Ok": {
-                                        "data": [
-                                          44
-                                        ]
-                                      }
-                                    },
-                                    {
-                                      "scalar_type": "Int32",
-                                      "nullable": false
-                                    }
-                                  ]
                                 }
                               }
-                            }
-                          ]
+                            ]
+                          }
                         }
                       }
                     ]
@@ -1809,42 +1812,45 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                 },
                                 "predicates": [
                                   {
-                                    "CallVariadic": {
-                                      "func": {
-                                        "And": null
-                                      },
-                                      "exprs": [
-                                        {
-                                          "Literal": [
-                                            {
-                                              "Ok": {
-                                                "data": [
-                                                  2
-                                                ]
-                                              }
-                                            },
-                                            {
-                                              "scalar_type": "Bool",
-                                              "nullable": false
-                                            }
-                                          ]
+                                    "level": 0,
+                                    "expr": {
+                                      "CallVariadic": {
+                                        "func": {
+                                          "And": null
                                         },
-                                        {
-                                          "Literal": [
-                                            {
-                                              "Ok": {
-                                                "data": [
-                                                  2
-                                                ]
+                                        "exprs": [
+                                          {
+                                            "Literal": [
+                                              {
+                                                "Ok": {
+                                                  "data": [
+                                                    2
+                                                  ]
+                                                }
+                                              },
+                                              {
+                                                "scalar_type": "Bool",
+                                                "nullable": false
                                               }
-                                            },
-                                            {
-                                              "scalar_type": "Bool",
-                                              "nullable": false
-                                            }
-                                          ]
-                                        }
-                                      ]
+                                            ]
+                                          },
+                                          {
+                                            "Literal": [
+                                              {
+                                                "Ok": {
+                                                  "data": [
+                                                    2
+                                                  ]
+                                                }
+                                              },
+                                              {
+                                                "scalar_type": "Bool",
+                                                "nullable": false
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      }
                                     }
                                   }
                                 ]
@@ -1978,21 +1984,24 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                           },
                                                           "predicates": [
                                                             {
-                                                              "CallBinary": {
-                                                                "func": {
-                                                                  "Lt": null
-                                                                },
-                                                                "expr1": {
-                                                                  "Column": [
-                                                                    0,
-                                                                    "a"
-                                                                  ]
-                                                                },
-                                                                "expr2": {
-                                                                  "Column": [
-                                                                    1,
-                                                                    "a"
-                                                                  ]
+                                                              "level": 0,
+                                                              "expr": {
+                                                                "CallBinary": {
+                                                                  "func": {
+                                                                    "Lt": null
+                                                                  },
+                                                                  "expr1": {
+                                                                    "Column": [
+                                                                      0,
+                                                                      "a"
+                                                                    ]
+                                                                  },
+                                                                  "expr2": {
+                                                                    "Column": [
+                                                                      1,
+                                                                      "a"
+                                                                    ]
+                                                                  }
                                                                 }
                                                               }
                                                             }
@@ -2267,10 +2276,13 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                         },
                         "predicates": [
                           {
-                            "Column": [
-                              2,
-                              null
-                            ]
+                            "level": 0,
+                            "expr": {
+                              "Column": [
+                                2,
+                                null
+                              ]
+                            }
                           }
                         ]
                       }
@@ -2409,21 +2421,24 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                               },
                                               "predicates": [
                                                 {
-                                                  "CallBinary": {
-                                                    "func": {
-                                                      "Gt": null
-                                                    },
-                                                    "expr1": {
-                                                      "Column": [
-                                                        0,
-                                                        "b"
-                                                      ]
-                                                    },
-                                                    "expr2": {
-                                                      "Column": [
-                                                        2,
-                                                        "b"
-                                                      ]
+                                                  "level": 0,
+                                                  "expr": {
+                                                    "CallBinary": {
+                                                      "func": {
+                                                        "Gt": null
+                                                      },
+                                                      "expr1": {
+                                                        "Column": [
+                                                          0,
+                                                          "b"
+                                                        ]
+                                                      },
+                                                      "expr2": {
+                                                        "Column": [
+                                                          2,
+                                                          "b"
+                                                        ]
+                                                      }
                                                     }
                                                   }
                                                 }
@@ -2698,10 +2713,13 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
             },
             "predicates": [
               {
-                "Column": [
-                  2,
-                  null
-                ]
+                "level": 0,
+                "expr": {
+                  "Column": [
+                    2,
+                    null
+                  ]
+                }
               }
             ]
           }
@@ -3004,21 +3022,24 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                             },
                                                             "predicates": [
                                                               {
-                                                                "CallBinary": {
-                                                                  "func": {
-                                                                    "Eq": null
-                                                                  },
-                                                                  "expr1": {
-                                                                    "Column": [
-                                                                      2,
-                                                                      "b"
-                                                                    ]
-                                                                  },
-                                                                  "expr2": {
-                                                                    "Column": [
-                                                                      0,
-                                                                      "b"
-                                                                    ]
+                                                                "level": 0,
+                                                                "expr": {
+                                                                  "CallBinary": {
+                                                                    "func": {
+                                                                      "Eq": null
+                                                                    },
+                                                                    "expr1": {
+                                                                      "Column": [
+                                                                        2,
+                                                                        "b"
+                                                                      ]
+                                                                    },
+                                                                    "expr2": {
+                                                                      "Column": [
+                                                                        0,
+                                                                        "b"
+                                                                      ]
+                                                                    }
                                                                   }
                                                                 }
                                                               }
@@ -3586,21 +3607,24 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                             },
                                                             "predicates": [
                                                               {
-                                                                "CallBinary": {
-                                                                  "func": {
-                                                                    "Eq": null
-                                                                  },
-                                                                  "expr1": {
-                                                                    "Column": [
-                                                                      2,
-                                                                      "b"
-                                                                    ]
-                                                                  },
-                                                                  "expr2": {
-                                                                    "Column": [
-                                                                      0,
-                                                                      "b"
-                                                                    ]
+                                                                "level": 0,
+                                                                "expr": {
+                                                                  "CallBinary": {
+                                                                    "func": {
+                                                                      "Eq": null
+                                                                    },
+                                                                    "expr1": {
+                                                                      "Column": [
+                                                                        2,
+                                                                        "b"
+                                                                      ]
+                                                                    },
+                                                                    "expr2": {
+                                                                      "Column": [
+                                                                        0,
+                                                                        "b"
+                                                                      ]
+                                                                    }
                                                                   }
                                                                 }
                                                               }
@@ -4918,50 +4942,53 @@ WHERE t1.b = t2.b AND t2.b = t3.b
             },
             "predicates": [
               {
-                "CallVariadic": {
-                  "func": {
-                    "And": null
-                  },
-                  "exprs": [
-                    {
-                      "CallBinary": {
-                        "func": {
-                          "Eq": null
-                        },
-                        "expr1": {
-                          "Column": [
-                            1,
-                            "b"
-                          ]
-                        },
-                        "expr2": {
-                          "Column": [
-                            3,
-                            "b"
-                          ]
-                        }
-                      }
+                "level": 0,
+                "expr": {
+                  "CallVariadic": {
+                    "func": {
+                      "And": null
                     },
-                    {
-                      "CallBinary": {
-                        "func": {
-                          "Eq": null
-                        },
-                        "expr1": {
-                          "Column": [
-                            3,
-                            "b"
-                          ]
-                        },
-                        "expr2": {
-                          "Column": [
-                            5,
-                            "b"
-                          ]
+                    "exprs": [
+                      {
+                        "CallBinary": {
+                          "func": {
+                            "Eq": null
+                          },
+                          "expr1": {
+                            "Column": [
+                              1,
+                              "b"
+                            ]
+                          },
+                          "expr2": {
+                            "Column": [
+                              3,
+                              "b"
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "CallBinary": {
+                          "func": {
+                            "Eq": null
+                          },
+                          "expr1": {
+                            "Column": [
+                              3,
+                              "b"
+                            ]
+                          },
+                          "expr2": {
+                            "Column": [
+                              5,
+                              "b"
+                            ]
+                          }
                         }
                       }
-                    }
-                  ]
+                    ]
+                  }
                 }
               }
             ]
@@ -5174,21 +5201,24 @@ INNER JOIN t as t3 ON t2.b = t3.b
                             },
                             "predicates": [
                               {
-                                "CallBinary": {
-                                  "func": {
-                                    "Eq": null
-                                  },
-                                  "expr1": {
-                                    "Column": [
-                                      1,
-                                      "b"
-                                    ]
-                                  },
-                                  "expr2": {
-                                    "Column": [
-                                      3,
-                                      "b"
-                                    ]
+                                "level": 0,
+                                "expr": {
+                                  "CallBinary": {
+                                    "func": {
+                                      "Eq": null
+                                    },
+                                    "expr1": {
+                                      "Column": [
+                                        1,
+                                        "b"
+                                      ]
+                                    },
+                                    "expr2": {
+                                      "Column": [
+                                        3,
+                                        "b"
+                                      ]
+                                    }
                                   }
                                 }
                               }
@@ -5355,21 +5385,24 @@ INNER JOIN t as t3 ON t2.b = t3.b
                         },
                         "predicates": [
                           {
-                            "CallBinary": {
-                              "func": {
-                                "Eq": null
-                              },
-                              "expr1": {
-                                "Column": [
-                                  3,
-                                  "b"
-                                ]
-                              },
-                              "expr2": {
-                                "Column": [
-                                  5,
-                                  "b"
-                                ]
+                            "level": 0,
+                            "expr": {
+                              "CallBinary": {
+                                "func": {
+                                  "Eq": null
+                                },
+                                "expr1": {
+                                  "Column": [
+                                    3,
+                                    "b"
+                                  ]
+                                },
+                                "expr2": {
+                                  "Column": [
+                                    5,
+                                    "b"
+                                  ]
+                                }
                               }
                             }
                           }
@@ -5626,21 +5659,24 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                             },
                             "predicates": [
                               {
-                                "CallBinary": {
-                                  "func": {
-                                    "Eq": null
-                                  },
-                                  "expr1": {
-                                    "Column": [
-                                      1,
-                                      "b"
-                                    ]
-                                  },
-                                  "expr2": {
-                                    "Column": [
-                                      3,
-                                      "b"
-                                    ]
+                                "level": 0,
+                                "expr": {
+                                  "CallBinary": {
+                                    "func": {
+                                      "Eq": null
+                                    },
+                                    "expr1": {
+                                      "Column": [
+                                        1,
+                                        "b"
+                                      ]
+                                    },
+                                    "expr2": {
+                                      "Column": [
+                                        3,
+                                        "b"
+                                      ]
+                                    }
                                   }
                                 }
                               }
@@ -5739,20 +5775,23 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                           },
                                                           "predicates": [
                                                             {
-                                                              "CallUnary": {
-                                                                "func": {
-                                                                  "Not": null
-                                                                },
-                                                                "expr": {
-                                                                  "CallUnary": {
-                                                                    "func": {
-                                                                      "IsNull": null
-                                                                    },
-                                                                    "expr": {
-                                                                      "Column": [
-                                                                        1,
-                                                                        "b"
-                                                                      ]
+                                                              "level": 0,
+                                                              "expr": {
+                                                                "CallUnary": {
+                                                                  "func": {
+                                                                    "Not": null
+                                                                  },
+                                                                  "expr": {
+                                                                    "CallUnary": {
+                                                                      "func": {
+                                                                        "IsNull": null
+                                                                      },
+                                                                      "expr": {
+                                                                        "Column": [
+                                                                          1,
+                                                                          "b"
+                                                                        ]
+                                                                      }
                                                                     }
                                                                   }
                                                                 }
@@ -6035,21 +6074,24 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                         },
                         "predicates": [
                           {
-                            "CallBinary": {
-                              "func": {
-                                "Eq": null
-                              },
-                              "expr1": {
-                                "Column": [
-                                  3,
-                                  "b"
-                                ]
-                              },
-                              "expr2": {
-                                "Column": [
-                                  5,
-                                  "b"
-                                ]
+                            "level": 0,
+                            "expr": {
+                              "CallBinary": {
+                                "func": {
+                                  "Eq": null
+                                },
+                                "expr1": {
+                                  "Column": [
+                                    3,
+                                    "b"
+                                  ]
+                                },
+                                "expr2": {
+                                  "Column": [
+                                    5,
+                                    "b"
+                                  ]
+                                }
                               }
                             }
                           }
@@ -6158,20 +6200,23 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                           },
                                                           "predicates": [
                                                             {
-                                                              "CallUnary": {
-                                                                "func": {
-                                                                  "Not": null
-                                                                },
-                                                                "expr": {
-                                                                  "CallUnary": {
-                                                                    "func": {
-                                                                      "IsNull": null
-                                                                    },
-                                                                    "expr": {
-                                                                      "Column": [
-                                                                        1,
-                                                                        "b"
-                                                                      ]
+                                                              "level": 0,
+                                                              "expr": {
+                                                                "CallUnary": {
+                                                                  "func": {
+                                                                    "Not": null
+                                                                  },
+                                                                  "expr": {
+                                                                    "CallUnary": {
+                                                                      "func": {
+                                                                        "IsNull": null
+                                                                      },
+                                                                      "expr": {
+                                                                        "Column": [
+                                                                          1,
+                                                                          "b"
+                                                                        ]
+                                                                      }
                                                                     }
                                                                   }
                                                                 }
@@ -7153,21 +7198,24 @@ FROM
                                   },
                                   "predicates": [
                                     {
-                                      "CallBinary": {
-                                        "func": {
-                                          "NotEq": null
-                                        },
-                                        "expr1": {
-                                          "Column": [
-                                            1,
-                                            "m"
-                                          ]
-                                        },
-                                        "expr2": {
-                                          "Column": [
-                                            0,
-                                            "a"
-                                          ]
+                                      "level": 0,
+                                      "expr": {
+                                        "CallBinary": {
+                                          "func": {
+                                            "NotEq": null
+                                          },
+                                          "expr1": {
+                                            "Column": [
+                                              1,
+                                              "m"
+                                            ]
+                                          },
+                                          "expr2": {
+                                            "Column": [
+                                              0,
+                                              "a"
+                                            ]
+                                          }
                                         }
                                       }
                                     }
@@ -7605,73 +7653,76 @@ FROM
                               },
                               "predicates": [
                                 {
-                                  "CallVariadic": {
-                                    "func": {
-                                      "Or": null
-                                    },
-                                    "exprs": [
-                                      {
-                                        "CallBinary": {
-                                          "func": {
-                                            "NotEq": null
-                                          },
-                                          "expr1": {
-                                            "Column": [
-                                              1,
-                                              "m"
-                                            ]
-                                          },
-                                          "expr2": {
-                                            "Column": [
-                                              0,
-                                              "a"
-                                            ]
-                                          }
-                                        }
+                                  "level": 0,
+                                  "expr": {
+                                    "CallVariadic": {
+                                      "func": {
+                                        "Or": null
                                       },
-                                      {
-                                        "CallVariadic": {
-                                          "func": {
-                                            "And": null
-                                          },
-                                          "exprs": [
-                                            {
-                                              "CallUnary": {
-                                                "func": {
-                                                  "Not": null
-                                                },
-                                                "expr": {
-                                                  "CallUnary": {
-                                                    "func": {
-                                                      "IsNull": null
-                                                    },
-                                                    "expr": {
-                                                      "Column": [
-                                                        1,
-                                                        "m"
-                                                      ]
+                                      "exprs": [
+                                        {
+                                          "CallBinary": {
+                                            "func": {
+                                              "NotEq": null
+                                            },
+                                            "expr1": {
+                                              "Column": [
+                                                1,
+                                                "m"
+                                              ]
+                                            },
+                                            "expr2": {
+                                              "Column": [
+                                                0,
+                                                "a"
+                                              ]
+                                            }
+                                          }
+                                        },
+                                        {
+                                          "CallVariadic": {
+                                            "func": {
+                                              "And": null
+                                            },
+                                            "exprs": [
+                                              {
+                                                "CallUnary": {
+                                                  "func": {
+                                                    "Not": null
+                                                  },
+                                                  "expr": {
+                                                    "CallUnary": {
+                                                      "func": {
+                                                        "IsNull": null
+                                                      },
+                                                      "expr": {
+                                                        "Column": [
+                                                          1,
+                                                          "m"
+                                                        ]
+                                                      }
                                                     }
                                                   }
                                                 }
-                                              }
-                                            },
-                                            {
-                                              "CallUnary": {
-                                                "func": {
-                                                  "IsNull": null
-                                                },
-                                                "expr": {
-                                                  "Column": [
-                                                    0,
-                                                    "a"
-                                                  ]
+                                              },
+                                              {
+                                                "CallUnary": {
+                                                  "func": {
+                                                    "IsNull": null
+                                                  },
+                                                  "expr": {
+                                                    "Column": [
+                                                      0,
+                                                      "a"
+                                                    ]
+                                                  }
                                                 }
                                               }
-                                            }
-                                          ]
+                                            ]
+                                          }
                                         }
-                                      }
-                                    ]
+                                      ]
+                                    }
                                   }
                                 }
                               ]
@@ -8636,60 +8687,63 @@ FROM
                                                     },
                                                     "predicates": [
                                                       {
-                                                        "CallVariadic": {
-                                                          "func": {
-                                                            "And": null
-                                                          },
-                                                          "exprs": [
-                                                            {
-                                                              "CallBinary": {
-                                                                "func": {
-                                                                  "Eq": null
-                                                                },
-                                                                "expr1": {
-                                                                  "Column": [
-                                                                    1,
-                                                                    "a"
-                                                                  ]
-                                                                },
-                                                                "expr2": {
-                                                                  "Column": [
-                                                                    0,
-                                                                    "m"
-                                                                  ]
-                                                                }
-                                                              }
+                                                        "level": 0,
+                                                        "expr": {
+                                                          "CallVariadic": {
+                                                            "func": {
+                                                              "And": null
                                                             },
-                                                            {
-                                                              "CallBinary": {
-                                                                "func": {
-                                                                  "Gt": null
-                                                                },
-                                                                "expr1": {
-                                                                  "Column": [
-                                                                    2,
-                                                                    "m"
-                                                                  ]
-                                                                },
-                                                                "expr2": {
-                                                                  "Literal": [
-                                                                    {
-                                                                      "Ok": {
-                                                                        "data": [
-                                                                          45,
-                                                                          5
-                                                                        ]
+                                                            "exprs": [
+                                                              {
+                                                                "CallBinary": {
+                                                                  "func": {
+                                                                    "Eq": null
+                                                                  },
+                                                                  "expr1": {
+                                                                    "Column": [
+                                                                      1,
+                                                                      "a"
+                                                                    ]
+                                                                  },
+                                                                  "expr2": {
+                                                                    "Column": [
+                                                                      0,
+                                                                      "m"
+                                                                    ]
+                                                                  }
+                                                                }
+                                                              },
+                                                              {
+                                                                "CallBinary": {
+                                                                  "func": {
+                                                                    "Gt": null
+                                                                  },
+                                                                  "expr1": {
+                                                                    "Column": [
+                                                                      2,
+                                                                      "m"
+                                                                    ]
+                                                                  },
+                                                                  "expr2": {
+                                                                    "Literal": [
+                                                                      {
+                                                                        "Ok": {
+                                                                          "data": [
+                                                                            45,
+                                                                            5
+                                                                          ]
+                                                                        }
+                                                                      },
+                                                                      {
+                                                                        "scalar_type": "Int32",
+                                                                        "nullable": false
                                                                       }
-                                                                    },
-                                                                    {
-                                                                      "scalar_type": "Int32",
-                                                                      "nullable": false
-                                                                    }
-                                                                  ]
+                                                                    ]
+                                                                  }
                                                                 }
                                                               }
-                                                            }
-                                                          ]
+                                                            ]
+                                                          }
                                                         }
                                                       }
                                                     ]
@@ -8742,21 +8796,24 @@ FROM
                               },
                               "predicates": [
                                 {
-                                  "CallBinary": {
-                                    "func": {
-                                      "NotEq": null
-                                    },
-                                    "expr1": {
-                                      "Column": [
-                                        0,
-                                        "a"
-                                      ]
-                                    },
-                                    "expr2": {
-                                      "Column": [
-                                        0,
-                                        "a"
-                                      ]
+                                  "level": 0,
+                                  "expr": {
+                                    "CallBinary": {
+                                      "func": {
+                                        "NotEq": null
+                                      },
+                                      "expr1": {
+                                        "Column": [
+                                          0,
+                                          "a"
+                                        ]
+                                      },
+                                      "expr2": {
+                                        "Column": [
+                                          0,
+                                          "a"
+                                        ]
+                                      }
                                     }
                                   }
                                 }

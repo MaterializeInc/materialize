@@ -95,7 +95,7 @@ use mz_expr::func::variadic::And;
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{
     AggregateFunc, Columns, Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr,
-    RECURSION_LIMIT, VariadicFunc, func,
+    Predicate, RECURSION_LIMIT, VariadicFunc, func,
 };
 use mz_ore::soft_assert_eq_no_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
@@ -162,6 +162,32 @@ impl PredicatePushdown {
         get_predicates: &mut BTreeMap<Id, BTreeSet<MirScalarExpr>>,
     ) -> Result<(), TransformError> {
         self.checked_recur(|_| {
+            // Split off predicates carrying a security level and leave them in
+            // a `Filter` this transform does not touch, so that they cannot sink
+            // below a predicate at a lower level, and cannot be reported at a
+            // `Get`, where the level would be lost.
+            //
+            // Everything below this point therefore sees only level-0
+            // predicates, which is what makes it sound for the rest of the
+            // transform to work in terms of bare expressions. This is stricter
+            // than the ordering rule requires, in that a levelled predicate
+            // could safely move up or sideways, but "never move" needs no
+            // ordering bookkeeping. See
+            // `doc/developer/design/20260828_security_barrier_views.md`.
+            if let MirRelationExpr::Filter { predicates, .. } = relation {
+                if predicates.iter().any(|p| p.level() > 0) {
+                    let (levelled, unconstrained): (Vec<_>, Vec<_>) =
+                        predicates.drain(..).partition(|p| p.level() > 0);
+                    let MirRelationExpr::Filter { input, .. } = relation else {
+                        unreachable!("matched immediately above")
+                    };
+                    let mut inner = input.take_dangerous().filter_leveled(unconstrained);
+                    self.action(&mut inner, get_predicates)?;
+                    *relation = inner.filter_leveled(levelled);
+                    return Ok(());
+                }
+            }
+
             // In the case of Filter or Get we have specific work to do;
             // otherwise we should recursively descend.
             match relation {
@@ -184,7 +210,7 @@ impl PredicatePushdown {
                             // Push all predicates to the body.
                             **body = body
                                 .take_dangerous()
-                                .filter(std::mem::replace(predicates, Vec::new()));
+                                .filter_leveled(std::mem::replace(predicates, Vec::new()));
 
                             self.action(input, get_predicates)?;
                         }
@@ -194,8 +220,10 @@ impl PredicatePushdown {
                             // `Filter`.
                             get_predicates
                                 .entry(*id)
-                                .or_insert_with(|| predicates.iter().cloned().collect())
-                                .retain(|p| predicates.contains(p));
+                                .or_insert_with(|| {
+                                    predicates.iter().map(|p| p.expr.clone()).collect()
+                                })
+                                .retain(|p| predicates.iter().any(|q| &q.expr == p));
                         }
                         MirRelationExpr::Join {
                             inputs,
@@ -222,7 +250,7 @@ impl PredicatePushdown {
                             // inputs, and failing to
                             let mut pred_not_translated = Vec::new();
 
-                            for mut predicate in predicates.drain(..) {
+                            for mut predicate in predicates.drain(..).map(|p| p.expr) {
                                 use mz_expr::{BinaryFunc, UnaryFunc};
                                 if let MirScalarExpr::CallBinary {
                                     func: BinaryFunc::Eq(_),
@@ -298,7 +326,8 @@ impl PredicatePushdown {
                             self.action(input, get_predicates)?;
 
                             // remove all predicates that were pushed down from the current Filter node
-                            *predicates = retain;
+                            *predicates =
+                                retain.into_iter().map(Predicate::unconstrained).collect();
                         }
                         MirRelationExpr::Reduce {
                             input: inner,
@@ -309,7 +338,7 @@ impl PredicatePushdown {
                         } => {
                             let mut retain = Vec::new();
                             let mut push_down = Vec::new();
-                            for predicate in predicates.drain(..) {
+                            for predicate in predicates.drain(..).map(|p| p.expr) {
                                 // Do not push down literal errors unless it is only errors.
                                 if !predicate.is_literal_err() || all_errors {
                                     let mut supported = true;
@@ -355,7 +384,7 @@ impl PredicatePushdown {
                             self.action(inner, get_predicates)?;
 
                             // remove all predicates that were pushed down from the current Filter node
-                            std::mem::swap(&mut retain, predicates);
+                            *predicates = retain.drain(..).map(Predicate::unconstrained).collect();
                         }
                         MirRelationExpr::TopK {
                             input,
@@ -394,14 +423,17 @@ impl PredicatePushdown {
                             std::mem::swap(&mut retain, predicates);
 
                             if !push_down.is_empty() {
-                                **input = input.take_dangerous().filter(push_down);
+                                **input = input.take_dangerous().filter_leveled(push_down);
                             }
 
                             self.action(input, get_predicates)?;
                         }
                         MirRelationExpr::Threshold { input } => {
                             let predicates = std::mem::take(predicates);
-                            *relation = input.take_dangerous().filter(predicates).threshold();
+                            *relation = input
+                                .take_dangerous()
+                                .filter_leveled(predicates)
+                                .threshold();
                             self.action(relation, get_predicates)?;
                         }
                         MirRelationExpr::Project { input, outputs } => {
@@ -411,7 +443,7 @@ impl PredicatePushdown {
                             });
                             *relation = input
                                 .take_dangerous()
-                                .filter(predicates)
+                                .filter_leveled(predicates)
                                 .project(outputs.clone());
 
                             self.action(relation, get_predicates)?;
@@ -420,18 +452,24 @@ impl PredicatePushdown {
                             input,
                             predicates: predicates2,
                         } => {
-                            *relation = input
-                                .take_dangerous()
-                                .filter(predicates.clone().into_iter().chain(predicates2.clone()));
+                            *relation = input.take_dangerous().filter(
+                                predicates
+                                    .iter()
+                                    .map(|p| p.expr.clone())
+                                    .chain(predicates2.iter().map(|p| p.expr.clone())),
+                            );
                             self.action(relation, get_predicates)?;
                         }
                         MirRelationExpr::Map { input, scalars } => {
+                            let mut exprs: Vec<MirScalarExpr> =
+                                predicates.drain(..).map(|p| p.expr).collect();
                             let (retained, pushdown) = Self::push_filters_through_map(
                                 scalars,
-                                predicates,
+                                &mut exprs,
                                 input.arity(),
                                 all_errors,
                             )?;
+                            *predicates = exprs.into_iter().map(Predicate::unconstrained).collect();
                             let scalars = std::mem::take(scalars);
                             let mut result = input.take_dangerous();
                             if !pushdown.is_empty() {
@@ -445,11 +483,14 @@ impl PredicatePushdown {
                             *relation = result;
                         }
                         MirRelationExpr::FlatMap { input, .. } => {
-                            let (mut retained, pushdown) =
-                                Self::push_filters_through_flat_map(predicates, input.arity());
+                            let mut exprs: Vec<MirScalarExpr> =
+                                predicates.drain(..).map(|p| p.expr).collect();
+                            let (retained, pushdown) =
+                                Self::push_filters_through_flat_map(&mut exprs, input.arity());
 
                             // remove all predicates that were pushed down from the current Filter node
-                            std::mem::swap(&mut retained, predicates);
+                            *predicates =
+                                retained.into_iter().map(Predicate::unconstrained).collect();
 
                             if !pushdown.is_empty() {
                                 // put the filter on top of the input
@@ -461,10 +502,10 @@ impl PredicatePushdown {
                         }
                         MirRelationExpr::Union { base, inputs } => {
                             let predicates = std::mem::take(predicates);
-                            **base = base.take_dangerous().filter(predicates.clone());
+                            **base = base.take_dangerous().filter_leveled(predicates.clone());
                             self.action(base, get_predicates)?;
                             for input in inputs {
-                                *input = input.take_dangerous().filter(predicates.clone());
+                                *input = input.take_dangerous().filter_leveled(predicates.clone());
                                 self.action(input, get_predicates)?;
                             }
                         }
@@ -482,12 +523,12 @@ impl PredicatePushdown {
                                 .partition(|p| p.is_literal_err());
                             let mut result = input.take_dangerous();
                             if !pushdown.is_empty() {
-                                result = result.filter(pushdown);
+                                result = result.filter_leveled(pushdown);
                             }
                             self.action(&mut result, get_predicates)?;
                             result = result.negate();
                             if !retained.is_empty() {
-                                result = result.filter(retained);
+                                result = result.filter_leveled(retained);
                             }
                             *relation = result;
                         }

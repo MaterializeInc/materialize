@@ -206,7 +206,7 @@ impl ProjectionLifting {
                         }
                         *relation = inner
                             .take_dangerous()
-                            .filter(predicates.clone())
+                            .filter_leveled(predicates.clone())
                             .project(outputs.clone());
                     }
                     Ok(())

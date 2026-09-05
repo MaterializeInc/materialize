@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use itertools::Itertools;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDesc, DataflowDescription, IndexImport};
 use mz_expr::{
-    AccessStrategy, CollectionPlan, Id, JoinImplementation, LocalId, MapFilterProject,
+    AccessStrategy, CollectionPlan, Eval, Id, JoinImplementation, LocalId, MapFilterProject,
     MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
@@ -50,7 +50,7 @@ pub fn optimize_dataflow(
     fast_path_optimizer: bool,
 ) -> Result<(), TransformError> {
     // Inline views that are used in only one other view.
-    inline_views(dataflow)?;
+    inline_views(dataflow, transform_ctx.security_barriers)?;
 
     if fast_path_optimizer {
         optimize_dataflow_relations(
@@ -67,7 +67,7 @@ pub fn optimize_dataflow(
             transform_ctx,
         )?;
 
-        optimize_dataflow_filters(dataflow)?;
+        optimize_dataflow_filters(dataflow, transform_ctx.security_barriers)?;
         // TODO: when the linear operator contract ensures that propagated
         // predicates are always applied, projections and filters can be removed
         // from where they come from. Once projections and filters can be removed,
@@ -114,12 +114,20 @@ pub fn optimize_dataflow(
 }
 
 /// Inline views used in one other view, and in no exported objects.
+///
+/// A view in `security_barriers` is inlined like any other, but its consumer's
+/// predicates are first raised to a higher security level, so that predicate
+/// movement and evaluation order continue to respect the boundary that inlining
+/// dissolves. See `doc/developer/design/20260828_security_barrier_views.md`.
 #[mz_ore::instrument(
     target = "optimizer",
     level = "debug",
     fields(path.segment = "inline_views")
 )]
-fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
+fn inline_views(
+    dataflow: &mut DataflowDesc,
+    security_barriers: &BTreeSet<GlobalId>,
+) -> Result<(), TransformError> {
     // We cannot inline anything whose `BuildDesc::id` appears in either the
     // `index_exports` or `sink_exports` of `dataflow`, because we lose our
     // ability to name it.
@@ -161,6 +169,14 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
         // Inline if the view is referenced in one view and no exports.
         if !occurs_in_export && occurrences_in_later_views.len() == 1 {
             let other = occurrences_in_later_views[0];
+            // Inlining dissolves the object boundary that kept the consumer's
+            // predicates above the barrier's, so raise the consumer's level
+            // first. From here the level, not the boundary, carries the
+            // guarantee, which is what lets the barrier's body be optimized
+            // jointly with its consumer's.
+            if security_barriers.contains(&global_id) {
+                raise_security_level(dataflow.objects_to_build[other].plan.as_inner_mut());
+            }
             // We can remove this view and insert it in the later view,
             // but are not able to relocate the later view `other`.
 
@@ -351,7 +367,10 @@ where
     level = "debug",
     fields(path.segment ="filters")
 )]
-fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
+fn optimize_dataflow_filters(
+    dataflow: &mut DataflowDesc,
+    security_barriers: &BTreeSet<GlobalId>,
+) -> Result<(), TransformError> {
     // Contains id -> predicates map, describing those predicates that
     // can (but need not) be applied to the collection named by `id`.
     let mut predicates = BTreeMap::<Id, BTreeSet<mz_expr::MirScalarExpr>>::new();
@@ -364,6 +383,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
             .rev()
             .map(|build_desc| (Id::Global(build_desc.id), build_desc.plan.as_inner_mut())),
         &mut predicates,
+        security_barriers,
     )?;
 
     // Push predicate information into the SourceDesc.
@@ -394,25 +414,84 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
 
 /// Pushes filters down through views in `view_sequence` in order.
 ///
+/// A view in `security_barriers` accepts only leakproof predicates from its
+/// consumers. A non-leakproof predicate is left above the consumer's `Get`,
+/// where it sees only rows the barrier already admitted. Because it never
+/// enters the barrier's plan it also never propagates onward to the barrier's
+/// own inputs, which is what keeps it away from persist filter pushdown.
+///
 /// This method is made public for the sake of testing.
 /// TODO: make this private once we allow multiple exports per dataflow.
 pub fn optimize_dataflow_filters_inner<'a, I>(
     view_iter: I,
     predicates: &mut BTreeMap<Id, BTreeSet<mz_expr::MirScalarExpr>>,
+    security_barriers: &BTreeSet<GlobalId>,
 ) -> Result<(), TransformError>
 where
     I: Iterator<Item = (Id, &'a mut MirRelationExpr)>,
 {
     let transform = crate::predicate_pushdown::PredicatePushdown::default();
     for (id, view) in view_iter {
+        let is_barrier = match id {
+            Id::Global(gid) => security_barriers.contains(&gid),
+            Id::Local(_) => false,
+        };
         if let Some(list) = predicates.get(&id).clone() {
+            let list = list
+                .iter()
+                .filter(|p| !is_barrier || is_leakproof(p))
+                .cloned()
+                .collect::<Vec<_>>();
             if !list.is_empty() {
-                *view = view.take_dangerous().filter(list.iter().cloned());
+                *view = view.take_dangerous().filter(list);
             }
         }
         transform.action(view, predicates)?;
     }
     Ok(())
+}
+
+/// Raises the security level of every non-leakproof predicate in `expr`.
+///
+/// Applied to a barrier view's consumer just before the view is inlined, so that
+/// the consumer's predicates outrank the barrier's own, which enter the merged
+/// plan at their existing levels.
+///
+/// Incrementing rather than assigning a fixed level is what makes nested
+/// barriers work: inlining an inner barrier raises everything already merged,
+/// so each barrier's own predicates stay below every predicate that was written
+/// above it.
+///
+/// A leakproof predicate is left at its level, so the comparisons that drive
+/// persist pruning and index lookups keep moving freely.
+fn raise_security_level(expr: &mut MirRelationExpr) {
+    expr.visit_pre_mut(|e| {
+        if let MirRelationExpr::Filter { predicates, .. } = e {
+            for predicate in predicates.iter_mut() {
+                if !is_leakproof(&predicate.expr) {
+                    predicate.raise();
+                }
+            }
+        }
+    });
+}
+
+/// Whether `predicate` may be evaluated against rows a security barrier would
+/// have excluded.
+///
+/// Materialize has no user-defined functions, so every function reachable from
+/// a predicate is a builtin whose only value-dependent channel is the error it
+/// raises: error messages embed the offending value, and an error anywhere in a
+/// dataflow fails the whole query. Leakproof therefore reduces to infallible,
+/// which [`Eval::could_error`] already answers. Its default is fail-safe, being
+/// `true` for a `LazyUnaryFunc` that does not override it, and otherwise derived
+/// from whether the function returns a `Result`.
+///
+/// NOTE: this is a weaker claim than "reveals nothing". Evaluation time and
+/// memory still vary with the hidden value, as they do in PostgreSQL, and no
+/// barrier closes those channels.
+fn is_leakproof(predicate: &mz_expr::MirScalarExpr) -> bool {
+    !predicate.could_error()
 }
 
 /// Propagates information about monotonic inputs through operators,
