@@ -803,17 +803,25 @@ async fn raw_stream<'a>(
         })
         .abort_on_drop();
 
-    let stream = async_stream::try_stream!({
-        // Ensure we don't pre-drop the task
-        let _max_lsn_task_handle = max_lsn_task_handle;
+    // `ready_chunks` batches messages that are already available without waiting for more: it
+    // returns as soon as one message is ready and drains up to `STREAM_MSG_CAPACITY` additional
+    // messages that are immediately available from the underlying stream. This lets the select!
+    // loop drain many messages per wake-up while keeping the stream inside this future so the
+    // `busy_signal` semaphore (via `SignaledFuture`) still pauses socket reads when downstream
+    // operators are busy.
+    const STREAM_MSG_CAPACITY: usize = 1024;
 
-        // ensure we don't drop the replication client!
+    let stream = async_stream::try_stream!({
+        // Ensure we don't pre-drop the task.
+        let _max_lsn_task_handle = max_lsn_task_handle;
+        // Ensure we don't drop the replication client!
         let _replication_client = replication_client;
 
+        let mut stream = pin!(
+            LogicalReplicationStream::new(copy_stream).ready_chunks(STREAM_MSG_CAPACITY)
+        );
         let mut uppers = pin!(uppers);
         let mut last_committed_upper = resume_lsn;
-
-        let mut stream = pin!(LogicalReplicationStream::new(copy_stream));
 
         if !(resume_lsn == MzOffset::from(0) || min_resume_lsn <= resume_lsn) {
             let err = TransientError::OvercompactedReplicationSlot {
@@ -825,59 +833,70 @@ async fn raw_stream<'a>(
         }
 
         loop {
-            tokio::select! {
-                Some(next_message) = stream.next() => match next_message {
-                    Ok(ReplicationMessage::XLogData(data)) => {
-                        yield ReplicationMessage::XLogData(data);
-                        Ok(())
-                    }
-                    Ok(ReplicationMessage::PrimaryKeepAlive(keepalive)) => {
-                        yield ReplicationMessage::PrimaryKeepAlive(keepalive);
-                        Ok(())
-                    }
-                    Err(err) => Err(err.into()),
-                    _ => Err(TransientError::UnknownReplicationMessage),
-                },
-                _ = feedback_timer.tick() => {
-                    let ts: i64 = PG_EPOCH.elapsed().unwrap().as_micros().try_into().unwrap();
-                    let lsn = PgLsn::from(last_committed_upper.offset);
-                    trace!("timely-{} ({}) sending keepalive {lsn:?}", config.worker_id, config.id);
-                    // Postgres only sends PrimaryKeepAlive messages when *it* wants a reply, which
-                    // happens when out status update is late. Since we send them proactively this
-                    // may never happen. It is therefore *crucial* that we set the last parameter
-                    // (the reply flag) to 1 here. This will cause the upstream server to send us a
-                    // PrimaryKeepAlive message promptly which will give us frontier advancement
-                    // information in the absence of data updates.
-                    let res = stream.as_mut().standby_status_update(lsn, lsn, lsn, ts, 1).await;
-                    res.map_err(|e| e.into())
-                },
-                Some(upper) = uppers.next() => match upper.into_option() {
-                    Some(lsn) => {
-                        if last_committed_upper < lsn {
-                            last_committed_upper = lsn;
-                            for stat in config.statistics.values() {
-                                stat.set_offset_committed(last_committed_upper.offset);
+            let result: Result<(), TransientError> = 'arm: {
+                tokio::select! {
+                    Some(batch) = stream.next() => {
+                        for msg in batch {
+                            match msg {
+                                Ok(ReplicationMessage::XLogData(data)) => {
+                                    yield ReplicationMessage::XLogData(data);
+                                }
+                                Ok(ReplicationMessage::PrimaryKeepAlive(keepalive)) => {
+                                    yield ReplicationMessage::PrimaryKeepAlive(keepalive);
+                                }
+                                Ok(_) => {
+                                    break 'arm Err(TransientError::UnknownReplicationMessage);
+                                }
+                                Err(err) => break 'arm Err(err.into()),
                             }
                         }
                         Ok(())
                     }
-                    None => Ok(()),
-                },
-                Ok(()) = probe_rx.changed() => match &*probe_rx.borrow() {
-                    Some(Ok(probe)) => {
-                        if let Some(offset_known) = probe.upstream_frontier.as_option() {
-                            for stat in config.statistics.values() {
-                                stat.set_offset_known(offset_known.offset);
+                    _ = feedback_timer.tick() => {
+                        let ts: i64 = PG_EPOCH.elapsed().unwrap().as_micros().try_into().unwrap();
+                        let lsn = PgLsn::from(last_committed_upper.offset);
+                        trace!("timely-{} ({}) sending keepalive {lsn:?}", config.worker_id, config.id);
+                        // Postgres only sends PrimaryKeepAlive messages when *it* wants a reply, which
+                        // happens when our status update is late. Since we send them proactively this
+                        // may never happen. It is therefore *crucial* that we set the last parameter
+                        // (the reply flag) to 1 here. This will cause the upstream server to send us a
+                        // PrimaryKeepAlive message promptly which will give us frontier advancement
+                        // information in the absence of data updates.
+                        let res = stream
+                            .as_mut()
+                            .get_pin_mut()
+                            .standby_status_update(lsn, lsn, lsn, ts, 1)
+                            .await;
+                        res.map_err(|e| e.into())
+                    }
+                    Some(upper) = uppers.next() => {
+                        if let Some(lsn) = upper.into_option() {
+                            if last_committed_upper < lsn {
+                                last_committed_upper = lsn;
+                                for stat in config.statistics.values() {
+                                    stat.set_offset_committed(last_committed_upper.offset);
+                                }
                             }
                         }
-                        probe_output.give(probe_cap, probe);
                         Ok(())
+                    }
+                    Ok(()) = probe_rx.changed() => match &*probe_rx.borrow() {
+                        Some(Ok(probe)) => {
+                            if let Some(offset_known) = probe.upstream_frontier.as_option() {
+                                for stat in config.statistics.values() {
+                                    stat.set_offset_known(offset_known.offset);
+                                }
+                            }
+                            probe_output.give(probe_cap, probe);
+                            Ok(())
+                        }
+                        Some(Err(err)) => Err(anyhow::anyhow!("{err}").into()),
+                        None => Ok(()),
                     },
-                    Some(Err(err)) => Err(anyhow::anyhow!("{err}").into()),
-                    None => Ok(()),
-                },
-                else => return
-            }?;
+                    else => return,
+                }
+            };
+            result?;
         }
     });
     Ok(Ok(stream))
