@@ -330,6 +330,20 @@ impl<P, S> DataflowDescription<P, S> {
         self.exported_index_ids().chain(self.exported_sink_ids())
     }
 
+    /// Identifiers of exported objects, each paired with the name of its export type.
+    ///
+    /// The name is `index` for index exports and [`ComputeSinkConnection::name`] for sink
+    /// exports. Only the `materialized_view` type maintains a persist sink, so consumers can use
+    /// the name to tell which exports are expected to write to storage.
+    pub fn export_types(&self) -> impl Iterator<Item = (GlobalId, &'static str)> + '_ {
+        let indexes = self.exported_index_ids().map(|id| (id, "index"));
+        let sinks = self
+            .sink_exports
+            .iter()
+            .map(|(id, desc)| (*id, desc.connection.name()));
+        indexes.chain(sinks)
+    }
+
     /// Identifiers of exported indexes.
     pub fn exported_index_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
         self.index_exports.keys().copied()

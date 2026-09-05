@@ -832,7 +832,7 @@ impl<'a> ActiveComputeState<'a> {
         let starts_immediately = dataflow.import_ids().next().is_none();
 
         // Initialize compute and logging state for each object.
-        for object_id in dataflow.export_ids() {
+        for (object_id, export_type) in dataflow.export_types() {
             let is_subscribe_or_copy = subscribe_copy_ids.contains(&object_id);
             let metrics = self.compute_state.metrics.for_collection(object_id);
             let mut collection = CollectionState::new(
@@ -847,6 +847,7 @@ impl<'a> ActiveComputeState<'a> {
                     object_id,
                     logger,
                     *dataflow_index,
+                    export_type,
                     dataflow.import_ids(),
                 );
                 if starts_immediately {
@@ -1055,8 +1056,13 @@ impl<'a> ActiveComputeState<'a> {
                 metrics,
             );
 
-            let logging =
-                CollectionLogging::new(id, logger.clone(), *dataflow_index, std::iter::empty());
+            let logging = CollectionLogging::new(
+                id,
+                logger.clone(),
+                *dataflow_index,
+                "index",
+                std::iter::empty(),
+            );
             // Log collections are never suspended and the controller marks them scheduled
             // implicitly, so no `Schedule` command ever arrives for them. Record their hydration
             // start here, or they would sit permanently in the illegal state of being hydrated

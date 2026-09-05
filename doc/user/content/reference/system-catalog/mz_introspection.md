@@ -109,6 +109,7 @@ The `mz_compute_exports` view describes the objects exported by [dataflows][data
 | -------------- |-----------| --------                                                                                                                                                                                                                                                                                       |
 | `export_id`    | [`text`]  | The ID of the index, materialized view, or subscription exported by the dataflow. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions.id`](../mz_internal#mz_subscriptions). |
 | `dataflow_id`  | [`uint8`] | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).                                                                                                                                                                                                               |
+| `export_type`  | [`text`]  | The type of the export: `index`, `materialized_view`, `subscribe`, `copy_to_s3_oneshot`, or `metric_sink`. Only a `materialized_view` writes its results back to storage.                                                                                                                 |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_exports_per_worker -->
 

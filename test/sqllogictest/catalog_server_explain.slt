@@ -14418,7 +14418,7 @@ EXPLAIN SELECT * FROM "mz_introspection"."mz_compute_exports";
 ----
 Explained Query (fast path):
   →Map/Filter/Project
-    Project: #0, #2
+    Project: #0, #2, #3
     Filter: (#1{worker_id} = 0)
       →Indexed mz_introspection.mz_compute_exports_per_worker (using mz_introspection.mz_compute_exports_per_worker_s2_primary_idx)
 
