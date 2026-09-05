@@ -383,6 +383,23 @@ pub enum Command {
         tx: oneshot::Sender<()>,
     },
 
+    /// Install the statement-lifecycle watch sets for a peek that frontend
+    /// sequencing has already issued.
+    ///
+    /// Fire-and-forget: the peek does not wait for this, so the watch sets can
+    /// be installed after the peek has already responded. A watch set whose
+    /// frontier is already past its timestamp fires as soon as it is installed,
+    /// so a late install still records the event, only with a later `occurred_at`.
+    ///
+    /// Statement lifecycle logging is best-effort here. The peek is in flight
+    /// and cannot be failed, so a dependency that goes away before the watch
+    /// sets are installed costs the statement its lifecycle events rather than
+    /// erroring the query, which is what the blocking registration path does.
+    InstallPeekWatchSets {
+        conn_id: ConnectionId,
+        watch_set: WatchSetCreation,
+    },
+
     /// Generate a timestamp explanation.
     /// This is used when `emit_timestamp_notice` is enabled.
     ExplainTimestamp {
@@ -505,6 +522,7 @@ impl Command {
             | Command::LookupConnection { .. }
             | Command::RegisterFrontendPeek { .. }
             | Command::UnregisterFrontendPeek { .. }
+            | Command::InstallPeekWatchSets { .. }
             | Command::ExplainTimestamp { .. }
             | Command::FrontendStatementLogging(..)
             | Command::InjectAuditEvents { .. }
@@ -550,6 +568,7 @@ impl Command {
             | Command::LookupConnection { .. }
             | Command::RegisterFrontendPeek { .. }
             | Command::UnregisterFrontendPeek { .. }
+            | Command::InstallPeekWatchSets { .. }
             | Command::ExplainTimestamp { .. }
             | Command::FrontendStatementLogging(..)
             | Command::InjectAuditEvents { .. }

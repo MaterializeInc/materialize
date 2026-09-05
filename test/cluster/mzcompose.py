@@ -4691,13 +4691,13 @@ def workflow_test_drop_cluster_during_registered_peeks_fast_path(
     teardown race (slow-path variant:
     `workflow_test_drop_cluster_during_registered_peeks`).
 
-    A `PeekExisting` fast-path peek registers with the coordinator and only
-    *then* issues `client.peek()`; registration hands ownership of
-    end-of-execution logging to the coordinator. If a `DROP CLUSTER` lands in
-    that window, the teardown retires the pending peek and logs its end,
-    `client.peek()` fails, and the frontend's `UnregisterFrontendPeek` must be
-    a no-op. Historically the frontend ended the statement itself here, and
-    the double end panicked and aborted environmentd.
+    A `PeekExisting` fast-path peek registers in the shared peek registry and
+    only *then* issues `client.peek()`. If a `DROP CLUSTER` lands in that
+    window, the coordinator's teardown claims the registry entry and cancels
+    it, `client.peek()` then fails on the missing instance, and the frontend
+    must end the statement exactly once. Both a double end and a missing end
+    are failures here: the former panicked and aborted environmentd when the
+    coordinator still owned end-of-execution logging.
 
     The window is a sub-millisecond cross-thread gap, so we make it
     deterministic with the `peek_after_register_before_issue` failpoint: pause
