@@ -12,7 +12,7 @@ mode cockroach
 query T
 SELECT '-0'::float::text
 ----
--0
+0
 
 query T
 SELECT '+0'::float::text
@@ -42,7 +42,7 @@ SELECT '.0'::float::text
 query T
 SELECT '-.0'::float::text
 ----
--0
+0
 
 query T
 SELECT '+.0'::float::text
@@ -57,7 +57,7 @@ SELECT '+0.'::float::text
 query T
 SELECT '-0.'::float::text
 ----
--0
+0
 
 query error invalid input syntax
 SELECT '++0'::float::text
@@ -186,3 +186,112 @@ SELECT 'e'::float::text
 
 query error invalid input syntax
 SELECT 'e10'::float::text
+
+# Row packing canonicalizes floats so that byte equality of packed rows agrees
+# with SQL float equality: -0.0 packs as +0.0 and every NaN packs as one bit
+# pattern. Arrangement keys (joins, GROUP BY, DISTINCT) and index lookups
+# compare packed bytes, so without this a stored -0.0 and +0.0 would be
+# distinct keys even though `-0.0 = 0.0` is true. See SQL-452.
+# Text formatting renders -0.0 as "0" as well (see the `'-0'::float::text`
+# tests above), so text output does not depend on whether a value crossed a
+# packing boundary. Negative zero is thereby unobservable in Materialize.
+# This deviates from PostgreSQL, which prints "-0".
+
+statement ok
+CREATE TABLE zeros (id int, f float8)
+
+statement ok
+INSERT INTO zeros VALUES (1, '-0'::float8), (2, '0'::float8)
+
+# The stored -0.0 reads back as +0.0.
+query T rowsort
+SELECT f::text FROM zeros
+----
+0
+0
+
+query I
+SELECT count(*) FROM (SELECT DISTINCT f FROM zeros)
+----
+1
+
+# One group, so a single count of 2.
+query I
+SELECT count(*) FROM zeros GROUP BY f
+----
+2
+
+query I
+SELECT count(*) FROM (SELECT DISTINCT ON (f) f FROM zeros)
+----
+1
+
+query I
+SELECT count(*) FROM (SELECT f FROM zeros UNION SELECT f FROM zeros)
+----
+1
+
+statement ok
+CREATE TABLE zeros2 (id int, f float8)
+
+statement ok
+INSERT INTO zeros2 VALUES (3, '0'::float8)
+
+query II
+SELECT z1.id, z2.id FROM zeros z1 JOIN zeros2 z2 ON z1.f = z2.f ORDER BY z1.id
+----
+1  3
+2  3
+
+# NaN bit patterns: parsed NaNs and arithmetic NaNs are one value.
+statement ok
+CREATE TABLE nans (f float8)
+
+statement ok
+INSERT INTO nans VALUES ('NaN'::float8), ('-NaN'::float8), ('inf'::float8 - 'inf'::float8)
+
+query I
+SELECT count(*) FROM (SELECT DISTINCT f FROM nans)
+----
+1
+
+query T
+SELECT DISTINCT f::text FROM nans
+----
+NaN
+
+# float4 gets the same treatment.
+statement ok
+CREATE TABLE zeros_f4 (f float4)
+
+statement ok
+INSERT INTO zeros_f4 VALUES ('-0'::float4), ('0'::float4), ('NaN'::float4)
+
+query I
+SELECT count(*) FROM (SELECT DISTINCT f FROM zeros_f4)
+----
+2
+
+# The same query must render identically through a view (inlined, the text
+# cast evaluates on unpacked datums) and a materialized view (the float is
+# packed and persisted before the cast).
+statement ok
+CREATE VIEW v_negzero AS SELECT -1.0::float8 * 0.0 AS f
+
+statement ok
+CREATE MATERIALIZED VIEW mv_negzero AS SELECT -1.0::float8 * 0.0 AS f
+
+query T
+SELECT f::text FROM v_negzero
+----
+0
+
+query T
+SELECT f::text FROM mv_negzero
+----
+0
+
+query T
+SELECT (-1.0::float8 * 0.0)::text
+----
+0
