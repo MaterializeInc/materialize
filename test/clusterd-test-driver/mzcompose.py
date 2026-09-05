@@ -145,14 +145,27 @@ def workflow_two_runtime_compute(c: Composition) -> None:
     interactive runtime.
     """
     c.up(METADATA_STORE, "minio", ServiceName("headless-driver", idle=True))
-    with c.override(Clusterd(mz_service="headless-driver", interactive_compute=True)):
-        for i, script in enumerate(TWO_RUNTIME_SCRIPTS):
-            ui.section(f"Running two-runtime scenario {script}")
-            if i > 0:
-                c.kill("clusterd")
-            c.up("clusterd")
-            c.run(
-                "headless-driver",
-                env_extra={"DRIVER_SCRIPT": f"{SCRIPTS_DIR}/{script}"},
-                use_aliases=True,
+    # Once per worker count: the registry pairs worker `i` of one runtime with
+    # worker `i` of the other, so a single worker never exercises the pairing.
+    first = True
+    for workers in (1, 2):
+        with c.override(
+            Clusterd(
+                mz_service="headless-driver",
+                interactive_compute=True,
+                workers=workers,
             )
+        ):
+            for script in TWO_RUNTIME_SCRIPTS:
+                ui.section(
+                    f"Running two-runtime scenario {script} with {workers} worker(s)"
+                )
+                if not first:
+                    c.kill("clusterd")
+                first = False
+                c.up("clusterd")
+                c.run(
+                    "headless-driver",
+                    env_extra={"DRIVER_SCRIPT": f"{SCRIPTS_DIR}/{script}"},
+                    use_aliases=True,
+                )
