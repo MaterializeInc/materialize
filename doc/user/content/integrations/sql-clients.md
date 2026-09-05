@@ -181,6 +181,8 @@ an open-source, browser-based SQL IDE, choose the **PostgreSQL** driver in the
 connection dialog and use the credentials from the Materialize console (host,
 port **6875**, your app password, SSL mode **Require**).
 
+<img width="1440" alt="Connect using the credentials provided in the Materialize console" src="https://github.com/user-attachments/assets/55212af8-66e0-4add-a7df-ea6eeb13d190">
+
 ### `psql`
 
 {{< warning >}}
