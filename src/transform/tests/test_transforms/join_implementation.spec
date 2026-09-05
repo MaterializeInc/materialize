@@ -40,8 +40,8 @@ Join on=(#0 = #1 = #2)
   Get x
 ----
 Project (#0..=#2)
-  Filter ((#4 AND #5) OR ((#0) IS NULL AND ((#3 AND #5) OR ((#1) IS NULL AND (#3 OR #4)))))
-    Map ((#2) IS NULL, (#0 = #2), (#0 = #1))
+  Filter ((#0 = #1) OR (#3 AND (#1) IS NULL)) AND ((#0 = #2) OR (#3 AND (#2) IS NULL))
+    Map ((#0) IS NULL)
       Get x
 
 apply pipeline=optimize
@@ -49,8 +49,8 @@ Join on=(#0 = #2 = #1 = #2)
   Get x
 ----
 Project (#0..=#2)
-  Filter ((#4 AND #5) OR ((#0) IS NULL AND ((#3 AND #5) OR ((#1) IS NULL AND (#3 OR #4)))))
-    Map ((#2) IS NULL, (#0 = #2), (#0 = #1))
+  Filter ((#0 = #1) OR (#3 AND (#1) IS NULL)) AND ((#0 = #2) OR (#3 AND (#2) IS NULL))
+    Map ((#0) IS NULL)
       Get x
 
 apply pipeline=optimize
