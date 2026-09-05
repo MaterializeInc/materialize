@@ -753,6 +753,22 @@ impl RowRef {
         &self.0
     }
 
+    /// A `u64` whose order is consistent with this type's `Ord`: for rows `a < b`,
+    /// `a.sort_prefix() <= b.sort_prefix()`. Equal prefixes decide nothing, and a caller
+    /// sorting by prefix must fall back to a full comparison on ties.
+    ///
+    /// Sorting a compact array of `(prefix, position)` pairs and comparing rows only on equal
+    /// prefixes is much cheaper than comparing rows throughout. The prefix is the length,
+    /// saturated at `u16::MAX`, followed by the first six bytes, mirroring the length-first
+    /// order of `Ord` below. Two saturated lengths compare equal, which keeps the agreement.
+    pub fn sort_prefix(&self) -> u64 {
+        let len = u64::cast_from(self.0.len().min(usize::from(u16::MAX))) << 48;
+        let mut lead = [0u8; 8];
+        let n = self.0.len().min(6);
+        lead[2..2 + n].copy_from_slice(&self.0[..n]);
+        len | u64::from_be_bytes(lead)
+    }
+
     /// True iff there is no data in this [`RowRef`].
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()

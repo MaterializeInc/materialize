@@ -34,9 +34,7 @@ use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{
-    Col2ValBatcher, Col2ValColBatcher, Col2ValPagedBatcher, columnar_exchange,
-};
+use mz_timely_util::columnar::{Col2ValColBatcher, Col2ValPagedBatcher, columnar_exchange};
 use mz_timely_util::columnation::ColumnationChunker;
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, PushInto};
@@ -1284,8 +1282,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             >(exchange, name),
             ArrangementBatcher::Columnation => ok_stream.mz_arrange_core::<
                 _,
-                batcher::Chunker<_>,
-                Col2ValBatcher<_, _, _, _>,
+                mz_row_spine::snapshot_batcher::UnsortedChunker<_, _, _>,
+                mz_row_spine::RowRowBatcher<_, _>,
                 RowRowBuilder<_, _>,
                 RowRowSpine<_, _>,
             >(exchange, name),

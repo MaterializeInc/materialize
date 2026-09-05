@@ -48,10 +48,10 @@ use crate::render::Pairer;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
-use crate::typedefs::{ErrBatcher, ErrBuilder, KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
+use crate::typedefs::{ErrBatcher, ErrBuilder, MzTimestamp, RowRowSpine, RowSpine};
 use mz_row_spine::{
-    DatumContainer, DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder,
-    RowValSpine,
+    DatumContainer, DatumSeq, KeyBatcher, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder,
+    RowValBuilder, RowValSpine,
 };
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
@@ -581,7 +581,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
             .into();
         let result = partial
             .mz_arrange::<
-                ColumnationChunker<_>,
+                mz_row_spine::snapshot_batcher::UnsortedChunker<_, _, _>,
                 RowBatcher<_, _>,
                 RowBuilder<_, _>,
                 RowSpine<_, _>,
@@ -647,7 +647,7 @@ where
     let arranged = input
         .clone()
         .mz_arrange::<
-            ColumnationChunker<_>,
+            mz_row_spine::snapshot_batcher::UnsortedChunker<_, _, _>,
             RowRowBatcher<_, _>,
             RowRowBuilder<_, _>,
             RowRowSpine<_, _>,

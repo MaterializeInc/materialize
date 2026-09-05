@@ -28,9 +28,7 @@ use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{
-    Col2ValBatcher, Col2ValColBatcher, Col2ValPagedBatcher, columnar_exchange,
-};
+use mz_timely_util::columnar::{Col2ValColBatcher, Col2ValPagedBatcher, columnar_exchange};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -407,8 +405,8 @@ where
                 >(exchange, "JoinStage"),
                 ArrangementBatcher::Columnation => keyed.mz_arrange_core::<
                     _,
-                    batcher::Chunker<_>,
-                    Col2ValBatcher<_, _, _, _>,
+                    mz_row_spine::snapshot_batcher::UnsortedChunker<_, _, _>,
+                    mz_row_spine::RowRowBatcher<_, _>,
                     RowRowBuilder<_, _>,
                     RowRowSpine<_, _>,
                 >(exchange, "JoinStage"),
