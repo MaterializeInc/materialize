@@ -778,8 +778,15 @@ def set_retry_on_agent_lost(pipeline: Any) -> None:
                     "limit": 2,
                 },
                 {
-                    "exit_status": 128,  # Temporary Github/GHCR/DockerHub connection issue
-                    "limit": 2,
+                    # Temporary Github/GHCR/DockerHub connection issue. A higher
+                    # limit than the rules around it: when GitHub refuses the
+                    # agents' anonymous git requests it does so in bursts
+                    # lasting minutes, and Buildkite requeues an automatic retry
+                    # within seconds, so a limit of 2 is spent inside the burst
+                    # that caused it. Measured on 2026-08-31: three attempts
+                    # landed within 40 seconds against bursts of 1-6 minutes.
+                    "exit_status": 128,
+                    "limit": 8,
                 },
                 {
                     "exit_status": 199,  # Rust ICE https://github.com/rust-lang/rust/issues/148581
