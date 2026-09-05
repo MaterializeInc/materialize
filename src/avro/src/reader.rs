@@ -961,7 +961,7 @@ impl<'a> SchemaResolver<'a> {
 /// In case a reader `Schema` is provided, schema resolution will also be performed.
 ///
 /// **NOTE** This function has a quite small niche of usage and does NOT take care of reading the
-/// header and consecutive data blocks; use [`Reader`](struct.Reader.html) if you don't know what
+/// header and consecutive data blocks; use [`Reader`] if you don't know what
 /// you are doing, instead.
 pub fn from_avro_datum<R: AvroRead>(schema: &Schema, reader: &mut R) -> Result<Value, AvroError> {
     let value = decode(schema.top_node(), reader)?;
