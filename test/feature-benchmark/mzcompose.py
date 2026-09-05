@@ -557,6 +557,26 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
+    # TEMP: A/B the MV sink dyncfgs on this build in CI, THIS with the flag on
+    # and OTHER with it off. Both flags run in one nightly by splitting the
+    # parallel jobs by parity: even jobs take the sync sink, odd jobs the
+    # correction buffer, and the scenarios shard over the jobs of each parity.
+    # Revert before merging.
+    ab_flags = ["enable_compute_sync_mv_sink", "enable_compute_correction_v2"]
+    ab_job = buildkite.get_parallelism_index()
+    ab_count = buildkite.get_parallelism_count()
+    ab_flag = ab_flags[ab_job % len(ab_flags)]
+    if ab_count > 1:
+        os.environ["BUILDKITE_PARALLEL_JOB"] = str(ab_job // len(ab_flags))
+        os.environ["BUILDKITE_PARALLEL_JOB_COUNT"] = str(
+            max(ab_count // len(ab_flags), 1)
+        )
+    args.other_tag = None
+    args.root_scenario = "MvSink"
+    args.this_params = f"{ab_flag}=true"
+    args.other_params = f"{ab_flag}=false"
+    print(f"TEMP A/B: {ab_flag} THIS=true OTHER=false")
+
     print(dedent(f"""
             this_tag: {args.this_tag}
             this_size: {args.this_size}
@@ -613,6 +633,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         selected_scenarios, lambda scenario_cls: scenario_cls.__name__
     )
     scenario_classes_remaining = list(scenario_classes_scheduled_to_run)
+
+    # TEMP: parity split above leaves the surplus jobs without scenarios.
+    if not scenario_classes_scheduled_to_run:
+        print("TEMP A/B: no scenarios for this shard")
+        return
 
     if (
         len(scenario_classes_scheduled_to_run) == 0
