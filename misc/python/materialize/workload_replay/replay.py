@@ -218,7 +218,7 @@ def continuous_queries(
             i = 0
             while True:
                 i += 1
-                replay_start = datetime.datetime.now(datetime.timezone.utc)
+                replay_start = datetime.datetime.now(datetime.UTC)
 
                 for query in workload["queries"]:
                     if stop_event.is_set():
@@ -244,7 +244,7 @@ def continuous_queries(
                     offset = (query["began_at"] - start) / factor_queries
                     scheduled = replay_start + offset
                     sleep_seconds = (
-                        scheduled - datetime.datetime.now(datetime.timezone.utc)
+                        scheduled - datetime.datetime.now(datetime.UTC)
                     ).total_seconds()
 
                     if sleep_seconds > 0:
