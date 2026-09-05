@@ -164,6 +164,23 @@ Materialize console.
 
 <img width="1440" alt="Screenshot 2023-12-28 at 18 45 11" src="https://github.com/MaterializeInc/materialize/assets/23521087/c530769e-3445-49c8-8f36-9f7166352ac4">
 
+### LibreDB Studio
+
+{{< warning >}}
+Only the SQL editor is fully supported today. The object/schema browser and the
+monitoring dashboard both depend on PostgreSQL catalog objects Materialize does
+not have: `MATERIALIZED` is a reserved keyword that breaks LibreDB Studio's
+schema-introspection query, and `pg_stat_activity`/`pg_statio_user_tables` do
+not exist, so the monitoring panel reports a connection error rather than
+data. Running queries, including Materialize-specific statements like `SHOW
+MATERIALIZED VIEWS` and `SHOW SOURCES`, works normally.
+{{< /warning >}}
+
+To connect to Materialize using [LibreDB Studio](https://github.com/libredb/libredb-studio),
+an open-source, browser-based SQL IDE, choose the **PostgreSQL** driver in the
+connection dialog and use the credentials from the Materialize console (host,
+port **6875**, your app password, SSL mode **Require**).
+
 ### `psql`
 
 {{< warning >}}
