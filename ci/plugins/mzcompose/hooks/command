@@ -145,6 +145,20 @@ cleanup() {
     printf "\n%s" "$BUILDKITE_LABEL: test timed out" >> run.log
   fi
 
+  # A composition that holds resources outside of Docker, such as a Cloud
+  # region, can declare a `ci-cleanup` workflow. It runs here, before the Docker
+  # teardown, with the arguments of the main workflow. A cancelled or timed-out
+  # job reaches this trap through SIGTERM, which ends the mzcompose process
+  # without running the composition's own cleanup path, so this is the only
+  # cleanup such a run gets. A failure is recorded for the error annotation but
+  # does not decide the job's result.
+  if echo "$workflows" | grep -x "ci-cleanup" > /dev/null; then
+    ci_unimportant_heading ":docker: Running the composition's ci-cleanup workflow"
+    if ! bin/ci-builder run "$builder" timeout 15m bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" run ci-cleanup "${run_args[@]:1}"; then
+      printf "\n%s" "$BUILDKITE_LABEL: ci-cleanup workflow failed" >> run.log
+    fi
+  fi
+
   ci_unimportant_heading "Post command steps"
   # Run before potential "run down" in coverage
   docker ps --all --quiet | xargs --no-run-if-empty docker inspect | jq '

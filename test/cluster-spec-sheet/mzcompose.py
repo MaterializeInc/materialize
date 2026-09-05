@@ -3386,16 +3386,33 @@ class EnvdObjectsSweep(Scenario):
 # TODO: We should factor the region helpers below out into a separate module.
 # (Similar `disable_region` functions also occur in other tests.)
 def disable_region(composition: Composition, hard: bool) -> None:
+    # `mz region disable` treats an already-disabled region as success, so any
+    # failure here is a real one (auth, API error) and must surface.
     print("Shutting down region ...")
+    if hard:
+        composition.run("mz", "region", "disable", "--hard", rm=True)
+    else:
+        composition.run("mz", "region", "disable", rm=True)
 
-    try:
-        if hard:
-            composition.run("mz", "region", "disable", "--hard", rm=True)
-        else:
-            composition.run("mz", "region", "disable", rm=True)
-    except UIError:
-        # Can return: status 404 Not Found
-        pass
+
+def verify_region_disabled(composition: Composition, region: str) -> None:
+    """Fail unless `mz region list` reports `region` as disabled.
+
+    `mz region disable` returning is not proof: it can be answered by a stale
+    or failing API, and a region that survives a cleanup keeps costing money
+    and load until someone notices. The check runs after every cleanup,
+    including the unattended one from the CI plugin's exit trap.
+    """
+    output = composition.run(
+        "mz", "region", "list", rm=True, capture_and_print=True
+    ).stdout
+    for line in output.splitlines():
+        cells = [cell.strip() for cell in line.split("|")]
+        if cells[0] == region:
+            if len(cells) >= 2 and cells[1] == "disabled":
+                return
+            raise UIError(f"region {region} is still {cells[1:]} after disable")
+    raise UIError(f"region {region} missing from `mz region list` output")
 
 
 def enable_region(target: "CloudTarget", envd_cpus: int | None = None) -> None:
@@ -3748,16 +3765,92 @@ def log_environment_info(target: "BenchTarget") -> None:
             pass
 
 
-def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -> None:
-    """
-    Run the bench workflow by default
-    """
+def add_target_arguments(parser: argparse.ArgumentParser) -> None:
+    """The arguments `workflow_default` and `workflow_ci_cleanup` share."""
     parser.add_argument(
         "--cleanup",
         default=False,
         action=argparse.BooleanOptionalAction,
         help="Destroy the region at the end of the workflow.",
     )
+    # Required rather than defaulting to cloud-production: `ci-cleanup` runs
+    # unattended from the CI plugin's exit trap and destroys the target's
+    # region, so a missing or malformed target must fail loudly instead of
+    # quietly selecting production. Every CI step passes it explicitly.
+    parser.add_argument(
+        "--target",
+        required=True,
+        choices=["cloud-production", "cloud-staging", "docker"],
+        help="Target to deploy to.",
+    )
+
+
+def make_target(composition: Composition, target: str) -> tuple["BenchTarget", Mz]:
+    """The bench target for `--target`, with the `mz` service configured for it."""
+    if target == "cloud-production":
+        bench_target: BenchTarget = CloudTarget(
+            composition,
+            PRODUCTION_USERNAME,
+            PRODUCTION_APP_PASSWORD or "",
+            region=PRODUCTION_REGION,
+        )
+        mz = Mz(
+            region=PRODUCTION_REGION,
+            environment=PRODUCTION_ENVIRONMENT,
+            app_password=PRODUCTION_APP_PASSWORD or "",
+        )
+    elif target == "cloud-staging":
+        staging_username, staging_app_password = staging_credentials()
+        bench_target = CloudTarget(
+            composition,
+            staging_username,
+            staging_app_password,
+            region=STAGING_REGION,
+            is_staging=True,
+            version=staging_version(),
+        )
+        mz = Mz(
+            region=STAGING_REGION,
+            environment=STAGING_ENVIRONMENT,
+            app_password=staging_app_password,
+        )
+    elif target == "docker":
+        bench_target = DockerTarget(composition)
+        mz = Mz(app_password="")
+    else:
+        raise ValueError(f"Unknown target: {target}")
+    return bench_target, mz
+
+
+def workflow_ci_cleanup(
+    composition: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Destroy the Cloud region of a run that did not get to its own cleanup.
+
+    The CI mzcompose plugin runs this workflow after `default` has exited, however
+    it exited, with the same arguments. A cancelled or timed-out job ends `default`
+    with SIGTERM, which skips its `finally` block, so for such a run this is the
+    only region cleanup there is. Only `--cleanup` and `--target` are read.
+    """
+    add_target_arguments(parser)
+    args, _ = parser.parse_known_args()
+    if not args.cleanup:
+        print("Not destroying the region: the run was started without --cleanup")
+        return
+    target, mz = make_target(composition, args.target)
+    if not isinstance(target, CloudTarget):
+        print(f"Nothing to clean up for --target={args.target}")
+        return
+    with composition.override(mz):
+        target.cleanup()
+
+
+def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -> None:
+    """
+    Run the bench workflow by default
+    """
+    add_target_arguments(parser)
     parser.add_argument(
         "--record",
         default=f"results_{int(time.time())}.csv",
@@ -3768,12 +3861,6 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         default=True,
         action=argparse.BooleanOptionalAction,
         help="Analyze results after completing test. Dispatches to cluster-scale or envd-scale focused analyses based on the file suffix: `.cluster.csv` or `.envd.csv`.",
-    )
-    parser.add_argument(
-        "--target",
-        default="cloud-production",
-        choices=["cloud-production", "cloud-staging", "docker"],
-        help="Target to deploy to (default: cloud-production).",
     )
     parser.add_argument(
         "--max-scale",
@@ -3865,34 +3952,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             f"{', '.join(sorted(cluster_object_limits_requested))}."
         )
 
-    if args.target == "cloud-production":
-        target: BenchTarget = CloudTarget(
-            composition, PRODUCTION_USERNAME, PRODUCTION_APP_PASSWORD or ""
-        )
-        mz = Mz(
-            region=PRODUCTION_REGION,
-            environment=PRODUCTION_ENVIRONMENT,
-            app_password=PRODUCTION_APP_PASSWORD or "",
-        )
-    elif args.target == "cloud-staging":
-        staging_username, staging_app_password = staging_credentials()
-        target: BenchTarget = CloudTarget(
-            composition,
-            staging_username,
-            staging_app_password,
-            is_staging=True,
-            version=staging_version(),
-        )
-        mz = Mz(
-            region=STAGING_REGION,
-            environment=STAGING_ENVIRONMENT,
-            app_password=staging_app_password,
-        )
-    elif args.target == "docker":
-        target = DockerTarget(composition)
-        mz = Mz(app_password="")
-    else:
-        raise ValueError(f"Unknown target: {args.target}")
+    target, mz = make_target(composition, args.target)
 
     with composition.override(mz):
         target_max = target.max_scale()
@@ -4016,11 +4076,13 @@ class CloudTarget(BenchTarget):
         composition: Composition,
         username: str,
         app_password: str,
+        region: str,
         is_staging: bool = False,
         version: str | None = None,
     ) -> None:
         self.composition = composition
         self.username = username
+        self.region = region
         self.app_password = app_password
         self.new_app_password: str | None = None
         self.is_staging = is_staging
@@ -4083,6 +4145,7 @@ class CloudTarget(BenchTarget):
 
     def cleanup(self) -> None:
         disable_region(self.composition, hard=True)
+        verify_region_disabled(self.composition, self.region)
 
     # M.1 size with the same worker count as the {scale}00cc size. Scales
     # above 8 have no available M.1 equivalent.
