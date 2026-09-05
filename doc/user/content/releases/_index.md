@@ -24,6 +24,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Self-Managed: 2026-09-11* <br>
 
 ### Improvements {#v26.41-improvements}
+- **MySQL snapshot parallelism on by default**: Initial snapshots of MySQL tables with a supported single-column primary key are now split into per-worker key ranges out of the box, where the splitting previously had to be turned on per replica; tables without a suitable primary key still fall back to a single-worker whole-table read.
 - **Pre-flight reference checks in `mz-deploy`**: `mz-deploy apply`, `apply tables`, and their `--dry-run` forms now check every `CREATE TABLE ... FROM SOURCE` reference against what the source can actually expose before creating anything, and report the mismatches grouped by source with close-name suggestions instead of failing partway through the batch with a raw server error.
 - **Faster Object Explorer loads in the Console**: The Console's Object Explorer tree now renders from a persisted, incrementally synced cache, which cuts the warm-load wait from roughly 600 ms to 25–50 ms on a catalog of about 2,800 objects.
 
