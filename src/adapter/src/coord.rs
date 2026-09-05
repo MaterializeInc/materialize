@@ -104,7 +104,7 @@ use mz_catalog::builtin::{
 };
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
 use mz_catalog::durable::OpenableDurableCatalogState;
-use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions};
+use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions, latest_item_version};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, Connection, DataSourceDesc,
     ReconfigurationTarget, Table, TableDataSource,
@@ -146,7 +146,9 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, SqlRelationType, Timestamp};
+use mz_repr::{
+    CatalogItemId, Diff, GlobalId, RelationDesc, RelationVersion, SqlRelationType, Timestamp,
+};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
@@ -3832,6 +3834,7 @@ impl Coordinator {
                                         physical_plan: physical_plan.clone(),
                                         dataflow_metainfos: metainfo.clone(),
                                         optimizer_features: optimizer_config.features.clone(),
+                                        item_version: RelationVersion::root(),
                                     },
                                 );
                                 (optimized_plan, physical_plan, metainfo)
@@ -3930,6 +3933,7 @@ impl Coordinator {
                                     physical_plan: physical_plan.clone(),
                                     dataflow_metainfos: metainfo.clone(),
                                     optimizer_features: optimizer_config.features.clone(),
+                                    item_version: latest_item_version(&mv.collections),
                                 },
                             );
                             (optimized_plan, physical_plan, metainfo)
@@ -4024,6 +4028,7 @@ impl Coordinator {
                                     physical_plan: physical_plan.clone(),
                                     dataflow_metainfos: metainfo.clone(),
                                     optimizer_features: optimizer_config.features.clone(),
+                                    item_version: RelationVersion::root(),
                                 },
                             );
                             (optimized_plan, physical_plan, metainfo)
