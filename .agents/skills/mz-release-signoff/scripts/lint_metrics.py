@@ -24,6 +24,9 @@ ALLOWLIST = SKILL / "scripts" / "metrics-allowlist.txt"
 CATALOG_NAME = re.compile(r"^- name: '?(.+?)'?$")
 BACKTICKED = re.compile(r"`([^`]+)`")
 CANDIDATE = re.compile(r"\b(mz_[a-z0-9_]+)\b")
+FENCED = re.compile(r"^```.*?^```", re.S | re.M)
+# A roster row abbreviates a family as `mz_foo_bar`, `_baz`, `_qux`.
+CONTINUATION = re.compile(r"^_[a-z0-9_]+$")
 
 # Histograms and summaries are catalogued as their expanded families, so a
 # reference naming the base is correct and must resolve through any suffix.
@@ -65,6 +68,31 @@ def resolves(name, exact, globs):
     )
 
 
+def resolve_continuation(continuation, base, exact, globs, allowed):
+    """Resolve `_baz` against the family of a preceding `mz_foo_bar`.
+
+    Return every prefix of the base that the continuation resolves against,
+    longest first. How many components the continuation drops is not stated by
+    the row, so every cut has to be tried: the roster writes both
+    `mz_persist_gc_seconds`, `_started`, which drops one, and
+    `mz_compute_controller_replica_count`, `_peek_count`, which drops two.
+
+    More than one hit means the row is not pinned to a single metric. That
+    matters on removal rather than today, because the longest cut is the
+    intended one and comes first: delete the intended metric and a shorter cut
+    still resolves, so the row stays green while pointing at nothing. The
+    caller rejects an ambiguous row for that reason, and the fix is to spell
+    the member out in full.
+    """
+    parts = base.split("_")
+    return [
+        candidate
+        for cut in range(len(parts) - 1, 0, -1)
+        for candidate in ["_".join(parts[:cut]) + continuation]
+        if candidate in allowed or resolves(candidate, exact, globs)
+    ]
+
+
 def allowlisted():
     names = set()
     for line in ALLOWLIST.read_text().splitlines():
@@ -74,20 +102,62 @@ def allowlisted():
     return names
 
 
+def names_in(token):
+    """Yield every catalogued-namespace metric name inside one code token.
+
+    A wildcard names a family whose stem is not itself catalogued, so it is
+    skipped. The test is per word rather than per token because a fenced block
+    arrives as one token, and a single wildcard inside it must not exempt the
+    whole block.
+    """
+    for word in token.split():
+        if "*" in word:
+            continue
+        for name in CANDIDATE.findall(word):
+            yield name.rstrip("_")
+
+
 def referenced():
-    """Yield (name, file) for every mz_* token inside backticks in the skill."""
+    """Yield (label, target, file) for every metric named in the skill.
+
+    Fenced blocks have to be pulled out before backticks are paired. A fence
+    contains backticks of its own, so pairing sequentially across one flips the
+    parity of every span after it: prose gets captured as code and the real
+    code spans become the separators between matches. Left unhandled, that
+    silently disables the check for every file containing a fence.
+    """
     for path in sorted(SKILL.rglob("*.md")):
-        for token in BACKTICKED.findall(path.read_text()):
-            # A prefix wildcard such as `mz_persist_*` names a family, not a
-            # metric, and its stem is not itself catalogued. Nothing here can
-            # be checked, so skip the whole token.
-            if "*" in token:
-                continue
-            for name in CANDIDATE.findall(token):
-                # Brace expansion such as `mz_foo_{sum,count}` leaves a
-                # trailing underscore. Resolve the base, which the catalog
-                # holds as an expanded family.
-                yield name.rstrip("_"), path
+        text = path.read_text()
+        for block in FENCED.findall(text):
+            for name in names_in(block):
+                yield name, name, path
+        # Continuations abbreviate within a single roster row, so the base is
+        # only sought on the same line. Tracking it across lines attaches a
+        # `_sum` to whatever full name happened to appear in an earlier
+        # paragraph, which manufactures failures rather than finding them.
+        for line in FENCED.sub("\n", text).splitlines():
+            previous = None
+            for span in BACKTICKED.findall(line):
+                stripped = span.strip()
+                # A bare histogram suffix is prose about the parts of a
+                # histogram, as in "the `_sum` rate of `mz_slow_message_handling`",
+                # never a family member abbreviated in a roster row.
+                if stripped in SUFFIXES:
+                    continue
+                if CONTINUATION.match(stripped):
+                    # With no in-scope base on this line the continuation
+                    # belongs to a family the catalog does not hold, such as
+                    # v2_mz_* or container_*, and cannot be checked.
+                    if previous:
+                        yield (
+                            f"{stripped} (after {previous})",
+                            (stripped, previous),
+                            path,
+                        )
+                    continue
+                for name in names_in(span):
+                    yield name, name, path
+                    previous = name
 
 
 def main() -> int:
@@ -99,16 +169,37 @@ def main() -> int:
     allowed = allowlisted()
 
     unresolved = {}
-    for name, path in referenced():
-        if name in allowed or resolves(name, exact, globs):
-            continue
-        unresolved.setdefault(name, set()).add(str(path))
+    ambiguous = {}
+    for label, target, path in referenced():
+        if isinstance(target, tuple):
+            continuation, base = target
+            hits = resolve_continuation(continuation, base, exact, globs, allowed)
+            if len(hits) > 1:
+                ambiguous.setdefault(label, (hits, set()))[1].add(str(path))
+                continue
+            if hits:
+                continue
+        else:
+            if target in allowed or resolves(target, exact, globs):
+                continue
+        unresolved.setdefault(label, set()).add(str(path))
 
     stale = sorted(n for n in allowed if resolves(n, exact, globs))
     if stale:
         print("Allowlisted names that now resolve in the catalog; remove them:")
         for name in stale:
             print(f"  {name}")
+        print()
+
+    if ambiguous:
+        print("Abbreviated metric names that resolve more than one way:")
+        for label in sorted(ambiguous):
+            hits, paths = ambiguous[label]
+            print(f"  {label}  ({', '.join(sorted(paths))})")
+            print(f"    resolves to: {', '.join(hits)}")
+        print()
+        print("The row is not pinned to one metric, so removing the intended one")
+        print("leaves the lint green. Spell the member out in full.")
         print()
 
     if unresolved:
@@ -123,7 +214,7 @@ def main() -> int:
             f"catalog cannot see it, in which case add it to {ALLOWLIST} with a reason."
         )
 
-    return 1 if (unresolved or stale) else 0
+    return 1 if (unresolved or stale or ambiguous) else 0
 
 
 if __name__ == "__main__":

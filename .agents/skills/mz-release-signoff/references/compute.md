@@ -43,7 +43,7 @@ System clusters are `s` followed by digits in either family, and `.*cluster-s[0-
 
 | Metric | Type | Notes |
 |---|---|---|
-| `mz_compute_controller_replica_count`, `_collection_count`, `_peek_count`, `_subscribe_count` | gauge | Controller-side inventory. Collection count tracks catalog growth, so a slow rise is expected. |
+| `mz_compute_controller_replica_count`, `mz_compute_controller_collection_count`, `_peek_count`, `_subscribe_count` | gauge | Controller-side inventory. Collection count tracks catalog growth, so a slow rise is expected. |
 | `mz_compute_controller_command_queue_size` | gauge | Sustained depth means the controller is not draining. |
 | `mz_compute_controller_response_send_count`, `_recv_count` | counter | Response queue depth, as the difference of the two. There is no depth gauge, because the response channel is an `instrumented_unbounded_channel` (`src/ore/src/channel.rs`), which takes a send and a receive counter and exports nothing else. Contrast `command_queue_size`, a real gauge that the command path increments and decrements directly. |
 | `mz_compute_commands_total`, `mz_compute_responses_total` | counter | Protocol volume. Doubles for one bucket during a zero-downtime upgrade. |
