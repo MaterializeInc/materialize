@@ -36,12 +36,13 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::metrics::{Metrics, SinkMetrics};
 use mz_repr::{Datum, Diff, Row, Timestamp};
+use mz_timely_util::pool_config;
 use timely::progress::Antichain;
 
 /// Default value of `compute_correction_v2_chain_proportionality`.
 const CHAIN_PROPORTIONALITY: f64 = 3.0;
 /// Default value of `compute_correction_v2_chunk_size`.
-const CHUNK_SIZE: usize = 8 * 1024;
+const CHUNK_SIZE: usize = 2 * 1024 * 1024;
 /// Default value of `consolidating_vec_growth_dampener`.
 const GROWTH_DAMPENER: usize = 1;
 
@@ -114,6 +115,55 @@ impl Corr {
     }
 }
 
+/// Buffer-pool configuration applied to the process pool for a run.
+///
+/// V2 offers every minted chunk to the pool, which decides whether the body stays in a resident
+/// slot or is evicted to its compressed tier and on to swap. V1 has no chunks and is unaffected.
+#[derive(Clone, Copy)]
+enum Spill {
+    /// No pool installed: every chunk stays resident. The production default.
+    Off,
+    /// A budget in bytes, large enough that nothing is evicted. Isolates the per-chunk insert
+    /// and read-back cost from the cost of actually spilling.
+    Resident,
+    /// A budget in mebibytes, tight enough to force eviction during the run.
+    Budget(usize),
+}
+
+impl Spill {
+    fn name(self) -> String {
+        match self {
+            Self::Off => "spill_off".to_string(),
+            Self::Resident => "pool_resident".to_string(),
+            Self::Budget(mib) => format!("pool_{mib}mib"),
+        }
+    }
+
+    /// Install this configuration on the process pool.
+    ///
+    /// The pool is a process singleton that later applies retune in place, which is also how
+    /// production drives it, so sweeping budgets in one process is legitimate. `Off` leaves the
+    /// pool uninstalled by clearing the spill gate: an installed pool cannot be uninstalled.
+    fn apply(self) {
+        let budget_bytes = match self {
+            Self::Off => {
+                mz_timely_util::columnar::chunk::set_compute_spill_enabled(false);
+                return;
+            }
+            Self::Resident => usize::MAX / 2,
+            Self::Budget(mib) => mib * 1024 * 1024,
+        };
+        mz_timely_util::columnar::chunk::set_compute_spill_enabled(true);
+        let applied = pool_config::apply_pool_config(pool_config::PoolPagerConfig {
+            budget_bytes,
+            spill_threads: 2,
+            eager_backing: false,
+            rss_target_bytes: 0,
+        });
+        assert!(applied, "pool reservation failed");
+    }
+}
+
 /// The shape of the update stream fed into the correction buffer.
 #[derive(Clone, Copy)]
 enum Pattern {
@@ -146,6 +196,14 @@ fn sink_metrics() -> SinkMetrics {
 }
 
 fn make_correction(version: Version, metrics: &SinkMetrics) -> Corr {
+    make_correction_with(version, metrics, CHUNK_SIZE)
+}
+
+/// Construct a correction buffer with an explicit `compute_correction_v2_chunk_size`.
+///
+/// The setting sizes V2's staging vector, so it controls how many updates accumulate before a
+/// chain is minted and pushed into the bucket chain. V1 ignores it.
+fn make_correction_with(version: Version, metrics: &SinkMetrics, chunk_size: usize) -> Corr {
     let worker_metrics = metrics.for_worker(0);
     match version {
         Version::V1 => Corr::V1(CorrectionV1::new(
@@ -158,7 +216,7 @@ fn make_correction(version: Version, metrics: &SinkMetrics) -> Corr {
             worker_metrics,
             None,
             CHAIN_PROPORTIONALITY,
-            CHUNK_SIZE,
+            chunk_size,
         )),
     }
 }
@@ -310,6 +368,9 @@ fn bench_correction(c: &mut Criterion) {
     let metrics = sink_metrics();
     let num_ts_values = [1024, 4096, 16384];
 
+    // The spill gate is process-global, so the baseline groups run with it explicitly off.
+    Spill::Off.apply();
+
     for pattern in [Pattern::Append, Pattern::Upsert, Pattern::TemporalFilter] {
         let mut group = c.benchmark_group(format!("correction_drain_stepwise/{}", pattern.name()));
         configure(&mut group);
@@ -348,5 +409,119 @@ fn bench_correction(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_correction);
+/// Sweep the spill configurations against V2's insert and drain paths.
+///
+/// Fixed at one pattern and size: the question is how each configuration shifts the per-chunk
+/// cost, not how that cost scales.
+fn bench_spill(c: &mut Criterion) {
+    let metrics = sink_metrics();
+    let num_ts = 16384;
+    let pattern = Pattern::Append;
+    let batches = make_batches(num_ts, pattern);
+
+    let mut group = c.benchmark_group(format!("correction_spill/{}", pattern.name()));
+    configure(&mut group);
+    for spill in [
+        Spill::Off,
+        Spill::Resident,
+        Spill::Budget(256),
+        Spill::Budget(64),
+        Spill::Budget(16),
+    ] {
+        spill.apply();
+
+        group.bench_function(
+            BenchmarkId::new(format!("insert/{}", spill.name()), num_ts),
+            |b| {
+                b.iter_batched(
+                    || (make_correction(Version::V2, &metrics), batches.clone()),
+                    |(mut correction, mut batches)| {
+                        for batch in &mut batches {
+                            correction.insert(batch);
+                        }
+                        correction
+                    },
+                    BatchSize::PerIteration,
+                )
+            },
+        );
+
+        group.bench_function(
+            BenchmarkId::new(format!("drain/{}", spill.name()), num_ts),
+            |b| {
+                b.iter_batched(
+                    || filled_correction(Version::V2, &metrics, &batches),
+                    |correction| drain_stepwise(correction, num_ts),
+                    BatchSize::PerIteration,
+                )
+            },
+        );
+    }
+    group.finish();
+
+    Spill::Off.apply();
+}
+
+/// Sweep `compute_correction_v2_chunk_size` against V2's insert and drain paths.
+///
+/// NOTE: the largest sizes here exceed the whole workload, so nothing ships during insert and
+/// the work moves to drain. Read the two halves of a large size's result together, or the
+/// insert number reads as a speedup that is really deferred work.
+fn bench_chunk_size(c: &mut Criterion) {
+    let metrics = sink_metrics();
+    let num_ts = 16384;
+    let pattern = Pattern::Append;
+    let batches = make_batches(num_ts, pattern);
+
+    Spill::Off.apply();
+
+    let mut group = c.benchmark_group(format!("correction_chunk_size/{}", pattern.name()));
+    configure(&mut group);
+    for chunk_size in [
+        8 * 1024,
+        64 * 1024,
+        256 * 1024,
+        1024 * 1024,
+        4 * 1024 * 1024,
+        16 * 1024 * 1024,
+        64 * 1024 * 1024,
+    ] {
+        let label = format!("{}KiB", chunk_size / 1024);
+
+        group.bench_function(BenchmarkId::new(format!("insert/{label}"), num_ts), |b| {
+            b.iter_batched(
+                || {
+                    (
+                        make_correction_with(Version::V2, &metrics, chunk_size),
+                        batches.clone(),
+                    )
+                },
+                |(mut correction, mut batches)| {
+                    for batch in &mut batches {
+                        correction.insert(batch);
+                    }
+                    correction
+                },
+                BatchSize::PerIteration,
+            )
+        });
+
+        group.bench_function(BenchmarkId::new(format!("drain/{label}"), num_ts), |b| {
+            b.iter_batched(
+                || {
+                    let mut correction = make_correction_with(Version::V2, &metrics, chunk_size);
+                    for batch in &batches {
+                        correction.insert(&mut batch.clone());
+                    }
+                    correction
+                },
+                |correction| drain_stepwise(correction, num_ts),
+                BatchSize::PerIteration,
+            )
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_correction, bench_spill, bench_chunk_size);
 criterion_main!(benches);

@@ -29,6 +29,10 @@ harness = false
 name = "column_pager"
 harness = false
 
+[[bench]]
+name = "column_borrow"
+harness = false
+
 [dependencies]
 ahash.workspace = true
 bytemuck.workspace = true

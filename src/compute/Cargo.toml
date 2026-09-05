@@ -69,6 +69,10 @@ default = []
 # Exposes internal types for benchmarks.
 bench = []
 
+[[example]]
+name = "correction_mem"
+required-features = ["bench"]
+
 [[bench]]
 name = "correction"
 harness = false

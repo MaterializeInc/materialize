@@ -147,17 +147,21 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{self, AtomicUsize};
+use std::sync::{Arc, Mutex, OnceLock};
 
+use columnar::bytes::indexed;
 use columnar::{Columnar, Index, Len, Ref};
 use mz_ore::cast::CastLossy;
+use mz_ore::pool::ChunkHandle;
 use mz_ore::soft_assert_or_log;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
-use mz_timely_util::column_pager::{self, PagedColumn};
 use mz_timely_util::columnar::Column;
+use mz_timely_util::columnar::chunk;
 use mz_timely_util::temporal::{Bucket, BucketChain};
 use timely::PartialOrder;
+use timely::container::{PushInto, SizableContainer};
 use timely::dataflow::channels::ContainerBytes;
 use timely::progress::Antichain;
 
@@ -167,23 +171,36 @@ use crate::sink::correction::{ChannelLogging, SizeMetrics};
 ///
 /// `D` is constrained to be `Columnar`, so that updates can be stored in a single columnar
 /// region per chunk, and the variable-length payload (e.g. `Row` bytes) lives in the same
-/// allocation as the rest of the chunk. The `Ref`-level `Eq + Ord` bounds let the merge/heap
-/// code compare updates directly through the columnar borrow, avoiding `into_owned` clones
-/// on the hot path.
+/// allocation as the rest of the chunk. [`DataContainer`] carries the bounds on that container.
 pub trait Data:
-    differential_dataflow::Data
-    + Columnar<Container: Send + Sync + Clone + for<'a> columnar::Borrow<Ref<'a>: Eq + Ord>>
-    + Send
-    + Sync
+    differential_dataflow::Data + Columnar<Container: DataContainer> + Send + Sync
 {
 }
 impl<D> Data for D where
-    D: differential_dataflow::Data
-        + Columnar<Container: Send + Sync + Clone + for<'a> columnar::Borrow<Ref<'a>: Eq + Ord>>
-        + Send
-        + Sync
+    D: differential_dataflow::Data + Columnar<Container: DataContainer> + Send + Sync
 {
 }
+
+/// The bounds [`Data`] places on its columnar container.
+///
+/// The `Ref`-level `Eq + Ord` bounds let the merge/heap code compare updates directly through
+/// the columnar borrow, avoiding `into_owned` clones on the hot path. The `Borrowed`-level
+/// `Send` bound lets a hoisted `Chunk::view` travel with the iterators that
+/// [`CorrectionV2::updates_before`] hands across the persist writer's `await`.
+pub trait DataContainer:
+    Send + Sync + Clone + for<'a> columnar::Borrow<Ref<'a>: Eq + Ord, Borrowed<'a>: Send>
+{
+}
+impl<C> DataContainer for C where
+    C: Send + Sync + Clone + for<'a> columnar::Borrow<Ref<'a>: Eq + Ord, Borrowed<'a>: Send>
+{
+}
+
+/// A borrowed view over a [`Chunk`]'s column.
+///
+/// Obtained from [`Chunk::view`] and indexed with `get`.
+type ChunkView<'a, D> =
+    <<(D, Timestamp, Diff) as Columnar>::Container as columnar::Borrow>::Borrowed<'a>;
 
 /// A data structure used to store corrections in the MV sink implementation.
 ///
@@ -217,11 +234,11 @@ pub struct CorrectionV2<D: Data> {
     /// The frontier by which all contained times are advanced.
     since: Antichain<Timestamp>,
 
-    /// Total count of updates in the correction buffer.
+    /// Total count of updates last reported to metrics.
     ///
     /// Tracked to compute deltas in `update_metrics`.
     prev_update_count: usize,
-    /// Total heap size used by the correction buffer.
+    /// Total size last reported to metrics.
     ///
     /// Tracked to compute deltas in `update_metrics`.
     prev_size: SizeMetrics,
@@ -229,8 +246,8 @@ pub struct CorrectionV2<D: Data> {
     metrics: SinkMetrics,
     /// Per-worker persist sink metrics.
     worker_metrics: SinkWorkerMetrics,
-    /// Introspection logging.
-    logging: Option<ChannelLogging>,
+    /// Running totals and introspection logging.
+    accounting: Accounting,
 }
 
 /// Fuel for restoring the bucket chain invariant after peeling.
@@ -258,18 +275,20 @@ impl<D: Data> CorrectionV2<D> {
         let update_size = std::mem::size_of::<(D, Timestamp, Diff)>();
         let chunk_capacity = std::cmp::max(chunk_size / update_size, 1);
 
+        let accounting = Accounting::new(logging);
+
         Self {
-            chain: BucketChain::new(ChainBucket::new(chain_proportionality, logging.clone())),
+            chain: BucketChain::new(ChainBucket::new(chain_proportionality, accounting.clone())),
             pending_low: Vec::new(),
             emitted: Chain::new(),
-            stage: Stage::new(logging.clone(), chunk_capacity),
+            stage: Stage::new(accounting.clone(), chunk_capacity),
             boundary: Antichain::from_elem(Timestamp::MIN),
             since: Antichain::from_elem(Timestamp::MIN),
             prev_update_count: 0,
             prev_size: Default::default(),
             metrics,
             worker_metrics,
-            logging,
+            accounting,
         }
     }
 
@@ -326,7 +345,7 @@ impl<D: Data> CorrectionV2<D> {
             builder.extend(updates.drain(..idx));
             let chain = builder.finish();
             if !chain.is_empty() {
-                self.log_chain_created(&chain);
+                self.account_chain_created(&chain);
                 self.pending_low.push(chain);
             }
         }
@@ -416,15 +435,15 @@ impl<D: Data> CorrectionV2<D> {
             let peeled = self.chain.peel(Antichain::new().borrow());
             for bucket in peeled {
                 for chain in bucket.into_chains() {
-                    self.log_chain_dropped(&chain);
+                    self.account_chain_dropped(&chain);
                 }
             }
             for chain in std::mem::take(&mut self.pending_low) {
-                self.log_chain_dropped(&chain);
+                self.account_chain_dropped(&chain);
             }
             let emitted = std::mem::replace(&mut self.emitted, Chain::new());
             if !emitted.is_empty() {
-                self.log_chain_dropped(&emitted);
+                self.account_chain_dropped(&emitted);
             }
             self.update_metrics();
             return;
@@ -455,7 +474,9 @@ impl<D: Data> CorrectionV2<D> {
             return;
         }
 
-        candidates.iter().for_each(|c| self.log_chain_dropped(c));
+        candidates
+            .iter()
+            .for_each(|c| self.account_chain_dropped(c));
 
         // Split the candidates at the upper. Parts at or beyond the upper (possible when `upper`
         // regresses below a previous one) stay pending.
@@ -468,7 +489,7 @@ impl<D: Data> CorrectionV2<D> {
                         lowers.push(lower);
                     }
                     if !remainder.is_empty() {
-                        self.log_chain_created(&remainder);
+                        self.account_chain_created(&remainder);
                         self.pending_low.push(remainder);
                     }
                 }
@@ -523,7 +544,7 @@ impl<D: Data> CorrectionV2<D> {
                 Some(&upper_ts) => {
                     let (lower, remainder) = chain.split_at_time(upper_ts);
                     if !remainder.is_empty() {
-                        self.log_chain_created(&remainder);
+                        self.account_chain_created(&remainder);
                         self.pending_low.push(remainder);
                     }
                     lower
@@ -533,7 +554,7 @@ impl<D: Data> CorrectionV2<D> {
         };
 
         if !merged.is_empty() {
-            self.log_chain_created(&merged);
+            self.account_chain_created(&merged);
         }
         self.emitted = merged;
 
@@ -574,35 +595,20 @@ impl<D: Data> CorrectionV2<D> {
         }
     }
 
-    fn log_chain_created(&self, chain: &Chain<D>) {
-        if let Some(logging) = &self.logging {
-            logging.chain_created(chain.update_count);
-        }
+    fn account_chain_created(&self, chain: &Chain<D>) {
+        self.accounting.chain_created(chain);
     }
 
-    fn log_chain_dropped(&self, chain: &Chain<D>) {
-        if let Some(logging) = &self.logging {
-            logging.chain_dropped(chain.update_count);
-        }
+    fn account_chain_dropped(&self, chain: &Chain<D>) {
+        self.accounting.chain_dropped(chain);
     }
 
     /// Update persist sink metrics.
+    ///
+    /// Reads the running totals maintained by [`Accounting`], so its cost is independent of how
+    /// much the buffer holds. Nothing here walks chains or pages a chunk in.
     fn update_metrics(&mut self) {
-        let mut new_size = self.stage.get_size();
-        let mut new_length = self.stage.data.len();
-        for chain in &self.pending_low {
-            new_size += chain.get_size();
-            new_length += chain.update_count;
-        }
-        new_size += self.emitted.get_size();
-        new_length += self.emitted.update_count;
-        for bucket in self.chain.buckets() {
-            for chain in &bucket.chains {
-                new_size += chain.get_size();
-                new_length += chain.update_count;
-            }
-        }
-
+        let (new_length, new_size) = self.accounting.totals();
         self.update_metrics_inner(new_size, new_length);
     }
 
@@ -617,12 +623,7 @@ impl<D: Data> CorrectionV2<D> {
         self.worker_metrics
             .report_correction_update_totals(new_length, new_size.capacity);
 
-        if let Some(logging) = &self.logging {
-            let i = |x: usize| isize::try_from(x).expect("must fit");
-            logging.report_size_diff(i(new_size.size) - i(old_size.size));
-            logging.report_capacity_diff(i(new_size.capacity) - i(old_size.capacity));
-            logging.report_allocations_diff(i(new_size.allocations) - i(old_size.allocations));
-        }
+        self.accounting.report_size_metrics(new_size, old_size);
 
         self.prev_size = new_size;
         self.prev_update_count = new_length;
@@ -653,39 +654,51 @@ fn merge_2<D: Data>(cursor1: Cursor<D>, cursor2: Cursor<D>) -> Chain<D> {
     let mut rest2 = Some(cursor2);
     let mut merged = ChainBuilder::default();
 
-    loop {
-        match (rest1, rest2) {
-            (Some(c1), Some(c2)) => {
-                let (d1, t1, r1) = c1.get();
-                let (d2, t2, r2) = c2.get();
+    // One borrow per chunk pair, not per update: `Chunk::view` re-decodes the column header on
+    // every call. The inner loop runs until either cursor crosses into its next chunk, at which
+    // point the outer loop re-borrows both.
+    while rest1.is_some() && rest2.is_some() {
+        let chunk1 = rest1.as_ref().expect("checked above").chunk_handle();
+        let chunk2 = rest2.as_ref().expect("checked above").chunk_handle();
+        let view1 = chunk1.view();
+        let view2 = chunk2.view();
 
-                match (t1, d1).cmp(&(t2, d2)) {
-                    Ordering::Less => {
-                        merged.push_ref((d1, t1, r1));
-                        rest1 = c1.step();
-                        rest2 = Some(c2);
-                    }
-                    Ordering::Greater => {
-                        merged.push_ref((d2, t2, r2));
-                        rest1 = Some(c1);
-                        rest2 = c2.step();
-                    }
-                    Ordering::Equal => {
-                        let r = r1 + r2;
-                        if r != Diff::ZERO {
-                            merged.push_ref((d1, t1, r));
-                        }
-                        rest1 = c1.step();
-                        rest2 = c2.step();
-                    }
-                }
-            }
-            (Some(c), None) | (None, Some(c)) => {
-                merged.push_cursor(c);
+        loop {
+            let (Some(c1), Some(c2)) = (rest1.as_ref(), rest2.as_ref()) else {
+                break;
+            };
+            if !c1.reads_from(&chunk1) || !c2.reads_from(&chunk2) {
                 break;
             }
-            (None, None) => break,
+
+            let (d1, t1, r1) = c1.get_with(&view1);
+            let (d2, t2, r2) = c2.get_with(&view2);
+
+            match refs_cmp::<D>((t1, d1), (t2, d2)) {
+                Ordering::Less => {
+                    merged.push_ref((d1, t1, r1));
+                    rest1 = rest1.take().expect("checked above").step();
+                }
+                Ordering::Greater => {
+                    merged.push_ref((d2, t2, r2));
+                    rest2 = rest2.take().expect("checked above").step();
+                }
+                Ordering::Equal => {
+                    let r = r1 + r2;
+                    if r != Diff::ZERO {
+                        merged.push_ref((d1, t1, r));
+                    }
+                    rest1 = rest1.take().expect("checked above").step();
+                    rest2 = rest2.take().expect("checked above").step();
+                }
+            }
         }
+    }
+
+    match (rest1, rest2) {
+        (Some(c), None) | (None, Some(c)) => merged.push_cursor(c),
+        (Some(_), Some(_)) => unreachable!("loop runs while both cursors are live"),
+        (None, None) => (),
     }
 
     merged.finish()
@@ -719,15 +732,153 @@ fn merge_many<D: Data>(cursors: Vec<Cursor<D>>) -> Chain<D> {
 impl<D: Data> Drop for CorrectionV2<D> {
     fn drop(&mut self) {
         for bucket in self.chain.buckets() {
-            bucket.chains.iter().for_each(|c| self.log_chain_dropped(c));
+            bucket
+                .chains
+                .iter()
+                .for_each(|c| self.account_chain_dropped(c));
         }
         self.pending_low
             .iter()
-            .for_each(|c| self.log_chain_dropped(c));
+            .for_each(|c| self.account_chain_dropped(c));
         if !self.emitted.is_empty() {
-            self.log_chain_dropped(&self.emitted);
+            self.account_chain_dropped(&self.emitted);
         }
         self.update_metrics_inner(Default::default(), 0);
+    }
+}
+
+/// Running totals over the buffer's contents, plus the introspection logging that reports them.
+///
+/// Shared by the buffer and by every structure that holds its chains, so the totals are
+/// maintained where chains are minted and retired rather than by a walk over the buffer.
+///
+/// Correctness rests on a discipline the code already keeps for the introspection logging: a
+/// chain the buffer holds has been announced exactly once through [`Accounting::chain_created`],
+/// and is retired exactly once, through [`Accounting::chain_dropped`], before it is dropped or
+/// consumed. Chains are immutable once announced, so the totals a chain contributes at
+/// retirement are the ones it contributed at announcement. `metrics_totals_match_walk` checks
+/// the result against a walk.
+#[derive(Clone, Debug)]
+struct Accounting {
+    /// The totals, shared with every clone.
+    totals: Arc<Totals>,
+    /// Introspection logging, absent when the sink is not logging.
+    logging: Option<ChannelLogging>,
+}
+
+/// The running totals behind an [`Accounting`].
+///
+/// Atomics because the buffer must stay `Send`, not because the counters are contended: the sink
+/// touches its buffer from one thread at a time, which is why `Relaxed` suffices.
+#[derive(Debug, Default)]
+struct Totals {
+    /// Number of updates the buffer holds.
+    records: AtomicUsize,
+    /// Serialized size of what the buffer holds, in bytes.
+    size: AtomicUsize,
+    /// Number of allocations holding it: one per chunk, plus the staging vector while it has one.
+    allocations: AtomicUsize,
+}
+
+impl Accounting {
+    /// Construct accounting that reports to the given logging, if any.
+    fn new(logging: Option<ChannelLogging>) -> Self {
+        Self {
+            totals: Default::default(),
+            logging,
+        }
+    }
+
+    /// Return the current totals as `(records, size metrics)`.
+    ///
+    /// The reported capacity equals the size: chunk bodies are exactly sized when minted, and the
+    /// staging vector's slack is bounded by one chunk's worth of updates and not tracked.
+    fn totals(&self) -> (usize, SizeMetrics) {
+        let size = self.totals.size.load(atomic::Ordering::Relaxed);
+        let metrics = SizeMetrics {
+            size,
+            capacity: size,
+            allocations: self.totals.allocations.load(atomic::Ordering::Relaxed),
+        };
+        (self.totals.records.load(atomic::Ordering::Relaxed), metrics)
+    }
+
+    /// Account for a chain the buffer now holds.
+    fn chain_created<D: Data>(&self, chain: &Chain<D>) {
+        let relaxed = atomic::Ordering::Relaxed;
+        self.totals.records.fetch_add(chain.update_count, relaxed);
+        self.totals.size.fetch_add(chain.size, relaxed);
+        self.totals
+            .allocations
+            .fetch_add(chain.chunks.len(), relaxed);
+        if let Some(logging) = &self.logging {
+            logging.chain_created(chain.update_count);
+        }
+    }
+
+    /// Account for a chain the buffer no longer holds.
+    fn chain_dropped<D: Data>(&self, chain: &Chain<D>) {
+        let relaxed = atomic::Ordering::Relaxed;
+        self.totals.records.fetch_sub(chain.update_count, relaxed);
+        self.totals.size.fetch_sub(chain.size, relaxed);
+        self.totals
+            .allocations
+            .fetch_sub(chain.chunks.len(), relaxed);
+        if let Some(logging) = &self.logging {
+            logging.chain_dropped(chain.update_count);
+        }
+    }
+
+    /// Announce the staging area as an empty chain, which is how its population is reported.
+    fn stage_created(&self) {
+        if let Some(logging) = &self.logging {
+            logging.chain_created(0);
+        }
+    }
+
+    /// Account for the staging area changing by `records` updates of `update_size` bytes each,
+    /// and by `allocations` allocations.
+    fn stage_diff(&self, records: isize, allocations: isize, update_size: usize) {
+        let bytes = records * isize::try_from(update_size).expect("must fit");
+        add_signed(&self.totals.records, records);
+        add_signed(&self.totals.size, bytes);
+        add_signed(&self.totals.allocations, allocations);
+
+        // The stage is reported as a chain that is dropped and re-created at its new length.
+        let Some(logging) = &self.logging else { return };
+        if records > 0 {
+            logging.chain_created(usize::try_from(records).expect("positive"));
+            logging.chain_dropped(0);
+        } else if records < 0 {
+            logging.chain_created(0);
+            logging.chain_dropped(usize::try_from(-records).expect("positive"));
+        }
+    }
+
+    /// Report the change from `old` to `new` size metrics to introspection.
+    fn report_size_metrics(&self, new: SizeMetrics, old: SizeMetrics) {
+        let Some(logging) = &self.logging else { return };
+        let i = |x: usize| isize::try_from(x).expect("must fit");
+        logging.report_size_diff(i(new.size) - i(old.size));
+        logging.report_capacity_diff(i(new.capacity) - i(old.capacity));
+        logging.report_allocations_diff(i(new.allocations) - i(old.allocations));
+    }
+}
+
+/// Add a signed `diff` to `counter`.
+///
+/// # Panics
+///
+/// Panics if the result would be negative, which means a retirement was never matched by an
+/// announcement.
+fn add_signed(counter: &AtomicUsize, diff: isize) {
+    let relaxed = atomic::Ordering::Relaxed;
+    if diff >= 0 {
+        counter.fetch_add(usize::try_from(diff).expect("non-negative"), relaxed);
+    } else {
+        let sub = usize::try_from(-diff).expect("positive");
+        let prev = counter.fetch_sub(sub, relaxed);
+        assert!(prev >= sub, "total retired below zero");
     }
 }
 
@@ -743,8 +894,8 @@ struct ChainBucket<D: Data> {
     chains: Vec<Chain<D>>,
     /// The size factor of subsequent chains required by the chain invariant.
     chain_proportionality: f64,
-    /// Introspection logging.
-    logging: Option<ChannelLogging>,
+    /// Running totals and introspection logging.
+    accounting: Accounting,
 }
 
 impl<D: Data> fmt::Debug for ChainBucket<D> {
@@ -757,11 +908,11 @@ impl<D: Data> fmt::Debug for ChainBucket<D> {
 
 impl<D: Data> ChainBucket<D> {
     /// Construct a new, empty `ChainBucket`.
-    fn new(chain_proportionality: f64, logging: Option<ChannelLogging>) -> Self {
+    fn new(chain_proportionality: f64, accounting: Accounting) -> Self {
         Self {
             chains: Vec::new(),
             chain_proportionality,
-            logging,
+            accounting,
         }
     }
 
@@ -770,9 +921,7 @@ impl<D: Data> ChainBucket<D> {
         if chain.is_empty() {
             return;
         }
-        if let Some(logging) = &self.logging {
-            logging.chain_created(chain.update_count);
-        }
+        self.accounting.chain_created(&chain);
         self.chains.push(chain);
 
         // Restore the chain invariant.
@@ -789,17 +938,13 @@ impl<D: Data> ChainBucket<D> {
         while merge_needed(&self.chains) {
             let a = self.chains.pop().unwrap();
             let b = self.chains.pop().unwrap();
-            if let Some(logging) = &self.logging {
-                logging.chain_dropped(a.update_count);
-                logging.chain_dropped(b.update_count);
-            }
+            self.accounting.chain_dropped(&a);
+            self.accounting.chain_dropped(&b);
 
             let cursors = [a, b].into_iter().filter_map(Chain::into_cursor).collect();
             let merged = merge_cursors(cursors);
             if !merged.is_empty() {
-                if let Some(logging) = &self.logging {
-                    logging.chain_created(merged.update_count);
-                }
+                self.accounting.chain_created(&merged);
                 self.chains.push(merged);
             }
         }
@@ -815,23 +960,19 @@ impl<D: Data> Bucket for ChainBucket<D> {
     type Timestamp = Timestamp;
 
     fn split(self, timestamp: &Self::Timestamp, fuel: &mut i64) -> (Self, Self) {
-        let mut lower = Self::new(self.chain_proportionality, self.logging.clone());
-        let mut upper = Self::new(self.chain_proportionality, self.logging.clone());
+        let mut lower = Self::new(self.chain_proportionality, self.accounting.clone());
+        let mut upper = Self::new(self.chain_proportionality, self.accounting.clone());
 
         for chain in self.chains {
             // Whole chunks are reused; at most one chunk straddling the timestamp is copied per
             // chain. Account fuel at chunk granularity.
             *fuel = fuel.saturating_sub(i64::try_from(chain.chunks.len()).expect("must fit"));
 
-            if let Some(logging) = &self.logging {
-                logging.chain_dropped(chain.update_count);
-            }
+            self.accounting.chain_dropped(&chain);
             let (lo, hi) = chain.split_at_time(*timestamp);
             for (part, target) in [(lo, &mut lower), (hi, &mut upper)] {
                 if !part.is_empty() {
-                    if let Some(logging) = &self.logging {
-                        logging.chain_created(part.update_count);
-                    }
+                    target.accounting.chain_created(&part);
                     target.chains.push(part);
                 }
             }
@@ -853,6 +994,10 @@ struct Chain<D: Data> {
     chunks: Vec<Chunk<D>>,
     /// The number of updates contained in all chunks.
     update_count: usize,
+    /// The serialized size of all chunks, in bytes.
+    ///
+    /// Maintained as chunks are pushed, so metrics never walk the chunks.
+    size: usize,
 }
 
 impl<D: Data> Chain<D> {
@@ -861,6 +1006,7 @@ impl<D: Data> Chain<D> {
         Self {
             chunks: Default::default(),
             update_count: 0,
+            size: 0,
         }
     }
 
@@ -877,6 +1023,7 @@ impl<D: Data> Chain<D> {
         mz_ore::soft_assert_no_log!(self.can_accept_chunk(&chunk));
 
         self.update_count += chunk.len();
+        self.size += chunk.size();
         self.chunks.push(chunk);
     }
 
@@ -919,8 +1066,9 @@ impl<D: Data> Chain<D> {
     /// Return an iterator over the contained updates.
     fn iter(&self) -> impl Iterator<Item = (D, Timestamp, Diff)> + '_ {
         self.chunks.iter().flat_map(|c| {
+            let view = c.view();
             (0..c.len()).map(move |i| {
-                let (d, t, r) = c.index(i);
+                let (d, t, r) = view.get(i);
                 (D::into_owned(d), t, r)
             })
         })
@@ -991,16 +1139,17 @@ impl<D: Data> Chain<D> {
                 let idx = chunk
                     .find_time_greater_than(skip_ts)
                     .expect("straddles time");
+                let view = chunk.view();
                 let mut builder = ChainBuilder::default();
                 for i in 0..idx {
-                    builder.push_ref(chunk.index(i));
+                    builder.push_ref(view.get(i));
                 }
                 for part in builder.finish().chunks {
                     lower.push_chunk(part);
                 }
                 let mut builder = ChainBuilder::default();
                 for i in idx..chunk.len() {
-                    builder.push_ref(chunk.index(i));
+                    builder.push_ref(view.get(i));
                 }
                 for part in builder.finish().chunks {
                     upper.push_chunk(part);
@@ -1009,15 +1158,6 @@ impl<D: Data> Chain<D> {
         }
 
         (lower, upper)
-    }
-
-    /// Return the size of the chain, for use in metrics.
-    fn get_size(&self) -> SizeMetrics {
-        let mut metrics = SizeMetrics::default();
-        for chunk in &self.chunks {
-            metrics += chunk.get_size();
-        }
-        metrics
     }
 }
 
@@ -1042,40 +1182,42 @@ impl<D: Data> Default for ChainBuilder<D> {
 impl<D: Data> ChainBuilder<D> {
     /// Push a reference-form update into the builder.
     fn push_ref(&mut self, update: Ref<'_, (D, Timestamp, Diff)>) {
-        self.builder.push(update);
-        self.drain();
+        if let Some(chunk) = self.builder.push(update) {
+            self.chain.push_chunk(chunk);
+        }
     }
 
     /// Push an owned-form update into the builder.
     fn push_owned(&mut self, update: &(D, Timestamp, Diff)) {
-        self.builder.push(update);
-        self.drain();
+        if let Some(chunk) = self.builder.push(update) {
+            self.chain.push_chunk(chunk);
+        }
     }
 
     /// Push the updates produced by a cursor into the builder.
     fn push_cursor(&mut self, cursor: Cursor<D>) {
         let mut rest = Some(cursor);
+        // One borrow per chunk: see `Chunk::view` for why this must not move into the inner loop.
         while let Some(cursor) = rest.take() {
-            let update = cursor.get();
-            self.push_ref(update);
-            rest = cursor.step();
-        }
-    }
+            let chunk = cursor.chunk_handle();
+            let view = chunk.view();
+            rest = Some(cursor);
 
-    /// Move any minted chunks from the builder into the chain.
-    fn drain(&mut self) {
-        while let Some(chunk) = self.builder.pop() {
-            self.chain.push_chunk(chunk);
+            while let Some(cursor) = rest.as_ref() {
+                if !cursor.reads_from(&chunk) {
+                    break;
+                }
+                self.push_ref(cursor.get_with(&view));
+                rest = rest.take().expect("checked above").step();
+            }
         }
     }
 
     /// Finish building, returning the assembled [`Chain`].
     fn finish(self) -> Chain<D> {
         let Self { builder, mut chain } = self;
-        for chunk in builder.finish() {
-            if chunk.len() > 0 {
-                chain.push_chunk(chunk);
-            }
+        if let Some(chunk) = builder.finish() {
+            chain.push_chunk(chunk);
         }
         chain
     }
@@ -1163,11 +1305,41 @@ impl<D: Data> Cursor<D> {
     }
 
     /// Get a reference to the current update.
+    ///
+    /// Single-access only. A loop over a cursor must hoist [`Cursor::chunk_handle`]'s
+    /// [`Chunk::view`] and read through [`Cursor::get_with`] instead.
     fn get(&self) -> Ref<'_, (D, Timestamp, Diff)> {
         let chunk = self.get_chunk();
         let (d, t, r) = chunk.index(self.chunk_offset);
         let t = self.overwrite_ts.unwrap_or(t);
         (d, t, r)
+    }
+
+    /// Get a reference to the current update, reading through an already-borrowed view.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `view` is not a view of the cursor's current chunk. Guard loops with
+    /// [`Cursor::reads_from`], which is how a caller learns the cursor has crossed into the next
+    /// chunk and the view must be refreshed.
+    fn get_with<'a>(&self, view: &ChunkView<'a, D>) -> Ref<'a, (D, Timestamp, Diff)> {
+        debug_assert_eq!(view.len(), self.get_chunk().len(), "view of another chunk");
+        let (d, t, r) = view.get(self.chunk_offset);
+        let t = self.overwrite_ts.unwrap_or(t);
+        (d, t, r)
+    }
+
+    /// A shared handle on the chunk the cursor currently reads from.
+    ///
+    /// Held by callers that hoist a [`Chunk::view`], so the view's borrow outlives the cursor
+    /// steps taken against it.
+    fn chunk_handle(&self) -> Rc<Chunk<D>> {
+        Rc::clone(&self.chunks[0])
+    }
+
+    /// Whether the cursor still reads from `chunk`.
+    fn reads_from(&self, chunk: &Rc<Chunk<D>>) -> bool {
+        Rc::ptr_eq(&self.chunks[0], chunk)
     }
 
     /// Get a reference to the current chunk.
@@ -1358,22 +1530,30 @@ impl<D: Data> Cursor<D> {
 /// boundary (~2 MiB, matching the ship granularity used elsewhere in the codebase), so each
 /// chunk corresponds to a single, predictably sized allocation.
 struct Chunk<D: Data> {
-    /// The paged-out form, taken on first materialization.
+    /// The body in the buffer pool, which may spill it.
+    ///
+    /// Empty when the body stays on the heap, which is what
+    /// [`mz_timely_util::columnar::chunk::try_spill_ref`] decides, and emptied again by
+    /// [`Chunk::column`]: a materialized chunk holds its body on the heap for the rest of its
+    /// life, so keeping the pool's copy alive would only double the footprint and hold budget
+    /// the pool could give to a chunk that still needs it.
     ///
     /// A `Mutex` (not `RefCell`) keeps the chunk `Sync`: cursors hold chunks behind a shared
     /// `Rc`, and the iterator returned by [`CorrectionV2::updates_before`] borrows them across
     /// the persist writer's `await`, so `&Chunk` must be `Send`. The lock is taken once, at
     /// materialization, and is otherwise uncontended (the sink runs single-threaded per worker).
-    paged: Mutex<Option<PagedColumn<(D, Timestamp, Diff)>>>,
+    pooled: Mutex<Option<ChunkHandle>>,
     /// The materialized form, populated lazily by [`Chunk::column`] on first access.
     ///
-    /// An `OnceLock` (not `OnceCell`) for the same `Sync` reason. Once set the slot is never
-    /// cleared, so its address is stable and [`Chunk::index`] can hand out `Ref<'_>` borrows tied
-    /// to `&self`. The allocation is freed when the chunk drops, which bounds resident memory to
-    /// the chunks under an active merge front.
+    /// An `OnceLock` for the same `Sync` reason as `pooled`. Once set the slot is never
+    /// cleared, so its address is stable and [`Chunk::index`] can hand out `Ref<'_>` borrows
+    /// tied to `&self`. The allocation is freed when the chunk drops, which bounds resident
+    /// memory to the chunks under an active merge front.
     resident: OnceLock<Column<(D, Timestamp, Diff)>>,
     /// Number of updates, cached so `len` and chain bookkeeping never page the chunk in.
     len: usize,
+    /// Serialized size of the body in words, cached so size accounting never pages it in.
+    body_words: usize,
     /// Time of the first update, cached so boundary checks (`split_at_time`, `can_accept`) route
     /// a resting chunk without materializing it.
     first_time: Timestamp,
@@ -1388,47 +1568,76 @@ impl<D: Data> fmt::Debug for Chunk<D> {
 }
 
 impl<D: Data> Chunk<D> {
-    /// Page the given non-empty column out into a chunk.
+    /// Mint a chunk from the given non-empty column, emptying it.
     ///
-    /// Reads the cached metadata (length, boundary times) while the column is still resident, then
-    /// hands it to the global column pager. The policy decides whether it actually spills; either
-    /// way the chunk is born paged and materializes lazily on first read.
+    /// Reads the metadata a resting chunk must answer (length, size, boundary times) while the
+    /// column is still in hand, then offers the body to the buffer pool. A body the pool takes
+    /// is encoded straight into its slot, which leaves the column's allocation behind for the
+    /// caller to refill, and materializes lazily on first read. A body the pool declines is
+    /// taken from the column instead, because a resident chunk has to own it.
     ///
     /// # Panics
     ///
-    /// Panics if the column is empty. Chunks are non-empty by construction; [`ChunkBuilder`] only
-    /// ever builds a chunk from a populated column.
-    fn from_column(mut data: Column<(D, Timestamp, Diff)>) -> Self {
+    /// Panics if the column is empty. Chunks are non-empty by construction; [`ChunkBuilder`]
+    /// only ever mints from a populated column.
+    fn mint(column: &mut Column<(D, Timestamp, Diff)>) -> Self {
         let (len, first_time, last_time) = {
-            let borrowed = data.borrow();
+            let borrowed = Column::borrow(column);
             let len = borrowed.len();
             assert!(len > 0, "chunks are non-empty");
             (len, borrowed.get(0).1, borrowed.get(len - 1).1)
         };
+        let body_words = column.length_in_bytes() / std::mem::size_of::<u64>();
 
-        let paged = column_pager::global_pager().page(&mut data);
+        // Depth 0: a correction chunk is rewritten by the next merge that reaches it, so the
+        // pool stores it uncompressed and in its hottest eviction band.
+        // TODO: chunks resting in the far-future buckets outlive that assumption and want a
+        // depth that reflects how long they have gone untouched.
+        let (pooled, resident) = match chunk::try_spill_ref(column, 0) {
+            Some(spilled) => {
+                column.clear();
+                (Mutex::new(Some(spilled.handle)), OnceLock::new())
+            }
+            None => {
+                // Serialize into an exactly sized vector, which leaves the column's allocation
+                // in place for the caller and keeps the typed container's spare capacity out
+                // of a body that is held for the rest of the chunk's life.
+                let mut words = Vec::with_capacity(body_words);
+                indexed::encode(&mut words, &Column::borrow(column));
+                column.clear();
+                let cell = OnceLock::new();
+                if cell.set(Column::Align(words)).is_err() {
+                    unreachable!("cell is fresh");
+                }
+                (Mutex::new(None), cell)
+            }
+        };
         Self {
-            paged: Mutex::new(Some(paged)),
-            resident: OnceLock::new(),
+            pooled,
+            body_words,
+            resident,
             len,
             first_time,
             last_time,
         }
     }
 
-    /// Materialize the chunk's column, paging it in on first access.
+    /// Materialize the chunk's column, taking it out of the pool on first access.
     ///
     /// The returned reference is valid for as long as `&self`: the `OnceLock` slot is never
-    /// cleared once populated, so its contents have a stable address.
+    /// cleared once populated, so its contents have a stable address. Taking the body frees the
+    /// pool's copy, so the chunk holds exactly one.
     fn column(&self) -> &Column<(D, Timestamp, Diff)> {
         self.resident.get_or_init(|| {
-            let paged = self
-                .paged
+            let handle = self
+                .pooled
                 .lock()
-                .expect("pager mutex poisoned")
+                .expect("pool handle mutex poisoned")
                 .take()
-                .expect("paged form present until materialized");
-            column_pager::global_pager().take(paged)
+                .expect("a chunk the pool declined is materialized at construction");
+            let mut words = Vec::new();
+            handle.take(&mut words);
+            Column::Align(words)
         })
     }
 
@@ -1437,13 +1646,25 @@ impl<D: Data> Chunk<D> {
         self.len
     }
 
+    /// Borrow the chunk's column, paging it in if necessary.
+    ///
+    /// Any caller that touches more than one update must hoist this out of its loop and index the
+    /// returned view. `Column::borrow` on a serialized column rebuilds the struct-of-arrays view
+    /// from the serialized header on every call, so borrowing per element pays that decode per
+    /// element.
+    fn view(&self) -> ChunkView<'_, D> {
+        self.column().borrow()
+    }
+
     /// Return the update at the given index, paging the chunk in if necessary.
+    ///
+    /// Single-access only. Indexing a hoisted [`Chunk::view`] is the loop form.
     ///
     /// # Panics
     ///
     /// Panics if the given index is not populated.
     fn index(&self, idx: usize) -> Ref<'_, (D, Timestamp, Diff)> {
-        self.column().borrow().get(idx)
+        self.view().get(idx)
     }
 
     /// Return the first update in the chunk, paging the chunk in if necessary.
@@ -1476,11 +1697,12 @@ impl<D: Data> Chunk<D> {
             return None;
         }
 
+        let view = self.view();
         let mut lower = 0;
         let mut upper = self.len;
         while lower < upper {
             let idx = (lower + upper) / 2;
-            if self.index(idx).1 > time {
+            if view.get(idx).1 > time {
                 upper = idx;
             } else {
                 lower = idx + 1;
@@ -1490,99 +1712,58 @@ impl<D: Data> Chunk<D> {
         Some(lower)
     }
 
-    /// Return the size of the chunk, for use in metrics.
+    /// Return the serialized size of the chunk's body in bytes, for use in metrics.
     ///
-    /// Reports resident bytes only: a chunk still spilled (on swap or in a pager file) is not part
-    /// of RSS and contributes nothing, matching the accounting in
-    /// [`mz_timely_util::columnar::merge_batcher`].
-    fn get_size(&self) -> SizeMetrics {
-        let resident = |col: &Column<(D, Timestamp, Diff)>| {
-            let bytes = col.length_in_bytes();
-            SizeMetrics {
-                size: bytes,
-                capacity: bytes,
-                allocations: 1,
-            }
-        };
-
-        if let Some(col) = self.resident.get() {
-            return resident(col);
-        }
-        // Not yet materialized: a policy that kept the column resident still occupies RSS, so
-        // account for it; a genuinely spilled column does not.
-        match &*self.paged.lock().expect("pager mutex poisoned") {
-            Some(PagedColumn::Resident(col, _)) => resident(col),
-            _ => SizeMetrics::default(),
-        }
+    /// The chunk holds exactly one copy of its body, in the pool or on the heap, so this is its
+    /// size either way. It is not a resident-byte number: what the pool has evicted is the
+    /// pool's business, and it publishes `resident_bytes` itself (`mz_ore::pool::PoolStats`).
+    fn size(&self) -> usize {
+        self.body_words * std::mem::size_of::<u64>()
     }
 }
 
-/// Builder that produces a stream of fixed-size [`Chunk`]s.
+/// Builder that mints fixed-size [`Chunk`]s from a stream of updates.
 ///
-/// Wraps [`mz_timely_util::columnar::builder::ColumnBuilder`], which mints a new
-/// [`Column::Align`] chunk whenever its in-progress columnar container reaches a fixed
-/// serialized byte boundary (~2 MiB, matching the ship granularity used elsewhere in the
-/// codebase). Each minted chunk is therefore a single, predictably-sized aligned allocation.
+/// Updates accumulate in one column, which is minted into a chunk as soon as the column reports
+/// itself at capacity, so every chunk is a single, predictably sized body. Minting a spilled body
+/// leaves the column's allocation in place, so a builder that mints many chunks grows one column
+/// once.
 struct ChunkBuilder<D: Data> {
-    inner: mz_timely_util::columnar::builder::ColumnBuilder<(D, Timestamp, Diff)>,
+    /// The updates pushed since the last mint.
+    current: Column<(D, Timestamp, Diff)>,
 }
 
 impl<D: Data> Default for ChunkBuilder<D> {
     fn default() -> Self {
         Self {
-            inner: Default::default(),
+            current: Default::default(),
         }
     }
 }
 
 impl<D: Data> ChunkBuilder<D> {
-    /// Push an update into the builder.
+    /// Push an update, returning a chunk if the push completed one.
     ///
-    /// Accepts whatever the inner [`ColumnBuilder`]'s [`PushInto`] impl accepts — both the
+    /// Accepts whatever [`Column`]'s [`PushInto`] impl accepts, both the
     /// `Ref<'_, (D, T, R)>` refs produced by cursors and `&(D, T, R)` references to owned
     /// tuples drained from the staging buffer.
     ///
-    /// [`ColumnBuilder`]: mz_timely_util::columnar::builder::ColumnBuilder
     /// [`PushInto`]: timely::container::PushInto
     #[inline]
-    fn push<T>(&mut self, item: T)
+    fn push<T>(&mut self, item: T) -> Option<Chunk<D>>
     where
-        mz_timely_util::columnar::builder::ColumnBuilder<(D, Timestamp, Diff)>:
-            timely::container::PushInto<T>,
+        Column<(D, Timestamp, Diff)>: PushInto<T>,
     {
-        timely::container::PushInto::push_into(&mut self.inner, item);
+        PushInto::push_into(&mut self.current, item);
+        // The ship test walks the column's slice lengths, so it costs per push, not per byte.
+        self.current
+            .at_capacity()
+            .then(|| Chunk::mint(&mut self.current))
     }
 
-    /// Pop a finished chunk, if one is available.
-    fn pop(&mut self) -> Option<Chunk<D>> {
-        use timely::container::ContainerBuilder;
-        // `ColumnBuilder::extract` stashes the popped chunk in its `finished` slot so the
-        // caller can read it through `&mut`; move it out with `mem::take` so we own it
-        // (leaves `Column::Typed(Default::default())` behind, which the next `extract`
-        // overwrites).
-        self.inner
-            .extract()
-            .map(|c| Chunk::from_column(std::mem::take(c)))
-    }
-
-    /// Finalize the builder: flush any in-progress updates as a typed chunk and drain pending.
-    fn finish(mut self) -> impl Iterator<Item = Chunk<D>> {
-        use timely::container::ContainerBuilder;
-        // `ColumnBuilder::finish` flushes the in-progress container into the pending queue
-        // (as `Column::Typed`) and returns the first pending entry. Subsequent calls drain
-        // the rest until `None`. Translate that into an owning iterator.
-        //
-        // `finish` can hand back an empty column (e.g. when the last shipped chunk landed exactly
-        // on the boundary). Skip those: `Chunk::from_column` requires a non-empty column, and an
-        // empty chunk would needlessly engage the pager.
-        std::iter::from_fn(move || {
-            loop {
-                let col = std::mem::take(self.inner.finish()?);
-                if !col.is_empty() {
-                    return Some(Chunk::from_column(col));
-                }
-            }
-        })
+    /// Mint the updates pushed since the last mint, if any.
+    fn finish(mut self) -> Option<Chunk<D>> {
+        (!self.current.is_empty()).then(|| Chunk::mint(&mut self.current))
     }
 }
 
@@ -1591,26 +1772,33 @@ impl<D: Data> ChunkBuilder<D> {
 struct Stage<D> {
     /// The contained updates.
     ///
-    /// This vector has a fixed capacity equal to the [`Chunk`] capacity.
+    /// Grows into `chunk_capacity` rather than being allocated at it, so a sink that never
+    /// stages that much never holds it. One of these exists per sink and worker, which is why
+    /// the eager allocation is worth avoiding even though a staging area is small.
     data: Vec<(D, Timestamp, Diff)>,
-    /// Introspection logging.
+    /// How many updates to accumulate before shipping a batch, from
+    /// `compute_correction_v2_chunk_size`.
+    ///
+    /// Shipping less often costs staging memory and saves inserts: it is the number of chains
+    /// minted per update, and every chain minted is a chain some later read has to merge.
+    chunk_capacity: usize,
+    /// Running totals and introspection logging.
     ///
     /// We want to report the number of records in the stage. To do so, we pretend that the stage
     /// is a chain, and every time the number of updates inside changes, the chain gets dropped and
     /// re-created.
-    logging: Option<ChannelLogging>,
+    accounting: Accounting,
 }
 
 impl<D: Data> Stage<D> {
-    fn new(logging: Option<ChannelLogging>, chunk_capacity: usize) -> Self {
+    fn new(accounting: Accounting, chunk_capacity: usize) -> Self {
         // For logging, we pretend the stage consists of a single chain.
-        if let Some(logging) = &logging {
-            logging.chain_created(0);
-        }
+        accounting.stage_created();
 
         Self {
-            data: Vec::with_capacity(chunk_capacity),
-            logging,
+            data: Vec::new(),
+            chunk_capacity,
+            accounting,
         }
     }
 
@@ -1624,11 +1812,11 @@ impl<D: Data> Stage<D> {
             return None;
         }
 
-        let prev_length = self.ilen();
+        let before = self.snapshot();
 
         // Determine how many chunks we can fill with the available updates.
         let update_count = self.data.len() + updates.len();
-        let chunk_capacity = self.data.capacity();
+        let chunk_capacity = self.chunk_capacity;
         let chunk_count = update_count / chunk_capacity;
 
         let mut new_updates = updates.drain(..);
@@ -1654,32 +1842,29 @@ impl<D: Data> Stage<D> {
         // Stage the remaining updates.
         Extend::extend(&mut self.data, new_updates);
 
-        self.log_length_diff(self.ilen() - prev_length);
+        self.account_since(before);
 
         maybe_ready
     }
 
     /// Flush all currently staged updates, returning them sorted and consolidated.
     fn flush(&mut self) -> Option<Vec<(D, Timestamp, Diff)>> {
-        self.log_length_diff(-self.ilen());
+        let before = self.snapshot();
 
         consolidate(&mut self.data);
+        let data = (!self.data.is_empty()).then(|| std::mem::take(&mut self.data));
 
-        if self.data.is_empty() {
-            return None;
-        }
-
-        let capacity = self.data.capacity();
-        let data = std::mem::replace(&mut self.data, Vec::with_capacity(capacity));
-        Some(data)
+        self.account_since(before);
+        data
     }
 
     /// Advance the times of staged updates by the given `since`.
     fn advance_times(&mut self, since: &Antichain<Timestamp>) {
         let Some(since_ts) = since.as_option() else {
             // If the since is the empty frontier, discard all updates.
-            self.log_length_diff(-self.ilen());
+            let before = self.snapshot();
             self.data.clear();
+            self.account_since(before);
             return;
         };
 
@@ -1688,42 +1873,35 @@ impl<D: Data> Stage<D> {
         }
     }
 
-    /// Return the size of the stage, for use in metrics.
+    /// The staged length and allocation count, taken before a mutation for [`Stage::account_since`].
+    fn snapshot(&self) -> (isize, isize) {
+        let len = isize::try_from(self.data.len()).expect("must fit");
+        (len, isize::from(self.data.capacity() > 0))
+    }
+
+    /// Account for the change to the stage since `before`, a [`Stage::snapshot`].
     ///
-    /// Note: We don't follow pointers here, so the returned `size` and `capacity` values are
-    /// under-estimates. That's fine as the stage should always be small.
-    fn get_size(&self) -> SizeMetrics {
-        SizeMetrics {
-            size: self.data.len() * std::mem::size_of::<(D, Timestamp, Diff)>(),
-            capacity: self.data.capacity() * std::mem::size_of::<(D, Timestamp, Diff)>(),
-            allocations: 1,
-        }
-    }
-
-    /// Return the number of updates in the stage, as an `isize`.
-    fn ilen(&self) -> isize {
-        self.data.len().try_into().expect("must fit")
-    }
-
-    fn log_length_diff(&self, diff: isize) {
-        let Some(logging) = &self.logging else { return };
-        if diff > 0 {
-            let count = usize::try_from(diff).expect("must fit");
-            logging.chain_created(count);
-            logging.chain_dropped(0);
-        } else if diff < 0 {
-            let count = usize::try_from(-diff).expect("must fit");
-            logging.chain_created(0);
-            logging.chain_dropped(count);
-        }
+    /// Sizes count the bare tuples without following pointers, so they are under-estimates.
+    /// That is fine as the stage should always be small.
+    fn account_since(&self, before: (isize, isize)) {
+        let (len, allocations) = self.snapshot();
+        self.accounting.stage_diff(
+            len - before.0,
+            allocations - before.1,
+            std::mem::size_of::<(D, Timestamp, Diff)>(),
+        );
     }
 }
 
 impl<D> Drop for Stage<D> {
     fn drop(&mut self) {
-        if let Some(logging) = &self.logging {
-            logging.chain_dropped(self.data.len());
-        }
+        let len = isize::try_from(self.data.len()).expect("must fit");
+        let allocations = isize::from(self.data.capacity() > 0);
+        self.accounting.stage_diff(
+            -len,
+            -allocations,
+            std::mem::size_of::<(D, Timestamp, Diff)>(),
+        );
     }
 }
 
@@ -1782,6 +1960,18 @@ fn refs_eq<D: Data>(a: Ref<'_, D>, b: Ref<'_, D>) -> bool {
         a == b
     }
     eq::<D>(D::reborrow(a), D::reborrow(b))
+}
+
+/// Compare two `(time, data)` pairs of columnar refs that have unrelated input lifetimes.
+///
+/// The same reborrow as [`refs_eq`], for the `Ord` bound.
+#[inline]
+fn refs_cmp<D: Data>(a: (Timestamp, Ref<'_, D>), b: (Timestamp, Ref<'_, D>)) -> Ordering {
+    #[inline]
+    fn cmp<'x, D: Data>(a: (Timestamp, Ref<'x, D>), b: (Timestamp, Ref<'x, D>)) -> Ordering {
+        a.cmp(&b)
+    }
+    cmp::<D>((a.0, D::reborrow(a.1)), (b.0, D::reborrow(b.1)))
 }
 
 /// A binary heap specialized for merging [`Cursor`]s.
@@ -2027,6 +2217,68 @@ mod tests {
         );
     }
 
+    /// The maintained record, size, and allocation totals must equal a walk over the chunks.
+    ///
+    /// Guards the delta accounting in [`Chain::push_chunk`] and [`Stage::account_since`]: a
+    /// site that grows a chain or the stage without adjusting the totals shows up here.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // slow under Miri, and the bookkeeping it checks has no unsafe code
+    fn metrics_totals_match_walk() {
+        let sink_metrics = sink_metrics();
+        let mut v2 = CorrectionV2::<String>::new(
+            sink_metrics.clone(),
+            sink_metrics.for_worker(0),
+            None,
+            3.0,
+            8 * 1024,
+        );
+
+        let num_ts = 200_u64;
+        for t in 0..num_ts {
+            v2.insert(&mut vec![
+                (format!("a-{t}"), Timestamp::from(t), Diff::ONE),
+                (format!("b-{t}"), Timestamp::from(t), Diff::ONE),
+            ]);
+        }
+
+        // Drain part of the buffer, so chains sit in `emitted` and `pending_low` as well as in
+        // the bucket chain.
+        let upper = Antichain::from_elem(Timestamp::from(num_ts / 2));
+        let drained = v2.updates_before(&upper).count();
+        assert_eq!(drained, usize::try_from(num_ts).expect("fits"));
+
+        // Advancing the since and consolidating there exercises the peel, split, and merge paths,
+        // each of which retires and mints chains.
+        v2.advance_since(Antichain::from_elem(Timestamp::from(num_ts / 2)));
+        v2.consolidate_at_since();
+        v2.insert(&mut vec![(
+            "late".to_owned(),
+            Timestamp::from(num_ts),
+            Diff::ONE,
+        )]);
+
+        let mut chains: Vec<&Chain<String>> = vec![&v2.emitted];
+        chains.extend(&v2.pending_low);
+        for bucket in v2.chain.buckets() {
+            chains.extend(&bucket.chains);
+        }
+
+        let mut size = v2.stage.data.len() * std::mem::size_of::<(String, Timestamp, Diff)>();
+        let mut records = v2.stage.data.len();
+        let mut allocations = usize::from(v2.stage.data.capacity() > 0);
+        for chain in chains {
+            size += chain.chunks.iter().map(Chunk::size).sum::<usize>();
+            records += chain.chunks.iter().map(Chunk::len).sum::<usize>();
+            allocations += chain.chunks.len();
+        }
+
+        assert!(size > 0, "workload must leave chunks behind");
+        assert_eq!(v2.prev_size.size, size);
+        assert_eq!(v2.prev_size.capacity, size);
+        assert_eq!(v2.prev_size.allocations, allocations);
+        assert_eq!(v2.prev_update_count, records);
+    }
+
     /// Reads must not observe updates at or beyond their `upper`, even when the `upper` is not
     /// beyond the `since`.
     #[mz_ore::test]
@@ -2063,43 +2315,46 @@ mod tests {
         );
     }
 
-    /// A [`PagingPolicy`] that always spills to the swap backend, uncompressed.
-    ///
-    /// The default global pager keeps every chunk resident; installing this drives the actual
-    /// spill path so the tests exercise [`Chunk::column`]'s page-in through [`mz_ore::pager`].
-    ///
-    /// [`PagingPolicy`]: column_pager::PagingPolicy
-    struct ForceSwap;
-
-    impl column_pager::PagingPolicy for ForceSwap {
-        fn decide(&self, _hint: column_pager::PageHint) -> column_pager::PageDecision {
-            column_pager::PageDecision::Page {
-                backend: mz_ore::pager::Backend::Swap,
-                codec: None,
-            }
-        }
-        fn record(&self, _event: column_pager::PageEvent) {}
+    /// One pool shared by every test in the module. A pool reserves a large slab of address
+    /// space, so one per test exhausts the VM map under parallel test threads.
+    fn test_pool() -> mz_ore::pool::Pool {
+        static POOL: std::sync::OnceLock<mz_ore::pool::Pool> = std::sync::OnceLock::new();
+        POOL.get_or_init(|| mz_ore::pool::Pool::new().expect("pool reservation"))
+            .clone()
     }
 
-    /// Install a global pager that spills every chunk to swap for the duration of `f`, then
-    /// restore the default (disabled) pager. The global pager is process-wide; concurrent tests
-    /// only ever observe a correct round-trip regardless of backend, so racing on it is benign.
-    fn with_swap_pager<R>(f: impl FnOnce() -> R) -> R {
-        use std::sync::Arc;
-        column_pager::set_global_pager(column_pager::ColumnPager::new(Arc::new(ForceSwap)));
+    /// Route this thread's chunk spills through the test pool for the duration of `f`.
+    ///
+    /// Without an override no pool is installed and every chunk stays resident, so the tests
+    /// would not exercise [`Chunk::column`]'s read-back at all. The override is thread-scoped,
+    /// so concurrently running tests do not race on it.
+    fn with_spill_pool<R>(f: impl FnOnce() -> R) -> R {
+        chunk::set_spill_override(Some(test_pool()));
         let result = f();
-        column_pager::set_global_pager(column_pager::ColumnPager::disabled());
+        chunk::set_spill_override(None);
         result
     }
 
-    /// Build a chain crossing the mint boundary while every chunk is spilled to swap, then assert
-    /// `iter()` (the read path behind `updates_before`) pages each chunk back in and roundtrips
-    /// values, order, and diffs.
+    /// Assert every chunk in the chain went to the pool, so a read must fetch it back.
+    fn assert_all_spilled<D: Data>(chain: &Chain<D>) {
+        assert!(
+            chain
+                .chunks
+                .iter()
+                .all(|c| c.pooled.lock().expect("not poisoned").is_some()),
+            "expected every chunk to spill, got {:?}",
+            chain.chunks,
+        );
+    }
+
+    /// Build a chain crossing the mint boundary while every chunk spills, then assert `iter()`
+    /// (the read path behind `updates_before`) reads each chunk back and roundtrips values,
+    /// order, and diffs.
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // madvise on the swap backend is unsupported under miri
-    fn iter_roundtrips_through_swap_backend() {
+    #[cfg_attr(miri, ignore)] // the pool's mapped regions are unsupported under miri
+    fn iter_roundtrips_through_pool() {
         let count = 200_000_u64;
-        with_swap_pager(|| {
+        with_spill_pool(|| {
             let mut builder = ChainBuilder::<i64>::default();
             for i in 0..count {
                 let d = i64::try_from(i).expect("fits");
@@ -2108,6 +2363,7 @@ mod tests {
             let chain = builder.finish();
             assert!(chain.chunks.len() > 1, "expected multiple minted chunks");
             assert_eq!(chain.update_count, usize::try_from(count).expect("fits"));
+            assert_all_spilled(&chain);
 
             let mut expected = 0_u64;
             for (d, t, r) in chain.iter() {
@@ -2121,13 +2377,13 @@ mod tests {
     }
 
     /// Drive a [`Cursor`] over a spilled, multi-chunk chain to completion (the access pattern
-    /// merges use). Each step pages the front chunk back in via [`Chunk::column`]; assert the
+    /// merges use). Each step reads the front chunk back via [`Chunk::column`]; assert the
     /// cursor yields every update in order.
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // madvise on the swap backend is unsupported under miri
-    fn cursor_steps_through_swap_backend() {
+    #[cfg_attr(miri, ignore)] // the pool's mapped regions are unsupported under miri
+    fn cursor_steps_through_pool() {
         let count = 200_000_u64;
-        with_swap_pager(|| {
+        with_spill_pool(|| {
             let mut builder = ChainBuilder::<i64>::default();
             for i in 0..count {
                 let d = i64::try_from(i).expect("fits");
@@ -2135,6 +2391,7 @@ mod tests {
             }
             let chain = builder.finish();
             assert!(chain.chunks.len() > 1, "expected multiple minted chunks");
+            assert_all_spilled(&chain);
 
             let mut rest = chain.into_cursor();
             let mut expected = 0_u64;
