@@ -128,6 +128,13 @@ pub struct DataflowBuilder<'a> {
     pub replan: Option<GlobalId>,
     /// A guard for recursive operations in this [`DataflowBuilder`] instance.
     recursion_guard: RecursionGuard,
+    /// Views imported so far that are declared security barriers.
+    ///
+    /// Collected during import because that is the only point at which the
+    /// optimizer has the catalog entry in hand. Handed to
+    /// [`mz_transform::TransformCtx::global`], which is what the barrier gates
+    /// read. See `doc/developer/design/20260828_security_barrier_views.md`.
+    security_barriers: BTreeSet<GlobalId>,
 }
 
 /// Behavior to prepare relation and scalar expressions for use in a dataflow.
@@ -288,7 +295,13 @@ impl<'a> DataflowBuilder<'a> {
             compute,
             replan: None,
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+            security_barriers: BTreeSet::new(),
         }
+    }
+
+    /// The security barriers among the views imported into the dataflow so far.
+    pub fn security_barriers(&self) -> &BTreeSet<GlobalId> {
+        &self.security_barriers
     }
 
     // TODO(aalexandrov): strictly speaking it should be better if we can make
@@ -353,6 +366,9 @@ impl<'a> DataflowBuilder<'a> {
                         dataflow.import_source(*id, source.desc.typ().clone(), monotonic);
                     }
                     CatalogItem::View(view) => {
+                        if view.security_barrier {
+                            self.security_barriers.insert(*id);
+                        }
                         let expr = view.locally_optimized_expr.as_ref();
                         self.import_view_into_dataflow(id, expr, dataflow, features)?;
                     }
