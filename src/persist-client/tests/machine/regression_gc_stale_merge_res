@@ -1,0 +1,97 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# A merge res applied a second time, after another compaction already replaced
+# the same spine range, resurrects the parts of its own output. The
+# intervening diff recorded those parts as deleted, so GC finds them both in
+# its delete set and live in the state it is truncating to.
+#
+# merge_res is retried on Indeterminate consensus errors and the retry re-runs
+# against freshly fetched state, so the second application happens whenever the
+# first one committed but the response was lost.
+#
+# NOTE: which assertion catches this depends on debug assertions. With them on,
+# ReferencedBlobValidator sees the batch inserted twice and fires first, in
+# state_versions.rs. With them off, as in the profiles that build our images,
+# the only detector left is GC's part check at gc.rs:528, which is what the
+# nightly hit. To reproduce that one:
+#
+#   CARGO_PROFILE_TEST_DEBUG_ASSERTIONS=false CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false \
+#     DATADRIVEN_FILTER=regression_gc_stale_merge_res \
+#     bin/cargo-test -p mz-persist-client internal::datadriven::tests::machine
+
+dyncfg
+persist_inline_writes_single_max_bytes 0
+persist_inline_writes_total_max_bytes 0
+----
+ok
+
+write-batch output=b0 lower=0 upper=1
+k1 0 1
+----
+parts=1 len=1
+
+write-batch output=b1 lower=1 upper=2
+k2 1 1
+----
+parts=1 len=1
+
+write-batch output=b2 lower=2 upper=3
+k3 2 1
+----
+parts=1 len=1
+
+compare-and-append input=b0 writer_id=w11111111-1111-1111-1111-111111111111
+----
+v2 [1]
+
+compare-and-append input=b1 writer_id=w11111111-1111-1111-1111-111111111111
+----
+v3 [2]
+
+# Merges b0 and b1 into one spine batch, which is what a merge res replaces.
+compare-and-append input=b2 writer_id=w11111111-1111-1111-1111-111111111111
+----
+v4 [3]
+
+# Two compactions of the same range, racing. Each writes its own blobs.
+compact output=c1 inputs=(b0,b1) lower=0 upper=2 since=0
+----
+parts=1 len=2
+
+compact output=c2 inputs=(b0,b1) lower=0 upper=2 since=0
+----
+parts=1 len=2
+
+apply-merge-res input=c1 writer_id=w11111111-1111-1111-1111-111111111111
+----
+v5 true
+
+# c2 replaces c1. This diff records c1's parts as deleted.
+apply-merge-res input=c2 writer_id=w11111111-1111-1111-1111-111111111111
+----
+v6 true
+
+# c1's committer never saw its success and retries: c1's parts are live again.
+apply-merge-res input=c1 writer_id=w11111111-1111-1111-1111-111111111111
+----
+v7 true
+
+write-rollup output=v7
+----
+state=v7 diffs=[v1, v8)
+
+add-rollup input=v7
+----
+v8
+
+# Walks v0..v7: c1's parts are deleted at v6 and live again at v7.
+gc to_seqno=v8
+----
+v9 batch_parts=2 rollups=0 truncated=v7 state_rollups=v0

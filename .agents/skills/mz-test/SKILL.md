@@ -235,6 +235,7 @@ Determine the right framework based on what you're testing:
   See `doc/developer/platform-checks.md`, especially the "Writing a Check" section.
   Do not use the old Legacy Upgrade tests.
 * **Panics or unexpected query errors under concurrency**: extend Parallel Workload actions in `misc/python/materialize/parallel_workload/action.py`.
+* **Result correctness under disruptions** (wrong data, lost or duplicated writes, while connections are cut and processes are killed): the invariants framework in `misc/python/materialize/invariants/` (scenarios in `scenarios/`, entry point `test/invariants/mzcompose.py`). Unlike Parallel Workload it verifies exact results, continuously during the disruptions.
 * **Many objects / limits**: add a `Generator` subclass in `test/limits/mzcompose.py`.
 * **OOM / bounded memory**: add a `Scenario` in `test/bounded-memory/mzcompose.py`.
 * **Performance micro-benchmarks**: Feature Benchmark scenarios in `misc/python/materialize/feature_benchmark/scenarios`.
