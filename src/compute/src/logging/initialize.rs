@@ -16,7 +16,7 @@ use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
 use mz_dyncfg::ConfigSet;
 use mz_ore::metrics::MetricsRegistry;
-use mz_repr::{Diff, Timestamp};
+use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_storage_operators::persist_source::Subtime;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::builder::ColumnBuilder;
@@ -35,7 +35,9 @@ use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
 use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
 use crate::render::errors::DataflowErrorSer;
-use crate::typedefs::{ErrBatcher, ErrBuilder};
+use crate::server::ComputeRuntimeRole;
+use crate::sharing::ArrangementSharingRegistry;
+use crate::typedefs::{ErrAgent, ErrBatcher, ErrBuilder, RowRowAgent};
 
 /// Initialize logging dataflows.
 ///
@@ -48,6 +50,8 @@ pub fn initialize(
     worker_config: Rc<ConfigSet>,
     workers_per_process: usize,
     storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
+    role: ComputeRuntimeRole,
+    sharing_registry: ArrangementSharingRegistry,
 ) -> LoggingTraces {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
@@ -74,6 +78,8 @@ pub fn initialize(
         worker_config,
         workers_per_process,
         storage_log_reader,
+        role,
+        sharing_registry,
     };
 
     // Depending on whether we should log the creation of the logging dataflows, we register the
@@ -114,6 +120,11 @@ struct LoggingContext<'a> {
     workers_per_process: usize,
     /// Optional reader for storage timely logging events.
     storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
+    /// This runtime's role. Only `Maintenance` publishes its logging indexes into the sharing
+    /// registry.
+    role: ComputeRuntimeRole,
+    /// The per-process registry maintenance publishes its logging indexes into.
+    sharing_registry: ArrangementSharingRegistry,
 }
 
 pub(crate) struct LoggingTraces {
@@ -206,6 +217,20 @@ impl LoggingContext<'_> {
             let traces = collections
                 .into_iter()
                 .map(|(log, collection)| {
+                    // Publish maintenance's logging index into the sharing registry so the
+                    // interactive runtime serves introspection peeks from it. Gated on the
+                    // Maintenance role inside the helper, so this is a no-op (adds no operators) on
+                    // Interactive and Solo.
+                    if let Some(&id) = self.config.index_logs.get(&log) {
+                        publish_logging_index(
+                            self.role,
+                            &self.sharing_registry,
+                            &scope,
+                            id,
+                            &collection.trace,
+                            &errs,
+                        );
+                    }
                     let bundle = TraceBundle::new(collection.trace, errs.clone())
                         .with_drop(collection.token);
                     (log, bundle)
@@ -353,3 +378,34 @@ impl ExtractTimestamp for (Timestamp, Subtime) {
         self.0
     }
 }
+
+/// Publishes a maintenance logging index's `oks`/`errs` arrangements into the sharing registry so
+/// the interactive runtime serves introspection peeks from them.
+///
+/// Gated on the `Maintenance` role. Interactive reads maintenance's slot, and its own empty copy
+/// would clobber it. Solo has no registry peer.
+fn publish_logging_index(
+    role: ComputeRuntimeRole,
+    registry: &ArrangementSharingRegistry,
+    scope: &timely::dataflow::Scope<'_, Timestamp>,
+    id: GlobalId,
+    oks_trace: &RowRowAgent<Timestamp, Diff>,
+    errs_trace: &ErrAgent<Timestamp, Diff>,
+) {
+    if role != ComputeRuntimeRole::Maintenance {
+        return;
+    }
+
+    // The arrange streams are consumed inside the per-log construction regions, so only the trace
+    // handles survive here. Re-import them to give the publishers a live stream to attach to.
+    let oks = oks_trace
+        .clone()
+        .import_named(scope.clone(), &format!("PublishLog({id})"));
+    let errs = errs_trace
+        .clone()
+        .import_named(scope.clone(), &format!("PublishLogErr({id})"));
+    registry.publish(id, &oks, &errs);
+}
+
+#[cfg(test)]
+mod tests;
