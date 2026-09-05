@@ -1632,6 +1632,23 @@ impl Catalog {
         }
     }
 
+    /// See [`ExpressionCacheHandle::restamp`](mz_catalog::expr_cache::ExpressionCacheHandle::restamp).
+    pub(crate) fn restamp_expression_cache<'a, 'b>(
+        &'a self,
+        global_id: GlobalId,
+        local_id: GlobalId,
+        item_version: RelationVersion,
+        invalidate_ids: BTreeSet<GlobalId>,
+    ) -> BoxFuture<'b, ()> {
+        if let Some(expr_cache) = &self.expr_cache_handle {
+            expr_cache
+                .restamp(global_id, local_id, item_version, invalidate_ids)
+                .boxed()
+        } else {
+            async {}.boxed()
+        }
+    }
+
     /// Listen for and apply all unconsumed updates to the durable catalog state.
     // TODO(jkosh44) When this method is actually used outside of a test we can remove the
     // `#[cfg(test)]` annotation.

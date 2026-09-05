@@ -4650,6 +4650,79 @@ fn test_replacement_materialized_view_invalidates_expression_cache() {
     }
 }
 
+// The boot after an apply reuses the replacement's cached plan. An index
+// created after the replacement was planned is therefore not adopted at boot,
+// while a re-optimization would read the input through it. That adoption is
+// what the assertion rests on: a cached plan installs with the imports it was
+// planned with.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_replacement_materialized_view_expression_cache_hit_after_apply() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default()
+        .data_directory(data_dir.path())
+        .with_system_parameter_default(
+            "enable_replacement_materialized_views".to_string(),
+            "true".to_string(),
+        )
+        .with_system_parameter_default(
+            "enable_logical_compaction_window".to_string(),
+            "true".to_string(),
+        );
+    // NOTE: user items get the same number as item id and global id, so the
+    // dataflow ids of `mz_compute_dependencies` join to the catalog ids.
+    let dependencies_query = "SELECT count(*), coalesce(bool_or(i.name = 't2_idx'), false) \
+        FROM mz_internal.mz_compute_dependencies d \
+        JOIN mz_catalog.mz_materialized_views mv ON d.object_id = mv.id \
+        LEFT JOIN mz_catalog.mz_indexes i ON d.dependency_id = i.id \
+        WHERE mv.name = 'mv'";
+    let reads_through_index = |client: &mut postgres::Client| -> bool {
+        Retry::default()
+            .max_duration(Duration::from_secs(60))
+            .clamp_backoff(Duration::from_secs(1))
+            .retry(|_| {
+                // An empty result means the dependencies are not recorded
+                // yet, not that the view reads no index.
+                let row = client.query_one(dependencies_query, &[]).unwrap();
+                let count: i64 = row.get(0);
+                if count == 0 {
+                    Err("no dependencies recorded yet")
+                } else {
+                    Ok(row.get::<_, bool>(1))
+                }
+            })
+            .unwrap()
+    };
+
+    {
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        create_replacement_fixture(&mut client);
+        client
+            .batch_execute("CREATE INDEX t2_idx ON t2 (a)")
+            .unwrap();
+        client
+            .batch_execute("ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp")
+            .unwrap();
+        assert!(
+            !reads_through_index(&mut client),
+            "the replacement was planned before the index"
+        );
+    }
+
+    {
+        let server = harness.start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
+        assert_eq!(row.get::<_, i32>(0), 2);
+        assert!(
+            !reads_through_index(&mut client),
+            "the boot should reuse the cached plan"
+        );
+    }
+}
+
 // A process that applies the replacement with the expression cache disabled
 // neither reads nor invalidates the entries the first process wrote, standing
 // in for a writer the apply-time invalidation cannot reach (see
