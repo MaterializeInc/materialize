@@ -15,7 +15,9 @@
 
 //! Common operator transformations on timely streams and differential collections.
 
+use std::collections::VecDeque;
 use std::hash::{BuildHasher, Hash, Hasher};
+use std::ops::Deref;
 
 use columnation::Columnation;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
@@ -23,7 +25,7 @@ use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Batcher;
 use differential_dataflow::{AsCollection, Collection, Hashable, VecCollection};
-use timely::container::{DrainContainer, PushInto};
+use timely::container::{CapacityContainerBuilder, DrainContainer, PushInto};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::builder_rc::{
@@ -473,23 +475,12 @@ where
                 data.hash(&mut h);
                 h.finish()
             });
-            consolidate_pact::<ColumnationChunker<((D1, ()), T, R)>, Ba, _, _>(
+            let sealed = consolidate_pact::<ColumnationChunker<((D1, ()), T, R)>, Ba, _, _>(
                 self.map(|k| (k, ())).inner,
                 exchange,
                 name,
-            )
-            .unary(Pipeline, "unpack consolidated", |_, _| {
-                |input, output| {
-                    input.for_each(|time, data| {
-                        let mut session = output.session(&time);
-                        for ((k, ()), t, d) in data.iter().flatten().flat_map(|chunk| chunk.iter())
-                        {
-                            session.give((k.clone(), t.clone(), d.clone()))
-                        }
-                    })
-                }
-            })
-            .as_collection()
+            );
+            unpack_consolidated(&sealed, "unpack consolidated", CONSOLIDATE_UNPACK_FUEL)
         } else {
             self
         }
@@ -504,22 +495,12 @@ where
     {
         let exchange = Exchange::new(move |update: &((D1, ()), T, R)| (update.0).0.hashed());
 
-        consolidate_pact::<ColumnationChunker<((D1, ()), T, R)>, Ba, _, _>(
+        let sealed = consolidate_pact::<ColumnationChunker<((D1, ()), T, R)>, Ba, _, _>(
             self.map(|k| (k, ())).inner,
             exchange,
             name,
-        )
-        .unary(Pipeline, &format!("Unpack {name}"), |_, _| {
-            |input, output| {
-                input.for_each(|time, data| {
-                    let mut session = output.session(&time);
-                    for ((k, ()), t, d) in data.iter().flatten().flat_map(|chunk| chunk.iter()) {
-                        session.give((k.clone(), t.clone(), d.clone()))
-                    }
-                })
-            }
-        })
-        .as_collection()
+        );
+        unpack_consolidated(&sealed, &format!("Unpack {name}"), CONSOLIDATE_UNPACK_FUEL)
     }
 }
 
@@ -630,6 +611,142 @@ where
     })
 }
 
+/// Records emitted per activation before yielding when unpacking consolidated output.
+///
+/// Matches the compute render layer's flat-map refuel constant. Large enough to be a
+/// non-event in steady state, small enough that a single activation cannot dump a whole
+/// sealed snapshot on the next operator.
+const CONSOLIDATE_UNPACK_FUEL: usize = 1_000_000;
+
+/// Pending unpack work: an undrained [`consolidate_pact`] message plus a resume cursor.
+struct PendingUnpack<T: Timestamp, C> {
+    /// Output capability held until the message is fully drained across activations.
+    cap: Capability<T>,
+    /// The message's sealed chains. Each chain is a `Vec` of chunks, each chunk a run of
+    /// records. Owned so draining can span activations.
+    chains: Vec<Vec<C>>,
+    /// Resume position: index into `chains`, into the current chain's chunks, and into the
+    /// current chunk's records.
+    chain: usize,
+    chunk: usize,
+    offset: usize,
+}
+
+/// Emits up to `*fuel` records from `chains`, resuming at `(*chain, *chunk, *offset)`,
+/// advancing the cursor and decrementing `*fuel` in place. Returns `true` once every record
+/// has been emitted, `false` if it stopped on exhausted fuel with work remaining.
+///
+/// Generic over the chunk type via its `[X]` deref so it can be unit-tested with plain
+/// `Vec`s in place of `ColumnationStack`s.
+fn drain_unpack<X, C, F>(
+    chains: &[Vec<C>],
+    chain: &mut usize,
+    chunk: &mut usize,
+    offset: &mut usize,
+    fuel: &mut usize,
+    mut emit: F,
+) -> bool
+where
+    C: Deref<Target = [X]>,
+    F: FnMut(&X),
+{
+    while *chain < chains.len() {
+        let chunks = &chains[*chain];
+        while *chunk < chunks.len() {
+            let records: &[X] = &chunks[*chunk];
+            while *offset < records.len() {
+                if *fuel == 0 {
+                    return false;
+                }
+                emit(&records[*offset]);
+                *offset += 1;
+                *fuel -= 1;
+            }
+            *chunk += 1;
+            *offset = 0;
+        }
+        *chain += 1;
+        *chunk = 0;
+    }
+    true
+}
+
+/// Unpacks the sealed chains from [`consolidate_pact`] into a collection, doing bounded work
+/// per activation.
+///
+/// [`consolidate_pact`] holds all updates for a time back until the frontier advances, then
+/// seals the whole consolidated content for that time into one chain and emits it in a single
+/// message. Draining that chain in one activation hands the entire snapshot downstream
+/// un-fueled, monopolizing the worker, and via the multi-consumer tee forces a full-snapshot
+/// container clone per extra consumer. This operator keeps undrained messages queued, emits at
+/// most `fuel` records per activation, and reschedules itself while work remains.
+fn unpack_consolidated<'scope, T, D1, R>(
+    sealed: &StreamVec<'scope, T, Vec<ColumnationStack<((D1, ()), T, R)>>>,
+    name: &str,
+    fuel: usize,
+) -> VecCollection<'scope, T, D1, R>
+where
+    T: Timestamp + Columnation,
+    D1: Columnation + Clone + 'static,
+    R: Columnation + Clone + 'static,
+{
+    let scope = sealed.scope();
+    let mut builder = OperatorBuilder::new(name.to_string(), scope.clone());
+    let mut input = builder.new_input(sealed.clone(), Pipeline);
+    builder.set_notify_for(0, FrontierInterest::Never);
+    let (output, stream) = builder.new_output::<Vec<(D1, T, R)>>();
+    let mut output = OutputBuilder::<_, CapacityContainerBuilder<Vec<(D1, T, R)>>>::from(output);
+    let info = builder.operator_info();
+
+    builder.build(move |_capabilities| {
+        // Reschedule ourselves when a large message drains across activations.
+        let activator = scope.activator_for(info.address);
+        let mut todo: VecDeque<PendingUnpack<T, ColumnationStack<((D1, ()), T, R)>>> =
+            VecDeque::new();
+        move |_frontiers| {
+            let mut output = output.activate();
+
+            // Queue each arriving message, retaining its capability since draining may span
+            // multiple activations.
+            input.for_each(|time, data| {
+                todo.push_back(PendingUnpack {
+                    cap: time.retain(0),
+                    chains: std::mem::take(data),
+                    chain: 0,
+                    chunk: 0,
+                    offset: 0,
+                });
+            });
+
+            let mut fuel = fuel;
+            while let Some(front) = todo.front_mut() {
+                if fuel == 0 {
+                    break;
+                }
+                let mut session = output.session_with_builder(&front.cap);
+                let done = drain_unpack(
+                    &front.chains,
+                    &mut front.chain,
+                    &mut front.chunk,
+                    &mut front.offset,
+                    &mut fuel,
+                    |((k, ()), t, d)| session.give((k.clone(), t.clone(), d.clone())),
+                );
+                drop(session);
+                if done {
+                    todo.pop_front();
+                }
+            }
+
+            if !todo.is_empty() {
+                activator.activate();
+            }
+        }
+    });
+
+    stream.as_collection()
+}
+
 /// Merge the contents of multiple streams and combine the containers using a container builder.
 pub trait ConcatenateFlatten<'scope, T: Timestamp, C: Container + DrainContainer> {
     /// Merge the contents of multiple streams and use the provided container builder to form
@@ -724,5 +841,83 @@ pub trait ClearContainer {
 impl<T> ClearContainer for Vec<T> {
     fn clear(&mut self) {
         Vec::clear(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::drain_unpack;
+
+    /// Drains `chains` in `fuel`-sized slices, collecting every emitted record and the number
+    /// of resumptions, mirroring how the operator would reschedule itself.
+    fn drain_all(chains: &[Vec<Vec<i32>>], fuel: usize) -> (Vec<i32>, usize) {
+        let (mut chain, mut chunk, mut offset) = (0, 0, 0);
+        let mut out = Vec::new();
+        let mut activations = 0;
+        loop {
+            activations += 1;
+            let mut budget = fuel;
+            let done = drain_unpack(
+                chains,
+                &mut chain,
+                &mut chunk,
+                &mut offset,
+                &mut budget,
+                |r: &i32| out.push(*r),
+            );
+            if done {
+                break;
+            }
+        }
+        (out, activations)
+    }
+
+    #[mz_ore::test]
+    fn drain_unpack_emits_every_record_once() {
+        let chains = vec![
+            vec![vec![1, 2, 3], vec![4, 5]],
+            vec![vec![6], vec![7, 8, 9, 10]],
+        ];
+        let expected: Vec<i32> = (1..=10).collect();
+        // Every fuel size, from one record at a time up past the total, yields the same
+        // records in the same order and never drops or duplicates across resume boundaries.
+        for fuel in 1..=12 {
+            let (out, _) = drain_all(&chains, fuel);
+            assert_eq!(out, expected, "fuel = {fuel}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn drain_unpack_bounds_work_and_resumes() {
+        let chains = vec![vec![(0..100).collect::<Vec<_>>()]];
+        // fuel = 10 over 100 records: ten full activations, no eleventh empty one.
+        let (out, activations) = drain_all(&chains, 10);
+        assert_eq!(out, (0..100).collect::<Vec<_>>());
+        assert_eq!(activations, 10);
+    }
+
+    #[mz_ore::test]
+    fn drain_unpack_skips_empty_chunks_and_chains() {
+        let chains = vec![
+            vec![],
+            vec![vec![], vec![1, 2]],
+            vec![vec![]],
+            vec![vec![3]],
+        ];
+        for fuel in 1..=5 {
+            let (out, _) = drain_all(&chains, fuel);
+            assert_eq!(out, vec![1, 2, 3], "fuel = {fuel}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn drain_unpack_empty_input_is_done_immediately() {
+        let chains: Vec<Vec<Vec<i32>>> = vec![];
+        let mut budget = 5;
+        let done = drain_unpack(&chains, &mut 0, &mut 0, &mut 0, &mut budget, |_: &i32| {
+            panic!("no records expected")
+        });
+        assert!(done);
+        assert_eq!(budget, 5, "fuel untouched when there is no work");
     }
 }
