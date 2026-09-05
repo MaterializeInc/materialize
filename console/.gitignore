@@ -31,3 +31,5 @@ yarn-error.log
 
 # Test logs
 /log
+.env.local
+.certs
