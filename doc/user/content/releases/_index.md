@@ -19,6 +19,25 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.41.0
+*Released to Materialize Cloud: 2026-09-10* <br>
+*Released to Materialize Self-Managed: 2026-09-11* <br>
+
+### Improvements {#v26.41-improvements}
+- **Cluster usage metrics in the Self-Managed Console**: The Console's cluster list in Self-Managed deployments now shows the per-replica usage table — CPU, memory, disk, and heap utilization, hydration status, and last status change, each filterable — which was previously disabled outside Materialize Cloud.
+- **MySQL snapshot parallelism on by default**: Initial snapshots of MySQL tables with a supported single-column primary key are now split into per-worker key ranges out of the box, where the splitting previously had to be turned on per replica; tables without a suitable primary key still fall back to a single-worker whole-table read.
+- **Pre-flight reference checks in `mz-deploy`**: `mz-deploy apply`, `apply tables`, and their `--dry-run` forms now check every `CREATE TABLE ... FROM SOURCE` reference against what the source can actually expose before creating anything, and report the mismatches grouped by source with close-name suggestions instead of failing partway through the batch with a raw server error.
+- **Faster Object Explorer loads in the Console**: The Console's Object Explorer tree now renders from a persisted, incrementally synced cache, which cuts the warm-load wait from roughly 600 ms to 25–50 ms on a catalog of about 2,800 objects.
+
+### Bug Fixes {#v26.41-bug-fixes}
+- Fixed `EXPLAIN TIMESTAMP AS DOT` aborting `environmentd`, which let any role that can run SQL take an environment down with a single statement; the statement now returns an unsupported-format error.
+- Fixed `environmentd` entering a crash loop that restarting could not clear, after an `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` was followed by dropping the old definition's dependencies.
+- Fixed a coordinator panic during `ALTER TABLE ... ADD COLUMN` when the schema change committed but its response was lost, so the retry now recognizes the evolution as already applied instead of reporting a mismatch.
+- Fixed Iceberg sinks panicking during Parquet writes when the sink's schema no longer matched that of an existing table, which could recur on every sink restart or zero-downtime upgrade; the sink now reports the mismatch instead.
+- Fixed MCP clients built on the official SDK failing the handshake, because Materialize answered `notifications/initialized` with `200` rather than the `202` the Streamable HTTP transport requires for a message that carries no reply.
+- `ALTER CLUSTER ... WITH (WAIT FOR ...)` now rolls back when its timeout is processed while the target replicas are still unhydrated, matching `WAIT UNTIL READY`'s safe default instead of forcing a cut-over that can cause downtime; request the previous behavior explicitly with `WAIT UNTIL READY (..., ON TIMEOUT = 'COMMIT')`.
+- Fixed the Console showing the previous region's clusters and Object Explorer contents after a region switch, until a full page refresh.
+
 ## v26.40.0
 *Released to Materialize Cloud: 2026-09-02* <br>
 *Released to Materialize Self-Managed: 2026-09-03* <br>
