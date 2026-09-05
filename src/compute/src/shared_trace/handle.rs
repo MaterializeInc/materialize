@@ -108,15 +108,6 @@ impl<Tr: TraceReader> SharedTraceHandle<Tr> {
             physical: coverage,
         })
     }
-
-    /// The published arrangement's current `(since, upper)` frontiers, read under the state lock.
-    ///
-    /// A point-in-time observation for diagnostics. Either frontier may have advanced by the time
-    /// the caller inspects the returned values.
-    pub(crate) fn frontiers(&self) -> (Antichain<Tr::Time>, Antichain<Tr::Time>) {
-        let state = self.shared.state.lock().expect("shared trace poisoned");
-        (state.since.clone(), state.upper.clone())
-    }
 }
 
 impl<Tr: TraceReader> Clone for SharedTraceHandle<Tr> {
@@ -161,19 +152,14 @@ where
     fn batches_through(&mut self, upper: AntichainRef<Tr::Time>) -> Option<Vec<Self::Batch>> {
         let state = self.shared.state.lock().expect("shared trace poisoned");
         // NOTE: `Spine::batches_through` asserts that the cut is at or beyond the spine's physical
-        // frontier, and that precondition does NOT transfer to a shared handle. A local reader is one
-        // of the trace's own agents, so the spine's frontier is the meet across agents including this
-        // reader's own, and the reader can never cut below it. A shared reader's request reaches the
-        // spine only through the publisher's single agent, whose setter joins, so the spine's frontier
-        // can sit above where this reader still legitimately cuts: it may be draining a seed whose
-        // coverage predates a later forward. Asserting the spine's precondition here therefore panics
-        // on a correct read, which is what it did.
+        // frontier. That precondition does not hold for a shared handle. A local reader is one of
+        // the trace's agents, so the spine's frontier is a meet that includes its own hold. A shared
+        // reader's hold reaches the spine only through the publisher's joining setter, so the
+        // spine's frontier can sit above a cut this reader still legitimately makes while draining
+        // a seed. The straddle check below is the guard instead. It is also what catches
+        // physical-hold forwarding that merged away a boundary a reader still needs, where removing
+        // it would leave a consumer silently double counting updates at times not before its cut.
         //
-        // The straddle check below is the real guard, and it does not depend on the precondition. It
-        // is also the falsifier for the physical-hold forwarding in `PublishArrangement`: if a reader
-        // ever does need a boundary that forwarding merged away, this fires and names the frontier,
-        // where deleting it would leave a consumer silently double counting updates at times not
-        // before its cut. Do not remove it.
         // A clean cut of the published chain: all non-empty batches whose upper is not beyond
         // `upper`, and none whose lower is beyond `upper`. Empty batches are dropped, as
         // `Spine::batches_through` does.
