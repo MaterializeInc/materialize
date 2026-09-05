@@ -83,6 +83,20 @@ pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether the compute controller checks the invariants of its read capabilities and of the
+/// compaction frontiers it emits.
+///
+/// The checks walk every collection and replica of an instance on each maintenance tick, so their
+/// cost grows with the size of the instance. This flag exists to turn them off if that cost turns
+/// out to be material. Correctness does not depend on them.
+pub const ENABLE_COMPUTE_READ_HOLD_INVARIANT_CHECKS: Config<bool> = Config::new(
+    "enable_compute_read_hold_invariant_checks",
+    false,
+    "Whether the compute controller checks the invariants of its read capabilities and emitted \
+     compaction frontiers.",
+    ParameterScope::Environment,
+);
+
 /// Adds the full set of all controller `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -95,4 +109,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&TIMELY_ZERO_COPY_LIMIT)
         .add(&ARRANGEMENT_EXERT_PROPORTIONALITY)
         .add(&ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE)
+        .add(&ENABLE_COMPUTE_READ_HOLD_INVARIANT_CHECKS)
 }
