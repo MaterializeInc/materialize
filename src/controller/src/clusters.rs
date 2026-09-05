@@ -458,6 +458,7 @@ impl Controller {
         config: ReplicaConfig,
         enable_worker_core_affinity: bool,
         enable_storage_introspection_logs: bool,
+        interactive_runtime: bool,
     ) -> Result<(), anyhow::Error> {
         let storage_location: ClusterReplicaLocation;
         let compute_location: ClusterReplicaLocation;
@@ -486,6 +487,7 @@ impl Controller {
                     m,
                     enable_worker_core_affinity,
                     enable_storage_introspection_logs,
+                    interactive_runtime,
                 )?;
                 storage_location = ClusterReplicaLocation {
                     ctl_addrs: service.addresses("storagectl"),
@@ -676,6 +678,11 @@ impl Controller {
     }
 
     /// Provisions a replica with the service orchestrator.
+    ///
+    /// `interactive_runtime` says whether to launch a second, interactive compute timely runtime
+    /// alongside the primary one. The caller resolves it per replica rather than this function
+    /// reading it: the flag is replica-scoped, scoped overrides reach a replica only once it
+    /// exists, and this value is needed before that.
     fn provision_replica(
         &self,
         cluster_id: ClusterId,
@@ -686,6 +693,7 @@ impl Controller {
         location: ManagedReplicaLocation,
         enable_worker_core_affinity: bool,
         enable_storage_introspection_logs: bool,
+        interactive_runtime: bool,
     ) -> Result<(Box<dyn Service>, AbortOnDropHandle<()>), anyhow::Error> {
         let service_name = ReplicaServiceName {
             cluster_id,
@@ -725,7 +733,6 @@ impl Controller {
             zero_copy_limit: TIMELY_ZERO_COPY_LIMIT.get_with_overrides(&self.dyncfg, overrides),
             ..Default::default()
         };
-
         let mut disk_limit = location.allocation.disk_limit;
         let memory_limit = location.allocation.memory_limit;
         let mut memory_request = None;
@@ -742,6 +749,38 @@ impl Controller {
             memory_request = memory_limit.map(|MemoryLimit(limit)| {
                 let request = ByteSize::b(limit.as_u64() - 1);
                 MemoryLimit(request)
+            });
+        }
+
+        let mut ports = vec![
+            ServicePort {
+                name: "storagectl".into(),
+                port_hint: 2100,
+            },
+            // To simplify the changes to tests, the port
+            // chosen here is _after_ the compute ones.
+            // TODO(petrosagg): fix the numerical ordering here
+            ServicePort {
+                name: "storage".into(),
+                port_hint: 2103,
+            },
+            ServicePort {
+                name: "computectl".into(),
+                port_hint: 2101,
+            },
+            ServicePort {
+                name: "compute".into(),
+                port_hint: 2102,
+            },
+            ServicePort {
+                name: "internal-http".into(),
+                port_hint: 6878,
+            },
+        ];
+        if interactive_runtime {
+            ports.push(ServicePort {
+                name: INTERACTIVE_PORT_NAME.into(),
+                port_hint: 2104,
             });
         }
 
@@ -789,6 +828,19 @@ impl Controller {
                             compute_timely_config.to_string(),
                         ),
                     ];
+                    if interactive_runtime {
+                        // `peer_addresses` panics on a port name absent from `ports` above, so the
+                        // port and this argument are added under the same condition.
+                        let interactive_compute_timely_config = TimelyConfig {
+                            workers: location.allocation.workers.get(),
+                            addresses: assigned.peer_addresses(INTERACTIVE_PORT_NAME),
+                            ..compute_proto_timely_config.clone()
+                        };
+                        args.push(format!(
+                            "--interactive-compute-timely-config={}",
+                            interactive_compute_timely_config.to_string(),
+                        ));
+                    }
                     if let Some(aws_external_id_prefix) = &aws_external_id_prefix {
                         args.push(format!(
                             "--aws-external-id-prefix={}",
@@ -834,31 +886,7 @@ impl Controller {
                     args.extend(secrets_args.clone());
                     args
                 }),
-                ports: vec![
-                    ServicePort {
-                        name: "storagectl".into(),
-                        port_hint: 2100,
-                    },
-                    // To simplify the changes to tests, the port
-                    // chosen here is _after_ the compute ones.
-                    // TODO(petrosagg): fix the numerical ordering here
-                    ServicePort {
-                        name: "storage".into(),
-                        port_hint: 2103,
-                    },
-                    ServicePort {
-                        name: "computectl".into(),
-                        port_hint: 2101,
-                    },
-                    ServicePort {
-                        name: "compute".into(),
-                        port_hint: 2102,
-                    },
-                    ServicePort {
-                        name: "internal-http".into(),
-                        port_hint: 6878,
-                    },
-                ],
+                ports,
                 cpu_limit: location.allocation.cpu_limit,
                 cpu_request: location.allocation.cpu_request,
                 memory_limit,
@@ -1055,3 +1083,11 @@ impl FromStr for ReplicaServiceName {
         })
     }
 }
+
+/// The port name the interactive compute runtime listens on.
+///
+/// Kubernetes rejects a container port name longer than 15 characters, and only a Kubernetes API
+/// server checks that: the process orchestrator accepts any name, so an over-long one passes every
+/// local test and then fails to schedule in cloud.
+const INTERACTIVE_PORT_NAME: &str = "interactive";
+const _: () = assert!(INTERACTIVE_PORT_NAME.len() <= 15);

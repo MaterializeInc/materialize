@@ -39,6 +39,7 @@ use mz_controller::clusters::{
     ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation, UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_dyncfg::{Config, ConfigDefault, ConfigType};
 use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
 use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::collections::CollectionExt;
@@ -2525,6 +2526,46 @@ impl CatalogState {
     /// coordinator's scoped-parameter reconcile path.
     pub fn scoped_system_parameters(&self) -> &ScopedParameters {
         &self.scoped_system_parameters
+    }
+
+    /// Resolves `config`'s replica-local override for `replica_id`, falling back to its environment
+    /// value when the replica has no override.
+    ///
+    /// For configs consumed when a replica is provisioned rather than on the replica itself. Those
+    /// cannot read the value from their own `worker_config`, because the decision is made in
+    /// `environmentd` before the replica exists.
+    ///
+    /// Parses through `ConfigType` rather than the value type's own `FromStr`, because a stored
+    /// override is a var-format string: `bool` formats as `on`/`off`, which `str::parse::<bool>()`
+    /// rejects. Parsing it the wrong way silently resolved `false` for an override every other
+    /// surface reported as on.
+    pub fn replica_scoped<D: ConfigDefault>(
+        &self,
+        replica_id: ReplicaId,
+        config: &Config<D>,
+    ) -> D::ConfigType {
+        // The environment value, not `config.default()`: a config flipped in production is served
+        // from the `ConfigSet`, and the compile-time default would silently ignore that flip.
+        let environment = config.get(self.system_configuration.dyncfgs());
+        let name = config.name();
+        let Some(value) = self
+            .scoped_system_parameters
+            .replica
+            .get(&replica_id)
+            .and_then(|overrides| overrides.get(name))
+        else {
+            return environment;
+        };
+        match D::ConfigType::parse(value) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                tracing::warn!(
+                    %name, %value, %replica_id, %error,
+                    "cannot parse replica-scoped override, falling back to the environment value",
+                );
+                environment
+            }
+        }
     }
 
     /// Return a mutable reference to the current system configuration.
