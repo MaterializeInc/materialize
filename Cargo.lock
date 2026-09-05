@@ -5008,7 +5008,7 @@ dependencies = [
 [[package]]
 name = "iceberg"
 version = "0.10.1"
-source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=958ac5b3c318026aeb362485c593e4956aeabe95#958ac5b3c318026aeb362485c593e4956aeabe95"
+source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=5c5c18987891601337b0837c7fd52ae633de715e#5c5c18987891601337b0837c7fd52ae633de715e"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -5065,7 +5065,7 @@ dependencies = [
 [[package]]
 name = "iceberg-catalog-rest"
 version = "0.10.1"
-source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=958ac5b3c318026aeb362485c593e4956aeabe95#958ac5b3c318026aeb362485c593e4956aeabe95"
+source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=5c5c18987891601337b0837c7fd52ae633de715e#5c5c18987891601337b0837c7fd52ae633de715e"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5084,7 +5084,7 @@ dependencies = [
 [[package]]
 name = "iceberg-storage-opendal"
 version = "0.10.1"
-source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=958ac5b3c318026aeb362485c593e4956aeabe95#958ac5b3c318026aeb362485c593e4956aeabe95"
+source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=5c5c18987891601337b0837c7fd52ae633de715e#5c5c18987891601337b0837c7fd52ae633de715e"
 dependencies = [
  "anyhow",
  "async-trait",
