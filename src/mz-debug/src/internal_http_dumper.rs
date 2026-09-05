@@ -29,7 +29,7 @@ use crate::kubectl_port_forwarder::{
 };
 use crate::{AuthMode, Context, EmulatorContext, PasswordAuthCredentials, SelfManagedContext};
 
-static PROFILES_DIR: &str = "profiles";
+pub(crate) static PROFILES_DIR: &str = "profiles";
 static PROM_METRICS_DIR: &str = "prom_metrics";
 static PROM_METRICS_ENDPOINT: &str = "metrics";
 static ENVD_HEAP_PROFILE_ENDPOINT: &str = "prof/heap";
@@ -118,6 +118,34 @@ fn http_error_status(err: &anyhow::Error) -> Option<StatusCode> {
     err.chain()
         .find_map(|cause| cause.downcast_ref::<reqwest::Error>())
         .and_then(reqwest::Error::status)
+}
+
+/// The symbolization helper script shipped alongside dumped profiles.
+static SYMBOLIZE_SCRIPT: &str = include_str!("symbolize.sh");
+
+/// Writes the symbolization helper script next to the dumped profiles so the
+/// dump is self-contained. Does nothing when no profiles directory exists,
+/// for example when profile dumping was disabled.
+pub async fn write_symbolize_script(base_path: &Path) -> Result<()> {
+    let dir = base_path.join(PROFILES_DIR);
+    if !dir.exists() {
+        return Ok(());
+    }
+    let path = dir.join("symbolize.sh");
+    tokio::fs::write(&path, SYMBOLIZE_SCRIPT)
+        .await
+        .with_context(|| format!("Failed to write {}", path.display()))?;
+    // Many unzip paths drop permission bits, so user-facing instructions say
+    // `bash ./symbolize.sh`. The executable bit still helps anyone working
+    // with the raw dump directory.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .await
+            .with_context(|| format!("Failed to set permissions on {}", path.display()))?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -876,4 +904,40 @@ fn find_http_port_by_label<'a>(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SYMBOLIZE_SCRIPT, write_symbolize_script};
+
+    #[mz_ore::test]
+    fn symbolize_script_embedded_intact() {
+        assert!(SYMBOLIZE_SCRIPT.starts_with("#!/usr/bin/env bash"));
+        assert!(SYMBOLIZE_SCRIPT.contains("set -euo pipefail"));
+        assert!(SYMBOLIZE_SCRIPT.contains("MZ_SYMBOLIZE_INNER"));
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn write_symbolize_script_creates_executable_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        // Without a profiles directory the helper is a no-op.
+        write_symbolize_script(dir.path()).await.expect("no-op");
+        assert!(!dir.path().join("profiles/symbolize.sh").exists());
+
+        std::fs::create_dir_all(dir.path().join("profiles")).expect("mkdir");
+        write_symbolize_script(dir.path()).await.expect("write");
+        let path = dir.path().join("profiles/symbolize.sh");
+        let contents = std::fs::read_to_string(&path).expect("read");
+        assert_eq!(contents, SYMBOLIZE_SCRIPT);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path)
+                .expect("metadata")
+                .permissions()
+                .mode();
+            assert_ne!(mode & 0o111, 0, "script must be executable");
+        }
+    }
 }

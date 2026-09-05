@@ -63,7 +63,17 @@ pub fn zip_debug_folder(zip_file_name: PathBuf, folder_path: &PathBuf) -> std::i
         let path = entry.path();
 
         if path.is_file() {
-            zip_writer.start_file(path.to_string_lossy(), SimpleFileOptions::default())?;
+            // Preserve permissions so the executable bit on helper scripts
+            // like symbolize.sh survives unzipping.
+            #[cfg(unix)]
+            let options = {
+                use std::os::unix::fs::PermissionsExt;
+                SimpleFileOptions::default()
+                    .unix_permissions(entry.metadata()?.permissions().mode())
+            };
+            #[cfg(not(unix))]
+            let options = SimpleFileOptions::default();
+            zip_writer.start_file(path.to_string_lossy(), options)?;
             let mut file = File::open(path)?;
             copy(&mut file, &mut zip_writer)?;
         }
@@ -71,6 +81,37 @@ pub fn zip_debug_folder(zip_file_name: PathBuf, folder_path: &PathBuf) -> std::i
 
     zip_writer.finish()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(unix)]
+    #[mz_ore::test]
+    fn zip_preserves_executable_bit() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dump_dir = dir.path().join("dump");
+        std::fs::create_dir_all(&dump_dir).expect("mkdir");
+        let script = dump_dir.join("script.sh");
+        std::fs::write(&script, "#!/usr/bin/env bash\n").expect("write");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+            .expect("set permissions");
+
+        let zip_path = dir.path().join("out.zip");
+        super::zip_debug_folder(zip_path.clone(), &dump_dir).expect("zip");
+
+        let mut archive =
+            zip::ZipArchive::new(std::fs::File::open(&zip_path).expect("open zip")).expect("read");
+        let name = archive
+            .file_names()
+            .find(|name| name.ends_with("script.sh"))
+            .expect("script in archive")
+            .to_owned();
+        let entry = archive.by_name(&name).expect("entry");
+        let mode = entry.unix_mode().expect("unix mode");
+        assert_ne!(mode & 0o111, 0, "executable bit must survive zipping");
+    }
 }
 
 pub async fn get_k8s_auth_mode(
