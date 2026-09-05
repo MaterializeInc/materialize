@@ -2936,6 +2936,19 @@ class FlipFlagsAction(Action):
             "'10ms'",
             "'2s'",
         ]
+        self.flags_with_values["storage_persist_sink_description_window"] = [
+            # Never commit a description ahead of the frontier, a window of a
+            # single timestamp, and a production-like width.
+            "'0s'",
+            "'1ms'",
+            "'5s'",
+        ]
+        self.flags_with_values["storage_persist_sink_description_window_max"] = [
+            # Below the initial width, which clamps to it, and two real ceilings.
+            "'1ms'",
+            "'10s'",
+            "'5min'",
+        ]
         self.flags_with_values["enable_variadic_left_join_lowering"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -3397,6 +3410,12 @@ class FlipFlagsAction(Action):
             "storage_suspend_and_restart_delay",
             "storage_reclock_to_latest",
             "storage_use_continual_feedback_upsert",
+            # The snapshot and replication operators read this independently at
+            # startup. A flip landing between the two reads leaves one in
+            # concurrent mode and the other not, within the same dataflow, which
+            # is a broken state rather than an interesting one. CI covers the
+            # feature by defaulting it on instead.
+            "storage_source_snapshot_concurrent_replication",
             "storage_server_maintenance_interval",
             "storage_sink_progress_search",
             "storage_sink_ensure_topic_config",
