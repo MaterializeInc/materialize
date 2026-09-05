@@ -2254,12 +2254,6 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_zero_downtime_cluster_reconfiguration,
-        desc: "Enable zero-downtime reconfiguration for alter cluster",
-        default: false,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_network_policies,
         desc: "ENABLE NETWORK POLICIES",
         default: true,

@@ -9,8 +9,6 @@ menu:
     weight: 70
 ---
 
-{{< private-preview />}}
-
 When you create a [MySQL source](/sql/create-source/mysql-v2/), Materialize
 performs an initial, snapshot-based sync of the selected tables before it
 starts ingesting change events from the binlog. For large tables, this

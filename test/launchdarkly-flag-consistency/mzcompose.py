@@ -208,6 +208,10 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     compute_correction_v2_chain_proportionality
     compute_correction_v2_chunk_size
     compute_flat_map_fuel
+    compute_index_peek_activation_budget
+    compute_index_peek_inline_budget
+    compute_index_peek_permit_fraction
+    compute_index_peek_yield_granularity
     compute_logical_backpressure_max_retained_capabilities
     compute_mv_sink_advance_persist_frontiers
     compute_peek_row_iteration_limit
@@ -244,6 +248,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_coalesce_case_transform
     enable_columnar_merge_batcher
     enable_compute_half_join2
+    enable_compute_index_peek_offload
     enable_compute_peek_row_iteration_limit
     enable_compute_render_fueled_as_specific_collection
     enable_date_bin_hopping
@@ -480,6 +485,7 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
     enable_repr_typecheck
     enable_unified_cluster_arrangment
     enable_yugabyte_connection
+    enable_zero_downtime_cluster_reconfiguration
     kafka_default_metadata_fetch_interval
     mysql_offset_known_interval
     persist_enable_arrow_lgalloc_noncc_sizes
@@ -516,7 +522,6 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "enable_lgalloc",
     "enable_timely_zero_copy_lgalloc",
     "enable_upsert_paged_spill",
-    "enable_zero_downtime_cluster_reconfiguration",
     "kafka_client_id_enrichment_rules",
     "kafka_progress_record_fetch_timeout",
     "kafka_socket_timeout",

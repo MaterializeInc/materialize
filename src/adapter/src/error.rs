@@ -311,7 +311,12 @@ pub enum AdapterError {
     /// read-only mode.
     ReadOnly,
     AlterClusterTimeout,
-    AlterClusterWhilePendingReplicas,
+    /// Another `ALTER CLUSTER` replaced the target this statement was waiting
+    /// for before it became realized.
+    AlterClusterSuperseded,
+    /// The cluster controller could not provision a reconfiguration target
+    /// within the environment's resource limits.
+    AlterClusterResourceExhausted,
     /// Attempt to convert a cluster to unmanaged while a graceful
     /// reconfiguration is in progress.
     AlterClusterUnmanagedWhileReconfiguring,
@@ -885,6 +890,14 @@ impl AdapterError {
             AdapterError::AlterClusterTimeout => Some(
                 "Consider increasing the timeout duration in the alter cluster statement.".into(),
             ),
+            AdapterError::AlterClusterSuperseded => Some(
+                "Retry the ALTER CLUSTER statement if its target is still desired.".into(),
+            ),
+            AdapterError::AlterClusterResourceExhausted => Some(
+                "Reduce the target resource use, or inspect \
+                 mz_internal.mz_cluster_reconfigurations for the retained outcome."
+                    .into(),
+            ),
             AdapterError::DDLTransactionRace => Some(
                 "Currently, DDL transactions fail when any other DDL happens concurrently, \
                  even on unrelated schemas/clusters.".into()
@@ -1085,7 +1098,8 @@ impl AdapterError {
             // transactions.
             AdapterError::ReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::AlterClusterTimeout => SqlState::QUERY_CANCELED,
-            AdapterError::AlterClusterWhilePendingReplicas => SqlState::OBJECT_IN_USE,
+            AdapterError::AlterClusterSuperseded => SqlState::QUERY_CANCELED,
+            AdapterError::AlterClusterResourceExhausted => SqlState::INSUFFICIENT_RESOURCES,
             AdapterError::AlterClusterUnmanagedWhileReconfiguring => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterUnmanagedWhileBursting => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterReplicationFactorWhileReconfiguring => {
@@ -1552,6 +1566,18 @@ impl fmt::Display for AdapterError {
             AdapterError::AlterClusterTimeout => {
                 write!(f, "canceling statement, provided timeout lapsed")
             }
+            AdapterError::AlterClusterSuperseded => {
+                write!(
+                    f,
+                    "cluster reconfiguration was superseded by another ALTER CLUSTER"
+                )
+            }
+            AdapterError::AlterClusterResourceExhausted => {
+                write!(
+                    f,
+                    "cluster reconfiguration could not provision its target within the available resource limits"
+                )
+            }
             AdapterError::AuthenticationError(e) => {
                 write!(f, "authentication error {e}")
             }
@@ -1564,9 +1590,6 @@ impl fmt::Display for AdapterError {
                     )?;
                 }
                 Ok(())
-            }
-            AdapterError::AlterClusterWhilePendingReplicas => {
-                write!(f, "cannot alter clusters with pending updates")
             }
             AdapterError::AlterClusterUnmanagedWhileReconfiguring => {
                 write!(
@@ -1681,6 +1704,9 @@ impl From<mz_compute_client::protocol::response::PeekError> for AdapterError {
             PeekError::Unstructured(error) => AdapterError::Unstructured(anyhow::Error::msg(error)),
             PeekError::RowIterationLimitExceeded { limit } => {
                 AdapterError::PeekRowIterationLimitExceeded { limit }
+            }
+            error @ PeekError::ResultExceedsMaxSize { .. } => {
+                AdapterError::ResultSize(error.to_string())
             }
         }
     }
@@ -1824,6 +1850,23 @@ impl Error for AdapterError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test]
+    fn alter_cluster_resource_exhausted_is_specific() {
+        let error = AdapterError::AlterClusterResourceExhausted;
+        assert_eq!(error.code(), SqlState::INSUFFICIENT_RESOURCES);
+        assert_eq!(
+            error.hint().as_deref(),
+            Some(
+                "Reduce the target resource use, or inspect \
+                 mz_internal.mz_cluster_reconfigurations for the retained outcome."
+            )
+        );
+        assert_eq!(
+            error.to_string(),
+            "cluster reconfiguration could not provision its target within the available resource limits"
+        );
+    }
 
     #[mz_ore::test]
     fn peek_row_iteration_limit_error_is_user_facing() {

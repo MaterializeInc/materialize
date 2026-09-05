@@ -144,6 +144,11 @@ def get_minimal_system_parameters(
         config["compute_peek_row_iteration_limit"] = "1000000000"
         config["enable_compute_peek_row_iteration_limit"] = "true"
 
+        # Exercise the peek offload path in tests while it defaults off in
+        # production. The budgets stay at their code defaults so tests make the
+        # same placement decisions production makes.
+        config["enable_compute_index_peek_offload"] = "true"
+
     if version < MzVersion.parse_mz("v0.163.0-dev"):
         config["enable_compute_active_dataflow_cancelation"] = "true"
 
@@ -166,6 +171,14 @@ def get_minimal_system_parameters(
         config["enable_cluster_controller"] = (
             "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
         )
+
+    # The `WITH (WAIT ...)` graceful-reconfiguration surface. Always accepted
+    # from v26.41 on. Older binaries still gate it behind this feature flag, so
+    # pin it on for them: the tests that use the surface no longer enable it
+    # themselves, and in a mixed-version run some of their phases execute
+    # against the old binary.
+    if version < MzVersion.parse_mz("v26.41.0-dev"):
+        config["enable_zero_downtime_cluster_reconfiguration"] = "true"
 
     return config
 
@@ -819,10 +832,15 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "mz_metrics_rusage_refresh_interval",
     "mz_metrics_usage_refresh_interval",
     "compute_peek_response_stash_batch_max_runs",
+    # The offload's budgets, left at their code defaults so tests exercise the
+    # placement decisions production makes. parallel-workload varies them.
+    "compute_index_peek_inline_budget",
+    "compute_index_peek_activation_budget",
+    "compute_index_peek_yield_granularity",
+    "compute_index_peek_permit_fraction",
+    "compute_peek_response_stash_batch_bytes",
     "compute_peek_response_stash_read_batch_size_bytes",
     "compute_peek_response_stash_read_memory_budget_bytes",
-    "compute_peek_stash_num_batches",
-    "compute_peek_stash_batch_size",
     "storage_statistics_retention_duration",
     "enable_paused_cluster_readhold_downgrade",
     "kafka_retry_backoff",

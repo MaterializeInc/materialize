@@ -41,7 +41,9 @@ use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use crate::command_channel;
-use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
+use crate::compute_state::{
+    ActiveComputeState, ComputeState, PeekPermits, PendingPeek, ReportedFrontier,
+};
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
 
 /// Caller-provided configuration for compute.
@@ -141,6 +143,8 @@ struct Config {
     pub metrics_registry: MetricsRegistry,
     /// The number of timely workers per process.
     pub workers_per_process: usize,
+    /// Bounds how many offloaded peek walks run at once, shared by every worker this server runs.
+    pub peek_permits: Arc<PeekPermits>,
     /// A reader for each storage worker in this process.
     pub storage_log_readers: Arc<Mutex<Vec<Option<StorageTimelyLogReader>>>>,
 }
@@ -180,6 +184,9 @@ pub async fn serve(
         context,
         metrics_registry: metrics_registry.clone(),
         workers_per_process,
+        // NOTE: per compute runtime, not global. A process running a maintenance and an
+        // interactive runtime calls `serve` twice and admits the bound once per call.
+        peek_permits: Arc::new(PeekPermits::new(workers_per_process)),
         storage_log_readers: Arc::new(Mutex::new(storage_log_readers)),
     };
     let tokio_executor = tokio::runtime::Handle::current();
@@ -264,7 +271,11 @@ pub(crate) struct ResponseSender {
 }
 
 impl ResponseSender {
-    fn new(inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>, worker_id: usize) -> Self {
+    /// `pub(crate)` rather than private so the peek tests can build the sender a worker holds.
+    pub(crate) fn new(
+        inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>,
+        worker_id: usize,
+    ) -> Self {
         Self {
             inner,
             worker_id,
@@ -273,7 +284,7 @@ impl ResponseSender {
     }
 
     /// Set the cluster protocol nonce.
-    fn set_nonce(&mut self, nonce: Uuid) {
+    pub(crate) fn set_nonce(&mut self, nonce: Uuid) {
         self.nonce = Some(nonce);
     }
 
@@ -314,6 +325,9 @@ struct Worker<'w> {
     metrics_registry: MetricsRegistry,
     /// The number of timely workers per process.
     workers_per_process: usize,
+    /// Bounds how many offloaded peek walks run at once, shared by the workers of one `serve`
+    /// call rather than by the process.
+    peek_permits: Arc<PeekPermits>,
     /// Reader for storage timely logging events.
     storage_log_reader: Option<StorageTimelyLogReader>,
 }
@@ -366,6 +380,7 @@ impl ClusterSpec for Config {
             tracing_handle: Arc::clone(&self.tracing_handle),
             metrics_registry: self.metrics_registry.clone(),
             workers_per_process: self.workers_per_process,
+            peek_permits: Arc::clone(&self.peek_permits),
             storage_log_reader,
         }
         .run()
@@ -472,6 +487,13 @@ impl<'w> Worker<'w> {
                 sleep_duration = Some(next_maintenance.saturating_duration_since(now))
             };
 
+            // Do not sleep while a peek waits for its turn. Only the sweep below gives it one,
+            // and nothing else leaves an activation behind to end the park.
+            let sleep_duration = match &self.compute_state {
+                Some(state) if state.peeks_awaiting_turn() => Some(Duration::ZERO),
+                _ => sleep_duration,
+            };
+
             // Step the timely worker, recording the time taken.
             let timer = self.metrics.timely_step_duration_seconds.start_timer();
             self.timely_worker.step_or_park(sleep_duration);
@@ -504,6 +526,7 @@ impl<'w> Worker<'w> {
                 self.context.clone(),
                 self.metrics_registry.clone(),
                 self.workers_per_process,
+                Arc::clone(&self.peek_permits),
                 self.storage_log_reader.take(),
             ));
         }
@@ -747,8 +770,10 @@ impl<'w> Worker<'w> {
             // All re-used dataflows should roll back any believed communicated information (e.g. frontiers)
             // so that they recommunicate that information as if from scratch.
 
-            // Remove all pending peeks.
-            for (_, peek) in std::mem::take(&mut compute_state.pending_peeks) {
+            // Remove all peeks, whether they have started or are still awaiting a turn.
+            let queued = std::mem::take(&mut compute_state.queued_peeks);
+            let pending = std::mem::take(&mut compute_state.pending_peeks);
+            for peek in queued.into_iter().map(PendingPeek::Index).chain(pending) {
                 // Log dropping the peek request.
                 if let Some(logger) = compute_state.compute_logger.as_mut() {
                     logger.log(&peek.as_log_event(false));

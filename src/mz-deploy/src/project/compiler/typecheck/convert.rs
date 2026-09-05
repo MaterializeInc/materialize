@@ -20,6 +20,7 @@ use crate::project::ir::compiled::FullyQualifiedName;
 use crate::project::ir::object_id::ObjectId;
 use crate::project::resolve::normalize::NormalizingVisitor;
 use crate::types::ColumnType;
+use mz_repr::adt::numeric::NUMERIC_DATUM_MAX_PRECISION;
 use mz_repr::{RelationDesc, SqlColumnType, SqlScalarType};
 use mz_sql_parser::ast::ColumnOption;
 use std::collections::BTreeMap;
@@ -172,7 +173,11 @@ fn sql_scalar_type_to_sql(scalar_type: &SqlScalarType) -> String {
         SqlScalarType::Float64 => "float8".into(),
         SqlScalarType::Numeric { max_scale } => match max_scale {
             None => "numeric".into(),
-            Some(max_scale) => format!("numeric({})", max_scale.into_u8()),
+            Some(max_scale) => format!(
+                "numeric({},{})",
+                NUMERIC_DATUM_MAX_PRECISION,
+                max_scale.into_u8()
+            ),
         },
         SqlScalarType::Date => "date".into(),
         SqlScalarType::Time => "time".into(),
@@ -224,6 +229,27 @@ fn sql_scalar_type_to_sql(scalar_type: &SqlScalarType) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mz_repr::adt::numeric::NumericMaxScale;
+
+    #[mz_ore::test]
+    fn numeric_renders_scale_in_the_scale_position() {
+        assert_eq!(
+            sql_scalar_type_to_sql(&SqlScalarType::Numeric { max_scale: None }),
+            "numeric"
+        );
+        assert_eq!(
+            sql_scalar_type_to_sql(&SqlScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO)
+            }),
+            "numeric(39,0)"
+        );
+        assert_eq!(
+            sql_scalar_type_to_sql(&SqlScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::try_from(2i64).unwrap())
+            }),
+            "numeric(39,2)"
+        );
+    }
 
     #[mz_ore::test]
     fn create_stub_table_sql_preserves_column_order() {

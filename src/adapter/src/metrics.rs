@@ -7,14 +7,24 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
+
+use mz_controller_types::ClusterId;
 use mz_ore::metric;
-use mz_ore::metrics::{MetricTag, MetricVisibility, MetricsRegistry, UIntGauge};
+use mz_ore::metrics::{
+    MakeCollector, MakeCollectorOpts, MetricTag, MetricVisibility, MetricsRegistry, UIntGauge,
+    remove_children_with_label,
+};
 use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
+use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::User;
+use mz_sql::session::vars::IsolationLevel;
 use mz_sql_parser::ast::statement_kind_label_value;
 use prometheus::core::{AtomicU64, GenericCounter};
 use prometheus::{Histogram, HistogramVec, IntCounter, IntCounterVec, IntGaugeVec};
+
+use crate::statement_logging::StatementExecutionStrategy;
 
 pub(crate) const OCC_CALLER_SESSION: &str = "session";
 pub(crate) const OCC_CALLER_BACKGROUND: &str = "background";
@@ -27,8 +37,6 @@ pub struct Metrics {
     pub active_internal_subscribes: IntGaugeVec,
     pub active_copy_tos: IntGaugeVec,
     pub queue_busy_seconds: Histogram,
-    pub determine_timestamp: IntCounterVec,
-    pub timestamp_difference_for_bounded_staleness_ms: HistogramVec,
     pub commands: IntCounterVec,
     pub storage_usage_collection_time_seconds: Histogram,
     pub arrangement_sizes_collection_time_seconds: Histogram,
@@ -40,7 +48,6 @@ pub struct Metrics {
     pub subscribe_outputs: IntCounterVec,
     pub canceled_peeks: IntCounter,
     pub linearize_message_seconds: HistogramVec,
-    pub time_to_first_row_seconds: HistogramVec,
     pub statement_logging_records: IntCounterVec,
     pub statement_logging_unsampled_bytes: IntCounter,
     pub statement_logging_actual_bytes: IntCounter,
@@ -66,6 +73,7 @@ pub struct Metrics {
     pub apply_catalog_implications_seconds: Histogram,
     pub group_commit_catalog_upper_seconds: Histogram,
     pub occ_retry_count: HistogramVec,
+    pub by_cluster: ClusterLabeledMetrics,
 }
 
 impl Metrics {
@@ -106,17 +114,6 @@ impl Metrics {
                 name: "mz_coord_queue_busy_seconds",
                 help: "The number of seconds the coord queue was processing before it was empty. This is a sampled metric and does not measure the full coord queue wait/idle times.",
                 buckets: histogram_seconds_buckets(0.000_128, 32.0)
-            )),
-            determine_timestamp: registry.register(metric!(
-                name: "mz_determine_timestamp",
-                help: "The total number of calls to determine_timestamp.",
-                var_labels:["respond_immediately", "isolation_level", "compute_instance"],
-            )),
-            timestamp_difference_for_bounded_staleness_ms: registry.register(metric!(
-                name: "mz_timestamp_difference_for_bounded_staleness_ms",
-                help: "How much older bounded-staleness timestamps are compared to serializable, in milliseconds. Measures the actual staleness incurred.",
-                var_labels:["compute_instance"],
-                buckets: histogram_milliseconds_buckets(1., 8000.),
             )),
             commands: registry.register(metric!(
                 name: "mz_adapter_commands",
@@ -173,14 +170,6 @@ impl Metrics {
                 var_labels: ["type", "immediately_handled"],
                 buckets: histogram_seconds_buckets(0.000_128, 8.0),
             )),
-            time_to_first_row_seconds: registry.register(metric! {
-                name: "mz_time_to_first_row_seconds",
-                help: "Latency of an execute for a successful query from pgwire's perspective",
-                var_labels: ["instance_id", "isolation_level", "strategy", "application_name"],
-                // NOTE: Measurements below 512 microseconds are negligible, so omit those buckets.
-                // This histogram retains series for dropped `instance_id` label values.
-                buckets: histogram_seconds_buckets(0.000_512, 32.0)
-            }),
             statement_logging_records: registry.register(metric! {
                 name: "mz_statement_logging_record_count",
                 help: "The total number of SQL statements tagged with whether or not they were recorded.",
@@ -318,6 +307,7 @@ impl Metrics {
                     0., 1., 2., 3., 5., 10., 25., 50., 100., 200., 300., 500., 750., 1000.,
                 ],
             )),
+            by_cluster: ClusterLabeledMetrics::register_into(registry),
         }
     }
 
@@ -331,10 +321,7 @@ impl Metrics {
             session_startup_table_writes_seconds: self.session_startup_table_writes_seconds.clone(),
             query_total: self.query_total.clone(),
             subscribe_outputs: self.subscribe_outputs.clone(),
-            determine_timestamp: self.determine_timestamp.clone(),
-            timestamp_difference_for_bounded_staleness_ms: self
-                .timestamp_difference_for_bounded_staleness_ms
-                .clone(),
+            by_cluster: self.by_cluster.clone(),
             optimization_notices: self.optimization_notices.clone(),
             statement_logging_records: self.statement_logging_records.clone(),
             statement_logging_unsampled_bytes: self.statement_logging_unsampled_bytes.clone(),
@@ -350,8 +337,7 @@ pub struct SessionMetrics {
     session_startup_table_writes_seconds: Histogram,
     query_total: IntCounterVec,
     subscribe_outputs: IntCounterVec,
-    determine_timestamp: IntCounterVec,
-    timestamp_difference_for_bounded_staleness_ms: HistogramVec,
+    by_cluster: ClusterLabeledMetrics,
     optimization_notices: IntCounterVec,
     statement_logging_records: IntCounterVec,
     statement_logging_unsampled_bytes: IntCounter,
@@ -375,16 +361,8 @@ impl SessionMetrics {
         self.subscribe_outputs.with_label_values(label_values)
     }
 
-    pub(crate) fn determine_timestamp(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
-        self.determine_timestamp.with_label_values(label_values)
-    }
-
-    pub(crate) fn timestamp_difference_for_bounded_staleness_ms(
-        &self,
-        label_values: &[&str],
-    ) -> Histogram {
-        self.timestamp_difference_for_bounded_staleness_ms
-            .with_label_values(label_values)
+    pub(crate) fn by_cluster(&self) -> &ClusterLabeledMetrics {
+        &self.by_cluster
     }
 
     pub(crate) fn optimization_notices(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
@@ -431,5 +409,274 @@ where
         SubscribeOutput::WithinTimestampOrderBy { .. } => "within_timestamp_order_by",
         SubscribeOutput::EnvelopeUpsert { .. } => "envelope_upsert",
         SubscribeOutput::EnvelopeDebezium { .. } => "envelope_debezium",
+    }
+}
+
+/// Adapter metrics whose series carry a cluster id label.
+///
+/// Series are created on first observation, as for any labeled metric, and
+/// `remove_cluster` deletes a dropped cluster's series from every vec that
+/// `register` put here.
+#[derive(Debug, Clone)]
+pub struct ClusterLabeledMetrics {
+    time_to_first_row_seconds: HistogramVec,
+    determine_timestamp: IntCounterVec,
+    timestamp_difference_for_bounded_staleness_ms: HistogramVec,
+    /// Every vec above with the label that carries its cluster id. `register`
+    /// is the only way in, so a vec registered any other way is not swept.
+    delete_on_cluster_drop: Vec<ClusterLabeledVec>,
+}
+
+/// A metric vec with the name of the label that carries the cluster id.
+#[derive(Debug, Clone)]
+enum ClusterLabeledVec {
+    Histogram(HistogramVec, &'static str),
+    Counter(IntCounterVec, &'static str),
+}
+
+impl ClusterLabeledVec {
+    fn delete_cluster(&self, cluster: &str) {
+        match self {
+            Self::Histogram(vec, label) => remove_children_with_label(vec, label, cluster),
+            Self::Counter(vec, label) => remove_children_with_label(vec, label, cluster),
+        }
+    }
+}
+
+impl ClusterLabeledMetrics {
+    fn register_into(registry: &MetricsRegistry) -> Self {
+        let mut vecs = Vec::new();
+        Self {
+            time_to_first_row_seconds: Self::register(
+                registry,
+                &mut vecs,
+                ClusterLabeledVec::Histogram,
+                "instance_id",
+                metric! {
+                    name: "mz_time_to_first_row_seconds",
+                    help: "Latency of an execute for a successful query from pgwire's perspective",
+                    var_labels: ["instance_id", "isolation_level", "strategy", "application_name"],
+                    // NOTE: Measurements below 512 microseconds are negligible, so omit those buckets.
+                    buckets: histogram_seconds_buckets(0.000_512, 32.0)
+                },
+            ),
+            determine_timestamp: Self::register(
+                registry,
+                &mut vecs,
+                ClusterLabeledVec::Counter,
+                "compute_instance",
+                metric!(
+                    name: "mz_determine_timestamp",
+                    help: "The total number of calls to determine_timestamp.",
+                    var_labels: ["respond_immediately", "isolation_level", "compute_instance"],
+                ),
+            ),
+            timestamp_difference_for_bounded_staleness_ms: Self::register(
+                registry,
+                &mut vecs,
+                ClusterLabeledVec::Histogram,
+                "compute_instance",
+                metric!(
+                    name: "mz_timestamp_difference_for_bounded_staleness_ms",
+                    help: "How much older bounded-staleness timestamps are compared to serializable, in milliseconds. Measures the actual staleness incurred.",
+                    var_labels: ["compute_instance"],
+                    buckets: histogram_milliseconds_buckets(1., 8000.),
+                ),
+            ),
+            delete_on_cluster_drop: vecs,
+        }
+    }
+
+    /// Registers `opts` and records it, wrapped by `wrap`, with `cluster_label`
+    /// as the label carrying its cluster id, so `remove_cluster` covers it.
+    ///
+    /// Panics if `cluster_label` is not a variable label of `opts`.
+    fn register<M: MakeCollector>(
+        registry: &MetricsRegistry,
+        vecs: &mut Vec<ClusterLabeledVec>,
+        wrap: fn(M, &'static str) -> ClusterLabeledVec,
+        cluster_label: &'static str,
+        opts: MakeCollectorOpts,
+    ) -> M {
+        assert!(
+            opts.opts
+                .variable_labels
+                .iter()
+                .any(|label| label == cluster_label),
+            "{cluster_label} is not a label of {}",
+            opts.opts.name
+        );
+        let vec: M = registry.register(opts);
+        // A metric vec is a handle onto shared state, so the clone sees the
+        // same children as the field.
+        vecs.push(wrap(vec.clone(), cluster_label));
+        vec
+    }
+
+    /// Deletes the series of `cluster_id`.
+    pub(crate) fn remove_cluster(&self, cluster_id: ClusterId) {
+        let cluster = cluster_id.to_string();
+        for vec in &self.delete_on_cluster_drop {
+            vec.delete_cluster(&cluster);
+        }
+    }
+
+    /// Statements without a cluster or strategy record under the "none" label value.
+    pub(crate) fn time_to_first_row_seconds(
+        &self,
+        cluster_id: Option<ClusterId>,
+        isolation_level: IsolationLevel,
+        strategy: Option<StatementExecutionStrategy>,
+        application_name: ApplicationNameHint,
+    ) -> Histogram {
+        let instance = match cluster_id {
+            Some(id) => Cow::Owned(id.to_string()),
+            None => Cow::Borrowed("none"),
+        };
+        self.time_to_first_row_seconds.with_label_values(&[
+            instance.as_ref(),
+            isolation_level.as_variant_str(),
+            strategy.map_or("none", |strategy| strategy.name()),
+            application_name.as_str(),
+        ])
+    }
+
+    pub(crate) fn determine_timestamp(
+        &self,
+        cluster_id: ClusterId,
+        respond_immediately: bool,
+        isolation_level: IsolationLevel,
+    ) -> GenericCounter<AtomicU64> {
+        self.determine_timestamp.with_label_values(&[
+            if respond_immediately { "true" } else { "false" },
+            isolation_level.as_variant_str(),
+            &cluster_id.to_string(),
+        ])
+    }
+
+    pub(crate) fn timestamp_difference_for_bounded_staleness_ms(
+        &self,
+        cluster_id: ClusterId,
+    ) -> Histogram {
+        self.timestamp_difference_for_bounded_staleness_ms
+            .with_label_values(&[&cluster_id.to_string()])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    const U1: ClusterId = ClusterId::User(1);
+    const U2: ClusterId = ClusterId::User(2);
+
+    fn families(registry: &MetricsRegistry) -> BTreeSet<String> {
+        registry
+            .gather()
+            .into_iter()
+            .map(|family| family.name().to_string())
+            .collect()
+    }
+
+    /// Names of the families with a series carrying `value` under any label.
+    fn families_with_label_value(registry: &MetricsRegistry, value: &str) -> BTreeSet<String> {
+        registry
+            .gather()
+            .into_iter()
+            .filter(|family| {
+                family
+                    .get_metric()
+                    .iter()
+                    .flat_map(|metric| metric.get_label())
+                    .any(|label| label.value() == value)
+            })
+            .map(|family| family.name().to_string())
+            .collect()
+    }
+
+    fn observe_first_row(
+        metrics: &ClusterLabeledMetrics,
+        cluster_id: Option<ClusterId>,
+        strategy: Option<StatementExecutionStrategy>,
+    ) {
+        metrics
+            .time_to_first_row_seconds(
+                cluster_id,
+                IsolationLevel::StrictSerializable,
+                strategy,
+                ApplicationNameHint::from_str("psql"),
+            )
+            .observe(0.1);
+    }
+
+    #[mz_ore::test]
+    fn dropping_a_cluster_removes_its_series() {
+        let registry = MetricsRegistry::new();
+        let metrics = ClusterLabeledMetrics::register_into(&registry);
+
+        observe_first_row(&metrics, Some(U1), None);
+        observe_first_row(
+            &metrics,
+            Some(U1),
+            Some(StatementExecutionStrategy::FastPath),
+        );
+        observe_first_row(&metrics, Some(U2), None);
+        metrics
+            .determine_timestamp(U1, true, IsolationLevel::Serializable)
+            .inc();
+        metrics
+            .timestamp_difference_for_bounded_staleness_ms(U1)
+            .observe(5.0);
+        assert_eq!(
+            families_with_label_value(&registry, "u1"),
+            families(&registry),
+            "every registered family needs a u1 series for the drop to be exercised"
+        );
+
+        metrics.remove_cluster(U1);
+
+        assert_eq!(
+            families_with_label_value(&registry, "u1"),
+            BTreeSet::new(),
+            "u1 series survived the drop"
+        );
+        assert_eq!(
+            families_with_label_value(&registry, "u2"),
+            BTreeSet::from(["mz_time_to_first_row_seconds".to_string()]),
+            "the other cluster's series must be untouched"
+        );
+    }
+
+    #[mz_ore::test]
+    fn statements_without_a_cluster_are_unaffected_by_drops() {
+        let registry = MetricsRegistry::new();
+        let metrics = ClusterLabeledMetrics::register_into(&registry);
+        observe_first_row(&metrics, None, Some(StatementExecutionStrategy::Constant));
+        observe_first_row(&metrics, Some(U1), None);
+        metrics.remove_cluster(U1);
+        assert_eq!(families_with_label_value(&registry, "u1"), BTreeSet::new());
+        assert_eq!(
+            families_with_label_value(&registry, "none"),
+            BTreeSet::from(["mz_time_to_first_row_seconds".to_string()])
+        );
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "is not a label of mz_test")]
+    fn registering_under_a_label_the_metric_lacks_panics() {
+        let registry = MetricsRegistry::new();
+        let _: IntCounterVec = ClusterLabeledMetrics::register(
+            &registry,
+            &mut Vec::new(),
+            ClusterLabeledVec::Counter,
+            "cluster_id",
+            metric!(
+                name: "mz_test",
+                help: "test",
+                var_labels: ["compute_instance"],
+            ),
+        );
     }
 }

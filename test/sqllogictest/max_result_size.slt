@@ -132,14 +132,70 @@ INSERT INTO t1 SELECT * FROM generate_series(1, 10000), repeat('a', 100);
 statement ok
 SET cluster TO 'c1';
 
-# Note: 'total' in the error message here is important because it indicates we failed when
-# aggregating the result from multiple workers, as opposed to on any single worker.
-query error total result exceeds max size of 1\.0 MiB
+# What this pins is the bound across the workers that produced the result, not the one each
+# worker applies to its own share: eight workers split 10000 rows of about 110 bytes, so no
+# single share comes near the cap and only the total can reject the query.
+query error result exceeds max size of 1\.0 MiB
 SELECT * FROM t1;
 
 # For SUBSCRIBE, we need to add a GROUP BY to force an exchange in the dataflow.
 query error total result exceeds max size of 1\.0 MiB
 SUBSCRIBE (SELECT * FROM t1 GROUP BY a, b)
+
+# A peek whose answer goes to the peek stash is not bounded by `max_result_size`, which caps
+# what environmentd materializes for a query. A stashed answer is read back in bounded chunks
+# and never materialized whole, so `max_query_result_size` is what bounds it, applied to the
+# rows the client receives.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_peek_response_stash TO 'true';
+----
+COMPLETE 0
+
+# Low enough that every worker's share of the result below reaches the stash.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET compute_peek_response_stash_threshold_bytes TO 1024;
+----
+COMPLETE 0
+
+# Small enough that the per-chunk check the adapter applies on read-back cannot be what
+# rejects the result.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET compute_peek_response_stash_read_batch_size_bytes TO 65536;
+----
+COMPLETE 0
+
+# The index is what makes this a fast-path index peek, which is the path that writes to the stash.
+statement ok
+CREATE INDEX t1_idx ON t1 (a);
+
+# The result is about 1.1 MB. Under a 1 MiB `max_result_size` alone it comes back whole, and it
+# is `max_query_result_size` that rejects it, with the message the read-back check produces.
+statement ok
+SET max_query_result_size = '1MB';
+
+query error total result exceeds max size of 1\.0 MiB
+SELECT * FROM t1;
+
+statement ok
+RESET max_query_result_size;
+
+statement ok
+DROP INDEX t1_idx;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET compute_peek_response_stash_threshold_bytes;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET compute_peek_response_stash_read_batch_size_bytes;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_peek_response_stash TO 'false';
+----
+COMPLETE 0
 
 # Regression: `RowSetFinishing` must not reject a result that fits within
 # `max_result_size`. This folds to a fast-path Constant of 10000 rows with a

@@ -7058,11 +7058,13 @@ dependencies = [
  "mz-expr",
  "mz-metrics",
  "mz-ore",
+ "mz-persist",
  "mz-persist-client",
  "mz-persist-types",
  "mz-proto",
  "mz-repr",
  "mz-row-spine",
+ "mz-secrets",
  "mz-storage-operators",
  "mz-storage-types",
  "mz-timely-util",
@@ -7075,6 +7077,7 @@ dependencies = [
  "scopeguard",
  "serde",
  "smallvec",
+ "thiserror 2.0.18",
  "timely",
  "tokio",
  "tracing",
@@ -7216,7 +7219,7 @@ dependencies = [
 
 [[package]]
 name = "mz-deploy"
-version = "0.4.0"
+version = "0.6.0"
 dependencies = [
  "annotate-snippets",
  "async-stream",

@@ -187,6 +187,10 @@
     Your S3 Tables bucket must be in the same AWS region as your Materialize
     deployment.
 
+- name: "restrictions-limitations-existing-table"
+  content: |
+    You cannot create an Iceberg sink into an existing Iceberg table. Materialize creates and manages the target Iceberg table itself, so the table named by the sink must not already exist.
+
 - name: "restrictions-limitations-partitioned-tables"
   content: |
     Partitioned tables are not supported.

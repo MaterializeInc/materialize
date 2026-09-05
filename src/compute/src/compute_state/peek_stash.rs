@@ -6,138 +6,104 @@
 //! For eligible peeks, we send the result back via the peek stash (aka persist
 //! blob), instead of inline in `ComputeResponse`.
 
-use std::num::{NonZeroI64, NonZeroU64};
+use std::num::NonZeroU64;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use mz_compute_client::protocol::command::Peek;
-use mz_compute_client::protocol::response::{PeekError, PeekResponse, StashedPeekResponse};
-use mz_expr::row::RowCollection;
-use mz_ore::cast::CastFrom;
-use mz_ore::task::AbortOnDropHandle;
+use mz_compute_client::protocol::response::{PeekResponse, StashedPeekResponse};
+use mz_ore::task::RuntimeExt;
+use mz_persist::location::ExternalError;
 use mz_persist_client::Schemas;
+use mz_persist_client::batch::{Added, Batch, BatchBuilder};
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::error::InvalidUsage;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{PersistLocation, ShardId};
-use mz_repr::{Diff, RelationDesc, Row, Timestamp};
+use mz_repr::{RelationDesc, Timestamp};
 use mz_storage_types::sources::SourceData;
 use timely::progress::Antichain;
+use tokio::runtime::Handle;
 use tokio::sync::oneshot;
-use tracing::debug;
+use tracing::warn;
 use uuid::Uuid;
 
-use crate::arrangement::manager::{PaddedTrace, TraceBundle};
-use crate::compute_state::peek_result_iterator;
-use crate::compute_state::peek_result_iterator::PeekResultIterator;
-use crate::typedefs::RowRowAgent;
+use crate::compute_state::peek_scan::RowBatch;
 
-/// An async task that stashes a peek response in persist and yields a handle to
-/// the batch in a [PeekResponse::Stashed].
+/// A failure that leaves an upload unable to answer the peek whose rows it holds.
 ///
-/// Note that `StashingPeek` intentionally does not implement or derive
-/// `Clone`, as each `StashingPeek` is meant to be dropped after it's
-/// done or no longer needed.
-pub struct StashingPeek {
-    pub peek: Peek,
-    /// Iterator for the results. The worker thread has to continually pump
-    /// results from this to the `rows_tx` channel.
-    peek_iterator: Option<PeekResultIterator<PaddedTrace<RowRowAgent<Timestamp, Diff>>>>,
-    /// We can't give a PeekResultIterator to our async upload task because the
-    /// underlying trace reader is not Send/Sync. So we need to use a channel to
-    /// send result rows from the worker thread to the async background task.
-    rows_tx: Option<tokio::sync::mpsc::Sender<Result<Vec<(Row, NonZeroI64)>, PeekError>>>,
-    /// The result of the background task, eventually.
-    pub result: oneshot::Receiver<(PeekResponse, Duration)>,
-    /// The `tracing::Span` tracking this peek's operation
-    pub span: tracing::Span,
-    /// A background task that's responsible for producing the peek results.
-    /// If we're no longer interested in the results, we abort the task.
-    _abort_handle: AbortOnDropHandle<()>,
+/// The variant names the step that refused, and the driver reports it as the peek's error.
+#[derive(Debug, thiserror::Error)]
+pub(super) enum StashError {
+    /// The stash location did not open, so nothing was written.
+    #[error("peek stash could not open its persist location: {0}")]
+    OpenLocation(#[source] ExternalError),
+    /// Persist refused a row the upload handed it.
+    #[error("peek stash could not write a row: {0}")]
+    WriteRow(#[source] InvalidUsage<Timestamp>),
+    /// Persist refused to finish the batch, which takes with it every part already written.
+    #[error("peek stash could not finish its batch: {0}")]
+    FinishBatch(#[source] InvalidUsage<Timestamp>),
+    /// The task finishing the batch ended without delivering one, which only a runtime that is
+    /// going away can cause.
+    #[error("peek stash lost the task finishing its batch")]
+    LostFinishTask,
 }
 
-impl StashingPeek {
-    pub fn start_upload(
-        persist_clients: Arc<PersistClientCache>,
-        persist_location: &PersistLocation,
-        mut peek: Peek,
-        mut trace_bundle: TraceBundle,
-        batch_max_runs: usize,
-    ) -> Self {
-        let (rows_tx, rows_rx) = tokio::sync::mpsc::channel(10);
-        let (result_tx, result_rx) = oneshot::channel::<(PeekResponse, Duration)>();
+/// A peek's answer on its way to the peek stash, written to persist a batch of rows at a time.
+///
+/// The upload owns the IO the stash needs, so a walk that feeds it performs none: a driver that can
+/// await pushes the rows the walk produced and finishes the upload, and the walk itself neither
+/// opens a client nor writes a byte. That split keeps a walk drivable from a timely worker and from
+/// an async task alike.
+///
+/// The rows an upload is given are the rows it writes, in the order it is given them. An upload
+/// that does not reach a reader deletes what it can, whether it is dropped by a driver that will
+/// answer with something else or stopped part-way through finishing.
+/// [`StashUpload::abandon`] bounds what that reaches and what it costs.
+pub(super) struct StashUpload {
+    /// The description the stashed response reports, and the schema the batch is written under.
+    relation_desc: RelationDesc,
+    /// The shard the batch belongs to, derived from the peek's uuid so that a reader holding the
+    /// response can find it.
+    shard_id: ShardId,
+    /// The parts persist has taken so far. Taken by whichever of [`StashUpload::finish`] and
+    /// [`StashUpload::abandon`] gets there first, and a `None` says the parts are accounted for
+    /// and nothing is left to delete.
+    batch_builder: Option<BatchBuilder<SourceData, (), Timestamp, i64>>,
+    /// The upper the batch is finished at, one step beyond the timestamp every row is written at.
+    upper: Antichain<Timestamp>,
+    /// Rows written so far, counting a row with a diff of `n` as `n` rows, which is how the
+    /// finishing counts them.
+    num_rows: u64,
+    /// Whether persist has taken a part off this builder and into blob storage. Until it has,
+    /// everything the upload holds is in memory, so an abandoned upload drops its builder instead
+    /// of paying a write and a delete to reclaim nothing.
+    wrote_parts: bool,
+    /// The runtime an abandoned upload's deletion is spawned on, held rather than taken from the
+    /// ambient context because [`StashUpload::abandon`] runs where there may be none: a `Drop`
+    /// carries no runtime context of its own, and `Handle::current` panics without one.
+    runtime: Handle,
+}
 
-        let persist_clients = Arc::clone(&persist_clients);
-        let persist_location = persist_location.clone();
+/// The `expect` message where the builder is taken: it is present until `finish` or `abandon`
+/// takes it, and neither runs twice.
+const BUILDER_TAKEN: &str = "an upload holds its builder until it is finished or abandoned";
 
-        let peek_uuid = peek.uuid;
-        let relation_desc = peek.result_desc.clone();
-
-        let oks_handle = trace_bundle.oks_mut();
-
-        let peek_iterator = peek_result_iterator::PeekResultIterator::new(
-            peek.target.id(),
-            peek.map_filter_project.clone(),
-            peek.timestamp,
-            peek.literal_constraints.as_deref_mut(),
-            oks_handle,
-            None,
-            0,
-        );
-
-        let rows_needed_by_finishing = peek.finishing.num_rows_needed();
-
-        let task_handle = mz_ore::task::spawn(
-            || format!("peek_stash::stash_peek_response({peek_uuid})"),
-            async move {
-                let start = Instant::now();
-
-                let result = Self::do_upload(
-                    &persist_clients,
-                    persist_location,
-                    batch_max_runs,
-                    peek.uuid,
-                    relation_desc,
-                    rows_needed_by_finishing,
-                    rows_rx,
-                )
-                .await;
-
-                let result = match result {
-                    Ok(peek_response) => peek_response,
-                    Err(e) => PeekResponse::Error(PeekError::unstructured(e.to_string())),
-                };
-                match result_tx.send((result, start.elapsed())) {
-                    Ok(()) => {}
-                    Err((_result, elapsed)) => {
-                        debug!(duration = ?elapsed, "dropping result for cancelled peek {}", peek_uuid)
-                    }
-                }
-            },
-        );
-
-        Self {
-            peek,
-            peek_iterator: Some(peek_iterator),
-            rows_tx: Some(rows_tx),
-            result: result_rx,
-            span: tracing::Span::current(),
-            _abort_handle: task_handle.abort_on_drop(),
-        }
-    }
-
-    async fn do_upload(
+impl StashUpload {
+    /// Opens an upload for the peek `peek_uuid` identifies.
+    ///
+    /// Fails when the stash location does not open, in which case nothing has been written.
+    pub(super) async fn open(
         persist_clients: &PersistClientCache,
         persist_location: PersistLocation,
         batch_max_runs: usize,
         peek_uuid: Uuid,
         relation_desc: RelationDesc,
-        max_rows: Option<usize>, // The number of rows needed by the RowSetFinishing's offset + limit
-        mut rows_rx: tokio::sync::mpsc::Receiver<Result<Vec<(Row, NonZeroI64)>, PeekError>>,
-    ) -> Result<PeekResponse, String> {
+    ) -> Result<Self, StashError> {
         let client = persist_clients
             .open(persist_location)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(StashError::OpenLocation)?;
 
         let shard_id = format!("s{}", peek_uuid);
         let shard_id = ShardId::try_from(shard_id).expect("can parse");
@@ -157,7 +123,7 @@ impl StashingPeek {
         //
         // TODO: We _could_ work around the above by teaching the bare columnar
         // Row encoder about zero-column rows.
-        let mut batch_builder = client
+        let batch_builder = client
             .batch_builder::<SourceData, (), Timestamp, i64>(
                 shard_id,
                 write_schemas,
@@ -166,93 +132,257 @@ impl StashingPeek {
             )
             .await;
 
-        let mut num_rows: u64 = 0;
-
-        'outer: loop {
-            let row = rows_rx.recv().await;
-            match row {
-                Some(Ok(rows)) => {
-                    for (row, diff) in rows {
-                        num_rows +=
-                            u64::from(NonZeroU64::try_from(diff).expect("diff fits into u64"));
-                        let diff: i64 = diff.into();
-
-                        batch_builder
-                            .add(&SourceData(Ok(row)), &(), &Timestamp::default(), &diff)
-                            .await
-                            .expect("invalid usage");
-
-                        if let Some(max_rows) = max_rows {
-                            if num_rows >= u64::cast_from(max_rows) {
-                                // Drop the receiver so the producer's next
-                                // try_reserve() fails, stopping row production.
-                                drop(rows_rx);
-                                break 'outer;
-                            }
-                        }
-                    }
-                }
-                Some(Err(err)) => return Ok(PeekResponse::Error(err)),
-                None => {
-                    break;
-                }
-            }
-        }
-
-        let batch = batch_builder.finish(upper).await.expect("invalid usage");
-
-        let stashed_response = StashedPeekResponse {
-            num_rows_batches: u64::cast_from(num_rows),
-            encoded_size_bytes: batch.encoded_size_bytes(),
+        Ok(Self {
             relation_desc,
             shard_id,
-            batches: vec![batch.into_transmittable_batch()],
-            inline_rows: vec![RowCollection::new(vec![], &[])],
-        };
-        let result = PeekResponse::Stashed(Box::new(stashed_response));
-        Ok(result)
+            batch_builder: Some(batch_builder),
+            upper,
+            num_rows: 0,
+            wrote_parts: false,
+            runtime: Handle::current(),
+        })
     }
 
-    /// Pumps rows from the [PeekResultIterator] to the async task, via our
-    /// `rows_tx`. Will pump at most `batch_size` rows in one batch, and at most
-    /// the given `num_batches` batches.
-    pub fn pump_rows(&mut self, mut num_batches: usize, batch_size: usize) {
-        while num_batches > 0
-            && let Some(row_iter) = self.peek_iterator.as_mut()
-        {
-            // Try to reserve space in the channel before pulling rows from the
-            // iterator.
-            let permit = match self
-                .rows_tx
-                .as_mut()
-                .expect("missing rows_tx")
-                .try_reserve()
-            {
-                Ok(permit) => permit,
-                Err(_) => {
-                    // Channel is full, can't send more rows right now.
-                    break;
-                }
-            };
+    /// Writes `rows` to the stash.
+    ///
+    /// Every row given is written. Stopping where the peek's finishing has all it can use is the
+    /// scan's to decide, since it is the scan that holds the finishing and produces the rows.
+    ///
+    /// Fails where persist rejects the write, which leaves the upload unusable and the rows it
+    /// holds unanswerable.
+    pub(super) async fn push(&mut self, rows: RowBatch) -> Result<(), StashError> {
+        let batch_builder = self.batch_builder.as_mut().expect(BUILDER_TAKEN);
 
-            let rows: Result<Vec<_>, _> = row_iter.take(batch_size).collect();
-            match rows {
-                Ok(rows) if rows.is_empty() => {
-                    // Iterator is exhausted, we're done
-                    drop(permit);
-                    self.peek_iterator.take();
-                    self.rows_tx.take();
-                    break;
-                }
-                Ok(rows) => {
-                    permit.send(Ok(rows));
-                }
-                Err(e) => {
-                    permit.send(Err(e));
-                }
-            }
+        for (row, diff) in rows {
+            self.num_rows += u64::from(NonZeroU64::try_from(diff).expect("diff fits into u64"));
+            let diff: i64 = diff.into();
 
-            num_batches -= 1;
+            let added = batch_builder
+                .add(&SourceData(Ok(row)), &(), &Timestamp::default(), &diff)
+                .await
+                .map_err(StashError::WriteRow)?;
+            self.wrote_parts |= matches!(added, Added::RecordAndParts);
         }
+
+        Ok(())
+    }
+
+    /// Finishes the batch and builds the response that names it.
+    ///
+    /// Every row of the answer is in the batch. The response's `inline_rows` are left for the
+    /// controller, which merges in the rows of workers whose share never reached the stash.
+    ///
+    /// Fails where persist rejects the batch, which takes the parts with it: persist keeps the
+    /// builder and hands back no handle to what it holds. Only a batch whose bounds do not admit
+    /// its own updates is refused, which this upload's fixed lower, upper and timestamp cannot
+    /// produce.
+    pub(super) async fn finish(mut self) -> Result<PeekResponse, StashError> {
+        let delivered = self.finish_batch().await?;
+        let batch = delivered.take();
+
+        let stashed_response = StashedPeekResponse {
+            num_rows_batches: self.num_rows,
+            encoded_size_bytes: batch.encoded_size_bytes(),
+            relation_desc: self.relation_desc.clone(),
+            shard_id: self.shard_id,
+            batches: vec![batch.into_transmittable_batch()],
+            inline_rows: Vec::new(),
+        };
+        Ok(PeekResponse::Stashed(Box::new(stashed_response)))
+    }
+
+    /// Finishes the batch as work of its own, and leaves the upload holding no parts.
+    ///
+    /// Flushing the buffered part and the uploads still in flight is the longest await an upload
+    /// makes, so a cancellation most likely lands there, with the builder already out of the
+    /// upload. A task the cancellation cannot reach holds it instead, and whoever ends up holding a
+    /// batch nobody will read deletes it.
+    async fn finish_batch(&mut self) -> Result<DeliveredBatch, StashError> {
+        let batch_builder = self.batch_builder.take().expect(BUILDER_TAKEN);
+        let upper = self.upper.clone();
+        let shard_id = self.shard_id;
+        let runtime = self.runtime.clone();
+
+        let (tx, rx) = oneshot::channel();
+        let _handle =
+            self.runtime
+                .spawn_named(|| format!("peek_stash::finish({shard_id})"), async move {
+                    let delivered = batch_builder
+                        .finish(upper)
+                        .await
+                        .map(|batch| DeliveredBatch::new(batch, runtime, shard_id))
+                        .map_err(StashError::FinishBatch);
+                    // A send that finds no receiver hands the delivery straight back, and dropping it
+                    // here deletes the batch. An error nobody is left to read is simply dropped.
+                    let _undelivered = tx.send(delivered);
+                });
+
+        // The task is detached rather than held, so it outlives this await and the only way the
+        // channel closes without a delivery is a runtime that is going away.
+        rx.await.map_err(|_| StashError::LostFinishTask)?
+    }
+
+    /// Schedules the deletion of whatever parts the upload still holds, and leaves it holding
+    /// none.
+    ///
+    /// Persist hands back a deletable handle only by finishing the batch, so the buffered rows are
+    /// written out first. That write reaches `persist_blob_target_size`, 128 MiB by default, and
+    /// nothing bounds how many abandoned uploads carry one at once, because the walk releases its
+    /// permit before this finishes.
+    ///
+    /// The handle does not reach parts a run merge already dropped from shard state. A reader
+    /// deleting a response it has finished with reaches the same set, so that bounds the builder
+    /// rather than abandonment.
+    ///
+    /// TODO: a builder teardown that surrendered the written parts without flushing the buffered
+    /// one would make this cost a delete and nothing else.
+    fn abandon(&mut self) {
+        let Some(batch_builder) = self.batch_builder.take() else {
+            return;
+        };
+
+        // An upload persist never took a part off holds its rows in memory alone, so its builder
+        // goes with it. Finishing here would upload the buffered part just to delete it again,
+        // and a part reaches blob storage only once the buffer passes
+        // `persist_blob_target_size`, which is far above the stash threshold that opened this
+        // upload. So this is the case nearly every abandoned upload is in.
+        if !self.wrote_parts {
+            drop(batch_builder);
+            return;
+        }
+
+        let upper = self.upper.clone();
+        let shard_id = self.shard_id;
+
+        // Scheduled, not awaited: the caller that matters most cannot await at all. Cancelling a
+        // peek aborts the walk driving it, and an aborted task is dropped rather than polled again,
+        // so the deletion reaches blob storage only as work outside that task. Entering the runtime
+        // explicitly lets this run from a `Drop`, which has no guaranteed runtime context.
+        //
+        // NOTE: this reaches only an upload a live replica gives up on. A replica that dies
+        // mid-upload, or one whose runtime is shutting down, leaves the parts behind for a
+        // reader-side sweep or persist's garbage collection.
+        let _handle =
+            self.runtime
+                .spawn_named(|| format!("peek_stash::discard({shard_id})"), async move {
+                    match batch_builder.finish(upper).await {
+                        Ok(batch) => batch.delete().await,
+                        Err(error) => {
+                            warn!(%shard_id, %error, "peek stash cannot delete an abandoned batch")
+                        }
+                    }
+                });
     }
 }
+
+impl Drop for StashUpload {
+    /// Deletes the parts of an upload that ends without [`StashUpload::finish`], which is the
+    /// only cleanup a walk aborted mid-upload gets.
+    fn drop(&mut self) {
+        self.abandon();
+    }
+}
+
+/// A finished batch on its way to the response that will name it, deleted from blob storage if it
+/// never arrives.
+///
+/// A batch nobody takes out of a delivery is one no reader will be told how to find, so dropping it
+/// deletes it. That covers both ways a delivery goes unclaimed: a send that finds no receiver, and
+/// a receiver dropped between the send and the take. Persist's own `Drop for Batch` covers neither,
+/// logging the blob keys and leaving them.
+struct DeliveredBatch {
+    /// Taken by [`DeliveredBatch::take`], and a `None` says the batch has an owner that will
+    /// answer for it.
+    batch: Option<Batch<SourceData, (), Timestamp, i64>>,
+    runtime: Handle,
+    shard_id: ShardId,
+}
+
+impl DeliveredBatch {
+    fn new(
+        batch: Batch<SourceData, (), Timestamp, i64>,
+        runtime: Handle,
+        shard_id: ShardId,
+    ) -> Self {
+        Self {
+            batch: Some(batch),
+            runtime,
+            shard_id,
+        }
+    }
+
+    /// Claims the batch, consuming the delivery.
+    ///
+    /// The caller takes over the obligation: a batch dropped without being transmitted or deleted
+    /// leaves its blobs behind.
+    fn take(mut self) -> Batch<SourceData, (), Timestamp, i64> {
+        self.batch
+            .take()
+            .expect("a delivery holds its batch until it is claimed")
+    }
+}
+
+impl Drop for DeliveredBatch {
+    fn drop(&mut self) {
+        let Some(batch) = self.batch.take() else {
+            return;
+        };
+
+        let shard_id = self.shard_id;
+        let _handle = self
+            .runtime
+            .spawn_named(|| format!("peek_stash::delete({shard_id})"), async move {
+                batch.delete().await
+            });
+    }
+}
+
+/// Where a peek's rows go when they may not be answered with inline, and what opening the upload
+/// that writes them takes.
+///
+/// A driver holds a target, not an open upload: a walk that never crosses the stash threshold opens
+/// no shard and writes no byte, and most walks never do. A driver gets one exactly when its scan was
+/// opened stash-eligible, so a walk with no target has a scan that offers no batch.
+pub(super) struct StashTarget {
+    persist_clients: Arc<PersistClientCache>,
+    persist_location: PersistLocation,
+    /// The peek's uuid, which the shard the batch belongs to is derived from.
+    peek_uuid: Uuid,
+    /// The description the rows are written under, and the one the response reports.
+    relation_desc: RelationDesc,
+}
+
+impl StashTarget {
+    /// The stash `peek`'s rows go to, at `persist_location`.
+    pub(super) fn new(
+        peek: &Peek,
+        persist_clients: Arc<PersistClientCache>,
+        persist_location: PersistLocation,
+    ) -> Self {
+        Self {
+            persist_clients,
+            persist_location,
+            peek_uuid: peek.uuid,
+            relation_desc: peek.result_desc.clone(),
+        }
+    }
+
+    /// Opens the upload, whose batch builder holds at most `batch_max_runs` runs.
+    pub(super) async fn open(&self, batch_max_runs: usize) -> Result<StashUpload, StashError> {
+        StashUpload::open(
+            &self.persist_clients,
+            self.persist_location.clone(),
+            batch_max_runs,
+            self.peek_uuid,
+            self.relation_desc.clone(),
+        )
+        .await
+    }
+}
+
+/// Tests of the incremental stash upload, over the persist location a replica would write to.
+///
+/// [`tests::stashed_rows`] is shared with the drivers that feed an upload, which read a response
+/// back the same way.
+#[cfg(test)]
+pub(crate) mod tests;

@@ -598,11 +598,9 @@ impl PendingPeek {
         // Merging eagerly is what keeps the controller's memory bounded, so the size check has to
         // happen on every response rather than once at the end.
         if self.inline_byte_len > max_result_size.cast_into() {
-            // NOTE: Tests match on this exact message, so nothing else may produce it.
-            let error = PeekError::unstructured(format!(
-                "total result exceeds max size of {}",
-                ByteSize::b(max_result_size)
-            ));
+            let error = PeekError::ResultExceedsMaxSize {
+                max_result_size: max_result_size.cast_into(),
+            };
             let current = mem::replace(&mut self.response, PeekResponse::Canceled);
             self.response = merge_peek_responses(current, PeekResponse::Error(error));
         }

@@ -106,8 +106,8 @@ use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, Cluste
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, ClusterVariantManaged, Connection,
-    DataSourceDesc, ReconfigurationTarget, Table, TableDataSource,
+    CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, Connection, DataSourceDesc,
+    ReconfigurationTarget, Table, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
@@ -155,7 +155,7 @@ use mz_sql::names::{QualifiedItemName, ResolvedIds};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{
     self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, HirRelationExpr,
-    NetworkPolicyRule, OnTimeoutAction, Params, QueryWhen,
+    NetworkPolicyRule, Params, QueryWhen,
 };
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{MAX_CREDIT_CONSUMPTION_RATE, SystemVars, Var};
@@ -190,8 +190,9 @@ use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{
-    ClusterEvalContext, ReplicaEvalContext, ScopedParameters, ScopedParametersScope,
-    SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig,
+    ClusterEvalContext, ClusterScopeContext, ReplicaEvalContext, ReplicaScopeContext,
+    ScopedParameters, ScopedParametersScope, SynchronizedParameters, SystemParameterFrontend,
+    SystemParameterSyncConfig,
 };
 use crate::coord::appends::{
     BuiltinTableAppendCompletion, BuiltinTableAppendNotify, DeferredOp, GroupCommitPermit,
@@ -936,8 +937,6 @@ pub struct ExplainTimestampFinish {
 #[derive(Debug)]
 pub enum ClusterStage {
     Alter(AlterCluster),
-    WaitForHydrated(AlterClusterWaitForHydrated),
-    Finalize(AlterClusterFinalize),
     /// The foreground wait-shim over a controller-driven background
     /// reconfiguration: poll the durable `reconfiguration` record until it
     /// clears, then report success or timeout depending on whether the realized
@@ -949,24 +948,6 @@ pub enum ClusterStage {
 pub struct AlterCluster {
     validity: PlanValidity,
     plan: plan::AlterClusterPlan,
-}
-
-#[derive(Debug)]
-pub struct AlterClusterWaitForHydrated {
-    validity: PlanValidity,
-    plan: plan::AlterClusterPlan,
-    new_config: ClusterVariantManaged,
-    workload_class: Option<String>,
-    timeout_time: Instant,
-    on_timeout: OnTimeoutAction,
-}
-
-#[derive(Debug)]
-pub struct AlterClusterFinalize {
-    validity: PlanValidity,
-    plan: plan::AlterClusterPlan,
-    new_config: ClusterVariantManaged,
-    workload_class: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1402,10 +1383,6 @@ pub struct ConnMeta {
     /// Lock for the Coordinator's deferred statements that is dropped on transaction clear.
     #[serde(skip)]
     deferred_lock: Option<OwnedMutexGuard<()>>,
-
-    /// Cluster reconfigurations that will need to be
-    /// cleaned up when the current transaction is cleared
-    pending_cluster_alters: BTreeSet<ClusterId>,
 
     /// Channel on which to send notices to a session.
     #[serde(skip)]
@@ -2349,30 +2326,87 @@ impl Coordinator {
         }
     }
 
-    /// Evaluates the scoped overrides for freshly-created objects from explicit
-    /// eval contexts and returns an [`Op::UpdateScopedSystemParameters`] to fold
-    /// into the same transaction that creates them.
+    /// Evaluates scoped overrides for objects created by `ops` and returns an
+    /// [`Op::UpdateScopedSystemParameters`] to fold into the same transaction.
     ///
-    /// The objects are not yet in the catalog, so the contexts are built from
-    /// plan data and pre-allocated ids. Folding the op into the create
-    /// transaction makes its committed diff drive the replica-scoped controller
-    /// push, as a catalog implication, before `create_replica`. A new replica's
-    /// first configuration then carries its overrides rather than the env-wide
-    /// values. Render-frozen flags (e.g. the column-paged batcher, chosen at
-    /// arrangement-build time) make a later push too late, which is why this
-    /// happens in the create transaction rather than the next sync tick.
+    /// The objects are not yet in the catalog, so this derives their contexts
+    /// from concrete create ops and pre-allocated ids. Centralizing the fold
+    /// here makes create-time configuration an invariant of coordinator-applied
+    /// catalog ops, independent of which component produced them. The committed
+    /// diff drives the replica-scoped controller push before `create_replica`.
+    /// Render-frozen flags make a later push too late.
     ///
-    /// Returns `None` when the shared frontend is not yet installed (e.g. before
-    /// LaunchDarkly connects), or when no override applies. The new objects then
-    /// resolve to the environment-wide value, and the periodic sync loop remains
-    /// the authoritative full-state reconciler.
+    /// Returns `None` when no scoped object is created or the shared frontend is
+    /// not yet installed. An installed frontend produces an op even when no
+    /// override applies, so a final DDL-transaction evaluation can clear a value
+    /// staged by an earlier statement. The periodic sync loop remains the
+    /// authoritative full-state reconciler.
     ///
     /// [`Op::UpdateScopedSystemParameters`]: crate::catalog::Op::UpdateScopedSystemParameters
-    fn scoped_overrides_create_op(
-        &self,
-        clusters: &[ClusterEvalContext],
-        replicas: &[ReplicaEvalContext],
-    ) -> Option<crate::catalog::Op> {
+    fn scoped_overrides_create_op(&self, ops: &[crate::catalog::Op]) -> Option<crate::catalog::Op> {
+        let mut created_clusters = BTreeMap::new();
+        let mut clusters = Vec::new();
+        for op in ops {
+            let crate::catalog::Op::CreateCluster { id, name, .. } = op else {
+                continue;
+            };
+            let cluster = ClusterScopeContext {
+                id: id.to_string(),
+                name: name.clone(),
+                is_builtin: id.is_system(),
+            };
+            created_clusters.insert(*id, cluster.clone());
+            clusters.push(ClusterEvalContext {
+                cluster_id: *id,
+                cluster,
+            });
+        }
+
+        let mut replicas = Vec::new();
+        for op in ops {
+            let crate::catalog::Op::CreateClusterReplica {
+                cluster_id,
+                replica_id,
+                name,
+                config,
+                ..
+            } = op
+            else {
+                continue;
+            };
+            let ReplicaLocation::Managed(location) = &config.location else {
+                continue;
+            };
+            let Some(cluster) = created_clusters.get(cluster_id).cloned().or_else(|| {
+                self.catalog()
+                    .try_get_cluster(*cluster_id)
+                    .map(|cluster| ClusterScopeContext {
+                        id: cluster_id.to_string(),
+                        name: cluster.name.clone(),
+                        is_builtin: cluster_id.is_system(),
+                    })
+            }) else {
+                continue;
+            };
+            replicas.push(ReplicaEvalContext {
+                cluster_id: *cluster_id,
+                replica_id: *replica_id,
+                replica: ReplicaScopeContext {
+                    id: replica_id.to_string(),
+                    name: name.clone(),
+                    is_builtin: cluster_id.is_system(),
+                    size: location.size.clone(),
+                    size_family: location.allocation.family().to_string(),
+                    cluster_id: cluster_id.to_string(),
+                    cluster_name: cluster.name.clone(),
+                },
+                cluster,
+            });
+        }
+
+        if clusters.is_empty() && replicas.is_empty() {
+            return None;
+        }
         let frontend = self.scoped_frontend.clone()?;
         let catalog = self.catalog();
         let system_config = catalog.system_config();
@@ -2394,19 +2428,15 @@ impl Coordinator {
         let mut evaluated = ScopedParameters::default();
         if !cluster_param_names.is_empty() && !clusters.is_empty() {
             evaluated.cluster =
-                frontend.pull_cluster_overrides(&params, &cluster_param_names, clusters);
+                frontend.pull_cluster_overrides(&params, &cluster_param_names, &clusters);
         }
         if !replica_param_names.is_empty() && !replicas.is_empty() {
             evaluated.replica =
-                frontend.pull_replica_overrides(&params, &replica_param_names, replicas);
+                frontend.pull_replica_overrides(&params, &replica_param_names, &replicas);
         }
-        if evaluated.is_empty() {
-            return None;
-        }
-
-        // Prune only within the objects being created. They have no prior rows,
-        // so nothing is removed, and this op never touches another object whose
-        // override a concurrent reconcile may be writing.
+        // Prune only within the objects this transaction creates. A later
+        // statement in a DDL transaction can replace an earlier folded value,
+        // but this never touches an unrelated object's override.
         let prune_scope = ScopedParametersScope {
             clusters: clusters.iter().map(|cluster| cluster.cluster_id).collect(),
             replicas: replicas.iter().map(|replica| replica.replica_id).collect(),

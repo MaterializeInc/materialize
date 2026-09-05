@@ -177,10 +177,6 @@ by default), Materialize rolls back the resize and the cluster keeps its current
 size. To customize the timeout behavior, use the `WAIT UNTIL READY` or `WAIT FOR` options.
 The resize still proceeds in the background.
 
-{{< private-preview >}}
-Customizing the resize timeout with `WAIT UNTIL READY` or `WAIT FOR`
-{{< /private-preview >}}
-
 - `WAIT UNTIL READY (TIMEOUT = ..., ON TIMEOUT = ...)` sets the timeout for the
   resize. On timeout, `ON TIMEOUT` selects whether to `COMMIT` (retire the old
   replicas and proceed with the not-yet-hydrated new ones, which can cause
@@ -223,11 +219,10 @@ You can monitor a resize through the following:
 
 ##### Cancel a resize
 To **cancel** an in-flight resize, reissue `ALTER CLUSTER` with the cluster's
-current size. Materialize drops the pending replicas and keeps the current
+current size. Materialize drops the target replicas and keeps the current
 configuration.
 
 #### Downtime considerations for v26.34 or before
-{{< private-preview />}}
 
 You can use the `WAIT UNTIL READY` option to perform a zero-downtime resizing,
 which incurs **no downtime**. Instead of restarting the cluster, this approach
