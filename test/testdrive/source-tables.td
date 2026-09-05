@@ -413,6 +413,12 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 > CREATE TABLE avro_table_append_cols (a, b) FROM SOURCE avro_source (REFERENCE "testdrive-avroavro-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+
+# A Kafka source exposes exactly one reference (its topic), so omitting the
+# REFERENCE clause must default to that topic rather than erroring.
+> CREATE TABLE avro_table_default_ref FROM SOURCE avro_source
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE NONE
 > COMMIT
 
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'avro_table_upsert';
@@ -447,9 +453,29 @@ moose    1
 moose    2
 moose    42
 
+# Omitting REFERENCE resolves to the source's single topic, yielding the same
+# rows as the explicitly-referenced append table.
+> SELECT * from avro_table_default_ref
+f1       f2
+---------------
+fish     1000
+geese    2
+geese    56
+goose    1
+moose    1
+moose    2
+moose    42
+
+# Confirm the defaulted reference was recorded as the source's topic.
+> SELECT topic FROM mz_internal.mz_kafka_source_tables k
+  JOIN mz_tables t ON k.id = t.id
+  WHERE t.name = 'avro_table_default_ref';
+testdrive-avroavro-${testdrive.seed}
+
 > SHOW TABLES ON avro_source;
 avro_table_append ""
 avro_table_append_cols ""
+avro_table_default_ref ""
 avro_table_upsert ""
 
 > DROP SOURCE avro_source CASCADE
