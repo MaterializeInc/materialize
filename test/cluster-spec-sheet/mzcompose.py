@@ -3756,11 +3756,15 @@ def add_target_arguments(parser: argparse.ArgumentParser) -> None:
         action=argparse.BooleanOptionalAction,
         help="Destroy the region at the end of the workflow.",
     )
+    # Required rather than defaulting to cloud-production: `ci-cleanup` runs
+    # unattended from the CI plugin's exit trap and destroys the target's
+    # region, so a missing or malformed target must fail loudly instead of
+    # quietly selecting production. Every CI step passes it explicitly.
     parser.add_argument(
         "--target",
-        default="cloud-production",
+        required=True,
         choices=["cloud-production", "cloud-staging", "docker"],
-        help="Target to deploy to (default: cloud-production).",
+        help="Target to deploy to.",
     )
 
 
