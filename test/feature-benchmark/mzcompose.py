@@ -571,7 +571,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         os.environ["BUILDKITE_PARALLEL_JOB_COUNT"] = str(
             max(ab_count // len(ab_flags), 1)
         )
-    args.other_tag = None
+    # setattr keeps pyright from narrowing the attribute to None.
+    setattr(args, "other_tag", None)
     args.root_scenario = "MvSink"
     args.this_params = f"{ab_flag}=true"
     args.other_params = f"{ab_flag}=false"
