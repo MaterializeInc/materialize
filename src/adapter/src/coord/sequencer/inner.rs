@@ -5052,15 +5052,11 @@ impl Coordinator {
             "finishing materialized view replacement application",
         );
 
-        // The durable expression cache is keyed by GlobalId and relies on the
-        // invariant that the definition behind a GlobalId never changes.
-        // Applying a replacement violates that for the target's existing
-        // GlobalIds: the item retains them as prior versions while its
-        // definition becomes the replacement's. Invalidate their cached
-        // expressions, and await the invalidation before the catalog
-        // transaction commits, so no subsequent bootstrap can pair the new
-        // definition with a stale cached expression whose dependencies may
-        // since have been dropped.
+        // Applying a replacement changes the target's definition while it
+        // keeps its GlobalIds, so the cached expressions under those ids are
+        // stale. Entries record the item's version and `ExpressionCache::open`
+        // drops them on the next boot; invalidating here only reclaims them
+        // eagerly.
         let invalidate_ids = self.catalog().get_entry(&id).global_ids().collect();
         self.catalog()
             .update_expression_cache(Vec::new(), Vec::new(), invalidate_ids)

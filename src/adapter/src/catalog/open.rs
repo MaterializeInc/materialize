@@ -39,6 +39,7 @@ use mz_catalog::durable::{
 };
 use mz_catalog::expr_cache::{
     ExpressionCacheConfig, ExpressionCacheHandle, GlobalExpressions, LocalExpressions,
+    latest_item_version,
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
@@ -52,7 +53,7 @@ use mz_ore::now::{SYSTEM_TIME, to_datetime};
 use mz_ore::{instrument, soft_assert_no_log};
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::is_unstable_schema;
-use mz_repr::{CatalogItemId, Diff, GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion, Timestamp};
 use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogItemType, RoleMembership, RoleVars};
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::CommentObjectId;
@@ -386,16 +387,17 @@ impl Catalog {
                 ?enable_expr_cache_dyncfg,
                 "using expression cache for startup"
             );
-            let current_ids = txn
+            let current_items = txn
                 .get_items()
                 .flat_map(|item| {
-                    let gid = item.global_id.clone();
-                    let gids: Vec<_> = item.extra_versions.values().cloned().collect();
-                    std::iter::once(gid).chain(gids)
+                    let version = latest_item_version(&item.extra_versions);
+                    std::iter::once(item.global_id)
+                        .chain(item.extra_versions.into_values())
+                        .map(move |gid| (gid, version))
                 })
                 .chain(
                     txn.get_system_object_mappings()
-                        .map(|som| som.unique_identifier.global_id),
+                        .map(|som| (som.unique_identifier.global_id, RelationVersion::root())),
                 )
                 .collect();
             let dyncfgs = config.persist_client.dyncfgs().clone();
@@ -415,7 +417,7 @@ impl Catalog {
                     .get_expression_cache_shard()
                     .expect("expression cache shard should exist for opened catalogs"),
                 persist: config.persist_client,
-                current_ids,
+                current_items,
                 remove_prior_versions: !config.read_only,
                 compact_shard: config.read_only,
                 dyncfgs,
