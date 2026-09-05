@@ -12,6 +12,7 @@
 //! This module houses the handlers for statements that manipulate the session,
 //! like `DISCARD` and `SET`.
 
+use mz_ore::str::StrExt;
 use mz_repr::{CatalogItemId, RelationDesc, RelationVersionSelector, SqlScalarType};
 use mz_sql_parser::ast::InspectShardStatement;
 use std::time::Duration;
@@ -20,7 +21,7 @@ use uncased::UncasedStr;
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     CloseStatement, DeallocateStatement, DeclareStatement, DiscardStatement, DiscardTarget,
-    ExecuteStatement, FetchOption, FetchOptionName, FetchStatement, PrepareStatement,
+    ExecuteStatement, FetchOption, FetchOptionName, FetchStatement, Ident, PrepareStatement,
     ResetVariableStatement, SetVariableStatement, SetVariableTo, ShowVariableStatement,
 };
 use crate::names::{self, Aug};
@@ -195,13 +196,27 @@ pub fn describe_declare(
     Ok(StatementDesc::new(None))
 }
 
+/// The lookup key for the prepared statement or portal that `name` refers to.
+///
+/// Both namespaces are shared with the extended protocol, whose `Parse` and
+/// `Bind` store the name exactly as it arrived on the wire, so the key has to be
+/// the identifier's raw value. `Ident`'s `Display` is the SQL renderer and
+/// re-quotes anything that cannot be printed bare, which would key
+/// `DEALLOCATE "Foo"` on a string holding the quote characters, matching no wire
+/// name. The lexer has already folded unquoted identifiers to lowercase, so the
+/// raw value gives Postgres' semantics: a quoted name keeps its case, an
+/// unquoted one is lowercase.
+fn statement_or_portal_name(name: Ident) -> String {
+    name.into_string()
+}
+
 pub fn plan_declare(
     _: &StatementContext,
     DeclareStatement { name, stmt, sql }: DeclareStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
     Ok(Plan::Declare(DeclarePlan {
-        name: name.to_string(),
+        name: statement_or_portal_name(name),
         stmt: *stmt,
         sql,
         params: params.clone(),
@@ -216,17 +231,14 @@ pub fn describe_fetch(
         options: _,
     }: FetchStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    if let Some(mut desc) = scx
-        .catalog
-        .get_portal_desc_unverified(&name.to_string())
-        .cloned()
-    {
+    let name = statement_or_portal_name(name);
+    if let Some(mut desc) = scx.catalog.get_portal_desc_unverified(&name).cloned() {
         // Parameters are already bound to the portal and will not be accepted through
         // FETCH.
         desc.param_types = Vec::new();
         Ok(desc)
     } else {
-        Err(PlanError::UnknownCursor(name.to_string()))
+        Err(PlanError::UnknownCursor(name))
     }
 }
 
@@ -256,7 +268,7 @@ pub fn plan_fetch(
         None => ExecuteTimeout::WaitOnce,
     };
     Ok(Plan::Fetch(FetchPlan {
-        name: name.to_string(),
+        name: statement_or_portal_name(name),
         count,
         timeout,
     }))
@@ -271,7 +283,7 @@ pub fn plan_close(
     CloseStatement { name }: CloseStatement,
 ) -> Result<Plan, PlanError> {
     Ok(Plan::Close(ClosePlan {
-        name: name.to_string(),
+        name: statement_or_portal_name(name),
     }))
 }
 
@@ -291,7 +303,7 @@ pub fn plan_prepare(
     let (stmt_resolved, _) = names::resolve(scx.catalog, *stmt.clone())?;
     let desc = describe(scx.pcx()?, scx.catalog, stmt_resolved, &param_types)?;
     Ok(Plan::Prepare(PreparePlan {
-        name: name.to_string(),
+        name: statement_or_portal_name(name),
         stmt: *stmt,
         desc,
         sql,
@@ -321,11 +333,11 @@ fn plan_execute_desc<'a>(
     scx: &'a StatementContext,
     ExecuteStatement { name, params }: ExecuteStatement<Aug>,
 ) -> Result<(&'a StatementDesc, Plan), PlanError> {
-    let name = name.to_string();
+    let name = statement_or_portal_name(name);
     let desc = match scx.catalog.get_prepared_statement_desc(&name) {
         Some(desc) => desc,
         // TODO(mjibson): use CoordError::UnknownPreparedStatement.
-        None => sql_bail!("unknown prepared statement {}", name),
+        None => sql_bail!("unknown prepared statement {}", name.quoted()),
     };
     Ok((
         desc,
@@ -348,6 +360,6 @@ pub fn plan_deallocate(
     DeallocateStatement { name }: DeallocateStatement,
 ) -> Result<Plan, PlanError> {
     Ok(Plan::Deallocate(DeallocatePlan {
-        name: name.map(|name| name.to_string()),
+        name: name.map(statement_or_portal_name),
     }))
 }

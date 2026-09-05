@@ -1939,13 +1939,37 @@ where
         Ok(State::Ready)
     }
 
-    fn complete_portal(&mut self, name: &str) {
-        let portal = self
+    /// Completes the portal that carried a `CLOSE`.
+    ///
+    /// The `CLOSE` can name that very portal, and sequencing has then already
+    /// removed it. Marking the state is bookkeeping for a portal nobody will
+    /// read again, so its absence is expected rather than an error.
+    fn complete_portal_after_close(&mut self, name: &str) {
+        if let Some(portal) = self
             .adapter_client
             .session()
             .get_portal_unverified_mut(name)
-            .expect("portal should exist");
-        *portal.state = PortalState::Completed(None);
+        {
+            *portal.state = PortalState::Completed(None);
+        }
+    }
+
+    /// Completes the portal that carried a `DECLARE`.
+    ///
+    /// A successful `DECLARE` only ever adds a portal, and adding one under a
+    /// name already in use fails with `DuplicateCursor`, so the executing portal
+    /// is still present here.
+    fn complete_portal_after_declare(&mut self, name: &str) {
+        match self
+            .adapter_client
+            .session()
+            .get_portal_unverified_mut(name)
+        {
+            Some(portal) => *portal.state = PortalState::Completed(None),
+            None => {
+                mz_ore::soft_panic_or_log!("portal {} vanished across a DECLARE", name.quoted())
+            }
+        }
     }
 
     async fn fetch(
@@ -2115,11 +2139,11 @@ where
 
         let r = match response {
             ExecuteResponse::ClosedCursor => {
-                self.complete_portal(&portal_name);
+                self.complete_portal_after_close(&portal_name);
                 command_complete!()
             }
             ExecuteResponse::DeclaredCursor => {
-                self.complete_portal(&portal_name);
+                self.complete_portal_after_declare(&portal_name);
                 command_complete!()
             }
             ExecuteResponse::EmptyQuery => {
