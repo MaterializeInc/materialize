@@ -274,9 +274,9 @@ tests:
 
 - it: should not pass the scheduler when not configured
   asserts:
-  - notContains:
-      path: spec.template.spec.containers[0].args
-      content: "--scheduler-name"
+  - notMatchRegex:
+      path: spec.template.spec.containers[0].args[*]
+      pattern: "^--scheduler-name"
 
 - it: should pass the scheduler when configured
   set:
@@ -285,6 +285,34 @@ tests:
   - contains:
       path: spec.template.spec.containers[0].args
       content: "--scheduler-name=my-scheduler"
+
+- it: should not pass the environmentd priority class when not configured
+  asserts:
+  - notMatchRegex:
+      path: spec.template.spec.containers[0].args[*]
+      pattern: "^--environmentd-priority-class-name"
+
+- it: should pass the environmentd priority class when configured
+  set:
+    environmentd.priorityClassName: mz-environmentd-high
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--environmentd-priority-class-name=mz-environmentd-high"
+
+- it: should not pass the clusterd priority class when not configured
+  asserts:
+  - notMatchRegex:
+      path: spec.template.spec.containers[0].args[*]
+      pattern: "^--clusterd-priority-class-name"
+
+- it: should pass the clusterd priority class when configured
+  set:
+    clusterd.priorityClassName: mz-clusterd-high
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--clusterd-priority-class-name=mz-clusterd-high"
 
 - it: should have license key checks disabled by default
   asserts:

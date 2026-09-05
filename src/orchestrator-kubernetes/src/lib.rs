@@ -76,6 +76,8 @@ pub struct KubernetesOrchestratorConfig {
     pub context: String,
     /// The name of a non-default Kubernetes scheduler to use, if any.
     pub scheduler_name: Option<String>,
+    /// The name of a `PriorityClass` to assign to services, if any.
+    pub priority_class_name: Option<String>,
     /// Annotations to install on every service created by the orchestrator.
     pub service_annotations: BTreeMap<String, String>,
     /// Labels to install on every service created by the orchestrator.
@@ -1200,6 +1202,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 security_context,
                 node_selector: Some(node_selector),
                 scheduler_name: self.config.scheduler_name.clone(),
+                priority_class_name: self.config.priority_class_name.clone(),
                 service_account: self.config.service_account.clone(),
                 affinity: Some(affinity),
                 topology_spread_constraints: topology_spread,

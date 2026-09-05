@@ -192,6 +192,9 @@ spec:
         - '--environmentd-toleration={{ toJson $toleration }}'
         {{- end }}
         {{- end }}
+        {{- if .Values.environmentd.priorityClassName }}
+        - "--environmentd-priority-class-name={{ .Values.environmentd.priorityClassName }}"
+        {{- end }}
         {{- if .Values.environmentd.defaultResources }}
         - '--environmentd-default-resources={{ toJson .Values.environmentd.defaultResources }}'
         {{- end }}
@@ -207,6 +210,9 @@ spec:
         {{- range $toleration := .Values.clusterd.tolerations }}
         - '--clusterd-toleration={{ toJson $toleration }}'
         {{- end }}
+        {{- end }}
+        {{- if .Values.clusterd.priorityClassName }}
+        - "--clusterd-priority-class-name={{ .Values.clusterd.priorityClassName }}"
         {{- end }}
         {{- if .Values.balancerd.nodeSelector }}
         {{- range $key, $value := .Values.balancerd.nodeSelector }}

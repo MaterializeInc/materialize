@@ -89,9 +89,13 @@ pub struct Config {
     pub environmentd_affinity: Option<Affinity>,
     pub environmentd_tolerations: Option<Vec<Toleration>>,
     pub environmentd_default_resources: Option<ResourceRequirements>,
+    /// The name of a `PriorityClass` to assign to environmentd pods, if any.
+    pub environmentd_priority_class_name: Option<String>,
     pub clusterd_node_selector: Vec<KeyValueArg<String, String>>,
     pub clusterd_affinity: Option<Affinity>,
     pub clusterd_tolerations: Option<Vec<Toleration>>,
+    /// The name of a `PriorityClass` to assign to clusterd pods, if any.
+    pub clusterd_priority_class_name: Option<String>,
     pub image_pull_policy: KubernetesImagePullPolicy,
     pub network_policies_internal_enabled: bool,
     pub network_policies_ingress_enabled: bool,

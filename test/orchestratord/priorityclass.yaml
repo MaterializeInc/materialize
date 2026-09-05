@@ -1,0 +1,12 @@
+# test/orchestratord/priorityclass.yaml, applied beside storageclass.yaml (:4571).
+# `value` is required. `globalDefault: false` keeps the unset baseline testable:
+# a global default would put a class on every pod, including the None case.
+# `preemptionPolicy: Never` keeps the test from evicting anything in the cluster.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: mz-test-priority
+value: 1000000000
+globalDefault: false
+preemptionPolicy: Never
+description: "Test fixture for the priorityClassName chart values."
