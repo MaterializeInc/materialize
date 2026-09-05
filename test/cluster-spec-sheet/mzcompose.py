@@ -3386,16 +3386,33 @@ class EnvdObjectsSweep(Scenario):
 # TODO: We should factor the region helpers below out into a separate module.
 # (Similar `disable_region` functions also occur in other tests.)
 def disable_region(composition: Composition, hard: bool) -> None:
+    # `mz region disable` treats an already-disabled region as success, so any
+    # failure here is a real one (auth, API error) and must surface.
     print("Shutting down region ...")
+    if hard:
+        composition.run("mz", "region", "disable", "--hard", rm=True)
+    else:
+        composition.run("mz", "region", "disable", rm=True)
 
-    try:
-        if hard:
-            composition.run("mz", "region", "disable", "--hard", rm=True)
-        else:
-            composition.run("mz", "region", "disable", rm=True)
-    except UIError:
-        # Can return: status 404 Not Found
-        pass
+
+def verify_region_disabled(composition: Composition, region: str) -> None:
+    """Fail unless `mz region list` reports `region` as disabled.
+
+    `mz region disable` returning is not proof: it can be answered by a stale
+    or failing API, and a region that survives a cleanup keeps costing money
+    and load until someone notices. The check runs after every cleanup,
+    including the unattended one from the CI plugin's exit trap.
+    """
+    output = composition.run(
+        "mz", "region", "list", rm=True, capture_and_print=True
+    ).stdout
+    for line in output.splitlines():
+        cells = [cell.strip() for cell in line.split("|")]
+        if cells[0] == region:
+            if len(cells) >= 2 and cells[1] == "disabled":
+                return
+            raise UIError(f"region {region} is still {cells[1:]} after disable")
+    raise UIError(f"region {region} missing from `mz region list` output")
 
 
 def enable_region(target: "CloudTarget", envd_cpus: int | None = None) -> None:
@@ -3772,7 +3789,10 @@ def make_target(composition: Composition, target: str) -> tuple["BenchTarget", M
     """The bench target for `--target`, with the `mz` service configured for it."""
     if target == "cloud-production":
         bench_target: BenchTarget = CloudTarget(
-            composition, PRODUCTION_USERNAME, PRODUCTION_APP_PASSWORD or ""
+            composition,
+            PRODUCTION_USERNAME,
+            PRODUCTION_APP_PASSWORD or "",
+            region=PRODUCTION_REGION,
         )
         mz = Mz(
             region=PRODUCTION_REGION,
@@ -3785,6 +3805,7 @@ def make_target(composition: Composition, target: str) -> tuple["BenchTarget", M
             composition,
             staging_username,
             staging_app_password,
+            region=STAGING_REGION,
             is_staging=True,
             version=staging_version(),
         )
@@ -4055,11 +4076,13 @@ class CloudTarget(BenchTarget):
         composition: Composition,
         username: str,
         app_password: str,
+        region: str,
         is_staging: bool = False,
         version: str | None = None,
     ) -> None:
         self.composition = composition
         self.username = username
+        self.region = region
         self.app_password = app_password
         self.new_app_password: str | None = None
         self.is_staging = is_staging
@@ -4122,6 +4145,7 @@ class CloudTarget(BenchTarget):
 
     def cleanup(self) -> None:
         disable_region(self.composition, hard=True)
+        verify_region_disabled(self.composition, self.region)
 
     # M.1 size with the same worker count as the {scale}00cc size. Scales
     # above 8 have no available M.1 equivalent.
