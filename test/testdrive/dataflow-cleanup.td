@@ -17,9 +17,12 @@
 # Filter them out so test assertions only see compute operators.
 $ set storage-id-offset=281474976710656
 
-# Introspection subscribes add noise to the introspection sources, so disable them.
+# Introspection subscribes and curated metric sinks both install dataflows on
+# every replica, adding noise to the introspection sources, so disable them
+# before creating the cluster below.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_introspection_subscribes = false
+ALTER SYSTEM SET enable_metric_sink = false
 
 # Create a clean replica to inspect dataflow state on.
 

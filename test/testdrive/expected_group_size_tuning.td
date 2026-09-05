@@ -9,8 +9,12 @@
 
 $ set-sql-timeout duration=240s
 
-# This test uses introspection queries that need to be targeted to a replica
-> SET cluster_replica = r1
+# The curated metric sinks read arrangement introspection on every replica, which
+# perturbs the arrangement sizes the group-size advice below is computed from and
+# leaves it empty. Turn them off so the views run on a replica that boots without
+# them.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_metric_sink = false
 
 # Start from a TPC-H load generator source with small data.
 > CREATE CLUSTER lgtpch_cluster_tuning SIZE 'scale=1,workers=1';
@@ -26,6 +30,13 @@ $ set-sql-timeout duration=240s
 > CREATE TABLE region FROM SOURCE lgtpch (REFERENCE region);
 > CREATE TABLE supplier FROM SOURCE lgtpch (REFERENCE supplier);
 > COMMIT
+
+# Run the views on a dedicated cluster created after the setting above, so its
+# replica boots without the metric sinks. This test's introspection queries target
+# this replica.
+> CREATE CLUSTER lgtpch_compute_tuning SIZE '${arg.default-replica-size}';
+> SET cluster = lgtpch_compute_tuning
+> SET cluster_replica = r1
 
 # Create a set of materialized views for testing based on the TPC-H schema.
 > CREATE MATERIALIZED VIEW lineitem_by_orderkey AS
