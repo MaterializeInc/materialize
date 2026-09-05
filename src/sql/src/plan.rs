@@ -2027,6 +2027,11 @@ pub enum QueryWhen {
     /// Same as Immediately, but will also advance to at least the specified
     /// expression.
     AtLeastTimestamp(Timestamp),
+    /// Same as Immediately, but will also advance to at least the largest
+    /// readable timestamp (i.e. write frontier minus one) across the named
+    /// objects. The list is resolved to concrete frontiers by the sequencer
+    /// at query time.
+    AtLeastFrontierOf(Vec<CatalogItemId>),
 }
 
 impl QueryWhen {
@@ -2034,7 +2039,9 @@ impl QueryWhen {
     pub fn advance_to_timestamp(&self) -> Option<Timestamp> {
         match self {
             QueryWhen::AtTimestamp(t) | QueryWhen::AtLeastTimestamp(t) => Some(t.clone()),
-            QueryWhen::Immediately | QueryWhen::FreshestTableWrite => None,
+            QueryWhen::Immediately
+            | QueryWhen::FreshestTableWrite
+            | QueryWhen::AtLeastFrontierOf(_) => None,
         }
     }
     /// Returns whether the candidate's upper bound is constrained.
@@ -2045,7 +2052,8 @@ impl QueryWhen {
             QueryWhen::AtTimestamp(_) => true,
             QueryWhen::AtLeastTimestamp(_)
             | QueryWhen::Immediately
-            | QueryWhen::FreshestTableWrite => false,
+            | QueryWhen::FreshestTableWrite
+            | QueryWhen::AtLeastFrontierOf(_) => false,
         }
     }
     /// Returns whether the candidate must be advanced to the since.
@@ -2053,7 +2061,8 @@ impl QueryWhen {
         match self {
             QueryWhen::Immediately
             | QueryWhen::AtLeastTimestamp(_)
-            | QueryWhen::FreshestTableWrite => true,
+            | QueryWhen::FreshestTableWrite
+            | QueryWhen::AtLeastFrontierOf(_) => true,
             QueryWhen::AtTimestamp(_) => false,
         }
     }
@@ -2063,7 +2072,8 @@ impl QueryWhen {
             QueryWhen::Immediately => true,
             QueryWhen::FreshestTableWrite
             | QueryWhen::AtTimestamp(_)
-            | QueryWhen::AtLeastTimestamp(_) => false,
+            | QueryWhen::AtLeastTimestamp(_)
+            | QueryWhen::AtLeastFrontierOf(_) => false,
         }
     }
 
@@ -2071,23 +2081,28 @@ impl QueryWhen {
     pub fn can_advance_to_timeline_ts(&self) -> bool {
         match self {
             QueryWhen::Immediately | QueryWhen::FreshestTableWrite => true,
-            QueryWhen::AtTimestamp(_) | QueryWhen::AtLeastTimestamp(_) => false,
+            QueryWhen::AtTimestamp(_)
+            | QueryWhen::AtLeastTimestamp(_)
+            | QueryWhen::AtLeastFrontierOf(_) => false,
         }
     }
     /// Returns whether the candidate must be advanced to the timeline's timestamp.
     pub fn must_advance_to_timeline_ts(&self) -> bool {
         match self {
             QueryWhen::FreshestTableWrite => true,
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => {
-                false
-            }
+            QueryWhen::Immediately
+            | QueryWhen::AtLeastTimestamp(_)
+            | QueryWhen::AtTimestamp(_)
+            | QueryWhen::AtLeastFrontierOf(_) => false,
         }
     }
     /// Returns whether the selected timestamp should be tracked within the current transaction.
     pub fn is_transactional(&self) -> bool {
         match self {
             QueryWhen::Immediately | QueryWhen::FreshestTableWrite => true,
-            QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => false,
+            QueryWhen::AtLeastTimestamp(_)
+            | QueryWhen::AtTimestamp(_)
+            | QueryWhen::AtLeastFrontierOf(_) => false,
         }
     }
 }
