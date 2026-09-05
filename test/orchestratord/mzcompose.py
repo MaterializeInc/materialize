@@ -3338,6 +3338,124 @@ def workflow_webhook_cert_rotation(
     print("webhook cert rotation test PASSED")
 
 
+def workflow_failure_events(
+    c: Composition,
+    parser: WorkflowArgumentParser,
+) -> None:
+    """Test that a reconciliation failure event reports the current cause.
+
+    Kubernetes aggregates repeats of an event into one object with a count, and
+    `kube`'s recorder keys that aggregation on everything except the event's
+    note. Aggregating a failing resource's events on that key alone pins the
+    note to whichever error came first, and since the controller retries faster
+    than the aggregation window expires, that first note would stand for as
+    long as the resource kept failing.
+
+    So this drives an environment through two *different* failures in a row and
+    requires the event to follow: a Materialize applied before its backend
+    secret exists fails looking the secret up, and once the secret appears with
+    a bad license key it fails validating that instead.
+    """
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+    init(definition)
+
+    # Apply the namespace and the Materialize but not the secret, so the first
+    # failure is the secret lookup. Reconciliation gets this far because
+    # resolving the environment id runs before anything is provisioned.
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump_all(
+            [definition["namespace"], definition["materialize"]]
+        ).encode(),
+    )
+    # The API server's own wording for a missing object, so this anchors that
+    # the first failure really is the secret lookup and not something else.
+    first = wait_for_failure_note(definition, lambda note: "not found" in note.lower())
+    print(f"First failure reported: {first}")
+
+    # Now supply the secret, with a license key that cannot validate, so the
+    # cause changes while the resource keeps failing.
+    secret = copy.deepcopy(definition["secret"])
+    secret["stringData"]["license_key"] = "not-a-real-license-key"
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump_all([secret]).encode(),
+    )
+    # Deliberately not matched against the expected wording: the property under
+    # test is that the reported cause follows the actual one, and asserting the
+    # note merely changed says that without depending on how either error is
+    # phrased.
+    second = wait_for_failure_note(definition, lambda note: note != first)
+    print(f"Second failure reported: {second}")
+    print("workflow_failure_events PASSED")
+
+
+def wait_for_failure_note(
+    definition: dict[str, Any],
+    matches: Callable[[str], bool],
+) -> str:
+    """Wait for a ReconciliationFailed event whose note satisfies `matches`.
+
+    Returns the note, so a caller can compare it against a later one. Times out
+    rather than returning if no note ever matches, which is the failure mode
+    when an event's note is pinned to a cause the resource has moved past.
+    """
+    name = definition["materialize"]["metadata"]["name"]
+    found: list[str] = []
+
+    def check() -> None:
+        events = json.loads(
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    # The events.k8s.io API explicitly, rather than the core v1
+                    # view `kubectl get events` serves, which renames these
+                    # fields.
+                    "events.events.k8s.io",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "json",
+                ],
+            )
+        )["items"]
+        notes = [
+            event.get("note") or ""
+            for event in events
+            if event.get("reason") == "ReconciliationFailed"
+            and event.get("regarding", {}).get("kind") == "Materialize"
+            and event.get("regarding", {}).get("name") == name
+        ]
+        matching = [note for note in notes if matches(note)]
+        assert matching, (
+            f"No ReconciliationFailed event on Materialize/{name} matching the "
+            f"expected cause; notes were {notes}"
+        )
+        found.append(matching[0])
+
+    retry(check, 300)
+    return found[0]
+
+
 def workflow_manually_promote(
     c: Composition,
     parser: WorkflowArgumentParser,
@@ -5061,6 +5179,56 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
             ]
         )
         raise ValueError("Never completed")
+
+    if expect_fail:
+        wait_for_reconciliation_failed_event(definition)
+
+
+def wait_for_reconciliation_failed_event(definition: dict[str, Any]) -> None:
+    """Assert that the operator reported the failed reconciliation as an event
+    on the Materialize resource.
+
+    The event is the only place a user without access to the operator's logs
+    sees why their environment is not progressing, so a failure that reaches
+    the logs but not the resource is a regression.
+    """
+    name = definition["materialize"]["metadata"]["name"]
+
+    def check() -> None:
+        events = json.loads(
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    # The events.k8s.io API explicitly, rather than the core v1
+                    # view `kubectl get events` serves, which renames the
+                    # fields asserted on below.
+                    "events.events.k8s.io",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "json",
+                ],
+            )
+        )["items"]
+        matching = [
+            event
+            for event in events
+            if event.get("reason") == "ReconciliationFailed"
+            and event.get("regarding", {}).get("kind") == "Materialize"
+            and event.get("regarding", {}).get("name") == name
+        ]
+        assert matching, (
+            f"Expected a ReconciliationFailed event on Materialize/{name}, found "
+            f"{[(e.get('reason'), e.get('regarding', {}).get('name')) for e in events]}"
+        )
+        event = matching[0]
+        assert event["type"] == "Warning", event
+        assert event["reportingController"] == "orchestratord.materialize.cloud", event
+        # The note carries the error, and is what makes the event actionable.
+        assert event.get("note"), event
+
+    retry(check, 120)
 
 
 def run_balancer(definition: dict[str, Any], expect_fail: bool) -> None:
