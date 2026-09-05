@@ -8,7 +8,7 @@
 
 use std::time::{Duration, Instant};
 
-use differential_dataflow::trace::{Cursor, TraceReader};
+use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use mz_compute_client::protocol::response::PeekError;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use timely::order::PartialOrder;
@@ -16,19 +16,52 @@ use tracing::error;
 
 use crate::arrangement::manager::PaddedTrace;
 use crate::compute_state::{PeekRowIterationTracker, peek_result_iterator};
+use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::ErrAgent;
 
 /// The error trace of an index, as
 /// [`TraceBundle::errs_mut`](crate::arrangement::manager::TraceBundle::errs_mut) hands it out.
 pub(super) type ErrsHandle = PaddedTrace<ErrAgent<Timestamp, Diff>>;
 
+/// A trace an index peek's error walk can read.
+///
+/// The bound is spelled once here, so the walk and everything that carries it name the shape
+/// rather than restate it.
+pub(super) trait PeekErrsTrace:
+    TraceReader<
+        Time = Timestamp,
+        Batch: Navigable<
+            Cursor: for<'a> Cursor<
+                Key<'a> = &'a DataflowErrorSer,
+                TimeGat<'a>: PartialOrder<Timestamp>,
+                DiffGat<'a> = &'a Diff,
+            >,
+        >,
+    >
+{
+}
+
+impl<Tr> PeekErrsTrace for Tr where
+    Tr: TraceReader<
+            Time = Timestamp,
+            Batch: Navigable<
+                Cursor: for<'a> Cursor<
+                    Key<'a> = &'a DataflowErrorSer,
+                    TimeGat<'a>: PartialOrder<Timestamp>,
+                    DiffGat<'a> = &'a Diff,
+                >,
+            >,
+        >
+{
+}
+
 /// A walk over an index peek's error trace, suspendable between cursor positions.
 ///
 /// Holds nothing of the ok trace or of the rows a peek returns. A peek reaches those only once
 /// this walk reports [`ErrorScanStep::Finished`] with an `Ok`.
-pub(super) struct ErrorScan {
-    cursor: peek_result_iterator::TraceCursor<ErrsHandle>,
-    storage: peek_result_iterator::TraceStorage<ErrsHandle>,
+pub(super) struct ErrorScan<Tr: PeekErrsTrace> {
+    cursor: peek_result_iterator::TraceCursor<Tr>,
+    storage: peek_result_iterator::TraceStorage<Tr>,
     /// The limit spans this walk and the ok scan after it, so the count accrued here is handed
     /// on with [`ErrorScanStep::Finished`].
     row_iteration_tracker: PeekRowIterationTracker,
@@ -48,12 +81,12 @@ pub(super) enum ErrorScanStep {
     OutOfFuel,
 }
 
-impl ErrorScan {
+impl<Tr: PeekErrsTrace> ErrorScan<Tr> {
     /// Opens a walk over `errs`.
     ///
     /// The walk starts without a row-iteration limit. The limit in effect is the caller's to
     /// supply through [`ErrorScan::set_row_iteration_limit`] before each step.
-    pub(super) fn new(errs: &mut ErrsHandle) -> Self {
+    pub(super) fn new(errs: &mut Tr) -> Self {
         let scan_start = Instant::now();
         let (cursor, storage) = errs.cursor();
         let mut scan = Self::from_cursor(cursor, storage);
@@ -63,8 +96,8 @@ impl ErrorScan {
 
     /// Opens a walk over an already-opened cursor.
     pub(super) fn from_cursor(
-        cursor: peek_result_iterator::TraceCursor<ErrsHandle>,
-        storage: peek_result_iterator::TraceStorage<ErrsHandle>,
+        cursor: peek_result_iterator::TraceCursor<Tr>,
+        storage: peek_result_iterator::TraceStorage<Tr>,
     ) -> Self {
         Self {
             cursor,

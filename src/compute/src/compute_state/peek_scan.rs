@@ -14,7 +14,6 @@ use std::mem;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::time::{Duration, Instant};
 
-use differential_dataflow::trace::cursor::BatchCursor;
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use mz_compute_client::protocol::command::Peek;
@@ -27,13 +26,48 @@ use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use timely::order::PartialOrder;
 
-use crate::compute_state::error_scan::{ErrorScan, ErrorScanStep, ErrsHandle};
+use crate::compute_state::error_scan::{ErrorScan, ErrorScanStep, PeekErrsTrace};
+use crate::compute_state::index_traces::{PeekErrs, PeekOks};
 use crate::compute_state::peek_result_iterator::{PeekResultIterator, Step};
 
-/// The scan an index peek builds, over the ok trace of the arrangement that answers it.
-pub(super) type IndexPeekScan = PeekScan<
-    crate::arrangement::manager::PaddedTrace<crate::typedefs::RowRowAgent<Timestamp, Diff>>,
->;
+/// A trace an index peek's ok walk can read.
+///
+/// The bound is spelled once here, so the walk and everything that carries it name the shape
+/// rather than restate it.
+pub(super) trait PeekOksTrace:
+    TraceReader<
+        Time = Timestamp,
+        Batch: Navigable<
+            Cursor: for<'a> Cursor<
+                Key<'a>: ExtendDatums + Eq,
+                KeyContainer: BatchContainer<Owned = Row>,
+                Val<'a>: ExtendDatums,
+                TimeGat<'a>: PartialOrder<Timestamp>,
+                DiffGat<'a> = &'a Diff,
+            >,
+        >,
+    >
+{
+}
+
+impl<Tr> PeekOksTrace for Tr where
+    Tr: TraceReader<
+            Time = Timestamp,
+            Batch: Navigable<
+                Cursor: for<'a> Cursor<
+                    Key<'a>: ExtendDatums + Eq,
+                    KeyContainer: BatchContainer<Owned = Row>,
+                    Val<'a>: ExtendDatums,
+                    TimeGat<'a>: PartialOrder<Timestamp>,
+                    DiffGat<'a> = &'a Diff,
+                >,
+            >,
+        >
+{
+}
+
+/// The scan an index peek builds.
+pub(super) type IndexPeekScan = PeekScan<PeekOks, PeekErrs>;
 
 /// Rows a scan hands to its driver, in the order the scan produced them.
 ///
@@ -128,9 +162,9 @@ pub(super) enum ScanOutcome {
 /// The state of a [`PeekScan`]'s walk over its error trace.
 ///
 /// Both ended states drop the walk, so a peek pins error batches only while it reads them.
-enum ErrorPhase {
+enum ErrorPhase<Tr: PeekErrsTrace> {
     /// The walk is under way, and resumes from the cursor position it stopped on.
-    Scanning(ErrorScan),
+    Scanning(ErrorScan<Tr>),
     /// The error trace holds no error at the peek's timestamp, which is the only way to the ok
     /// trace. The rows the walk examined have been handed to the ok walk.
     Clean,
@@ -146,15 +180,16 @@ enum ErrorPhase {
 /// A stash-eligible scan retains at most the threshold before its first batch and the batch size
 /// after, plus the row that crossed either. A scan that cannot use the stash fills no batch, and
 /// `max_result_size` alone bounds its prefix.
-pub(super) struct PeekScan<Tr>
+pub(super) struct PeekScan<Tr, ETr>
 where
-    Tr: TraceReader<Batch: Navigable>,
+    Tr: PeekOksTrace,
+    ETr: PeekErrsTrace,
 {
     /// The time at which the error trace is read.
     peek_timestamp: Timestamp,
     /// The collection the peek reads, for logging.
     target_id: GlobalId,
-    error_phase: ErrorPhase,
+    error_phase: ErrorPhase<ETr>,
     /// The walk over the ok trace, reached only once the error walk reports the error trace
     /// clean. Its cursor is opened with the scan, and nothing advances it before then.
     oks: PeekResultIterator<Tr>,
@@ -195,16 +230,10 @@ where
     pub(super) rows_thinned: usize,
 }
 
-impl<Tr> PeekScan<Tr>
+impl<Tr, ETr> PeekScan<Tr, ETr>
 where
-    Tr: TraceReader<Batch: Navigable>,
-    for<'a> BatchCursor<Tr>: Cursor<
-            Key<'a>: ExtendDatums + Eq,
-            KeyContainer: BatchContainer<Owned = Row>,
-            Val<'a>: ExtendDatums,
-            TimeGat<'a>: PartialOrder<Timestamp>,
-            DiffGat<'a> = &'a Diff,
-        >,
+    Tr: PeekOksTrace,
+    ETr: PeekErrsTrace,
 {
     /// Opens a scan of `peek` over the traces that answer it.
     ///
@@ -213,7 +242,7 @@ where
     /// the caller's to supply to each [`PeekScan::step`].
     pub(super) fn new(
         peek: &Peek,
-        errs_handle: &mut ErrsHandle,
+        errs_handle: &mut ETr,
         oks_handle: &mut Tr,
         max_result_size: u64,
         stash: StashBounds,
