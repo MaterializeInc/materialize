@@ -95,6 +95,12 @@ impl<Tr: TraceReader> Published<Tr> {
 }
 
 impl<Tr: TraceReader> SharedTraceHandle<Tr> {
+    /// The published arrangement's current `(since, upper)` frontiers, read under the state lock.
+    pub(crate) fn frontiers(&self) -> (Antichain<Tr::Time>, Antichain<Tr::Time>) {
+        let state = self.shared.state.lock().expect("shared trace poisoned");
+        (state.since.clone(), state.upper.clone())
+    }
+
     /// Takes a consistent snapshot of the published arrangement as of `time`, waiting until `upper`
     /// passes `time`.
     ///
@@ -689,16 +695,21 @@ fn empty_logical_request_releases_the_hold() {
         published.note_writer_logical(&target);
         writer.set_logical_compaction(target.borrow());
 
+        // Release the standing hold first. The accumulation is a meet, so a hold at or above the
+        // standing hold is invisible through `logical_holds`, and the assertion below would pass
+        // whether or not the empty request released anything.
+        published.note_standing_hold(&Antichain::new());
+        assert!(published.logical_holds().is_empty());
+
         // A reduce over a finished input does exactly this: `upper_limit` becomes the empty
         // antichain and it forwards that to its source trace.
         let mut hold = published.handle();
+        assert!(!published.logical_holds().is_empty());
         hold.set_logical_compaction(Antichain::new().borrow());
 
-        assert_eq!(
-            published.logical_holds(),
-            published.standing_hold(),
-            "an empty request must release the hold rather than record it, leaving the standing \
-             hold as the whole accumulation"
+        assert!(
+            published.logical_holds().is_empty(),
+            "an empty request must release the hold rather than record it"
         );
     });
 }
