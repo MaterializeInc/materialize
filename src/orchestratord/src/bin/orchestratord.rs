@@ -721,7 +721,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             k8s_controller::Controller::namespaced_all(
                 client.clone(),
                 Observed::new(
-                    controller::materialize::Context::new(config.clone(), Arc::clone(&metrics)),
+                    controller::materialize::Context::new(
+                        config.clone(),
+                        Arc::clone(&metrics),
+                        Arc::clone(&publisher),
+                    ),
                     controller::materialize::CONTROLLER_NAME,
                     Arc::clone(&metrics.reconcile),
                     Arc::clone(&publisher),
