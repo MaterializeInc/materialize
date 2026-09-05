@@ -15,4 +15,5 @@
 
 //! Reusable containers.
 
+pub mod adaptive_consolidation;
 pub mod stack;
