@@ -20,7 +20,7 @@ use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollection};
 use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_COLUMNAR_MERGE_BATCHER};
 use mz_dyncfg::ConfigSet;
-use mz_row_spine::ArcBatch;
+use mz_row_spine::{ArcBatch, ArcMerger};
 use timely::Container;
 use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::Stream;
@@ -279,19 +279,23 @@ pub trait ArrangementSize {
 /// Helper for [`ArrangementSize`] to install a common operator holding on to a trace.
 ///
 /// * `arranged`: The arrangement to inspect.
-/// * `logic`: Closure that calculates the heap size/capacity/allocations for a batch. The return
-///    value are size and capacity in bytes, and number of allocations, all in absolute values.
+/// * `batch_logic`: Closure that calculates the heap size/capacity/allocations for a batch. The
+///    return value are size and capacity in bytes, and number of allocations, all in absolute
+///    values.
+/// * `merger_logic`: The same, for the partially assembled output that an in-progress merge holds.
 ///
 /// Batch-size logging identifies each batch by the address of its backing allocation and holds a
 /// weak reference to it, so it needs the `Arc` underlying the spine's [`ArcBatch<B>`] batches;
 /// `batch.0` reaches straight through the newtype to it.
-fn log_arrangement_size_inner<'scope, B, L>(
+fn log_arrangement_size_inner<'scope, B, LB, LM>(
     arranged: Arranged<'scope, TraceAgent<Spine<ArcBatch<B>>>>,
-    mut logic: L,
+    mut batch_logic: LB,
+    mut merger_logic: LM,
 ) -> Arranged<'scope, TraceAgent<Spine<ArcBatch<B>>>>
 where
     B: Batch + 'static,
-    L: FnMut(&B) -> (usize, usize, usize) + 'static,
+    LB: FnMut(&B) -> (usize, usize, usize) + 'static,
+    LM: FnMut(&ArcMerger<B>) -> (usize, usize, usize) + 'static,
 {
     let scope = arranged.stream.scope();
     let Some(logger) = scope
@@ -328,7 +332,7 @@ where
                     for batch in data.iter() {
                         batches
                             .entry(Arc::as_ptr(&batch.0))
-                            .or_insert_with(|| (Arc::downgrade(&batch.0), logic(&batch.0)));
+                            .or_insert_with(|| (Arc::downgrade(&batch.0), batch_logic(&batch.0)));
                     }
                     output.session(&time).give_container(data);
                 });
@@ -346,7 +350,7 @@ where
                 trace.borrow().trace().map_batches(|batch| {
                     batches
                         .entry(Arc::as_ptr(&batch.0))
-                        .or_insert_with(|| (Arc::downgrade(&batch.0), logic(&batch.0)));
+                        .or_insert_with(|| (Arc::downgrade(&batch.0), batch_logic(&batch.0)));
                 });
 
                 let (mut size, mut capacity, mut allocations) = (0, 0, 0);
@@ -358,6 +362,25 @@ where
                     } else {
                         false
                     }
+                });
+
+                // An in-progress merge holds a third allocation beyond its two input batches: the
+                // partially assembled output, which `map_batches` does not present and which no
+                // weak reference above reaches. Its containers are allocated at the merged
+                // capacity the moment the merge begins, so leaving it out understates a merging
+                // arrangement's resident bytes by close to the sum of its inputs. It can exceed
+                // that sum, because a container sizes its merged reservation from the inputs'
+                // record counts rather than from their own allocations.
+                //
+                // A merger's contents change as the merge proceeds, so unlike a sealed batch it
+                // cannot be measured once and cached; it is re-measured on every activation. The
+                // cost is bounded by the number of layers mid-merge, logarithmic in the
+                // arrangement's size.
+                trace.borrow().trace().map_mergers(|merger| {
+                    let (sz, c, a) = merger_logic(merger);
+                    size += sz;
+                    capacity += c;
+                    allocations += a;
                 });
 
                 let size = size.try_into().expect("must fit");
@@ -399,6 +422,50 @@ where
     }
 }
 
+/// Sums the heap size, capacity, and allocation count of the containers backing a key/value
+/// arrangement's storage.
+///
+/// A macro rather than a function generic over the layout: `heap_size` is an inherent method on
+/// each concrete container type, not a trait method, so a body abstract over the layout cannot
+/// call it. Both a sealed batch and an in-progress merge's partial output are this storage type,
+/// and both are measured here so that the two agree.
+macro_rules! val_storage_heap_size {
+    ($storage:expr) => {{
+        let storage = $storage;
+        let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+        let mut callback = |siz, cap| {
+            size += siz;
+            capacity += cap;
+            allocations += usize::from(cap > 0);
+        };
+        storage.keys.heap_size(&mut callback);
+        storage.vals.offs.heap_size(&mut callback);
+        storage.vals.vals.heap_size(&mut callback);
+        storage.upds.offs.heap_size(&mut callback);
+        storage.upds.times.heap_size(&mut callback);
+        storage.upds.diffs.heap_size(&mut callback);
+        (size, capacity, allocations)
+    }};
+}
+
+/// The key-only counterpart of [`val_storage_heap_size`], for storage with no value layer.
+macro_rules! key_storage_heap_size {
+    ($storage:expr) => {{
+        let storage = $storage;
+        let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+        let mut callback = |siz, cap| {
+            size += siz;
+            capacity += cap;
+            allocations += usize::from(cap > 0);
+        };
+        storage.keys.heap_size(&mut callback);
+        storage.upds.offs.heap_size(&mut callback);
+        storage.upds.times.heap_size(&mut callback);
+        storage.upds.diffs.heap_size(&mut callback);
+        (size, capacity, allocations)
+    }};
+}
+
 impl<'scope, T, K, V, R> ArrangementSize for Arranged<'scope, KeyValAgent<K, V, T, R>>
 where
     T: MzTimestamp,
@@ -407,21 +474,11 @@ where
     R: Semigroup + Ord + MzData + 'static,
 {
     fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |batch| {
-            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-            let mut callback = |siz, cap| {
-                size += siz;
-                capacity += cap;
-                allocations += usize::from(cap > 0);
-            };
-            batch.storage.keys.heap_size(&mut callback);
-            batch.storage.vals.offs.heap_size(&mut callback);
-            batch.storage.vals.vals.heap_size(&mut callback);
-            batch.storage.upds.offs.heap_size(&mut callback);
-            batch.storage.upds.times.heap_size(&mut callback);
-            batch.storage.upds.diffs.heap_size(&mut callback);
-            (size, capacity, allocations)
-        })
+        log_arrangement_size_inner(
+            self,
+            |batch| val_storage_heap_size!(&batch.storage),
+            |merger| val_storage_heap_size!(merger.inner().result()),
+        )
     }
 }
 
@@ -432,19 +489,11 @@ where
     R: Semigroup + Ord + MzData + 'static,
 {
     fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |batch| {
-            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-            let mut callback = |siz, cap| {
-                size += siz;
-                capacity += cap;
-                allocations += usize::from(cap > 0);
-            };
-            batch.storage.keys.heap_size(&mut callback);
-            batch.storage.upds.offs.heap_size(&mut callback);
-            batch.storage.upds.times.heap_size(&mut callback);
-            batch.storage.upds.diffs.heap_size(&mut callback);
-            (size, capacity, allocations)
-        })
+        log_arrangement_size_inner(
+            self,
+            |batch| key_storage_heap_size!(&batch.storage),
+            |merger| key_storage_heap_size!(merger.inner().result()),
+        )
     }
 }
 
@@ -455,21 +504,11 @@ where
     R: Semigroup + Ord + MzArrangeData + 'static,
 {
     fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |batch| {
-            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-            let mut callback = |siz, cap| {
-                size += siz;
-                capacity += cap;
-                allocations += usize::from(cap > 0);
-            };
-            batch.storage.keys.heap_size(&mut callback);
-            batch.storage.vals.offs.heap_size(&mut callback);
-            batch.storage.vals.vals.heap_size(&mut callback);
-            batch.storage.upds.offs.heap_size(&mut callback);
-            batch.storage.upds.times.heap_size(&mut callback);
-            batch.storage.upds.diffs.heap_size(&mut callback);
-            (size, capacity, allocations)
-        })
+        log_arrangement_size_inner(
+            self,
+            |batch| val_storage_heap_size!(&batch.storage),
+            |merger| val_storage_heap_size!(merger.inner().result()),
+        )
     }
 }
 
@@ -479,21 +518,11 @@ where
     R: Semigroup + Ord + MzArrangeData + 'static,
 {
     fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |batch| {
-            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-            let mut callback = |siz, cap| {
-                size += siz;
-                capacity += cap;
-                allocations += usize::from(cap > 0);
-            };
-            batch.storage.keys.heap_size(&mut callback);
-            batch.storage.vals.offs.heap_size(&mut callback);
-            batch.storage.vals.vals.heap_size(&mut callback);
-            batch.storage.upds.offs.heap_size(&mut callback);
-            batch.storage.upds.times.heap_size(&mut callback);
-            batch.storage.upds.diffs.heap_size(&mut callback);
-            (size, capacity, allocations)
-        })
+        log_arrangement_size_inner(
+            self,
+            |batch| val_storage_heap_size!(&batch.storage),
+            |merger| val_storage_heap_size!(merger.inner().result()),
+        )
     }
 }
 
@@ -503,18 +532,10 @@ where
     R: Semigroup + Ord + MzArrangeData + 'static,
 {
     fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |batch| {
-            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-            let mut callback = |siz, cap| {
-                size += siz;
-                capacity += cap;
-                allocations += usize::from(cap > 0);
-            };
-            batch.storage.keys.heap_size(&mut callback);
-            batch.storage.upds.offs.heap_size(&mut callback);
-            batch.storage.upds.times.heap_size(&mut callback);
-            batch.storage.upds.diffs.heap_size(&mut callback);
-            (size, capacity, allocations)
-        })
+        log_arrangement_size_inner(
+            self,
+            |batch| key_storage_heap_size!(&batch.storage),
+            |merger| key_storage_heap_size!(merger.inner().result()),
+        )
     }
 }

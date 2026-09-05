@@ -207,6 +207,13 @@ pub struct ArcMerger<B: Batch> {
     merger: B::Merger,
 }
 
+impl<B: Batch> ArcMerger<B> {
+    /// The inner batch's merger, which owns the merge's partially assembled output.
+    pub fn inner(&self) -> &B::Merger {
+        &self.merger
+    }
+}
+
 impl<B: Batch> Merger<ArcBatch<B>> for ArcMerger<B> {
     fn new(
         source1: &ArcBatch<B>,

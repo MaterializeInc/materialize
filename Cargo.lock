@@ -3328,8 +3328,7 @@ checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
 [[package]]
 name = "differential-dataflow"
 version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2677690d1dfbf4d8427eef2fdcf350ab0b258d3be20d01dd37dca07ca6f50bcc"
+source = "git+https://github.com/antiguru/differential-dataflow.git?rev=26257c4a5c6a09fb29c5423c9ba656b221f3d2df#26257c4a5c6a09fb29c5423c9ba656b221f3d2df"
 dependencies = [
  "columnar",
  "columnation",

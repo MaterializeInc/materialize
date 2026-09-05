@@ -288,10 +288,17 @@ impl DemuxHandler<'_, '_, '_> {
     }
 
     fn handle_merge(&mut self, event: MergeEvent) {
-        let Some(done) = event.complete else { return };
+        let operator_id = event.operator;
+
+        let Some(done) = event.complete else {
+            // A merge start changes no batch or record count, but it does allocate the merge's
+            // output at its full capacity, so the arrangement's footprint jumps here rather than
+            // at completion. Re-measure now, or the size stays understated for the whole merge.
+            self.notify_arrangement_size(operator_id);
+            return;
+        };
 
         let ts = self.ts();
-        let operator_id = event.operator;
         self.output
             .batches
             .give(((operator_id, ()), ts, Diff::MINUS_ONE));
