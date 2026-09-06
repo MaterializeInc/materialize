@@ -167,7 +167,7 @@ cleanup() {
     # period before the artifacts and the error annotation. Normal disables
     # take about 30 s. The output also goes to run.log so that the artifact
     # shows why a cleanup failed.
-    if ! bin/ci-builder run "$builder" timeout 15m bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" run ci-cleanup "${run_args[@]:1}" |& sed -u -r 's/\x1B\[[0-9;]*[A-Za-z]//g' | tee -a run.log; then
+    if ! bin/ci-builder run "$builder" timeout --signal=TERM --kill-after=30s 15m bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" run ci-cleanup "${run_args[@]:1}" |& sed -u -r 's/\x1B\[[0-9;]*[A-Za-z]//g' | tee -a run.log; then
       printf "\n%s" "$BUILDKITE_LABEL: ci-cleanup workflow failed" >> run.log
     fi
   fi
