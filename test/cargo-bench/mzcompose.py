@@ -1,0 +1,606 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+"""
+Runs every criterion benchmark at an ancestor commit and at the current commit,
+then fails when a benchmark regressed beyond a threshold.
+
+The ancestor and current checkouts both build at the same fixed checkout path
+and the same fixed `CARGO_TARGET_DIR`, one after the other, because cargo
+derives a unit's hash from absolute paths and two builds at different paths
+produce different bytes even from identical source. Locally this means the
+current-commit build does not reuse the developer's own `target/` cache; the
+first run compiles it from scratch into a parked target dir and later runs
+reuse that.
+"""
+
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
+from materialize import MZ_ROOT, buildkite, git, spawn
+from materialize.cargo_bench.compare import (
+    CompareReport,
+    Verdict,
+    compare,
+    render_markdown,
+)
+from materialize.cargo_bench.targets import (
+    BenchTarget,
+    BuiltBench,
+    bench_executables,
+    bench_targets,
+    cargo_build_args,
+    package_manifests,
+)
+from materialize.mz_version import MzVersion
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+
+SERVICES = []
+
+BASELINE = "ancestor"
+
+REPORTS_ARTIFACT = "criterion-reports.tar.zst"
+
+
+@dataclass(frozen=True)
+class TargetFailure:
+    target: BenchTarget
+    returncode: int
+
+
+def resolve_ancestor() -> str:
+    """Pick the commit to compare against: the merge base in a pull request, else the latest release tag."""
+    if buildkite.is_in_pull_request():
+        return buildkite.get_merge_base()
+    current = MzVersion.parse_cargo()
+    # Release candidates carry a semver prerelease and would otherwise win
+    # over the release they precede.
+    releases = [
+        v
+        for v in git.get_version_tags(version_type=MzVersion)
+        if v.prerelease is None and v < current
+    ]
+    if not releases:
+        raise RuntimeError(f"no release tag older than {current} found")
+    return git.rev_parse(f"{max(releases)}^{{commit}}")
+
+
+def target_dir() -> Path:
+    """Resolve `CARGO_TARGET_DIR`, defaulting to `<MZ_ROOT>/target`.
+
+    A relative override is resolved against `MZ_ROOT`, not the process cwd,
+    since mzcompose workflows can be invoked from any directory.
+    """
+    value = Path(os.getenv("CARGO_TARGET_DIR", str(MZ_ROOT / "target")))
+    return value if value.is_absolute() else MZ_ROOT / value
+
+
+def cargo_bench_dir() -> Path:
+    """Directory holding every checkout and target dir this workflow builds at.
+
+    It sits under `target_dir()` so parking a target dir between runs (a
+    rename between `target` and `ancestor-target` or `current-target`) stays
+    on one filesystem instead of copying.
+    """
+    return target_dir() / "cargo-bench"
+
+
+def remove_worktree(path: Path) -> None:
+    """Remove the git worktree at `path`, tolerating and logging failure.
+
+    Used both for leftover cleanup from a crashed prior run, where `path` may
+    not be a registered worktree at all, and in a `finally` block, where a
+    failure here must not mask an exception already in flight.
+    """
+    try:
+        spawn.runv(["git", "worktree", "remove", "--force", str(path)], cwd=MZ_ROOT)
+    except subprocess.CalledProcessError as e:
+        print(f"^^^ +++ removing worktree {path} failed: {e}")
+
+
+def load_targets(
+    cwd: Path, packages: list[str], env: dict[str, str] | None = None
+) -> tuple[list[BenchTarget], dict[str, str]]:
+    """Enumerate bench targets and package manifest paths for one checkout via `cargo metadata`."""
+    metadata = json.loads(
+        spawn.capture(
+            ["cargo", "metadata", "--no-deps", "--format-version=1"], cwd=cwd, env=env
+        )
+    )
+    targets = bench_targets(metadata)
+    if packages:
+        targets = [t for t in targets if t.package in packages]
+    return targets, package_manifests(metadata)
+
+
+def build_benches(
+    cwd: Path,
+    targets: list[BenchTarget],
+    manifests: dict[str, str],
+    env: dict[str, str],
+) -> tuple[list[BuiltBench], list[TargetFailure]]:
+    """Compile every bench target of one checkout in as few `cargo bench --no-run` invocations as possible.
+
+    A single invocation covering every target builds with full core
+    parallelism, but cargo's message stream gives no way to tell which target
+    broke when the invocation itself exits non-zero. The fallback isolates
+    the failing targets with one invocation each; cargo's incremental cache
+    makes recompiling the targets that already succeeded cheap.
+    """
+    print(f"--- Building {len(targets)} bench targets in {cwd}")
+    if not targets:
+        # An unrestricted `cargo bench --no-run` would build every bench
+        # target in the whole workspace instead of nothing.
+        return [], []
+    try:
+        output = spawn.capture(cargo_build_args(targets), cwd=cwd, env=env)
+        return bench_executables(output.splitlines(), manifests), []
+    except subprocess.CalledProcessError:
+        pass
+
+    built: list[BuiltBench] = []
+    failures: list[TargetFailure] = []
+    for target in targets:
+        try:
+            output = spawn.capture(cargo_build_args([target]), cwd=cwd, env=env)
+            built.extend(bench_executables(output.splitlines(), manifests))
+        except subprocess.CalledProcessError as e:
+            print(
+                f"^^^ +++ {target.package}/{target.name} failed to build with {e.returncode}"
+            )
+            failures.append(TargetFailure(target, e.returncode))
+    return built, failures
+
+
+def run_bench(
+    built: BuiltBench,
+    criterion_args: list[str],
+    env: dict[str, str],
+    target_home: Path,
+    label: str,
+    header_suffix: str = "",
+) -> int | None:
+    """Run one compiled bench binary directly and return its exit code on failure, else `None`.
+
+    The binary is invoked directly rather than through `cargo bench` again,
+    since cargo has already compiled it and re-running cargo would recheck
+    the whole workspace for no benefit. `--bench` is required: a criterion
+    binary invoked without it runs in test mode and measures nothing. Cargo
+    itself runs bench binaries with the package directory as cwd, which is
+    also what `CARGO_MANIFEST_DIR` would otherwise expand to at build time,
+    so both are set here for a binary that inspects either at runtime.
+    """
+    print(f"--- Benchmarking {built.package}/{built.name} ({label}){header_suffix}")
+    target_env = dict(
+        env,
+        CARGO_MANIFEST_DIR=str(built.manifest_dir),
+        CRITERION_HOME=str(target_home),
+    )
+    try:
+        spawn.runv(
+            [str(built.executable), "--bench", *criterion_args],
+            cwd=built.manifest_dir,
+            env=target_env,
+        )
+        return None
+    except subprocess.CalledProcessError as e:
+        print(f"^^^ +++ {built.package}/{built.name} failed with {e.returncode}")
+        return e.returncode
+
+
+def loaded_image_digest(executable: Path, scratch: Path) -> str | None:
+    """Return the sha256 hex digest of the bytes a loader actually maps for `executable`, or `None` if `strip` fails.
+
+    Two builds of identical source from different checkouts still differ in
+    debug info, symbol names, the build-id note, and `.comment` (compiler and
+    linker version strings, which vary if the system's C toolchain changed
+    between builds), none of which the loader maps into memory. Stripping
+    those out before hashing judges identity on the loaded program rather
+    than on incidental build-environment bytes. `--strip-all` removes symbol
+    tables and debug info but leaves `.comment` behind, so it is named
+    explicitly. A `None` return means "unknown", not "identical": the caller
+    must never treat two `None`s as a match, or a broken `strip` would skip
+    every benchmark instead of running them.
+    """
+    stripped = scratch / executable.name
+    try:
+        spawn.runv(
+            [
+                "strip",
+                "--strip-all",
+                "--remove-section=.note.gnu.build-id",
+                "--remove-section=.comment",
+                "-o",
+                str(stripped),
+                str(executable),
+            ]
+        )
+        return hashlib.sha256(stripped.read_bytes()).hexdigest()
+    except subprocess.CalledProcessError as e:
+        print(f"^^^ +++ stripping {executable} failed: {e}")
+        return None
+    finally:
+        stripped.unlink(missing_ok=True)
+
+
+def run_benches(
+    head_built: list[BuiltBench],
+    ancestor_built: list[BuiltBench],
+    head_targets: list[BenchTarget],
+    ancestor_targets: list[BenchTarget],
+    env: dict[str, str],
+    criterion_home: Path,
+) -> tuple[list[TargetFailure], list[TargetFailure], list[BuiltBench]]:
+    """Run every HEAD bench binary, its ancestor counterpart first when one was built for the same target.
+
+    Interleaving ancestor and HEAD per target, rather than running every
+    ancestor target and then every HEAD target, keeps the machine's page
+    cache and thermal state close between the two runs of a benchmark, which
+    is what produced repeatable false regressions in the I/O-bound
+    mz-ore/pager benches when the two phases ran far apart. A target present
+    only in the ancestor is never run, since there is no HEAD result to
+    compare it against.
+    """
+    ancestor_by_key = {(b.package, b.name): b for b in ancestor_built}
+    ancestor_target_by_key = {(t.package, t.name): t for t in ancestor_targets}
+    head_target_by_key = {(t.package, t.name): t for t in head_targets}
+    scratch = criterion_home / "stripped"
+    scratch.mkdir(parents=True, exist_ok=True)
+
+    ancestor_failures: list[TargetFailure] = []
+    current_failures: list[TargetFailure] = []
+    identical: list[BuiltBench] = []
+    for head_bin in sorted(head_built, key=lambda b: (b.package, b.name)):
+        key = (head_bin.package, head_bin.name)
+        # Benchmark ids are only unique within a target, so a collision
+        # across targets sharing one criterion home would silently merge two
+        # unrelated benchmarks.
+        target_home = criterion_home / head_bin.package / head_bin.name
+        ancestor_bin = ancestor_by_key.get(key)
+        header_suffix = ""
+        if ancestor_bin is not None:
+            if ancestor_bin.executable == head_bin.executable:
+                raise RuntimeError(
+                    f"{head_bin.package}/{head_bin.name}: ancestor and current bench "
+                    f"binaries resolve to the same file {head_bin.executable}"
+                )
+            # A target whose loaded program is identical between ancestor and
+            # current cannot have changed in any way that affects the
+            # benchmark, and running it anyway only costs time and risks a
+            # false regression from shared CI hardware.
+            ancestor_digest = loaded_image_digest(ancestor_bin.executable, scratch)
+            head_digest = loaded_image_digest(head_bin.executable, scratch)
+            if (
+                ancestor_digest is not None
+                and head_digest is not None
+                and ancestor_digest == head_digest
+            ):
+                print(
+                    f"--- Skipping {head_bin.package}/{head_bin.name}: identical binaries"
+                )
+                identical.append(head_bin)
+                continue
+            ancestor_label = ancestor_digest[:12] if ancestor_digest else "unknown"
+            head_label = head_digest[:12] if head_digest else "unknown"
+            header_suffix = f" ancestor={ancestor_label} current={head_label}"
+            rc = run_bench(
+                ancestor_bin,
+                ["--save-baseline", BASELINE],
+                env,
+                target_home,
+                "ancestor",
+            )
+            if rc is not None:
+                ancestor_failures.append(TargetFailure(ancestor_target_by_key[key], rc))
+            # Criterion's --save-baseline leaves a `new/` copy of the
+            # ancestor run behind in addition to the baseline it saves. An id
+            # absent at HEAD would otherwise keep that copy and get reported
+            # as a HEAD result carrying the ancestor's numbers. Criterion
+            # recreates `new/` on the HEAD run and only reads
+            # `ancestor/estimates.json` and `ancestor/sample.json` for
+            # comparison, so removing it here is safe.
+            for d in target_home.rglob("new"):
+                if d.is_dir():
+                    shutil.rmtree(d)
+        rc = run_bench(
+            head_bin,
+            ["--baseline-lenient", BASELINE],
+            env,
+            target_home,
+            "current",
+            header_suffix,
+        )
+        if rc is not None:
+            current_failures.append(TargetFailure(head_target_by_key[key], rc))
+    return ancestor_failures, current_failures, identical
+
+
+def render_report(
+    ancestor: str | None,
+    threshold: float,
+    report: CompareReport,
+    ancestor_failures: list[TargetFailure],
+    current_failures: list[TargetFailure],
+    identical: list[BuiltBench],
+) -> str:
+    sections = []
+    if ancestor is not None:
+        sections.append(
+            f"Ancestor: `{ancestor}`, regression threshold: {threshold:.0%}"
+        )
+    else:
+        sections.append("Ancestor run skipped, no comparison performed")
+    if current_failures:
+        sections.append(
+            "Bench targets failing on the current commit:\n"
+            + "\n".join(
+                f"* `{f.target.package}/{f.target.name}` exited with {f.returncode}"
+                for f in current_failures
+            )
+        )
+    if ancestor_failures:
+        sections.append(
+            "Bench targets skipped on the ancestor (their benchmarks show as new):\n"
+            + "\n".join(
+                f"* `{f.target.package}/{f.target.name}` exited with {f.returncode}"
+                for f in ancestor_failures
+            )
+        )
+    if report.warnings:
+        sections.append("Warnings:\n" + "\n".join(f"* {w}" for w in report.warnings))
+    if identical:
+        sections.append(
+            "Bench targets with identical binaries at ancestor and current (not run):\n"
+            + "\n".join(f"* `{b.package}/{b.name}`" for b in identical)
+        )
+    sections.append(render_markdown(report))
+    return "\n\n".join(sections)
+
+
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--ancestor",
+        help="commit to compare against, defaults to the merge base in a PR and the latest release tag otherwise",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.10,
+        help="relative mean slowdown that counts as a regression",
+    )
+    parser.add_argument(
+        "--package",
+        action="append",
+        default=[],
+        help="only run bench targets of this package, repeatable",
+    )
+    parser.add_argument(
+        "--skip-ancestor",
+        action="store_true",
+        help="run only the current commit, no comparison",
+    )
+    args = parser.parse_args()
+    if args.skip_ancestor and args.ancestor:
+        parser.error("--ancestor has no effect with --skip-ancestor")
+
+    # Manifests are re-enumerated from `src` below, once the checkout that
+    # will actually be built exists at its fixed path, so cargo's build
+    # output (which reports manifest paths under that checkout) can be
+    # resolved back to package names.
+    head_targets, _ = load_targets(MZ_ROOT, args.package)
+    if not head_targets:
+        raise RuntimeError("no bench targets found")
+
+    packages = sorted({t.package for t in head_targets})
+    # Sharding by package rather than by target keeps each shard to one
+    # dependency closure per checkout.
+    shard_packages = buildkite.shard_list(packages, lambda p: p)
+    if not shard_packages:
+        print("--- No bench packages assigned to this shard")
+        return
+    print(f"--- Bench packages in this shard: {', '.join(shard_packages)}")
+    head_targets = [t for t in head_targets if t.package in shard_packages]
+
+    criterion_home = target_dir() / "criterion-compare"
+    # Stale baselines from an earlier run would silently become the
+    # comparison target, so start from an empty directory every time.
+    shutil.rmtree(criterion_home, ignore_errors=True)
+    criterion_home.mkdir(parents=True)
+    env = dict(os.environ, CARGO_TARGET_DIR=str(target_dir()))
+    # Persist's test storage configs panic under CI when no external Postgres
+    # or S3 endpoint is configured. This step measures code, not network
+    # storage, so the benches run as they do locally and skip those variants.
+    env.pop("CI", None)
+    # A vendored C dependency such as OpenSSL embeds its own build timestamp
+    # unless SOURCE_DATE_EPOCH is set, and a timestamp difference alone would
+    # defeat the identical-binary skip below even when the compiled source is
+    # otherwise byte-for-byte the same between the ancestor and current build.
+    # The value must not be "0": the OpenSSL version this workspace resolves
+    # reads it with Perl's `||`, which treats the string "0" as false and
+    # falls back to the real time, so any other fixed non-zero value is used.
+    env["SOURCE_DATE_EPOCH"] = "1"
+
+    # Cargo derives a unit's hash from absolute paths, so the ancestor and
+    # current checkouts must build at the same checkout path and the same
+    # target dir path for identical source to produce identical binaries.
+    # The identical-binary skip in `run_benches` depends on that. Both sides
+    # therefore build one after another at these fixed paths instead of at a
+    # fresh temporary worktree each, and each side's target dir and checkout
+    # are parked under a side-specific name between runs so cargo's caches
+    # and the ancestor's fixtures survive across invocations of this workflow.
+    root = cargo_bench_dir()
+    src = root / "src"
+    target = root / "target"
+    ancestor_target = root / "ancestor-target"
+    current_target = root / "current-target"
+    ancestor_src = root / "ancestor-src"
+
+    # A cancelled or timed-out job can leave a previous run's worktrees
+    # registered and their directories in place. Clear both before reusing
+    # the fixed paths.
+    spawn.runv(["git", "worktree", "prune"], cwd=MZ_ROOT)
+    for leftover in (src, ancestor_src):
+        if leftover.exists():
+            remove_worktree(leftover)
+            shutil.rmtree(leftover, ignore_errors=True)
+    # A hard kill (OOM, SIGKILL) skips the `finally` below and can leave
+    # `target` populated with whichever side's build was in flight. Which
+    # side that was is no longer known, and the next rename onto this path
+    # would fail with the destination already existing, so discarding the
+    # cache is the only safe option.
+    if target.exists():
+        shutil.rmtree(target)
+
+    ancestor: str | None = None
+    ancestor_targets: list[BenchTarget] = []
+    ancestor_built: list[BuiltBench] = []
+    ancestor_build_failures: list[TargetFailure] = []
+    # Tracks which parked target dir currently owns `target`, so the
+    # `finally` below can park it back even if a build raises partway through.
+    target_owner: str | None = None
+    try:
+        if not args.skip_ancestor:
+            ancestor = args.ancestor or resolve_ancestor()
+            assert ancestor is not None
+            print(f"--- Comparing against ancestor {ancestor}")
+            spawn.runv(
+                ["git", "worktree", "add", "--detach", str(src), ancestor],
+                cwd=MZ_ROOT,
+            )
+            if ancestor_target.exists():
+                ancestor_target.rename(target)
+            target_owner = "ancestor"
+            ancestor_env = dict(env, CARGO_TARGET_DIR=str(target))
+            ancestor_targets, ancestor_manifests = load_targets(
+                src, shard_packages, ancestor_env
+            )
+            ancestor_built_raw, ancestor_build_failures = build_benches(
+                src, ancestor_targets, ancestor_manifests, ancestor_env
+            )
+            target.rename(ancestor_target)
+            target_owner = None
+            # Keeps the checkout registered and valid so its bench binaries,
+            # which read fixtures relative to their manifest dir, keep
+            # running against those fixtures once `src` is reused below.
+            spawn.runv(
+                ["git", "worktree", "move", str(src), str(ancestor_src)],
+                cwd=MZ_ROOT,
+            )
+            ancestor_built = [
+                BuiltBench(
+                    package=b.package,
+                    name=b.name,
+                    executable=ancestor_target / b.executable.relative_to(target),
+                    manifest_dir=ancestor_src / b.manifest_dir.relative_to(src),
+                )
+                for b in ancestor_built_raw
+            ]
+
+        # Only the committed HEAD is measured here. Uncommitted local changes
+        # in MZ_ROOT are not part of the checkout built below.
+        head = spawn.capture(["git", "rev-parse", "HEAD"], cwd=MZ_ROOT).strip()
+        spawn.runv(["git", "worktree", "add", "--detach", str(src), head], cwd=MZ_ROOT)
+        if current_target.exists():
+            current_target.rename(target)
+        target_owner = "current"
+        current_env = dict(env, CARGO_TARGET_DIR=str(target))
+        # Enumerated from `src`, not MZ_ROOT, so the manifest paths this
+        # returns match the paths cargo reports for the build below, even
+        # though both are the same commit.
+        current_targets, current_manifests = load_targets(
+            src, shard_packages, current_env
+        )
+        head_built_raw, current_build_failures = build_benches(
+            src, current_targets, current_manifests, current_env
+        )
+        target.rename(current_target)
+        target_owner = None
+        head_built = [
+            BuiltBench(
+                package=b.package,
+                name=b.name,
+                executable=current_target / b.executable.relative_to(target),
+                manifest_dir=b.manifest_dir,
+            )
+            for b in head_built_raw
+        ]
+
+        if args.skip_ancestor:
+            ancestor_run_failures, current_run_failures, identical = run_benches(
+                head_built, [], current_targets, [], env, criterion_home
+            )
+        else:
+            ancestor_run_failures, current_run_failures, identical = run_benches(
+                head_built,
+                ancestor_built,
+                current_targets,
+                ancestor_targets,
+                env,
+                criterion_home,
+            )
+        ancestor_failures = ancestor_build_failures + ancestor_run_failures
+        current_failures = current_build_failures + current_run_failures
+    finally:
+        if target_owner is not None and target.exists():
+            target.rename(
+                ancestor_target if target_owner == "ancestor" else current_target
+            )
+        for path in (src, ancestor_src):
+            if path.exists():
+                remove_worktree(path)
+        shutil.rmtree(src, ignore_errors=True)
+        shutil.rmtree(ancestor_src, ignore_errors=True)
+
+    report = compare(criterion_home, args.threshold)
+    markdown = render_report(
+        ancestor,
+        args.threshold,
+        report,
+        ancestor_failures,
+        current_failures,
+        identical,
+    )
+    print(markdown)
+
+    failed = report.has_regressions or bool(current_failures)
+    if buildkite.is_in_buildkite():
+        buildkite.add_annotation(
+            "error" if failed else "info",
+            f"Cargo bench results ({', '.join(shard_packages)})",
+            markdown,
+        )
+        try:
+            spawn.runv(
+                [
+                    "tar",
+                    "-caf",
+                    REPORTS_ARTIFACT,
+                    "-C",
+                    str(criterion_home.parent),
+                    criterion_home.name,
+                ],
+                cwd=MZ_ROOT,
+            )
+            buildkite.upload_artifact(REPORTS_ARTIFACT, cwd=MZ_ROOT)
+            (MZ_ROOT / REPORTS_ARTIFACT).unlink(missing_ok=True)
+        except subprocess.CalledProcessError as e:
+            print(f"^^^ +++ uploading criterion reports failed: {e}")
+
+    if current_failures:
+        raise RuntimeError(
+            f"{len(current_failures)} bench target(s) failed on the current commit"
+        )
+    if report.has_regressions:
+        regressions = [r.id for r in report.results if r.verdict == Verdict.REGRESSION]
+        raise RuntimeError(f"benchmark regressions: {', '.join(regressions)}")
