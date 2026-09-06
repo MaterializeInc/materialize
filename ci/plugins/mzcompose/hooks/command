@@ -157,11 +157,12 @@ cleanup() {
     # The main workflow's containers can outlive its process: SIGTERM ends
     # mzcompose, but a `docker compose run` container it started keeps going,
     # and an in-flight `mz region enable` could re-create the region after the
-    # cleanup deleted it. Only compose-managed containers, so that containers
-    # a composition drives through other means, such as kind nodes, keep
-    # running for the log collection below. Killed containers keep their logs
-    # for services.log; `mzcompose down` removes them.
-    docker ps --quiet --filter label=com.docker.compose.project | xargs --no-run-if-empty docker kill > /dev/null || true
+    # cleanup deleted it. Only this composition's compose project (named after
+    # the composition): other jobs' containers, and containers a composition
+    # drives outside compose, such as kind nodes, keep running for the log
+    # collection below. Killed containers keep their logs for services.log;
+    # `mzcompose down` removes them.
+    docker ps --quiet --filter "label=com.docker.compose.project=$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" | xargs --no-run-if-empty docker kill > /dev/null || true
     # 15m keeps a hung cleanup from eating the agents' 40-minute cancel grace
     # period before the artifacts and the error annotation. Normal disables
     # take about 30 s. The output also goes to run.log so that the artifact
