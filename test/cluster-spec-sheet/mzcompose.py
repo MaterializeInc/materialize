@@ -3404,24 +3404,30 @@ def verify_region_disabled(composition: Composition, region: str) -> None:
     or failing API, and a region that survives a cleanup keeps costing money
     and load until someone notices. "disabled" also covers a region whose
     deletion is still pending, so the check proves that no enabled region is
-    left, not that the deletion has completed. The check runs after every
-    cleanup, including the unattended one from the CI plugin's exit trap.
+    left, not that the deletion has completed.
     """
     output = composition.run(
         "mz", "region", "list", "--format", "json", rm=True, capture_and_print=True
     ).stdout
-    # The JSON array is the last line: `mz region list` reports a cloud provider
-    # whose lookup failed as an `Error: ...` line on stdout before it.
+    # `mz region list` reports a cloud provider whose lookup failed as an
+    # `Error: ...` line on stdout before the JSON array, so parsing the whole
+    # output would fail on an unrelated provider's hiccup.
+    lines = output.strip().splitlines()
+    start = next((i for i, line in enumerate(lines) if line.startswith("[")), None)
     try:
-        regions = json.loads(output.strip().splitlines()[-1])
-    except (ValueError, IndexError) as e:
+        if start is None:
+            raise ValueError("no JSON array in the output")
+        statuses = {
+            entry["region"]: entry["status"]
+            for entry in json.loads("\n".join(lines[start:]))
+        }
+    except (ValueError, KeyError, TypeError) as e:
         raise UIError(f"unexpected `mz region list` output: {output!r}") from e
-    for entry in regions:
-        if entry["region"] == region:
-            if entry["status"] == "disabled":
-                return
-            raise UIError(f"region {region} is still {entry['status']} after disable")
-    raise UIError(f"region {region} missing from `mz region list` output")
+    status = statuses.get(region)
+    if status is None:
+        raise UIError(f"region {region} missing from `mz region list` output")
+    if status != "disabled":
+        raise UIError(f"region {region} is still {status} after disable")
 
 
 def enable_region(target: "CloudTarget", envd_cpus: int | None = None) -> None:
