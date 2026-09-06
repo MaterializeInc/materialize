@@ -472,11 +472,15 @@ impl SourceTimestamp for KafkaTimestamp {
         };
         assert_eq!(lower_inclusive, upper_inclusive, "invalid range {self}");
 
+        let mut range = range::Range::new(Some((
+            range::RangeBound::new(lower, lower_inclusive),
+            range::RangeBound::new(upper, upper_inclusive),
+        )));
+        range
+            .canonicalize(&SqlScalarType::Numeric { max_scale: None })
+            .expect("partition intervals are valid ranges");
         packer
-            .push_range(range::Range::new(Some((
-                range::RangeBound::new(lower, lower_inclusive),
-                range::RangeBound::new(upper, upper_inclusive),
-            ))))
+            .push_range(range)
             .expect("pushing range must not generate errors");
 
         packer.push(Datum::UInt64(self.timestamp().offset));
@@ -488,9 +492,9 @@ impl SourceTimestamp for KafkaTimestamp {
 
         match (datums.next(), datums.next(), datums.next()) {
             (Some(Datum::Range(range)), Some(Datum::UInt64(offset)), None) => {
-                let mut range = range.into_bounds(|b| b.datum());
-                //XXX: why do we have to canonicalize on read?
-                range.canonicalize().expect("ranges must be valid");
+                // No canonicalization on read. The row was written canonical, and
+                // a numeric range has no discrete step to rewrite anyway.
+                let range = range.into_bounds(|b| b.datum());
                 let range = range.inner.expect("empty range");
 
                 let lower = range.lower.bound.map(|row| {

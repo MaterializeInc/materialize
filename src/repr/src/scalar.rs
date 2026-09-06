@@ -5417,9 +5417,7 @@ pub fn arb_datum(allow_dummy: bool) -> BoxedStrategy<PropDatum> {
         any::<[u8; 16]>()
             .prop_map(|x| PropDatum::Uuid(Uuid::from_bytes(x)))
             .boxed(),
-        arb_range(arb_range_data())
-            .prop_map(PropDatum::Range)
-            .boxed(),
+        arb_range_any().prop_map(PropDatum::Range).boxed(),
     ];
 
     if allow_dummy {
@@ -5519,9 +5517,11 @@ pub fn arb_datum_for_scalar(scalar_type: SqlScalarType) -> impl Strategy<Value =
         SqlScalarType::Range { element_type } => {
             let data_strat = (
                 arb_datum_for_scalar(*element_type.clone()),
-                arb_datum_for_scalar(*element_type),
+                arb_datum_for_scalar(*element_type.clone()),
             );
-            arb_range(data_strat).prop_map(PropDatum::Range).boxed()
+            arb_range(*element_type, data_strat)
+                .prop_map(PropDatum::Range)
+                .boxed()
         }
         SqlScalarType::List { element_type, .. } => arb_list(arb_datum_for_scalar(*element_type))
             .prop_map(PropDatum::List)
@@ -5707,29 +5707,37 @@ pub fn arb_range_type() -> Union<BoxedStrategy<SqlScalarType>> {
     ])
 }
 
+/// A range over each of the discrete range element types.
 #[cfg(any(test, feature = "proptest"))]
-fn arb_range_data() -> Union<BoxedStrategy<(PropDatum, PropDatum)>> {
+fn arb_range_any() -> Union<BoxedStrategy<PropRange>> {
     Union::new(vec![
-        (
-            any::<i32>().prop_map(PropDatum::Int32),
-            any::<i32>().prop_map(PropDatum::Int32),
-        )
-            .boxed(),
-        (
-            any::<i64>().prop_map(PropDatum::Int64),
-            any::<i64>().prop_map(PropDatum::Int64),
-        )
-            .boxed(),
-        (
-            arb_date().prop_map(PropDatum::Date),
-            arb_date().prop_map(PropDatum::Date),
-        )
-            .boxed(),
+        arb_range(
+            SqlScalarType::Int32,
+            (
+                any::<i32>().prop_map(PropDatum::Int32),
+                any::<i32>().prop_map(PropDatum::Int32),
+            ),
+        ),
+        arb_range(
+            SqlScalarType::Int64,
+            (
+                any::<i64>().prop_map(PropDatum::Int64),
+                any::<i64>().prop_map(PropDatum::Int64),
+            ),
+        ),
+        arb_range(
+            SqlScalarType::Date,
+            (
+                arb_date().prop_map(PropDatum::Date),
+                arb_date().prop_map(PropDatum::Date),
+            ),
+        ),
     ])
 }
 
 #[cfg(any(test, feature = "proptest"))]
 fn arb_range(
+    elem_type: SqlScalarType,
     data: impl Strategy<Value = (PropDatum, PropDatum)> + 'static,
 ) -> BoxedStrategy<PropRange> {
     (
@@ -5741,7 +5749,7 @@ fn arb_range(
         data,
     )
         .prop_map(
-            |(split, lower_inf, lower_inc, upper_inf, upper_inc, (a, b))| {
+            move |(split, lower_inf, lower_inc, upper_inf, upper_inc, (a, b))| {
                 let mut row = Row::default();
                 let mut packer = row.packer();
                 let r = if split % 32 == 0 {
@@ -5772,7 +5780,7 @@ fn arb_range(
                         },
                     )));
 
-                    range.canonicalize().unwrap();
+                    range.canonicalize(&elem_type).unwrap();
 
                     // Extract canonicalized state; pretend the range was empty
                     // if the bounds are rewritten.
@@ -6175,7 +6183,7 @@ mod tests {
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
-        fn range_packing_unpacks_correctly(range in arb_range(arb_range_data())) {
+        fn range_packing_unpacks_correctly(range in arb_range_any()) {
             let PropRange(row, prop_range) = range;
             let row = row.unpack_first();
             let d = row.unwrap_range();

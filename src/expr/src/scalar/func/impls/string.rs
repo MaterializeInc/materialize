@@ -784,7 +784,7 @@ impl<E: Eval> LazyUnaryFunc for CastStringToRange<E> {
                 .eval(&[Datum::String(elem_text)], temp_storage)
         })?;
 
-        range.canonicalize()?;
+        range.canonicalize(self.return_ty.unwrap_range_element_type())?;
 
         Ok(temp_storage.make_datum(|packer| {
             packer

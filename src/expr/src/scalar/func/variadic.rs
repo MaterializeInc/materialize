@@ -623,7 +623,7 @@ impl EagerVariadicFunc for RangeCreate {
             RangeBound::new(upper, upper_inclusive),
         )));
 
-        range.canonicalize()?;
+        range.canonicalize(&self.elem_type)?;
 
         Ok(temp_storage.make_datum(|row| {
             row.push_range(range).expect("errors already handled");
