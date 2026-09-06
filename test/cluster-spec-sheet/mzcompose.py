@@ -4016,32 +4016,40 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
 
         test_failed = True
         try:
-            scenarios_list = buildkite.shard_list(sorted(list(scenarios)), lambda s: s)
-            composition.test_parts(scenarios_list, process)
-            test_failed = False
-        finally:
+            try:
+                scenarios_list = buildkite.shard_list(
+                    sorted(list(scenarios)), lambda s: s
+                )
+                composition.test_parts(scenarios_list, process)
+                test_failed = False
+            finally:
+                for stream in streams.values():
+                    stream.file.close()
+
+            # Upload, archive, and analyze each result stream uniformly. The
+            # cluster_object_limits stream's extra `healthy` / `failure_mode`
+            # columns are silently dropped on upload (CSV writer uses
+            # extrasaction="ignore"); to recover them, consult the artifact
+            # CSV directly.
             for stream in streams.values():
-                stream.file.close()
+                stream.spec.upload(composition, stream.path, not test_failed)
+
+            assert not test_failed
+
+            if buildkite.is_in_buildkite():
+                for stream in streams.values():
+                    buildkite.upload_artifact(stream.path, cwd=MZ_ROOT, quiet=True)
+
+            if args.analyze:
+                for stream in streams.values():
+                    stream.spec.analyze(stream.path)
+        finally:
+            # Only after the results are out: the teardown can fail (a slow
+            # hard delete, a transient API error in its verify) and must not
+            # cost a multi-hour run its data. The CI plugin's `ci-cleanup`
+            # repeats the teardown after the workflow, however it ended.
             if args.cleanup:
                 target.cleanup()
-
-        # Upload, archive, and analyze each result stream uniformly. The
-        # cluster_object_limits stream's extra `healthy` / `failure_mode`
-        # columns are silently dropped on upload (CSV writer uses
-        # extrasaction="ignore"); to recover them, consult the artifact
-        # CSV directly.
-        for stream in streams.values():
-            stream.spec.upload(composition, stream.path, not test_failed)
-
-        assert not test_failed
-
-        if buildkite.is_in_buildkite():
-            for stream in streams.values():
-                buildkite.upload_artifact(stream.path, cwd=MZ_ROOT, quiet=True)
-
-        if args.analyze:
-            for stream in streams.values():
-                stream.spec.analyze(stream.path)
 
 
 class BenchTarget:
