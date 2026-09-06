@@ -1586,14 +1586,19 @@ impl CatalogState {
                     .chain([(RelationVersion::root(), global_id)].into_iter())
                     .collect();
 
-                // Collect optimizer parameters.
+                // Collect optimizer parameters. The layering must match
+                // `sequence_create_materialized_view`: the cluster's own
+                // feature overrides, then the cluster-scoped system parameters,
+                // which win over a manual `FEATURES` pin. These features both
+                // key the local expression cache and drive re-optimization on a
+                // miss, so a divergence here rehydrates the view under features
+                // it was never created with.
                 let system_vars = session_catalog.system_vars();
-                let overrides = self
-                    .get_cluster(materialized_view.cluster_id)
-                    .config
-                    .features();
-                let optimizer_config =
-                    optimize::OptimizerConfig::from(system_vars).override_from(&overrides);
+                let cluster_id = materialized_view.cluster_id;
+                let overrides = self.get_cluster(cluster_id).config.features();
+                let optimizer_config = optimize::OptimizerConfig::from(system_vars)
+                    .override_from(&overrides)
+                    .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id));
                 let previous_exprs = previous_item.map(|item| match item {
                     CatalogItem::MaterializedView(materialized_view) => (
                         materialized_view.raw_expr,
