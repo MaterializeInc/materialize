@@ -3449,11 +3449,12 @@ def enable_region(target: "CloudTarget", envd_cpus: int | None = None) -> None:
         # Production Cloud forbids callers from injecting environmentd args and rejects
         # `--environmentd-extra-arg` with a 403 Forbidden, so this is staging-only.
         args += [
-            "--environmentd-extra-arg=--system-parameter-default=with_0dt_caught_up_check_stability_period=0s"
+            "--environmentd-extra-arg=--system-parameter-default=with_0dt_caught_up_check_stability_period=0s",
+            # Pin the image built for this PR. Production does not accept a
+            # custom version.
+            "--version",
+            staging_version(),
         ]
-
-    if target.version is not None:
-        args += ["--version", target.version]
 
     target.composition.run("mz", "region", "enable", *args, rm=True)
 
@@ -3822,7 +3823,6 @@ def make_target(composition: Composition, target: str) -> tuple["BenchTarget", M
             staging_app_password,
             region=STAGING_REGION,
             is_staging=True,
-            version=staging_version(),
         )
         mz = Mz(
             region=STAGING_REGION,
@@ -4093,7 +4093,6 @@ class CloudTarget(BenchTarget):
         app_password: str,
         region: str,
         is_staging: bool = False,
-        version: str | None = None,
     ) -> None:
         self.composition = composition
         self.username = username
@@ -4101,11 +4100,6 @@ class CloudTarget(BenchTarget):
         self.app_password = app_password
         self.new_app_password: str | None = None
         self.is_staging = is_staging
-        # Set for staging runs so `mz region enable --version <version>` pins the
-        # exact image built for this PR. Must be None for production (production
-        # doesn't accept a custom version).
-        self.version = version
-        assert (version is not None) == is_staging
 
     def dbbench_connection_flags(self) -> list[str]:
         assert self.new_app_password is not None
