@@ -191,8 +191,12 @@ def workflow_default(c: Composition) -> None:
 
         # Add a rule that targets the current organization with the 3GiB
         # variant. Even though we don't delete the above rule (replicated as
-        # first entry in the contextTargets list below), the evaluation order is
-        # based on the definition order of flag variants.
+        # first entry in the contextTargets list below), the organization target
+        # is the one that wins. The SDK evaluates contextTargets in array order,
+        # first match winning, so something server-side must reorder the array
+        # LaunchDarkly serves. That it appears to order by the definition order of
+        # the flag's variations is an unconfirmed observation about LaunchDarkly's
+        # server, not documented behaviour and not what the SDK does.
         ld_client.update_targeting(
             LD_FEATURE_FLAG_KEY,
             contextTargets=[

@@ -9,6 +9,7 @@
 
 use std::collections::BTreeSet;
 
+use mz_dyncfg::ParameterScope;
 use mz_sql::session::vars::{ENABLE_LAUNCHDARKLY, SystemVars, Value, Var, VarInput};
 
 /// A struct that defines the system parameters that should be synchronized
@@ -48,6 +49,16 @@ impl SynchronizedParameters {
 
     pub fn is_synchronized(&self, name: &str) -> bool {
         self.synchronized.contains(name)
+    }
+
+    /// The names of the synchronized parameters that declare `scope`, the scope at
+    /// which their value may be overridden per object.
+    pub fn synchronized_with_scope(&self, scope: ParameterScope) -> BTreeSet<&'static str> {
+        self.system_vars
+            .iter_synced()
+            .filter(|var| var.scope() == scope)
+            .map(|var| var.name())
+            .collect()
     }
 
     /// Return a clone of the set of names of synchronized values.

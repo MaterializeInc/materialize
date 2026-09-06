@@ -275,6 +275,13 @@ pub mod v1alpha1 {
         /// The ConfigMap must contain a `system-params.json` key whose value
         /// is a valid JSON object containing valid system parameters.
         ///
+        /// Each top-level key sets a parameter for the whole environment, except
+        /// for the two reserved keys `segments` and `rules`. A segment names a
+        /// context kind, `cluster` or `replica`, and the clauses selecting the
+        /// objects it matches, and a rule attaches parameters to a segment. For
+        /// each parameter the first matching rule wins. A segment matching no
+        /// live object, or one this version cannot evaluate, has no effect.
+        ///
         /// Run `SHOW ALL` in SQL to see a subset of configurable system parameters.
         ///
         /// Example ConfigMap:
@@ -282,7 +289,21 @@ pub mod v1alpha1 {
         /// data:
         ///   system-params.json: |
         ///     {
-        ///       "max_connections": 1000
+        ///       "max_connections": 1000,
+        ///       "segments": {
+        ///         "analytics": {
+        ///           "contextKind": "cluster",
+        ///           "clauses": [
+        ///             {"attribute": "cluster_name", "op": "in", "values": ["analytics"]}
+        ///           ]
+        ///         }
+        ///       },
+        ///       "rules": [
+        ///         {
+        ///           "segment": "analytics",
+        ///           "parameters": {"enable_eager_delta_joins": true}
+        ///         }
+        ///       ]
         ///     }
         /// ```
         pub system_parameter_configmap_name: Option<String>,
@@ -1546,6 +1567,13 @@ pub mod v1 {
         /// The ConfigMap must contain a `system-params.json` key whose value
         /// is a valid JSON object containing valid system parameters.
         ///
+        /// Each top-level key sets a parameter for the whole environment, except
+        /// for the two reserved keys `segments` and `rules`. A segment names a
+        /// context kind, `cluster` or `replica`, and the clauses selecting the
+        /// objects it matches, and a rule attaches parameters to a segment. For
+        /// each parameter the first matching rule wins. A segment matching no
+        /// live object, or one this version cannot evaluate, has no effect.
+        ///
         /// Run `SHOW ALL` in SQL to see a subset of configurable system parameters.
         ///
         /// Example ConfigMap:
@@ -1553,7 +1581,21 @@ pub mod v1 {
         /// data:
         ///   system-params.json: |
         ///     {
-        ///       "max_connections": 1000
+        ///       "max_connections": 1000,
+        ///       "segments": {
+        ///         "analytics": {
+        ///           "contextKind": "cluster",
+        ///           "clauses": [
+        ///             {"attribute": "cluster_name", "op": "in", "values": ["analytics"]}
+        ///           ]
+        ///         }
+        ///       },
+        ///       "rules": [
+        ///         {
+        ///           "segment": "analytics",
+        ///           "parameters": {"enable_eager_delta_joins": true}
+        ///         }
+        ///       ]
         ///     }
         /// ```
         pub system_parameter_configmap_name: Option<String>,
