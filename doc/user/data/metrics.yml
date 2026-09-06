@@ -237,6 +237,14 @@ metrics:
   - source
   source: src/balancerd/src/lib.rs
   visibility: internal
+- name: mz_balancer_connection_limit
+  help: Maximum number of connections proxied at once, 0 if unlimited.
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_connection_rejected_total
+  help: Count of connections refused because the connection limit was reached.
+  source: src/balancerd/src/lib.rs
+  visibility: internal
 - name: mz_balancer_connection_status
   help: Count of completed network connections, by status
   labels:
