@@ -3387,8 +3387,9 @@ class EnvdObjectsSweep(Scenario):
 # TODO: We should factor the region helpers below out into a separate module.
 # (Similar `disable_region` functions also occur in other tests.)
 def disable_region(composition: Composition, hard: bool) -> None:
-    # `mz region disable` treats an already-disabled region as success, so any
-    # failure here is a real one (auth, API error) and must surface.
+    # `mz region disable` reports a region that does not exist as success (its
+    # `disable` maps the API's 404 to "Region already disabled"), so any failure
+    # here is a real one (auth, API error) and must surface.
     print("Shutting down region ...")
     if hard:
         composition.run("mz", "region", "disable", "--hard", rm=True)
