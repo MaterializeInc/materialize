@@ -21,6 +21,18 @@ mod extensions;
 mod logging;
 mod metrics;
 mod render;
+/// Rendering internals exposed for benchmarks.
+///
+/// Not a supported API. The contents track whatever `benches/` needs, and the
+/// modules behind them stay private so the crate's real surface does not grow.
+#[cfg(feature = "bench")]
+pub mod bench {
+    pub use crate::render::RenderTimestamp;
+    pub use crate::render::columnar::{
+        CollectionEdge, ColumnarCollection, columnar_consolidate, columnar_negate, columnar_to_vec,
+        concat_many, vec_to_columnar,
+    };
+}
 /// MV sink machinery, exposed for benchmarks.
 #[cfg(feature = "bench")]
 pub mod sink;

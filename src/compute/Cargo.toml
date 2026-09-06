@@ -81,3 +81,8 @@ harness = false
 [[bench]]
 name = "columnar_merge_batcher_row"
 harness = false
+
+[[bench]]
+name = "columnar_edge"
+harness = false
+required-features = ["bench"]
