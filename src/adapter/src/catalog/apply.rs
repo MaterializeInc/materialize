@@ -551,7 +551,7 @@ impl CatalogState {
     /// copies (`scoped_system_parameters.{cluster,replica}`), keyed by object
     /// id. Mirrors the durable `{cluster,replica}_system_configurations`
     /// collections; the cluster copy is consumed at plan time via
-    /// [`CatalogState::cluster_scoped_optimizer_overrides`], the replica copy at
+    /// [`CatalogState::optimizer_features_for_cluster`], the replica copy at
     /// the compute controller's per-replica dyncfg push.
     ///
     /// Retraction is conditional on the value matching, so a value change
@@ -559,7 +559,7 @@ impl CatalogState {
     /// of the order the two updates are applied in. See the scoped feature flags
     /// design.
     ///
-    /// [`CatalogState::cluster_scoped_optimizer_overrides`]: crate::catalog::CatalogState::cluster_scoped_optimizer_overrides
+    /// [`CatalogState::optimizer_features_for_cluster`]: crate::catalog::CatalogState::optimizer_features_for_cluster
     fn apply_scoped_system_configuration_update<Id: Ord>(
         map: &mut BTreeMap<Id, BTreeMap<String, String>>,
         id: Id,

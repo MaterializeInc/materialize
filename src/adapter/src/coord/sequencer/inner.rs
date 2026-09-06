@@ -2678,7 +2678,8 @@ impl Coordinator {
             OptimizedMirRelationExpr(expr)
         } else {
             // Collect optimizer parameters.
-            let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+            let optimizer_config =
+                optimize::OptimizerConfig::env_wide(self.catalog().system_config());
 
             // (`optimize::view::Optimizer` has a special case for constant queries.)
             let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);

@@ -337,7 +337,7 @@ impl Coordinator {
         let catalog = self.catalog().clone();
         let conn_catalog = catalog.for_session(session);
         let catalog_state = conn_catalog.state();
-        let optimizer_config = optimize::OptimizerConfig::from(conn_catalog.system_vars());
+        let optimizer_config = optimize::OptimizerConfig::env_wide(conn_catalog.system_vars());
 
         // Determine if we need column rewriting (defaults/reordering).
         let target_desc = catalog

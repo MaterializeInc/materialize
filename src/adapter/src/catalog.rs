@@ -2499,7 +2499,7 @@ mod tests {
     use std::{env, iter};
 
     use itertools::Itertools;
-    use mz_catalog::memory::objects::CatalogItem;
+    use mz_catalog::memory::objects::{CatalogItem, ClusterVariant};
     use mz_postgres_util::{query, sql};
     use tokio_postgres::NoTls;
     use tokio_postgres::types::Type;
@@ -2901,6 +2901,51 @@ mod tests {
                     .all(|id| !element_ids.contains(id)),
                 "{ARRAY_SUFFIX:?} recorded an element type id from {ELEMENT_TYPE:?}",
             );
+
+            catalog.expire().await;
+        })
+        .await;
+    }
+
+    /// The optimizer-feature stack for a cluster, weakest layer first: the
+    /// env-wide system vars, the cluster's `FEATURES` pin, then the
+    /// cluster-scoped system parameter. The scoped layer is last so a targeted
+    /// rollout is not defeated by a manual pin.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_optimizer_features_for_cluster_layering() {
+        Catalog::with_debug(|mut catalog| async move {
+            let cluster_id = catalog
+                .resolve_cluster("quickstart")
+                .expect("quickstart cluster exists")
+                .id;
+            let resolved = |catalog: &Catalog| {
+                catalog
+                    .state()
+                    .optimizer_features_for_cluster(cluster_id)
+                    .enable_eager_delta_joins
+            };
+
+            assert!(!resolved(&catalog), "env-wide base");
+
+            let cluster = catalog
+                .state
+                .clusters_by_id
+                .get_mut(&cluster_id)
+                .expect("cluster exists");
+            match &mut cluster.config.variant {
+                ClusterVariant::Managed(managed) => {
+                    managed.optimizer_feature_overrides.enable_eager_delta_joins = Some(true);
+                }
+                ClusterVariant::Unmanaged => panic!("quickstart is a managed cluster"),
+            }
+            assert!(resolved(&catalog), "`FEATURES` pin beats the env-wide base");
+
+            catalog.state.scoped_system_parameters.cluster.insert(
+                cluster_id,
+                BTreeMap::from([("enable_eager_delta_joins".to_string(), "false".to_string())]),
+            );
+            assert!(!resolved(&catalog), "scoped parameter beats the pin");
 
             catalog.expire().await;
         })

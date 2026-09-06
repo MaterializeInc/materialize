@@ -40,7 +40,6 @@ use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
-use mz_repr::optimize::OverrideFrom;
 use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{Params, Plan, SubscribePlan};
@@ -221,11 +220,7 @@ impl Coordinator {
         let compute_instance = self.instance_snapshot(cluster_id).expect("must exist");
         let (_, view_id) = self.allocate_transient_id();
 
-        let vars = self.catalog().system_config();
-        let overrides = self.catalog.get_cluster(cluster_id).config.features();
-        let optimizer_config = optimize::OptimizerConfig::from(vars)
-            .override_from(&overrides)
-            .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id));
+        let optimizer_config = self.optimizer_config_for_cluster(cluster_id);
 
         let mut optimizer = optimize::subscribe::Optimizer::new(
             self.owned_catalog(),

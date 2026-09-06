@@ -17,7 +17,6 @@ use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{CatalogItem, MetricSink};
 use mz_controller_types::ClusterId;
 use mz_ore::instrument;
-use mz_repr::optimize::OverrideFrom;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::{QualifiedItemName, ResolvedIds};
 use mz_sql::plan;
@@ -132,9 +131,7 @@ impl Coordinator {
         // `optimize::metric_sink::shape_metric_sink_source`); scoped to this dataflow, not durable.
         let (_, view_id) = self.allocate_transient_id();
 
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
-            .override_from(&self.catalog.get_cluster(cluster_id).config.features())
-            .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id));
+        let optimizer_config = self.optimizer_config_for_cluster(cluster_id);
         let optimizer_features = optimizer_config.features.clone();
         let debug_name = self
             .catalog()

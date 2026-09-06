@@ -41,7 +41,6 @@ use mz_cluster_client::ReplicaId;
 use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::{instrument, soft_panic_or_log};
-use mz_repr::optimize::OverrideFrom;
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc};
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{
@@ -275,9 +274,7 @@ impl Coordinator {
         // dataflow. See `optimize::metric_sink::shape_metric_sink_source`.
         let (_, view_id) = self.allocate_transient_id();
 
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
-            .override_from(&self.catalog.get_cluster(cluster_id).config.features())
-            .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id));
+        let optimizer_config = self.optimizer_config_for_cluster(cluster_id);
 
         let mut optimizer = optimize::metric_sink::Optimizer::new(
             self.owned_catalog(),

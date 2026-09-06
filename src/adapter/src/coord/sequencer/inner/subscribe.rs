@@ -20,7 +20,7 @@ use mz_ore::instrument;
 use mz_repr::GlobalId;
 use mz_repr::Timestamp;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
-use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
+use mz_repr::optimize::OverrideFrom;
 use mz_sql::plan::{self, QueryWhen, SubscribeFrom};
 use mz_sql::session::metadata::SessionMetadata;
 use std::collections::BTreeSet;
@@ -284,9 +284,8 @@ impl Coordinator {
         let (_, view_id) = self.allocate_transient_id();
         let (_, sink_id) = self.allocate_transient_id();
         let debug_name = format!("subscribe-{}", sink_id);
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
-            .override_from(&self.catalog.get_cluster(cluster_id).config.features())
-            .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id))
+        let optimizer_config = self
+            .optimizer_config_for_cluster(cluster_id)
             .override_from(&explain_ctx);
 
         // Build an optimizer for this SUBSCRIBE.
@@ -677,9 +676,8 @@ impl Coordinator {
 
         let target_cluster = self.catalog().get_cluster(cluster_id);
 
-        let features = OptimizerFeatures::from(self.catalog().system_config())
-            .override_from(&target_cluster.config.features())
-            .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id))
+        let features = self
+            .optimizer_features_for_cluster(cluster_id)
             .override_from(&config.features);
 
         let rows = optimizer_trace

@@ -14,7 +14,7 @@ use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{CatalogItem, Index};
 use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
-use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
+use mz_repr::optimize::OverrideFrom;
 use mz_repr::{Datum, Row};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
@@ -216,9 +216,8 @@ impl Coordinator {
 
         let target_cluster = self.catalog().get_cluster(index.cluster_id);
 
-        let features = OptimizerFeatures::from(self.catalog().system_config())
-            .override_from(&target_cluster.config.features())
-            .override_from(&self.cluster_scoped_optimizer_overrides(index.cluster_id))
+        let features = self
+            .optimizer_features_for_cluster(index.cluster_id)
             .override_from(&config.features);
 
         // TODO(mgree): calculate statistics (need a timestamp)
@@ -329,9 +328,8 @@ impl Coordinator {
             self.allocate_transient_id()
         };
 
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
-            .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
-            .override_from(&self.cluster_scoped_optimizer_overrides(*cluster_id))
+        let optimizer_config = self
+            .optimizer_config_for_cluster(*cluster_id)
             .override_from(&explain_ctx);
         let optimizer_features = optimizer_config.features.clone();
 
@@ -598,9 +596,8 @@ impl Coordinator {
 
         let target_cluster = self.catalog().get_cluster(index.cluster_id);
 
-        let features = OptimizerFeatures::from(self.catalog().system_config())
-            .override_from(&target_cluster.config.features())
-            .override_from(&self.cluster_scoped_optimizer_overrides(index.cluster_id))
+        let features = self
+            .optimizer_features_for_cluster(index.cluster_id)
             .override_from(&config.features);
 
         let rows = optimizer_trace

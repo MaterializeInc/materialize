@@ -50,7 +50,6 @@ use mz_persist_types::ShardId;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap, merge_mz_acl_items};
 use mz_repr::network_policy_id::NetworkPolicyId;
-use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, ColumnName, GlobalId, SqlColumnType, strconv};
 use mz_sql::ast::RawDataType;
@@ -865,9 +864,14 @@ impl Catalog {
     /// Extracts optimized expressions from `Op::CreateItem` operations for views
     /// and materialized views. These can be used to populate a `LocalExpressionCache`
     /// to avoid re-optimization during `apply_updates`.
+    ///
+    /// Each expression is labelled with the features the sequencer optimized it
+    /// under, resolved the same way `apply_updates` will resolve them: env-wide
+    /// for a view, per-cluster for a materialized view. A label that does not
+    /// match costs a needless re-optimization inside the transaction.
     fn extract_expressions_from_ops(
+        state: &CatalogState,
         ops: &[Op],
-        optimizer_features: &OptimizerFeatures,
     ) -> BTreeMap<GlobalId, LocalExpressions> {
         let mut exprs = BTreeMap::new();
 
@@ -879,7 +883,9 @@ impl Catalog {
                             view.global_id,
                             LocalExpressions {
                                 local_mir: (*view.locally_optimized_expr).clone(),
-                                optimizer_features: optimizer_features.clone(),
+                                optimizer_features: state
+                                    .system_config()
+                                    .env_wide_optimizer_features(),
                             },
                         );
                     }
@@ -888,7 +894,8 @@ impl Catalog {
                             mv.global_id_writes(),
                             LocalExpressions {
                                 local_mir: (*mv.locally_optimized_expr).clone(),
-                                optimizer_features: optimizer_features.clone(),
+                                optimizer_features: state
+                                    .optimizer_features_for_cluster(mv.cluster_id),
                             },
                         );
                     }
@@ -967,8 +974,7 @@ impl Catalog {
 
         // Extract optimized expressions from CreateItem ops to avoid re-optimization
         // during apply_updates. We extract before the loop since `ops` is moved there.
-        let optimizer_features = OptimizerFeatures::from(state.system_config());
-        let cached_exprs = Self::extract_expressions_from_ops(&ops, &optimizer_features);
+        let cached_exprs = Self::extract_expressions_from_ops(&state, &ops);
 
         let mut storage_collections_to_create = BTreeSet::new();
         let mut storage_collections_to_drop = BTreeSet::new();

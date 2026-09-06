@@ -249,8 +249,8 @@ where
 /// 1. To make the flag available to all stages in our [`Optimize`] pipelines
 ///    and allow engineers to set a system-wide override:
 ///    1. Add the flag to the `optimizer_feature_flags!(...)` macro call.
-///    2. Add the flag to the `feature_flags!(...)` macro call and extend the
-///       `From<&SystemVars>` implementation for [`OptimizerFeatures`].
+///    2. Add the flag to the `feature_flags!(...)` macro call and extend
+///       `SystemVars::env_wide_optimizer_features`.
 ///
 /// 2. To enable `EXPLAIN ... WITH(...)` overrides which will allow engineers to
 ///    inspect plan differences before deploying the optimizer changes:
@@ -297,15 +297,26 @@ pub enum OptimizeMode {
     Explain,
 }
 
-impl From<&SystemVars> for OptimizerConfig {
-    fn from(vars: &SystemVars) -> Self {
+impl OptimizerConfig {
+    /// Builds a config from the environment-wide system variables, i.e. with
+    /// no cluster override applied.
+    ///
+    /// Correct only for a plan that runs on no cluster, such as a `CREATE
+    /// VIEW` or a constant-folded `INSERT ... VALUES`. A plan that is
+    /// installed on or executed by a cluster must instead use
+    /// [`CatalogState::optimizer_config_for_cluster`], which layers the
+    /// cluster's `FEATURES` pin and the cluster-scoped system parameters on
+    /// top of this.
+    ///
+    /// [`CatalogState::optimizer_config_for_cluster`]: crate::catalog::CatalogState::optimizer_config_for_cluster
+    pub fn env_wide(vars: &SystemVars) -> Self {
         Self {
             mode: OptimizeMode::Execute,
             replan: None,
             no_fast_path: false,
             persist_fast_path_order: PERSIST_FAST_PATH_ORDER.get(vars.dyncfgs()),
             subscribe_snapshot_optimization: SUBSCRIBE_SNAPSHOT_OPTIMIZATION.get(vars.dyncfgs()),
-            features: OptimizerFeatures::from(vars),
+            features: vars.env_wide_optimizer_features(),
         }
     }
 }

@@ -15,7 +15,7 @@ use mz_catalog::memory::objects::{CatalogItem, View};
 use mz_expr::CollectionPlan;
 use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
-use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
+use mz_repr::optimize::OverrideFrom;
 use mz_repr::{Datum, RelationDesc, Row};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
@@ -208,8 +208,11 @@ impl Coordinator {
 
         let target_cluster = None; // Views don't have a target cluster.
 
-        let features =
-            OptimizerFeatures::from(self.catalog().system_config()).override_from(&config.features);
+        let features = self
+            .catalog()
+            .system_config()
+            .env_wide_optimizer_features()
+            .override_from(&config.features);
 
         let cardinality_stats = BTreeMap::new();
 
@@ -299,7 +302,7 @@ impl Coordinator {
         let (item_id, global_id) = self.allocate_user_id().await?;
 
         // Collect optimizer parameters.
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
+        let optimizer_config = optimize::OptimizerConfig::env_wide(self.catalog().system_config())
             .override_from(&explain_ctx);
 
         // Build an optimizer for this VIEW.
@@ -480,8 +483,11 @@ impl Coordinator {
             ExprHumanizerExt::new(transient_items, &session_catalog)
         };
 
-        let features =
-            OptimizerFeatures::from(self.catalog().system_config()).override_from(&config.features);
+        let features = self
+            .catalog()
+            .system_config()
+            .env_wide_optimizer_features()
+            .override_from(&config.features);
 
         let rows = optimizer_trace
             .into_rows(
