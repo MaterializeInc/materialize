@@ -4,9 +4,12 @@ Reproduce data for the cluster spec sheet effort.
 
 # Usage
 
-`bin/mzcompose --find cluster-spec-sheet run default`
+`bin/mzcompose --find cluster-spec-sheet run default --target=<target>`
 
 This will run all scenarios currently defined for the cluster spec sheet.
+`--target` is required: `cloud-production`, `cloud-staging`, or `docker`.
+There is deliberately no default, because the CI cleanup below destroys the
+target's region unattended.
 
 Pass `--cleanup` to disable the region after the test.
 
@@ -15,7 +18,12 @@ Pass `--cleanup` to disable the region after the test.
 
 ## Running via Buildkite
 
-The workload runs as part of the release qualification pipeline in Buildkite.
+The workload runs in the `spec-sheet` Buildkite pipeline. After a CI job
+ends, however it ends, the mzcompose plugin runs the `ci-cleanup` workflow
+with the job's arguments; for a Cloud target started with `--cleanup` it
+disables the region. A canceled or timed-out job never reaches the
+composition's own cleanup, so this is what keeps canceled runs from leaving
+regions behind.
 
 ## Running manually in Cloud
 
@@ -27,7 +35,7 @@ Once the environment variables have been set, you can run:
 
 ```
 cd test/cluster-spec-sheet
-./mzcompose run default
+./mzcompose run default --target=cloud-production
 ```
 
 ## Running in Docker
@@ -55,11 +63,11 @@ bin/mzcompose --find cluster-spec-sheet run default envd_qps_scalability  --targ
 ```
 or
 ```
-bin/mzcompose --find cluster-spec-sheet run default cluster
+bin/mzcompose --find cluster-spec-sheet run default cluster --target=cloud-production
 ```
 or
 ```
-bin/mzcompose --find cluster-spec-sheet run default envd_objects_scalability
+bin/mzcompose --find cluster-spec-sheet run default envd_objects_scalability --target=cloud-production
 ```
 or
 ```

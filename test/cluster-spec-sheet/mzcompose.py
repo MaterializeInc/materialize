@@ -3749,18 +3749,22 @@ def log_environment_info(target: "BenchTarget") -> None:
 
 
 def add_target_arguments(parser: argparse.ArgumentParser) -> None:
-    """The arguments of a workflow that constructs a bench target."""
+    """The arguments `workflow_default` and `workflow_ci_cleanup` share."""
     parser.add_argument(
         "--cleanup",
         default=False,
         action=argparse.BooleanOptionalAction,
         help="Destroy the region at the end of the workflow.",
     )
+    # Required rather than defaulting to cloud-production: `ci-cleanup` runs
+    # unattended from the CI plugin's exit trap and destroys the target's
+    # region, so a missing or malformed target must fail loudly instead of
+    # quietly selecting production. Every CI step passes it explicitly.
     parser.add_argument(
         "--target",
-        default="cloud-production",
+        required=True,
         choices=["cloud-production", "cloud-staging", "docker"],
-        help="Target to deploy to (default: cloud-production).",
+        help="Target to deploy to.",
     )
 
 
@@ -3795,6 +3799,30 @@ def make_target(composition: Composition, target: str) -> tuple["BenchTarget", M
     else:
         raise ValueError(f"Unknown target: {target}")
     return bench_target, mz
+
+
+def workflow_ci_cleanup(
+    composition: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Destroy the Cloud region of a run that did not get to its own cleanup.
+
+    The CI mzcompose plugin runs this workflow after `default` has exited, however
+    it exited, with the same arguments. A cancelled or timed-out job ends `default`
+    with SIGTERM, which skips its `finally` block, so for such a run this is the
+    only region cleanup there is. Only `--cleanup` and `--target` are read.
+    """
+    add_target_arguments(parser)
+    args, _ = parser.parse_known_args()
+    if not args.cleanup:
+        print("Not destroying the region: the run was started without --cleanup")
+        return
+    target, mz = make_target(composition, args.target)
+    if not isinstance(target, CloudTarget):
+        print(f"Nothing to clean up for --target={args.target}")
+        return
+    with composition.override(mz):
+        target.cleanup()
 
 
 def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -> None:
