@@ -7,21 +7,25 @@ that renders temporary dataflows and serves reads directly off the arrangements 
 maintenance runtime builds, zero-copy through a per-process sharing registry. It is a
 placement choice for rendered dataflows.
 
-A second mechanism, **peek offloading**, moves a fast-path index peek's *walk* off the
-serving timely worker onto a blocking task. The two were originally conceived as one and
-measurement separated them: they fix different problems, are distinguished by different
-workloads, and should be adopted, flagged and rolled separately. Peek offloading needs no
-second runtime, this design needs none of it, and it is parked pending an experiment. It
-appears here only where the comparison bounds what the interactive runtime is claimed to
-buy. See [Peek placement is a separate axis](#peek-placement-is-a-separate-axis).
+A second mechanism, **peek execution**, decides how a fast-path index peek's *walk* runs:
+in budgeted slices on the serving worker, or offloaded to a blocking task once it exceeds
+its budget. The two were originally conceived as one and measurement separated them: they
+fix different problems, are distinguished by different workloads, and are flagged and
+rolled separately. Peek execution needs no second runtime and shipped on its own, with its
+own design document (`20260825_peek_execution.md`, #38449). It appears here only where the
+comparison bounds what the interactive runtime is claimed to buy. See
+[Peek placement is a separate axis](#peek-placement-is-a-separate-axis).
 
-The feature is gated by the `ENABLE_COMPUTE_INTERACTIVE_RUNTIME` dyncfg, off in
-production and on by default in CI. With the dyncfg off, a replica runs a single
-`Solo` runtime that takes the same code paths, with no sharing registry, no second
-runtime, and no `role` metric label. It is not a byte-identical deployment: the
-`Rc` to `Arc` spine migration is unconditional and applies with the feature off,
-which the goldens show (`relations.slt` prints batch type names, and the `ii_t4`
-arrangement-size bound moved).
+The feature is gated by the `enable_compute_interactive_runtime` dyncfg, off in production
+and on by default in CI. With the dyncfg off, a replica runs a single `Solo` runtime that
+takes the same code paths, publishes nothing, and carries no `role` metric label. With it
+on, every index the maintenance runtime renders gains a publisher, which is visible in the
+goldens CI runs with the flag on: `relations.slt` lists the publisher operators, and the
+arrangement-size bound in `introspection-sources.td` moved.
+
+The implementation lands as a stack of eight pull requests, each a self-contained layer,
+followed by two that add the benchmarks. [Implementation history](#implementation-history)
+lists them.
 
 This document is the single design of record and is self-contained. The measurements it
 cites by `E` number live in the project document "Interactive read isolation: experimental
@@ -233,13 +237,13 @@ subscribe clause while *keeping* transience, so the predicate becomes
 `desc.is_transient() && desc.copy_to_ids().next().is_none()`. Keeping transience is
 what makes it cheap: transient ids are never retained by reconciliation, so nothing
 regresses there, they pass both frontier-reporting gates unchanged, and their exports
-are freshly rendered so the shared-trace re-export path is not reached. It needs the
-compaction downgrade described in
-[Compaction feedback exists, and a frozen hold defeats it](#compaction-feedback-exists-and-a-frozen-hold-defeats-it),
-plus two call-site bugs in `import_index_shared` recorded in the open findings. A
-`SUBSCRIBE` sink needs the stream and not the trace, so it is the easiest case of that
-downgrade, but the downgrade is what any other long-lived interactive dataflow needs and
-it should be built for the general case.
+are freshly rendered so the shared-trace re-export path is not reached. It relies on the
+compaction feedback described in
+[Compaction feedback flows through the reader's handle](#compaction-feedback-flows-through-the-readers-handle),
+and on closing the `SnapshotMode` gap recorded in the open findings. A `SUBSCRIBE` sink
+needs the stream and not the trace, so it is the easiest case of that feedback, but the
+feedback is what any other long-lived interactive dataflow needs and it is built for the
+general case.
 
 Maintained collections on the interactive runtime are a strictly larger change and one
 piece of it has no home in the current protocol. See the reconciliation finding in
@@ -494,11 +498,13 @@ the kernel and how well that works depends on runnable threads against available
 is why its measured wins arrive on a replica with CPU headroom, and why its behaviour on a
 saturated box is a separate and unmeasured question.
 
-**Peek placement is therefore orthogonal to this design and is not settled here.** It is
-parked pending one experiment, and neither the parking nor the experiment touches the
-interactive runtime. Making the walk cooperative is a third candidate, implemented outside
-this branch, predicted to match or beat the offload on both fixtures the offload's case
-rests on. Note that chunking a peek walk is not the same move as
+**Peek placement is therefore orthogonal to this design and is not settled here.** It was
+settled by the peek execution work, which shipped independently: the walk runs in budgeted
+slices on the worker (`INDEX_PEEK_INLINE_BUDGET`, `INDEX_PEEK_ACTIVATION_BUDGET`) and is
+offloaded to a blocking task past its budget (`ENABLE_INDEX_PEEK_OFFLOAD`). The interactive
+runtime inherits that path unchanged, see
+[The interactive serving path](#the-interactive-serving-path). Note that chunking a peek
+walk is not the same move as
 [yielding in maintenance](#why-not-yield-for-interactivity-in-one-runtime), which is ruled
 out on different grounds: a peek walk consumes no input and consolidates nothing, so
 run-to-completion is not part of its contract.
@@ -952,14 +958,17 @@ was dropped.
 
 ### Placeholder and adopt
 
-A publication point is an `Arc<SharedTrace>`. It can be created empty as a
-placeholder and later adopted by a publisher in place, filling the same `Arc`.
+A publication point is an `Arc<SharedTrace>`. It can be created empty, as an unbacked
+placeholder, and later adopted by a publisher in place, filling the same `Arc`.
 This is what makes arrival-order construction work. A differential import captures
 its input trace by value at construction time, so the import must have a real
-trace to hold even before the arrangement it reads exists. `Published::placeholder`
+trace to hold even before the arrangement it reads exists. `Published::new`
 gives it one. A later `PublishArrangement::adopt` installs the real publisher into
 that same point, and the by-value handle observes the fill because it is a live
-proxy into the shared state, not a snapshot.
+proxy into the shared state, not a snapshot. `Published::handle_at` checks the
+published `since` against the reader's `as_of` and registers the reader's hold under
+one acquisition of the state lock, so the publisher cannot advance `since` between
+the check and the registration.
 
 The `TraceAgent` that writes the arrangement lives in the publisher's sink
 closure, not in `SharedTrace`, so the writer is decoupled from the shared state.
@@ -997,9 +1006,9 @@ The publisher takes its writer-driven floors from sources Materialize already ha
   `TraceManager` update. `SharedTraceState.writer_logical` holds it, seeded
   `None` so the publisher falls back to its own current hold, the dataflow
   `as_of`, before the first command arrives.
-* Physical compaction follows the stream `upper`, mirroring
-  `TraceManager::maintenance`, which sets physical compaction to the trace upper
-  to enable batch merging.
+* Physical compaction follows the chain's *coverage*, the upper of the last
+  published batch, mirroring `TraceManager::maintenance`, which sets physical
+  compaction to the trace upper to enable batch merging.
 
 With no reader hold on a dimension, the target follows that writer floor, so with
 zero readers compaction follows the writer. The published `since` is the meet of
@@ -1007,6 +1016,17 @@ the publisher's post-forward hold and the writer floor, which keeps a registerin
 reader from latching an anti-conservative `since` that claims accuracy at
 already-merged times. An index publishes two independent arrangements, so
 readiness and `since` gating operate on `meet(oks, errs)`.
+
+A reader's handle mirrors `TraceAgent` rather than reimplementing its policy, because
+the two axes carry different frontiers and `since` is never the right physical one. A
+handle registers its logical hold at its `as_of` and its physical hold at the chain
+coverage, not at `since` and not at `as_of`: an import is seeded with the whole chain
+and wrapped in `TraceFrontier`, which advances times rather than cutting, so cuts only
+ever happen at or above the coverage. Both setters join rather than assign and report
+the join, so a consumer can never lower its own hold below a frontier the trace was
+already told it could compact past, and `get_physical_compaction` reports exactly the
+frontier the trace honours, which is what the join operator's own assertion checks
+against `map_batches`.
 
 ### Bounded import is a call-site choice, not a limit of the primitive
 
@@ -1025,15 +1045,16 @@ activation pushes arrived batches to every registered queue, pushes a `Frontier`
 when `upper` advances, and activates every importer.
 
 **What actually makes interactive imports bounded is the call site.**
-`import_index_shared` in `render.rs` synthesizes `snapshot_until` as
-`as_of.step_forward()` and passes that instead of `self.until`, with a comment saying
-`self.until` may be empty for a long-lived dependency "so it cannot serve as the
-snapshot bound". That is a deliberate narrowing to single-time reads, and reversing it
-is a one-argument change.
+`import_index_shared` in `render.rs` synthesizes `snapshot_until` as the frontier one
+step past `as_of` and passes that instead of `self.until`, because `self.until` may be
+empty for a long-lived dependency and so cannot serve as the snapshot bound. An `as_of`
+at the maximum timestamp has no finite successor, so it drops out and the bound becomes
+the empty frontier, which reads the final state. That is a deliberate narrowing to
+single-time reads, and reversing it is a one-argument change.
 
 The reason that matters is that it moves the obstacle. Following imports are not the
 hard part. See
-[Compaction feedback exists, and a frozen hold defeats it](#compaction-feedback-exists-and-a-frozen-hold-defeats-it).
+[Compaction feedback flows through the reader's handle](#compaction-feedback-flows-through-the-readers-handle).
 
 Import is pairwise: importer worker `i` reads publisher worker `i`. That is sound
 only when both sides shard keys the same way, `key.hashed() % peers`, with equal
@@ -1043,7 +1064,7 @@ the requested `as_of` means the controller offered an unreadable `as_of`, a
 protocol error, and the import must panic rather than silently read coalesced
 data.
 
-### Compaction feedback exists, and a frozen hold defeats it
+### Compaction feedback flows through the reader's handle
 
 An arranged collection is two things: a stream of batches, and a handle to the trace. A
 long-running dataflow generally needs both. A join looks up each side's incoming batches
@@ -1066,23 +1087,16 @@ needs no new command.
   trace handles as their frontiers advance, and `TraceFrontier` forwards the downgrades
   through, so a well-behaved importer already causes the maintenance trace to compact.
 
-**One frozen hold defeats it.** `import_shared_index`'s caller sets
-`set_logical_compaction(as_of)` and `set_physical_compaction(as_of)` on `oks_hold` and
-`errs_hold` and then retains those handles as dataflow tokens, never downgrading them. That
-is fatal rather than merely redundant because of the aggregation: the target is a **meet**
-across all holds, so a single hold pinned at `as_of` dominates it no matter how far every
-other hold advances. The downstream handles downgrade correctly and it makes no difference.
-
-For a single-time read the pin lasts milliseconds and is not observable. For a long-lived
-importer it pins the imported index's `since` at the importer's start time for the
-importer's whole life, which is why this is a prerequisite for any long-lived interactive
-dataflow rather than a follow-up.
-
-**So the fix is to downgrade, not to release.** Feed the export's frontier into the retained
-handles' `set_logical_compaction` rather than pinning them at `as_of`, or do not retain a
-separate hold at all. Release rather than downgrade is sufficient only for an importer that
-needs the stream and never the trace, which a `SUBSCRIBE` sink plausibly is. That is a
-narrower case than the general one and it should not be the basis of the design.
+**One frozen hold would defeat it**, because the target is a **meet** across all holds: a
+single hold pinned at `as_of` dominates it no matter how far every other hold advances.
+So the import keeps no separate hold. The read hold is each returned `Arranged`'s own
+trace handle, registered at `as_of`, and the dataflow token retains only the registry
+slot's `Arc`, whose strong count is the registry's measure of a live reader. A consumer
+that keeps the trace downgrades that handle as its frontier advances, and the publisher
+compacts behind it. For a single-time read the distinction is unobservable. For a
+long-lived importer it is what lets the imported index's `since` advance for the
+importer's whole life, so it is in place before any such importer exists rather than
+retrofitted for one.
 
 Separately, and not a compaction problem: the import queue is unbounded with no
 backpressure, deliberately, so that maintenance progress is never coupled to a slow reader.
@@ -1105,7 +1119,9 @@ per-worker slot holding the published `oks` and `errs` points.
   re-examines only the affected pending work. The `map` and `wakers` locks are
   independent, and the lost-wakeup argument that lets them stay separate is a
   map-lock total order plus drain-before-reread plus a sticky activation token.
-  The per-step `process_peeks` scan is removed on the interactive runtime.
+  A shared peek that cannot yet be answered leaves the sweep's queue and parks in
+  `pending_work` keyed by its target id, so only a dirty mark for that id re-examines
+  it.
 * **One close, no withdrawal command.** An adopted point closes when its publisher
   drops, so no explicit withdrawal command is needed. A placeholder that is never
   adopted, because the index creation it anticipated was cancelled, leaves an empty
@@ -1114,19 +1130,39 @@ per-worker slot holding the published `oks` and `errs` points.
   controller's read-hold discipline, and the leaked slot is an empty publication
   point, not a retained arrangement. Reclaiming it would need a reader-teardown
   hygiene path that does not exist.
-* **Re-exports.** A `Trace` re-export, where one index aliases another's
-  arrangement, shares the existing `Arc` under the new id rather than
-  republishing. The source's seal signal wakes the re-export transitively.
+* **Re-exports are aliases.** An index whose dataflow imports another index on the
+  same relation and key re-exports the imported arrangement rather than arranging
+  again, and on a publishing runtime `publish_alias` registers the new id as a second
+  name for the target's slot. Readers of either id share one publication point, and
+  the re-export dataflow needs no operators of its own, which is what keeps
+  `mz_compute_error_counts` attributing the target's errors to it, and what keeps the
+  resident cost of a re-export near zero. Before aliasing, when every re-export
+  published through its own import of the shared traces, that cost measured about
+  150 KiB per re-export. `publish_alias` refuses when a reader already created a slot
+  for the alias id, because that slot is the point the reader imported and only a
+  publisher writing into it can back it. The caller then falls back to importing the
+  shared traces and publishing them under the alias id, which is the one case where a
+  re-export dataflow has operators. While the target lives, its frontiers govern the
+  shared point: the alias dataflow imports the target, so the controller never
+  advances the target's `since` past an alias's. Once the target drops, the point
+  stays reachable under the alias ids and its frontiers move to the meet of what the
+  aliases have noted. A seal on the target notifies its aliases too. The registry's
+  three locks are taken in the order map, aliases, wakers.
 
 ## The interactive serving path
 
 The interactive runtime serves everything through the registry.
 
-* **Fast-path index peeks** read the published arrangement directly, served inline on the
-  interactive runtime's own worker step (`PendingPeek::IndexShared`). Once reads live in a
-  separate runtime, the runtime itself is the isolation mechanism, so no async hand-off is
-  needed for this design to work. Walking off the worker stays available as an independent
-  substrate choice on either runtime, which is the orthogonal axis above.
+* **Fast-path index peeks** read the published arrangement through the same `IndexPeek`
+  path the maintenance runtime uses for its local traces. `IndexTraces` names the
+  provenance, `Local` for a pinned `TraceBundle` and `Shared` for handles minted from the
+  registry on each attempt, and everything past that point, the budgeted walk, the
+  offload past the budget, the stash and the result limits, is one code path. The only
+  difference is where an unanswerable peek waits: a local peek stays in the sweep's
+  queue, a shared one parks in `pending_work` until its target's dirty mark. Once reads
+  live in a separate runtime, the runtime itself is the isolation mechanism, and the walk
+  substrate stays an independent choice on either runtime, which is the orthogonal axis
+  above.
 * **Slow-path query dataflows** import the maintenance arrangements as real
   `ArrangementFlavor::SharedTrace` arrangements and render joins and reduces over
   them. Importing as a real arrangement, not a substituted collection, is
@@ -1159,8 +1195,19 @@ The interactive runtime serves everything through the registry.
 `src/compute-client/src/multiplex.rs` presents one controller endpoint over the
 two runtimes.
 
-* It routes peeks and one-shot work to interactive, maintained work to
-  maintenance, and lifecycle commands to both.
+* It routes peeks to interactive, `CreateDataflow` by
+  `DataflowDescription::is_peek_dataflow` (see
+  [The bounded-read boundary](#the-bounded-read-boundary)), maintained work to
+  maintenance, and lifecycle commands to both. A peek dataflow reads published
+  maintenance indexes and never another temporary collection, and nothing in the
+  protocol enforces that, so the multiplexer soft-asserts that a peek dataflow imports
+  no transient id rather than render one that silently finds no input. Naming the
+  runtime in the dataflow description, so that placement is the control plane's
+  decision, is tracked as CPU-216.
+* It broadcasts `AllowCompaction` for every non-transient collection to both runtimes,
+  see [Protocol invariants](#protocol-invariants), and forwards it for transient ones to
+  the owner. An empty frontier is a drop and evicts the owner entry, so the state does
+  not grow without bound.
 * It does not deduplicate peek responses, and keeps no per-peek state. The
   exactly-one-`PeekResponse`-per-uuid contract is upheld below and above it, by the
   per-worker `PartitionedComputeState` in each process and the controller's
@@ -1169,8 +1216,9 @@ two runtimes.
 * It forwards each collection's `Frontiers` only from the runtime that owns the
   collection. Both runtimes install the internal logging dataflows, so without
   this rule the interactive runtime's empty copies would regress the controller's
-  per-collection frontier. State: `transient_owner` maps a `GlobalId` to its
-  owning runtime.
+  per-collection frontier. State: `transient_owner`, the set of transient ids the
+  interactive runtime renders; every other id is maintenance's. It is per connection
+  and cleared by `Hello`.
 
 ## Roles and process globals
 
@@ -1211,6 +1259,12 @@ mechanism.
   production and on by default in the variable CI system parameters, so the suite
   exercises the two-runtime path broadly. The compiled default stays off, so
   production is unaffected.
+* In CI the flag is a `VariableSystemParameter` defaulting to `true`, so sqllogictest,
+  testdrive and the mzcompose suites provision two-runtime replicas, and the parallel
+  workload flips it at random. Unmanaged replicas are launched by the test itself
+  rather than by the controller, so the flag never reaches them. A suite that wants the
+  second runtime on one, as the feature benchmark does, passes
+  `--interactive-compute-timely-config` to its `clusterd` service directly.
 * When enabled, the controller launches replicas with a second interactive
   runtime configured by the `--interactive-compute-timely-config` CLI argument
   (its own worker ports). The dyncfg controls whether the controller passes that
@@ -1275,87 +1329,12 @@ decision rather than a patch.
   reconnect. Fixing it needs the two runtimes to exchange retained-id sets, and the
   protocol has no place for that. This is the piece of "maintained dataflows on
   interactive" that is structurally foreclosed rather than merely unbuilt.
-* **The inert physical hold, and a claim about it that needs checking.** The defect
-  itself stands: with no reader holds the publisher forwards the stream `upper` as its
-  physical fallback, `set_physical_compaction` only joins, and a hold registered below
-  that is inert, so a merge can straddle a reader's cut into the `batches_through`
-  assert and a shared-fate abort. A remedy that fits the existing types: record the
-  floor the publisher has already forwarded in the shared state, clamp a newly
-  registered hold up to it rather than to `since` alone, and assert against it at import
-  time, converting a straddle abort into a loud protocol-ordering failure at import.
-  Separate the cause from how it manifests, because they have different lifetimes.
-
-  The **cause** is a window in which `physical_holds` is empty. The publisher then uses
-  its `writer_physical = upper` fallback, and `TraceAgent::set_physical_compaction` only
-  joins, so the agent is pinned at `upper` irreversibly. Once any reader hold is
-  registered the target becomes a meet over holds and the fallback is not used, so the
-  window closes. The damage, though, does not heal.
-
-  How it **manifests** depends on what the importer does with the trace.
-  `import_snapshot_at` returns `Arranged<TraceFrontier<SharedTraceHandle>>`, so the
-  handle *is* the downstream trace rather than a local re-arrangement. A stream-only
-  consumer cuts once, at registration, and has one chance to meet a spine that merged
-  across it. A join cuts on every activation: differential's join sets `acknowledged`
-  from arriving batch uppers and calls `batches_through(acknowledged)` each time, and
-  `acknowledged` necessarily trails the publisher's `upper` because the publisher has
-  sealed ahead while the join works through the batch ending there. So once the agent is
-  pinned high, every activation is a candidate for the straddle.
-
-  **Take differential and the single-runtime path as correct, and the defect localises
-  entirely to our reimplementation of a mechanism differential already has.**
-
-  Why there is a reimplementation at all: `TraceReader`'s compaction setters take
-  `&mut self`, so they cannot be driven through an `Arc`. Differential's own answer to
-  the same problem is `TraceBox`, which holds a `MutableAntichain` over every handle's
-  hold and applies the aggregate to the trace, with each `TraceAgent` clone owning an
-  entry. That is unavailable across threads because `TraceAgent` is built on
-  `Rc<RefCell<..>>` and is not `Send`. So `SharedTraceHandle` is a per-reader owned
-  struct over an `Arc<SharedTrace<Tr>>`, readers record intent under a mutex, and the
-  publisher applies the meet to the one real `TraceAgent` it owns. The `Arc` is what
-  forces the indirection, and the indirection is where the semantics drifted.
-
-  It drifts in two places, both mechanical.
-
-  1. **We overwrite where differential joins.** `set_physical_compaction` stores the
-     requested frontier with no join and no clamp, and `get_physical_compaction` returns
-     it. `TraceAgent::set_physical_compaction` joins the request into the handle's own
-     hold and reports the join, so differential forbids a handle from lowering its own
-     hold and always reports what it actually holds. Ours permits lowering and reports
-     the request. That is what disables differential's tripwire: the join asserts its
-     physical compaction is at or below `acknowledged`, which *fires* against a stock
-     agent pinned above the cut and points straight at the cause, and passes against our
-     handle because the handle reports a frontier it asked for and never received. The
-     straddle then surfaces later inside `batches_through` as an abort with no obvious
-     origin.
-  2. **`register` seeds the physical hold from a logical quantity.** Both dimensions are
-     seeded from `state.since`, which is computed as a meet of logical frontiers, while
-     the publisher's agent may have forwarded physical compaction far above it. So a
-     fresh handle enters holding a physical frontier the trace does not honour, the meet
-     drops below the agent's floor, and `Spine::set_physical_compaction` rewinds past
-     already-merged batches with only a `debug_assert!` in the way, which compiles out of
-     the profile we ship. `TraceAgent::clone` does not do this: it seeds the new entry
-     from the cloned handle's own current hold, which is a value the trace already
-     honours.
-
-  So the fix is to mirror `TraceAgent` rather than to change policy. Join on set and
-  report the join. Seed a registration from the publisher's forwarded physical floor
-  rather than from `since`, and assert against that floor at import time so a request the
-  trace cannot honour fails loudly where it is made.
-
-  Note what is *not* a divergence. `writer_physical = upper` matches differential, where
-  a trace with zero live handles also permits maximal merging. The fallback is not the
-  bug, and the circularity its comment describes, that the publisher's own hold would
-  stop the spine compacting and so stop the per-batch `since` from advancing, is a real
-  constraint to preserve.
-
-  It remains a race rather than a certainty, since being permitted to merge is not
-  merging and the spine's fuel schedule decides when.
-* **A peek against a dropped or never-published shared id hangs silently.** The
-  registry returns no handle, the peek reports not-ready and is re-enqueued, and
-  nothing will mark it again. The local path fails loudly on the same condition.
-  Never-adopted placeholders are also never evicted.
-* **`reexport`'s failure is discarded at both call sites**, so an alias that was
-  never established becomes a permanently unresolvable peek rather than an error.
+* **A peek against a never-published shared id waits until it is cancelled.** The
+  registry returns no handle, the peek parks in `pending_work`, and only a
+  publication, a seal or a cancel for that id re-examines it. The local path fails
+  loudly on the same condition. The controller's read-hold discipline keeps a published
+  id from dropping while a peek targets it, so the case is an index whose creation was
+  cancelled before it rendered. Never-adopted placeholders are also never evicted.
 * **The coordinator control plane is a parallel, unsolved bottleneck.** Peeks
   serialize behind DDL on the single coordinator thread, upstream of compute.
   Two-runtime fixes the data plane and does not touch this. For non-introspection
@@ -1370,7 +1349,7 @@ decision rather than a patch.
   process. Profilers cannot tell them apart by name. A per-worker rename in the
   worker entrypoint would fix it, and would fix the pre-existing storage and
   compute collision as a side effect.
-* **The interactive runtime is an introspection blind spot.** It runs with
+* **The interactive runtime is an introspection blind spot** (CPU-222). It runs with
   logging disabled and serves introspection from maintenance's published copies,
   which is what keeps introspection answerable during hydration. The cost is that
   the interactive runtime's own dataflows, arrangement sizes, and scheduling are
@@ -1397,8 +1376,12 @@ decision rather than a patch.
   index. That run crossed two builds, so it establishes only that no doubling appeared,
   rather than that the effect is absent. Whether it is a reporting artifact or real
   retention decides whether the feature carries a memory regression, so it should be
-  settled on a single build before the flag is considered for production. `test/testdrive/introspection-sources.td`
-  carries the raised bound and a pointer to this entry.
+  settled on a single build before the flag is considered for production.
+  `test/testdrive/introspection-sources.td` carries the raised bound and a pointer to
+  this entry. The `ManyIndexesIdle` feature benchmark, 200 published one-key indexes
+  against a single-runtime image on one build, put clusterd's resident memory within
+  2% in two of three nightly runs and 16% above in the third, so at that scale the
+  doubling is at most partly resident.
 * **Storage introspection is patched into maintenance introspection.** A
   pre-existing coupling, where storage's introspection is merged into the compute
   runtime's introspection, is inherited unchanged by the split. It complicates
@@ -1589,25 +1572,67 @@ the existing answer and a better one.
 
 ## Testing strategy
 
-* A `clusterd-test-driver` workflow drives an interactive query dataflow that
-  imports an unpublished maintenance index, scheduled before the index publishes,
-  and asserts its result peek resolves correctly only after publication. This
-  proves the bind, fill, resolve read path is served off the maintenance worker.
-* A shared-fate subprocess test verifies a panic in either runtime aborts the
-  process.
-* Unit tests cover the sharing primitive and registry, including the single-source
-  feed, placeholder-adopted-late joins, cross-thread reads, the compaction
-  invariants, and a join and a reduce over a chain the publisher's spine has merged
-  across, read at a stale `as_of`.
-* The `TwoRuntimeReadIsolation` parallel-benchmark scenario measures read latency
-  while the maintenance runtime is saturated by hydration churn, at a read rate
-  below the two-runtime serving drain. It reads `strict_serializable=False`, so it
-  measures the sealed-timestamp population the feature helps, not the strict
-  serializable one it does not. On a box with CPU headroom, two-runtime holds the
-  point-read p50 flat while a single-runtime baseline backlogs without bound. Above
-  the two-runtime drain both configurations backlog and the comparison degenerates
-  into a statement about offered rate, which is why the scenario's rate was lowered
-  rather than left where the baseline's percentiles were pure queueing artifacts.
+* Unit tests cover the sharing primitive and registry: the single-source feed,
+  placeholder-adopted-late joins, cross-thread reads, the compaction invariants, a join
+  and a reduce over a chain the publisher's spine has merged across read at a stale
+  `as_of`, and the alias rules, where an alias shares the target's slot, is refused once a
+  reader holds its own point, and inherits the target's frontiers until the target drops
+  and the aliases' meet takes over. The multiplexer's routing and frontier filtering and
+  the index peek sweep have their own.
+* A shared-fate subprocess test (`two_runtime_shared_fate.rs`) verifies a panic in either
+  runtime aborts the process.
+* Four `clusterd-test-driver` specs, run at one and two workers, cover the runtime
+  boundary: a fast-path read through a published index, a query dataflow that binds to
+  an index before it is published and resolves after, a read through an index that
+  re-exports another's arrangement and so aliases its publication point, and a query
+  dataflow that binds to such a re-export before it renders, which is the one case
+  where the re-export publishes through an import.
+* `interactive_runtime.slt` pins the flag before creating a two-worker cluster and reads
+  through indexes, re-exports and introspection relations on it.
+* Feature benchmarks under the `InteractiveRuntime` group price each read path on a quiet
+  replica against a single-runtime image: a join that needs a peek dataflow, a point
+  lookup, `CREATE INDEX` plus the first read through it, an introspection read, and
+  clusterd memory with 200 published indexes idle, after a restart, and with 200
+  re-exports of one arrangement. The benchmark's default cluster is an unmanaged replica,
+  so its `clusterd` service is launched with the second runtime explicitly.
+* Parallel-benchmark scenarios measure the isolation claims under contention and gate on
+  regression thresholds. `ReadIsolationUnderHydration` and `IntrospectionUnderHydration`
+  read at a fixed rate while hydration churn saturates the maintenance workers.
+  `TemporaryDataflowFloor` is the quiet-replica cost of a peek dataflow.
+  `FreshnessUnderPeekWalks` is how far full index walks hold back a maintained index's
+  frontier. `MaintenanceUnderPeekSaturation` is the converse: a peek load saturates every
+  worker of an eight-worker cluster on a sixteen-core agent while a materialized view's
+  freshness is measured from an idle cluster, which prices the oversubscription of two
+  runtimes' worker threads. Scenarios whose measurement is peek service time read at
+  SERIALIZABLE, because a strict serializable read waits on the frontier the contention
+  stalls, which is M5 rather than the mechanism under test.
+* The `bounded-memory` composition's `swap` workflow runs a replica whose arrangements
+  exceed its memory limit by 1.5x, 2x, 3x and 6x with unlimited swap, and asserts that
+  the read completes and that the replica's cgroup reports swap use, so the paged-out
+  case has a regression test.
+
+What one nightly run measured on the CI agents, two runtimes against one, reported as
+p50 / p99 unless stated:
+
+| Scenario, measured query | Two runtimes | Single runtime |
+|---|---|---|
+| Point lookup under hydration churn | 5.7 / 46 ms | 225 / 1711 ms |
+| Range count under hydration churn | 53 / 84 ms | 2001 / 5536 ms |
+| Hydration churn cycle, same scenario | 7.2 s | 11.0 s |
+| Introspection read under hydration churn | 94 ms / 2.4 s | 595 s / 629 s |
+| Strict serializable read after write, under full index walks | 13.9 / 22 ms | 15.1 / 75 ms |
+| Peek dataflow on a quiet replica | 19.9 / 25 ms | 19.9 / 53 ms |
+| Point lookup behind expensive peeks | 4.7 / 6.5 ms | 4.8 / 7.0 ms |
+| Materialized view freshness under peek saturation | 61 / 1449 ms | 642 / 1249 ms |
+| Clusterd memory, 200 re-exports idle, before aliasing | +45% to +64% | baseline |
+| Clusterd memory, 200 re-exports idle, aliased | +1.3% | baseline |
+
+The introspection row is the case the design is justified by: with one runtime the
+introspection reads queued behind the churn for the whole load phase. The saturation row
+says the sixteen worker threads on sixteen cores cost nothing measurable at that size, since
+the tails were within 16% of each other and the churn throughput was equal, and that the
+median moved because the view's writes no longer wait behind peeks. The expensive-peeks row is peek-versus-peek queueing,
+which the second runtime does not address and the equal numbers confirm.
 
 ## Implementation history
 
@@ -1624,6 +1649,33 @@ differential-dataflow.
 The read-hold protocol went through three mechanisms before the current one. Two
 reconstructed the lost command ordering rather than restoring it, and both are recorded
 under [Rejected alternatives](#rejected-alternatives).
+
+Re-exports became aliases late. The first cut published each re-export through its own
+import of the shared traces, which cost about 150 KiB of resident memory per re-export and
+gave the re-export dataflow operators, so `mz_compute_error_counts` stopped attributing
+the target's errors to it. Aliasing restored both, and the import path survives only as
+the fallback for a reader that bound to the alias id first.
+
+The peek path was unified with the peek execution work: the interactive runtime's own
+`PendingPeek` variant was folded into `IndexPeek`, with `IndexTraces` naming the trace
+provenance, so budgeting, offload and the stash apply to shared and local traces alike.
+
+The implementation is split into a stack of layers, each reviewable on its own and each
+compiling and passing its tests without the ones above it:
+
+1. the shared-trace primitive (#38386),
+2. the per-process sharing registry (#38387),
+3. the multiplexer with broadcast compaction (#38388),
+4. publication of maintained indexes, with re-exports as aliases (#38389),
+5. import of published indexes as a shared arrangement (#38390),
+6. the second runtime, its role, and the shared-fate test (#38391),
+7. fast-path peeks on the interactive runtime (#38392),
+8. the flag, on in test configurations, with the driver specs and the moved goldens
+   (#38393),
+
+followed by the benchmarks that guard the read paths (#38676) and price oversubscription
+and publication at scale (#38678). The swap scenarios in `bounded-memory` are independent
+of the stack (#38683).
 
 Every planning and evaluation document that preceded this one has been folded in or moved
 out, so this directory holds one design document and nothing else. The planning documents
