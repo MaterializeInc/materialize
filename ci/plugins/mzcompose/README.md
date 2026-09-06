@@ -24,4 +24,18 @@ at the last occurrence of the marker. Logs without the marker are scanned in
 full. This is useful for workflows that exercise historical binaries before
 testing the current build.
 
+## Cleaning up resources outside of Docker
+
+A composition that creates resources outside of Docker, such as a Cloud
+region, can define a workflow named `ci-cleanup`. The command hook runs it
+after the main workflow has exited, however it exited, and passes it the same
+`args`. Cancelling or timing out a job ends the main workflow with SIGTERM,
+which does not run Python `finally` blocks, so a composition must not rely on
+its own cleanup path for those cases. Before the workflow runs, the hook kills
+the main workflow's containers, so nothing left over from the main run can
+race the cleanup; the Docker teardown proper happens afterwards. The workflow
+must be idempotent: it also runs after a successful run that already cleaned
+up. It writes no JUnit report, so the main workflow's report survives. Its
+failure is recorded in the error annotation and fails an otherwise green job.
+
 [Buildkite plugin]: https://buildkite.com/docs/agent/v3/plugins
