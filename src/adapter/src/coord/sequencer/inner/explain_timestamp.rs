@@ -137,7 +137,7 @@ impl Coordinator {
         }: ExplainTimestampOptimize,
     ) -> Result<StageResult<Box<ExplainTimestampStage>>, AdapterError> {
         // Collect optimizer parameters.
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+        let optimizer_config = optimize::OptimizerConfig::env_wide(self.catalog().system_config());
 
         let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 

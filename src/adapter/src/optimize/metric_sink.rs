@@ -747,7 +747,7 @@ mod tests {
         let catalog = Arc::new(SingleTableCatalog::new());
         let cluster_id = ClusterId::user(1).expect("valid cluster id");
         let compute_instance = ComputeInstanceSnapshot::new_without_collections(cluster_id);
-        let config = OptimizerConfig::from(&SystemVars::default());
+        let config = OptimizerConfig::env_wide(&SystemVars::default());
         let metrics = OptimizerMetrics::register_into(&MetricsRegistry::new(), Duration::MAX);
 
         let mut optimizer = Optimizer::new(

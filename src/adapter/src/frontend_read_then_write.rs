@@ -141,7 +141,6 @@ use mz_expr::row::RowCollection;
 use mz_expr::{CollectionPlan, Id, LocalId, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::cast::CastFrom;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
-use mz_repr::optimize::OverrideFrom;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::catalog::CatalogError;
 use mz_sql::plan::{self, MutationKind, QueryWhen};
@@ -1260,13 +1259,7 @@ impl PeekClient {
         let (_, view_id) = self.transient_id_gen.allocate_id();
         let (_, sink_id) = self.transient_id_gen.allocate_id();
         let debug_name = format!("frontend-read-then-write-subscribe-{}", sink_id);
-        let optimizer_config = optimize::OptimizerConfig::from(catalog.system_config())
-            .override_from(&catalog.get_cluster(cluster_id).config.features())
-            .override_from(
-                &catalog
-                    .state()
-                    .cluster_scoped_optimizer_overrides(cluster_id),
-            );
+        let optimizer_config = catalog.state().optimizer_config_for_cluster(cluster_id);
 
         let mut optimizer = optimize::subscribe::Optimizer::new(
             Arc::<Catalog>::clone(catalog),

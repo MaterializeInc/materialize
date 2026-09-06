@@ -16,7 +16,7 @@ use mz_controller_types::ClusterId;
 use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
-use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
+use mz_repr::optimize::OverrideFrom;
 use mz_repr::{Datum, GlobalId, Timestamp};
 use mz_sql::ast::{ExplainStage, Statement};
 use mz_sql::catalog::CatalogCluster;
@@ -253,9 +253,8 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(cluster.id())
             .expect("compute instance does not exist");
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
-            .override_from(&self.catalog.get_cluster(cluster.id()).config.features())
-            .override_from(&self.cluster_scoped_optimizer_overrides(cluster.id()))
+        let optimizer_config = self
+            .optimizer_config_for_cluster(cluster.id())
             .override_from(&explain_ctx);
 
         if cluster.replicas().next().is_none() && explain_ctx.needs_cluster() {
@@ -776,9 +775,7 @@ impl Coordinator {
 
         if let Some(trace) = plan_insights_optimizer_trace {
             let target_cluster = self.catalog().get_cluster(cluster_id);
-            let features = OptimizerFeatures::from(self.catalog().system_config())
-                .override_from(&target_cluster.config.features())
-                .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id));
+            let features = self.optimizer_features_for_cluster(cluster_id);
             let insights = trace
                 .into_plan_insights(
                     &features,

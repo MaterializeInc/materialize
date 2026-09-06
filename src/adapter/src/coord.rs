@@ -144,7 +144,7 @@ use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
-use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, SqlRelationType, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
@@ -2290,10 +2290,10 @@ impl Coordinator {
     /// introspection relations. The `replica`-scoped overrides reach the compute
     /// controller's per-replica dyncfg layer through the catalog implication for
     /// the persisted change. The `cluster`-scoped layer is resolved at plan time
-    /// via [`CatalogState::cluster_scoped_optimizer_overrides`].
+    /// via [`CatalogState::optimizer_features_for_cluster`].
     ///
     /// [`CatalogState`]: crate::catalog::CatalogState
-    /// [`CatalogState::cluster_scoped_optimizer_overrides`]: crate::catalog::CatalogState::cluster_scoped_optimizer_overrides
+    /// [`CatalogState::optimizer_features_for_cluster`]: crate::catalog::CatalogState::optimizer_features_for_cluster
     pub(crate) async fn reconcile_scoped_system_parameters(
         &mut self,
         scoped: ScopedParameters,
@@ -2528,16 +2528,24 @@ impl Coordinator {
         self.controller.storage.update_parameters(storage_config);
     }
 
-    /// Returns the cluster-coherent scoped optimizer-feature overrides for
-    /// `cluster_id`. See
-    /// [`CatalogState::cluster_scoped_optimizer_overrides`](crate::catalog::CatalogState::cluster_scoped_optimizer_overrides).
-    pub(crate) fn cluster_scoped_optimizer_overrides(
+    /// Resolves the optimizer features for a plan that runs on `cluster_id`.
+    /// See
+    /// [`CatalogState::optimizer_features_for_cluster`](crate::catalog::CatalogState::optimizer_features_for_cluster).
+    pub(crate) fn optimizer_features_for_cluster(
         &self,
         cluster_id: ClusterId,
-    ) -> OptimizerFeatureOverrides {
+    ) -> OptimizerFeatures {
         self.catalog()
             .state()
-            .cluster_scoped_optimizer_overrides(cluster_id)
+            .optimizer_features_for_cluster(cluster_id)
+    }
+
+    /// Resolves the optimizer config for a plan that runs on `cluster_id`. See
+    /// [`CatalogState::optimizer_config_for_cluster`](crate::catalog::CatalogState::optimizer_config_for_cluster).
+    pub(crate) fn optimizer_config_for_cluster(&self, cluster_id: ClusterId) -> OptimizerConfig {
+        self.catalog()
+            .state()
+            .optimizer_config_for_cluster(cluster_id)
     }
 
     /// Initializes coordinator state based on the contained catalog. Must be
@@ -3739,17 +3747,7 @@ impl Coordinator {
         let mut uncached_expressions = BTreeMap::new();
 
         let optimizer_config = |catalog: &Catalog, cluster_id| {
-            let system_config = catalog.system_config();
-            let overrides = catalog.get_cluster(cluster_id).config.features();
-            OptimizerConfig::from(system_config)
-                .override_from(&overrides)
-                // A cluster-scoped LaunchDarkly rule beats a manual `FEATURES`
-                // pin.
-                .override_from(
-                    &catalog
-                        .state()
-                        .cluster_scoped_optimizer_overrides(cluster_id),
-                )
+            catalog.state().optimizer_config_for_cluster(cluster_id)
         };
 
         for entry in ordered_catalog_entries {

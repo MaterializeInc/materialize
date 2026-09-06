@@ -23,7 +23,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::JoinHandle;
 use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
-use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
+use mz_repr::optimize::OverrideFrom;
 use mz_repr::{Datum, GlobalId, IntoRowIterator, Timestamp};
 use mz_sql::ast::Raw;
 use mz_sql::catalog::CatalogCluster;
@@ -481,14 +481,9 @@ impl PeekClient {
         let compute_instance_snapshot =
             ComputeInstanceSnapshot::new_without_collections(cluster.id());
 
-        let optimizer_config = optimize::OptimizerConfig::from(catalog.system_config())
-            .override_from(&catalog.get_cluster(cluster.id()).config.features())
-            // A cluster-scoped LaunchDarkly rule beats a manual `FEATURES` pin.
-            .override_from(
-                &catalog
-                    .state()
-                    .cluster_scoped_optimizer_overrides(cluster.id()),
-            )
+        let optimizer_config = catalog
+            .state()
+            .optimizer_config_for_cluster(cluster.id())
             .override_from(&explain_ctx);
 
         if cluster.replicas().next().is_none() && explain_ctx.needs_cluster() {
@@ -1217,15 +1212,9 @@ impl PeekClient {
                 // Generate plan insights notice if needed
                 if let Some(trace) = plan_insights_optimizer_trace {
                     let target_cluster = catalog.get_cluster(target_cluster_id);
-                    let features = OptimizerFeatures::from(catalog.system_config())
-                        .override_from(&target_cluster.config.features())
-                        // A cluster-scoped LaunchDarkly rule beats a manual
-                        // `FEATURES` pin.
-                        .override_from(
-                            &catalog
-                                .state()
-                                .cluster_scoped_optimizer_overrides(target_cluster_id),
-                        );
+                    let features = catalog
+                        .state()
+                        .optimizer_features_for_cluster(target_cluster_id);
                     let insights = trace
                         .into_plan_insights(
                             &features,

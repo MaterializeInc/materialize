@@ -2386,33 +2386,42 @@ feature_flags!(
     },
 );
 
-impl From<&super::SystemVars> for OptimizerFeatures {
-    fn from(vars: &super::SystemVars) -> Self {
-        Self {
-            enable_eager_delta_joins: vars.enable_eager_delta_joins(),
-            enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
-            enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
-            enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
-            enable_letrec_fixpoint_analysis: vars.enable_letrec_fixpoint_analysis(),
-            enable_cardinality_estimates: vars.enable_cardinality_estimates(),
-            persist_fast_path_limit: vars.persist_fast_path_limit(),
+impl super::SystemVars {
+    /// Reads the optimizer features from the environment-wide system
+    /// variables, i.e. the base layer with no cluster override applied.
+    ///
+    /// This is the weakest layer of the optimizer-feature stack and is the
+    /// correct value only for a plan that runs on no cluster, such as a
+    /// `CREATE VIEW` or a constant-folded `INSERT ... VALUES`. A plan that is
+    /// installed on or executed by a cluster must instead resolve its features
+    /// through the catalog's per-cluster resolver, which layers the cluster's
+    /// `FEATURES` pin and the cluster-scoped system parameters on top of this.
+    pub fn env_wide_optimizer_features(&self) -> OptimizerFeatures {
+        OptimizerFeatures {
+            enable_eager_delta_joins: self.enable_eager_delta_joins(),
+            enable_new_outer_join_lowering: self.enable_new_outer_join_lowering(),
+            enable_reduce_mfp_fusion: self.enable_reduce_mfp_fusion(),
+            enable_variadic_left_join_lowering: self.enable_variadic_left_join_lowering(),
+            enable_letrec_fixpoint_analysis: self.enable_letrec_fixpoint_analysis(),
+            enable_cardinality_estimates: self.enable_cardinality_estimates(),
+            persist_fast_path_limit: self.persist_fast_path_limit(),
             reoptimize_imported_views: false,
-            enable_join_prioritize_arranged: vars.enable_join_prioritize_arranged(),
-            enable_projection_pushdown_after_relation_cse: vars
+            enable_join_prioritize_arranged: self.enable_join_prioritize_arranged(),
+            enable_projection_pushdown_after_relation_cse: self
                 .enable_projection_pushdown_after_relation_cse(),
-            enable_union_cancellation_after_relation_cse: vars
+            enable_union_cancellation_after_relation_cse: self
                 .enable_union_cancellation_after_relation_cse(),
-            enable_less_reduce_in_eqprop: vars.enable_less_reduce_in_eqprop(),
-            enable_dequadratic_eqprop_map: vars.enable_dequadratic_eqprop_map(),
-            enable_eq_classes_withholding_errors: vars.enable_eq_classes_withholding_errors(),
-            enable_fast_path_plan_insights: vars.enable_fast_path_plan_insights(),
-            enable_cast_elimination: vars.enable_cast_elimination(),
-            enable_case_literal_transform: vars.enable_case_literal_transform(),
-            enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
-            enable_simplify_from_less_existence: vars.enable_simplify_from_less_existence(),
-            enable_coalesce_case_transform: vars.enable_coalesce_case_transform(),
-            enable_will_distinct_propagation: vars.enable_will_distinct_propagation(),
-            enable_fixed_correlated_cte_lowering: vars.enable_fixed_correlated_cte_lowering(),
+            enable_less_reduce_in_eqprop: self.enable_less_reduce_in_eqprop(),
+            enable_dequadratic_eqprop_map: self.enable_dequadratic_eqprop_map(),
+            enable_eq_classes_withholding_errors: self.enable_eq_classes_withholding_errors(),
+            enable_fast_path_plan_insights: self.enable_fast_path_plan_insights(),
+            enable_cast_elimination: self.enable_cast_elimination(),
+            enable_case_literal_transform: self.enable_case_literal_transform(),
+            enable_simplify_quantified_comparisons: self.enable_simplify_quantified_comparisons(),
+            enable_simplify_from_less_existence: self.enable_simplify_from_less_existence(),
+            enable_coalesce_case_transform: self.enable_coalesce_case_transform(),
+            enable_will_distinct_propagation: self.enable_will_distinct_propagation(),
+            enable_fixed_correlated_cte_lowering: self.enable_fixed_correlated_cte_lowering(),
         }
     }
 }
@@ -2500,7 +2509,7 @@ mod tests {
 
         // Enable for item parsing, then ensure we still get the same optimizer features.
         vars.enable_for_item_parsing();
-        let features_for_item_parsing = OptimizerFeatures::from(&vars);
+        let features_for_item_parsing = vars.env_wide_optimizer_features();
         assert_eq!(features_for_item_parsing, false_features);
     }
 }

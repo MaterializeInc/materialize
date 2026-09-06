@@ -143,7 +143,7 @@ pub struct CatalogState {
     /// In-memory mirror of the durable scoped (per-cluster and per-replica)
     /// system-parameter cache, maintained by `apply.rs` from the durable
     /// collections. Resolution reads from here: the optimizer's per-cluster
-    /// feature overrides (`cluster_scoped_optimizer_overrides`) and the
+    /// feature overrides (`optimizer_features_for_cluster`) and the
     /// coordinator's per-replica dyncfg push. See the scoped feature flags
     /// design. Skipped in the consistency-check snapshot because it is fully
     /// derived from the durable catalog.
@@ -1521,9 +1521,10 @@ impl CatalogState {
                 is_retained_metrics_object,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
-                // Collect optimizer parameters.
+                // Collect optimizer parameters. A view is not installed on a
+                // cluster, so the env-wide layer is the whole stack here.
                 let optimizer_config =
-                    optimize::OptimizerConfig::from(session_catalog.system_vars());
+                    optimize::OptimizerConfig::env_wide(session_catalog.system_vars());
                 let previous_exprs = previous_item.map(|item| match item {
                     CatalogItem::View(view) => Some((view.raw_expr, view.locally_optimized_expr)),
                     _ => None,
@@ -1586,19 +1587,12 @@ impl CatalogState {
                     .chain([(RelationVersion::root(), global_id)].into_iter())
                     .collect();
 
-                // Collect optimizer parameters. The layering must match
-                // `sequence_create_materialized_view`: the cluster's own
-                // feature overrides, then the cluster-scoped system parameters,
-                // which win over a manual `FEATURES` pin. These features both
-                // key the local expression cache and drive re-optimization on a
-                // miss, so a divergence here rehydrates the view under features
-                // it was never created with.
-                let system_vars = session_catalog.system_vars();
-                let cluster_id = materialized_view.cluster_id;
-                let overrides = self.get_cluster(cluster_id).config.features();
-                let optimizer_config = optimize::OptimizerConfig::from(system_vars)
-                    .override_from(&overrides)
-                    .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id));
+                // Collect optimizer parameters. These features both key the
+                // local expression cache and drive re-optimization on a miss,
+                // so resolving them differently here than the sequencer did
+                // rehydrates the view under features it was never created with.
+                let optimizer_config =
+                    self.optimizer_config_for_cluster(materialized_view.cluster_id);
                 let previous_exprs = previous_item.map(|item| match item {
                     CatalogItem::MaterializedView(materialized_view) => (
                         materialized_view.raw_expr,
@@ -2514,7 +2508,11 @@ impl CatalogState {
     /// Returns the cluster-coherent scoped optimizer-feature overrides for
     /// `cluster_id` from the in-memory scoped-parameter working copy, or empty
     /// if the cluster has none.
-    pub fn cluster_scoped_optimizer_overrides(
+    ///
+    /// Private on purpose: this is one layer of the optimizer-feature stack,
+    /// and a caller holding it alone is a caller assembling the stack by hand.
+    /// Go through [`CatalogState::optimizer_features_for_cluster`].
+    fn cluster_scoped_optimizer_overrides(
         &self,
         cluster_id: ClusterId,
     ) -> OptimizerFeatureOverrides {
@@ -2524,6 +2522,36 @@ impl CatalogState {
             .cloned()
             .map(OptimizerFeatureOverrides::from)
             .unwrap_or_default()
+    }
+
+    /// Resolves the optimizer features for a plan that runs on `cluster_id`.
+    ///
+    /// The layers, weakest first: the environment-wide system variables, the
+    /// cluster's own `CLUSTER ... FEATURES(...)` pin, then the cluster-scoped
+    /// system parameters, which win so that a targeted rollout is not defeated
+    /// by a manual pin.
+    ///
+    /// Every plan installed on or executed by a cluster must resolve its
+    /// features through here or through
+    /// [`CatalogState::optimizer_config_for_cluster`]. Assembling the layers by
+    /// hand is how a layer gets dropped: the omission is invisible at the call
+    /// site and surfaces much later as a plan that differs between creation and
+    /// catalog rehydration.
+    pub fn optimizer_features_for_cluster(&self, cluster_id: ClusterId) -> OptimizerFeatures {
+        self.system_config()
+            .env_wide_optimizer_features()
+            .override_from(&self.get_cluster(cluster_id).config.features())
+            .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id))
+    }
+
+    /// Resolves the optimizer config for a plan that runs on `cluster_id`.
+    ///
+    /// See [`CatalogState::optimizer_features_for_cluster`] for the layering
+    /// and for why the layers must not be assembled at the call site.
+    pub fn optimizer_config_for_cluster(&self, cluster_id: ClusterId) -> optimize::OptimizerConfig {
+        let mut config = optimize::OptimizerConfig::env_wide(self.system_config());
+        config.features = self.optimizer_features_for_cluster(cluster_id);
+        config
     }
 
     /// Returns the entire scoped system-parameter working copy, read by the

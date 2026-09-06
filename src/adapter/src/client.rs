@@ -1863,7 +1863,7 @@ impl SessionClient {
                         // functions like current_user() are resolved before we
                         // decide whether this can use the blind-write path.
                         let optimizer_config =
-                            optimize::OptimizerConfig::from(catalog.system_config());
+                            optimize::OptimizerConfig::env_wide(catalog.system_config());
                         let session = self.session.as_ref().expect("SessionClient invariant");
                         let prep = ExprPrepOneShot {
                             logical_time: EvalTime::NotAvailable,
