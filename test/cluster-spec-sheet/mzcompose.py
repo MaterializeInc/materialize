@@ -3505,19 +3505,19 @@ def cloud_recreate_region_with_envd_cpus(
     soon as it has booted, in about a minute.
     """
     for attempt in range(1, attempts + 1):
-        disable_region(target.composition, hard=True)
         try:
+            disable_region(target.composition, hard=True)
             enable_region(target, envd_cpus=envd_cpus)
             break
         except UIError as e:
             # A sweep does a dozen of these calls and the staging Cloud API returns the
-            # occasional 502, which `mz region enable` does not retry on its own. We
-            # disable again before retrying, so that a half-finished enable can't leave
-            # the region running with the previous allocation.
+            # occasional 502 that surfaces despite the CLI's own retries. A retry starts
+            # over with the disable, so that a half-finished enable can't leave the
+            # region running with the previous allocation.
             if attempt == attempts:
                 raise
             print(
-                f"WARNING: 'mz region enable' failed (attempt {attempt}/{attempts}): {e}"
+                f"WARNING: recreating the region failed (attempt {attempt}/{attempts}): {e}"
             )
             time.sleep(30)
 
