@@ -161,8 +161,12 @@ cleanup() {
     # the composition): other jobs' containers, and containers a composition
     # drives outside compose, such as kind nodes, keep running for the log
     # collection below. Killed containers keep their logs for services.log;
-    # `mzcompose down` removes them.
-    docker ps --quiet --filter "label=com.docker.compose.project=$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" | xargs --no-run-if-empty docker kill > /dev/null || true
+    # `mzcompose down` removes them. Skipped under coverage: the coverage
+    # teardown below stops containers gracefully on purpose, and a kill here
+    # would defeat it.
+    if [ -z "${CI_COVERAGE_ENABLED:-}" ]; then
+      docker ps --quiet --filter "label=com.docker.compose.project=$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" | xargs --no-run-if-empty docker kill > /dev/null || true
+    fi
     # 15m keeps a hung cleanup from eating the agents' 40-minute cancel grace
     # period before the artifacts and the error annotation. Normal disables
     # take about 30 s. The output also goes to run.log so that the artifact
