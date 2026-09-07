@@ -59,7 +59,8 @@ check_default_workflow_references_others() {
     )
 
     for file in "${MZCOMPOSE_TEST_FILES[@]}"; do
-      MATCHES_COUNT=$(grep "def workflow_" "$file" -c)
+      # `ci-cleanup` is run by the mzcompose plugin's hook, never by `default`.
+      MATCHES_COUNT=$(grep "def workflow_" "$file" | grep -vc "def workflow_ci_cleanup" || true)
 
       if (( MATCHES_COUNT > 1 )); then
         # mzcompose file contains more than one workflow
