@@ -429,41 +429,39 @@ fn publish_join_input(
     id: GlobalId,
     updates: &[Update],
     seal: u64,
-) -> impl FnMut(&mut timely::worker::Worker) + use<> {
+) -> JoinInput {
     let registry_in = registry.clone();
     let updates = updates.to_vec();
 
-    let (mut oks_input, mut errs_input, keep) = worker.dataflow::<Timestamp, _, _>(move |scope| {
-        let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
-        let oks = oks_collection.mz_arrange::<
-            ColumnationChunker<_>,
-            RowRowBatcher<_, _>,
-            RowRowBuilder<_, _>,
-            RowRowSpine<_, _>,
-        >("input oks");
+    let (mut oks_input, mut errs_input, (oks, errs)) =
+        worker.dataflow::<Timestamp, _, _>(move |scope| {
+            let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
+            let oks = oks_collection.mz_arrange::<
+                ColumnationChunker<_>,
+                RowRowBatcher<_, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >("input oks");
 
-        let (errs_input, errs_collection) = scope.new_collection::<DataflowErrorSer, Diff>();
-        let errs = KeyCollection::from(errs_collection).mz_arrange::<
-            ColumnationChunker<_>,
-            ErrBatcher<_, _>,
-            ErrBuilder<_, _>,
-            ErrSpine<_, _>,
-        >("input errs");
+            let (errs_input, errs_collection) = scope.new_collection::<DataflowErrorSer, Diff>();
+            let errs = KeyCollection::from(errs_collection).mz_arrange::<
+                ColumnationChunker<_>,
+                ErrBatcher<_, _>,
+                ErrBuilder<_, _>,
+                ErrSpine<_, _>,
+            >("input errs");
 
-        registry_in.publish(id, &oks, &errs);
-        (
-            oks_input,
-            errs_input,
-            (oks.trace.clone(), errs.trace.clone()),
-        )
-    });
+            registry_in.publish(id, &oks, &errs);
+            (
+                oks_input,
+                errs_input,
+                (oks.trace.clone(), errs.trace.clone()),
+            )
+        });
 
-    // Distinct update times in order. Insert each time's updates, then advance and step, so the
-    // publisher seals and appends one batch per time rather than one batch for everything.
     let mut times: Vec<u64> = updates.iter().map(|&(_, _, t, _)| t).collect();
     times.sort_unstable();
     times.dedup();
-
     for &t in &times {
         oks_input.advance_to(Timestamp::from(t));
         for &(k, v, ut, d) in &updates {
@@ -472,8 +470,6 @@ fn publish_join_input(
             }
         }
         oks_input.flush();
-        // Step so the arrange operator observes this frontier and the publisher appends the
-        // sealed batch to importer queues before the next time is loaded.
         for _ in 0..16 {
             worker.step();
         }
@@ -483,23 +479,51 @@ fn publish_join_input(
     errs_input.advance_to(Timestamp::from(seal));
     errs_input.flush();
 
-    // Return a closure that keeps the input handles and the trace agents alive and continues
-    // stepping. Dropping the handles would drop the inputs and let the dataflow drain to the empty
-    // frontier, and dropping the agents would drop the trace, either closing the publication before
-    // the importer has read it.
-    //
-    // Each call also advances the inputs to a fresh filler time, so the arrange operator keeps
-    // activating the way a live index's does in production. The filler times carry no updates, so
-    // they add empty seal-only batches and advance `upper` without changing any accumulation.
-    let mut filler = seal;
-    move |worker: &mut timely::worker::Worker| {
-        let _keep = &keep;
-        filler += 1;
-        oks_input.advance_to(Timestamp::from(filler));
-        oks_input.flush();
-        errs_input.advance_to(Timestamp::from(filler));
-        errs_input.flush();
+    JoinInput {
+        oks_input,
+        errs_input,
+        oks,
+        errs,
+        filler: seal,
+    }
+}
+
+/// A published join input: its inputs, its trace agents, and the filler clock its ticks advance.
+///
+/// The inputs keep the dataflow from draining to the empty frontier, and the agents keep the trace
+/// alive, either of which would close the publication before an importer has read it. Production
+/// keeps the agents in the trace manager.
+struct JoinInput {
+    oks_input: differential_dataflow::input::InputSession<Timestamp, (Row, Row), Diff>,
+    errs_input: differential_dataflow::input::InputSession<Timestamp, DataflowErrorSer, Diff>,
+    oks: crate::typedefs::RowRowAgent<Timestamp, Diff>,
+    errs: crate::typedefs::ErrAgent<Timestamp, Diff>,
+    filler: u64,
+}
+
+impl JoinInput {
+    /// Advances the inputs to a fresh filler time and steps the worker once, so the arrange
+    /// operators keep activating the way a live index's do in production. The filler times carry
+    /// no updates, so they add empty seal-only batches and advance `upper` without changing any
+    /// accumulation. The agents' physical compaction follows the upper, as the trace manager's
+    /// maintenance does, so the spines may merge.
+    fn tick(&mut self, worker: &mut timely::worker::Worker) {
+        self.filler += 1;
+        let upper = Antichain::from_elem(Timestamp::from(self.filler));
+        self.oks_input.advance_to(Timestamp::from(self.filler));
+        self.oks_input.flush();
+        self.errs_input.advance_to(Timestamp::from(self.filler));
+        self.errs_input.flush();
         worker.step();
+        self.oks.set_physical_compaction(upper.borrow());
+        self.errs.set_physical_compaction(upper.borrow());
+    }
+
+    /// Compacts both arrangements to `frontier` on their own agents, as `handle_allow_compaction`
+    /// does through the trace manager.
+    fn allow_compaction(&mut self, frontier: &Antichain<Timestamp>) {
+        self.oks.set_logical_compaction(frontier.borrow());
+        self.errs.set_logical_compaction(frontier.borrow());
     }
 }
 
@@ -572,8 +596,8 @@ fn join_over_imported_arrangements_matches_direct() {
         let seal_ts = Timestamp::from(seal);
         let mut steps = 0;
         while probe.less_than(&seal_ts) {
-            keep_a(worker);
-            keep_b(worker);
+            keep_a.tick(worker);
+            keep_b.tick(worker);
             worker.step();
             steps += 1;
             assert!(steps < 10_000, "join did not seal through {seal_ts:?}");
@@ -732,7 +756,7 @@ fn join_over_point_adopted_late_matches_direct() {
         // Step with A still unadopted. The import holds A's frontier at the minimum,
         // so the join frontier cannot pass 0 and no output is produced.
         for _ in 0..64 {
-            keep_b(worker);
+            keep_b.tick(worker);
             worker.step();
         }
         assert!(
@@ -750,7 +774,7 @@ fn join_over_point_adopted_late_matches_direct() {
         let mut steps = 0;
         while probe.less_than(&seal_ts) {
             keep_a(worker);
-            keep_b(worker);
+            keep_b.tick(worker);
             worker.step();
             steps += 1;
             assert!(
@@ -1208,8 +1232,8 @@ fn shared_trace_flavor_feeds_join_and_reduce() {
         let seal_ts = Timestamp::from(seal);
         let mut steps = 0;
         while join_probe.less_than(&seal_ts) || reduce_probe.less_than(&seal_ts) {
-            keep_a(worker);
-            keep_b(worker);
+            keep_a.tick(worker);
+            keep_b.tick(worker);
             worker.step();
             steps += 1;
             assert!(steps < 10_000, "dataflow did not seal through {seal_ts:?}");
@@ -1306,21 +1330,21 @@ fn stale_as_of_import_over_merged_chain_matches_direct() {
         let mut keep_a = publish_join_input(&registry, worker, id_a, &a, seal);
         let mut keep_b = publish_join_input(&registry, worker, id_b, &b, seal);
         for _ in 0..64 {
-            keep_a(worker);
-            keep_b(worker);
+            keep_a.tick(worker);
+            keep_b.tick(worker);
         }
 
-        // The controller allows compaction up to the read time, exactly as
-        // `handle_allow_compaction` does in production. That raises the published `since`, so the
-        // spine may coalesce the history below the read time. No importer has registered yet, so
-        // the publisher's physical target is the chain coverage and the spine is free to fold
-        // those batches together. The extra ticks give it activations to do so.
+        // The controller allows compaction up to the read time, which the writer applies to the
+        // arrangements as `handle_allow_compaction` does through the trace manager. That raises the
+        // published `since`, so the spine may coalesce the history below the read time. No importer
+        // has registered yet, so nothing holds the spines' physical frontiers down and they are free
+        // to fold those batches together. The extra ticks give them activations to do so.
         let allow = Antichain::from_elem(as_of_ts);
-        registry.note_allow_compaction(id_a, 0, &allow);
-        registry.note_allow_compaction(id_b, 0, &allow);
+        keep_a.allow_compaction(&allow);
+        keep_b.allow_compaction(&allow);
         for _ in 0..64 {
-            keep_a(worker);
-            keep_b(worker);
+            keep_a.tick(worker);
+            keep_b.tick(worker);
         }
 
         let worker_index = worker.index();
@@ -1425,8 +1449,8 @@ fn stale_as_of_import_over_merged_chain_matches_direct() {
         let seal_ts = Timestamp::from(seal);
         let mut steps = 0;
         while join_probe.less_than(&seal_ts) || reduce_probe.less_than(&seal_ts) {
-            keep_a(worker);
-            keep_b(worker);
+            keep_a.tick(worker);
+            keep_b.tick(worker);
             worker.step();
             steps += 1;
             assert!(steps < 10_000, "dataflow did not seal through {seal_ts:?}");

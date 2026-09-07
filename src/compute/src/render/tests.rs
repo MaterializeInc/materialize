@@ -46,12 +46,17 @@ fn test_rows() -> Vec<(Row, Row)> {
 /// of `scope`. The updates are written at time 0 and sealed by advancing the inputs to 1.
 ///
 /// The `InputSession` handles drop at the end of this call, buffering the sealed updates for the
-/// worker to process on later steps, mirroring `sharing.rs`'s `publish_index_into`.
+/// worker to process on later steps, mirroring `sharing.rs`'s `publish_index_into`. Returns the
+/// trace agents: the point closes with the trace, and the trace lives as long as an agent does, so
+/// the caller keeps them for as long as it reads.
 fn publish_index(
     scope: Scope<'_, Timestamp>,
     registry: &ArrangementSharingRegistry,
     id: GlobalId,
     rows: Vec<(Row, Row)>,
+) -> (
+    RowRowAgent<Timestamp, Diff>,
+    crate::typedefs::ErrAgent<Timestamp, Diff>,
 ) {
     let (mut oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
     let oks = oks_collection.mz_arrange::<
@@ -69,8 +74,8 @@ fn publish_index(
         );
 
     let slot = registry.get_or_create(id, 0, 1);
-    PublishArrangement::adopt(&oks, &slot.oks, "test oks", || {});
-    PublishArrangement::adopt(&errs, &slot.errs, "test errs", || {});
+    PublishArrangement::adopt(&oks, &slot.oks, || {});
+    PublishArrangement::adopt(&errs, &slot.errs, || {});
     registry.notify(id, 0);
 
     for (k, v) in rows {
@@ -80,6 +85,7 @@ fn publish_index(
     oks_input.flush();
     errs_input.advance_to(Timestamp::from(1_u64));
     errs_input.flush();
+    (oks.trace.clone(), errs.trace.clone())
 }
 
 /// The interactive import path imports a maintenance-published arrangement into a second
@@ -103,8 +109,8 @@ fn interactive_import_replays_rows_and_holds_at_as_of() {
 
     timely::execute_directly(move |worker| {
         // Maintenance runtime: publish the index into the shared registry.
-        worker.dataflow::<Timestamp, _, _>(|scope| {
-            publish_index(scope, &registry_in, id, rows.clone());
+        let _keep = worker.dataflow::<Timestamp, _, _>(|scope| {
+            publish_index(scope, &registry_in, id, rows.clone())
         });
 
         // Interactive runtime: a temporary dataflow imports the published arrangement via the
@@ -170,6 +176,7 @@ fn publish_index_with_writer(
     InputSession<Timestamp, (Row, Row), Diff>,
     InputSession<Timestamp, crate::render::errors::DataflowErrorSer, Diff>,
     RowRowAgent<Timestamp, Diff>,
+    crate::typedefs::ErrAgent<Timestamp, Diff>,
 ) {
     let (mut oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
     let oks = oks_collection.mz_arrange::<
@@ -188,8 +195,8 @@ fn publish_index_with_writer(
         );
 
     let slot = registry.get_or_create(id, 0, 1);
-    PublishArrangement::adopt(&oks, &slot.oks, "test oks", || {});
-    PublishArrangement::adopt(&errs, &slot.errs, "test errs", || {});
+    PublishArrangement::adopt(&oks, &slot.oks, || {});
+    PublishArrangement::adopt(&errs, &slot.errs, || {});
     registry.notify(id, 0);
 
     for (k, v) in rows {
@@ -200,14 +207,13 @@ fn publish_index_with_writer(
     errs_input.advance_to(Timestamp::from(1_u64));
     errs_input.flush();
 
-    (oks_input, errs_input, oks_writer)
+    (oks_input, errs_input, oks_writer, errs.trace.clone())
 }
 
 /// Feeds `oks_input` a filler update at `at`, advances it to `next`, and steps `worker` a few
 /// times, mirroring the `tick` helper in `differential-dataflow`'s own `sharing.rs` test suite.
-/// The publisher operator only recomputes its forwarded compaction when a batch runs through
-/// it, so a bare `set_logical_compaction`/`set_physical_compaction` call on a writer handle is
-/// invisible to the published `since` until the next such tick.
+/// A reader's hold reaches the trace on the arrange operator's next activation, which an idle
+/// dataflow never gets, so tests tick after moving one.
 fn tick(
     worker: &mut timely::worker::Worker,
     oks_input: &mut InputSession<Timestamp, (Row, Row), Diff>,
@@ -261,8 +267,8 @@ fn interactive_import_hold_releases_on_drop() {
         // Maintenance runtime: publish the index, keeping the `oks` `InputSession` (so we can
         // tick the dataflow afterward) and a plain writer trace handle (so we can request
         // compaction on it directly, as a controller would) alive across the whole closure.
-        let (mut oks_input, _errs_input, mut oks_writer) =
-            worker.dataflow::<Timestamp, _, _>(|scope| {
+        let (mut oks_input, _errs_input, mut oks_writer, _errs_keep) = worker
+            .dataflow::<Timestamp, _, _>(|scope| {
                 publish_index_with_writer(scope, &registry, id, rows.clone())
             });
 
@@ -283,14 +289,12 @@ fn interactive_import_hold_releases_on_drop() {
             (oks_arranged.trace, errs_arranged.trace)
         });
 
-        // The controller requests compaction well past `as_of`, and both runtimes apply it:
-        // `note_allow_compaction` forwards the writer floor into the published slot and
+        // The controller requests compaction well past `as_of`, and both runtimes apply it: the
+        // writer handle advances, which the trace mirrors into the published `since` at once, and
         // `note_standing_hold` advances the importing runtime's own position, exactly as
-        // `handle_allow_compaction` does on each side. The writer handle advances too so the trace
-        // can physically compact. A filler tick reactivates the publisher so it recomputes its
-        // forwarded `since` (still pinned to `as_of` here by the live reader hold).
+        // `handle_allow_compaction` does on each side. The `since` stays pinned to `as_of` here by
+        // the live reader hold.
         let target = Antichain::from_elem(Timestamp::from(10_u64));
-        registry.note_allow_compaction(id, 0, &target);
         registry.note_standing_hold(id, 0, &target);
         oks_writer.set_logical_compaction(target.borrow());
         oks_writer.set_physical_compaction(target.borrow());
@@ -359,8 +363,8 @@ fn interactive_import_holds_after_construction() {
     let registry = ArrangementSharingRegistry::new();
 
     timely::execute_directly(move |worker| {
-        let (mut oks_input, _errs_input, _oks_writer) =
-            worker.dataflow::<Timestamp, _, _>(|scope| {
+        let (mut oks_input, _errs_input, _oks_writer, _errs_keep) = worker
+            .dataflow::<Timestamp, _, _>(|scope| {
                 publish_index_with_writer(scope, &registry, id, rows.clone())
             });
 
@@ -430,9 +434,10 @@ fn published_since_does_not_chase_reader_holds() {
     let registry = ArrangementSharingRegistry::new();
 
     timely::execute_directly(move |worker| {
-        let (mut oks_input, _errs_input, _w) = worker.dataflow::<Timestamp, _, _>(|scope| {
-            publish_index_with_writer(scope, &registry, id, rows.clone())
-        });
+        let (mut oks_input, _errs_input, _w, _errs_keep) =
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                publish_index_with_writer(scope, &registry, id, rows.clone())
+            });
         // A reader at the higher as_of. Its handles go out of scope with the builder; the
         // import operator's own hold remains.
         worker.dataflow::<Timestamp, _, _>(|scope| {
@@ -454,8 +459,7 @@ fn published_since_does_not_chase_reader_holds() {
             );
         }
 
-        // No `note_allow_compaction` has been called: the controller has allowed nothing, so a
-        // read at the lower time is still legal.
+        // The writer has compacted nothing, so a read at the lower time is still legal.
         let (probe_oks, _) = registry.handles(&id, 0).expect("published");
         let since = probe_oks.frontiers().0;
         assert!(
@@ -484,9 +488,10 @@ fn import_reports_physical_within_chain_coverage() {
     let registry = ArrangementSharingRegistry::new();
 
     timely::execute_directly(move |worker| {
-        let (mut oks_input, _errs_input, _w) = worker.dataflow::<Timestamp, _, _>(|scope| {
-            publish_index_with_writer(scope, &registry, id, rows.clone())
-        });
+        let (mut oks_input, _errs_input, _w, _errs_keep) =
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                publish_index_with_writer(scope, &registry, id, rows.clone())
+            });
         tick(
             worker,
             &mut oks_input,
@@ -547,8 +552,8 @@ fn interactive_import_hold_downgrades_while_live() {
     let registry = ArrangementSharingRegistry::new();
 
     timely::execute_directly(move |worker| {
-        let (mut oks_input, _errs_input, mut oks_writer) =
-            worker.dataflow::<Timestamp, _, _>(|scope| {
+        let (mut oks_input, _errs_input, mut oks_writer, _errs_keep) = worker
+            .dataflow::<Timestamp, _, _>(|scope| {
                 publish_index_with_writer(scope, &registry, id, rows.clone())
             });
 
@@ -567,7 +572,6 @@ fn interactive_import_hold_downgrades_while_live() {
         // The controller allows compaction well past `as_of`, both runtimes apply it, and the
         // writer applies it to the trace.
         let target = Antichain::from_elem(Timestamp::from(10_u64));
-        registry.note_allow_compaction(id, 0, &target);
         registry.note_standing_hold(id, 0, &target);
         oks_writer.set_logical_compaction(target.borrow());
         oks_writer.set_physical_compaction(target.borrow());
@@ -640,8 +644,8 @@ fn import_asserts_since_at_most_as_of() {
     let registry = ArrangementSharingRegistry::new();
 
     timely::execute_directly(move |worker| {
-        let (mut oks_input, _errs_input, mut oks_writer) =
-            worker.dataflow::<Timestamp, _, _>(|scope| {
+        let (mut oks_input, _errs_input, mut oks_writer, _errs_keep) = worker
+            .dataflow::<Timestamp, _, _>(|scope| {
                 publish_index_with_writer(scope, &registry, id, rows.clone())
             });
 
@@ -650,7 +654,6 @@ fn import_asserts_since_at_most_as_of() {
         // `as_of` on the next tick: no reader hold pins it, and the standing hold has moved with
         // the writer floor.
         let target = Antichain::from_elem(Timestamp::from(10_u64));
-        registry.note_allow_compaction(id, 0, &target);
         registry.note_standing_hold(id, 0, &target);
         oks_writer.set_logical_compaction(target.borrow());
         oks_writer.set_physical_compaction(target.borrow());
@@ -698,8 +701,8 @@ fn standing_hold_pins_until_the_importing_runtime_applies() {
     let registry = ArrangementSharingRegistry::new();
 
     timely::execute_directly(move |worker| {
-        let (mut oks_input, _errs_input, mut oks_writer) =
-            worker.dataflow::<Timestamp, _, _>(|scope| {
+        let (mut oks_input, _errs_input, mut oks_writer, _errs_keep) = worker
+            .dataflow::<Timestamp, _, _>(|scope| {
                 publish_index_with_writer(scope, &registry, id, rows.clone())
             });
 
@@ -707,7 +710,6 @@ fn standing_hold_pins_until_the_importing_runtime_applies() {
         // its own trace handle compacts. The interactive runtime has not applied the broadcast copy
         // of that command, so its standing hold does not move.
         let target = Antichain::from_elem(Timestamp::from(10_u64));
-        registry.note_allow_compaction(id, 0, &target);
         oks_writer.set_logical_compaction(target.borrow());
         oks_writer.set_physical_compaction(target.borrow());
         tick(

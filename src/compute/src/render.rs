@@ -570,11 +570,10 @@ pub fn build_compute_dataflow(
 /// Reports a publication point refusing to serve `as_of`, and aborts.
 ///
 /// A refusal is a protocol-ordering failure: the controller promises an index's `since` never
-/// passes the `as_of` of a dataflow importing it. The diagnostics say which side moved. A controller
-/// frontier beyond `as_of` means maintenance applied a compaction ahead of this render. A standing
-/// hold at the refusing `since` means this runtime had already applied it, so the create was ordered
-/// behind it on this runtime's own stream. A standing hold below the `since` means the publisher
-/// escaped its bound.
+/// passes the `as_of` of a dataflow importing it. The diagnostics say which side moved. A standing
+/// hold at the refusing `since` means this runtime had already applied the compaction, so the
+/// create was ordered behind it on this runtime's own stream. A standing hold below the `since`
+/// means the trace compacted past its bound.
 fn report_compacted_past(
     idx_id: GlobalId,
     part: &str,
@@ -584,10 +583,9 @@ fn report_compacted_past(
 ) -> ! {
     panic!(
         "Index {idx_id} ({part}) has been allowed to compact beyond the dataflow as_of: \
-         since {:?}, as_of {:?}, controller allow_compaction {:?}, standing hold {:?}",
+         since {:?}, as_of {:?}, standing hold {:?}",
         since.elements(),
         as_of.elements(),
-        diagnostics.writer_logical.as_ref().map(|f| f.elements()),
         diagnostics.standing_hold.elements(),
     )
 }
