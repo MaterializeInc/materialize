@@ -36,6 +36,9 @@ use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Datum, DatumVec, Diff, ReprScalarType, Row, SharedRow};
+use mz_row_spine::{
+    DatumContainer, DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder,
+};
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::CollectionExt;
@@ -55,9 +58,6 @@ use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
 use crate::typedefs::{
     ErrBatcher, ErrBuilder, KeyBatcher, MzTimestamp, RowRowSpine, RowSpine, RowValSpine,
-};
-use mz_row_spine::{
-    DatumContainer, DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder,
 };
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
