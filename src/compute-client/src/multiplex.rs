@@ -121,10 +121,8 @@ impl Multiplexer {
     ///   are subscribes and copy-tos, which do not emit `Frontiers` (they report through
     ///   `SubscribeResponse`/`CopyToResponse`). So maintenance reports frontiers only for
     ///   non-transient ids.
-    /// * The interactive runtime hosts only wholly-transient query dataflows. It installs empty
-    ///   copies of maintenance's introspection indexes but does not report their frontiers (see
-    ///   `report_frontiers`, which reports only transient collections on the interactive runtime). So
-    ///   interactive reports frontiers only for transient ids.
+    /// * The interactive runtime hosts only wholly-transient query dataflows, so it reports
+    ///   frontiers only for transient ids.
     ///
     /// Filtering on `id.is_transient()` for the interactive source captures that split exactly. It
     /// deliberately does not consult `transient_owner`: that map is evicted when a collection's
@@ -273,6 +271,8 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Multiplexer {
     /// This method never sends, so nothing here can be stranded half-done by a cancellation.
     async fn recv(&mut self) -> Result<Option<ComputeResponse>, anyhow::Error> {
         loop {
+            // `GenericClient::recv` is cancellation safe by invariant, so the losing branch drops
+            // no message.
             let (source, response) = tokio::select! {
                 r = self.maintenance.recv() => (Runtime::Maintenance, r?),
                 r = self.interactive.recv() => (Runtime::Interactive, r?),
