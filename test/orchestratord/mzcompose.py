@@ -498,7 +498,9 @@ def download_repo_file_at_tag(path: str, tag: str) -> bytes:
     requests/hour), which is what CI relies on. Falls back to anonymous
     raw.githubusercontent.com otherwise. Anonymous raw content throttles
     shared CI IPs with 429, so retry with backoff on rate-limit and 5xx
-    statuses, honoring Retry-After when present.
+    statuses, honoring Retry-After when present. The Contents API also
+    occasionally answers 404 for a path that exists at the tag, so 404 is
+    retried too; a genuine 404 surfaces after the full backoff.
     """
     token = os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
         "GITHUB_TOKEN"
@@ -519,7 +521,7 @@ def download_repo_file_at_tag(path: str, tag: str) -> bytes:
         response = requests.get(url, headers=headers, timeout=30)
         if response.status_code == 200:
             return response.content
-        if response.status_code not in (429, 500, 502, 503, 504):
+        if response.status_code not in (404, 429, 500, 502, 503, 504):
             break
         wait = float(response.headers.get("Retry-After", delay))
         print(f"Got {response.status_code} for {url}, retrying in {wait}s")
