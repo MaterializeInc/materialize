@@ -18,5 +18,10 @@ Dataflow errors are deserialized from the error trace and reported as `PeekError
 
 ## Submodules
 
+- `error_scan` -- suspendable walk over an index peek's error trace, run before the ok trace walk.
+- `peek_budget` -- per-activation fuel budget that limits how many cursor positions all queued peeks may walk before the worker returns to other work.
+- `peek_metrics` -- `PeekWalkMetrics` (cloned into offloaded walks) and `IndexPeekMetrics` (per-worker-owned) for reporting phase timings and substrate counters.
+- `peek_offload` -- drives a peek's walk on the blocking pool away from the timely worker, managing `PeekPermits` and writing large row sets to the peek stash.
 - `peek_result_iterator` -- cursor-based row extraction logic for peek processing.
+- `peek_scan` -- `PeekScan`, the suspendable two-phase walk over the error and ok traces that answers an index peek.
 - `peek_stash` -- incremental stash upload machinery (`StashUpload`, `StashTarget`, `DeliveredBatch`) used by peek drivers to write large results to persist.
