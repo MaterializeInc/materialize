@@ -15,22 +15,18 @@ use std::time::{Duration, Instant};
 use differential_dataflow::input::Input;
 use differential_dataflow::trace::Cursor;
 use differential_dataflow::trace::cursor::{CursorList, cursor_list};
-use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, Timestamp};
 use mz_row_spine::{RowRowBatcher, RowRowBuilder};
 use mz_timely_util::columnation::ColumnationChunker;
 
-use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent, TraceReplayInstruction};
+use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::cursor::Navigable;
-use differential_dataflow::trace::{BatchReader, TraceReader};
-use timely::dataflow::operators::generic::Operator;
 use timely::progress::Antichain;
 
 use crate::extensions::arrange::MzArrange;
 use crate::typedefs::RowRowSpine;
 
-use super::state::seed_frontier;
 use super::*;
 
 /// How long [`SharedTraceHandle::snapshot_at`] waits for a seal before failing the test.
@@ -60,22 +56,16 @@ impl<Tr: TraceReader> TraceSnapshot<Tr> {
 
 /// Observations on a publication point's internals that no reader surface exposes.
 impl<Tr: TraceReader> Published<Tr> {
-    /// The accumulated logical holds registered against this publication point.
-    ///
-    /// Empty when every hold has released, which the published frontiers cannot show: the publisher
-    /// leaves its agent where it stands rather than forwarding an empty accumulation.
+    /// The accumulated logical holds registered against this publication point, the standing hold
+    /// included. Empty when every hold has released.
     pub(crate) fn logical_holds(&self) -> Antichain<Tr::Time> {
-        let state = self.shared.state.lock().expect("shared trace poisoned");
-        state.logical_compaction.frontier().to_owned()
+        self.shared.logical_holds()
     }
 
-    /// The accumulated physical holds registered against this publication point.
-    ///
-    /// Empty when no reader is registered, in which case the publisher forwards the chain coverage
-    /// instead.
+    /// The accumulated physical holds registered against this publication point. Empty when no
+    /// reader is registered.
     pub(crate) fn physical_holds(&self) -> Antichain<Tr::Time> {
-        let state = self.shared.state.lock().expect("shared trace poisoned");
-        state.physical_compaction.frontier().to_owned()
+        self.shared.physical_holds()
     }
 
     /// The number of batches in the published chain.
@@ -83,22 +73,14 @@ impl<Tr: TraceReader> Published<Tr> {
     /// Counting through a handle would register a physical hold and perturb the merge behaviour
     /// being measured, which is the whole observable here.
     pub(crate) fn chain_len(&self) -> usize {
-        let state = self.shared.state.lock().expect("shared trace poisoned");
-        state.chain.len()
-    }
-
-    /// The standing hold currently bounding this arrangement's logical compaction.
-    pub(crate) fn standing_hold(&self) -> Antichain<Tr::Time> {
-        let state = self.shared.state.lock().expect("shared trace poisoned");
-        state.standing_hold.clone()
+        self.shared.chain().len()
     }
 }
 
 impl<Tr: TraceReader> SharedTraceHandle<Tr> {
     /// The published arrangement's current `(since, upper)` frontiers, read under the state lock.
     pub(crate) fn frontiers(&self) -> (Antichain<Tr::Time>, Antichain<Tr::Time>) {
-        let state = self.shared.state.lock().expect("shared trace poisoned");
-        (state.since.clone(), state.upper.clone())
+        self.reader.shared().frontiers()
     }
 
     /// Takes a consistent snapshot of the published arrangement as of `time`, waiting until `upper`
@@ -121,47 +103,47 @@ impl<Tr: TraceReader> SharedTraceHandle<Tr> {
         Tr::Time: Debug,
     {
         let deadline = Instant::now() + SNAPSHOT_TIMEOUT;
+        let shared = self.reader.shared();
         loop {
-            {
-                let state = self.shared.state.lock().expect("shared trace poisoned");
-                // `upper` not less-equal `time` means all updates at `time` are sealed.
-                if !state.upper.less_equal(time) {
-                    // `since` beyond `time` means times at `time` have been coalesced and a read
-                    // there would be inaccurate. Fail to `None` rather than serve stale data.
-                    if !state.since.less_equal(time) {
-                        return None;
-                    }
-                    return Some(TraceSnapshot {
-                        chain: state.chain.clone(),
-                    });
-                }
-                if state.closed {
+            let (since, upper) = shared.frontiers();
+            // `upper` not less-equal `time` means all updates at `time` are sealed.
+            if !upper.less_equal(time) {
+                // `since` beyond `time` means times at `time` have been coalesced and a read
+                // there would be inaccurate. Fail to `None` rather than serve stale data.
+                if !since.less_equal(time) {
                     return None;
                 }
-                assert!(
-                    Instant::now() < deadline,
-                    "snapshot_at({time:?}) timed out waiting for a seal: upper={:?} since={:?}",
-                    state.upper.elements(),
-                    state.since.elements(),
-                );
+                return Some(TraceSnapshot {
+                    chain: shared.chain(),
+                });
             }
+            if shared.is_closed() {
+                return None;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "snapshot_at({time:?}) timed out waiting for a seal: upper={:?} since={:?}",
+                upper.elements(),
+                since.elements(),
+            );
             std::thread::sleep(Duration::from_millis(1));
         }
     }
 }
 
 /// Adopts a freshly rendered arrangement into a new point, the standalone-primitive counterpart to
-/// the maintenance create-then-adopt path. Creates a [`Published::new`] sized to the arrangement's
+/// the maintenance create-then-adopt path. The publication closes when the trace drops, and the
+/// trace lives only as long as an agent does (production keeps one in the trace manager), so callers
+/// keep `arranged.trace` or a clone alive for the life of the test. Creates a [`Published::new`] sized to the arrangement's
 /// own scope, installs `arranged`'s publisher into it via [`PublishArrangement::adopt`], and returns
 /// the now-backed point.
-fn adopt_fresh<Tr>(arranged: &Arranged<'_, TraceAgent<Tr>>) -> Published<Tr>
+fn adopt_fresh<'a, Tr: TraceReader>(arranged: &Arranged<'a, TraceAgent<Tr>>) -> Published<Tr>
 where
-    Tr: differential_dataflow::trace::Trace + 'static,
-    Tr::Batch: Send + Sync,
-    Tr::Time: Lattice + Clone + Send + Sync,
+    Tr::Time: timely::order::TotalOrder,
+    Arranged<'a, TraceAgent<Tr>>: PublishArrangement<Tr>,
 {
     let published = Published::new(arranged.stream.scope().peers());
-    PublishArrangement::adopt(arranged, &published, "test", || {});
+    PublishArrangement::adopt(arranged, &published, || {});
     published
 }
 
@@ -192,7 +174,7 @@ fn publish_then_snapshot_reads_rows() {
     };
 
     let handle = timely::execute_directly(move |worker| {
-        let (published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+        let (published, mut input, _keep) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
             let arranged = collection.mz_arrange::<
                 ColumnationChunker<_>,
@@ -202,7 +184,7 @@ fn publish_then_snapshot_reads_rows() {
             >("smoke oks");
             // The extension trait under test.
             let published = adopt_fresh(&arranged);
-            (published, input)
+            (published, input, arranged.trace.clone())
         });
 
         for (k, v) in rows {
@@ -257,7 +239,7 @@ fn publish_then_snapshot_reads_rows() {
 #[mz_ore::test]
 fn quiet_seal_advances_upper() {
     let (upper, snapshot_is_some) = timely::execute_directly(move |worker| {
-        let (published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+        let (published, mut input, _keep) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
             let arranged = collection.mz_arrange::<
                 ColumnationChunker<_>,
@@ -266,7 +248,7 @@ fn quiet_seal_advances_upper() {
                 RowRowSpine<_, _>,
             >("quiet oks");
             let published = adopt_fresh(&arranged);
-            (published, input)
+            (published, input, arranged.trace.clone())
         });
 
         // No updates at all. Advance the input to 1 to seal the (empty) batch at time 0.
@@ -343,7 +325,7 @@ fn snapshot_at_waits_until_upper_passes_time() {
     });
 
     timely::execute_directly(move |worker| {
-        let (published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+        let (published, mut input, _keep) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
             let arranged = collection.mz_arrange::<
                 ColumnationChunker<_>,
@@ -352,7 +334,7 @@ fn snapshot_at_waits_until_upper_passes_time() {
                 RowRowSpine<_, _>,
             >("cross-thread oks");
             let published = adopt_fresh(&arranged);
-            (published, input)
+            (published, input, arranged.trace.clone())
         });
         handle_tx.send(published.handle()).unwrap();
 
@@ -407,8 +389,8 @@ fn tick(
 }
 
 /// Publishing must not pin compaction. With no registered reader holds, as the controller
-/// advances its logical compaction (forwarded through `note_writer_logical`) the publisher's own
-/// forwarded hold must follow, so the trace actually compacts.
+/// advances its logical compaction on the writer's own handle, the published `since` must follow,
+/// so the trace actually compacts.
 ///
 /// Exercises the publisher's compaction forwarding with the standing hold as the only accumulated
 /// hold, which no other test in this crate or `crate::sharing` covers: `crate::render`'s
@@ -443,16 +425,14 @@ fn publish_without_readers_does_not_pin_compaction() {
             );
         }
 
-        // The controller requests compaction to 10. `note_writer_logical` records the writer's own
-        // frontier (the production path is `handle_allow_compaction` via the registry), and the
-        // writer handle advances too so the underlying trace can physically compact. A fresh tick
-        // reactivates the publisher so it recomputes what it forwards.
+        // The controller requests compaction to 10 on the writer's own handle (the production path
+        // is `handle_allow_compaction` through the `TraceManager`), which the trace mirrors into the
+        // published `since` at once.
         //
         // The standing hold moves with it, as it does in production once the importing runtime
         // applies the same broadcast command. Without it the target stays bounded at the adoption
         // floor, which is what `standing_hold_holds_since_behind_the_writer` covers.
         let target = Antichain::from_elem(Timestamp::from(10_u64));
-        published.note_writer_logical(&target);
         published.note_standing_hold(&target);
         writer.set_logical_compaction(target.borrow());
         writer.set_physical_compaction(target.borrow());
@@ -528,7 +508,6 @@ fn standing_hold_holds_since_behind_the_writer() {
         // both the writer handle and the publisher's writer-driven floor move to 10. The importing
         // runtime has not applied it, so its standing hold stays at 3.
         let target = Antichain::from_elem(Timestamp::from(10_u64));
-        published.note_writer_logical(&target);
         writer.set_logical_compaction(target.borrow());
         writer.set_physical_compaction(target.borrow());
         tick(
@@ -638,7 +617,6 @@ fn handle_at_mints_at_as_of_or_refuses() {
         // The controller allows compaction to 10 and both runtimes apply it, so the publisher
         // forwards a `since` of 10 on its next activation.
         let target = Antichain::from_elem(Timestamp::from(10_u64));
-        published.note_writer_logical(&target);
         published.note_standing_hold(&target);
         writer.set_logical_compaction(target.borrow());
         writer.set_physical_compaction(target.borrow());
@@ -692,7 +670,6 @@ fn empty_logical_request_releases_the_hold() {
             );
         }
         let target = Antichain::from_elem(Timestamp::from(2_u64));
-        published.note_writer_logical(&target);
         writer.set_logical_compaction(target.borrow());
 
         // Release the standing hold first. The accumulation is a meet, so a hold at or above the
@@ -724,7 +701,7 @@ fn empty_logical_request_releases_the_hold() {
 #[mz_ore::test]
 fn an_emptied_accumulation_does_not_release_the_trace() {
     timely::execute_directly(move |worker| {
-        let (published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+        let (published, mut input, _keep) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
             let arranged = collection.mz_arrange::<
                 ColumnationChunker<_>,
@@ -732,7 +709,7 @@ fn an_emptied_accumulation_does_not_release_the_trace() {
                 RowRowBuilder<_, _>,
                 RowRowSpine<_, _>,
             >("emptied oks");
-            (adopt_fresh(&arranged), input)
+            (adopt_fresh(&arranged), input, arranged.trace.clone())
         });
         for t in 0..3 {
             tick(
@@ -746,7 +723,6 @@ fn an_emptied_accumulation_does_not_release_the_trace() {
         // The controller drops the collection. Both the writer's frontier and the importing
         // runtime's applied frontier become empty, and there is no reader hold.
         let empty = Antichain::new();
-        published.note_writer_logical(&empty);
         published.note_standing_hold(&empty);
         tick(
             worker,
@@ -792,7 +768,7 @@ fn import_asserts_equal_peers() {
     // sending the handle before the dataflow ever steps is enough; only worker 0 sends, the
     // others publish redundantly (mirroring real SPMD dataflows) but nobody reads their handles.
     timely::execute(timely::Config::process(2), move |worker| {
-        let (published, _input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+        let (published, _input, _keep) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
             let arranged = collection.mz_arrange::<
                 ColumnationChunker<_>,
@@ -801,7 +777,7 @@ fn import_asserts_equal_peers() {
                 RowRowSpine<_, _>,
             >("peers oks");
             let published = adopt_fresh(&arranged);
-            (published, input)
+            (published, input, arranged.trace.clone())
         });
         if worker.index() == 0 {
             handle_tx.lock().unwrap().send(published.handle()).unwrap();
@@ -824,87 +800,6 @@ fn import_asserts_equal_peers() {
     });
 }
 
-/// Root cause of the delayed-capability panic: within a worker step the trace's `map_batches`
-/// upper can run strictly ahead of the arrangement stream's input frontier.
-///
-/// The trace advances the instant the arrange operator inserts a sealed batch, but the stream's
-/// input frontier only reaches the sink after progress propagates, a step later. A publisher
-/// that sources the seal frontier from the trace (the buggy two-source feed) can therefore
-/// forward a frontier the stream has not caught up to. This records both frontiers on every
-/// activation of a sink attached to a real arrangement and asserts the trace upper is observed
-/// leading the stream frontier, the desync the fix sidesteps by sourcing `upper` from the
-/// stream frontier alone.
-#[mz_ore::test]
-fn trace_upper_can_lead_stream_frontier() {
-    let observed_lead = timely::execute_directly(move |worker| {
-        let records: Arc<Mutex<Vec<(Antichain<Timestamp>, Antichain<Timestamp>)>>> =
-            Arc::new(Mutex::new(Vec::new()));
-        let mut input = worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
-            let arranged = collection.mz_arrange::<
-                ColumnationChunker<_>,
-                RowRowBatcher<_, _>,
-                RowRowBuilder<_, _>,
-                RowRowSpine<_, _>,
-            >("lead oks");
-            let agent = arranged.trace.clone();
-            let rec = Arc::clone(&records);
-            arranged.stream.clone().sink(
-                timely::dataflow::channels::pact::Pipeline,
-                "record-frontiers",
-                move |(handle_in, frontier)| {
-                    handle_in.for_each(|_cap, data| data.drain(..).for_each(drop));
-                    let stream_frontier = frontier.frontier().to_owned();
-                    // Fold accumulator meaning "no batch observed yet", not a gating or published
-                    // frontier, so the empty-frontier convention above does not apply here.
-                    let mut trace_upper = Antichain::new();
-                    agent.map_batches(|b| trace_upper = b.upper().to_owned());
-                    rec.lock().unwrap().push((stream_frontier, trace_upper));
-                },
-            );
-            input
-        });
-
-        // Seal several distinct times, stepping once between each so progress lags the trace by
-        // a batch on each sealing step.
-        for t in 0..6u64 {
-            input.advance_to(Timestamp::from(t));
-            input.update(
-                (
-                    Row::pack_slice(&[Datum::Int64(i64::cast_from(u32::try_from(t).unwrap()))]),
-                    Row::pack_slice(&[Datum::String("v")]),
-                ),
-                Diff::ONE,
-            );
-            input.advance_to(Timestamp::from(t + 1));
-            input.flush();
-            worker.step();
-        }
-        drop(input);
-        for _ in 0..8 {
-            worker.step();
-        }
-
-        let records = records.lock().unwrap();
-        records.iter().any(|(stream_frontier, trace_upper)| {
-            match (
-                stream_frontier.elements().first(),
-                trace_upper.elements().first(),
-            ) {
-                // Both single-time here: the trace upper strictly leads when the stream
-                // frontier is below it.
-                (Some(s), Some(u)) => s < u,
-                _ => false,
-            }
-        })
-    });
-
-    assert!(
-        observed_lead,
-        "trace map_batches upper never observed leading the stream frontier"
-    );
-}
-
 /// A live reader's cut floor bounds the spine's merging, and with no reader the publisher lets it
 /// merge freely.
 ///
@@ -920,7 +815,7 @@ fn trace_upper_can_lead_stream_frontier() {
 #[mz_ore::test]
 fn reader_floor_bounds_merges_and_no_reader_merges_freely() {
     timely::execute_directly(move |worker| {
-        let (held, free, mut held_input, mut free_input) =
+        let (held, free, mut held_input, mut free_input, (mut held_keep, mut free_keep)) =
             worker.dataflow::<Timestamp, _, _>(|scope| {
                 let (held_input, held_collection) = scope.new_collection::<(Row, Row), Diff>();
                 let held_arranged = held_collection.mz_arrange::<
@@ -941,42 +836,41 @@ fn reader_floor_bounds_merges_and_no_reader_merges_freely() {
                     adopt_fresh(&free_arranged),
                     held_input,
                     free_input,
+                    (held_arranged.trace.clone(), free_arranged.trace.clone()),
                 )
             });
+
+        // The kept agents stand in for the trace manager, which lets every arrangement's spine merge
+        // up to its upper. Logical compaction stays at the minimum, so every merge is above `since`.
+        let mut tick_both = |worker: &mut timely::worker::Worker, t: u64| {
+            tick(
+                worker,
+                &mut held_input,
+                Timestamp::from(t),
+                Timestamp::from(t + 1),
+            );
+            tick(
+                worker,
+                &mut free_input,
+                Timestamp::from(t),
+                Timestamp::from(t + 1),
+            );
+            let upper = Antichain::from_elem(Timestamp::from(t + 1));
+            held_keep.set_physical_compaction(upper.borrow());
+            free_keep.set_physical_compaction(upper.borrow());
+        };
 
         // Seal a few times on both, then take a handle on `held` only. Its floor pins at the
         // coverage as of now, so every batch sealed after this cannot merge: a merge needs the
         // physical frontier at or beyond the batches' upper, and those uppers are all above the
-        // floor. `_reader` must outlive the ticks below, it *is* the floor.
+        // floor. `reader` must outlive the ticks below, it *is* the floor.
         for t in 0..4u64 {
-            tick(
-                worker,
-                &mut held_input,
-                Timestamp::from(t),
-                Timestamp::from(t + 1),
-            );
-            tick(
-                worker,
-                &mut free_input,
-                Timestamp::from(t),
-                Timestamp::from(t + 1),
-            );
+            tick_both(worker, t);
         }
         let mut reader = held.handle();
 
         for t in 4..20u64 {
-            tick(
-                worker,
-                &mut held_input,
-                Timestamp::from(t),
-                Timestamp::from(t + 1),
-            );
-            tick(
-                worker,
-                &mut free_input,
-                Timestamp::from(t),
-                Timestamp::from(t + 1),
-            );
+            tick_both(worker, t);
         }
 
         let held_len = held.chain_len();
@@ -998,12 +892,7 @@ fn reader_floor_bounds_merges_and_no_reader_merges_freely() {
         // batches behind it, which is the half a bare registration does not exercise.
         reader.set_physical_compaction(Antichain::from_elem(Timestamp::from(20_u64)).borrow());
         for t in 20..24u64 {
-            tick(
-                worker,
-                &mut held_input,
-                Timestamp::from(t),
-                Timestamp::from(t + 1),
-            );
+            tick_both(worker, t);
         }
         let raised_len = held.chain_len();
         assert!(
@@ -1023,7 +912,7 @@ fn reader_floor_bounds_merges_and_no_reader_merges_freely() {
 #[mz_ore::test]
 fn clone_registers_at_its_sources_physical_frontier() {
     timely::execute_directly(move |worker| {
-        let (published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+        let (published, mut input, _keep) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
             let arranged = collection.mz_arrange::<
                 ColumnationChunker<_>,
@@ -1031,7 +920,7 @@ fn clone_registers_at_its_sources_physical_frontier() {
                 RowRowBuilder<_, _>,
                 RowRowSpine<_, _>,
             >("clone oks");
-            (adopt_fresh(&arranged), input)
+            (adopt_fresh(&arranged), input, arranged.trace.clone())
         });
         for t in 0..4u64 {
             tick(
@@ -1079,34 +968,42 @@ fn clone_registers_at_its_sources_physical_frontier() {
 #[mz_ore::test]
 fn live_import_does_not_pin_merging() {
     timely::execute_directly(move |worker| {
-        let (imported, control, mut imported_input, mut control_input) = worker
-            .dataflow::<Timestamp, _, _>(|scope| {
-                let (imported_input, imported_collection) =
-                    scope.new_collection::<(Row, Row), Diff>();
-                let imported_arranged = imported_collection.mz_arrange::<
+        let (
+            imported,
+            control,
+            mut imported_input,
+            mut control_input,
+            (mut imported_keep, mut control_keep),
+        ) = worker.dataflow::<Timestamp, _, _>(|scope| {
+            let (imported_input, imported_collection) = scope.new_collection::<(Row, Row), Diff>();
+            let imported_arranged = imported_collection.mz_arrange::<
                     ColumnationChunker<_>,
                     RowRowBatcher<_, _>,
                     RowRowBuilder<_, _>,
                     RowRowSpine<_, _>,
                 >("imported oks");
-                let (control_input, control_collection) =
-                    scope.new_collection::<(Row, Row), Diff>();
-                let control_arranged = control_collection.mz_arrange::<
+            let (control_input, control_collection) = scope.new_collection::<(Row, Row), Diff>();
+            let control_arranged = control_collection.mz_arrange::<
                     ColumnationChunker<_>,
                     RowRowBatcher<_, _>,
                     RowRowBuilder<_, _>,
                     RowRowSpine<_, _>,
                 >("control oks");
+            (
+                adopt_fresh(&imported_arranged),
+                adopt_fresh(&control_arranged),
+                imported_input,
+                control_input,
                 (
-                    adopt_fresh(&imported_arranged),
-                    adopt_fresh(&control_arranged),
-                    imported_input,
-                    control_input,
-                )
-            });
+                    imported_arranged.trace.clone(),
+                    control_arranged.trace.clone(),
+                ),
+            )
+        });
 
-        // Seal a few times so the chain the import seeds from is non-empty.
-        for t in 0..4u64 {
+        // The kept agents stand in for the trace manager, which lets every arrangement's spine merge
+        // up to its upper.
+        let mut tick_both = |worker: &mut timely::worker::Worker, t: u64| {
             tick(
                 worker,
                 &mut imported_input,
@@ -1119,6 +1016,14 @@ fn live_import_does_not_pin_merging() {
                 Timestamp::from(t),
                 Timestamp::from(t + 1),
             );
+            let upper = Antichain::from_elem(Timestamp::from(t + 1));
+            imported_keep.set_physical_compaction(upper.borrow());
+            control_keep.set_physical_compaction(upper.borrow());
+        };
+
+        // Seal a few times so the chain the import seeds from is non-empty.
+        for t in 0..4u64 {
+            tick_both(worker, t);
         }
 
         // A live import: empty `until`, so it never completes and its read hold lives as long as
@@ -1141,18 +1046,7 @@ fn live_import_does_not_pin_merging() {
         drop(handle);
 
         for t in 4..40u64 {
-            tick(
-                worker,
-                &mut imported_input,
-                Timestamp::from(t),
-                Timestamp::from(t + 1),
-            );
-            tick(
-                worker,
-                &mut control_input,
-                Timestamp::from(t),
-                Timestamp::from(t + 1),
-            );
+            tick_both(worker, t);
         }
 
         let imported_len = imported.chain_len();
@@ -1166,170 +1060,8 @@ fn live_import_does_not_pin_merging() {
     });
 }
 
-/// A fresh importer is seeded with the frontier its seeded chain covers, not the stream frontier
-/// that lags it.
-///
-/// [`trace_upper_can_lead_stream_frontier`] establishes that the lag is real. Registration copies
-/// the chain from the trace, so seeding the lagging stream frontier alongside it would hand the
-/// importer a trace covering times its own stream had not reached.
-#[mz_ore::test]
-fn seed_frontier_covers_the_chain_not_the_stream_frontier() {
-    timely::execute_directly(move |worker| {
-        let (agent, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
-            let arranged = collection.mz_arrange::<
-                ColumnationChunker<_>,
-                RowRowBatcher<_, _>,
-                RowRowBuilder<_, _>,
-                RowRowSpine<_, _>,
-            >("seed oks");
-            (arranged.trace.clone(), input)
-        });
-
-        for t in 0..3u64 {
-            input.advance_to(Timestamp::from(t));
-            input.update(
-                (
-                    Row::pack_slice(&[Datum::Int64(i64::cast_from(u32::try_from(t).unwrap()))]),
-                    Row::pack_slice(&[Datum::String("v")]),
-                ),
-                Diff::ONE,
-            );
-            input.advance_to(Timestamp::from(t + 1));
-            input.flush();
-            worker.step();
-        }
-
-        let mut chain = Vec::new();
-        agent.map_batches(|batch| chain.push(batch.clone()));
-        let coverage = chain.last().expect("sealed batches").upper().to_owned();
-        // A stream frontier from before the last seal, the lagging value registration must not
-        // seed.
-        let lagging = Antichain::from_elem(Timestamp::from(0_u64));
-        assert!(
-            timely::PartialOrder::less_than(&lagging, &coverage),
-            "test needs a stream frontier strictly below the chain coverage"
-        );
-        assert_eq!(
-            seed_frontier::<RowRowSpine<Timestamp, Diff>>(&chain, &lagging),
-            coverage,
-            "seed must cover the seeded chain"
-        );
-        assert_eq!(
-            seed_frontier::<RowRowSpine<Timestamp, Diff>>(&[], &lagging),
-            lagging,
-            "an empty chain covers nothing, so the stream frontier stands"
-        );
-    });
-}
-
-/// A live batch the seed already covers is dropped, not replayed under a capability the seed
-/// has already moved past.
-///
-/// The importer seeds from the trace, which can hold a batch the arrangement stream has not
-/// delivered yet. The publisher then pushes that same batch as a live instruction on a later
-/// activation, with a hint below the frontier the seed already claimed. Replaying it would both
-/// double count the batch and panic in `caps.delayed(hint)`, since the capability set no longer
-/// has an element at or below the hint.
-///
-/// Injects exactly that ordering into a real published arrangement's importer queue, using a
-/// real non-empty `Arc` batch, so the drain-and-emit loop under test is the production one. An
-/// unbounded `until` keeps the capability alive long enough for the injected batch to be
-/// reached: with a finite `until` the frontier check would drop the capability first and mask
-/// the case. The test passes by running to completion, since the failure mode is a panic on the
-/// worker thread.
-#[mz_ore::test]
-fn live_batch_covered_by_the_seed_is_dropped() {
-    timely::execute_directly(move |worker| {
-        let (published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
-            let arranged = collection.mz_arrange::<
-                ColumnationChunker<_>,
-                RowRowBatcher<_, _>,
-                RowRowBuilder<_, _>,
-                RowRowSpine<_, _>,
-            >("hazard oks");
-            let published = adopt_fresh(&arranged);
-            (published, input)
-        });
-        input.update(
-            (
-                Row::pack_slice(&[Datum::Int32(1)]),
-                Row::pack_slice(&[Datum::String("a")]),
-            ),
-            Diff::ONE,
-        );
-        input.advance_to(Timestamp::from(1_u64));
-        input.flush();
-        let handle = published.handle();
-        for _ in 0..32 {
-            worker.step();
-        }
-
-        // A real non-empty `Arc` batch from the published chain to replay.
-        let real_batch = {
-            let state = handle.shared.state.lock().unwrap();
-            state
-                .chain
-                .iter()
-                .find(|b| !b.is_empty())
-                .expect("a non-empty sealed batch")
-                .clone()
-        };
-
-        // Register a real importer, then step so its source seeds and drains the current chain,
-        // leaving its `CapabilitySet` at the published upper (1). `until` is left unbounded so
-        // the injected frontier below cannot trip the early "reached until" exit before the
-        // hazardous batch is replayed.
-        let as_of = Antichain::from_elem(Timestamp::from(1_u64));
-        let until = Antichain::new();
-        worker.dataflow::<Timestamp, _, _>(|scope| {
-            let _imp = handle.import_snapshot_at(scope, "hazard import", as_of, until);
-        });
-        for _ in 0..4 {
-            worker.step();
-        }
-
-        // Inject the hazardous ordering: a `Frontier` at 5 before a `Batch` whose hint is 1
-        // (< 5). `Batch(5)` keeps caps at or below 5, `Frontier(5)` downgrades to 5, and
-        // `Batch(1)` would then panic in `delayed` if the loop replayed it. Activate the
-        // importer so it drains this step.
-        {
-            let queue = {
-                let mut state = handle.shared.state.lock().unwrap();
-                state
-                    .live_queues()
-                    .pop()
-                    .expect("importer queue registered")
-            };
-            {
-                let mut instructions = queue.instructions.lock().unwrap();
-                instructions.clear();
-                instructions.push_back(TraceReplayInstruction::Batch(
-                    real_batch.clone(),
-                    Some(Timestamp::from(5_u64)),
-                ));
-                instructions.push_back(TraceReplayInstruction::Frontier(Antichain::from_elem(
-                    Timestamp::from(5_u64),
-                )));
-                instructions.push_back(TraceReplayInstruction::Batch(
-                    real_batch.clone(),
-                    Some(Timestamp::from(1_u64)),
-                ));
-            }
-            queue.activate();
-        }
-
-        // Keep `input` alive so the publisher does not close and null the importer's caps.
-        for _ in 0..8 {
-            worker.step();
-        }
-        drop(input);
-    });
-}
-
 /// Publishes `updates` as a `RowRow` index, sealing one batch per distinct time, and returns the
-/// publication plus its still-open input handle (dropping the handle would close the publisher).
+/// publication, its still-open input handle, and an agent that keeps the trace alive.
 fn publish_updates(
     worker: &mut timely::worker::Worker,
     updates: &[(i64, &'static str, u64, i64)],
@@ -1338,8 +1070,9 @@ fn publish_updates(
 ) -> (
     Published<RowRowSpine<Timestamp, Diff>>,
     differential_dataflow::input::InputSession<Timestamp, (Row, Row), Diff>,
+    TraceAgent<RowRowSpine<Timestamp, Diff>>,
 ) {
-    let (published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+    let (published, mut input, keep) = worker.dataflow::<Timestamp, _, _>(|scope| {
         let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
         let arranged = collection.mz_arrange::<
             ColumnationChunker<_>,
@@ -1348,7 +1081,7 @@ fn publish_updates(
             RowRowSpine<_, _>,
         >(name);
         let published = adopt_fresh(&arranged);
-        (published, input)
+        (published, input, arranged.trace.clone())
     });
 
     let mut times: Vec<u64> = updates.iter().map(|&(_, _, t, _)| t).collect();
@@ -1374,7 +1107,7 @@ fn publish_updates(
     }
     input.advance_to(Timestamp::from(seal));
     input.flush();
-    (published, input)
+    (published, input, keep)
 }
 
 /// A differential join over two single-sourced imports must equal the direct join exactly, with
@@ -1421,8 +1154,8 @@ fn join_over_single_sourced_import_matches_direct() {
 
     let (tx, rx) = mpsc::channel();
     timely::execute_directly(move |worker| {
-        let (pub_a, keep_a) = publish_updates(worker, &a, seal, "join A");
-        let (pub_b, keep_b) = publish_updates(worker, &b, seal, "join B");
+        let (pub_a, keep_a, _agent_a) = publish_updates(worker, &a, seal, "join A");
+        let (pub_b, keep_b, _agent_b) = publish_updates(worker, &b, seal, "join B");
         let ha = pub_a.handle();
         let hb = pub_b.handle();
 
@@ -1487,7 +1220,7 @@ fn empty_seal_advances_import_frontier_to_completion() {
 
     let (tx, rx) = mpsc::channel();
     timely::execute_directly(move |worker| {
-        let (published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+        let (published, mut input, _keep) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
             let arranged = collection.mz_arrange::<
                 ColumnationChunker<_>,
@@ -1496,7 +1229,7 @@ fn empty_seal_advances_import_frontier_to_completion() {
                 RowRowSpine<_, _>,
             >("empty-seal oks");
             let published = adopt_fresh(&arranged);
-            (published, input)
+            (published, input, arranged.trace.clone())
         });
 
         // Data at time 0, sealed to 1.
