@@ -330,6 +330,11 @@ ignore = [
     # patched release, so this cannot be resolved by a version bump. That
     # client only talks to AWS endpoints, and the advisory is low severity.
     "RUSTSEC-2026-0258",
+    # `azure_core` 0.21 and earlier write the outgoing `authorization` header to
+    # the log at debug and trace level. It reaches us through `azure_identity`
+    # in `mz-persist`; the fix is moving to the new Azure SDK, tracked in
+    # SEC-619. The security team accepted ignoring the advisory until then.
+    "RUSTSEC-2026-0275",
 ]
 
 # Must be manually kept in sync with about.toml.
