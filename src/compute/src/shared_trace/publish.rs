@@ -122,6 +122,12 @@ where
         self.shared.upper()
     }
 
+    /// The published seal frontier.
+    pub(crate) fn upper(&self) -> Antichain<Tr::Time> {
+        let state = self.shared.state.lock().expect("shared trace poisoned");
+        state.upper.clone()
+    }
+
     /// Why this point would refuse an `as_of`. See [`Diagnostics`].
     pub(crate) fn diagnostics(&self) -> Diagnostics<Tr::Time> {
         Diagnostics {

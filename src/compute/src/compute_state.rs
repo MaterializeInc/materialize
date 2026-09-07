@@ -1131,6 +1131,14 @@ impl<'a> ActiveComputeState<'a> {
                 traces.oks_mut().read_upper(&mut new_frontier);
             } else if let Some(frontier) = &collection.sink_write_frontier {
                 new_frontier.clone_from(&frontier.borrow());
+            } else if let Some(upper) = self
+                .compute_state
+                .sharing_registry
+                .published_upper(&id, self.timely_worker.index())
+            {
+                // An index that re-exports an imported shared arrangement has no trace of its own,
+                // only an alias to the published point. See `export_index`.
+                new_frontier.clone_from(&upper);
             } else {
                 error!(id = ?id, "collection without write frontier");
                 continue;
