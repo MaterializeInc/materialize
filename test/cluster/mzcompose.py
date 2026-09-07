@@ -5206,6 +5206,89 @@ def workflow_test_occ_sealed_input_write_stands_alone(c: Composition) -> None:
         assert rows == 3, f"{write} succeeded, then lost {3 - rows} of its 3 rows"
 
 
+def workflow_test_optimizer_panics_are_errors(c: Composition) -> None:
+    """A panic during optimization fails the statement and leaves environmentd
+    running, on every sequencing path and at every optimization stage the
+    path reaches.
+
+    Each path is meant to run the optimizer through `catch_unwind_optimize`,
+    which turns a panic into an internal error. A path that calls the
+    optimizer directly lets the panic reach the panic hook, which aborts the
+    process; the OCC read-then-write path did that (SQL-686). The
+    `optimize_mir_local`, `optimize_dataflow` and `finalize_dataflow`
+    failpoints sit at the start of the three stages, so a path with two
+    wrapped calls gets both of them exercised.
+    """
+    LOCAL = "optimize_mir_local"
+    GLOBAL = "optimize_dataflow"
+    LIR = "finalize_dataflow"
+    # Statements are expected to fail, so nothing they would create exists
+    # for the next round.
+    cases = [
+        ("SELECT * FROM t", [LOCAL, GLOBAL, LIR]),
+        ("SUBSCRIBE (SELECT * FROM t)", [LOCAL, GLOBAL, LIR]),
+        ("CREATE VIEW v2 AS SELECT * FROM t", [LOCAL]),
+        ("CREATE MATERIALIZED VIEW mv AS SELECT * FROM t", [LOCAL, GLOBAL, LIR]),
+        ("CREATE INDEX i ON t (a)", [GLOBAL, LIR]),
+        ("DELETE FROM t WHERE a IN (SELECT a FROM v)", [LOCAL, GLOBAL, LIR]),
+    ]
+
+    def check(frontend_peek: bool) -> None:
+        c.sql(
+            f"ALTER SYSTEM SET enable_frontend_peek_sequencing = {frontend_peek}",
+            port=6877,
+            user="mz_system",
+        )
+        # The peek flag is read when a connection is set up, so use a fresh one.
+        with c.sql_cursor() as cur:
+            # A SUBSCRIBE that unexpectedly succeeds would otherwise wait for
+            # rows forever.
+            cur.execute("SET statement_timeout = '30s'")
+            for statement, failpoints in cases:
+                for failpoint in failpoints:
+                    cur.execute(
+                        f"SET failpoints = '{failpoint}=panic(forced optimizer panic)'".encode()
+                    )
+                    try:
+                        cur.execute(statement.encode())
+                    except DatabaseError as e:
+                        assert "unexpected panic during query optimization" in str(e), (
+                            statement,
+                            failpoint,
+                            e,
+                        )
+                    else:
+                        raise AssertionError(
+                            f"{statement!r} succeeded with {failpoint} set to panic"
+                        )
+                    finally:
+                        cur.execute(f"SET failpoints = '{failpoint}=off'".encode())
+            # The statements failed on their own; the process they ran in did not.
+            cur.execute("SELECT count(*) FROM t")
+            assert cur.fetchall() == [(1,)]
+
+    # Read at startup, so the read-then-write path needs a restart to switch.
+    for occ in (False, True):
+        with c.override(
+            Materialized(
+                additional_system_parameter_defaults={
+                    "enable_adapter_frontend_occ_read_then_write": str(occ).lower()
+                },
+            )
+        ):
+            c.up("materialized")
+            c.sql(dedent("""
+                DROP TABLE IF EXISTS t CASCADE;
+                CREATE TABLE t (a int);
+                INSERT INTO t VALUES (1);
+                CREATE VIEW v AS SELECT a FROM t;
+                """))
+            for frontend_peek in (False, True):
+                check(frontend_peek)
+            c.kill("materialized")
+            c.rm("materialized")
+
+
 def workflow_test_refresh_mv_warmup(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:

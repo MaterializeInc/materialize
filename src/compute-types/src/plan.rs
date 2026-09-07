@@ -647,6 +647,8 @@ impl LirRelationExpr {
         features: &OptimizerFeatures,
         metrics: Option<&LoweringMetrics>,
     ) -> Result<DataflowDescription<Self>, String> {
+        fail::fail_point!("finalize_dataflow");
+
         // First, we lower the dataflow description from MIR to LIR. Lowering
         // also moves common parts of the MFPs pushed onto each source's reads into the source
         // itself (see `Context::refine_source_mfps`).
