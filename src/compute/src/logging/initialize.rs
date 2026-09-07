@@ -382,8 +382,8 @@ impl ExtractTimestamp for (Timestamp, Subtime) {
 /// Publishes a maintenance logging index's `oks`/`errs` arrangements into the sharing registry so
 /// the interactive runtime serves introspection peeks from them.
 ///
-/// Gated on the `Maintenance` role. Interactive reads maintenance's slot, and its own empty copy
-/// would clobber it. Solo has no registry peer.
+/// Gated on the `Maintenance` role: Interactive reads maintenance's slot, and Solo has no registry
+/// peer.
 fn publish_logging_index(
     role: ComputeRuntimeRole,
     registry: &ArrangementSharingRegistry,
