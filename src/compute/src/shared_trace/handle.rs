@@ -327,8 +327,8 @@ where
                 (queue, seed)
             };
 
-            let mut capabilities = Some(CapabilitySet::new());
-            capabilities.as_mut().unwrap().insert(capability);
+            // Emptied once the read is over, which is the operator's "done" state.
+            let mut capabilities = CapabilitySet::from_elem(capability);
             let mut acknowledged = seed.clone();
             // The seeded instructions come first and are emitted as-is. Everything after the seed's
             // own `Frontier` is a live instruction from the publisher, and is filtered against
@@ -344,7 +344,7 @@ where
                     instructions.drain(..).collect()
                 };
 
-                if let Some(caps) = capabilities.as_mut() {
+                if !capabilities.is_empty() {
                     for instruction in drained {
                         match instruction {
                             TraceReplayInstruction::Frontier(frontier) => {
@@ -389,13 +389,13 @@ where
                                 if frontier.is_empty()
                                     || timely::PartialOrder::less_equal(&until, &frontier)
                                 {
-                                    capabilities = None;
+                                    capabilities.downgrade(std::iter::empty::<Tr::Time>());
                                     // The read is over, so stop holding the trace back. A consumer of
                                     // the returned trace still holds its own registration.
                                     hold = None;
                                     break;
                                 }
-                                caps.downgrade(&frontier.borrow()[..]);
+                                capabilities.downgrade(&frontier.borrow()[..]);
                             }
                             TraceReplayInstruction::Batch(batch, hint) => {
                                 // The seed and the live instructions come from different places:
@@ -419,7 +419,7 @@ where
                                         // `BatchFrontier` wrapper advances times to `as_of` and drops
                                         // times at or beyond `until` on read, so the stream presents
                                         // the same `[as_of, until)` view as the trace.
-                                        let cap = caps.delayed(&time);
+                                        let cap = capabilities.delayed(&time);
                                         output.session(&cap).give(BatchFrontier::make_from(
                                             batch,
                                             as_of.borrow(),
