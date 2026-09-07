@@ -6993,7 +6993,6 @@ dependencies = [
  "mz-storage-types",
  "mz-timely-util",
  "mz-txn-wal",
- "nix 0.31.3",
  "num_cpus",
  "rustls",
  "serde",
