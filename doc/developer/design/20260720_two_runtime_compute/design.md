@@ -1588,11 +1588,13 @@ the existing answer and a better one.
 * `interactive_runtime.slt` pins the flag before creating a two-worker cluster and reads
   through indexes, re-exports and introspection relations on it.
 * Feature benchmarks under the `InteractiveRuntime` group price each read path on a quiet
-  replica against a single-runtime image: a join that needs a peek dataflow, a point
-  lookup, `CREATE INDEX` plus the first read through it, an introspection read, and
-  clusterd memory with 200 published indexes idle, after a restart, and with 200
-  re-exports of one arrangement. The benchmark's default cluster is an unmanaged replica,
-  so its `clusterd` service is launched with the second runtime explicitly.
+  replica against a single-runtime image: a join that needs a peek dataflow, an
+  introspection read, and clusterd memory with 200 published indexes idle, after a
+  restart, and with 200 re-exports of one arrangement. The point lookup and `CREATE
+  INDEX` plus the first read through it are the main set's `FastPathFilterIndex` and
+  `CreateIndex`, which run on the same container. The benchmark's default cluster is an
+  unmanaged replica, so its `clusterd` service is launched with the second runtime
+  explicitly.
 * Parallel-benchmark scenarios measure the isolation claims under contention and gate on
   regression thresholds. `ReadIsolationUnderHydration` and `IntrospectionUnderHydration`
   read at a fixed rate while hydration churn saturates the maintenance workers.
