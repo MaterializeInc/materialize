@@ -27,7 +27,7 @@ regions behind.
 
 ## Running manually in Cloud
 
-To run the cloud canary test manually, you can specify either `--target=cloud-production` (which is hardcoded to aws/us-east-1) or `--target=cloud-staging` (which is hardcoded to aws/eu-west-1). For production, you need to set the environment variables `NIGHTLY_MZ_USERNAME` and `MZ_CLI_APP_PASSWORD`. For staging, the run uses one account from the E2E database pool: set `E2E_STAGING_TEST_FRONTEGG_DATABASE_APP_PASSWORD_<n>` for the pool index `<n>` and select it with `CI_CONCURRENCY_POOL_SLOT=<n>` (outside CI, index 0 is used when the slot is unset); the username is derived from the index.
+To run the cloud canary test manually, you can specify either `--target=cloud-production` (which is hardcoded to aws/us-east-1) or `--target=cloud-staging` (which is hardcoded to aws/eu-west-1). For production, you need to set the environment variables `NIGHTLY_MZ_USERNAME` and `MZ_CLI_APP_PASSWORD`. For staging, the run uses one account from the E2E database pool: set `E2E_STAGING_TEST_FRONTEGG_DATABASE_APP_PASSWORD_<n>` for the pool index `<n>` and select it with `CI_CONCURRENCY_POOL_SLOT=<n>` (outside CI, index 0 is used when the slot is unset); the username is derived from the index. Staging runs also need `BUILDKITE_COMMIT`, which selects the image version to enable.
 
 The username is an email address, the app password is a password generated in the cloud console (something like `mzp_...`).
 

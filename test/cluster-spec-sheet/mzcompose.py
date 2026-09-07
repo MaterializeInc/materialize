@@ -3791,7 +3791,7 @@ def add_target_arguments(parser: argparse.ArgumentParser) -> None:
         "--cleanup",
         default=False,
         action=argparse.BooleanOptionalAction,
-        help="Destroy the region at the end of the workflow.",
+        help="Destroy the region when the workflow ends, and from CI's ci-cleanup after a cancel or timeout.",
     )
     # Required rather than defaulting to cloud-production: `ci-cleanup` runs
     # unattended from the CI plugin's exit trap and destroys the target's
