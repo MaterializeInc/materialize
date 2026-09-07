@@ -573,11 +573,10 @@ pub fn build_compute_dataflow(
 /// Reports a publication point refusing to serve `as_of`, and aborts.
 ///
 /// A refusal is a protocol-ordering failure: the controller promises an index's `since` never
-/// passes the `as_of` of a dataflow importing it. The diagnostics say which side moved. A controller
-/// frontier beyond `as_of` means maintenance applied a compaction ahead of this render. A standing
-/// hold at the refusing `since` means this runtime had already applied it, so the create was ordered
-/// behind it on this runtime's own stream. A standing hold below the `since` means the publisher
-/// escaped its bound.
+/// passes the `as_of` of a dataflow importing it. The diagnostics say which side moved. A standing
+/// hold at the refusing `since` means this runtime had already applied the compaction, so the
+/// create was ordered behind it on this runtime's own stream. A standing hold below the `since`
+/// means the trace compacted past its bound.
 fn report_compacted_past(
     idx_id: GlobalId,
     part: &str,
@@ -587,16 +586,16 @@ fn report_compacted_past(
 ) -> ! {
     panic!(
         "Index {idx_id} ({part}) has been allowed to compact beyond the dataflow as_of: \
-         since {:?}, as_of {:?}, controller allow_compaction {:?}, standing hold {:?}",
+         since {:?}, as_of {:?}, standing hold {:?}",
         since.elements(),
         as_of.elements(),
-        diagnostics.writer_logical.as_ref().map(|f| f.elements()),
         diagnostics.standing_hold.elements(),
     )
 }
 
 /// Imports the published `oks`/`errs` arrangements of `idx_id` into `outer` as a snapshot at
-/// `as_of` bounded by `until`, through [`crate::shared_trace::SharedTraceHandle::import_snapshot_at`].
+/// `as_of` bounded by `until`, through
+/// [`SharedReader::import_frontier_core`](mz_timely_util::shared_trace::SharedReader::import_frontier_core).
 ///
 /// Binds through [`ArrangementSharingRegistry::get_or_create`], so a dependency not yet published
 /// yields an unbacked point whose import produces nothing until a publisher adopts it. That is what
@@ -639,14 +638,14 @@ fn import_published_index<'outer>(
     };
 
     // These handles' own registrations end with this function. The hold that outlives it is the one
-    // `import_snapshot_at` clones into each returned `Arranged`.
-    let oks_arranged = oks_handle.import_snapshot_at(
+    // `import_frontier_core` clones into each returned `Arranged`.
+    let oks_arranged = oks_handle.import_frontier_core(
         outer.clone(),
         &format!("Shared{name}"),
         as_of.clone(),
         until.clone(),
     );
-    let errs_arranged = errs_handle.import_snapshot_at(
+    let errs_arranged = errs_handle.import_frontier_core(
         outer,
         &format!("SharedErr{name}"),
         as_of.clone(),
