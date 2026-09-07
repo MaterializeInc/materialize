@@ -234,7 +234,7 @@ pub enum ArrangementFlavor<'scope, T: RenderTimestamp> {
         Arranged<'scope, ErrEnter<mz_repr::Timestamp, T>>,
     ),
     /// A maintenance-runtime arrangement imported into the interactive runtime through the
-    /// shared-trace primitive. Backed by `SharedTraceHandle`, so it is a real arrangement the plan
+    /// shared-trace primitive. Backed by `SharedReader`, so it is a real arrangement the plan
     /// can `Get`, not a re-derived collection. Only the interactive runtime produces this.
     ///
     /// The `GlobalId` mirrors [`Self::Trace`]'s: it names the imported index, so an export of this
