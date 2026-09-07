@@ -238,12 +238,8 @@ pub enum ArrangementFlavor<'scope, T: RenderTimestamp> {
     /// shared-trace primitive. Backed by `SharedTraceHandle`, so it is a real arrangement the plan
     /// can `Get`, not a re-derived collection. Only the interactive runtime produces this.
     ///
-    /// The `GlobalId` mirrors [`Self::Trace`]'s: it names the imported index. The interactive
-    /// runtime never re-exports maintained indexes, so it is never consumed by an export path.
-    ///
-    /// NOTE: the `TraceFrontier` bound on the imported handles is derived from the dataflow's
-    /// `as_of`, not from its `until`, so this variant serves single-time dataflows only. Nothing
-    /// checks that at the type level.
+    /// The `GlobalId` mirrors [`Self::Trace`]'s: it names the imported index, so an export of this
+    /// same arrangement can alias it instead of arranging again.
     SharedTrace(
         GlobalId,
         Arranged<'scope, SharedOksEnter<T>>,
