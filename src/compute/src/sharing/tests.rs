@@ -31,9 +31,10 @@ use super::*;
 
 /// Builds a tiny dataflow that arranges `rows` into a `RowRow` `oks` arrangement and an empty
 /// `errs` arrangement, publishes both, and returns a registry that holds them under `id` on
-/// worker 0 (of 1). The dataflow runs to completion inside `execute_directly`; the returned
-/// registry keeps the published chains alive through their `Arc`s, so the snapshot reads below
-/// observe the sealed contents even after the publishing worker has torn down.
+/// worker 0 (of 1). The dataflow runs to completion inside `execute_directly`. The published
+/// chain outlives the worker through its `Arc`s, and the standing hold keeps the published
+/// `since` at the minimum, so the snapshot reads below observe the sealed contents even after
+/// the publishing worker has torn down.
 fn publish_index(id: GlobalId, rows: Vec<(Row, Row)>) -> ArrangementSharingRegistry {
     let registry = ArrangementSharingRegistry::new();
     publish_index_into(&registry, id, rows);
@@ -48,7 +49,10 @@ fn publish_index(id: GlobalId, rows: Vec<(Row, Row)>) -> ArrangementSharingRegis
 fn publish_index_into(registry: &ArrangementSharingRegistry, id: GlobalId, rows: Vec<(Row, Row)>) {
     let registry_in = registry.clone();
     timely::execute_directly(move |worker| {
-        worker.dataflow::<Timestamp, _, _>(|scope| {
+        // The trace lives as long as an agent does, and the point closes when it drops, so the
+        // agents must outlive the stepping that seals the batches. Production keeps them in the
+        // trace manager. `execute_directly` steps only after this closure returns, so step here.
+        let keep = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (mut oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
             let oks = oks_collection.mz_arrange::<
                 ColumnationChunker<_>,
@@ -75,7 +79,10 @@ fn publish_index_into(registry: &ArrangementSharingRegistry, id: GlobalId, rows:
             oks_input.flush();
             errs_input.advance_to(Timestamp::from(1_u64));
             errs_input.flush();
+            (oks.trace.clone(), errs.trace.clone())
         });
+        while worker.step() {}
+        drop(keep);
     });
 }
 
@@ -343,7 +350,7 @@ fn publish_join_input(
     let registry_in = registry.clone();
     let updates = updates.to_vec();
 
-    let (mut oks_input, mut errs_input) = worker.dataflow::<Timestamp, _, _>(move |scope| {
+    let (mut oks_input, mut errs_input, keep) = worker.dataflow::<Timestamp, _, _>(move |scope| {
         let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
         let oks = oks_collection.mz_arrange::<
             ColumnationChunker<_>,
@@ -361,7 +368,11 @@ fn publish_join_input(
         >("input errs");
 
         registry_in.publish(id, &oks, &errs);
-        (oks_input, errs_input)
+        (
+            oks_input,
+            errs_input,
+            (oks.trace.clone(), errs.trace.clone()),
+        )
     });
 
     // Distinct update times in order. Insert each time's updates, then advance and step, so the
@@ -389,18 +400,17 @@ fn publish_join_input(
     errs_input.advance_to(Timestamp::from(seal));
     errs_input.flush();
 
-    // Return a closure that keeps the input handles alive and continues stepping. Dropping the
-    // handles would drop the inputs and let the publisher dataflow drain to the empty frontier,
-    // closing the publication before the importer has read it.
+    // Return a closure that keeps the input handles and the trace agents alive and continues
+    // stepping. Dropping the handles would drop the inputs and let the dataflow drain to the empty
+    // frontier, and dropping the agents would drop the trace, either closing the publication before
+    // the importer has read it.
     //
-    // Each call also advances the inputs to a fresh filler time. Stepping alone is not enough to
-    // run the publisher: timely only schedules its sink when its input is active, so an
-    // out-of-band change such as a controller `AllowCompaction` landing in `writer_logical` is not
-    // picked up until something ticks the dataflow. A live index in production always has that
-    // tick. The filler times carry no updates, so they add empty seal-only batches and advance
-    // `upper` without changing any accumulation.
+    // Each call also advances the inputs to a fresh filler time, so the arrange operator keeps
+    // activating the way a live index's does in production. The filler times carry no updates, so
+    // they add empty seal-only batches and advance `upper` without changing any accumulation.
     let mut filler = seal;
     move |worker: &mut timely::worker::Worker| {
+        let _keep = &keep;
         filler += 1;
         oks_input.advance_to(Timestamp::from(filler));
         oks_input.flush();
@@ -526,7 +536,7 @@ fn adopt_join_input(
 ) -> impl FnMut(&mut timely::worker::Worker) + use<> {
     let updates = updates.to_vec();
 
-    let mut oks_input = worker.dataflow::<Timestamp, _, _>(|scope| {
+    let (mut oks_input, keep) = worker.dataflow::<Timestamp, _, _>(|scope| {
         let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
         let oks = oks_collection.mz_arrange::<
             ColumnationChunker<_>,
@@ -534,11 +544,10 @@ fn adopt_join_input(
             RowRowBuilder<_, _>,
             RowRowSpine<_, _>,
         >("adopt oks");
-        // Install this arrangement's publisher into the pre-existing point, rather than minting a
-        // fresh one. Importers already registered against it (built before this call) now begin to
-        // fill.
-        PublishArrangement::adopt(&oks, point, "adopt oks", || {});
-        oks_input
+        // Attach this arrangement's trace to the pre-existing point, rather than minting a fresh
+        // one. Importers already registered against it (built before this call) are seeded now.
+        PublishArrangement::adopt(&oks, point, || {});
+        (oks_input, oks.trace.clone())
     });
 
     let mut times: Vec<u64> = updates.iter().map(|&(_, _, t, _)| t).collect();
@@ -560,7 +569,7 @@ fn adopt_join_input(
     oks_input.flush();
 
     move |worker: &mut timely::worker::Worker| {
-        let _keep = &oks_input;
+        let _keep = (&oks_input, &keep);
         worker.step();
     }
 }
@@ -726,30 +735,35 @@ fn bare_handle_read_upper_advances_cross_thread() {
         timely::execute_directly(move |worker| {
             let worker_index = worker.index();
             let peers = worker.peers();
-            let (mut oks_input, mut errs_input) = worker.dataflow::<Timestamp, _, _>(|scope| {
-                let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
-                let oks = oks_collection.mz_arrange::<
+            let (mut oks_input, mut errs_input, _keep) =
+                worker.dataflow::<Timestamp, _, _>(|scope| {
+                    let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
+                    let oks = oks_collection.mz_arrange::<
                         ColumnationChunker<_>,
                         RowRowBatcher<_, _>,
                         RowRowBuilder<_, _>,
                         RowRowSpine<_, _>,
                     >("spike oks");
 
-                let (errs_input, errs_collection) =
-                    scope.new_collection::<DataflowErrorSer, Diff>();
-                let errs = KeyCollection::from(errs_collection).mz_arrange::<
+                    let (errs_input, errs_collection) =
+                        scope.new_collection::<DataflowErrorSer, Diff>();
+                    let errs = KeyCollection::from(errs_collection).mz_arrange::<
                         ColumnationChunker<_>,
                         ErrBatcher<_, _>,
                         ErrBuilder<_, _>,
                         ErrSpine<_, _>,
                     >("spike errs");
 
-                let slot = publisher_registry.get_or_create(id, worker_index, peers);
-                PublishArrangement::adopt(&oks, &slot.oks, "shared oks", || {});
-                PublishArrangement::adopt(&errs, &slot.errs, "shared errs", || {});
-                publisher_registry.notify(id, worker_index);
-                (oks_input, errs_input)
-            });
+                    let slot = publisher_registry.get_or_create(id, worker_index, peers);
+                    PublishArrangement::adopt(&oks, &slot.oks, || {});
+                    PublishArrangement::adopt(&errs, &slot.errs, || {});
+                    publisher_registry.notify(id, worker_index);
+                    (
+                        oks_input,
+                        errs_input,
+                        (oks.trace.clone(), errs.trace.clone()),
+                    )
+                });
 
             for &t in &publisher_seals {
                 // Add a row just below the seal time, then advance the frontier to `t` and step
