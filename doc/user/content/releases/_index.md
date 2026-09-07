@@ -30,6 +30,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 - **Faster Object Explorer loads in the Console**: The Console's Object Explorer tree now renders from a persisted, incrementally synced cache, which cuts the warm-load wait from roughly 600 ms to 25–50 ms on a catalog of about 2,800 objects.
 
 ### Bug Fixes {#v26.41-bug-fixes}
+- Fixed `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` run while a zero-downtime upgrade was in progress leaving the upgraded environment on the view's previous definition, which either put `environmentd` into a crash loop that restarting could not clear or left the view silently computing and serving the replaced definition.
 - Fixed `EXPLAIN TIMESTAMP AS DOT` aborting `environmentd`, which let any role that can run SQL take an environment down with a single statement; the statement now returns an unsupported-format error.
 - Fixed `environmentd` entering a crash loop that restarting could not clear, after an `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` was followed by dropping the old definition's dependencies.
 - Fixed a coordinator panic during `ALTER TABLE ... ADD COLUMN` when the schema change committed but its response was lost, so the retry now recognizes the evolution as already applied instead of reporting a mismatch.
