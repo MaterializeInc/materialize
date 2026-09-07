@@ -421,11 +421,11 @@ pub const ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD: Config<Duration> = Config::
     ParameterScope::Environment,
 );
 
-/// How often to sweep replicas for completed object hydration episodes.
+/// How often to sweep replicas for completed object and replica hydration episodes.
 pub const HYDRATION_HISTORY_COLLECTION_INTERVAL: Config<Duration> = Config::new(
     "hydration_history_collection_interval",
-    Duration::ZERO,
-    "How often to record completed object hydration episodes. A zero duration disables collection.",
+    Duration::from_secs(60),
+    "How often to record completed object and replica hydration episodes. A zero duration prevents new collection and retention sweeps.",
     ParameterScope::Environment,
 );
 

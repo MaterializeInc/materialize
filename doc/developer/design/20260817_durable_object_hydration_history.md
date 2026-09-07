@@ -56,7 +56,8 @@ not-yet-recorded dataflow, and the OCC path rejects a result that exceeds
 only matters at millions of dataflows per replica.
 
 Two dyncfgs control it. `hydration_history_collection_interval` sets the sweep
-cadence and disables collection at zero, which is the production default.
+cadence, defaulting to 60 seconds. Setting it to zero prevents new collection and
+retention sweeps as a break-glass measure. An in-flight sweep is allowed to finish.
 `hydration_history_retention_period` bounds how long rows live, defaulting to 30
 days.
 
@@ -222,10 +223,8 @@ crash-looping replica must not be able to stop the table from shrinking. The
 dependency does not run the other way: a catalog server without a replica skips
 retention and leaves collection running.
 
-Disabling collection also suspends retention. The alternative is an always-on
-subscribe in the default configuration, where the table is empty and there is
-nothing to retain. Rows already collected are therefore kept while collection is
-off.
+Disabling collection also suspends retention once any in-flight sweep finishes.
+Rows already collected are therefore kept while collection is off.
 
 ## Durability is best effort
 
@@ -322,18 +321,12 @@ than wrong data. Because the symptom is otherwise hard to attribute, both a time
 and retry-budget exhaustion log that the replica's introspection frontier may be
 trailing.
 
-## Rollout
+## Operational control
 
-Collection is disabled by default, and the interval is runtime configurable, so
-enabling it needs no restart. The plan is to enable it in CI when this merges, then
-in staging, then in production, a week apart, so each step has a week of real
-traffic behind it before the next.
-
-CI enables it at a 60 second interval through the mzcompose configuration, which is
-what exercises the hydration, restart, retention, and catalog tests. It stays off in
-the sqllogictest runner defaults, against the usual preference for enabling new
-paths in tests: the collector installs subscribes and writes a builtin table, while
-those runs assert on catalog contents and plans.
+The collection interval is runtime configurable, so disabling or re-enabling the
+collector needs no restart. Standard mzcompose tests also set the 60 second interval
+explicitly so mixed-version tests exercise the collector when running binaries whose
+compiled default is zero.
 
 ## Future Work
 
