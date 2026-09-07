@@ -22,8 +22,7 @@ use super::publish_logging_index;
 
 /// A logging/introspection index is a `RowRow` `oks` arrangement plus an (empty) `errs`
 /// arrangement, published into the sharing registry only by the maintenance runtime. Interactive
-/// and Solo must not publish: interactive reads maintenance's slot rather than clobbering it with
-/// its own empty copy, and Solo has no registry peer.
+/// and Solo must not publish: interactive reads maintenance's slot, and Solo has no registry peer.
 ///
 /// Builds real `RowRow`/`Err` arrangements (the exact types the logging path produces) and drives
 /// [`publish_logging_index`] for each role, asserting only maintenance ends up published.
