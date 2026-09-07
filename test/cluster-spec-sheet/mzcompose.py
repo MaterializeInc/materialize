@@ -13,6 +13,7 @@ Reproduces cluster spec sheet results on Materialize Cloud (or local Docker).
 
 import argparse
 import csv
+import functools
 import glob
 import itertools
 import json
@@ -105,7 +106,10 @@ MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = ADDITIONAL_BENCHMARKING_SYST
 }
 
 
+@functools.cache
 def staging_version() -> str:
+    # Cached: the version cannot change within a run, and `parse_cargo` shells
+    # out to cargo, whose failure must not surface inside a region retry loop.
     return f"{MzVersion.parse_cargo()}--pr.g{os.environ['BUILDKITE_COMMIT']}"
 
 
