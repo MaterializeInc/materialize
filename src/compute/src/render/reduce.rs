@@ -26,7 +26,10 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
 use differential_dataflow::{Data, VecCollection};
 use itertools::Itertools;
-use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
+use mz_compute_types::dyncfgs::{
+    ENABLE_COMPUTE_DISTINCT_ERROR_CHECK, ENABLE_COMPUTE_TEMPORAL_BUCKETING,
+    TEMPORAL_BUCKETING_SUMMARY,
+};
 use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, LirAggregateExpr,
@@ -231,7 +234,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             // can go ahead and render them directly.
             ReducePlan::Distinct => {
                 let (arranged_output, errs) = self.build_distinct(collection, mfp_after);
-                errors.push(errs);
+                errors.extend(errs);
                 arranged_output
             }
             ReducePlan::Accumulable(expr) => {
@@ -283,14 +286,21 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     }
 
     /// Build the dataflow to compute the set of distinct keys.
+    ///
+    /// The output arrangement holds `Row`s and cannot carry errors, so any error has to come
+    /// from a second reduce over the same arranged input, `DistinctByErrorCheck`. That reduce is
+    /// only rendered when it has something to report: an `mfp_after` that can error, or, when
+    /// [`ENABLE_COMPUTE_DISTINCT_ERROR_CHECK`] is set, non-positive multiplicities. Otherwise
+    /// the returned error collection is `None`.
     fn build_distinct<'s>(
         &self,
         collection: VecCollection<'s, T, (Row, Row), Diff>,
         mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
     ) -> (
         Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
-        VecCollection<'s, T, DataflowErrorSer, Diff>,
+        Option<VecCollection<'s, T, DataflowErrorSer, Diff>>,
     ) {
+        let check_multiplicities = ENABLE_COMPUTE_DISTINCT_ERROR_CHECK.get(&self.config_set);
         let error_logger = self.error_logger();
 
         // Allocations for the two closures.
@@ -312,7 +322,18 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             .clone()
             .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>, _>(
                 "DistinctBy",
-                move |key, _input, output| {
+                move |key, input, output| {
+                    // A key with a non-positive multiplicity is not present in the distinct
+                    // output. Whether it also surfaces as a dataflow error is up to the
+                    // error-check reduce below; here it can only be logged.
+                    if let Some((_, count)) = input.iter().find(|(_, count)| !count.is_positive()) {
+                        error_logger.log(
+                            "Non-positive multiplicity in DistinctBy",
+                            &format!("row={key:?}, count={count}"),
+                        );
+                        return;
+                    }
+
                     let temp_storage = RowArena::new();
                     let mut datums_local = datums1.borrow();
                     key.extend_datums(&temp_storage, &mut datums_local, None);
@@ -333,17 +354,25 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     }
                 },
             );
+
+        if !check_multiplicities && mfp_after2.is_none() {
+            return (output, None);
+        }
+
+        let error_logger = self.error_logger();
         let errors = arranged.mz_reduce_abelian::<_, RowErrBuilder<_, _>, RowErrSpine<_, _>, _>(
             "DistinctByErrorCheck",
             move |key, input: &[(_, Diff)], output: &mut Vec<(DataflowErrorSer, _)>| {
-                for (_, count) in input.iter() {
-                    if count.is_positive() {
-                        continue;
+                if check_multiplicities {
+                    for (_, count) in input.iter() {
+                        if count.is_positive() {
+                            continue;
+                        }
+                        let message = "Non-positive multiplicity in DistinctBy";
+                        error_logger.log(message, &format!("row={key:?}, count={count}"));
+                        output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
+                        return;
                     }
-                    let message = "Non-positive multiplicity in DistinctBy";
-                    error_logger.log(message, &format!("row={key:?}, count={count}"));
-                    output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
-                    return;
                 }
                 // If `mfp_after` can error, then evaluate it here.
                 let Some(mfp) = &mfp_after2 else { return };
@@ -356,7 +385,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 }
             },
         );
-        (output, errors.as_collection(|_k, v| v.clone()))
+        (output, Some(errors.as_collection(|_k, v| v.clone())))
     }
 
     /// Build the dataflow to compute and arrange multiple non-accumulable,
