@@ -53,10 +53,11 @@ use crate::render::columnar::{CollectionEdge, flat_map_datums};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
-use crate::typedefs::{ErrBatcher, ErrBuilder, KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
+use crate::typedefs::{
+    ErrBatcher, ErrBuilder, KeyBatcher, MzTimestamp, RowRowSpine, RowSpine, RowValSpine,
+};
 use mz_row_spine::{
     DatumContainer, DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder,
-    RowValSpine,
 };
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.

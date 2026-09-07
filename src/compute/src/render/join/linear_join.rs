@@ -49,8 +49,8 @@ use crate::render::columnar::{CollectionEdge, columnar_to_vec, vec_to_columnar};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::join::mz_join_core::mz_join_core;
-use crate::typedefs::{RowRowAgent, RowRowEnter};
-use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder, RowRowSpine};
+use crate::typedefs::{RowRowAgent, RowRowEnter, RowRowSpine};
+use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder};
 
 /// Available linear join implementations.
 ///

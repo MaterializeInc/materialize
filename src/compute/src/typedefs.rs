@@ -25,8 +25,8 @@ use mz_row_spine::RowValBuilder;
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::spines::{ColKeyBatcher, ColKeyBuilder, ColValBatcher, ColValBuilder};
 
-pub use crate::typedefs::spines::{ColKeySpine, ColValSpine};
-pub use mz_row_spine::{RowRowSpine, RowSpine, RowValBatcher, RowValSpine};
+pub use crate::typedefs::spines::{ColKeySpine, ColValSpine, RowRowSpine, RowSpine, RowValSpine};
+pub use mz_row_spine::RowValBatcher;
 
 pub(crate) mod spines {
     use columnation::Columnation;
@@ -38,17 +38,31 @@ pub(crate) mod spines {
     use mz_timely_util::columnation::ColumnationStack;
 
     use mz_row_spine::{ArcBatch, ArcBuilder, OffsetOptimized};
+    use mz_timely_util::shared_trace::SharedSpine;
 
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
 
+    // Every spine is wrapped in `SharedSpine`, so any arrangement can be published for readers on
+    // another thread. Unpublished, the wrapper costs one branch per trace call.
+
+    /// A spine for `(Row, Row)` updates.
+    pub type RowRowSpine<T, R> = SharedSpine<mz_row_spine::RowRowSpine<T, R>>;
+    /// A spine for `Row` keys with generic values.
+    pub type RowValSpine<V, T, R> = SharedSpine<mz_row_spine::RowValSpine<V, T, R>>;
+    /// A spine for `Row` keys with unit values.
+    pub type RowSpine<T, R, DC = ColumnationStack<R>> =
+        SharedSpine<mz_row_spine::RowSpine<T, R, DC>>;
+
     /// A spine for generic keys and values.
-    pub type ColValSpine<K, V, T, R> = Spine<ArcBatch<OrdValBatch<MzStack<((K, V), T, R)>>>>;
+    pub type ColValSpine<K, V, T, R> =
+        SharedSpine<Spine<ArcBatch<OrdValBatch<MzStack<((K, V), T, R)>>>>>;
     pub type ColValBatcher<K, V, T, R> = KeyValBatcher<K, V, T, R>;
     pub type ColValBuilder<K, V, T, R> =
         ArcBuilder<OrdValBuilder<MzStack<((K, V), T, R)>, ColumnationStack<((K, V), T, R)>>>;
 
     /// A spine for generic keys
-    pub type ColKeySpine<K, T, R> = Spine<ArcBatch<OrdKeyBatch<MzStack<((K, ()), T, R)>>>>;
+    pub type ColKeySpine<K, T, R> =
+        SharedSpine<Spine<ArcBatch<OrdKeyBatch<MzStack<((K, ()), T, R)>>>>>;
     pub type ColKeyBatcher<K, T, R> = KeyBatcher<K, T, R>;
     pub type ColKeyBuilder<K, T, R> =
         ArcBuilder<OrdKeyBuilder<MzStack<((K, ()), T, R)>, ColumnationStack<((K, ()), T, R)>>>;
