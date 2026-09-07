@@ -24,7 +24,7 @@
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::Thread;
 
 use differential_dataflow::operators::arrange::Arranged;
@@ -68,15 +68,14 @@ struct Waker {
     pending: bool,
 }
 
-/// The map of published slots, plus one [`Waker`] per interactive worker index.
-///
-/// The `map` and `wakers` locks are independent. The lost-wakeup argument that lets them stay
-/// separate is documented on [`ArrangementSharingRegistry::notify`].
+/// The registry's state: the published slots and one [`Waker`] per interactive worker index. One
+/// lock covers all of it. Every critical section is a few map operations, and the publisher takes
+/// it once per seal, not per record.
 #[derive(Default)]
 struct Inner {
-    map: Mutex<BTreeMap<GlobalId, Vec<Option<Arc<SharedIndexArrangement>>>>>,
+    map: BTreeMap<GlobalId, Vec<Option<Arc<SharedIndexArrangement>>>>,
     /// Indexed by worker ordinal; `None` until that interactive worker registers its waker.
-    wakers: Mutex<Vec<Option<Waker>>>,
+    wakers: Vec<Option<Waker>>,
 }
 
 /// Per-process registry of published index arrangements.
@@ -88,13 +87,17 @@ struct Inner {
 /// comes and goes.
 #[derive(Clone, Default)]
 pub struct ArrangementSharingRegistry {
-    inner: Arc<Inner>,
+    inner: Arc<Mutex<Inner>>,
 }
 
 impl ArrangementSharingRegistry {
     /// Creates an empty registry.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Inner> {
+        self.inner.lock().expect("registry poisoned")
     }
 
     /// Returns the existing slot for `(id, worker_index)`, or creates one backed by unbacked
@@ -113,8 +116,9 @@ impl ArrangementSharingRegistry {
         worker_index: usize,
         peers: usize,
     ) -> Arc<SharedIndexArrangement> {
-        let mut map = self.inner.map.lock().expect("registry poisoned");
-        let slots = map
+        let mut inner = self.lock();
+        let slots = inner
+            .map
             .entry(id)
             .or_insert_with(|| (0..peers).map(|_| None).collect());
         Arc::clone(slots[worker_index].get_or_insert_with(|| {
@@ -154,14 +158,15 @@ impl ArrangementSharingRegistry {
 
     /// Removes all slots for `id`, called when the index drops.
     pub(crate) fn remove(&self, id: &GlobalId) {
-        {
-            let mut map = self.inner.map.lock().expect("registry poisoned");
-            map.remove(id);
-        }
+        let mut inner = self.lock();
+        let Inner { map, wakers } = &mut *inner;
+        map.remove(id);
         // `remove` is not worker-specific: any interactive worker may have pending work on `id`, so
         // mark it dirty for every registered waker. A waiter re-checks and, finding the slot gone,
         // drops or keeps its item.
-        self.notify_all(*id);
+        for waker in wakers.iter_mut().flatten() {
+            Self::mark(waker, *id);
+        }
     }
 
     /// Mints reader handles for `id` on `worker_index`, if published.
@@ -170,8 +175,9 @@ impl ArrangementSharingRegistry {
         id: &GlobalId,
         worker_index: usize,
     ) -> Option<(SharedOksHandle, SharedErrsHandle)> {
-        let map = self.inner.map.lock().expect("registry poisoned");
-        Self::mint(&map, id, worker_index)
+        let inner = self.lock();
+        let slot = inner.map.get(id)?.get(worker_index)?.as_ref()?;
+        Some((slot.oks.handle(), slot.errs.handle()))
     }
 
     /// The accumulated `oks` logical holds registered against `id` on `worker_index`, if published.
@@ -185,8 +191,8 @@ impl ArrangementSharingRegistry {
         id: &GlobalId,
         worker_index: usize,
     ) -> Option<Antichain<Timestamp>> {
-        let map = self.inner.map.lock().expect("registry poisoned");
-        let slot = map.get(id)?.get(worker_index)?.as_ref()?;
+        let inner = self.lock();
+        let slot = inner.map.get(id)?.get(worker_index)?.as_ref()?;
         Some(slot.oks.logical_holds())
     }
 
@@ -196,7 +202,8 @@ impl ArrangementSharingRegistry {
     /// Overwrites any prior waker for that index, starting with an empty dirty set and a cleared
     /// coalescing flag.
     pub(crate) fn register_waker(&self, worker_index: usize, worker: Thread) {
-        let mut wakers = self.inner.wakers.lock().expect("registry poisoned");
+        let mut inner = self.lock();
+        let wakers = &mut inner.wakers;
         if worker_index >= wakers.len() {
             wakers.resize_with(worker_index + 1, || None);
         }
@@ -214,8 +221,8 @@ impl ArrangementSharingRegistry {
     /// call this before re-reading the map: draining before the map re-check is what closes the
     /// lost-wakeup window.
     pub(crate) fn take_dirty(&self, worker_index: usize) -> BTreeSet<GlobalId> {
-        let mut wakers = self.inner.wakers.lock().expect("registry poisoned");
-        match wakers.get_mut(worker_index).and_then(|w| w.as_mut()) {
+        let mut inner = self.lock();
+        match inner.wakers.get_mut(worker_index).and_then(|w| w.as_mut()) {
             Some(waker) => {
                 waker.pending = false;
                 std::mem::take(&mut waker.dirty)
@@ -241,8 +248,9 @@ impl ArrangementSharingRegistry {
         worker_index: usize,
         frontier: &Antichain<Timestamp>,
     ) {
-        let map = self.inner.map.lock().expect("registry poisoned");
-        if let Some(arr) = map
+        let inner = self.lock();
+        if let Some(arr) = inner
+            .map
             .get(&id)
             .and_then(|slots| slots.get(worker_index))
             .and_then(|slot| slot.as_ref())
@@ -260,39 +268,29 @@ impl ArrangementSharingRegistry {
     ///
     /// # Lost-wakeup contract
     ///
-    /// `map` and `wakers` are separate locks. A publisher writes its slot under `map`, releases it,
-    /// then calls this under `wakers`. On wake the interactive server loop runs `take_dirty` (under
-    /// `wakers`) and only then re-reads the slot via `handles` (under `map`). Label the four steps:
-    /// publisher P1 = slot write, P2 = this mark+unpark; worker W1 = `take_dirty`, W2 = map re-read.
-    /// Program order gives P1 -> P2 and W1 -> W2.
+    /// The publication a mark announces and the mark itself are separate critical sections: a
+    /// publisher backs its slot (the point's own state lock, released before `on_seal` fires), then
+    /// calls this. On wake the interactive server loop runs `take_dirty` and only then re-reads the
+    /// slot via `handles`, again two acquisitions. Label the four steps: publisher P1 = slot write,
+    /// P2 = this mark+unpark; worker W1 = `take_dirty`, W2 = slot re-read. Program order gives
+    /// P1 -> P2 and W1 -> W2.
     ///
-    /// The `map` lock totally orders P1 against W2, so the worker's re-read either observes the slot
-    /// or does not:
+    /// P1 and W2 are totally ordered, so the worker's re-read either observes the slot or does not:
     ///
     /// * W2 observes P1's write: the worker serves the work immediately, no park, no lost wake.
     /// * W2 precedes P1: the worker misses the slot and will park. Then W2 -> P1 combined with
     ///   W1 -> W2 and P1 -> P2 gives W1 -> P2, so this mark lands in a dirty set the worker has
     ///   ALREADY drained, sets `pending = true`, and unparks. An unpark landing before the park is
     ///   remembered, so the worker's next `step_or_park` returns at once (or never parks), it
-    ///   re-runs `take_dirty` and sees `id`, re-reads the map (now past P1), and serves. No lost
+    ///   re-runs `take_dirty` and sees `id`, re-reads the slot (now past P1), and serves. No lost
     ///   wake.
     ///
     /// The contradictory interleaving P2 -> W1 with W2 -> P1 is impossible: it would require
-    /// P1 -> P2 -> W1 -> W2 -> P1, a cycle. Hence the drain-before-map-read ordering the server loop
-    /// guarantees is exactly what makes two independent locks lost-wakeup-free.
+    /// P1 -> P2 -> W1 -> W2 -> P1, a cycle. Hence the drain-before-re-read ordering the server loop
+    /// guarantees is what makes the separate critical sections lost-wakeup-free.
     pub(crate) fn notify(&self, id: GlobalId, worker_index: usize) {
-        let mut wakers = self.inner.wakers.lock().expect("registry poisoned");
-        if let Some(waker) = wakers.get_mut(worker_index).and_then(|w| w.as_mut()) {
-            Self::mark(waker, id);
-        }
-    }
-
-    /// Marks `id` dirty for every registered worker and fires each coalescing waker. Used by
-    /// `remove`, which is not worker-specific. Per worker, the lost-wakeup argument on
-    /// [`Self::notify`] applies unchanged.
-    fn notify_all(&self, id: GlobalId) {
-        let mut wakers = self.inner.wakers.lock().expect("registry poisoned");
-        for waker in wakers.iter_mut().flatten() {
+        let mut inner = self.lock();
+        if let Some(waker) = inner.wakers.get_mut(worker_index).and_then(|w| w.as_mut()) {
             Self::mark(waker, id);
         }
     }
@@ -307,22 +305,12 @@ impl ArrangementSharingRegistry {
         }
     }
 
-    /// Mints reader handles for `id` on `worker_index` from an already-locked map, if published.
-    fn mint(
-        map: &BTreeMap<GlobalId, Vec<Option<Arc<SharedIndexArrangement>>>>,
-        id: &GlobalId,
-        worker_index: usize,
-    ) -> Option<(SharedOksHandle, SharedErrsHandle)> {
-        let slot = map.get(id)?.get(worker_index)?.as_ref()?;
-        Some((slot.oks.handle(), slot.errs.handle()))
-    }
-
     /// Whether worker `worker_index`'s coalescing flag is armed. Lets tests assert that a burst of
     /// marks collapses to one activation without observing the (asynchronous) fire.
     #[cfg(test)]
     fn waker_pending(&self, worker_index: usize) -> bool {
-        let wakers = self.inner.wakers.lock().expect("registry poisoned");
-        wakers
+        self.lock()
+            .wakers
             .get(worker_index)
             .and_then(|w| w.as_ref())
             .is_some_and(|w| w.pending)
