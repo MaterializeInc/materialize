@@ -281,7 +281,10 @@ fn publish_kv_index_into(
 ) {
     let registry_in = registry.clone();
     timely::execute_directly(move |worker| {
-        worker.dataflow::<Timestamp, _, _>(|scope| {
+        // The trace lives as long as an agent does, and the point closes when it drops, so the
+        // agents must outlive the stepping that seals the batches. Production keeps them in the
+        // trace manager. `execute_directly` steps only after this closure returns, so step here.
+        let keep = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (mut oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
             let oks = oks_collection.mz_arrange::<
                 ColumnationChunker<_>,
@@ -299,8 +302,8 @@ fn publish_kv_index_into(
             >("test errs");
 
             let slot = registry_in.get_or_create(id, 0, 1);
-            PublishArrangement::adopt(&oks, &slot.oks, "peek oks", || {});
-            PublishArrangement::adopt(&errs, &slot.errs, "peek errs", || {});
+            PublishArrangement::adopt(&oks, &slot.oks, || {});
+            PublishArrangement::adopt(&errs, &slot.errs, || {});
             registry_in.notify(id, 0);
 
             for (k, v) in rows {
@@ -310,7 +313,10 @@ fn publish_kv_index_into(
             oks_input.flush();
             errs_input.advance_to(Timestamp::from(1_u64));
             errs_input.flush();
+            (oks.trace.clone(), errs.trace.clone())
         });
+        while worker.step() {}
+        drop(keep);
     });
 }
 
@@ -483,28 +489,34 @@ fn interactive_shared_peek_defers_until_sealed() {
         let worker_index = worker.index();
         let peers = worker.peers();
 
-        let (mut oks_input, mut errs_input) = worker.dataflow::<Timestamp, _, _>(move |scope| {
-            let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
-            let oks = oks_collection.mz_arrange::<
+        let (mut oks_input, mut errs_input, _keep) =
+            worker.dataflow::<Timestamp, _, _>(move |scope| {
+                let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
+                let oks = oks_collection.mz_arrange::<
                     ColumnationChunker<_>,
                     RowRowBatcher<_, _>,
                     RowRowBuilder<_, _>,
                     RowRowSpine<_, _>,
                 >("test oks");
-            let (errs_input, errs_collection) = scope.new_collection::<DataflowErrorSer, Diff>();
-            let errs = KeyCollection::from(errs_collection).mz_arrange::<
+                let (errs_input, errs_collection) =
+                    scope.new_collection::<DataflowErrorSer, Diff>();
+                let errs = KeyCollection::from(errs_collection).mz_arrange::<
                     ColumnationChunker<_>,
                     ErrBatcher<_, _>,
                     ErrBuilder<_, _>,
                     ErrSpine<_, _>,
                 >("test errs");
 
-            let slot = registry_in.get_or_create(id, worker_index, peers);
-            PublishArrangement::adopt(&oks, &slot.oks, "peek oks", || {});
-            PublishArrangement::adopt(&errs, &slot.errs, "peek errs", || {});
-            registry_in.notify(id, worker_index);
-            (oks_input, errs_input)
-        });
+                let slot = registry_in.get_or_create(id, worker_index, peers);
+                PublishArrangement::adopt(&oks, &slot.oks, || {});
+                PublishArrangement::adopt(&errs, &slot.errs, || {});
+                registry_in.notify(id, worker_index);
+                (
+                    oks_input,
+                    errs_input,
+                    (oks.trace.clone(), errs.trace.clone()),
+                )
+            });
 
         // A row at time 0, batch sealed so the trace's upper is {1}.
         oks_input.update((row(1), row(10)), Diff::ONE);
@@ -608,16 +620,16 @@ fn interactive_compute_state(
 }
 
 /// Publishes `rows` as a `RowRow` index under `id` on the CURRENT worker (no nested
-/// `execute_directly`), sealing the batch and draining to the empty upper so the registry's
-/// `Arc` keeps the snapshot readable after the inputs drop.
+/// `execute_directly`), sealing the batch and draining to the empty upper. Returns the trace
+/// agents, which the caller keeps for as long as it reads: the point closes with the trace.
 fn publish_index_current_worker(
     worker: &mut TimelyWorker,
     registry: &ArrangementSharingRegistry,
     id: GlobalId,
     rows: Vec<(Row, Row)>,
-) {
+) -> (RowRowAgent<Timestamp, Diff>, ErrAgent<Timestamp, Diff>) {
     let registry_in = registry.clone();
-    let (mut oks_input, mut errs_input) = worker.dataflow::<Timestamp, _, _>(move |scope| {
+    let (mut oks_input, mut errs_input, keep) = worker.dataflow::<Timestamp, _, _>(move |scope| {
         let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
         let oks = oks_collection.mz_arrange::<
             ColumnationChunker<_>,
@@ -634,10 +646,14 @@ fn publish_index_current_worker(
         >("test errs");
 
         let slot = registry_in.get_or_create(id, scope.index(), scope.peers());
-        PublishArrangement::adopt(&oks, &slot.oks, "peek oks", || {});
-        PublishArrangement::adopt(&errs, &slot.errs, "peek errs", || {});
+        PublishArrangement::adopt(&oks, &slot.oks, || {});
+        PublishArrangement::adopt(&errs, &slot.errs, || {});
         registry_in.notify(id, scope.index());
-        (oks_input, errs_input)
+        (
+            oks_input,
+            errs_input,
+            (oks.trace.clone(), errs.trace.clone()),
+        )
     });
 
     for (k, v) in rows {
@@ -650,13 +666,14 @@ fn publish_index_current_worker(
     for _ in 0..16 {
         worker.step();
     }
-    // Drop the inputs and drain: the batch seals to the empty upper, readable at any finite ts,
-    // and the registry's `Arc` keeps the published chain alive.
+    // Drop the inputs and drain: the batch seals to the empty upper, readable at any finite ts.
+    // The returned agents keep the trace, and with it the publication, alive.
     drop(oks_input);
     drop(errs_input);
     for _ in 0..16 {
         worker.step();
     }
+    keep
 }
 
 /// A peek issued before its index is published enqueues in `pending_work` (never the maintenance
@@ -715,7 +732,7 @@ fn interactive_peek_resolves_on_publication_not_on_bare_tick() {
         assert!(rx.try_recv().is_err(), "no response before publication");
 
         // Publish the index from this same worker. `insert` marks the id dirty for worker 0.
-        publish_index_current_worker(worker, &registry, id, kv.clone());
+        let _keep = publish_index_current_worker(worker, &registry, id, kv.clone());
 
         // No-polling: the data is now published and ready, yet a re-examination with an empty
         // dirty set must NOT serve the peek. Only a dirtied id triggers work.
@@ -782,28 +799,34 @@ fn interactive_peek_resolves_on_seal_via_note_frontier() {
 
         // Publish a row at time 0, sealing only to upper {1}.
         let registry_in = registry.clone();
-        let (mut oks_input, mut errs_input) = worker.dataflow::<Timestamp, _, _>(move |scope| {
-            let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
-            let oks = oks_collection.mz_arrange::<
+        let (mut oks_input, mut errs_input, _keep) =
+            worker.dataflow::<Timestamp, _, _>(move |scope| {
+                let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
+                let oks = oks_collection.mz_arrange::<
                     ColumnationChunker<_>,
                     RowRowBatcher<_, _>,
                     RowRowBuilder<_, _>,
                     RowRowSpine<_, _>,
                 >("test oks");
-            let (errs_input, errs_collection) = scope.new_collection::<DataflowErrorSer, Diff>();
-            let errs = KeyCollection::from(errs_collection).mz_arrange::<
+                let (errs_input, errs_collection) =
+                    scope.new_collection::<DataflowErrorSer, Diff>();
+                let errs = KeyCollection::from(errs_collection).mz_arrange::<
                     ColumnationChunker<_>,
                     ErrBatcher<_, _>,
                     ErrBuilder<_, _>,
                     ErrSpine<_, _>,
                 >("test errs");
 
-            let slot = registry_in.get_or_create(id, scope.index(), scope.peers());
-            PublishArrangement::adopt(&oks, &slot.oks, "peek oks", || {});
-            PublishArrangement::adopt(&errs, &slot.errs, "peek errs", || {});
-            registry_in.notify(id, scope.index());
-            (oks_input, errs_input)
-        });
+                let slot = registry_in.get_or_create(id, scope.index(), scope.peers());
+                PublishArrangement::adopt(&oks, &slot.oks, || {});
+                PublishArrangement::adopt(&errs, &slot.errs, || {});
+                registry_in.notify(id, scope.index());
+                (
+                    oks_input,
+                    errs_input,
+                    (oks.trace.clone(), errs.trace.clone()),
+                )
+            });
 
         oks_input.update((row(1), row(10)), Diff::ONE);
         oks_input.advance_to(Timestamp::from(1_u64));
