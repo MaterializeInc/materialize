@@ -362,11 +362,9 @@ fn snapshot_at_waits_until_upper_passes_time() {
 }
 
 /// Feeds `input` a fresh update at `at`, advances the frontier to `next`, and steps `worker`,
-/// so the publisher operator reactivates and republishes its forwarded compaction from the
-/// trace. Mirrors the `tick` helper in the differential-dataflow primitive's own
-/// `tests/sharing.rs`: the publisher only recomputes its forwarded compaction when a batch runs
-/// through it, so a bare `set_logical_compaction`/`set_physical_compaction` call on a writer
-/// handle is invisible until the next such tick.
+/// so the arrange operator activates and applies any reader hold that moved since the last
+/// tick. Mirrors the `tick` helper in the differential-dataflow primitive's own
+/// `tests/sharing.rs`.
 fn tick(
     worker: &mut timely::worker::Worker,
     input: &mut differential_dataflow::input::InputSession<Timestamp, (Row, Row), Diff>,
