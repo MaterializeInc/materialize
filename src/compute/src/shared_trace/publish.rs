@@ -223,7 +223,8 @@ where
                 // already been sealed. When the Spine has merged an old batch and a leading one into
                 // a single batch whose upper leads the frontier, that gate drops the whole batch,
                 // stranding its historical part and leaving a late importer's snapshot missing rows.
-                // Forwarding all batches costs only momentary memory, since batches are Arc-shared.
+                // Forwarding all batches costs no copies, since batches are Arc-shared, and the
+                // chain is re-read after the compaction below so it does not outlive the spine's.
                 // It cannot double-count: the stream emits each original batch once and never
                 // re-emits a merged batch, so future `arrived` batches never carry what the seed
                 // already holds. The stream frontier still drives the published `upper` and the
@@ -316,6 +317,18 @@ where
                 // an unbounded merge synchronously, which must not block concurrent readers.
                 agent.set_logical_compaction(logical_target.borrow());
                 agent.set_physical_compaction(physical_target.borrow());
+
+                // That compaction can complete merges, and a batch the spine drops stays alive for as
+                // long as the published chain still names it. The chain published above was read
+                // before the merge, so re-read it. Merges the arrange operator finishes on its own
+                // between activations are picked up the same way on the next one, so the published
+                // chain pins a spine's pre-merge batches for at most one activation.
+                let mut chain = Vec::new();
+                agent.map_batches(|batch| chain.push(batch.clone()));
+                {
+                    let mut state = sink_shared.state.lock().expect("shared trace poisoned");
+                    state.chain = chain;
+                }
 
                 // Wake fast-path peeks parked on this arrangement's seal, AFTER the state lock above
                 // is released and `state.upper` reflects the advance. The registry wake takes the
