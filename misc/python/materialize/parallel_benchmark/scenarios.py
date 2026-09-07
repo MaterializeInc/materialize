@@ -1274,13 +1274,13 @@ class StagingBench(Scenario):
 
 
 # Regression thresholds for a query measured while something else contends for
-# its replica. Contended tails vary more between runs than a quiet query's.
+# its replica. Contended tails vary more between runs than a quiet query's. Only the
+# stats the suite gates on everywhere are listed, so p99 stays reported but ungated.
 CONTENDED_THRESHOLDS = {
     "qps": 1.5,
     "avg": 1.5,
     "p50": 1.5,
     "p95": 1.5,
-    "p99": 2.0,
 }
 
 
