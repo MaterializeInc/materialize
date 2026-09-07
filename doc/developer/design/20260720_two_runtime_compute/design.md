@@ -236,8 +236,8 @@ What reaches the actual case is dropping **both** the finite-`until` clause and 
 subscribe clause while *keeping* transience, so the predicate becomes
 `desc.is_transient() && desc.copy_to_ids().next().is_none()`. Keeping transience is
 what makes it cheap: transient ids are never retained by reconciliation, so nothing
-regresses there, they pass both frontier-reporting gates unchanged, and their exports
-are freshly rendered so the shared-trace re-export path is not reached. It relies on the
+regresses there, they pass the multiplexer's frontier filter unchanged, and an export
+that is the imported arrangement aliases its publication point. It relies on the
 compaction feedback described in
 [Compaction feedback flows through the reader's handle](#compaction-feedback-flows-through-the-readers-handle),
 and on closing the `SnapshotMode` gap recorded in the open findings. A `SUBSCRIBE` sink
@@ -874,13 +874,13 @@ seed: the controller does not offer an `as_of` below a collection's `since`, so 
 can need a frontier below it. That also makes the no-broadcast-yet behaviour identical to
 the writer-driven fallback.
 
-**The rendering runtime tells its own publications apart by transience, not by whether it
-hosts the collection.** It holds empty local copies of the maintenance runtime's
-introspection indexes, so "do I have a collection for this id" answers yes for ids whose
-*publication* is the peer's. A non-transient id there is the peer's, a transient one is its
-own. It must also not apply the broadcast frontier as the writer-driven floor, which is the
-peer's to drive, and it must not run `drop_collection` for a broadcast drop, which would
-remove the peer's slot from the registry.
+**The rendering runtime tells the peer's publications apart by whether it hosts the
+collection.** It installs no logging dataflow and renders only the transient dataflows the
+multiplexer routes to it, so "do I have a collection for this id" answers no exactly for
+the ids whose publication is the peer's. For those it records the standing hold and does
+nothing else: it must not apply the broadcast frontier as the writer-driven floor, which is
+the peer's to drive, and it must not run `drop_collection` for a broadcast drop, which
+would remove the peer's slot from the registry.
 
 #### The price: compaction is coupled to the rendering runtime's drain rate
 
@@ -1028,7 +1028,7 @@ already told it could compact past, and `get_physical_compaction` reports exactl
 frontier the trace honours, which is what the join operator's own assertion checks
 against `map_batches`.
 
-### Bounded import is a call-site choice, not a limit of the primitive
+### The import follows the dataflow's until
 
 `SharedTraceHandle::import_snapshot_at(scope, name, as_of, until)` bounds the import
 by `until`, and `shared_trace.rs` states the contract directly: "For a single-time
@@ -1044,15 +1044,14 @@ The feed is live already. `adopt_named` is a sink on the arrangement stream that
 activation pushes arrived batches to every registered queue, pushes a `Frontier` instruction
 when `upper` advances, and activates every importer.
 
-**What actually makes interactive imports bounded is the call site.**
-`import_index_shared` in `render.rs` synthesizes `snapshot_until` as the frontier one
-step past `as_of` and passes that instead of `self.until`, because `self.until` may be
-empty for a long-lived dependency and so cannot serve as the snapshot bound. An `as_of`
-at the maximum timestamp has no finite successor, so it drops out and the bound becomes
-the empty frontier, which reads the final state. That is a deliberate narrowing to
-single-time reads, and reversing it is a one-argument change.
+**What makes interactive imports bounded is the routing predicate, not the import.**
+`import_index_shared` in `render.rs` passes the dataflow's own `until`, as the
+maintenance import does. The multiplexer routes only single-time dataflows to the
+interactive runtime, so that `until` is always one step past `as_of` and every import
+completes once the trace seals past it. A dataflow with an empty `until` would follow the
+trace for as long as it lived, and nothing at the import stops it.
 
-The reason that matters is that it moves the obstacle. Following imports are not the
+The reason that matters is that it places the obstacle. Following imports are not the
 hard part. See
 [Compaction feedback flows through the reader's handle](#compaction-feedback-flows-through-the-readers-handle).
 
@@ -1146,8 +1145,10 @@ per-worker slot holding the published `oks` and `errs` points.
   shared point: the alias dataflow imports the target, so the controller never
   advances the target's `since` past an alias's. Once the target drops, the point
   stays reachable under the alias ids and its frontiers move to the meet of what the
-  aliases have noted. A seal on the target notifies its aliases too. The registry's
-  three locks are taken in the order map, aliases, wakers.
+  aliases have noted. A seal on the target notifies its aliases too. On the interactive
+  runtime an export whose arrangement is an imported shared arrangement aliases the
+  same way, and since it has no trace of its own, `report_frontiers` reads its frontier
+  through the registry. The registry's state sits behind one lock.
 
 ## The interactive serving path
 
@@ -1214,9 +1215,9 @@ two runtimes.
   per-process one. Peeks route only to the interactive runtime, so the multiplexer
   sees exactly one response per uuid and forwards it verbatim.
 * It forwards each collection's `Frontiers` only from the runtime that owns the
-  collection. Both runtimes install the internal logging dataflows, so without
-  this rule the interactive runtime's empty copies would regress the controller's
-  per-collection frontier. State: `transient_owner`, the set of transient ids the
+  collection. Only the hosting runtime reports a collection's frontier, so this is a
+  guard on that invariant: a report leaking from the other runtime would regress the
+  controller's per-collection frontier. State: `transient_owner`, the set of transient ids the
   interactive runtime renders; every other id is maintenance's. It is per connection
   and cleared by `Hello`.
 
@@ -1280,9 +1281,9 @@ mechanism.
 
 ## Non-goals
 
-* `SUBSCRIBE` is out of scope. All interactive work is single-time, so the shared
-  import applies no `until` or `as_of` coalescing. A future subscribe migration
-  must add it.
+* `SUBSCRIBE` is out of scope. The routing predicate admits only single-time
+  dataflows. The import itself follows the dataflow's `until`, so a subscribe
+  migration is a routing change plus the `SnapshotMode` gap recorded below.
 * Cross-process and replica-to-replica sharing are out of scope. Sharing is
   per-process because the batches are `Arc`-backed in memory.
 * The import and replay queue is unbounded, with no overflow handling, in this
@@ -1313,11 +1314,6 @@ decision rather than a patch.
   Reachable the instant a subscribe does, and the failure is a **silently wrong
   answer**: the snapshot is included when the user asked for it to be skipped. This
   wants fixing before, not with, any routing relaxation.
-* **`export_index` panics on re-exporting a shared trace.** The
-  `unreachable!("interactive runtime does not re-export an imported shared
-  arrangement")` arm holds only while interactive's exports are always freshly rendered
-  local arrangements. A maintained index on interactive whose plan is a bare `Get` of
-  an imported index with a matching key would take it.
 * **Reconciliation cannot retain any cross-runtime importer, and this is stronger than
   the I2 row that records it.** `dependencies_retained` requires every imported index
   id to appear in `retain_ids`, and `retain_ids` is populated only from matches within
@@ -1453,7 +1449,7 @@ actually arbitrate. Ordered by expected value per line of change.
    same partitioning. Making the runtimes unequal would require that partitioning
    to become a contract between them, visible to whatever re-routed across the
    mismatch, and it has to stay an implementation detail of the compute layer
-   instead. See [Bounded import is a call-site choice, not a limit of the primitive](#bounded-import-is-a-call-site-choice-not-a-limit-of-the-primitive).
+   instead. See [The import follows the dataflow's until](#the-import-follows-the-dataflows-until).
 
    So the reservation is expressed by sizing *both* runtimes one worker below the
    core count and leaving a core for the interactive threads and for tokio.
@@ -1581,12 +1577,14 @@ the existing answer and a better one.
   the index peek sweep have their own.
 * A shared-fate subprocess test (`two_runtime_shared_fate.rs`) verifies a panic in either
   runtime aborts the process.
-* Four `clusterd-test-driver` specs, run at one and two workers, cover the runtime
+* Five `clusterd-test-driver` specs, run at one and two workers, cover the runtime
   boundary: a fast-path read through a published index, a query dataflow that binds to
   an index before it is published and resolves after, a read through an index that
-  re-exports another's arrangement and so aliases its publication point, and a query
+  re-exports another's arrangement and so aliases its publication point, a query
   dataflow that binds to such a re-export before it renders, which is the one case
-  where the re-export publishes through an import.
+  where the re-export publishes through an import, and a query dataflow on the
+  interactive runtime whose export is the arrangement it imports, which aliases the
+  shared publication point.
 * `interactive_runtime.slt` pins the flag before creating a two-worker cluster and reads
   through indexes, re-exports and introspection relations on it.
 * Feature benchmarks under the `InteractiveRuntime` group price each read path on a quiet
@@ -1654,7 +1652,9 @@ Re-exports became aliases late. The first cut published each re-export through i
 import of the shared traces, which cost about 150 KiB of resident memory per re-export and
 gave the re-export dataflow operators, so `mz_compute_error_counts` stopped attributing
 the target's errors to it. Aliasing restored both, and the import path survives only as
-the fallback for a reader that bound to the alias id first.
+the fallback for a reader that bound to the alias id first. The interactive runtime's
+export of an imported shared arrangement was an `unreachable!` until review asked what
+guaranteed it. Nothing did, and it became an alias as well.
 
 The peek path was unified with the peek execution work: the interactive runtime's own
 `PendingPeek` variant was folded into `IndexPeek`, with `IndexTraces` naming the trace
