@@ -23,8 +23,6 @@ use mz_postgres_client::metrics::PostgresClientMetrics;
 
 use crate::azure::{AzureBlob, AzureBlobConfig};
 use crate::file::{FileBlob, FileBlobConfig};
-#[cfg(feature = "foundationdb")]
-use crate::foundationdb::{FdbConsensus, FdbConsensusConfig};
 use crate::hedge::HedgeSibling;
 use crate::location::{Blob, Consensus, Determinate, ExternalError};
 use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
@@ -274,9 +272,6 @@ impl BlobConfig {
 /// Config for an implementation of [Consensus].
 #[derive(Debug, Clone)]
 pub enum ConsensusConfig {
-    #[cfg(feature = "foundationdb")]
-    /// Config for FoundationDB.
-    FoundationDB(FdbConsensusConfig),
     /// Config for [PostgresConsensus].
     Postgres(PostgresConsensusConfig),
     /// Config for [MemConsensus], only available in testing.
@@ -290,10 +285,6 @@ impl ConsensusConfig {
     /// Opens the associated implementation of [Consensus].
     pub async fn open(self) -> Result<Arc<dyn Consensus>, ExternalError> {
         match self {
-            #[cfg(feature = "foundationdb")]
-            ConsensusConfig::FoundationDB(config) => {
-                Ok(Arc::new(FdbConsensus::open(config).await?))
-            }
             ConsensusConfig::Postgres(config) => {
                 Ok(Arc::new(PostgresConsensus::open(config).await?))
             }
@@ -313,10 +304,6 @@ impl ConsensusConfig {
         dyncfg: Arc<ConfigSet>,
     ) -> Result<Self, ExternalError> {
         let config = match url.scheme() {
-            #[cfg(feature = "foundationdb")]
-            "foundationdb" => Ok(ConsensusConfig::FoundationDB(FdbConsensusConfig::new(
-                url.clone(),
-            )?)),
             "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
                 PostgresConsensusConfig::new(url, knobs, metrics, dyncfg)?,
             )),

@@ -85,4 +85,3 @@ default = ["mz-build-tools/default"]
 # `src/persist-client/fuzz` cargo-fuzz crate. Not for production use.
 fuzzing = []
 turmoil = []
-foundationdb = ["mz-persist/foundationdb"]

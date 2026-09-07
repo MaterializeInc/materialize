@@ -87,4 +87,3 @@ tonic-prost-build.workspace = true
 
 [features]
 default = ["mz-build-tools/default"]
-foundationdb = ["mz-persist-client/foundationdb"]
