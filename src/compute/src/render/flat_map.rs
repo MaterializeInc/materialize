@@ -16,6 +16,7 @@ use mz_expr::TableFunc;
 use mz_expr::{Eval, MfpPlan};
 use mz_repr::{DatumVec, RowArena, SharedRow};
 use mz_repr::{Diff, Row, Timestamp};
+use mz_timely_util::containers::adaptive_consolidation::AdaptiveConsolidatingContainerBuilder;
 use mz_timely_util::operator::StreamExt;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
@@ -142,7 +143,7 @@ fn drain_through_mfp<T>(
         '_,
         '_,
         T,
-        ConsolidatingContainerBuilder<Vec<(Row, T, Diff)>>,
+        AdaptiveConsolidatingContainerBuilder<Row, T, Diff>,
         Capability<T>,
     >,
     err_output: &mut Session<

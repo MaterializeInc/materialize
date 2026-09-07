@@ -18,7 +18,6 @@
 use std::hash::{BuildHasher, Hash, Hasher};
 
 use columnation::Columnation;
-use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Batcher;
@@ -39,6 +38,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::{Container, ContainerBuilder, PartialOrder};
 
 use crate::columnation::{ColumnationChunker, ColumnationStack};
+use crate::containers::adaptive_consolidation::AdaptiveConsolidatingContainerBuilder;
 
 /// Extension methods for timely [`Stream`]s.
 pub trait StreamExt<'scope, T, C1>
@@ -394,7 +394,7 @@ where
     {
         self.inner
             .clone()
-            .unary::<ConsolidatingContainerBuilder<_>, _, _, _>(
+            .unary::<AdaptiveConsolidatingContainerBuilder<_, _, _>, _, _, _>(
                 Pipeline,
                 "ExplodeOne",
                 move |_, _| {

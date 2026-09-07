@@ -38,6 +38,7 @@ use mz_timely_util::columnar::{
     Col2ValBatcher, Col2ValColBatcher, Col2ValPagedBatcher, columnar_exchange,
 };
 use mz_timely_util::columnation::ColumnationChunker;
+use mz_timely_util::containers::adaptive_consolidation::AdaptiveConsolidatingContainerBuilder;
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -1032,7 +1033,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         let until = std::rc::Rc::new(until);
 
         let (stream, errors) = self
-            .flat_map::<_, ConsolidatingContainerBuilder<Vec<(Row, T, Diff)>>, _>(
+            .flat_map::<_, AdaptiveConsolidatingContainerBuilder<Row, T, Diff>, _>(
                 key_val,
                 max_demand,
                 move |row_datums, time, diff, ok_session, err_session| {

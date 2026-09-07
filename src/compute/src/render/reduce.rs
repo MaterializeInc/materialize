@@ -17,7 +17,6 @@ use columnation::{Columnation, CopyRegion};
 use dec::OrderedDecimal;
 use differential_dataflow::Diff as _;
 use differential_dataflow::collection::AsCollection;
-use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
@@ -39,6 +38,7 @@ use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Datum, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnation::ColumnationChunker;
+use mz_timely_util::containers::adaptive_consolidation::AdaptiveConsolidatingContainerBuilder;
 use mz_timely_util::operator::CollectionExt;
 use num_traits::Float;
 use serde::{Deserialize, Serialize};
@@ -108,56 +108,50 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
             let (key_val_input, err) = input
                 .enter_region(inner)
-                .flat_map::<_, ConsolidatingContainerBuilder<Vec<((Row, Row), T, Diff)>>, _>(
-                    input_key.map(|k| (k, None)),
-                    max_demand,
-                    move |row_datums, time, diff, ok_session, err_session| {
-                        let mut row_builder = SharedRow::get();
-                        let temp_storage = RowArena::new();
+                .flat_map::<_, AdaptiveConsolidatingContainerBuilder<(Row, Row), T, Diff>, _>(
+                input_key.map(|k| (k, None)),
+                max_demand,
+                move |row_datums, time, diff, ok_session, err_session| {
+                    let mut row_builder = SharedRow::get();
+                    let temp_storage = RowArena::new();
 
-                        let mut row_iter = row_datums.drain(..);
-                        let mut datums_local = datums.borrow();
-                        // Unpack only the demanded columns.
-                        for skip in skips.iter() {
-                            datums_local.push(row_iter.nth(*skip).unwrap());
+                    let mut row_iter = row_datums.drain(..);
+                    let mut datums_local = datums.borrow();
+                    // Unpack only the demanded columns.
+                    for skip in skips.iter() {
+                        datums_local.push(row_iter.nth(*skip).unwrap());
+                    }
+
+                    // Evaluate the key expressions.
+                    let key =
+                        key_plan.evaluate_into(&mut datums_local, &temp_storage, &mut row_builder);
+                    let key = match key {
+                        Err(e) => {
+                            err_session.give((e.into(), time, diff));
+                            return 1;
                         }
+                        Ok(Some(key)) => key.clone(),
+                        Ok(None) => panic!("Row expected as no predicate was used"),
+                    };
 
-                        // Evaluate the key expressions.
-                        let key = key_plan.evaluate_into(
-                            &mut datums_local,
-                            &temp_storage,
-                            &mut row_builder,
-                        );
-                        let key = match key {
-                            Err(e) => {
-                                err_session.give((e.into(), time, diff));
-                                return 1;
-                            }
-                            Ok(Some(key)) => key.clone(),
-                            Ok(None) => panic!("Row expected as no predicate was used"),
-                        };
+                    // Evaluate the value expressions.
+                    // The prior evaluation may have left additional columns we should delete.
+                    datums_local.truncate(skips.len());
+                    let val =
+                        val_plan.evaluate_into(&mut datums_local, &temp_storage, &mut row_builder);
+                    let val = match val {
+                        Err(e) => {
+                            err_session.give((e.into(), time, diff));
+                            return 1;
+                        }
+                        Ok(Some(val)) => val.clone(),
+                        Ok(None) => panic!("Row expected as no predicate was used"),
+                    };
 
-                        // Evaluate the value expressions.
-                        // The prior evaluation may have left additional columns we should delete.
-                        datums_local.truncate(skips.len());
-                        let val = val_plan.evaluate_into(
-                            &mut datums_local,
-                            &temp_storage,
-                            &mut row_builder,
-                        );
-                        let val = match val {
-                            Err(e) => {
-                                err_session.give((e.into(), time, diff));
-                                return 1;
-                            }
-                            Ok(Some(val)) => val.clone(),
-                            Ok(None) => panic!("Row expected as no predicate was used"),
-                        };
-
-                        ok_session.give(((key, val), time, diff));
-                        1
-                    },
-                );
+                    ok_session.give(((key, val), time, diff));
+                    1
+                },
+            );
 
             // Bucket the keyed `(key, val)` stream when lowering chose `TemporalBucketing`.
             // `Reduce` builds its own arrangement via `KeyValPlan`, bypassing
