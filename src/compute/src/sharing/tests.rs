@@ -188,37 +188,41 @@ fn alias_refused_once_a_reader_holds_its_own_point() {
 }
 
 #[mz_ore::test]
-fn alias_frontiers_follow_the_target_then_the_aliases_meet() {
+fn alias_standing_holds_follow_the_target_then_the_aliases_meet() {
     let target = GlobalId::User(1);
     let alias_a = GlobalId::User(2);
     let alias_b = GlobalId::User(3);
     let registry = publish_index(target, test_rows());
     assert!(registry.publish_alias(alias_a, target, 0, 1));
     assert!(registry.publish_alias(alias_b, target, 0, 1));
-    let writer_logical = |id: &GlobalId| {
+    let standing_hold = |id: &GlobalId| {
         registry
             .published_diagnostics(id, 0)
             .expect("published")
-            .writer_logical
+            .standing_hold
     };
     let at = |t: u64| Antichain::from_elem(Timestamp::from(t));
 
-    // While the target lives, only its notes reach the shared point.
-    registry.note_allow_compaction(alias_a, 0, &at(10));
-    assert_eq!(writer_logical(&alias_a), None);
-    registry.note_allow_compaction(target, 0, &at(5));
-    assert_eq!(writer_logical(&alias_a), Some(at(5)));
-    registry.note_allow_compaction(alias_b, 0, &at(20));
-    assert_eq!(writer_logical(&target), Some(at(5)));
+    // While the target lives, only its notes reach the shared point. The hold was seeded at the
+    // minimum when the arrangement was adopted.
+    registry.note_standing_hold(alias_a, 0, &at(10));
+    assert_eq!(
+        standing_hold(&alias_a),
+        Antichain::from_elem(Timestamp::MIN)
+    );
+    registry.note_standing_hold(target, 0, &at(5));
+    assert_eq!(standing_hold(&alias_a), at(5));
+    registry.note_standing_hold(alias_b, 0, &at(20));
+    assert_eq!(standing_hold(&target), at(5));
 
     // Once the target drops, the meet of the aliases' notes governs the point.
     registry.remove(&target);
-    assert_eq!(writer_logical(&alias_a), Some(at(10)));
-    registry.note_allow_compaction(alias_a, 0, &at(30));
-    assert_eq!(writer_logical(&alias_b), Some(at(20)));
+    assert_eq!(standing_hold(&alias_a), at(10));
+    registry.note_standing_hold(alias_a, 0, &at(30));
+    assert_eq!(standing_hold(&alias_b), at(20));
     registry.remove(&alias_b);
-    registry.note_allow_compaction(alias_a, 0, &at(40));
-    assert_eq!(writer_logical(&alias_a), Some(at(40)));
+    registry.note_standing_hold(alias_a, 0, &at(40));
+    assert_eq!(standing_hold(&alias_a), at(40));
 }
 
 /// Walks a snapshot of `handle` at `at` into a sorted `Vec` of owned (key, value) rows,
