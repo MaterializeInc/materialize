@@ -12,9 +12,8 @@ menu:
 [ADBC (Arrow Database Connectivity)](https://arrow.apache.org/adbc/) is a
 standard, columnar database API from Apache Arrow. Because Materialize is
 **wire-compatible** with PostgreSQL, the community [ADBC PostgreSQL
-driver](https://arrow.apache.org/adbc/current/driver/postgresql.html)
-(`adbc_driver_postgresql`) can connect directly to Materialize; i.e., no
-Materialize-specific driver is required.
+driver](https://arrow.apache.org/adbc/current/driver/postgresql.html) can
+connect directly to Materialize; i.e., no Materialize-specific driver is required.
 
 The benefit over a standard PostgreSQL client is the result format. ADBC returns
 query results as [Apache Arrow](https://arrow.apache.org/) tables, which you can
@@ -29,24 +28,28 @@ reads the binary send and receive functions of every type from
 `pg_catalog.pg_type`. Earlier versions of Materialize do not expose
 `pg_type.typsend`, so `connect()` fails before it can run a query.
 
-Install the driver manager, the PostgreSQL driver, and PyArrow. The examples on
-this page also use DuckDB:
+Install the PostgreSQL driver with [dbc](https://docs.columnar.tech/dbc/):
 
 ```bash
-pip install adbc-driver-manager adbc-driver-postgresql pyarrow duckdb
+dbc install postgresql
 ```
 
-The examples were tested with `adbc-driver-manager` and
-`adbc-driver-postgresql` 1.12.0, `pyarrow` 25.0.1, and `duckdb` 1.5.5.
+Install the driver manager and PyArrow. The examples on this page also use DuckDB:
+
+```bash
+pip install adbc-driver-manager pyarrow duckdb
+```
+
+The examples were tested with `adbc-driver-manager` 1.12.0, `pyarrow` 25.0.1, and `duckdb` 1.5.5.
 
 ## Connect
 
-Connect using `adbc_driver_postgresql.dbapi.connect` with a PostgreSQL
+Connect using `adbc_driver_manager.dbapi.connect` with a PostgreSQL
 connection URI. Use the connection as a context manager so that it closes when
 the block exits:
 
 ```python
-import adbc_driver_postgresql.dbapi
+from adbc_driver_manager import dbapi
 from urllib.parse import quote_plus
 
 username = quote_plus("MATERIALIZE_USERNAME")
@@ -57,7 +60,7 @@ uri = (
     "@MATERIALIZE_HOST:6875/materialize?sslmode=require"
 )
 
-with adbc_driver_postgresql.dbapi.connect(uri) as conn:
+with dbapi.connect(uri) as conn:
     # Run queries here.
     ...
 ```
@@ -84,7 +87,7 @@ Execute a query with a cursor, then call `fetch_arrow_table` to get a
 [`pyarrow.Table`](https://arrow.apache.org/docs/python/generated/pyarrow.Table.html):
 
 ```python
-with adbc_driver_postgresql.dbapi.connect(uri) as conn:
+with dbapi.connect(uri) as conn:
     with conn.cursor() as cur:
         cur.execute("SELECT n, n * 2 AS doubled FROM generate_series(1, 100) AS g(n)")
         table = cur.fetch_arrow_table()
