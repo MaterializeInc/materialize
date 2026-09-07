@@ -853,7 +853,7 @@ impl<'a> ActiveComputeState<'a> {
         // would diverge that order across workers, latently unsound under a multi-worker interactive
         // runtime. On the interactive runtime a query dataflow imports its maintenance-index inputs
         // from the sharing registry, binding each through a registry placeholder that a maintenance
-        // publisher adopts later (see `render::import_shared_index`). A not-yet-published dependency
+        // publisher adopts later (see `render::import_published_index`). A not-yet-published dependency
         // therefore yields an empty import held at the minimum frontier, so the build is always
         // possible without waiting.
         let dataflow_index = Rc::new(self.timely_worker.next_dataflow_index());
@@ -995,42 +995,25 @@ impl<'a> ActiveComputeState<'a> {
     fn handle_allow_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
         let worker_index = self.timely_worker.index();
 
-        let interactive = self.compute_state.role == ComputeRuntimeRole::Interactive;
-
-        // The multiplexer broadcasts compaction for the collections its peer publishes, which are the
-        // ones this runtime may import, so on the interactive runtime a non-transient id is one of
-        // those. This runtime's own publications are its transient query outputs.
-        let peer_published = interactive && !id.is_transient();
-        if peer_published {
-            // The standing hold: this runtime's own position in the command stream, which the peer's
-            // publisher bounds its compaction by. An importing dataflow of ours whose `CreateDataflow`
-            // is still queued here has registered no reader hold yet, so nothing else keeps the
-            // arrangement at or below the `as_of` it is about to read at.
+        // A collection this runtime does not host is one its peer publishes and this runtime may
+        // import. The multiplexer broadcasts `AllowCompaction` for those, and the frontier becomes
+        // the standing hold: this runtime's own position in the command stream, which the peer's
+        // publisher bounds its compaction by. An importing dataflow of ours whose `CreateDataflow`
+        // is still queued here has registered no reader hold yet, so nothing else keeps the
+        // arrangement at or below the `as_of` it is about to read at.
+        //
+        // Hosting is a question about `collections`, not about the id. The peer also renders
+        // transient collections of its own (subscribes and copy-tos) this runtime has never seen,
+        // and neither of those may reach `drop_collection`, which would panic on the untracked
+        // collection or unpublish an arrangement this runtime does not own.
+        if !self.compute_state.collections.contains_key(&id) {
+            mz_ore::soft_assert_or_log!(
+                self.compute_state.role == ComputeRuntimeRole::Interactive,
+                "compaction for a collection this runtime does not host: {id}"
+            );
             self.compute_state
                 .sharing_registry
                 .note_standing_hold(id, worker_index, &frontier);
-        }
-
-        // Whether there is local work is a question about `collections`, NOT about the id: this
-        // runtime holds empty local copies of the peer's introspection indexes, whose ids are the
-        // peer's to publish, and the peer renders transient collections of its own (subscribes and
-        // copy-tos) that this runtime has never seen. Asking the id instead sends a broadcast frontier
-        // for one of those down the drop path, where `drop_collection` panics on a collection that was
-        // never installed here.
-        if interactive && !self.compute_state.collections.contains_key(&id) {
-            return;
-        }
-
-        if peer_published {
-            if !frontier.is_empty() {
-                // Keeps this runtime's empty local copy of an introspection index in step.
-                self.compute_state
-                    .traces
-                    .allow_compaction(id, frontier.borrow());
-            }
-            // Never `drop_collection` for one of those. It would also `sharing_registry.remove(&id)`
-            // and so unpublish an arrangement this runtime does not own. The empty copies live for
-            // the process lifetime, and the peer drops the real collection on its own stream.
             return;
         }
 
@@ -1053,16 +1036,17 @@ impl<'a> ActiveComputeState<'a> {
     fn handle_peek(&mut self, peek: Peek) {
         let pending = match &peek.target {
             PeekTarget::Index { id } => {
-                let traces = if self.compute_state.role == ComputeRuntimeRole::Interactive {
+                let traces = match self.compute_state.role {
                     // The interactive runtime maintains no traces of its own. It reads the
                     // arrangements the maintenance runtime publishes into the sharing registry.
-                    IndexTraces::Shared {
+                    ComputeRuntimeRole::Interactive => IndexTraces::Shared {
                         registry: self.compute_state.sharing_registry.clone(),
                         worker_index: self.timely_worker.index(),
-                    }
-                } else {
+                    },
                     // Acquire a copy of the trace suitable for fulfilling the peek.
-                    IndexTraces::Local(self.compute_state.traces.get(id).unwrap().clone())
+                    ComputeRuntimeRole::Maintenance | ComputeRuntimeRole::Solo => {
+                        IndexTraces::Local(self.compute_state.traces.get(id).unwrap().clone())
+                    }
                 };
                 PendingPeek::index(peek, traces)
             }
@@ -1214,15 +1198,14 @@ impl<'a> ActiveComputeState<'a> {
             panic!("dataflow server has already initialized logging");
         }
 
-        let mut config = config;
-        // The interactive runtime maintains no introspection indexes of its own: it serves
-        // introspection peeks from the maintenance runtime's registry-published copies (see
-        // `logging::publish_logging_index`). Force logging off so its replay stays empty. The
-        // dataflows still install (empty, per database-issues#4545), so the logging indexes are
-        // still created and the sanity check below still holds, but they hold no data and, being
-        // non-maintenance, are never published.
+        // The interactive runtime keeps no introspection state of its own. Its peeks on the logging
+        // indexes read the maintenance runtime's publications from the registry (see
+        // `logging::publish_logging_index`), so installing the logging dataflow here would only
+        // create collections under ids this runtime does not own, which every command handler
+        // would then have to tell apart from its own. Without a `compute_logger` this runtime's
+        // own events are not logged. TODO(CPU-222): log them through the maintenance runtime.
         if self.compute_state.role() == ComputeRuntimeRole::Interactive {
-            config.enable_logging = false;
+            return;
         }
 
         let LoggingTraces {
@@ -1291,14 +1274,6 @@ impl<'a> ActiveComputeState<'a> {
     pub fn report_frontiers(&mut self) {
         let mut responses = Vec::new();
 
-        // The interactive runtime installs empty copies of the maintenance runtime's
-        // logging/introspection indexes (see `initialize_logging`) and shares every non-transient
-        // collection's identity with the maintenance runtime, which owns and reports the real
-        // frontiers. Reporting our empty copies' frontiers races the owner's report for the same
-        // collection id in the controller's single per-collection frontier stream, regressing it.
-        // Report only the wholly-transient query dataflows this runtime exclusively hosts.
-        let report_only_transient = self.compute_state.role() == ComputeRuntimeRole::Interactive;
-
         // Maintain a single allocation for `new_frontier` to avoid allocating on every iteration.
         let mut new_frontier = Antichain::new();
 
@@ -1306,10 +1281,6 @@ impl<'a> ActiveComputeState<'a> {
             // The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
             // collections (database-issues#4701).
             if collection.is_subscribe_or_copy {
-                continue;
-            }
-
-            if report_only_transient && !id.is_transient() {
                 continue;
             }
 
