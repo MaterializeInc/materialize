@@ -19,9 +19,8 @@ comparison bounds what the interactive runtime is claimed to buy. See
 The feature is gated by the `enable_compute_interactive_runtime` dyncfg, off in production
 and on by default in CI. With the dyncfg off, a replica runs a single `Solo` runtime that
 takes the same code paths, publishes nothing, and carries no `role` metric label. With it
-on, every index the maintenance runtime renders gains a publisher, which is visible in the
-goldens CI runs with the flag on: `relations.slt` lists the publisher operators, and the
-arrangement-size bound in `introspection-sources.td` moved.
+on, every index the maintenance runtime renders is attached to a publication point.
+Publication adds no operator, so the dataflow goldens do not change with the flag.
 
 The implementation lands as a stack of eight pull requests, each a self-contained layer,
 followed by two that add the benchmarks. [Implementation history](#implementation-history)
@@ -817,7 +816,7 @@ Two changes.
 instead of routing it to the owning one. It keeps routing `CreateDataflow` by ownership.
 
 **A standing hold per shared collection.** The rendering runtime holds every shared
-collection it may import at the last compaction frontier *it* has applied. The publisher
+collection it may import at the last compaction frontier *it* has applied. The trace
 bounds the owning runtime's compaction by that hold, alongside the reader registrations it
 already meets.
 
@@ -843,8 +842,8 @@ which is queued *behind* the create.
 
 **The standing hold costs nothing.** It pins each collection at the controller's own
 compaction frontier, which the controller already guarantees is readable, and which the
-publisher's writer-driven fallback already targets when no reader is registered. So it adds
-no pin that was not there. What it removes is the publisher's freedom to run ahead of the
+trace manager's compaction already targets when no reader is registered. So it adds no pin
+that was not there. What it removes is the trace's freedom to compact ahead of the
 rendering runtime.
 
 **What it needs from the runtimes.** The rendering runtime must accept `AllowCompaction` for
@@ -856,23 +855,21 @@ its compaction reaches the empty frontier, so it needs no per-dataflow identity.
 
 #### As implemented
 
-The standing hold is one frontier per publication point
-(`SharedTraceState::standing_hold`), joined so it only rises, and the publisher's logical
-target is met against it. The published `since` is then bounded by it without further work,
-because `since` derives from the publisher's own agent hold and that hold is the join of
-targets it has already forwarded. A `debug_assert` in the publisher states that, so an edit
-letting the target escape the bound fails there rather than admitting a reader below what
-the trace holds.
+The standing hold is a reader on the publication point with no physical hold
+(`Published::standing`), so it enters the same accumulation as every import's hold, joined
+so it only rises. The trace's `since` is bounded by it because the trace compacts to the
+meet of that accumulation and its local frontier, and the published `since` is that
+frontier read back, so there is no separate target that could escape the bound.
 
 Two things were not obvious from the design.
 
-**The hold must be seeded at the adoption floor, not at the minimum time.** An arrangement
-whose importing runtime has not yet applied any compaction for it would otherwise be pinned
-at the minimum time for as long as that lasts, which for a collection the controller never
-compacts again is forever. The publisher's own compaction frontier at adoption is the right
+**The hold must be seeded at the attachment floor, not at the minimum time.** An
+arrangement whose importing runtime has not yet applied any compaction for it would otherwise
+be pinned at the minimum time for as long as that lasts, which for a collection the controller
+never compacts again is forever. The trace's own compaction frontier at attachment is the right
 seed: the controller does not offer an `as_of` below a collection's `since`, so no importer
 can need a frontier below it. That also makes the no-broadcast-yet behaviour identical to
-the writer-driven fallback.
+an unshared index.
 
 **The rendering runtime tells the peer's publications apart by whether it hosts the
 collection.** It installs no logging dataflow and renders only the transient dataflows the
@@ -945,77 +942,102 @@ against a released differential-dataflow, with no fork and no `[patch.crates-io]
   read from a thread other than the one maintaining the trace. The orphan rule
   forbids the blanket `impl Trait for Arc<B>` in Materialize, which is why the
   newtype exists rather than a bare `Arc<B>`.
-* `mz_compute::shared_trace` holds the primitive proper: `Published`,
-  `SharedTraceHandle`, `SharedTrace`, the `PublishArrangement` extension trait,
-  and `import_snapshot_at`.
+* `mz_timely_util::shared_trace` holds the primitive proper: `SharedSpine`, a `Trace`
+  wrapper around the spine, `Shared`, the publication point it mirrors into, and
+  `SharedReader`, the `Send` reader with the import. Every spine in
+  `mz_compute::typedefs` is a `SharedSpine`, so any arrangement can be published.
+  Unattached, the wrapper costs one branch per trace call.
+* `mz_compute::shared_trace` is the Materialize glue: `Published`, a point plus the
+  standing hold, the `PublishArrangement::adopt` extension that attaches an
+  arrangement's trace to a point, and `SharedTraceHandle`, the reader carrying the
+  publisher's peer count, with `import_snapshot_at`.
 
-An earlier prototype consumed these from a differential-dataflow fork. The only
-capability that kept the fork alive was reading `agent.trace_box_unstable()`, an
-upstream API documented as unstable and undefined behavior to mutate, to compute
-a compaction floor. Materialize already has authoritative sources for that
-information, so the read was replaced (see [Compaction](#compaction)) and the fork
-was dropped.
+An earlier prototype consumed these from a differential-dataflow fork, whose only
+remaining purpose was reading a compaction floor off `agent.trace_box_unstable()`,
+an upstream API documented as unstable and undefined behavior to mutate. The wrapper
+reaches the trace through that same accessor exactly once, to attach it, the way
+arrangement-size logging already reaches it to walk batches, and reads no floor from
+it: compaction frontiers reach the wrapper through the `Trace` methods the `TraceBox`
+calls (see [Compaction](#compaction)).
 
-### Placeholder and adopt
+### Why a wrapper and not a shared spine
 
-A publication point is an `Arc<SharedTrace>`. It can be created empty, as an unbacked
-placeholder, and later adopted by a publisher in place, filling the same `Arc`.
+A spine behind a mutex was the obvious shape, and the spine's own structure rules it
+out. `introduce_batch` spends fuel on in-progress merges, and `roll_up` and
+`complete_at` finish merges synchronously with unbounded fuel as part of structural
+changes, so a lock guarding the spine is held for whole merges, and detaching the
+in-progress mergers would cover only the fuel path. Batches, though, are immutable
+and reference counted, so a chain of them plus the trace's frontiers is a consistent
+view that any thread can read.
+
+`SharedSpine` therefore keeps the spine private to its worker and mirrors the chain,
+`upper`, and compaction frontiers into the point inside every mutation. The lock is
+held for a chain rebuild, one reference count per spine level, never for merge work.
+Measured on a churn workload with two runtimes in one process (release build, 1M to
+8M keys, every key rewritten every round): writer mutations averaged 0.5 to 33 ms
+and peaked at 276 ms, which is what a reader of a shared spine would have waited,
+while the wrapper's readers acquired cursors in 1.5 µs at p99 and 174 µs at worst,
+and the writer held the view lock for under 1 µs per publish.
+
+### Placeholder and attach
+
+A publication point is an `Arc<Shared>`. It can be created empty, as an unbacked
+placeholder, and later attached by a trace in place, filling the same `Arc`.
 This is what makes arrival-order construction work. A differential import captures
 its input trace by value at construction time, so the import must have a real
 trace to hold even before the arrangement it reads exists. `Published::new`
-gives it one. A later `PublishArrangement::adopt` installs the real publisher into
-that same point, and the by-value handle observes the fill because it is a live
+gives it one. A later `PublishArrangement::adopt` attaches the arrangement's
+`SharedSpine` to that same point, publishing its chain and seeding every importer
+already registered, and the by-value handle observes the fill because it is a live
 proxy into the shared state, not a snapshot. `Published::handle_at` checks the
 published `since` against the reader's `as_of` and registers the reader's hold under
-one acquisition of the state lock, so the publisher cannot advance `since` between
+one acquisition of the state lock, so the trace cannot advance `since` between
 the check and the registration.
 
-The `TraceAgent` that writes the arrangement lives in the publisher's sink
-closure, not in `SharedTrace`, so the writer is decoupled from the shared state.
+The point holds no trace agent and the trace holds only the point, so no cycle keeps
+either alive. The point closes when the trace drops, which is when the last
+`TraceAgent` on it drops. Production keeps one in the trace manager for the index's
+life; a test that reads after its worker has torn down keeps one for as long as it
+reads.
 
 Placeholder frontiers are `Antichain::from_elem(Timestamp::minimum())`, never
 `Antichain::new()`. The empty antichain reads as sealed through the end of time,
 which would make every snapshot wait vacuously true and return empty results.
 
-### Single-sourced replay feed
+### One lock for the chain and the feed
 
-The publisher replays batches and frontiers to importers from a single
-authoritative source. The hazard it avoids: the trace's `map_batches` upper can
-run ahead of the arrangement stream within a worker step, so splicing batches
-from the stream with frontiers from the trace can enqueue a `Frontier(upper)`
-ahead of a `Batch` whose time is below it, which makes the importer's delayed
-capability panic. Feeding a batch and the frontier that closes it from one source
-keeps them mutually ordered. For the same reason the replay is incremental rather
-than a one-shot dump of the whole chain under a single capability, which would be
-the record-doubling bug.
+The trace enqueues a batch to every importer under the same lock in which it
+publishes the chain containing that batch, so an importer registering concurrently
+either seeds a chain with the batch or receives it through its queue, never both and
+never neither. Frontiers follow the chain: the published `upper` is the last batch's
+upper, and each enqueued batch is followed by the frontier that closes it, so an
+importer's delayed capability never meets a frontier ahead of a batch below it. The
+replay is incremental rather than a one-shot dump of the whole chain under a single
+capability, which would be the record-doubling bug: the returned arrangement's stream
+frontier tracks the trace's `upper`, so the trace never runs ahead of the stream and a
+join counts each match once.
 
 ### Compaction
 
-Publishing carries no independent compaction floor. In Materialize the controller
-drives `since` through the maintained trace's own handle. Only a live importer's
-registered hold may hold the shared view back, and it releases on drop. The
-publisher keeps a holding agent solely so importer holds have somewhere to forward
-to, so that hold must follow the writer rather than pin the trace.
+Publishing carries no compaction floor of its own. The wrapper sits where
+differential's `TraceBox` calls the trace: `set_logical_compaction` and
+`set_physical_compaction` arrive with the meet of the local agents' holds, the
+controller's `AllowCompaction` among them through the trace manager, and the wrapper
+applies the meet of that frontier and the readers' holds to the inner spine. The
+published `since` and physical frontier are read off the spine after the call, so they
+are the trace's own frontiers rather than an approximation of them, and a registering
+reader cannot latch a `since` claiming accuracy at already-merged times. Nothing is
+forwarded through the registry.
 
-The publisher takes its writer-driven floors from sources Materialize already has:
-
-* Logical compaction comes from the controller's `AllowCompaction` frontier,
-  forwarded into the published slot by
-  `ArrangementSharingRegistry::note_allow_compaction`, which
-  `compute_state::handle_allow_compaction` calls alongside the local
-  `TraceManager` update. `SharedTraceState.writer_logical` holds it, seeded
-  `None` so the publisher falls back to its own current hold, the dataflow
-  `as_of`, before the first command arrives.
-* Physical compaction follows the chain's *coverage*, the upper of the last
-  published batch, mirroring `TraceManager::maintenance`, which sets physical
-  compaction to the trace upper to enable batch merging.
-
-With no reader hold on a dimension, the target follows that writer floor, so with
-zero readers compaction follows the writer. The published `since` is the meet of
-the publisher's post-forward hold and the writer floor, which keeps a registering
-reader from latching an anti-conservative `since` that claims accuracy at
-already-merged times. An index publishes two independent arrangements, so
-readiness and `since` gating operate on `meet(oks, errs)`.
+Readers' holds accumulate in two `MutableAntichain`s on the point, one per axis, and
+each reader adjusts them by a delta the way a `TraceAgent` adjusts the `TraceBox`. A
+reader that moves a hold wakes the arrange operator through a `SyncActivator`, whose
+next `exert` applies the new meet; without the wake the hold applies at the operator's
+next activation. With no reader hold on an axis the meet is the local frontier, so with
+zero readers compaction follows the trace manager exactly, physical compaction included:
+`TraceManager::maintenance` sets it to the trace upper to enable batch merging. An index
+publishes two independent arrangements, so readiness and `since` gating operate on
+`meet(oks, errs)`.
 
 A reader's handle mirrors `TraceAgent` rather than reimplementing its policy, because
 the two axes carry different frontiers and `since` is never the right physical one. A
@@ -1031,21 +1053,21 @@ against `map_batches`.
 ### The import follows the dataflow's until
 
 `SharedTraceHandle::import_snapshot_at(scope, name, as_of, until)` bounds the import
-by `until`, and `shared_trace.rs` states the contract directly: "For a single-time
-interactive read pass `until = as_of.step_forward()` ... An empty `until` performs no
-bounding and the import stays live with the trace." The bound is checked as
+by `until`, and the import's contract states it directly: "For a single-time read pass
+`until = as_of.step_forward()`: the capability drops once `upper` passes `as_of` and
+the read completes." An empty `until` performs no bounding and the import stays live
+with the trace. The bound is checked as
 `frontier.is_empty() || until.less_equal(&frontier)`, and an empty antichain is
 `less_equal` to nothing but the empty frontier, so an empty `until` never fires the
 bound except on the publisher's terminal signal. The signature is the analogue of the
 maintenance path's `TraceAgent::import_frontier_core(outer, name, as_of, until)`, into
 which maintained dataflows pass an empty `until` routinely.
 
-The feed is live already. `adopt_named` is a sink on the arrangement stream that on every
-activation pushes arrived batches to every registered queue, pushes a `Frontier` instruction
-when `upper` advances, and activates every importer.
+The feed is live already. Every `insert` into the trace enqueues the batch and the frontier
+that closes it to every registered importer and activates them.
 
 **What makes interactive imports bounded is the routing predicate, not the import.**
-`import_index_shared` in `render.rs` passes the dataflow's own `until`, as the
+`import_published_index` in `render.rs` passes the dataflow's own `until`, as the
 maintenance import does. The multiplexer routes only single-time dataflows to the
 interactive runtime, so that `until` is always one step past `as_of` and every import
 completes once the trace seals past it. A dataflow with an empty `until` would follow the
@@ -1069,7 +1091,7 @@ An arranged collection is two things: a stream of batches, and a handle to the t
 long-running dataflow generally needs both. A join looks up each side's incoming batches
 against the *other* side's trace, so it holds a trace handle for its whole life and cannot
 release it. Such an importer must instead **downgrade** logical and physical compaction as
-its own frontier advances, or the publisher can never merge or truncate in the background.
+its own frontier advances, or the trace can never merge or truncate in the background.
 So compaction information has to flow backwards, from the importing runtime to the
 publishing one.
 
@@ -1077,11 +1099,10 @@ That backward channel exists, and it is shared memory rather than protocol, whic
 needs no new command.
 
 * `SharedTraceHandle` implements `TraceReader`, and its `set_logical_compaction` and
-  `set_physical_compaction` mirror the handle's frontier into
-  `SharedTraceState::logical_holds[id]` and `physical_holds[id]`.
-* On every activation the publisher computes the meet of those holds against its
-  writer-driven floor and the standing hold, and forwards the result to its own
-  `TraceAgent`.
+  `set_physical_compaction` move the handle's hold in the point's accumulations and wake
+  the arrange operator.
+* The trace applies the meet of its local `TraceBox` frontier and those accumulations to
+  the spine on that activation, and on every mutation after.
 * Handles handed downstream behave normally. Differential's join and reduce downgrade their
   trace handles as their frontiers advance, and `TraceFrontier` forwards the downgrades
   through, so a well-behaved importer already causes the maintenance trace to compact.
@@ -1091,7 +1112,7 @@ single hold pinned at `as_of` dominates it no matter how far every other hold ad
 So the import keeps no separate hold. The read hold is each returned `Arranged`'s own
 trace handle, registered at `as_of`, and the dataflow token retains only the registry
 slot's `Arc`, whose strong count is the registry's measure of a live reader. A consumer
-that keeps the trace downgrades that handle as its frontier advances, and the publisher
+that keeps the trace downgrades that handle as its frontier advances, and the trace
 compacts behind it. For a single-time read the distinction is unobservable. For a
 long-lived importer it is what lets the imported index's `since` advance for the
 importer's whole life, so it is in place before any such importer exists rather than
@@ -1121,8 +1142,9 @@ per-worker slot holding the published `oks` and `errs` points.
   A shared peek that cannot yet be answered leaves the sweep's queue and parks in
   `pending_work` keyed by its target id, so only a dirty mark for that id re-examines
   it.
-* **One close, no withdrawal command.** An adopted point closes when its publisher
-  drops, so no explicit withdrawal command is needed. A placeholder that is never
+* **One close, no withdrawal command.** An attached point closes when its trace drops,
+  which is when the index's last trace agent does, so no explicit withdrawal command is
+  needed. A placeholder that is never
   adopted, because the index creation it anticipated was cancelled, leaves an empty
   slot in the registry for the life of the process. Correctness does not depend on
   reclaiming it: whether an imported index may compact or drop rests on the
@@ -1139,7 +1161,7 @@ per-worker slot holding the published `oks` and `errs` points.
   published through its own import of the shared traces, that cost measured about
   150 KiB per re-export. `publish_alias` refuses when a reader already created a slot
   for the alias id, because that slot is the point the reader imported and only a
-  publisher writing into it can back it. The caller then falls back to importing the
+  trace attached to it can back it. The caller then falls back to importing the
   shared traces and publishing them under the alias id, which is the one case where a
   re-export dataflow has operators. While the target lives, its frontiers govern the
   shared point: the alias dataflow imports the target, so the controller never
@@ -1188,7 +1210,7 @@ The interactive runtime serves everything through the registry.
   other read.
 * **Late-bound imports, never a deferred build.** A query dataflow whose imported
   dependencies are not yet published is built immediately anyway, against a real
-  but empty publication point that a maintenance publisher later adopts in place.
+  but empty publication point that the maintenance trace later attaches to in place.
   Deferring the build would break the deterministic-construction principle above.
 
 ## The multiplexer
@@ -1355,24 +1377,19 @@ decision rather than a patch.
   separate introspection channel, rather than turning its local logging back on.
 * **Per-runtime memory attribution.** Arrangement-size introspection does not yet
   attribute memory per runtime, a specific case of the blind spot above.
-* **Publishing an index doubles its reported arrangement size.** With the feature
-  on, a published index reports twice the heap size, capacity, and allocations of
-  the same index with the feature off, while its record and batch counts are
-  unchanged (measured on a 16-worker replica: a one-record index reports 8740 bytes
-  and 132 allocations against 4370 and 66). What is established: it is not the
-  `Rc` to `Arc` migration, since an unpublished materialized-view arrangement is
-  byte-identical either way. It is not a reader, since it is present before anything
-  imports the index. It is not the published chain lagging a spine merge, since
-  re-reading the chain after compaction is forwarded does not change it. The
-  arrangement-size logger identifies batches by address and sums every batch it can
-  still upgrade a `Weak` to, so a second live batch per worker is being held
-  somewhere in the publish path. **It did not reproduce on staging**, where E6 measured both
-  the reported size and the resident set coming slightly *down* with the flag on, and
-  measured import as nearly free at 4.5 MiB for 48 interactive dataflows over a 95 MiB
-  index. That run crossed two builds, so it establishes only that no doubling appeared,
-  rather than that the effect is absent. Whether it is a reporting artifact or real
-  retention decides whether the feature carries a memory regression, so it should be
-  settled on a single build before the flag is considered for production.
+* **Publishing an index doubled its reported arrangement size under the sink-based
+  publisher.** With that publisher on, a published index reported twice the heap size,
+  capacity, and allocations of the same index with the feature off, while its record and
+  batch counts were unchanged (measured on a 16-worker replica: a one-record index
+  reported 8740 bytes and 132 allocations against 4370 and 66). It was not the `Rc` to
+  `Arc` migration, since an unpublished materialized-view arrangement is byte-identical
+  either way, and not a reader, since it was present before anything imported the index.
+  It did not reproduce on staging, where E6 measured the reported size and the resident
+  set coming slightly *down* with the flag on. The sink is gone: the trace wrapper adds no
+  operator and holds the chain the spine already holds, and `introspection-sources.td`
+  asserts the one-record bound of 16 KiB with the flag on. The sink's cause was not
+  established before it was removed, so whether a doubling survives is what that
+  assertion now watches.
   `test/testdrive/introspection-sources.td` carries the raised bound and a pointer to
   this entry. The `ManyIndexesIdle` feature benchmark, 200 published one-key indexes
   against a single-runtime image on one build, put clusterd's resident memory within
@@ -1568,9 +1585,9 @@ the existing answer and a better one.
 
 ## Testing strategy
 
-* Unit tests cover the sharing primitive and registry: the single-source feed,
-  placeholder-adopted-late joins, cross-thread reads, the compaction invariants, a join
-  and a reduce over a chain the publisher's spine has merged across read at a stale
+* Unit tests cover the sharing primitive and registry: the single-lock feed,
+  placeholder-attached-late joins, cross-thread reads, the compaction invariants, a join
+  and a reduce over a chain the writer's spine has merged across read at a stale
   `as_of`, and the alias rules, where an alias shares the target's slot, is refused once a
   reader holds its own point, and inherits the target's frontiers until the target drops
   and the aliases' meet takes over. The multiplexer's routing and frontier filtering and
@@ -1641,10 +1658,15 @@ Arc-backed batches and a `sharing` module, stacked on an Arc-batches base branch
 The sharing primitive was then reimplemented natively in `mz_compute::shared_trace`
 plus `mz_row_spine::ArcBatch`, and a lifecycle correctness redesign fixed a set of
 concurrency bugs through a single-source publisher feed and placeholder-plus-adopt
-construction. Finally the fork was dropped entirely: the publisher's compaction
+construction. Then the fork was dropped entirely: the publisher's compaction
 floor moved from the fork's `trace_box_unstable` read to the controller's
-`AllowCompaction` and the stream upper, so the build now depends only on released
-differential-dataflow.
+`AllowCompaction` and the stream upper, so the build depends only on released
+differential-dataflow. Last, the sink-based publisher gave way to `SharedSpine`, a
+`Trace` wrapper that publishes from inside the trace's own mutations. The sink lagged
+the trace by an activation, which is where the chain-retention and
+stream-versus-trace-upper cases came from, and it computed `since` as a meet it could
+only approximate; the wrapper reads both off the spine, and the registry stopped
+forwarding the controller's frontier.
 
 The read-hold protocol went through three mechanisms before the current one. Two
 reconstructed the lost command ordering rather than restoring it, and both are recorded
