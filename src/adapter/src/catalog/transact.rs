@@ -35,7 +35,7 @@ use mz_audit_log::{
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
 use mz_catalog::durable::{DryRunTransaction, NetworkPolicy, Snapshot, Transaction};
-use mz_catalog::expr_cache::LocalExpressions;
+use mz_catalog::expr_cache::{LocalExpressions, latest_item_version};
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterConfig, ClusterVariant, DataSourceDesc, DefaultPrivileges,
@@ -52,7 +52,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap, merge_mz_acl_i
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, ColumnName, GlobalId, SqlColumnType, strconv};
+use mz_repr::{CatalogItemId, ColumnName, GlobalId, RelationVersion, SqlColumnType, strconv};
 use mz_sql::ast::RawDataType;
 use mz_sql::catalog::{
     AutoProvisionSource, CatalogDatabase, CatalogError as SqlCatalogError,
@@ -880,6 +880,7 @@ impl Catalog {
                             LocalExpressions {
                                 local_mir: (*view.locally_optimized_expr).clone(),
                                 optimizer_features: optimizer_features.clone(),
+                                item_version: RelationVersion::root(),
                             },
                         );
                     }
@@ -889,6 +890,7 @@ impl Catalog {
                             LocalExpressions {
                                 local_mir: (*mv.locally_optimized_expr).clone(),
                                 optimizer_features: optimizer_features.clone(),
+                                item_version: latest_item_version(&mv.collections),
                             },
                         );
                     }
