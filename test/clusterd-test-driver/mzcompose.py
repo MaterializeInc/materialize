@@ -102,6 +102,7 @@ TWO_RUNTIME_SCRIPTS = [
     "two_runtime_query_dataflow.spec",
     "two_runtime_reexport.spec",
     "two_runtime_reexport_reader_first.spec",
+    "two_runtime_reexport_interactive.spec",
 ]
 
 
