@@ -189,37 +189,41 @@ fn alias_refused_once_a_reader_holds_its_own_point() {
 }
 
 #[mz_ore::test]
-fn alias_frontiers_follow_the_target_then_the_aliases_meet() {
+fn alias_standing_holds_follow_the_target_then_the_aliases_meet() {
     let target = GlobalId::User(1);
     let alias_a = GlobalId::User(2);
     let alias_b = GlobalId::User(3);
     let registry = publish_index(target, test_rows());
     assert!(registry.publish_alias(alias_a, target, 0, 1));
     assert!(registry.publish_alias(alias_b, target, 0, 1));
-    let writer_logical = |id: &GlobalId| {
+    let standing_hold = |id: &GlobalId| {
         registry
             .published_diagnostics(id, 0)
             .expect("published")
-            .writer_logical
+            .standing_hold
     };
     let at = |t: u64| Antichain::from_elem(Timestamp::from(t));
 
-    // While the target lives, only its notes reach the shared point.
-    registry.note_allow_compaction(alias_a, 0, &at(10));
-    assert_eq!(writer_logical(&alias_a), None);
-    registry.note_allow_compaction(target, 0, &at(5));
-    assert_eq!(writer_logical(&alias_a), Some(at(5)));
-    registry.note_allow_compaction(alias_b, 0, &at(20));
-    assert_eq!(writer_logical(&target), Some(at(5)));
+    // While the target lives, only its notes reach the shared point. The hold was seeded at the
+    // minimum when the arrangement was adopted.
+    registry.note_standing_hold(alias_a, 0, &at(10));
+    assert_eq!(
+        standing_hold(&alias_a),
+        Antichain::from_elem(Timestamp::MIN)
+    );
+    registry.note_standing_hold(target, 0, &at(5));
+    assert_eq!(standing_hold(&alias_a), at(5));
+    registry.note_standing_hold(alias_b, 0, &at(20));
+    assert_eq!(standing_hold(&target), at(5));
 
     // Once the target drops, the meet of the aliases' notes governs the point.
     registry.remove(&target);
-    assert_eq!(writer_logical(&alias_a), Some(at(10)));
-    registry.note_allow_compaction(alias_a, 0, &at(30));
-    assert_eq!(writer_logical(&alias_b), Some(at(20)));
+    assert_eq!(standing_hold(&alias_a), at(10));
+    registry.note_standing_hold(alias_a, 0, &at(30));
+    assert_eq!(standing_hold(&alias_b), at(20));
     registry.remove(&alias_b);
-    registry.note_allow_compaction(alias_a, 0, &at(40));
-    assert_eq!(writer_logical(&alias_a), Some(at(40)));
+    registry.note_standing_hold(alias_a, 0, &at(40));
+    assert_eq!(standing_hold(&alias_a), at(40));
 }
 
 #[mz_ore::test]
@@ -265,6 +269,84 @@ fn alias_of_an_alias_joins_the_root() {
     let _ = registry.take_dirty(0);
     registry.notify(root, 0);
     assert_eq!(registry.take_dirty(0), BTreeSet::from([root, leaf, next]));
+}
+
+#[mz_ore::test]
+fn alias_bookkeeping_is_per_worker() {
+    let root = GlobalId::User(1);
+    let reexport = GlobalId::User(2);
+    let leaf = GlobalId::User(3);
+    let registry = ArrangementSharingRegistry::new();
+    let _root_slots = [
+        registry.get_or_create(root, 0, 2),
+        registry.get_or_create(root, 1, 2),
+    ];
+    // On worker 0 the re-export aliases the root's slot. On worker 1 a reader bound the re-export's
+    // id first, so it publishes a point of its own there.
+    assert!(registry.publish_alias(reexport, root, 0, 2));
+    let _reader_slot = registry.get_or_create(reexport, 1, 2);
+    assert!(!registry.publish_alias(reexport, root, 1, 2));
+    // A re-export of the re-export shares whichever slot the re-export has on each worker.
+    assert!(registry.publish_alias(leaf, reexport, 0, 2));
+    assert!(registry.publish_alias(leaf, reexport, 1, 2));
+    registry.register_waker(1, thread::current());
+    let standing_hold = |id: &GlobalId, worker| {
+        registry
+            .published_diagnostics(id, worker)
+            .expect("published")
+            .standing_hold
+    };
+    let at = |t: u64| Antichain::from_elem(Timestamp::from(t));
+
+    // Worker 1's seals under the re-export's own point reach the leaf, and the root's do not.
+    registry.notify(reexport, 1);
+    assert_eq!(registry.take_dirty(1), BTreeSet::from([reexport, leaf]));
+    registry.notify(root, 1);
+    assert_eq!(registry.take_dirty(1), BTreeSet::from([root]));
+
+    // The re-export governs its own point on worker 1, and the root governs the shared one on
+    // worker 0.
+    registry.note_standing_hold(root, 0, &at(5));
+    registry.note_standing_hold(root, 1, &at(5));
+    registry.note_standing_hold(reexport, 0, &at(10));
+    registry.note_standing_hold(reexport, 1, &at(10));
+    registry.note_standing_hold(leaf, 1, &at(20));
+    assert_eq!(standing_hold(&leaf, 0), at(5));
+    assert_eq!(standing_hold(&leaf, 1), at(10));
+    assert_eq!(standing_hold(&root, 1), at(5));
+}
+
+#[mz_ore::test]
+fn republished_root_leaves_its_old_point_to_the_aliases() {
+    let root = GlobalId::User(1);
+    let alias = GlobalId::User(2);
+    let registry = publish_index(root, test_rows());
+    assert!(registry.publish_alias(alias, root, 0, 1));
+    let standing_hold = |id: &GlobalId| {
+        registry
+            .published_diagnostics(id, 0)
+            .expect("published")
+            .standing_hold
+    };
+    let at = |t: u64| Antichain::from_elem(Timestamp::from(t));
+    registry.note_standing_hold(root, 0, &at(5));
+
+    // The root drops and its id is published again, over a new point. Its notes govern only that
+    // point, and the alias's notes govern the one the alias still shares.
+    registry.remove(&root);
+    let _new_root_slot = registry.get_or_create(root, 0, 1);
+    registry.note_standing_hold(root, 0, &at(7));
+    registry.note_standing_hold(alias, 0, &at(12));
+    assert_eq!(standing_hold(&alias), at(12));
+    assert_eq!(standing_hold(&root), at(7));
+
+    // A new alias of the new point stays out of the old point's meet.
+    let other = GlobalId::User(3);
+    assert!(registry.publish_alias(other, root, 0, 1));
+    registry.note_standing_hold(other, 0, &at(8));
+    registry.note_standing_hold(alias, 0, &at(15));
+    assert_eq!(standing_hold(&alias), at(15));
+    assert_eq!(standing_hold(&root), at(7));
 }
 
 /// Walks a snapshot of `handle` at `at` into a sorted `Vec` of owned (key, value) rows,
