@@ -818,15 +818,14 @@ async fn frontiers_forwarded_from_owning_runtime() {
 
 #[mz_ore::test(tokio::test)]
 async fn frontiers_dropped_from_non_owning_runtime() {
-    // Both runtimes install the internally-created logging/introspection dataflows and report
-    // frontiers for the same (maintained) collection id. Only the owner's (maintenance's) report
-    // may reach the controller; the interactive runtime's empty copy must be dropped, else the
-    // controller sees the collection's frontier regress.
+    // Only the runtime that hosts a collection may report its frontier. A report for a maintained
+    // id from the interactive runtime is for a collection it does not host, and forwarding it
+    // would let the controller see the collection's frontier regress.
     let mut h = harness();
     // A maintained id: never recorded as a transient owner, so maintenance owns it.
     let id = GlobalId::System(42);
-    // The interactive runtime's empty logging collection reports the empty frontier first, then
-    // maintenance reports a real, finite frontier. The interactive report must be dropped.
+    // The interactive runtime reports the empty frontier first, then maintenance reports a real,
+    // finite frontier. The interactive report must be dropped.
     h.inter_tx
         .send(ComputeResponse::Frontiers(
             id,
