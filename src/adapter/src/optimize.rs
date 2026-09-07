@@ -473,6 +473,8 @@ fn optimize_mir_local(
     expr: MirRelationExpr,
     ctx: &mut TransformCtx,
 ) -> Result<OptimizedMirRelationExpr, OptimizerError> {
+    fail::fail_point!("optimize_mir_local");
+
     #[allow(deprecated)]
     let optimizer = mz_transform::Optimizer::logical_optimizer(ctx);
     let expr = optimizer.optimize(expr, ctx)?;
