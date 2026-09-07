@@ -454,11 +454,14 @@ impl ComputeState {
         // and `InstanceConfig::arrangement_dictionary_compression`) and held fixed, so that
         // flipping the flag does not retroactively change arrangements on existing replicas.
 
-        // Apply column-paged-batcher configuration. Routes through
-        // `apply_tiered_config`, which reuses a process-wide `TieredPolicy`
-        // singleton — operator-driven tunes mutate the existing atomics
-        // rather than installing a fresh policy with a fresh budget atomic
-        // that would orphan in-flight resident tickets.
+        // Apply column-pager configuration. The arrange batchers spill
+        // through the buffer pool below, so the consumers of this budget are
+        // the MV sink's correction buffer and storage's paged upsert stash
+        // flavor, which share one policy and one underlying `mz_ore::pager`.
+        // Routes through `apply_tiered_config`, which reuses a process-wide
+        // `TieredPolicy` singleton — operator-driven tunes mutate the
+        // existing atomics rather than installing a fresh policy with a
+        // fresh budget atomic that would orphan in-flight resident tickets.
         //
         // Backend selection mirrors the lower-level `mz_ore::pager`
         // already configured above: file when a scratch directory is

@@ -351,6 +351,22 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
         }
     }
 
+    /// The body for the duration of `f`: a resident body is borrowed, a
+    /// spilled body is loaded from the pool for the call and dropped after it.
+    pub fn with_column<F, X>(&self, f: F) -> X
+    where
+        F: FnOnce(&Column<(D, T, R)>) -> X,
+    {
+        match self {
+            ColumnChunk::Resident(col, _) => f(col),
+            ColumnChunk::Spilled(body, _) => {
+                let mut words = Vec::new();
+                body.handle.read_into(&mut words);
+                f(&Column::Align(words))
+            }
+        }
+    }
+
     /// True when the body lives in the pool.
     pub fn is_spilled(&self) -> bool {
         matches!(self, ColumnChunk::Spilled(_, _))
@@ -1092,7 +1108,7 @@ pub struct UnchunkBuilder<Bu, D: Columnar, T: Columnar, R: Columnar> {
 
 impl<Bu, D, T, R> differential_dataflow::trace::Builder for UnchunkBuilder<Bu, D, T, R>
 where
-    Bu: differential_dataflow::trace::Builder<Input = Column<(D, T, R)>>,
+    Bu: differential_dataflow::trace::Builder<Input = Column<(D, T, R)>> + ChainState,
     D: Columnar + 'static,
     T: Columnar + 'static,
     R: Columnar + 'static,
@@ -1124,15 +1140,65 @@ where
         chain: &mut Vec<Self::Input>,
         description: differential_dataflow::trace::Description<Self::Time>,
     ) -> Self::Output {
+        let mut state = Bu::State::default();
+        if Bu::wants_bodies() {
+            // The inner builder derives its state from the chain's contents,
+            // so the chain is walked twice and a spilled body is read once
+            // per walk. `wants_bodies` is what keeps that second read off the
+            // path that has no use for it.
+            for chunk in chain.iter() {
+                chunk.with_column(|column| Bu::observe(&mut state, column));
+            }
+        } else {
+            for chunk in chain.iter() {
+                Bu::observe_records(&mut state, chunk.records());
+            }
+        }
+        let mut builder = Self {
+            inner: Bu::from_state(state),
+            _marker: std::marker::PhantomData,
+        };
         // One chunk at a time through `push`, so peak transient memory is a
         // single loaded body rather than the whole chain at once.
-        let mut builder = Self::new();
         for chunk in chain.iter_mut() {
             builder.push(chunk);
         }
         chain.clear();
         builder.done(description)
     }
+}
+
+/// A builder whose batches carry state derived from a whole chain, computed
+/// before the chain's first push.
+///
+/// [`Builder::seal`] receives the chain at once, which a chain of pool-backed
+/// chunks cannot supply without holding every body resident at the same time.
+/// An implementor splits the derivation instead: a caller folds the chain into
+/// [`State`](Self::State) one entry at a time, then builds from it.
+///
+/// A caller folds each chain entry exactly once, through
+/// [`observe`](Self::observe) when [`wants_bodies`](Self::wants_bodies) holds
+/// and through [`observe_records`](Self::observe_records) otherwise, so an
+/// implementor may accumulate the same figure in both without double counting.
+///
+/// [`Builder::seal`]: differential_dataflow::trace::Builder::seal
+pub trait ChainState: differential_dataflow::trace::Builder {
+    /// State accumulated across a chain.
+    type State: Default;
+
+    /// Whether the state needs the chain's contents. When this is false a
+    /// caller reads no bodies, and the builder sees only record counts.
+    fn wants_bodies() -> bool;
+
+    /// Fold one chain entry's contents into `state`.
+    fn observe(state: &mut Self::State, input: &Self::Input);
+
+    /// Fold one chain entry's update count into `state`, for a caller that
+    /// reads no bodies.
+    fn observe_records(state: &mut Self::State, records: usize);
+
+    /// Build with `state` installed.
+    fn from_state(state: Self::State) -> Self;
 }
 
 /// A chunker for `arrange_core` over [`ColumnChunk`]s: sorts and consolidates
@@ -1188,6 +1254,86 @@ where
         let col = self.inner.finish()?;
         self.staged = ColumnChunk::from_column(std::mem::take(col));
         Some(&mut self.staged)
+    }
+}
+
+/// The [`ChunkBatcher`] of a chunk chain, reporting resident bytes to the
+/// batcher size logger.
+///
+/// [`ChunkBatcher`]: differential_dataflow::trace::chunk::ChunkBatcher
+pub type AccountedChunkBatcher<D, T, R> =
+    differential_dataflow::trace::implementations::merge_batcher::MergeBatcher<
+        AccountedChunkMerger<D, T, R>,
+    >;
+
+/// The chunk merger of [`AccountedChunkBatcher`]: differential's merger, plus
+/// the [`Merger::allocation`] figures the `mz_arrangement_batcher_*_raw`
+/// introspection tables are assembled from.
+///
+/// Those tables surface as memory dashboards, so they report what a chunk
+/// costs in RSS: a resident body's bytes, and nothing for a spilled one,
+/// whose bytes live in the pool.
+///
+/// [`Merger::allocation`]: differential_dataflow::trace::implementations::merge_batcher::Merger::allocation
+pub struct AccountedChunkMerger<D: Columnar, T: Columnar, R: Columnar> {
+    inner: differential_dataflow::trace::chunk::ChunkMerger<ColumnChunk<D, T, R>>,
+}
+
+impl<D: Columnar, T: Columnar, R: Columnar> Default for AccountedChunkMerger<D, T, R> {
+    fn default() -> Self {
+        Self {
+            inner: Default::default(),
+        }
+    }
+}
+
+impl<D, T, R> differential_dataflow::trace::implementations::merge_batcher::Merger
+    for AccountedChunkMerger<D, T, R>
+where
+    D: Columnar + 'static,
+    T: Columnar + 'static,
+    R: Columnar + 'static,
+    ColumnChunk<D, T, R>: Chunk,
+    <ColumnChunk<D, T, R> as Chunk>::Time: Clone + PartialOrder + 'static,
+{
+    type Chunk = ColumnChunk<D, T, R>;
+    type Time = <ColumnChunk<D, T, R> as Chunk>::Time;
+
+    fn merge(
+        &mut self,
+        list1: Vec<Self::Chunk>,
+        list2: Vec<Self::Chunk>,
+        output: &mut Vec<Self::Chunk>,
+        stash: &mut Vec<Self::Chunk>,
+    ) {
+        self.inner.merge(list1, list2, output, stash)
+    }
+
+    fn extract(
+        &mut self,
+        merged: Vec<Self::Chunk>,
+        upper: AntichainRef<Self::Time>,
+        frontier: &mut Antichain<Self::Time>,
+        readied: &mut Vec<Self::Chunk>,
+        kept: &mut Vec<Self::Chunk>,
+        stash: &mut Vec<Self::Chunk>,
+    ) {
+        self.inner
+            .extract(merged, upper, frontier, readied, kept, stash)
+    }
+
+    fn len(chunk: &Self::Chunk) -> usize {
+        Chunk::len(chunk)
+    }
+
+    fn allocation(chunk: &Self::Chunk) -> (usize, usize, usize) {
+        match chunk {
+            ColumnChunk::Resident(col, _) => {
+                let bytes = col.length_in_bytes();
+                (bytes, bytes, 1)
+            }
+            ColumnChunk::Spilled(_, _) => (0, 0, 0),
+        }
     }
 }
 
@@ -1346,6 +1492,28 @@ mod tests {
     fn force_spill(chunk: TestChunk, pool: &Pool) -> TestChunk {
         let depth = chunk.depth();
         TestChunk::spill_body(chunk.into_column(), pool, depth)
+    }
+
+    /// The batcher size logger reports a resident body's bytes and nothing
+    /// for a spilled one, whose bytes live in the pool rather than in RSS.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn allocation_reports_resident_bytes_only() {
+        use differential_dataflow::trace::implementations::merge_batcher::Merger;
+
+        let data: Vec<Tuple> = (0..64u64).map(|i| ((i, i), 0, 1)).collect();
+        let resident = TestChunk::from_column(build_column(&data));
+        let (size, capacity, allocations) =
+            AccountedChunkMerger::<(u64, u64), u64, i64>::allocation(&resident);
+        assert!(size > 0, "a resident body reports its bytes");
+        assert_eq!((capacity, allocations), (size, 1));
+
+        let spilled = force_spill(resident, &test_pool());
+        assert_eq!(
+            AccountedChunkMerger::<(u64, u64), u64, i64>::allocation(&spilled),
+            (0, 0, 0),
+            "a spilled body holds no resident bytes"
+        );
     }
 
     /// A single pool shared by every test in the module. A pool reserves a

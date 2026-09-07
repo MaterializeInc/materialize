@@ -49,9 +49,11 @@ pub enum ArrangementBatcher {
     /// `ColumnChunker` + `Col2ValColBatcher` + `RowRowColPagedBuilder`.
     /// Chains are resident `Column`s.
     Columnar,
-    /// `ColumnChunker` + `Col2ValPagedBatcher` + `RowRowColPagedBuilder`.
-    /// Chains are `Column`s routed through the pager, which may spill them.
-    ColumnarPaged,
+    /// `ChunkChunker` + `ChunkBatcher` + `UnchunkBuilder<RowRowColPagedBuilder>`.
+    /// Chains are chunks whose bodies the process buffer pool spills while
+    /// the process chunk spill gate is set, and that stay resident
+    /// otherwise.
+    Chunked,
 }
 
 impl ArrangementBatcher {
@@ -59,12 +61,12 @@ impl ArrangementBatcher {
     ///
     /// `ENABLE_COLUMN_PAGED_BATCHER` wins over
     /// `ENABLE_COLUMNAR_MERGE_BATCHER`, because it asks for the same columnar
-    /// chains plus paging. Call this once per arrange site at operator
-    /// construction time, so a dataflow keeps one batcher for its whole life
-    /// even if the flags flip underneath it.
+    /// chains plus the option to spill them. Call this once per arrange site
+    /// at operator construction time, so a dataflow keeps one batcher for its
+    /// whole life even if the flags flip underneath it.
     pub fn from_config(config: &ConfigSet) -> Self {
         if ENABLE_COLUMN_PAGED_BATCHER.get(config) {
-            Self::ColumnarPaged
+            Self::Chunked
         } else if ENABLE_COLUMNAR_MERGE_BATCHER.get(config) {
             Self::Columnar
         } else {

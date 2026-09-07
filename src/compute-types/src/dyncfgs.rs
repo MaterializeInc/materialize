@@ -44,18 +44,19 @@ pub const ENABLE_ERROR_DISTINCT: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
-/// Use the column-paged merge batcher code path at arrange sites. When
-/// `true`, arrange operators use `Col2ValPagedBatcher` (in
-/// `mz_timely_util::columnar`) and `RowRowColPagedBuilder` (in
-/// `mz_row_spine`), the columnar-native batcher that the pager can spill
-/// (gated by [`ENABLE_COLUMN_PAGED_BATCHER_SPILL`]). Read at operator
-/// construction time. Flips take effect on dataflows created after the
-/// change.
+/// Use the chunked merge batcher code path at arrange sites. When `true`,
+/// arrange operators batch through `ChunkBatcher` over
+/// `ColumnChunk` (in `mz_timely_util::columnar::chunk`) and build batches
+/// with `RowRowColPagedBuilder` (in `mz_row_spine`) behind
+/// `UnchunkBuilder`: columnar-native chains whose bodies the process buffer
+/// pool can spill (gated by [`ENABLE_COLUMN_PAGED_BATCHER_SPILL`]). Read at
+/// operator construction time. Flips take effect on dataflows created after
+/// the change.
 ///
 /// Takes precedence over [`ENABLE_COLUMNAR_MERGE_BATCHER`]: both select
-/// columnar chains, and this one additionally routes them through the pager.
-/// With both `false` the arrange sites use the columnation
-/// `Col2ValBatcher` / `RowRowBuilder` path. See
+/// columnar chains, and this one additionally makes them spillable. With
+/// both `false` the arrange sites use the columnation `Col2ValBatcher` /
+/// `RowRowBuilder` path. See
 /// `mz_compute::extensions::arrange::ArrangementBatcher` for the resolution.
 ///
 /// Disabled by default while the new path is stabilizing.
@@ -64,23 +65,23 @@ pub const ENABLE_ERROR_DISTINCT: Config<bool> = Config::new(
 pub const ENABLE_COLUMN_PAGED_BATCHER: Config<bool> = Config::new(
     "enable_column_paged_batcher",
     false,
-    "Use the columnar-native paged merge batcher at arrange sites. Takes precedence over \
-     enable_columnar_merge_batcher; with both false, arranges use the columnation \
-     `Col2ValBatcher` / `RowRowBuilder` path.",
+    "Use the columnar-native chunked merge batcher at arrange sites, whose chunk bodies the \
+     process buffer pool can spill. Takes precedence over enable_columnar_merge_batcher; \
+     with both false, arranges use the columnation `Col2ValBatcher` / `RowRowBuilder` path.",
     ParameterScope::Replica,
 );
 
 /// Use the resident columnar merge batcher at arrange sites. When `true`,
 /// arrange operators use `Col2ValColBatcher` (in `mz_timely_util::columnar`)
 /// and `RowRowColPagedBuilder` (in `mz_row_spine`): the same `Column` chains
-/// and the same builder as the paged arm, merged by `ColumnMerger` with no
-/// pager and no spill budget. When `false` (the default), the arrange sites
+/// and the same builder as the chunked arm, merged by `ColumnMerger` with
+/// no spill budget. When `false` (the default), the arrange sites
 /// use the columnation `Col2ValBatcher` / `RowRowBuilder` path. Read at
 /// operator construction time. Flips take effect on dataflows created after
 /// the change.
 ///
 /// This is the columnation-versus-columnar axis on its own, so the two paths
-/// can be compared without the pager in the measurement. It is ignored while
+/// can be compared without spilling in the measurement. It is ignored while
 /// [`ENABLE_COLUMN_PAGED_BATCHER`] is `true`.
 pub const ENABLE_COLUMNAR_MERGE_BATCHER: Config<bool> = Config::new(
     "enable_columnar_merge_batcher",
@@ -90,10 +91,10 @@ pub const ENABLE_COLUMNAR_MERGE_BATCHER: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
-/// Allow the column-paged batcher's pager to evict chunks under memory
-/// pressure. Only meaningful when [`ENABLE_COLUMN_PAGED_BATCHER`] is `true`.
-/// With the spill flag off the pager keeps every chunk resident regardless of
-/// budget.
+/// Allow chunk bodies to spill to the process buffer pool under memory
+/// pressure. Sets compute's leg of the process-wide chunk spill gate, which
+/// the arrange batchers read when [`ENABLE_COLUMN_PAGED_BATCHER`] is `true`.
+/// With the gate clear every chunk stays resident regardless of budget.
 ///
 /// This flag (or the storage-side `enable_upsert_paged_spill`) also gates
 /// installation of the process buffer pool (`mz_ore::pool`): the first
@@ -101,14 +102,18 @@ pub const ENABLE_COLUMNAR_MERGE_BATCHER: Config<bool> = Config::new(
 /// address space and spawns its spill threads. Turning the gates back off
 /// stops retuning but does not tear the installed pool down.
 ///
+/// It additionally enables the process-global column pager, which the MV
+/// sink's correction buffer and storage's paged upsert stash draw from, so
+/// it is not exclusive to the arrange path.
+///
 /// Off by default, even when the batcher path itself is on, so the
 /// no-pressure case stays a pure resident operation. Tune the budget via
 /// [`COLUMN_PAGED_BATCHER_BUDGET_FRACTION`].
 pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
     "enable_column_paged_batcher_spill",
     false,
-    "Allow the column-paged batcher's pager to evict chunks under memory pressure. Only \
-     meaningful when `enable_column_paged_batcher = true`.",
+    "Allow chunk bodies to spill to the process buffer pool under memory pressure. Only \
+     meaningful for arrange sites when `enable_column_paged_batcher = true`.",
     ParameterScope::Replica,
 );
 
