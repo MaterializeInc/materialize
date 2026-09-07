@@ -420,7 +420,7 @@ def launch(
     tags.setdefault("team", "engineering")
     tags.setdefault(
         "deleteAfter",
-        delete_after.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        delete_after.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     )
 
     ec2 = boto3.client("ec2")
@@ -708,7 +708,7 @@ def get_old_instances() -> list[InstanceTypeDef]:
         if delete_after is None:
             return False
         delete_after = float(delete_after)
-        return datetime.datetime.now(datetime.timezone.utc).timestamp() > delete_after
+        return datetime.datetime.now(datetime.UTC).timestamp() > delete_after
 
     return [
         i

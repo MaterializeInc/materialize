@@ -735,8 +735,7 @@ class AWS(State):
             delete_after = "2099-12-31T00:00:00Z"
         else:
             delete_after = (
-                datetime.datetime.now(datetime.timezone.utc)
-                + datetime.timedelta(hours=24)
+                datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=24)
             ).strftime("%Y-%m-%dT%H:%M:%SZ")
         tags = {
             "Environment": "dev",

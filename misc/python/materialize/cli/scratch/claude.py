@@ -114,7 +114,7 @@ def run(args: argparse.Namespace) -> None:
         instances = launch_cluster(
             descs,
             extra_tags=extra_tags,
-            delete_after=datetime.datetime.now(datetime.timezone.utc) + max_age,
+            delete_after=datetime.datetime.now(datetime.UTC) + max_age,
         )
 
         print("Launched:")
