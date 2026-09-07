@@ -1024,11 +1024,6 @@ impl<'a> ActiveComputeState<'a> {
             self.compute_state
                 .traces
                 .allow_compaction(id, frontier.borrow());
-            // Forward the same frontier to the sharing registry so a cross-runtime publisher of this
-            // index follows the controller's logical compaction. A no-op unless `id` is published.
-            self.compute_state
-                .sharing_registry
-                .note_allow_compaction(id, worker_index, &frontier);
         }
     }
 
