@@ -25,6 +25,7 @@ use timely::progress::Antichain;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::DataflowErrorSer;
 use crate::shared_trace::PublishArrangement;
+use crate::shared_trace::tests::SharedReaderExt;
 use crate::typedefs::{ErrBatcher, ErrBuilder};
 
 use super::*;
@@ -423,7 +424,7 @@ fn publish_join_input(
 /// The core spike: a maintenance-published index consumed *as an arrangement* by a join.
 ///
 /// Two `RowRow` indexes are published (each sealing several batches), imported through
-/// `SharedTraceHandle::import_snapshot_at` over the full `[0, seal)` range so every distinct time
+/// `SharedReader::import_frontier_core` over the full `[0, seal)` range so every distinct time
 /// stays visible, and joined with differential's `join_core`, which drives the same
 /// `cursor_through`/`batches_through` boundary as `mz_join_core`. The join runs live alongside
 /// the publishers in one worker, so the imported batches arrive incrementally and the join
@@ -472,8 +473,8 @@ fn join_over_imported_arrangements_matches_direct() {
         let probe = ProbeHandle::new();
         worker.dataflow::<Timestamp, _, _>(|scope| {
             let arr_a =
-                oks_a.import_snapshot_at(scope.clone(), "import A", as_of.clone(), until.clone());
-            let arr_b = oks_b.import_snapshot_at(scope.clone(), "import B", as_of, until);
+                oks_a.import_frontier_core(scope.clone(), "import A", as_of.clone(), until.clone());
+            let arr_b = oks_b.import_frontier_core(scope.clone(), "import B", as_of, until);
             let joined = arr_a.join_core(arr_b, |key, v1, v2| {
                 let row = Row::pack(key.into_iter().chain(v1.into_iter()).chain(v2.into_iter()));
                 Some(row)
@@ -609,7 +610,6 @@ fn join_over_point_adopted_late_matches_direct() {
 
     timely::execute_directly(move |worker| {
         let registry = ArrangementSharingRegistry::new();
-        let peers = worker.peers();
         let worker_index = worker.index();
 
         // B: published normally, an already-materialized co-input.
@@ -617,7 +617,7 @@ fn join_over_point_adopted_late_matches_direct() {
         let (oks_b, _errs_b) = registry.handles(&id_b, worker_index).expect("B published");
 
         // A: a PLACEHOLDER, created before any publisher exists. Mint its reader handle now.
-        let point_a: Published<RowRowSpine<Timestamp, Diff>> = Published::new(peers);
+        let point_a: Published<RowRowSpine<Timestamp, Diff>> = Published::new();
         let oks_a = point_a.handle();
 
         // Interactive side: import both as arrangements and join them. A is imported over the
@@ -629,13 +629,13 @@ fn join_over_point_adopted_late_matches_direct() {
         let until = Antichain::from_elem(Timestamp::from(seal));
         let probe = ProbeHandle::new();
         worker.dataflow::<Timestamp, _, _>(|scope| {
-            let arr_a = oks_a.import_snapshot_at(
+            let arr_a = oks_a.import_frontier_core(
                 scope.clone(),
                 "import A (unbacked)",
                 as_of.clone(),
                 until.clone(),
             );
-            let arr_b = oks_b.import_snapshot_at(scope.clone(), "import B", as_of, until);
+            let arr_b = oks_b.import_frontier_core(scope.clone(), "import B", as_of, until);
             let joined = arr_a.join_core(arr_b, |key, v1, v2| {
                 let row = Row::pack(key.into_iter().chain(v1.into_iter()).chain(v2.into_iter()));
                 Some(row)
