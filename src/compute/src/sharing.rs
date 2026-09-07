@@ -146,13 +146,9 @@ impl ArrangementSharingRegistry {
         let worker_index = scope.index();
         let slot = self.get_or_create(id, worker_index, scope.peers());
         let registry = self.clone();
-        oks.adopt(&slot.oks, &format!("{id} oks"), move || {
-            registry.notify(id, worker_index)
-        });
+        oks.adopt(&slot.oks, move || registry.notify(id, worker_index));
         let registry = self.clone();
-        errs.adopt(&slot.errs, &format!("{id} errs"), move || {
-            registry.notify(id, worker_index)
-        });
+        errs.adopt(&slot.errs, move || registry.notify(id, worker_index));
         self.notify(id, worker_index);
     }
 
@@ -225,32 +221,6 @@ impl ArrangementSharingRegistry {
                 std::mem::take(&mut waker.dirty)
             }
             None => BTreeSet::new(),
-        }
-    }
-
-    /// Forwards the controller's logical compaction `frontier` for `id` into its published slot on
-    /// `worker_index`, if one exists.
-    ///
-    /// Called from `handle_allow_compaction` alongside the local `TraceManager` update, so a
-    /// cross-runtime publisher follows the controller's compaction without reading trace internals.
-    /// The same frontier drives the index's `oks` and `errs`, matching `TraceManager::allow_compaction`.
-    /// A no-op for unshared ids (no slot) and for a slot whose points are still unbacked (an unbacked point's
-    /// `note_writer_logical` simply records the frontier a later `adopt` will publish against).
-    /// Does not `notify`: compaction bookkeeping alone gives a waiting reader nothing new to serve.
-    pub(crate) fn note_allow_compaction(
-        &self,
-        id: GlobalId,
-        worker_index: usize,
-        frontier: &Antichain<Timestamp>,
-    ) {
-        let map = self.inner.map.lock().expect("registry poisoned");
-        if let Some(arr) = map
-            .get(&id)
-            .and_then(|slots| slots.get(worker_index))
-            .and_then(|slot| slot.as_ref())
-        {
-            arr.oks.note_writer_logical(frontier);
-            arr.errs.note_writer_logical(frontier);
         }
     }
 
