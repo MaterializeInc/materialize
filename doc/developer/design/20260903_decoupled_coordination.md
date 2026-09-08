@@ -79,6 +79,19 @@ Coalescing or rate-limiting bound advancement may retain extra history, but must
 not delay protection until after it is needed. Choose cadence and batching from
 measured catalog load, DDL latency, and retention cost.
 
+### Applying committed permission
+
+Any component may apply committed compaction permission for the identified
+collection lifetime. Applying permission does not require exclusive ownership or
+leadership. Concurrent or delayed application must not regress compaction or
+bypass other valid read protection. Permission cannot be reused for a different
+collection lifetime or an unrelated use of a shared shard.
+
+Coordination belongs at the boundary that authorizes compaction, admits read
+requirements, and reclaims client protection, not at the act of applying
+already-committed permission. Proposing bounds need not require a leader either,
+provided catalog transactions validate proposals against authoritative requirements.
+
 ### Logical recovery dependencies
 
 Maintained recovery protection covers all logical collection inputs, including
@@ -113,8 +126,7 @@ requirements remain implementation choices.
 
 Propagation to persist critical since handles must respect all valid read
 requirements. Those handles are the durable backstop, not a substitute for
-multi-client accounting. Stale owners must not advance compaction or destroy
-data based on incomplete local knowledge.
+multi-client accounting.
 
 Recovery must establish actual readability and restore valid read requirements
 before further advancement is authorized. Reconstructed plans must use inputs
@@ -183,7 +195,7 @@ logical-input protection rather than making optimization decisions authoritative
 ### Delegated compaction advancement
 
 The catalog could define maintained requirements and retention policies while
-fenced components account for client and maintained reads and advance
+components account for client and maintained reads and advance
 compaction directly. Persist critical handles would provide the durable storage
 backstop, without publishing advancing bounds to the catalog. This avoids ongoing
 frontier-publication traffic and its dependence on catalog write availability.
@@ -192,8 +204,8 @@ Delegation still requires coordination when durable read requirements are
 introduced or strengthened. Their admission must be tied to protection held by
 those components. Reclaiming abandoned precommit protection must exclude a late
 commit that relies on it. Observing an object's absence in a catalog snapshot is
-not sufficient. Recovery of valid holds and enforcement against stale owners
-remain necessary under either approach.
+not sufficient. Both approaches must recover valid holds and prevent compaction
+based on incomplete or superseded read requirements.
 
 We choose explicit bounds for the catalog-local permission boundary. Delegation
 reduces ongoing catalog traffic but shifts coordination into maintained-DDL
@@ -256,7 +268,8 @@ Creation, changes, deletion, and compaction work across recovery. Losing the
 adapter does not interrupt maintained work.
 
 Demonstrate a production subscriber applying committed changes without
-creator-local plans, including same-batch dependencies.
+creator-local plans, including same-batch dependencies. Include concurrent and
+delayed application of committed compaction permission.
 
 #### 3. Independent query execution
 
@@ -552,3 +565,10 @@ Integration cases identified in review include table commit before initializatio
 read-only bootstrap racing a drop, and intermediate bound updates removed by a
 same-transaction drop. Independent-client protection is part of milestone 3, not
 a prerequisite for the first maintained-recovery example.
+
+### 2026-09-08: Non-exclusive compaction application agreed with Aljoscha
+
+Applying committed permission does not require a fenced or exclusive executor.
+Separate this responsibility from authorization and read-protection accounting.
+Milestone 1 remains active. Existing controller fencing cannot simply be removed
+while advancement still depends on private hold accounting.
