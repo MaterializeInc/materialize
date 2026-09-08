@@ -12,6 +12,13 @@
 //! the Get has a matching index. Convert these to `IndexedFilter` joins, which is a semi-join with
 //! a constant collection.
 //!
+//! Detecting which index to use, and with which values, reads the filter as written (see
+//! [`key_bounds`]). Removing the constraints the lookup enforces from the filter, and dropping
+//! contradictory disjuncts, work on a disjunctive normal form of the filter that is prepared
+//! first and undone afterwards. The two therefore have different reach: a filter can yield a
+//! lookup whose constraints removal cannot take out, in which case the filter stays whole above
+//! the lookup.
+//!
 //! E.g.: Logically, we go from something like
 //! `SELECT f1, f2, f3 FROM t WHERE t.f1 = lit1 AND t.f2 = lit2`
 //! to
@@ -35,6 +42,10 @@ use mz_repr::{Diff, GlobalId, ReprRelationType, Row};
 use crate::TransformCtx;
 use crate::canonicalize_mfp::CanonicalizeMfp;
 use crate::notice::IndexTooWideForLiteralConstraints;
+
+mod key_bounds;
+
+use key_bounds::KeyBounds;
 
 /// Convert literal constraints into `IndexedFilter` joins.
 #[derive(Debug)]
@@ -78,7 +89,9 @@ impl LiteralConstraints {
         {
             let orig_mfp = mfp.clone();
 
-            // Preparation for the literal constraints detection.
+            // Preparation for removing literal constraints and contradictory disjuncts, which
+            // work on a disjunctive normal form. Detection reads the prepared MFP too, but does
+            // not depend on the form.
             Self::inline_literal_constraints(&mut mfp);
             Self::list_of_predicates_to_and_of_predicates(&mut mfp);
             Self::distribute_and_over_or(&mut mfp)?;
@@ -219,8 +232,9 @@ impl LiteralConstraints {
     /// For example, if there is an index on `(f1, f2)`, and the Filter is
     /// `(f1 = 3 AND f2 = 5) OR (f1 = 7 AND f2 = 9)`, it returns `Some([f1, f2], [[3,5], [7,9]])`.
     ///
-    /// We can use an index if each argument of the OR includes a literal constraint on each of the
-    /// key fields of the index. Extra predicates inside the OR arguments are ok.
+    /// An index is usable when the predicates, read as written, pin every field of its key to
+    /// literals; the values to look up are exactly the key values the predicates admit. Predicates
+    /// that say nothing about the key are fine and stay in the filter.
     ///
     /// Returns (idx_id, idx_key, values to lookup in the index).
     fn detect_literal_constraints(
@@ -229,66 +243,36 @@ impl LiteralConstraints {
         transform_ctx: &mut TransformCtx,
     ) -> Option<(GlobalId, Vec<MirScalarExpr>, Vec<Row>)> {
         // Checks whether an index with the specified key can be used to speed up the given filter.
-        // See comment of `IndexMatch`.
-        fn match_index(key: &[MirScalarExpr], or_args: &Vec<MirScalarExpr>) -> IndexMatch {
+        // See comment of `IndexMatch`. Reads the predicates as they are, so a shape the DNF
+        // preparation could not fully distribute is still examined: the key is usable when the
+        // predicates pin every one of its fields, and the lookup values are exactly the key
+        // values they admit.
+        fn match_index(key: &[MirScalarExpr], mfp: &MapFilterProject) -> IndexMatch {
             if key.is_empty() {
                 // Nothing to do with an index that has an empty key.
                 return IndexMatch::UnusableNoSubset;
             }
             if !key.iter().all_unique() {
-                // This is a weird index. Why does it have duplicate key expressions?
+                // We could handle this, but it would need some care, and such indexes are odd.
                 return IndexMatch::UnusableNoSubset;
             }
-            let mut literal_values = Vec::new();
-            let mut inv_cast_any = false;
-            // This starts with all key fields of the index.
-            // At the end, it will contain a subset S of index key fields such that if the index had
-            // only S as its key, then the index would be usable.
-            let mut usable_key_fields = key.iter().collect::<BTreeSet<_>>();
-            let mut usable = true;
-            for or_arg in or_args {
-                let mut row = Row::default();
-                let mut packer = row.packer();
-                for key_field in key {
-                    let and_args = or_arg.and_or_args(And.into());
-                    // Let's find a constraint for this key field
-                    if let Some((literal, inv_cast)) = and_args
-                        .iter()
-                        .find_map(|and_arg| and_arg.expr_eq_literal(key_field))
-                    {
-                        // (Note that the above find_map can find only 0 or 1 result, because
-                        // of `remove_impossible_or_args`.)
-                        packer.push(literal.unpack_first());
-                        inv_cast_any |= inv_cast;
-                    } else {
-                        // There is an `or_arg` where we didn't find a constraint for a key field,
-                        // so the index is unusable. Throw out the field from the usable fields.
-                        usable = false;
-                        usable_key_fields.remove(key_field);
-                        if usable_key_fields.is_empty() {
-                            return IndexMatch::UnusableNoSubset;
-                        }
-                    }
+            let bounds = KeyBounds::conjunction(mfp.predicates.iter().map(|(_, p)| p), key);
+            if bounds.bounds_every_field() {
+                match bounds.lookup_values() {
+                    Some(values) => IndexMatch::Usable(values, bounds.inv_cast),
+                    // Too many values to look up; a scan is the better plan.
+                    None => IndexMatch::UnusableNoSubset,
                 }
-                literal_values.push(row);
-            }
-            if usable {
-                // We should deduplicate, because a constraint can be duplicated by
-                // `distribute_and_over_or`. For example: `IN ('l1', 'l2') AND (a > 0 OR a < 5)`:
-                // the 2 args of the OR will cause the IN constraints to be duplicated. This doesn't
-                // alter the meaning of the expression when evaluated as a filter, but if we extract
-                // those literals 2 times into `literal_values` then the Peek code will look up
-                // those keys from the index 2 times, leading to duplicate results.
-                literal_values.sort();
-                literal_values.dedup();
-                IndexMatch::Usable(literal_values, inv_cast_any)
             } else {
-                if usable_key_fields.is_empty() {
+                let subset = bounds
+                    .bounded_fields()
+                    .into_iter()
+                    .map(|i| key[i].clone())
+                    .collect_vec();
+                if subset.is_empty() {
                     IndexMatch::UnusableNoSubset
                 } else {
-                    IndexMatch::UnusableTooWide(
-                        usable_key_fields.into_iter().cloned().collect_vec(),
-                    )
+                    IndexMatch::UnusableTooWide(subset)
                 }
             }
         }
@@ -298,7 +282,7 @@ impl LiteralConstraints {
         let index_matches = transform_ctx
             .indexes
             .indexes_on(get_id)
-            .map(|(index_id, key)| (index_id, key.to_owned(), match_index(key, &or_args)))
+            .map(|(index_id, key)| (index_id, key.to_owned(), match_index(key, mfp)))
             .collect_vec();
 
         let result = index_matches
@@ -325,9 +309,11 @@ impl LiteralConstraints {
                             assert!(!usable_subset.is_empty());
                             // Determine literal values that we would get if the index was on
                             // `usable_subset`.
-                            let literal_values = match match_index(&usable_subset, &or_args) {
+                            let literal_values = match match_index(&usable_subset, mfp) {
                                 IndexMatch::Usable(literal_vals, _) => literal_vals,
-                                _ => unreachable!(), // `usable_subset` would make the index usable.
+                                // The subset is bounded, so this is the value count exceeding
+                                // the lookup limit: nothing to recommend looking up.
+                                _ => return,
                             };
 
                             // Let's come up with a recommendation for what columns to index:
@@ -403,16 +389,20 @@ impl LiteralConstraints {
         // After removing the literal constraints we have
         // `c OR (d AND e)`
         let mut constraints_to_residual_sets = BTreeMap::new();
-        or_args.iter().for_each(|or_arg| {
+        for or_arg in or_args.iter() {
             let and_args = or_arg.and_or_args(And.into());
             let (mut constraints, mut residual): (Vec<_>, Vec<_>) =
                 and_args.iter().cloned().partition(|and_arg| {
                     key.iter()
                         .any(|key_field| matches!(and_arg.expr_eq_literal(key_field), Some(..)))
                 });
-            // In every or_arg there has to be some literal constraints, otherwise
-            // `detect_literal_constraints` would have returned None.
-            assert!(constraints.len() >= 1);
+            // Detection reads the predicates as a whole, so it can find a usable key while an
+            // individual disjunct pins nothing, for example a disjunct that is literally
+            // `null`. This removal reasons disjunct by disjunct and has nothing to say about
+            // such a shape, so the filter stays as it is; the lookup is still taken.
+            if constraints.is_empty() {
+                return false;
+            }
             // `remove_impossible_or_args` made sure that inside each or_arg, each
             // expression can be literal constrained only once. So if we find one of the
             // key fields being literal constrained, then it's definitely that literal
@@ -428,7 +418,7 @@ impl LiteralConstraints {
                 .entry(constraints)
                 .or_insert_with(BTreeSet::new);
             entry.insert(residual);
-        });
+        }
         let residual_sets = constraints_to_residual_sets
             .into_iter()
             .map(|(_constraints, residual_set)| residual_set)
@@ -750,10 +740,10 @@ impl LiteralConstraints {
 /// Whether an index is usable to speed up a Filter with literal constraints.
 #[derive(Clone)]
 enum IndexMatch {
-    /// The index is usable, that is, each OR argument constrains each key field.
+    /// The index is usable, that is, the predicates pin every key field.
     ///
-    /// The `Vec<Row>` has the constraining literal values, where each Row corresponds to one OR
-    /// argument, and each value in the Row corresponds to one key field.
+    /// The `Vec<Row>` has the key values the predicates admit, deduplicated, each value in a Row
+    /// corresponding to one key field.
     ///
     /// The `bool` indicates whether we needed to inverse cast equalities to match them up with key
     /// fields. The inverse cast enables index usage when an implicit cast is wrapping a key field.
