@@ -210,8 +210,8 @@ as well as query performance. Record what ran, failures, and remaining gaps.
 
 ## Implementation log (append-only)
 
-Append dated entries with findings and evidence, decisions or pending questions,
-validation results, and the next useful step. Clearly distinguish an
+Append dated entries with findings, decisions or pending questions, and the next
+useful step. Validation status lives in the PR, not here. Clearly distinguish an
 implementer's proposal from a decision reviewed with Aljoscha. Do not rewrite
 earlier entries. Keep the main text concise and update its agreed boundaries
 only following review.
@@ -221,155 +221,110 @@ only following review.
 Multi-adapter operation is the end goal, not the immediate deliverable.
 Query-local dataflows remain on the fast protocol. Adapter loss must not harm
 other clients or maintained dataflows, but transparent failover is not required.
-Completing relevant catalog implication paths is within scope. Implementation
-has not started and runtime validation has not been performed.
+Completing relevant catalog implication paths is within scope.
 
 ### 2026-09-03: Sink creation from committed implications
 
-Sink additions now install exports through catalog implications. Independent
-review found no blocking issue. [CI build 133862](https://buildkite.com/materialize/test/builds/133862)
-passed both Clippy jobs and formatting before a documentation push superseded it.
-Latest CI and runtime validation remain pending. Local builds were blocked by
-missing artifacts and tools. Aljoscha confirmed CI as the default test loop.
+Sink additions now install exports through catalog implications.
 
 Controllers still live in the adapter. Direct committed-update tests and
-same-batch MV/sink creation remain gaps. Next proposed slice: reuse index plan
-reconstruction from bootstrap, preserving precommit optimization as a cache.
-Index parsing leaves plans absent and the expression cache has no runtime read
-API. No new boundary decision was made.
+same-batch MV/sink creation remain gaps. Index parsing leaves plans absent and
+the expression cache has no runtime read API.
 
 ### 2026-09-03: Reusable index reconstruction
 
 Extracted bootstrap's uncached index planning and notice rendering without
-changing cache policy, ordering, or installation. Independent review found no
-issue. Local adapter `cargo check` and Rust formatting passed. Full formatting
-and lint failed on missing tools and a Python-doctest dependency build. Runtime
-validation and this commit's [PR CI](https://github.com/MaterializeInc/materialize/pull/38696/checks)
-remain pending.
+changing cache policy, ordering, or installation. Next: runtime expression-cache
+reads and index-add implications using reconstruction on cache misses. Cache
+validity must account for committed dependencies, and installation must follow
+same-batch prerequisites.
 
-Next proposed slice: runtime expression-cache reads and index-add implications
-using reconstruction on cache misses. Cache validity must account for committed
-dependencies, and installation must follow same-batch prerequisites. Add direct
-committed-update coverage without sequencer plans. No boundary decision changed.
-
-### 2026-09-03: Runtime index implications, verification in progress
+### 2026-09-03: Runtime index implications
 
 Index additions now acquire cached or reconstructed plans and install through
 implications. Runtime cache reads are best-effort and validated against committed
 dependencies and compute availability. Review identified stale session notices
 after cache rejection, addressed by filtering dropped dependencies.
 
-Adapter and cache-test compilation passed. Runtime tests remain pending. The
-extraction's Clippy fix passed both [CI Clippy jobs](https://buildkite.com/materialize/test/builds/133870).
-Full validation of this follow-up is pending. Proposed test-only adapter catalog
-transaction request awaits Aljoscha's approval, because no existing harness can
-exercise cluster/table/index creation in one committed batch. Same-batch MV/index
-creation still depends on moving MV storage creation into implications.
+No existing harness can exercise cluster/table/index creation in one committed
+batch without the sequencer. Same-batch MV/index creation still depends on moving
+MV storage creation into implications.
 
 ### 2026-09-03: System-boundary verification
 
 Agreed with Aljoscha to proceed with system-level coverage, without a test-only
 coordinator command. Added cache-disabled SQL creation and restart coverage for
-index use, EXPLAIN, notices, and drop cleanup. Python formatting and Ruff passed,
-runtime validation remains in [PR CI](https://github.com/MaterializeInc/materialize/pull/38696/checks).
-The no-sequencer same-batch runtime case remains uncovered until a production
-catalog subscriber exists. External catalog writers fence the adapter today,
-and the existing read-only catalog harness does not apply controller effects.
+index use, EXPLAIN, notices, and drop cleanup. The no-sequencer same-batch runtime
+case remains uncovered until a production catalog subscriber exists. External
+catalog writers fence the adapter today, and the existing read-only catalog
+harness does not apply controller effects.
 
 ### 2026-09-03: MV storage registration from committed implications
 
 MV additions register storage before dependent sinks/indexes, then initialize
 read policies through the deferred batch. Runtime and bootstrap share descriptor
 construction, including replacement ownership and the initial storage frontier.
-Compute installation remains sequencer-side. No boundary decision changed.
-
-Local adapter compilation and Rust/Python formatting passed. Full formatting and
-lint are blocked by missing tools and a Python-doctest OpenSSL dependency build.
-Independent review found no issue. This slice's [PR CI](https://github.com/MaterializeInc/materialize/pull/38696/checks)
-is pending. Prior regular [CI build 133879](https://buildkite.com/materialize/test/builds/133879)
-passed. Next useful step: catalog-driven MV compute planning and installation,
-preserving refresh timestamp selection and input protection. Same-batch runtime
-coverage still awaits a production subscriber.
+Compute installation remains sequencer-side.
 
 ### 2026-09-03: Reusable MV reconstruction
 
 Extracted bootstrap MV reconstruction without changing cache policy or timestamp
 selection. Extended cache-disabled restart coverage to MV results, EXPLAIN, and
-continued maintenance. Independent review found no issue. Adapter compilation
-and Rust/Python formatting passed.
-Full formatting and lint remain blocked by missing tools and an OpenSSL dependency
-build. Prior [CI build 133882](https://buildkite.com/materialize/test/builds/133882)
-passed. This slice's [PR CI](https://github.com/MaterializeInc/materialize/pull/38696/checks)
-and runtime coverage are pending.
+continued maintenance.
 
-Next useful step: establish input protection for runtime MV reconstruction before
-moving compute installation. A cache miss can choose imports outside the creator's
-holds, and acquiring fresh holds after commit cannot recover history needed for
-the committed first refresh. No protection mechanism or boundary change was agreed.
+Finding: a cache miss during runtime MV reconstruction can choose imports outside
+the creator's holds, and acquiring fresh holds after commit cannot recover history
+needed for the committed first refresh. Input protection must be established
+before moving compute installation.
 
 ### 2026-09-03: Pending first-refresh recovery coverage
 
 Added cache-disabled restart coverage for an unexecuted first refresh after its
-input changes. Python formatting and Ruff passed. Full formatting/lint remain
-blocked by missing tools and an OpenSSL dependency build. Prior
-[CI build 133887](https://buildkite.com/materialize/test/builds/133887) passed.
-This slice's [PR CI](https://github.com/MaterializeInc/materialize/pull/38696/checks)
-and runtime verification are pending.
+input changes.
 
 Code inspection ruled out merely broadening creator holds: timestamp selection
 joins every hold, changing historical MV readability, while
 [`sufficient_collections`](../../../src/adapter/src/coord/indexes.rs) stops at
 available indexes and does not cover sibling indexes exposed by same-batch drops.
 Compute holds do protect actual transitive dependencies. Production MV installation
-remains paused. Next proposed step: agree whether to establish lifecycle-owned
-protection now or build a temporary protected-plan reconstruction bridge. No new
-mechanism or boundary change was agreed.
+paused pending a decision between lifecycle-owned protection and a temporary
+protected-plan reconstruction bridge.
 
 ### 2026-09-03: Lifecycle protection prioritized with Aljoscha
 
 Proceed with lifecycle-owned protection rather than a temporary adapter bridge.
-Both restart jobs in [CI build 133889](https://buildkite.com/materialize/test/builds/133889)
-passed, including the pending-first-refresh regression. Overall CI remains pending.
 
 The durable writer is already shared behind a mutex, so an independent lifecycle
 component need not introduce concurrent catalog writers. Existing hold accounting
 and epoch fencing are reusable, but neither recovers pending maintained read
-requirements from catalog state. Before choosing a schema, clarify whether catalog
-authority requires committed frontier bounds or can delegate advancement to a
-fenced lifecycle owner under catalog-derived policies. The latter is a proposal,
-not an agreed interpretation of the boundary. No production changes made.
+requirements from catalog state. Open question before choosing a schema: does
+catalog authority require committed frontier bounds, or can advancement be
+delegated to a fenced lifecycle owner under catalog-derived policies?
 
 ### 2026-09-03: Delegation failure-scenario exploration
 
-[CI build 133889](https://buildkite.com/materialize/test/builds/133889) passed.
 Worked cases require atomic ordering of creation commit versus hold reclamation,
 physical fencing, and a recovery barrier before compaction resumes. Snapshot absence
 and catalog fencing alone are insufficient. Small abstract interleaving models
-checked these orderings, not production behavior. The delegation proposal shifts
-coordination to read-requiring DDL and owner handover rather than ongoing frontier
-publication. Admission/revocation and recovery of valid client holds remain open.
+checked these orderings, not production behavior. Delegation shifts coordination
+to read-requiring DDL and owner handover rather than ongoing frontier publication.
 The shared writer mutex only serializes one in-process handle, not independent
-writers or subscriber delivery. No boundary decision or production change made.
+writers or subscriber delivery.
 
 ### 2026-09-03: Catalog-bound traffic estimate
 
-Aljoscha leans toward explicit bounds. For compact records advancing once per
-minute, a planning budget of 300–500 bytes per retraction/insertion pair gives
-0.5–0.83 MB/s at 100,000 changing bounds. This estimates uncompressed logical
-updates, not measured persist traffic. Current structured JSONB encoding retains
-whole-record JSON text. Whole-item rewrites, batch sizes, catalog CPU/DDL latency,
-persist maintenance, subscriber fanout, and retained history need measurement.
-No schema or publication cadence was agreed.
+For compact records advancing once per minute, a planning budget of 300-500 bytes
+per retraction/insertion pair gives 0.5-0.83 MB/s at 100,000 changing bounds.
+This estimates uncompressed logical updates, not measured persist traffic. Current
+structured JSONB encoding retains whole-record JSON text. Whole-item rewrites,
+batch sizes, catalog CPU/DDL latency, persist maintenance, subscriber fanout, and
+retained history need measurement.
 
 ### 2026-09-03: Explicit bounds agreed with Aljoscha
 
 Choose catalog-backed compaction bounds and document delegated advancement as an
 alternative. Schema, granularity, batching, and publication cadence remain open.
-The one-minute traffic estimate is not a chosen cadence. Next useful step: define
-the catalog transaction boundary for maintained read requirements and bound
-advancement. This is a design decision, with no production implementation change.
-Documentation checks passed. Full formatting and lint remain blocked by missing
-tools and the Python-doctest OpenSSL build.
+The one-minute traffic estimate is not a chosen cadence.
 
 ### 2026-09-04: Admission and recovery scope exploration
 
@@ -380,11 +335,6 @@ timestamp. Requirement identity must account for recovery and access-path change
 not just creation admission. Protecting all logical dependencies risks retaining
 unneeded history and rejecting historical creation on unused inputs. Protecting
 selected imports requires a recoverable path through replanning and index drops.
-This choice remains open, with schema work paused for discussion with Aljoscha.
-
-No production changes or local tests. Existing [CI build 133937](https://buildkite.com/materialize/test/builds/133937)
-remains pending, with no reported failures at inspection.
-Next useful step: agree the recovery protection scope before adding durable records.
 
 ### 2026-09-04: Recovery cases traced
 
@@ -396,34 +346,20 @@ show whole logical inputs eliminated from nonconstant results. A reconstructed p
 can require their discarded history. The [expression cache](../../../src/catalog/src/expr_cache.rs)
 explicitly has no cross-build representation compatibility contract.
 
-Pending proposal: retain a logical recovery computation over protected storage inputs,
-without pinning physical indexes. This adds durable expression compatibility and
-dependency-version obligations, not just frontier metadata. Independent scrutiny of
-an IDs-only alternative using empty-input substitution found unestablished error and
-semantic-assumption contracts. No approach was agreed. No production changes or runtime
-experiments. Next useful step: review the recovery representation cost with Aljoscha.
-
-### 2026-09-04: Logical-input protection comparison
-
-Aljoscha leans toward protecting all logical inputs. The catalog already preserves
-[logical dependencies for drop safety](../../../test/sqllogictest/materialized_views.slt),
-but installed holds and [bootstrap recovery constraints](../../../src/compute-client/src/as_of_selection.rs)
-follow physical imports. Bootstrap freezes recovered storage sinces, not missing
-history. Conservative logical storage-input protection would strengthen that contract
-while retaining SQL-based reconstruction, avoiding authoritative optimized expressions.
-Extra retention, historical creation admission, and conversion of existing objects
-need consideration. This remains a proposal. No production changes or runtime tests.
+Retaining a logical recovery computation over protected storage inputs would add
+durable expression compatibility and dependency-version obligations. An IDs-only
+alternative using empty-input substitution has unestablished error and
+semantic-assumption contracts.
 
 ### 2026-09-04: Logical-input protection agreed with Aljoscha
 
 Choose logical-input protection based on code inspection, accepting conservative
-retention without making optimized expressions authoritative. Independent review
-found no issue. Historical creation admission and conversion of existing objects
-are the next design questions, not approved behavior changes.
-
-Document checks passed. Full formatting and lint remain blocked by missing tools
-and the Python-doctest OpenSSL dependency build. No production changes, runtime
-recovery experiments, or retention measurements were made.
+retention without making optimized expressions authoritative. The catalog already
+preserves [logical dependencies for drop safety](../../../test/sqllogictest/materialized_views.slt),
+but installed holds and [bootstrap recovery constraints](../../../src/compute-client/src/as_of_selection.rs)
+follow physical imports. Bootstrap freezes recovered storage sinces, not missing
+history. Historical creation admission and
+conversion of existing objects are the next design questions.
 
 ### 2026-09-04: Admission and conversion boundaries agreed with Aljoscha
 
@@ -433,27 +369,14 @@ rejected. Existing objects keep their promised results, with conversion active o
 once remaining recovery requirements are protected. The conversion mechanism and
 rollout policy for objects unable to satisfy that condition remain open.
 
-Document checks passed. Full formatting and lint remain blocked by missing tools
-and the OpenSSL dependency build. No production changes were made.
-
 ### 2026-09-08: Logical collection input discovery
 
-Added catalog traversal and boundary tests for logical inputs, preserving collection
-versions and stopping at upstream MV outputs without selecting indexes. Review found
-that resolved collection IDs also include functions, addressed by filtering name
-references to relations while retaining raw-HIR reads. This is discovery only, with
-no runtime protection or admission change.
+Added catalog traversal and tests for logical inputs, preserving collection
+versions and stopping at upstream MV outputs without selecting indexes. Review
+found that resolved collection IDs also include functions, addressed by filtering
+name references to relations while retaining raw-HIR reads. This is discovery only,
+with no runtime protection or admission change.
 
-Adapter library/test compilation and Rust formatting passed. Full formatting and
-lint remain blocked by missing tools and the OpenSSL dependency build. Runtime
-validation is pending in [PR CI](https://github.com/MaterializeInc/materialize/pull/38696/checks).
-Next useful step: derive maintained requirements from their query definitions and
-enforce admission together with bound advancement at the durable transaction boundary.
-Conversion policy remains open. No design boundary changed.
-
-### 2026-09-08: Test fixture Clippy fix
-
-Both Clippy jobs in [CI build 133949](https://buildkite.com/materialize/test/builds/133949)
-rejected seven `unwrap()` calls in the new fixtures. Replaced them with descriptive
-`expect()` messages without changing assertions or production behavior. Rust formatting
-passed. Updated CI validation remains pending.
+Next useful step: derive maintained requirements from their query definitions
+and enforce admission together with bound advancement at the durable transaction
+boundary. Conversion policy remains open.

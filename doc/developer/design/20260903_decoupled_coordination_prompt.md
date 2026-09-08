@@ -30,6 +30,11 @@ prerequisite for pushing. Follow the mz-debug-ci skill when investigating CI.
 Report pending or failed checks explicitly rather than treating a push as
 successful validation.
 
+Locally, `bin/fmt`, `cargo check`, and the Rust parts of `bin/lint`
+(check-cargo, check-formatting, check-python-docs) work. `bin/lint` also runs
+checks whose tools are not installed here (npm, helm-docs, trufflehog, zizmor);
+CI is the authority for those. Do not record local tooling gaps anywhere.
+
 Focus on regular PR CI for now. Nightly intentionally does not run on this
 draft PR, so do not treat its absence as a blocker or try to enable it. We will
 start nightly validation once we have a working implementation.
@@ -40,11 +45,12 @@ status, not the chronology of attempts. If blocked, report the blocker rather
 than claiming completion.
 
 Append only a minimal dated handoff to the design's log: consequential findings
-or decisions, validation status, unresolved questions, and the next useful step.
-Link evidence rather than recording every CI attempt or duplicating the change
-description. Distinguish proposals from decisions we reviewed together. Do not
-rewrite earlier entries. Keep the main design focused on design, and change
-its agreed boundaries only after discussing them with me.
+or decisions, unresolved questions, and the next useful step. Do not record
+validation status there at all: CI results, pending checks, formatting or
+compile checks, tool availability, and review outcomes are reconstructible from
+the PR and are noise in the log. Distinguish proposals from decisions we
+reviewed together. Do not rewrite earlier entries. Keep the main design focused
+on design, and change its agreed boundaries only after discussing them with me.
 
 You may commit and push progress to this bookmark without asking again.
 Prefer jj. In-progress commits and pushes are allowed while iterating. Before

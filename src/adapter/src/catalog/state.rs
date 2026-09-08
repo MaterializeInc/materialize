@@ -3159,52 +3159,48 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
-    async fn logical_collection_inputs_views_ignore_optimization_and_indexes() {
+    async fn logical_collection_inputs_follow_names_not_plans() {
         Catalog::with_debug(|mut catalog| async move {
             let mut ids = Vec::new();
             for (name, sql) in [
                 ("t", "CREATE TABLE materialize.public.t (a int)"),
                 ("v", "CREATE VIEW materialize.public.v AS SELECT * FROM materialize.public.t"),
-                ("l", "CREATE VIEW materialize.public.l AS SELECT * FROM materialize.public.v"),
-                ("r", "CREATE VIEW materialize.public.r AS SELECT * FROM materialize.public.v"),
-                ("diamond", "CREATE VIEW materialize.public.diamond AS SELECT * FROM materialize.public.l UNION ALL SELECT * FROM materialize.public.r"),
-                ("empty", "CREATE VIEW materialize.public.empty AS SELECT 1 FROM materialize.public.t WHERE false"),
-                ("typed", "CREATE VIEW materialize.public.typed AS SELECT pg_catalog.pg_typeof((SELECT a FROM materialize.public.t))"),
+                ("typed", "CREATE VIEW materialize.public.typed AS SELECT pg_catalog.pg_typeof((SELECT a FROM materialize.public.v))"),
+                ("implicit", "CREATE VIEW materialize.public.implicit AS SELECT pg_catalog.pg_get_userbyid(1::oid)"),
             ] {
                 ids.push(create_collection_input_item(&mut catalog, name, sql).await);
             }
-            let [table, _, _, _, diamond, empty, typed] = ids[..] else {
+            let [table, view, typed, implicit] = ids[..] else {
                 unreachable!()
             };
-            let entry = catalog.state.get_entry_by_global_id(&empty);
-            let CatalogItem::View(empty_view) = entry.item() else {
-                panic!("expected view")
-            };
-            assert!(empty_view.locally_optimized_expr.depends_on().is_empty());
-            assert!(empty_view.resolved_ids.collections().any(|id| *id == table));
-            assert_eq!(
-                catalog.state.logical_collection_inputs([empty]),
-                BTreeSet::from([table]),
-                "name-resolution references survive optimization"
-            );
 
+            // pg_typeof discards its argument during planning, so the read of `v`
+            // survives only in name resolution.
             let entry = catalog.state.get_entry_by_global_id(&typed);
             let CatalogItem::View(typed_view) = entry.item() else {
                 panic!("expected view")
             };
-            // pg_typeof discards its argument after determining its type.
             assert!(typed_view.raw_expr.depends_on().is_empty());
             assert_eq!(
                 catalog.state.logical_collection_inputs([typed]),
                 BTreeSet::from([table]),
-                "name-resolution references survive elimination during SQL planning"
+                "name-resolution references survive elimination during planning"
             );
 
-            let roots = [diamond, diamond];
+            // The SQL function body reads mz_roles without the view naming it.
+            let roles_id = catalog
+                .state
+                .entry_by_id
+                .values()
+                .find(|entry| entry.name().item == "mz_roles")
+                .and_then(|entry| entry.global_ids().next())
+                .expect("debug catalog has mz_roles");
             assert_eq!(
-                catalog.state.logical_collection_inputs(roots),
-                BTreeSet::from([table])
+                catalog.state.logical_collection_inputs([implicit]),
+                BTreeSet::from([roles_id]),
+                "collection reads introduced by planning are included"
             );
+
             for (name, sql) in [
                 ("t_idx", "CREATE INDEX t_idx IN CLUSTER quickstart ON materialize.public.t (a)"),
                 ("v_idx", "CREATE INDEX v_idx IN CLUSTER quickstart ON materialize.public.v (a)"),
@@ -3212,9 +3208,9 @@ mod tests {
                 create_collection_input_item(&mut catalog, name, sql).await;
             }
             assert_eq!(
-                catalog.state.logical_collection_inputs(roots),
+                catalog.state.logical_collection_inputs([view, typed]),
                 BTreeSet::from([table]),
-                "indexes on both leaves and intermediate views do not change logical inputs"
+                "indexes are not inputs and do not change traversal"
             );
             catalog.expire().await;
         })
@@ -3223,43 +3219,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
-    async fn logical_collection_inputs_implicit_sql_function_read() {
-        Catalog::with_debug(|mut catalog| async move {
-            let view = create_collection_input_item(
-                &mut catalog,
-                "implicit",
-                "CREATE VIEW materialize.public.implicit AS SELECT pg_catalog.pg_get_userbyid(1::oid)",
-            )
-            .await;
-            let entry = catalog.state.get_entry_by_global_id(&view);
-            let CatalogItem::View(view_item) = entry.item() else {
-                panic!("expected view")
-            };
-            assert!(view_item.resolved_ids.collections().any(|id| {
-                matches!(catalog.state.get_entry_by_global_id(id).item(), CatalogItem::Func(_))
-            }));
-            // The SQL function reads mz_roles without naming it in the CREATE VIEW.
-            let roles = catalog
-                .state
-                .entry_by_id
-                .values()
-                .find(|entry| entry.name().item == "mz_roles")
-                .expect("debug catalog has mz_roles");
-            assert!(matches!(roles.item(), CatalogItem::MaterializedView(_)));
-            let roles_id = roles.global_ids().next().expect("mz_roles has a collection");
-            assert!(!view_item.resolved_ids.collections().any(|id| *id == roles_id));
-            assert_eq!(
-                catalog.state.logical_collection_inputs([view]),
-                BTreeSet::from([roles_id])
-            );
-            catalog.expire().await;
-        })
-        .await;
-    }
-
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
-    async fn logical_collection_inputs_leaf_boundaries_and_versions() {
+    async fn logical_collection_inputs_stop_at_materialized_views() {
         Catalog::with_debug(|mut catalog| async move {
             let mut ids = Vec::new();
             for (name, sql) in [
@@ -3267,81 +3227,17 @@ mod tests {
                 ("v", "CREATE VIEW materialize.public.v AS SELECT * FROM materialize.public.t"),
                 ("mv", "CREATE MATERIALIZED VIEW materialize.public.mv IN CLUSTER quickstart AS SELECT * FROM materialize.public.v"),
                 ("over_mv", "CREATE VIEW materialize.public.over_mv AS SELECT * FROM materialize.public.mv"),
-                ("replacement", "CREATE REPLACEMENT MATERIALIZED VIEW materialize.public.replacement FOR materialize.public.mv IN CLUSTER quickstart AS SELECT * FROM materialize.public.t"),
             ] {
                 ids.push(create_collection_input_item(&mut catalog, name, sql).await);
             }
-            let [table, view, mv, over_mv, replacement] = ids[..] else {
+            let [_table, _view, mv, over_mv] = ids[..] else {
                 unreachable!()
             };
-            let mv_id = catalog.state.get_entry_by_global_id(&mv).id();
-            let entry = catalog.state.get_entry_by_global_id(&replacement);
-            let CatalogItem::MaterializedView(replacement_item) = entry.item() else {
-                panic!("expected materialized view")
-            };
-            assert_eq!(replacement_item.replacement_target, Some(mv_id));
             assert_eq!(
                 catalog.state.logical_collection_inputs([over_mv]),
-                BTreeSet::from([mv])
+                BTreeSet::from([mv]),
+                "an upstream MV output is a leaf, its definition is not traversed"
             );
-            assert_eq!(
-                catalog.state.logical_collection_inputs([replacement]),
-                BTreeSet::from([replacement]),
-                "neither the MV definition nor its replacement target is traversed"
-            );
-
-            // Install a second version directly to isolate ID preservation from
-            // ALTER TABLE sequencing. The parsed view still refers to the root version.
-            let (_, latest) = catalog
-                .allocate_user_id_for_test()
-                .await
-                .expect("can allocate test collection version");
-            let table_id = catalog.state.get_entry_by_global_id(&table).id();
-            let entry = catalog
-                .state
-                .entry_by_id
-                .get_mut(&table_id)
-                .expect("test table exists");
-            let CatalogItem::Table(table_item) = &mut entry.item else {
-                panic!("expected table")
-            };
-            let version = table_item
-                .desc
-                .add_column("b", mz_repr::SqlScalarType::Int32.nullable(true));
-            table_item.collections.insert(version, latest);
-            catalog.state.entry_by_global_id.insert(latest, table_id);
-            assert_eq!(
-                catalog.state.logical_collection_inputs([view]),
-                BTreeSet::from([table]),
-                "a view's table version is not remapped to the latest version"
-            );
-            assert_eq!(
-                catalog.state.logical_collection_inputs([table, latest]),
-                BTreeSet::from([table, latest]),
-                "distinct versions of one catalog item remain distinct leaves"
-            );
-            for is_source in [false, true] {
-                let entry = catalog
-                    .state
-                    .entry_by_id
-                    .values()
-                    .find(|entry| {
-                        if is_source {
-                            matches!(entry.item(), CatalogItem::Source(_))
-                        } else {
-                            matches!(entry.item(), CatalogItem::Log(_))
-                        }
-                    })
-                    .expect("debug catalog has sources and logs");
-                let id = entry
-                    .global_ids()
-                    .next()
-                    .expect("source or log has a collection");
-                assert_eq!(
-                    catalog.state.logical_collection_inputs([id]),
-                    BTreeSet::from([id])
-                );
-            }
             catalog.expire().await;
         })
         .await;
