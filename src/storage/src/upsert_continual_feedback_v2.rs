@@ -105,7 +105,7 @@ use mz_repr::{Datum, Diff, GlobalId, Row};
 #[cfg(feature = "fuzzing")]
 use mz_row_spine::DatumSeq;
 use mz_row_spine::{FundedValRowSpine, ValRowColPagedBuilder};
-use mz_storage_types::dyncfgs::ENABLE_UPSERT_CHUNKED_STASH;
+use mz_storage_types::dyncfgs::{ENABLE_UPSERT_ASYNC_READS, ENABLE_UPSERT_CHUNKED_STASH};
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
@@ -148,7 +148,7 @@ pub enum UpsertStashFlavor {
     Paged,
     /// Chunk merge batcher stash, chunk-spine feedback arrangement,
     /// bulk-probe drain. Spills through the process buffer pool.
-    Chunked,
+    Chunked { async_reads: bool },
 }
 
 impl UpsertStashFlavor {
@@ -157,7 +157,9 @@ impl UpsertStashFlavor {
     /// for its whole life even if the flag flips underneath it.
     pub fn from_config(config: &ConfigSet) -> Self {
         if ENABLE_UPSERT_CHUNKED_STASH.get(config) {
-            Self::Chunked
+            Self::Chunked {
+                async_reads: ENABLE_UPSERT_ASYNC_READS.get(config),
+            }
         } else {
             Self::Paged
         }
@@ -446,7 +448,7 @@ where
         source_config.source_statistics.clone(),
     );
     match flavor {
-        UpsertStashFlavor::Chunked => {
+        UpsertStashFlavor::Chunked { async_reads } => {
             // Chains and sealed batches alike are `FeedbackChunk`s whose
             // bodies spill to the buffer pool, behind the same process spill
             // gate as the source stash.
@@ -465,6 +467,7 @@ where
                 persist_token,
                 upsert_metrics,
                 source_config,
+                async_reads,
             )
         }
         UpsertStashFlavor::Paged => {
@@ -488,6 +491,7 @@ where
                 persist_token,
                 upsert_metrics,
                 source_config,
+                false,
             )
         }
     }
@@ -558,6 +562,7 @@ fn build_upsert_operator<'scope, A, T, FromTime>(
     persist_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
+    async_reads: bool,
 ) -> (
     VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
     StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
@@ -802,6 +807,7 @@ where
                     &mut persist_trace,
                     source_config.worker_id,
                     source_config.id,
+                    async_reads,
                 )
                 .await;
 
@@ -922,6 +928,7 @@ where
         trace: &mut TraceAgent<Self::Spine>,
         worker_id: usize,
         source_id: GlobalId,
+        async_reads: bool,
     ) -> DrainStats;
 }
 
@@ -966,9 +973,10 @@ where
         trace: &mut TraceAgent<Self::Spine>,
         worker_id: usize,
         source_id: GlobalId,
+        async_reads: bool,
     ) -> DrainStats {
         drain_sealed_input_chunked(
-            sealed.into_iter().map(ColumnChunk::into_column),
+            sealed.into_iter(),
             ineligible,
             output_handle,
             output_cap,
@@ -976,6 +984,7 @@ where
             trace,
             worker_id,
             source_id,
+            async_reads,
         )
         .await
     }
@@ -1016,6 +1025,7 @@ where
         trace: &mut TraceAgent<Self::Spine>,
         worker_id: usize,
         source_id: GlobalId,
+        _async_reads: bool,
     ) -> DrainStats {
         drain_sealed_input_paged(
             sealed,
@@ -1100,7 +1110,7 @@ struct DrainStats {
 /// probe hits for its keys) is resident regardless of drain size. Only the
 /// re-stashed ineligible set is materialized.
 async fn drain_sealed_input_chunked<T, O>(
-    sealed: impl Iterator<Item = Column<UpsertUpdate<T, O>>>,
+    sealed: impl Iterator<Item = UpsertChunk<T, O>>,
     ineligible: &mut Vec<UpsertUpdate<T, O>>,
     output_handle: &UpsertOutputHandle<T>,
     output_cap: &Capability<T>,
@@ -1108,6 +1118,7 @@ async fn drain_sealed_input_chunked<T, O>(
     trace: &mut TraceAgent<FeedbackSpine<T>>,
     worker_id: usize,
     source_id: GlobalId,
+    async_reads: bool,
 ) -> DrainStats
 where
     T: Timestamp + TotalOrder + Lattice + Sync,
@@ -1137,6 +1148,11 @@ where
 
     for chunk in sealed {
         use columnar::{Index, Len};
+        let chunk = if async_reads {
+            chunk.into_column_async().await
+        } else {
+            chunk.into_column()
+        };
         let view = chunk.borrow();
         let total = view.len();
         let mut start = 0;
@@ -1180,7 +1196,13 @@ where
                 use columnar::Borrow;
                 let mut staging = <FeedbackUpdate<T> as columnar::Columnar>::Container::default();
                 for batch in &batches {
-                    batch.extract_into(probe_col.borrow(), &mut staging);
+                    if async_reads {
+                        batch
+                            .extract_into_async(probe_col.borrow(), &mut staging)
+                            .await;
+                    } else {
+                        batch.extract_into(probe_col.borrow(), &mut staging);
+                    }
                 }
                 let staged = staging.borrow();
                 let mut hits: Vec<_> = (0..staged.len())
@@ -1498,10 +1520,8 @@ mod test {
         Row::pack_slice(&[Datum::Int64(k), Datum::Int64(v)])
     }
 
-    // Runs the test body once per stash flavor and asserts the two flavors
-    // produce identical (consolidated) output, so every scenario covers both
-    // operator arms. Returns one flavor's output for the caller's own
-    // expected-value assertion.
+    // Compare paged, synchronous chunked, and asynchronous chunked output
+    // before checking each scenario's expected result.
     macro_rules! upsert_test {
         (|$input:ident, $persist:ident, $worker:ident| $body:block) => {{
             let run = |flavor: UpsertStashFlavor| {
@@ -1572,8 +1592,10 @@ mod test {
             };
 
             let paged = run(UpsertStashFlavor::Paged);
-            let chunked = run(UpsertStashFlavor::Chunked);
+            let chunked = run(UpsertStashFlavor::Chunked { async_reads: false });
             assert_eq!(paged, chunked, "stash flavors must produce equal output");
+            let asynchronous = run(UpsertStashFlavor::Chunked { async_reads: true });
+            assert_eq!(chunked, asynchronous, "async reads must preserve output");
             chunked
         }};
     }
@@ -1751,7 +1773,8 @@ mod test {
     /// worker on this thread, so it reaches the operator's batchers. The
     /// paged flavor (which the harness also runs) routes through the column
     /// pager rather than the chunk override, so it stays resident and serves
-    /// as the reference.
+    /// as the reference. A zero budget and a spill thread send the async
+    /// flavor's reads through the queued path, completing off the worker.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
     fn drain_reads_spilled_chunks() {
@@ -1759,6 +1782,8 @@ mod test {
         use mz_timely_util::columnar::chunk::set_spill_override;
 
         let pool = Pool::new().expect("pool creation");
+        pool.set_budget(0);
+        pool.set_spill_threads(1);
         set_spill_override(Some(pool.clone()));
 
         const KEYS: i64 = 1500;
@@ -1782,6 +1807,10 @@ mod test {
         assert!(
             pool.stats().inserts > 0,
             "chunks should have spilled through the pool"
+        );
+        assert!(
+            pool.stats().spill_reads > 0,
+            "async reads should have queued on the spill thread"
         );
 
         let mut expected: Vec<(Result<Row, DataflowError>, _, _)> = Vec::new();
@@ -1962,7 +1991,11 @@ mod test {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
     fn lagging_replacement_below_upper_strands_data() {
-        for flavor in [UpsertStashFlavor::Paged, UpsertStashFlavor::Chunked] {
+        for flavor in [
+            UpsertStashFlavor::Paged,
+            UpsertStashFlavor::Chunked { async_reads: false },
+            UpsertStashFlavor::Chunked { async_reads: true },
+        ] {
             let (frontier, emitted) = run_below_upper_scenario_v2(flavor);
 
             // The below-upper data is discarded (no output) and the output

@@ -92,6 +92,16 @@ pub trait UnloadChunk: Chunk {
         staging: &mut Self::Staging,
     );
 
+    /// As `extract_into`, allowing a spilled body to be read asynchronously.
+    fn extract_into_async(
+        &self,
+        probes: Self::Probes<'_>,
+        probe_index: &mut usize,
+        staging: &mut Self::Staging,
+    ) -> impl std::future::Future<Output = ()> {
+        async move { self.extract_into(probes, probe_index, staging) }
+    }
+
     /// Append the whole chunk into `staging` (the scan path).
     fn fetch_into(&self, staging: &mut Self::Staging);
 }
@@ -110,51 +120,32 @@ pub trait UnloadBatch<C: UnloadChunk> {
     /// whose continuation follows in staging.
     fn extract_into(&self, probes: C::Probes<'_>, staging: &mut C::Staging);
 
+    /// Extract probe hits in order, awaiting each selected chunk's read.
+    fn extract_into_async(
+        &self,
+        probes: C::Probes<'_>,
+        staging: &mut C::Staging,
+    ) -> impl std::future::Future<Output = ()>;
+
     /// Materialize the batch's full contents into `staging` (the scan path).
     fn fetch_into(&self, staging: &mut C::Staging);
 }
 
 impl<C: UnloadChunk> UnloadBatch<C> for ChunkBatch<C> {
     fn extract_into(&self, probes: C::Probes<'_>, staging: &mut C::Staging) {
-        let count = C::probe_count(probes);
-        let chunks = &self.chunks[..];
-        let (mut probe_index, mut chunk) = (0usize, 0usize);
-        while probe_index < count && chunk < chunks.len() {
-            // Whether chunk `c` lies entirely below `probes[probe_index]`
-            // (its last key is smaller), read from resident metadata.
-            let below = |c: usize| chunks[c].locate(probes, probe_index) == Ordering::Greater;
-            // Gallop to the first chunk not below the probe: exponential
-            // search from the current chunk, then binary within the bracket.
-            if below(chunk) {
-                let (mut prev, mut step) = (chunk, 1usize);
-                while prev + step < chunks.len() && below(prev + step) {
-                    prev += step;
-                    step <<= 1;
-                }
-                let (mut a, mut b) = (prev + 1, (prev + step).min(chunks.len()));
-                while a < b {
-                    let m = a + (b - a) / 2;
-                    if below(m) { a = m + 1 } else { b = m }
-                }
-                chunk = a;
-            }
-            if chunk >= chunks.len() {
-                return;
-            }
-            // Consume probes in the gap below this chunk's first key: they
-            // match nothing in the batch, and deciding so from resident
-            // metadata is what keeps an untouched body unopened.
-            while probe_index < count && chunks[chunk].locate(probes, probe_index) == Ordering::Less
-            {
-                probe_index += 1;
-            }
-            if probe_index < count && chunks[chunk].locate(probes, probe_index) == Ordering::Equal {
-                chunks[chunk].extract_into(probes, &mut probe_index, staging);
-            }
-            // Everything strictly below this chunk's last key is consumed; a
-            // probe equal to it was extracted but left for the next chunk
-            // (the straddle re-offer).
-            chunk += 1;
+        let (mut probe_index, mut chunk) = (0, 0);
+        while let Some(next) = next_probe_chunk(&self.chunks, probes, &mut probe_index, &mut chunk)
+        {
+            next.extract_into(probes, &mut probe_index, staging);
+        }
+    }
+
+    async fn extract_into_async(&self, probes: C::Probes<'_>, staging: &mut C::Staging) {
+        let (mut probe_index, mut chunk) = (0, 0);
+        while let Some(next) = next_probe_chunk(&self.chunks, probes, &mut probe_index, &mut chunk)
+        {
+            next.extract_into_async(probes, &mut probe_index, staging)
+                .await;
         }
     }
 
@@ -165,19 +156,71 @@ impl<C: UnloadChunk> UnloadBatch<C> for ChunkBatch<C> {
     }
 }
 
+/// The next chunk a probe hits, deciding from resident metadata only so an
+/// untouched body stays unopened. The caller extracts from the returned chunk,
+/// which consumes every probe strictly below its last key and leaves a probe
+/// equal to it for the next chunk (the straddle re-offer).
+fn next_probe_chunk<'a, C: UnloadChunk>(
+    chunks: &'a [C],
+    probes: C::Probes<'_>,
+    probe_index: &mut usize,
+    chunk: &mut usize,
+) -> Option<&'a C> {
+    let count = C::probe_count(probes);
+    while *probe_index < count && *chunk < chunks.len() {
+        // Whether chunk `c` lies entirely below `probes[probe_index]` (its
+        // last key is smaller).
+        let below = |c: usize| chunks[c].locate(probes, *probe_index) == Ordering::Greater;
+        // Gallop to the first chunk not below the probe: exponential search
+        // from the current chunk, then binary within the bracket.
+        if below(*chunk) {
+            let (mut prev, mut step) = (*chunk, 1usize);
+            while prev + step < chunks.len() && below(prev + step) {
+                prev += step;
+                step <<= 1;
+            }
+            let (mut a, mut b) = (prev + 1, (prev + step).min(chunks.len()));
+            while a < b {
+                let m = a + (b - a) / 2;
+                if below(m) { a = m + 1 } else { b = m }
+            }
+            *chunk = a;
+        }
+        let next = chunks.get(*chunk)?;
+        *chunk += 1;
+        // Probes in the gap below this chunk's first key match nothing in the
+        // batch.
+        while *probe_index < count && next.locate(probes, *probe_index) == Ordering::Less {
+            *probe_index += 1;
+        }
+        if *probe_index < count && next.locate(probes, *probe_index) == Ordering::Equal {
+            return Some(next);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     //! Contract tests for the batch driver over a miniature row family:
     //! extraction over arbitrary chunk cuts and probe placements — straddled
     //! keys included — equals the reference filter of the raw rows.
 
+    use std::cell::Cell;
     use std::collections::VecDeque;
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
 
     use differential_dataflow::trace::Description;
     use timely::progress::Antichain;
     use timely::progress::frontier::AntichainRef;
 
     use super::*;
+
+    std::thread_local! {
+        /// Chunks whose body `Rows::extract_into` opened on this thread.
+        static OPENED: Cell<usize> = const { Cell::new(0) };
+    }
 
     /// A sorted, consolidated run of `(key, val)` rows; the minimal family.
     /// Only the read surface is exercised: the [`Chunk`] transducers are the
@@ -236,6 +279,7 @@ mod tests {
             probe_index: &mut usize,
             staging: &mut Self::Staging,
         ) {
+            OPENED.set(OPENED.get() + 1);
             let rows = &self.0[..];
             let last = rows[rows.len() - 1].0;
             let mut pos = 0;
@@ -274,8 +318,9 @@ mod tests {
     }
 
     /// Every (chunk cut, contiguous probe range) placement over rows with a
-    /// multi-chunk-spanning key equals the reference filter, and the scan
-    /// path reproduces the batch exactly.
+    /// multi-chunk-spanning key equals the reference filter, the async driver
+    /// opens exactly the chunks the sync one does, and the scan path
+    /// reproduces the batch exactly.
     #[mz_ore::test]
     fn extract_matches_filter() {
         // Even keys 0..=16; key 8 carries 6 rows so it spans chunks at every
@@ -293,13 +338,33 @@ mod tests {
                 for hi in lo..=18u64 {
                     let probes: Vec<u64> = (lo..=hi).collect();
                     let mut staging = Vec::new();
+                    OPENED.set(0);
                     batch.extract_into(&probes[..], &mut staging);
+                    let opened = OPENED.get();
                     let want: Vec<_> = rows
                         .iter()
                         .filter(|r| lo <= r.0 && r.0 <= hi)
                         .copied()
                         .collect();
                     assert_eq!(staging, want, "cut={cut} probes={lo}..={hi}");
+
+                    let mut async_staging = Vec::new();
+                    OPENED.set(0);
+                    {
+                        let read = std::pin::pin!(
+                            batch.extract_into_async(&probes[..], &mut async_staging)
+                        );
+                        assert_eq!(
+                            read.poll(&mut Context::from_waker(Waker::noop())),
+                            Poll::Ready(())
+                        );
+                    }
+                    assert_eq!(async_staging, want, "async cut={cut} probes={lo}..={hi}");
+                    assert_eq!(
+                        OPENED.get(),
+                        opened,
+                        "async opened chunks cut={cut} probes={lo}..={hi}"
+                    );
                 }
             }
             let mut staging = Vec::new();

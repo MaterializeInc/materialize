@@ -582,6 +582,7 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     enable_new_outer_join_lowering
     enable_notices_for_index_too_wide_for_literal_constraints
     enable_refresh_every_mvs
+    enable_upsert_async_reads
     enable_upsert_chunked_stash
     enable_upsert_paged_spill
     enable_variadic_left_join_lowering
