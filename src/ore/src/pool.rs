@@ -194,6 +194,8 @@ enum Residency {
 pub struct PoolStats {
     /// Chunks inserted.
     pub inserts: u64,
+    /// Inserts written directly to an extent because resident admission was full.
+    pub direct_extent_inserts: u64,
     /// Chunks freed (handle dropped).
     pub frees: u64,
     /// Backing writes elided: chunks dead before their compression
@@ -279,6 +281,7 @@ pub struct PoolStats {
 
 #[derive(Debug, Default)]
 struct Counters {
+    direct_extent_inserts: AtomicU64,
     inserts: AtomicU64,
     spill_scheduled: AtomicU64,
     spill_cancelled: AtomicU64,
@@ -570,10 +573,13 @@ impl Pool {
     }
 
     /// Allocates a chunk of `len` words and fills it in place: `fill`
-    /// receives the chunk's slot memory directly and must overwrite all of
-    /// it (the slot's prior contents are unspecified), so serialization
-    /// writes its single copy straight into pool memory. The returned handle
-    /// starts `UnbackedResident`. A zero `len` returns a length-0 handle
+    /// receives `len` contiguous words and must overwrite all of them.
+    /// With resident admission, these are the slot's unspecified prior
+    /// contents, so serialization writes directly into pool memory.
+    /// Otherwise, `fill` writes into staging for a synchronous extent write.
+    /// The returned handle
+    /// starts `UnbackedResident` when admission has room, otherwise `Evicted`
+    /// with a directly written extent. A zero `len` returns a length-0 handle
     /// holding no slot; payloads beyond the largest size class fall back to
     /// a plain heap allocation, always resident, a prototype limitation.
     /// `hints` steer eviction and write-behind policy; callers without
@@ -620,14 +626,22 @@ impl Pool {
                 .oversize_payloads
                 .fetch_add(1, Ordering::Relaxed);
         }
+        if class.is_some() {
+            if !inner.reserve_insert(len_bytes) {
+                inner.enforce_budget();
+                if !inner.reserve_insert(len_bytes) {
+                    return self.insert_extent(len, hints, codec, fill);
+                }
+            }
+        } else {
+            inner
+                .counters
+                .resident_bytes
+                .fetch_add(u64::cast_from(len_bytes), Ordering::Relaxed);
+        }
         // A class with no free slot degrades to the heap path below: an
         // unpageable chunk beats a dead replica.
         let slot = class.and_then(|class| inner.alloc_slot(class, len_bytes));
-        // Whichever home the payload found, it is resident.
-        inner
-            .counters
-            .resident_bytes
-            .fetch_add(u64::cast_from(len_bytes), Ordering::Relaxed);
         let meta = match (class, slot) {
             (Some(class), Some(slot)) => {
                 let region = &inner.regions[class];
@@ -689,11 +703,49 @@ impl Pool {
         ChunkHandle { meta }
     }
 
+    fn insert_extent(
+        &self,
+        len: usize,
+        hints: ChunkHints,
+        codec: &'static dyn ExtentCodec,
+        fill: impl FnOnce(&mut [u64]),
+    ) -> ChunkHandle {
+        // Compress synchronously to keep denied insertions from queuing
+        // uncompressed payloads behind an occupied enforcer.
+        let mut words = vec![0; len];
+        fill(&mut words);
+        let inner = &self.0;
+        let extent = SwapExtent::write(&inner.extent_arena, &words, codec, Scratch::Shrink);
+        drop(words);
+        let meta = Arc::new(ChunkMeta::new(
+            inner,
+            len,
+            region::size_class_for(len * 8),
+            hints.depth,
+            codec,
+            Residency::Evicted,
+            None,
+            None,
+        ));
+        inner.live_chunks.fetch_add(1, Ordering::Relaxed);
+        inner
+            .counters
+            .direct_extent_inserts
+            .fetch_add(1, Ordering::Relaxed);
+        {
+            let mut state = meta.state();
+            inner.commit_extent(&meta, &mut state, extent);
+        }
+        inner.enforce_or_defer_compressed_cap();
+        ChunkHandle { meta }
+    }
+
     /// Snapshot of the pool's counters.
     pub fn stats(&self) -> PoolStats {
         let c = &self.0.counters;
         PoolStats {
             inserts: c.inserts.load(Ordering::Relaxed),
+            direct_extent_inserts: c.direct_extent_inserts.load(Ordering::Relaxed),
             frees: c.frees.load(Ordering::Relaxed),
             writes_elided: c.writes_elided.load(Ordering::Relaxed),
             evictions_compress: c.evictions_compress.load(Ordering::Relaxed),
@@ -984,6 +1036,23 @@ impl PoolInner {
                 queue.retain(|weak| weak.strong_count() > 0);
             }
         }
+    }
+
+    /// Reserve insertion bytes before populating a slot. Enforcement can
+    /// lag by one eighth of the budget, or one payload for small budgets.
+    /// Read admissions use the budget itself and cannot consume this slack.
+    fn reserve_insert(&self, len_bytes: usize) -> bool {
+        let len = u64::cast_from(len_bytes);
+        self.counters
+            .resident_bytes
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+                let budget = self.budget_bytes.load(Ordering::Relaxed);
+                let ceiling = budget.saturating_add((budget / 8).max(len));
+                let next = cur.checked_add(len)?;
+                let oversize = self.counters.oversize_bytes.load(Ordering::Relaxed);
+                (next.saturating_sub(oversize) <= ceiling).then_some(next)
+            })
+            .is_ok()
     }
 
     fn enforce_budget(&self) {
@@ -3170,6 +3239,67 @@ mod tests {
             resident <= u64::cast_from(budget),
             "resident {resident} exceeds budget {budget}: racing insert escaped enforcement",
         );
+    }
+
+    #[mz_ore::test]
+    fn insertion_debt_is_bounded_during_enforcement() {
+        let budget = 2 * SMALL * 8;
+        let pool = test_pool(budget);
+        let guard = pool.0.enforcing.lock().expect("enforcement lock");
+        let mut handles = Vec::new();
+        for seed in 0..16 {
+            handles.push(insert(&pool, &mut payload(SMALL, seed)));
+            assert!(
+                pool.stats().resident_bytes <= u64::cast_from(budget + SMALL * 8),
+                "an occupied enforcer must not allow unlimited insertion debt",
+            );
+        }
+        drop(guard);
+        for (seed, handle) in handles.iter().enumerate() {
+            assert_eq!(read(handle), payload(SMALL, u64::cast_from(seed)));
+        }
+        drop(handles);
+        assert_eq!(pool.stats().resident_bytes, 0);
+        assert_eq!(pool.stats().live_chunks, 0);
+        assert_eq!(pool.stats().extent_resident_bytes, 0);
+    }
+
+    #[mz_ore::test]
+    fn admission_reserves_before_concurrent_fills() {
+        let budget = 2 * SMALL * 8;
+        let pool = test_pool(budget);
+        let guard = pool.0.enforcing.lock().expect("enforcement lock");
+        let gate = Arc::new(std::sync::Barrier::new(9));
+        let threads: Vec<_> = (0..8u64)
+            .map(|seed| {
+                let pool = pool.clone();
+                let gate = Arc::clone(&gate);
+                std::thread::spawn(move || {
+                    pool.insert_with(SMALL, ChunkHints::default(), &TEST_CODEC, |dst| {
+                        gate.wait();
+                        gate.wait();
+                        dst.copy_from_slice(&payload(SMALL, seed));
+                    })
+                })
+            })
+            .collect();
+        gate.wait();
+        let reserved = pool.stats().resident_bytes;
+        // Release every producer even if the assertion fails.
+        gate.wait();
+        let handles: Vec<_> = threads
+            .into_iter()
+            .map(|t| t.join().expect("producer panicked"))
+            .collect();
+        drop(guard);
+        assert!(reserved <= u64::cast_from(budget + SMALL * 8));
+        assert!(pool.stats().direct_extent_inserts > 0);
+        for (seed, handle) in handles.iter().enumerate() {
+            assert_eq!(read(handle), payload(SMALL, u64::cast_from(seed)));
+        }
+        drop(handles);
+        assert_eq!(pool.stats().resident_bytes, 0);
+        assert_eq!(pool.stats().live_chunks, 0);
     }
 
     #[mz_ore::test]
