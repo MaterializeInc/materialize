@@ -196,6 +196,10 @@ pub struct PoolStats {
     pub inserts: u64,
     /// Inserts written directly to an extent because resident admission was full.
     pub direct_extent_inserts: u64,
+    /// Nonresident reads queued on the spill threads.
+    pub spill_reads: u64,
+    /// Queued reads whose copy has not completed.
+    pub spill_reads_in_flight: u64,
     /// Chunks freed (handle dropped).
     pub frees: u64,
     /// Backing writes elided: chunks dead before their compression
@@ -282,6 +286,7 @@ pub struct PoolStats {
 #[derive(Debug, Default)]
 struct Counters {
     direct_extent_inserts: AtomicU64,
+    spill_reads: AtomicU64,
     inserts: AtomicU64,
     spill_scheduled: AtomicU64,
     spill_cancelled: AtomicU64,
@@ -408,6 +413,13 @@ struct Spill {
     threads: AtomicU64,
     /// Queued plus currently-processing entries; `quiesce` waits on zero.
     in_flight: AtomicU64,
+    /// Evicted-chunk reads awaiting a spill thread. Pushed under the `queue`
+    /// lock so a parking worker's emptiness check and the notify cannot miss
+    /// each other. Served before evictions: a read unblocks a worker, an
+    /// eviction only frees memory that the budget already accounted for.
+    reads: Mutex<VecDeque<Arc<ReadJob>>>,
+    /// Queued plus currently-copying reads.
+    reads_in_flight: AtomicU64,
     /// Test-only lifecycle: production spill threads are immortal (the pool
     /// is a process singleton), but Miri rejects a test binary exiting with
     /// live threads, so tests stop and join them.
@@ -421,6 +433,106 @@ struct Spill {
 /// inline on the caller: bounded memory overshoot under burst beats an
 /// unbounded queue of still-resident chunks.
 const SPILL_IN_FLIGHT_MAX: usize = 64;
+
+/// An evicted-chunk read handed to the spill threads.
+///
+/// The job owns the handle until the copy completes, so a caller that drops
+/// its [`QueuedRead`] cannot free the chunk under the reading thread.
+struct ReadJob {
+    handle: Arc<ChunkHandle>,
+    state: Mutex<ReadJobState>,
+}
+
+#[derive(Default)]
+struct ReadJobState {
+    result: Option<Vec<u64>>,
+    waker: Option<std::task::Waker>,
+}
+
+impl std::fmt::Debug for ReadJob {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReadJob").finish_non_exhaustive()
+    }
+}
+
+/// Resolves with the chunk's words once a spill thread has copied them out.
+///
+/// Needs no runtime: completion wakes whatever `Waker` last polled it.
+#[derive(Debug)]
+pub struct QueuedRead(Arc<ReadJob>);
+
+impl std::future::Future for QueuedRead {
+    type Output = Vec<u64>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Vec<u64>> {
+        let mut state = self.0.state.lock().expect("read job poisoned");
+        if let Some(words) = state.result.take() {
+            return std::task::Poll::Ready(words);
+        }
+        state.waker = Some(cx.waker().clone());
+        std::task::Poll::Pending
+    }
+}
+
+impl PoolInner {
+    /// Whether evicted-chunk reads can be served on the spill threads.
+    fn spill_reads_enabled(&self) -> bool {
+        self.spill.enabled.load(Ordering::Relaxed) && self.spill.threads.load(Ordering::Relaxed) > 0
+    }
+
+    fn queue_read(&self, handle: Arc<ChunkHandle>) -> QueuedRead {
+        let job = Arc::new(ReadJob {
+            handle,
+            state: Mutex::new(ReadJobState::default()),
+        });
+        self.counters.spill_reads.fetch_add(1, Ordering::Relaxed);
+        self.spill.reads_in_flight.fetch_add(1, Ordering::Relaxed);
+        {
+            let _queue = self.spill_queue();
+            self.spill
+                .reads
+                .lock()
+                .expect("read queue poisoned")
+                .push_back(Arc::clone(&job));
+        }
+        self.spill.cv.notify_one();
+        QueuedRead(job)
+    }
+
+    /// Serves one queued read on the calling spill thread.
+    fn read_step(&self) -> bool {
+        let job = self
+            .spill
+            .reads
+            .lock()
+            .expect("read queue poisoned")
+            .pop_front();
+        let Some(job) = job else {
+            return false;
+        };
+        let mut words = Vec::new();
+        job.handle.read_into(&mut words);
+        let waker = {
+            let mut state = job.state.lock().expect("read job poisoned");
+            state.result = Some(words);
+            state.waker.take()
+        };
+        // Release this thread's reference before the decrement, so no read in
+        // flight means no spill thread still holds a chunk. For a job whose
+        // future was dropped, this is where the chunk is freed.
+        drop(job);
+        // Decrement before waking so a caller that observes its result also
+        // observes no read in flight.
+        self.spill.reads_in_flight.fetch_sub(1, Ordering::Relaxed);
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+        true
+    }
+}
 
 /// What a spill thread does with a chunk once compressed.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -746,6 +858,8 @@ impl Pool {
         PoolStats {
             inserts: c.inserts.load(Ordering::Relaxed),
             direct_extent_inserts: c.direct_extent_inserts.load(Ordering::Relaxed),
+            spill_reads: c.spill_reads.load(Ordering::Relaxed),
+            spill_reads_in_flight: self.0.spill.reads_in_flight.load(Ordering::Relaxed),
             frees: c.frees.load(Ordering::Relaxed),
             writes_elided: c.writes_elided.load(Ordering::Relaxed),
             evictions_compress: c.evictions_compress.load(Ordering::Relaxed),
@@ -838,6 +952,15 @@ impl Pool {
     #[cfg(test)]
     fn quiesce_spill(&self) {
         while self.0.spill.in_flight.load(Ordering::Relaxed) > 0 {
+            std::thread::yield_now();
+        }
+    }
+
+    /// Test hook: waits until no queued read remains, so tests observe the
+    /// job of a dropped [`QueuedRead`] finishing.
+    #[cfg(test)]
+    fn quiesce_reads(&self) {
+        while self.0.spill.reads_in_flight.load(Ordering::Relaxed) > 0 {
             std::thread::yield_now();
         }
     }
@@ -1247,6 +1370,9 @@ impl PoolInner {
             // loop (job completion, condvar wakeup, park timeout) trims the
             // compressed tier if needed. A single atomic load when under cap.
             self.enforce_compressed_cap();
+            if self.read_step() {
+                continue;
+            }
             let popped = self.spill_queue().pop_front();
             if let Some(meta) = popped {
                 self.spill_process(&meta, SpillKind::Evict);
@@ -1256,12 +1382,19 @@ impl PoolInner {
             if self.spill.eager.load(Ordering::Relaxed) && self.back_one() {
                 continue;
             }
-            // Nothing to evict or back: park. Re-checking emptiness under
-            // the queue lock closes the lost-wakeup window (hand-offs push
-            // under this lock before notifying); the timeout backstops
-            // everything else (fresh inserts, tier growth, lost notifies).
+            // Nothing to read, evict, or back: park. Re-checking emptiness
+            // under the queue lock closes the lost-wakeup window (hand-offs
+            // and reads push under this lock before notifying); the timeout
+            // backstops everything else (fresh inserts, tier growth, lost
+            // notifies).
             let queue = self.spill_queue();
-            if queue.is_empty() {
+            let reads_empty = self
+                .spill
+                .reads
+                .lock()
+                .expect("read queue poisoned")
+                .is_empty();
+            if queue.is_empty() && reads_empty {
                 let _ = self
                     .spill
                     .cv
@@ -1958,6 +2091,53 @@ impl ChunkHandle {
         self.read_impl(0..self.meta.len, dst, false);
     }
 
+    /// Copy this chunk without admitting it to the pool, keeping nonresident
+    /// reads off the calling thread.
+    ///
+    /// A resident body whose state lock is free is copied inline. Otherwise
+    /// the read queues on the pool's spill threads and resolves through the
+    /// polled `Waker`, so it needs no async runtime. Without spill threads
+    /// the read runs inline on the caller, as [`ChunkHandle::read_into`]
+    /// does. A queued read retains its handle until the copy finishes, even
+    /// if the caller drops the future. The returned buffer belongs to the
+    /// caller.
+    pub async fn read_async(self: &Arc<Self>) -> Vec<u64> {
+        if let Some(words) = self.try_read_resident() {
+            return words;
+        }
+        let pool = &self.meta.pool;
+        if pool.spill_reads_enabled() {
+            return pool.queue_read(Arc::clone(self)).await;
+        }
+        let mut words = Vec::new();
+        self.read_into(&mut words);
+        words
+    }
+
+    /// Copies a resident, uncontended body inline. Evicted and oversize
+    /// bodies, and a body whose state lock is held, return `None`.
+    fn try_read_resident(&self) -> Option<Vec<u64>> {
+        if self.meta.len == 0 {
+            return Some(Vec::new());
+        }
+        let mut state = match self.meta.state.try_lock() {
+            Ok(state) => state,
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+            Err(std::sync::TryLockError::Poisoned(_)) => panic!("chunk state poisoned"),
+        };
+        match state.residency {
+            Residency::UnbackedResident | Residency::BackedResident | Residency::WriteInFlight => {
+                state.touched = true;
+                let slot = state.slot.expect("resident non-empty chunk has a slot");
+                // SAFETY: the state lock prevents eviction from releasing this slot.
+                let words = unsafe { self.meta.pool.slot_data(&self.meta, slot) };
+                Some(words.to_vec())
+            }
+            // Oversize heap copies have no slot-size bound, so keep them off-worker.
+            Residency::Oversize | Residency::Evicted => None,
+        }
+    }
+
     /// As [`ChunkHandle::read_into`], restricted to the word range `range`
     /// of the chunk's contents, which must lie within them. `dst` receives
     /// exactly the range.
@@ -2216,6 +2396,9 @@ impl Drop for ChunkHandle {
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+
     use super::*;
     use crate::pool::extent::TEST_CODEC;
 
@@ -2229,6 +2412,87 @@ mod tests {
         let pool = Pool::with_class_capacity(capacity).expect("pool creation");
         pool.set_budget(budget_bytes);
         pool
+    }
+
+    struct ChannelWake(std::sync::mpsc::Sender<()>);
+
+    impl std::task::Wake for ChannelWake {
+        fn wake(self: Arc<Self>) {
+            let _ = self.0.send(());
+        }
+    }
+
+    #[mz_ore::test]
+    fn resident_reads_complete_inline() {
+        let pool = test_pool(usize::MAX);
+        let expected = payload(8192, 42);
+        let handle = Arc::new(insert(&pool, &mut expected.clone()));
+        let resident = pool.stats().resident_bytes;
+        let mut read = Box::pin(handle.read_async());
+        assert_eq!(
+            read.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(expected)
+        );
+        assert_eq!(pool.stats().resident_bytes, resident);
+        assert_eq!(pool.stats().spill_reads, 0);
+        pool.evict(&handle);
+        assert!(handle.try_read_resident().is_none());
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn evicted_reads_run_inline_without_spill_threads() {
+        let pool = test_pool(0);
+        let expected = payload(8192, 42);
+        let handle = Arc::new(insert(&pool, &mut expected.clone()));
+        assert!(handle.try_read_resident().is_none(), "a zero budget evicts");
+        let mut read = Box::pin(handle.read_async());
+        assert_eq!(
+            read.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(expected)
+        );
+        assert_eq!(pool.stats().resident_bytes, 0);
+        assert_eq!(pool.stats().spill_reads, 0);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn evicted_reads_complete_on_spill_threads_without_a_runtime() {
+        let pool = test_pool(0);
+        pool.set_spill_threads(2);
+        let expected = payload(8192, 42);
+        let handle = Arc::new(insert(&pool, &mut expected.clone()));
+        pool.quiesce_spill();
+        assert!(handle.try_read_resident().is_none(), "a zero budget evicts");
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let waker = Waker::from(Arc::new(ChannelWake(sender)));
+        let mut cx = Context::from_waker(&waker);
+        let mut queued = Box::pin(handle.read_async());
+        let words = loop {
+            match queued.as_mut().poll(&mut cx) {
+                Poll::Ready(words) => break words,
+                Poll::Pending => receiver
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .expect("spill thread wakes the reader"),
+            }
+        };
+        assert_eq!(words, expected);
+        let stats = pool.stats();
+        assert_eq!(stats.spill_reads, 1);
+        assert_eq!(stats.spill_reads_in_flight, 0);
+        assert_eq!(stats.resident_bytes, 0);
+        // A dropped future leaves its job to finish on the spill thread,
+        // and the job keeps the chunk alive until then.
+        let mut dropped = Box::pin(handle.read_async());
+        assert!(dropped.as_mut().poll(&mut cx).is_pending());
+        drop(dropped);
+        drop(queued);
+        drop(handle);
+        pool.quiesce_reads();
+        assert_eq!(pool.stats().spill_reads, 2);
+        assert_eq!(pool.stats().spill_reads_in_flight, 0);
+        assert_eq!(pool.stats().frees, 1);
+        pool.join_spill_threads();
     }
 
     /// Scales an iteration count down under Miri, where one interpreted
