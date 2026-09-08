@@ -44,6 +44,7 @@ use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use columnar::bytes::indexed;
@@ -281,7 +282,7 @@ pub struct SpilledBody<D: Columnar, T> {
     /// and miss every path that skips it.
     compressed: bool,
     /// The pool chunk holding the serialized column.
-    handle: ChunkHandle,
+    handle: Arc<ChunkHandle>,
 }
 
 /// A sorted, consolidated run of `(D, T, R)` updates, resident or spilled.
@@ -369,6 +370,14 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
         }
     }
 
+    /// Load a spilled body asynchronously, keeping resident columns on this worker.
+    pub async fn into_column_async(self) -> Column<(D, T, R)> {
+        match self {
+            Self::Spilled(body, _) => Column::Align(body.handle.read_async().await),
+            resident @ Self::Resident(..) => resident.into_column(),
+        }
+    }
+
     /// True when the body lives in the pool.
     pub fn is_spilled(&self) -> bool {
         matches!(self, ColumnChunk::Spilled(_, _))
@@ -446,7 +455,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
                 time_lower,
                 time_upper: time_upper.into(),
                 compressed,
-                handle,
+                handle: Arc::new(handle),
             }),
             depth,
         )
@@ -1094,6 +1103,22 @@ where
         }
     }
 
+    async fn extract_into_async(
+        &self,
+        probes: Self::Probes<'_>,
+        probe_index: &mut usize,
+        staging: &mut Self::Staging,
+    ) {
+        match self {
+            Self::Resident(_, _) => self.extract_into(probes, probe_index, staging),
+            Self::Spilled(body, _) => {
+                let words = body.handle.read_async().await;
+                let view = borrow_words::<((K, V), T, R)>(&words);
+                extract_view_into::<K, V, T, R>(view, probes, probe_index, staging);
+            }
+        }
+    }
+
     fn fetch_into(&self, staging: &mut Self::Staging) {
         match self {
             ColumnChunk::Resident(col, _) => {
@@ -1589,6 +1614,49 @@ mod tests {
             let mut staging = <Tuple as Columnar>::Container::default();
             batch.fetch_into(&mut staging);
             prop_assert_eq!(collect_staging(&staging), input);
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn async_reads_preserve_straddles_and_skip_unprobed_chunks() {
+        let input = vec![
+            ((1, 0), 0, 1),
+            ((2, 0), 0, 1),
+            ((2, 1), 0, -1),
+            ((3, 0), 0, 1),
+            ((8, 0), 0, 1),
+        ];
+        for spill in [false, true] {
+            let pool = Pool::new().expect("pool creation");
+            pool.set_budget(0);
+            let chunks: Vec<TestChunk> = if spill {
+                chunked_spilled(&input, &[1, 1], &pool).into()
+            } else {
+                chunked(&input, &[1, 1]).into()
+            };
+            let description = Description::new(
+                Antichain::from_elem(0u64),
+                Antichain::new(),
+                Antichain::from_elem(0u64),
+            );
+            let batch = ChunkBatch::new(chunks.clone(), description);
+            let mut probes = <u64 as Columnar>::Container::default();
+            for key in [0u64, 2, 4, 9] {
+                probes.push(key);
+            }
+            let mut staging = <Tuple as Columnar>::Container::default();
+            batch
+                .extract_into_async(probes.borrow(), &mut staging)
+                .await;
+            assert_eq!(collect_staging(&staging), input[1..3]);
+            assert_eq!(pool.stats().async_reads, if spill { 2 } else { 0 });
+            let mut actual = Vec::new();
+            for chunk in chunks {
+                actual.append(&mut collect_column(&chunk.into_column_async().await));
+            }
+            assert_eq!(actual, input);
+            assert_eq!(pool.stats().resident_bytes, 0);
         }
     }
 

@@ -442,6 +442,16 @@ pub const ENABLE_UPSERT_CHUNKED_STASH: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Offload chunked upsert stash drains and feedback lookups to the blocking
+/// executor. Merge reads remain synchronous. Read at operator construction.
+pub const ENABLE_UPSERT_ASYNC_READS: Config<bool> = Config::new(
+    "enable_upsert_async_reads",
+    false,
+    "Read sealed stash and feedback chunks asynchronously when enable_upsert_v2 and \
+     enable_upsert_chunked_stash are true. Takes effect on new dataflows.",
+    ParameterScope::Replica,
+);
+
 // RocksDB
 
 /// How many times to try to cleanup old RocksDB DB's on disk before giving up.
@@ -566,6 +576,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&SUSPENDABLE_SOURCES)
         .add(&ENABLE_UPSERT_PAGED_SPILL)
         .add(&ENABLE_UPSERT_CHUNKED_STASH)
+        .add(&ENABLE_UPSERT_ASYNC_READS)
         .add(&WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL)
         .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
         .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE)

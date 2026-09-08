@@ -80,6 +80,11 @@ use crate::pool::region::{Region, SIZE_CLASSES};
 /// NOTE: Seen OoMs with Miri since it actually allocates the capacity.
 const CLASS_CAPACITY_BYTES: usize = if cfg!(miri) { 16 << 20 } else { 1 << 40 };
 
+// At most eight queued or running reads per pool. Completed buffers belong
+// to callers, whose staging limits must bound their retained memory.
+#[cfg(feature = "async")]
+const ASYNC_READ_CONCURRENCY: usize = 8;
+
 /// A chunk-provided transform between a chunk's body bytes and the stored
 /// bytes its extent holds. The pool owns scheduling: spill threads, the
 /// residency state machine, cancellation, and the ledger. It invokes the
@@ -196,6 +201,10 @@ pub struct PoolStats {
     pub inserts: u64,
     /// Inserts written directly to an extent because resident admission was full.
     pub direct_extent_inserts: u64,
+    /// Reads submitted to the blocking executor.
+    pub async_reads: u64,
+    /// Submitted reads that have not released their concurrency permit.
+    pub async_reads_in_flight: u64,
     /// Chunks freed (handle dropped).
     pub frees: u64,
     /// Backing writes elided: chunks dead before their compression
@@ -282,6 +291,7 @@ pub struct PoolStats {
 #[derive(Debug, Default)]
 struct Counters {
     direct_extent_inserts: AtomicU64,
+    async_reads: AtomicU64,
     inserts: AtomicU64,
     spill_scheduled: AtomicU64,
     spill_cancelled: AtomicU64,
@@ -381,6 +391,8 @@ struct PoolInner {
     /// counter read still has its bytes enforced rather than dropped.
     enforce_pending: std::sync::atomic::AtomicBool,
     counters: Counters,
+    #[cfg(feature = "async")]
+    read_slots: Arc<tokio::sync::Semaphore>,
     spill: Spill,
 }
 
@@ -568,6 +580,8 @@ impl Pool {
             enforcing: Mutex::new(()),
             enforce_pending: std::sync::atomic::AtomicBool::new(false),
             counters: Counters::default(),
+            #[cfg(feature = "async")]
+            read_slots: Arc::new(tokio::sync::Semaphore::new(ASYNC_READ_CONCURRENCY)),
             spill: Spill::default(),
         })))
     }
@@ -746,6 +760,17 @@ impl Pool {
         PoolStats {
             inserts: c.inserts.load(Ordering::Relaxed),
             direct_extent_inserts: c.direct_extent_inserts.load(Ordering::Relaxed),
+            async_reads: c.async_reads.load(Ordering::Relaxed),
+            async_reads_in_flight: {
+                #[cfg(feature = "async")]
+                {
+                    u64::cast_from(ASYNC_READ_CONCURRENCY - self.0.read_slots.available_permits())
+                }
+                #[cfg(not(feature = "async"))]
+                {
+                    0
+                }
+            },
             frees: c.frees.load(Ordering::Relaxed),
             writes_elided: c.writes_elided.load(Ordering::Relaxed),
             evictions_compress: c.evictions_compress.load(Ordering::Relaxed),
@@ -1958,6 +1983,37 @@ impl ChunkHandle {
         self.read_impl(0..self.meta.len, dst, false);
     }
 
+    /// Copy this chunk on the blocking executor without admitting it to the pool.
+    ///
+    /// Requires a Tokio runtime. A submitted read retains its handle and
+    /// concurrency permit until it finishes, even if the caller cancels.
+    /// The returned buffer belongs to the caller.
+    #[cfg(feature = "async")]
+    pub async fn read_async(self: &Arc<Self>) -> Vec<u64> {
+        let permit = Arc::clone(&self.meta.pool.read_slots)
+            .acquire_owned()
+            .await
+            .expect("pool read semaphore remains open");
+        let handle = Arc::clone(self);
+        self.meta
+            .pool
+            .counters
+            .async_reads
+            .fetch_add(1, Ordering::Relaxed);
+        crate::task::spawn_blocking(
+            || "pool_read",
+            move || {
+                // A cancelled JoinHandle must not release admission while its
+                // blocking read still owns a slot or extent reference.
+                let _permit = permit;
+                let mut words = Vec::new();
+                handle.read_into(&mut words);
+                words
+            },
+        )
+        .await
+    }
+
     /// As [`ChunkHandle::read_into`], restricted to the word range `range`
     /// of the chunk's contents, which must lie within them. `dst` receives
     /// exactly the range.
@@ -2216,6 +2272,9 @@ impl Drop for ChunkHandle {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "async")]
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+
     use super::*;
     use crate::pool::extent::TEST_CODEC;
 
@@ -2229,6 +2288,117 @@ mod tests {
         let pool = Pool::with_class_capacity(capacity).expect("pool creation");
         pool.set_budget(budget_bytes);
         pool
+    }
+
+    #[cfg(feature = "async")]
+    #[derive(Debug, Default)]
+    struct DelayedReadCodec {
+        entered: AtomicUsize,
+        released: AtomicBool,
+    }
+
+    #[cfg(feature = "async")]
+    impl ExtentCodec for DelayedReadCodec {
+        fn encode(&self, body: &[u8], out: &mut Vec<u8>) {
+            TEST_CODEC.encode(body, out);
+        }
+
+        fn decode(&self, stored: &[u8], body: &mut [u8]) {
+            // NOTE: Test-only delay models a page fault while the state lock is held.
+            self.entered.fetch_add(1, Ordering::SeqCst);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !self.released.load(Ordering::SeqCst) {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "test read was released"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            TEST_CODEC.decode(stored, body);
+        }
+    }
+
+    #[cfg(feature = "async")]
+    struct ReleaseReadsOnDrop(&'static DelayedReadCodec);
+
+    #[cfg(feature = "async")]
+    impl Drop for ReleaseReadsOnDrop {
+        fn drop(&mut self) {
+            self.0.released.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[cfg(feature = "async")]
+    async fn wait_for_read_state(mut ready: impl FnMut() -> bool) {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while !ready() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("read workers made progress");
+    }
+
+    #[cfg(feature = "async")]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn async_read_round_trip_without_admission() {
+        for budget in [0, usize::MAX] {
+            let pool = test_pool(budget);
+            let expected = payload(8192, 42);
+            let handle = Arc::new(insert(&pool, &mut expected.clone()));
+            let resident = pool.stats().resident_bytes;
+            assert_eq!(handle.read_async().await, expected);
+            assert_eq!(pool.stats().resident_bytes, resident);
+            assert_eq!(pool.stats().async_reads, 1);
+            assert_eq!(pool.stats().async_reads_in_flight, 0);
+        }
+    }
+
+    #[cfg(feature = "async")]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn async_reads_remain_bounded_after_cancellation() {
+        let pool = test_pool(0);
+        let codec = Box::leak(Box::new(DelayedReadCodec::default()));
+        let release = ReleaseReadsOnDrop(codec);
+        let expected = payload(8192, 7);
+        let handles: Vec<_> = (0..=ASYNC_READ_CONCURRENCY)
+            .map(|_| {
+                Arc::new(
+                    pool.insert_with(expected.len(), ChunkHints::default(), codec, |dst| {
+                        dst.copy_from_slice(&expected);
+                    }),
+                )
+            })
+            .collect();
+        let mut reads: Vec<_> = handles.iter().map(|h| Box::pin(h.read_async())).collect();
+        for read in &mut reads {
+            assert!(futures::poll!(read.as_mut()).is_pending());
+        }
+        wait_for_read_state(|| codec.entered.load(Ordering::SeqCst) == ASYNC_READ_CONCURRENCY)
+            .await;
+        assert_eq!(
+            pool.stats().async_reads,
+            u64::cast_from(ASYNC_READ_CONCURRENCY)
+        );
+        assert_eq!(
+            pool.stats().async_reads_in_flight,
+            u64::cast_from(ASYNC_READ_CONCURRENCY)
+        );
+        drop(reads);
+        drop(handles);
+        // The unsubmitted ninth read frees immediately. Detached blocking
+        // jobs must retain both their handles and their admission permits.
+        assert_eq!(pool.stats().frees, 1);
+        assert_eq!(
+            pool.stats().async_reads_in_flight,
+            u64::cast_from(ASYNC_READ_CONCURRENCY)
+        );
+        drop(release);
+        wait_for_read_state(|| pool.stats().frees == u64::cast_from(ASYNC_READ_CONCURRENCY + 1))
+            .await;
+        assert_eq!(pool.stats().async_reads_in_flight, 0);
     }
 
     /// Scales an iteration count down under Miri, where one interpreted
