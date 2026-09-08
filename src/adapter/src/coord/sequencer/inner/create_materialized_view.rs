@@ -19,7 +19,7 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{CatalogItemId, Datum, RelationVersion, Row, VersionedRelationDesc};
+use mz_repr::{CatalogItemId, Datum, GlobalId, RelationVersion, Row, VersionedRelationDesc};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
@@ -94,6 +94,33 @@ impl Staged for CreateMaterializedViewStage {
 }
 
 impl Coordinator {
+    /// Discovers storage inputs required to reconstruct an MV from its definition.
+    pub(crate) fn materialized_view_logical_inputs(
+        &self,
+        ids: impl IntoIterator<Item = GlobalId>,
+    ) -> Result<CollectionIdBundle, AdapterError> {
+        let inputs = self.catalog().state().logical_collection_inputs(
+            ids.into_iter()
+                .filter(|id| self.catalog().get_entry_by_global_id(id).is_relation()),
+        );
+        let log_names: Vec<_> = inputs
+            .iter()
+            .map(|id| self.catalog().get_entry_by_global_id(id))
+            .filter(|entry| matches!(entry.item(), CatalogItem::Log(_)))
+            .map(|entry| entry.name().item.clone())
+            .collect();
+        if !log_names.is_empty() {
+            return Err(AdapterError::InvalidLogDependency {
+                object_type: "materialized view".into(),
+                log_names,
+            });
+        }
+        Ok(CollectionIdBundle {
+            storage_ids: inputs,
+            compute_ids: BTreeMap::new(),
+        })
+    }
+
     #[instrument]
     pub(crate) async fn sequence_create_materialized_view(
         &mut self,
@@ -325,6 +352,7 @@ impl Coordinator {
             materialized_view:
                 plan::MaterializedView {
                     expr,
+                    query_ids,
                     cluster_id,
                     target_replica,
                     refresh_schedule,
@@ -392,7 +420,7 @@ impl Coordinator {
                 // index), otherwise we might be missing some read holds.
                 let ids = self
                     .index_oracle(*cluster_id)
-                    .sufficient_collections(resolved_ids.collections().copied());
+                    .sufficient_collections(query_ids.collections().copied());
                 if !ids.difference(&read_holds.id_bundle()).is_empty() {
                     return Err(AdapterError::ChangedPlan(
                         "the set of possible inputs changed during the creation of the \
@@ -570,6 +598,7 @@ impl Coordinator {
                     materialized_view:
                         plan::MaterializedView {
                             mut create_sql,
+                            query_ids,
                             expr: raw_expr,
                             column_names,
                             dependencies,
@@ -611,6 +640,12 @@ impl Coordinator {
 
         // Timestamp selection
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
+        let logical_inputs = self.materialized_view_logical_inputs(
+            query_ids
+                .collections()
+                .copied()
+                .chain(raw_expr.depends_on()),
+        )?;
 
         let read_holds_owned;
         let read_holds = if let Some(txn_reads) = self.txn_read_holds.get(ctx.session().conn_id()) {
@@ -625,8 +660,18 @@ impl Coordinator {
             &read_holds_owned
         };
 
-        let (dataflow_as_of, storage_as_of, until) =
-            self.select_timestamps(id_bundle, refresh_schedule.as_ref(), read_holds)?;
+        // Reuse purification's holds, whose timestamps may already be named by
+        // REFRESH AT. Planning can introduce reads absent from name resolution.
+        let mut additional_inputs = id_bundle.clone();
+        additional_inputs.extend(&logical_inputs);
+        let additional_read_holds =
+            self.acquire_read_holds(&additional_inputs.difference(&read_holds.id_bundle()));
+        let (dataflow_as_of, storage_as_of, until) = self.select_timestamps(
+            id_bundle,
+            refresh_schedule.as_ref(),
+            read_holds,
+            &additional_read_holds,
+        )?;
 
         tracing::info!(
             dataflow_as_of = ?dataflow_as_of,
@@ -817,6 +862,7 @@ impl Coordinator {
         id_bundle: CollectionIdBundle,
         refresh_schedule: Option<&RefreshSchedule>,
         read_holds: &ReadHolds,
+        additional_read_holds: &ReadHolds,
     ) -> Result<
         (
             Antichain<mz_repr::Timestamp>,
@@ -826,13 +872,18 @@ impl Coordinator {
         AdapterError,
     > {
         assert!(
-            id_bundle.difference(&read_holds.id_bundle()).is_empty(),
+            id_bundle
+                .difference(&read_holds.id_bundle())
+                .difference(&additional_read_holds.id_bundle())
+                .is_empty(),
             "we must have read holds for all involved collections"
         );
 
         // For non-REFRESH MVs both the `dataflow_as_of` and the `storage_as_of` should be simply
         // `least_valid_read`.
-        let least_valid_read = read_holds.least_valid_read();
+        let least_valid_read = read_holds
+            .least_valid_read()
+            .join(&additional_read_holds.least_valid_read());
         let mut dataflow_as_of = least_valid_read.clone();
         let mut storage_as_of = least_valid_read.clone();
 
@@ -846,6 +897,16 @@ impl Coordinator {
         // the first refresh time. Also note that simply moving the `dataflow_as_of` forward to the
         // first refresh time would prevent warmup before the first refresh.
         if let Some(refresh_schedule) = &refresh_schedule {
+            // Planning can introduce logical reads absent from name resolution.
+            // Do not let rounding skip a requested refresh on those inputs.
+            for refresh_at_ts in &refresh_schedule.ats {
+                if !least_valid_read.less_equal(refresh_at_ts) {
+                    return Err(AdapterError::InputNotReadableAtRefreshAtTime(
+                        *refresh_at_ts,
+                        least_valid_read,
+                    ));
+                }
+            }
             if let Some(least_valid_read_ts) = least_valid_read.as_option() {
                 if let Some(first_refresh_ts) =
                     refresh_schedule.round_up_timestamp(*least_valid_read_ts)

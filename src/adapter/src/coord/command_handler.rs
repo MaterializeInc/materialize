@@ -1665,12 +1665,7 @@ impl Coordinator {
                 }
 
                 let mz_now = match self
-                    .resolve_mz_now_for_create_materialized_view(
-                        &cmvs,
-                        &resolved_ids,
-                        ctx.session_mut(),
-                        true,
-                    )
+                    .resolve_mz_now_for_create_materialized_view(&cmvs, ctx.session_mut(), true)
                     .await
                 {
                     Ok(mz_now) => mz_now,
@@ -1712,12 +1707,7 @@ impl Coordinator {
             }) => {
                 let mut cmvs = *box_cmvs;
                 let mz_now = match self
-                    .resolve_mz_now_for_create_materialized_view(
-                        &cmvs,
-                        &resolved_ids,
-                        ctx.session_mut(),
-                        false,
-                    )
+                    .resolve_mz_now_for_create_materialized_view(&cmvs, ctx.session_mut(), false)
                     .await
                 {
                     Ok(mz_now) => mz_now,
@@ -1875,7 +1865,6 @@ impl Coordinator {
     async fn resolve_mz_now_for_create_materialized_view(
         &mut self,
         cmvs: &CreateMaterializedViewStatement<Aug>,
-        resolved_ids: &ResolvedIds,
         session: &Session,
         acquire_read_holds: bool,
     ) -> Result<Option<Timestamp>, AdapterError> {
@@ -1886,9 +1875,13 @@ impl Coordinator {
         {
             let catalog = self.catalog().for_session(session);
             let cluster = mz_sql::plan::resolve_cluster_for_materialized_view(&catalog, cmvs)?;
-            let ids = self
+            let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &cmvs.query);
+            let mut ids = self
                 .index_oracle(cluster)
                 .sufficient_collections(resolved_ids.collections().copied());
+            ids.extend(
+                &self.materialized_view_logical_inputs(resolved_ids.collections().copied())?,
+            );
 
             // If there is any REFRESH option, then acquire read holds. (Strictly speaking, we'd
             // need this only if there is a `REFRESH AT`, not for `REFRESH EVERY`, because later

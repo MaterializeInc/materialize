@@ -458,3 +458,15 @@ Milestone 1 remains active. There is no durable producer for these bounds yet.
 Next useful step: persist bounds and maintained requirements, enforce their
 compatibility at the catalog transaction boundary, and supply committed bounds
 to storage before relying on them for MV installation and recovery.
+
+### 2026-09-08: Logical-input MV admission
+
+MV creation accounts for logical inputs in refresh preparation and timestamp
+selection, including eliminated references and planner-introduced reads. Query
+references are kept separate from statement dependencies because a replacement's
+`FOR` target is not an input read. Existing early holds are preserved when adding
+inputs discovered during planning.
+
+This constrains live admission using held readability, not committed permission.
+Milestone 1 still needs a durable producer for bounds and maintained requirements,
+transaction-boundary compatibility checks, and committed delivery to storage.
