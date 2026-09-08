@@ -147,8 +147,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_table_rename RENAME TO alter_table_renamed;
 
 ! SELECT * FROM alter_table_rename;
-contains:incompatible schema change on public.alter_table_rename: table was renamed or moved upstream (it is now public.alter_table_renamed with oid
-hint:FROM SOURCE <source> (REFERENCE public.alter_table_renamed)
+regex:incompatible schema change on public\.alter_table_rename \(oid \d+\): table was renamed or moved upstream \(it is now public\.alter_table_renamed with oid
 
 #
 # Alter table rename colum
@@ -162,8 +161,7 @@ ALTER TABLE alter_table_rename_column RENAME COLUMN f2 TO f1;
 ALTER TABLE alter_table_rename_column RENAME COLUMN f3 TO f2;
 
 ! SELECT * FROM alter_table_rename_column;
-contains:incompatible schema change on public.alter_table_rename_column: column
-hint:CREATE SCHEMA v2;
+regex:incompatible schema change on public\.alter_table_rename_column \(oid \d+\): column
 
 #
 # Change column attnum
@@ -177,8 +175,7 @@ ALTER TABLE alter_table_change_attnum DROP COLUMN f2;
 ALTER TABLE alter_table_change_attnum ADD COLUMN f2 VARCHAR(10);
 
 ! SELECT * FROM alter_table_change_attnum;
-contains:incompatible schema change on public.alter_table_change_attnum: column "f2" changed position upstream
-hint:CREATE SCHEMA v2;
+regex:incompatible schema change on public\.alter_table_change_attnum \(oid \d+\): column "f2" changed position upstream
 
 > SELECT * from alter_table_supported;
 1 1
@@ -204,8 +201,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_table_supported DROP COLUMN f2;
 
 ! SELECT * from alter_table_supported;
-contains:incompatible schema change on public.alter_table_supported: column "f2" was dropped or renamed upstream
-hint:WITH (EXCLUDE COLUMNS ("f2")) before the upstream drop
+regex:incompatible schema change on public\.alter_table_supported \(oid \d+\): column "f2" was dropped or renamed upstream
 
 
 #

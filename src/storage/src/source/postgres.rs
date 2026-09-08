@@ -89,7 +89,8 @@ use itertools::Itertools as _;
 use mz_expr::EvalError;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_postgres_util::desc::{PostgresTableDesc, SchemaChangeError};
+use mz_postgres_util::desc::PostgresTableDesc;
+use mz_postgres_util::schema_change::SchemaChangeError;
 use mz_postgres_util::{Client, PostgresError, Sql, query_opt, simple_query_opt, sql};
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
@@ -375,7 +376,7 @@ pub enum DefiniteError {
 impl DefiniteError {
     fn hint(&self) -> Option<String> {
         match self {
-            DefiniteError::IncompatibleSchema(err) => Some(err.hint()),
+            DefiniteError::IncompatibleSchema(err) => err.hint(),
             _ => None,
         }
     }

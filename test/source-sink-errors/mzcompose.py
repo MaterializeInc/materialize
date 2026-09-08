@@ -497,7 +497,7 @@ disruptions: list[Disruption] = [
     PgDisruption(
         name="alter-postgres",
         breakage=lambda c, _: alter_pg_table(c),
-        expected_error='incompatible schema change on .+source1: column "f1" was dropped or renamed upstream',
+        expected_error=r'incompatible schema change on .+source1 \(oid \d+\): column "f1" was dropped or renamed upstream',
         fixage=None,
     ),
     PgDisruption(
