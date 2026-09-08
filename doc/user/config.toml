@@ -25,7 +25,7 @@ publishDate = ["publishDate"]
 [[menu.main]]
 identifier = "get-started"
 name = "Getting started"
-url = "/get-started/quickstart/"
+url = "/get-started/"
 weight = 10
 
 #

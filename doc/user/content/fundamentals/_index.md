@@ -9,7 +9,6 @@ menu:
     weight: 20
 aliases:
   - /overview/what-is-materialize/
-  - /get-started/
 ---
 
 {{% include-headless "/headless/materialize-intro/intro" %}}

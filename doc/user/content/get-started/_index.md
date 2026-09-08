@@ -1,7 +1,9 @@
 ---
-title: "Quickstart"
+title: "Getting started with Materialize"
+linkTitle: "Getting started"
 description: "Learn the basics of Materialize."
 aliases:
+  - /get-started/quickstart/
   - /katacoda/
   - /quickstarts/
   - /install/
