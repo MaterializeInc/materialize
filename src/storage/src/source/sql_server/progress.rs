@@ -81,7 +81,6 @@ pub(crate) fn render<'scope>(
                 // Emit 0 to mark this worker as having started up correctly.
                 for stat in config.statistics.values() {
                     stat.set_offset_known(0);
-                    stat.set_offset_committed(0);
                 }
                 return Ok(());
             }

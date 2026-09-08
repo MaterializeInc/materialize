@@ -48,6 +48,7 @@ use proptest::strategy::Strategy;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
+use timely::progress::frontier::AntichainRef;
 use timely::progress::timestamp::Refines;
 use timely::progress::{PathSummary, Timestamp};
 
@@ -259,6 +260,13 @@ pub trait SourceTimestamp:
 {
     fn encode_row(&self) -> Row;
     fn decode_row(row: &Row) -> Self;
+
+    /// A scalar summary of a frontier of this timestamp type, as reported by the
+    /// `offset_known` and `offset_committed` source statistics.
+    ///
+    /// Returns `None` when the frontier has no scalar summary, in which case the statistic
+    /// is left unchanged.
+    fn to_offset_stat(frontier: AntichainRef<'_, Self>) -> Option<u64>;
 }
 
 impl SourceTimestamp for MzOffset {
@@ -272,6 +280,10 @@ impl SourceTimestamp for MzOffset {
             (Some(Datum::UInt64(offset)), None) => MzOffset::from(offset),
             _ => panic!("invalid row {row:?}"),
         }
+    }
+
+    fn to_offset_stat(frontier: AntichainRef<'_, Self>) -> Option<u64> {
+        frontier.as_option().map(|offset| offset.offset)
     }
 }
 

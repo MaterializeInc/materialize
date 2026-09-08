@@ -313,12 +313,17 @@ where
     }
 }
 
+/// Maximum bytes [`AsyncOutputHandle::give_fueled`] emits before yielding back to timely.
+/// Operators that spread emission over multiple output handles can use this to enforce the same
+/// bound over their aggregate emission, since the built-in counter is per handle.
+pub const MAX_OUTSTANDING_BYTES: usize = 128 * 1024 * 1024;
+
 impl<T, D> AsyncOutputHandle<T, FueledBuilder<CapacityContainerBuilder<Vec<D>>>>
 where
     D: Clone + 'static,
     T: Timestamp,
 {
-    pub const MAX_OUTSTANDING_BYTES: usize = 128 * 1024 * 1024;
+    pub const MAX_OUTSTANDING_BYTES: usize = MAX_OUTSTANDING_BYTES;
 
     /// Provides one record at the time specified by the capability and
     /// charges `size_bytes` against the builder's fuel counter. Once at least

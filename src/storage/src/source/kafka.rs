@@ -68,7 +68,6 @@ use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespac
 use crate::metrics::source::kafka::KafkaSourceMetrics;
 use crate::source::types::{FuelSize, Probe, SignaledFuture, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage, probe};
-use crate::statistics::SourceStatistics;
 
 #[derive(
     Clone,
@@ -143,13 +142,11 @@ struct PartitionCapability {
 ///  available for consumption + 1.
 type PartitionWatermark = u64;
 
-/// Processes `resume_uppers` stream updates, committing them upstream and
-/// storing them in the `progress_statistics` to be emitted later.
+/// Processes `resume_uppers` stream updates, committing them upstream.
 pub struct KafkaResumeUpperProcessor {
     config: RawSourceCreationConfig,
     topic_name: String,
     consumer: Arc<BaseConsumer<TunnelingClientContext<GlueConsumerContext>>>,
-    statistics: Vec<SourceStatistics>,
 }
 
 /// Computes whether this worker is responsible for consuming a partition. It assigns partitions to
@@ -664,10 +661,9 @@ fn render_reader<'scope>(
                 config: config.clone(),
                 topic_name: topic.clone(),
                 consumer,
-                statistics: all_export_stats.clone(),
             };
 
-            // Seed the progress metrics with `0` if we are snapshotting.
+            // Commit the resume upper upstream if we are snapshotting.
             if !snapshot_export_stats.is_empty() {
                 if let Err(e) = offset_committer
                     .process_frontier(resume_upper.clone())
@@ -1132,24 +1128,13 @@ impl KafkaResumeUpperProcessor {
 
         // Generate a list of partitions that this worker is responsible for
         let mut offsets = vec![];
-        let mut offset_committed = 0;
         for ts in frontier.iter() {
             if let Some(pid) = ts.interval().singleton() {
                 let pid = pid.unwrap_exact();
                 if responsible_for_pid(&self.config, *pid) {
                     offsets.push((pid.clone(), *ts.timestamp()));
-
-                    // Note that we do not subtract 1 from the frontier. Imagine
-                    // that frontier is 2 for this pid. That means we have
-                    // full processed offset 0 and offset 1, which means we have
-                    // processed _2_ offsets.
-                    offset_committed += ts.timestamp().offset;
                 }
             }
-        }
-
-        for export_stat in self.statistics.iter() {
-            export_stat.set_offset_committed(offset_committed);
         }
 
         if !offsets.is_empty() {

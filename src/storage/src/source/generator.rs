@@ -303,7 +303,6 @@ fn render_simple_generator<'scope>(
                 // Emit 0, to mark this worker as having started up correctly.
                 for stats in source_statistics.values() {
                     stats.set_offset_known(0);
-                    stats.set_offset_committed(0);
                 }
                 return;
             }
@@ -451,7 +450,6 @@ fn render_simple_generator<'scope>(
                             // right now, but will come back to it.
                             if let Some(offset_committed) = offset_committed {
                                 for stats in source_statistics.values() {
-                                    stats.set_offset_committed(offset_committed);
                                     // technically we could have _known_ a larger offset
                                     // than the one that has been committed, but we can
                                     // never recover that known amount on restart, so we

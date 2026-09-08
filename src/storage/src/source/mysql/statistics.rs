@@ -14,12 +14,11 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::vec::Map;
 use timely::dataflow::{Scope, StreamVec};
-use timely::progress::Antichain;
 
 use mz_mysql_util::query_sys_var;
 use mz_ore::future::InTask;
-use mz_storage_types::sources::MySqlSourceConnection;
-use mz_storage_types::sources::mysql::{GtidPartition, GtidState, gtid_set_frontier};
+use mz_storage_types::sources::mysql::{GtidPartition, gtid_set_frontier};
+use mz_storage_types::sources::{MySqlSourceConnection, SourceTimestamp};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
@@ -36,7 +35,6 @@ pub(crate) fn render<'scope>(
     scope: Scope<'scope, GtidPartition>,
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
-    resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
     replication_errors: StreamVec<'scope, GtidPartition, ReplicationError>,
 ) -> (
     StreamVec<'scope, GtidPartition, ReplicationError>,
@@ -61,7 +59,6 @@ pub(crate) fn render<'scope>(
                 // Emit 0, to mark this worker as having started up correctly.
                 for stat in config.statistics.values() {
                     stat.set_offset_known(0);
-                    stat.set_offset_committed(0);
                 }
                 return Ok(());
             }
@@ -82,7 +79,6 @@ pub(crate) fn render<'scope>(
                 )
                 .await?;
 
-            tokio::pin!(resume_uppers);
             let timestamp_interval = config.timestamp_interval;
             let mut probe_ticker = probe::Ticker::new(move || timestamp_interval, config.now_fn);
 
@@ -97,7 +93,8 @@ pub(crate) fn render<'scope>(
                     let upstream_frontier =
                         gtid_set_frontier(&gtid_executed).map_err(TransientError::from)?;
 
-                    let offset_known = aggregate_mysql_frontier(&upstream_frontier);
+                    let offset_known = GtidPartition::to_offset_stat(upstream_frontier.borrow())
+                        .expect("gtid frontiers always have an offset stat");
                     for stat in config.statistics.values() {
                         stat.set_offset_known(offset_known);
                     }
@@ -108,14 +105,6 @@ pub(crate) fn render<'scope>(
                             upstream_frontier,
                         },
                     );
-                }
-            };
-            let commit_loop = async {
-                while let Some(committed_frontier) = resume_uppers.next().await {
-                    let offset_committed = aggregate_mysql_frontier(&committed_frontier);
-                    for stat in config.statistics.values() {
-                        stat.set_offset_committed(offset_committed);
-                    }
                 }
             };
             let error_loop = async {
@@ -136,7 +125,6 @@ pub(crate) fn render<'scope>(
             };
             let res = tokio::select! {
                 res = probe_loop => res,
-                res = commit_loop => Ok(res),
                 res = error_loop => res,
             };
             tracing::info!("Statistics loop exited, shutting down");
@@ -149,23 +137,4 @@ pub(crate) fn render<'scope>(
         probe_stream,
         button.press_on_drop(),
     )
-}
-
-/// Aggregate a mysql frontier into single number representing the
-/// _number of transactions_ it represents.
-fn aggregate_mysql_frontier(frontier: &Antichain<GtidPartition>) -> u64 {
-    let mut progress_stat = 0;
-    for ts in frontier.iter() {
-        if let Some(_uuid) = ts.interval().singleton() {
-            // We assume source id's don't disappear once they appear.
-            let ts = match ts.timestamp() {
-                GtidState::Absent => 0,
-                // Txid's in mysql start at 1, so we subtract 1 from the _frontier_
-                // to get the _number of transactions_.
-                GtidState::Active(id) => id.get().saturating_sub(1),
-            };
-            progress_stat += ts;
-        }
-    }
-    progress_stat
 }
