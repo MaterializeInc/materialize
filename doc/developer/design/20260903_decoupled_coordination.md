@@ -7,10 +7,10 @@ Cluster-side components subscribe to catalog changes and enact the desired
 state, rather than depending on an adapter to send lifecycle commands. Adapters
 write catalog changes and use a separate fast protocol for query execution.
 
-The goal is decoupling, with existing SQL behavior, consistency guarantees, and
-performance preserved. Losing an adapter must not disrupt maintained dataflows
-or other clients. Its own queries may fail. Transparent query or session
-failover is out of scope.
+The goal is decoupling, preserving consistency guarantees, performance, and
+existing SQL behavior except for the [maintained-creation admission rules](#admission-and-conversion).
+Losing an adapter must not disrupt maintained dataflows or other clients. Its own
+queries may fail. Transparent query or session failover is out of scope.
 
 Working multi-adapter operation is the destination, not this deliverable.
 Boundaries must support independent adapters becoming catalog writers and query
@@ -72,6 +72,23 @@ Coalescing or rate-limiting bound advancement may retain extra history, but must
 not delay protection until after it is needed. Choose cadence and batching from
 measured catalog load, DDL latency, and retention cost.
 
+### Logical recovery dependencies
+
+Maintained recovery protection covers all logical collection inputs, including
+those eliminated by optimization. Unmaterialized views do not form recovery
+boundaries. Persisted inputs do: reading an upstream MV protects its output,
+while that MV's maintenance separately protects its own inputs. Indexes remain
+replaceable access paths, not the authority for recovery dependencies.
+
+Protection follows the history needed for installation and recovery, rather than
+pinning creation-time history forever. For MVs it can advance with durable output
+progress and cease when no further input reads are needed for recovery. Execution
+holds may retain additional history.
+
+We accept extra retention on inputs the running plan does not read, especially
+for slow or suspended consumers, to preserve reconstruction from catalog SQL
+independently of optimizer choices.
+
 ## Boundary contracts
 
 ### Readability and compaction
@@ -98,6 +115,20 @@ before further advancement is authorized. Reconstructed plans must use inputs
 readable at the protected timestamps, rather than assume equivalent access paths
 have equivalent history.
 
+### Admission and conversion
+
+Admission of maintained read requirements respects committed compaction permission
+for all logical inputs, rather than relying on lagging physical compaction.
+Automatically selected creation timestamps must be compatible with all those
+inputs. Explicit historical refresh requests are rejected if any logical input
+cannot support them, even when optimization removes that input.
+
+Existing objects retain their promised results. Their conversion to logical-input
+protection becomes active only once their remaining recovery requirements are
+protected across all logical inputs. Conversion must not skip pending results by
+moving the recovery timestamp forward. The conversion mechanism and rollout policy
+for objects that cannot yet satisfy this condition remain open.
+
 ### Visibility and execution
 
 Catalog commit, cluster application, and query readiness are different events.
@@ -111,6 +142,18 @@ writes must remain safe across restarts and handover, independently of query
 connection lifetime.
 
 ## Alternatives
+
+### Plan-specific recovery protection
+
+Protecting only physical inputs ties retention to optimizer output. Controller
+dependency holds implicitly do this, with their aggregate effect preserved in
+persist sinces. Bootstrap rebuilds holds from physical plans and durable storage
+frontiers, but cannot restore discarded history for an input introduced by
+replanning.
+
+A plan-specific design needs a recovery contract beyond an input-ID set, such as
+durable logical recovery expressions with upgrade compatibility. We choose
+logical-input protection rather than making optimization decisions authoritative.
 
 ### Delegated compaction advancement
 
@@ -327,3 +370,68 @@ the catalog transaction boundary for maintained read requirements and bound
 advancement. This is a design decision, with no production implementation change.
 Documentation checks passed. Full formatting and lint remain blocked by missing
 tools and the Python-doctest OpenSSL build.
+
+### 2026-09-04: Admission and recovery scope exploration
+
+The proposed validation seam is durable `Transaction` state before
+[`into_parts`](../../../src/catalog/src/durable/transaction.rs) extracts the batch.
+MV creation protects physical imports but persists only the storage visibility
+timestamp. Requirement identity must account for recovery and access-path changes,
+not just creation admission. Protecting all logical dependencies risks retaining
+unneeded history and rejecting historical creation on unused inputs. Protecting
+selected imports requires a recoverable path through replanning and index drops.
+This choice remains open, with schema work paused for discussion with Aljoscha.
+
+No production changes or local tests. Existing [CI build 133937](https://buildkite.com/materialize/test/builds/133937)
+remains pending, with no reported failures at inspection.
+Next useful step: agree the recovery protection scope before adding durable records.
+
+### 2026-09-04: Recovery cases traced
+
+Existing dependency holds retain dropped indexes and their storage inputs. Live
+replanning lacks timestamp-aware access-path selection, while bootstrap can rebuild
+indexes with different installation frontiers. Transitive storage protection handles
+access-path loss but does not guarantee reconstruction from SQL: [optimizer goldens](../../../test/sqllogictest/transform/union_cancel.slt)
+show whole logical inputs eliminated from nonconstant results. A reconstructed plan
+can require their discarded history. The [expression cache](../../../src/catalog/src/expr_cache.rs)
+explicitly has no cross-build representation compatibility contract.
+
+Pending proposal: retain a logical recovery computation over protected storage inputs,
+without pinning physical indexes. This adds durable expression compatibility and
+dependency-version obligations, not just frontier metadata. Independent scrutiny of
+an IDs-only alternative using empty-input substitution found unestablished error and
+semantic-assumption contracts. No approach was agreed. No production changes or runtime
+experiments. Next useful step: review the recovery representation cost with Aljoscha.
+
+### 2026-09-04: Logical-input protection comparison
+
+Aljoscha leans toward protecting all logical inputs. The catalog already preserves
+[logical dependencies for drop safety](../../../test/sqllogictest/materialized_views.slt),
+but installed holds and [bootstrap recovery constraints](../../../src/compute-client/src/as_of_selection.rs)
+follow physical imports. Bootstrap freezes recovered storage sinces, not missing
+history. Conservative logical storage-input protection would strengthen that contract
+while retaining SQL-based reconstruction, avoiding authoritative optimized expressions.
+Extra retention, historical creation admission, and conversion of existing objects
+need consideration. This remains a proposal. No production changes or runtime tests.
+
+### 2026-09-04: Logical-input protection agreed with Aljoscha
+
+Choose logical-input protection based on code inspection, accepting conservative
+retention without making optimized expressions authoritative. Independent review
+found no issue. Historical creation admission and conversion of existing objects
+are the next design questions, not approved behavior changes.
+
+Document checks passed. Full formatting and lint remain blocked by missing tools
+and the Python-doctest OpenSSL dependency build. No production changes, runtime
+recovery experiments, or retention measurements were made.
+
+### 2026-09-04: Admission and conversion boundaries agreed with Aljoscha
+
+Automatic creation timestamps account for all logical inputs. Explicit historical
+refresh requests incompatible with their committed compaction permission are
+rejected. Existing objects keep their promised results, with conversion active only
+once remaining recovery requirements are protected. The conversion mechanism and
+rollout policy for objects unable to satisfy that condition remain open.
+
+Document checks passed. Full formatting and lint remain blocked by missing tools
+and the OpenSSL dependency build. No production changes were made.
