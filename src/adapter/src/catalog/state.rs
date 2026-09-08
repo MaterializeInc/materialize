@@ -571,6 +571,55 @@ impl CatalogState {
         }
     }
 
+    /// Returns the logical collection inputs reachable through unmaterialized views.
+    ///
+    /// Tables, sources, materialized views, and logs are leaves. Collection versions
+    /// are preserved, and index availability does not affect the result. This only
+    /// discovers dependencies, it does not acquire read protection.
+    ///
+    /// Panics if an ID is absent or does not identify a queryable collection.
+    pub fn logical_collection_inputs(
+        &self,
+        ids: impl IntoIterator<Item = GlobalId>,
+    ) -> BTreeSet<GlobalId> {
+        let mut pending: Vec<_> = ids.into_iter().collect();
+        let mut seen = BTreeSet::new();
+        let mut inputs = BTreeSet::new();
+        while let Some(id) = pending.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            match self.get_entry_by_global_id(&id).item() {
+                CatalogItem::View(view) => {
+                    // Name resolution retains references eliminated by planning.
+                    // Its IDs also include non-relations such as functions.
+                    // Raw HIR also includes collection reads introduced by planning.
+                    pending.extend(
+                        view.resolved_ids
+                            .collections()
+                            .filter(|id| self.get_entry_by_global_id(id).is_relation())
+                            .copied(),
+                    );
+                    pending.extend(view.raw_expr.depends_on());
+                }
+                CatalogItem::Table(_)
+                | CatalogItem::Source(_)
+                | CatalogItem::MaterializedView(_)
+                | CatalogItem::Log(_) => {
+                    inputs.insert(id);
+                }
+                CatalogItem::Index(_)
+                | CatalogItem::Sink(_)
+                | CatalogItem::Type(_)
+                | CatalogItem::Func(_)
+                | CatalogItem::Secret(_)
+                | CatalogItem::Connection(_)
+                | CatalogItem::MetricSink(_) => panic!("not a queryable collection: {id}"),
+            }
+        }
+        inputs
+    }
+
     /// Computes the IDs of any log sources this catalog entry transitively
     /// depends on.
     pub fn introspection_dependencies(&self, id: CatalogItemId) -> Vec<CatalogItemId> {
@@ -3061,6 +3110,138 @@ impl Catalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn create_collection_input_item(
+        catalog: &mut Catalog,
+        name: &str,
+        create_sql: &str,
+    ) -> GlobalId {
+        let (id, global_id) = catalog
+            .allocate_user_id_for_test()
+            .await
+            .expect("can allocate test item IDs");
+        let item = catalog
+            .state()
+            .parse_item(
+                global_id,
+                create_sql,
+                &BTreeMap::new(),
+                None,
+                false,
+                None,
+                &mut LocalExpressionCache::Closed,
+                None,
+            )
+            .expect("can parse test item");
+        let commit_ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                commit_ts,
+                None,
+                vec![crate::catalog::Op::CreateItem {
+                    item,
+                    name: QualifiedItemName {
+                        qualifiers: mz_sql::names::ItemQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::Id(DatabaseId::User(1)),
+                            schema_spec: SchemaSpecifier::Id(SchemaId::User(3)),
+                        },
+                        item: name.to_string(),
+                    },
+                    id,
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                }],
+            )
+            .await
+            .expect("can create test item");
+        global_id
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn logical_collection_inputs_follow_names_not_plans() {
+        Catalog::with_debug(|mut catalog| async move {
+            let mut ids = Vec::new();
+            for (name, sql) in [
+                ("t", "CREATE TABLE materialize.public.t (a int)"),
+                ("v", "CREATE VIEW materialize.public.v AS SELECT * FROM materialize.public.t"),
+                ("typed", "CREATE VIEW materialize.public.typed AS SELECT pg_catalog.pg_typeof((SELECT a FROM materialize.public.v))"),
+                ("implicit", "CREATE VIEW materialize.public.implicit AS SELECT pg_catalog.pg_get_userbyid(1::oid)"),
+            ] {
+                ids.push(create_collection_input_item(&mut catalog, name, sql).await);
+            }
+            let [table, view, typed, implicit] = ids[..] else {
+                unreachable!()
+            };
+
+            // pg_typeof discards its argument during planning, so the read of `v`
+            // survives only in name resolution.
+            let entry = catalog.state.get_entry_by_global_id(&typed);
+            let CatalogItem::View(typed_view) = entry.item() else {
+                panic!("expected view")
+            };
+            assert!(typed_view.raw_expr.depends_on().is_empty());
+            assert_eq!(
+                catalog.state.logical_collection_inputs([typed]),
+                BTreeSet::from([table]),
+                "name-resolution references survive elimination during planning"
+            );
+
+            // The SQL function body reads mz_roles without the view naming it.
+            let roles_id = catalog
+                .state
+                .entry_by_id
+                .values()
+                .find(|entry| entry.name().item == "mz_roles")
+                .and_then(|entry| entry.global_ids().next())
+                .expect("debug catalog has mz_roles");
+            assert_eq!(
+                catalog.state.logical_collection_inputs([implicit]),
+                BTreeSet::from([roles_id]),
+                "collection reads introduced by planning are included"
+            );
+
+            for (name, sql) in [
+                ("t_idx", "CREATE INDEX t_idx IN CLUSTER quickstart ON materialize.public.t (a)"),
+                ("v_idx", "CREATE INDEX v_idx IN CLUSTER quickstart ON materialize.public.v (a)"),
+            ] {
+                create_collection_input_item(&mut catalog, name, sql).await;
+            }
+            assert_eq!(
+                catalog.state.logical_collection_inputs([view, typed]),
+                BTreeSet::from([table]),
+                "indexes are not inputs and do not change traversal"
+            );
+            catalog.expire().await;
+        })
+        .await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn logical_collection_inputs_stop_at_materialized_views() {
+        Catalog::with_debug(|mut catalog| async move {
+            let mut ids = Vec::new();
+            for (name, sql) in [
+                ("t", "CREATE TABLE materialize.public.t (a int)"),
+                ("v", "CREATE VIEW materialize.public.v AS SELECT * FROM materialize.public.t"),
+                ("mv", "CREATE MATERIALIZED VIEW materialize.public.mv IN CLUSTER quickstart AS SELECT * FROM materialize.public.v"),
+                ("over_mv", "CREATE VIEW materialize.public.over_mv AS SELECT * FROM materialize.public.mv"),
+            ] {
+                ids.push(create_collection_input_item(&mut catalog, name, sql).await);
+            }
+            let [_table, _view, mv, over_mv] = ids[..] else {
+                unreachable!()
+            };
+            assert_eq!(
+                catalog.state.logical_collection_inputs([over_mv]),
+                BTreeSet::from([mv]),
+                "an upstream MV output is a leaf, its definition is not traversed"
+            );
+            catalog.expire().await;
+        })
+        .await;
+    }
 
     /// A deep dependency chain (a long chain of stacked views) must not
     /// overflow the stack when computing its dependents, and the dependents
