@@ -435,3 +435,25 @@ rollout policy for objects unable to satisfy that condition remain open.
 
 Document checks passed. Full formatting and lint remain blocked by missing tools
 and the OpenSSL dependency build. No production changes were made.
+
+### 2026-09-08: Logical collection input discovery
+
+Added catalog traversal and boundary tests for logical inputs, preserving collection
+versions and stopping at upstream MV outputs without selecting indexes. Review found
+that resolved collection IDs also include functions, addressed by filtering name
+references to relations while retaining raw-HIR reads. This is discovery only, with
+no runtime protection or admission change.
+
+Adapter library/test compilation and Rust formatting passed. Full formatting and
+lint remain blocked by missing tools and the OpenSSL dependency build. Runtime
+validation is pending in [PR CI](https://github.com/MaterializeInc/materialize/pull/38696/checks).
+Next useful step: derive maintained requirements from their query definitions and
+enforce admission together with bound advancement at the durable transaction boundary.
+Conversion policy remains open. No design boundary changed.
+
+### 2026-09-08: Test fixture Clippy fix
+
+Both Clippy jobs in [CI build 133949](https://buildkite.com/materialize/test/builds/133949)
+rejected seven `unwrap()` calls in the new fixtures. Replaced them with descriptive
+`expect()` messages without changing assertions or production behavior. Rust formatting
+passed. Updated CI validation remains pending.
