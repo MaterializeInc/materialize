@@ -43,7 +43,6 @@ members = [
     "src/expr-derive-impl",
     "src/expr-parser",
     "src/fivetran-destination",
-    "src/foundationdb",
     "src/frontegg-auth",
     "src/frontegg-client",
     "src/frontegg-mock",
@@ -170,7 +169,6 @@ default-members = [
     "src/expr-derive",
     "src/expr-derive-impl",
     "src/expr-parser",
-    "src/foundationdb",
     "src/frontegg-auth",
     "src/frontegg-client",
     "src/frontegg-mock",
@@ -357,7 +355,6 @@ fail = { version = "0.5.1", features = ["failpoints"] }
 fallible-iterator = "0.2.0"
 fancy-regex = "0.17.0"
 flate2 = "1.1.9"
-foundationdb = { version = "0.10.0", default-features = false, features = ["embedded-fdb-include", "fdb-7_3"] }
 futures = "0.3.32"
 futures-core = "0.3.32"
 futures-task = "0.3.32"

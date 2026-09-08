@@ -1748,6 +1748,8 @@ generate_extracted_config!(
     TableFromSourceOption,
     (TextColumns, Vec::<Ident>, Default(vec![])),
     (ExcludeColumns, Vec::<Ident>, Default(vec![])),
+    (ExcludeConstraints, Vec::<String>, Default(vec![])),
+    (ExcludeAllConstraints, bool, Default(false)),
     (PartitionBy, Vec<Ident>),
     (RetainHistory, OptionalDuration),
     (Details, String)
@@ -1779,6 +1781,8 @@ pub fn plan_create_table_from_source(
     let TableFromSourceOptionExtracted {
         text_columns,
         exclude_columns,
+        exclude_constraints: _,
+        exclude_all_constraints: _,
         retain_history,
         partition_by,
         details,
