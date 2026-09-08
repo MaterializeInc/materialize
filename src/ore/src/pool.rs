@@ -201,6 +201,8 @@ pub struct PoolStats {
     pub inserts: u64,
     /// Inserts written directly to an extent because resident admission was full.
     pub direct_extent_inserts: u64,
+    /// Chunks inserted directly into an extent by caller request.
+    pub cold_inserts: u64,
     /// Reads submitted to the blocking executor.
     pub async_reads: u64,
     /// Submitted reads that have not released their concurrency permit.
@@ -291,6 +293,7 @@ pub struct PoolStats {
 #[derive(Debug, Default)]
 struct Counters {
     direct_extent_inserts: AtomicU64,
+    cold_inserts: AtomicU64,
     async_reads: AtomicU64,
     inserts: AtomicU64,
     spill_scheduled: AtomicU64,
@@ -717,6 +720,27 @@ impl Pool {
         ChunkHandle { meta }
     }
 
+    /// Encode `data` directly into an extent without allocating a resident slot.
+    ///
+    /// Compression is synchronous. The extent participates in the pool's
+    /// compressed-residency accounting and reclamation. Empty and oversize
+    /// payloads use the same fallback as [`Pool::insert_with`].
+    pub fn insert_cold(
+        &self,
+        data: &[u64],
+        hints: ChunkHints,
+        codec: &'static dyn ExtentCodec,
+    ) -> ChunkHandle {
+        if data.is_empty() || region::size_class_for(std::mem::size_of_val(data)).is_none() {
+            return self.insert_with(data.len(), hints, codec, |dst| dst.copy_from_slice(data));
+        }
+        let inner = &self.0;
+        let extent = SwapExtent::write(&inner.extent_arena, data, codec, Scratch::Shrink);
+        inner.counters.inserts.fetch_add(1, Ordering::Relaxed);
+        inner.counters.cold_inserts.fetch_add(1, Ordering::Relaxed);
+        self.finish_extent(data.len(), hints, codec, extent)
+    }
+
     fn insert_extent(
         &self,
         len: usize,
@@ -731,6 +755,21 @@ impl Pool {
         let inner = &self.0;
         let extent = SwapExtent::write(&inner.extent_arena, &words, codec, Scratch::Shrink);
         drop(words);
+        inner
+            .counters
+            .direct_extent_inserts
+            .fetch_add(1, Ordering::Relaxed);
+        self.finish_extent(len, hints, codec, extent)
+    }
+
+    fn finish_extent(
+        &self,
+        len: usize,
+        hints: ChunkHints,
+        codec: &'static dyn ExtentCodec,
+        extent: SwapExtent,
+    ) -> ChunkHandle {
+        let inner = &self.0;
         let meta = Arc::new(ChunkMeta::new(
             inner,
             len,
@@ -742,10 +781,6 @@ impl Pool {
             None,
         ));
         inner.live_chunks.fetch_add(1, Ordering::Relaxed);
-        inner
-            .counters
-            .direct_extent_inserts
-            .fetch_add(1, Ordering::Relaxed);
         {
             let mut state = meta.state();
             inner.commit_extent(&meta, &mut state, extent);
@@ -760,6 +795,7 @@ impl Pool {
         PoolStats {
             inserts: c.inserts.load(Ordering::Relaxed),
             direct_extent_inserts: c.direct_extent_inserts.load(Ordering::Relaxed),
+            cold_inserts: c.cold_inserts.load(Ordering::Relaxed),
             async_reads: c.async_reads.load(Ordering::Relaxed),
             async_reads_in_flight: {
                 #[cfg(feature = "async")]
@@ -3938,6 +3974,61 @@ mod tests {
         let mut range = Vec::new();
         h.read_range_into(8..24, &mut range);
         assert_eq!(range, want[8..24], "range reads copy the range directly");
+    }
+
+    #[mz_ore::test]
+    fn cold_insert_skips_resident_admission() {
+        let codecs: [&'static dyn ExtentCodec; 2] = [&TEST_CODEC, &IDENTITY_CODEC];
+        for codec in codecs {
+            let pool = test_pool(256 << 20);
+            pool.set_rss_target(1 << 30);
+            let want = payload(SMALL, 703);
+            let handle = pool.insert_cold(&want, ChunkHints { depth: 3 }, codec);
+            assert_eq!(handle.residency(), Residency::Evicted);
+            assert_eq!(handle.meta.depth, 3);
+            let stats = pool.stats();
+            assert_eq!(stats.inserts, 1);
+            assert_eq!(stats.cold_inserts, 1);
+            assert_eq!(stats.direct_extent_inserts, 0);
+            assert_eq!(stats.resident_bytes, 0);
+            assert_eq!(stats.live_chunks, 1);
+            assert!(stats.extent_resident_bytes > 0);
+            assert_eq!(read(&handle), want);
+            assert_eq!(pool.stats().resident_bytes, 0);
+            let mut range = Vec::new();
+            handle.read_range_into(3..11, &mut range);
+            assert_eq!(range, want[3..11]);
+            assert_eq!(read_admit(&handle), want);
+            assert!(pool.stats().resident_bytes > 0);
+            pool.evict(&handle);
+            assert_eq!(
+                pool.stats().extent_bytes_written,
+                stats.extent_bytes_written
+            );
+            assert_eq!(read(&handle), want);
+            drop(handle);
+            let stats = pool.stats();
+            assert_eq!(stats.resident_bytes, 0);
+            assert_eq!(stats.live_chunks, 0);
+            assert_eq!(stats.extent_resident_bytes, 0);
+            assert_eq!(stats.frees, 1);
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn cold_insert_empty_and_oversize_fallbacks() {
+        let pool = test_pool(usize::MAX);
+        let empty = pool.insert_cold(&[], ChunkHints::default(), &TEST_CODEC);
+        assert_eq!(read(&empty), Vec::<u64>::new());
+        let want = payload(SIZE_CLASSES[SIZE_CLASSES.len() - 1] / 8 + 1, 704);
+        let big = pool.insert_cold(&want, ChunkHints::default(), &TEST_CODEC);
+        assert_eq!(big.residency(), Residency::Oversize);
+        assert_eq!(read(&big), want);
+        assert_eq!(pool.stats().inserts, 2);
+        assert_eq!(pool.stats().cold_inserts, 0);
+        drop(big);
+        assert_eq!(pool.stats().resident_bytes, 0);
     }
 
     #[mz_ore::test]

@@ -39,9 +39,7 @@
 //! actually touches.
 
 use std::borrow::Cow;
-#[cfg(test)]
-use std::cell::Cell;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -84,7 +82,9 @@ thread_local! {
     #[cfg(test)]
     static COMPRESS_MIN_DEPTH_OVERRIDE: Cell<Option<u8>> = const { Cell::new(None) };
 
-    /// Reusable staging for call-scoped reads of spilled bodies.
+    static DIRECT_COMPRESSED_OUTPUT_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
+
+    /// Reusable staging for call-scoped reads and serialization of spilled bodies.
     static READ_SCRATCH: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -117,6 +117,28 @@ pub fn set_storage_spill_enabled(enabled: bool) {
 /// restores the global resolution.
 pub fn set_spill_override(pool: Option<Pool>) {
     SPILL_OVERRIDE.with(|cell| *cell.borrow_mut() = pool);
+}
+
+static DIRECT_COMPRESSED_OUTPUT: AtomicBool = AtomicBool::new(false);
+
+/// Compress eligible spilled bodies directly into extents, bypassing resident slots.
+///
+/// Consulted at each spill. Bodies below the compression floor retain normal
+/// admission. Encoding is synchronous, and short-lived bodies lose write elision.
+pub fn set_direct_compressed_output(enabled: bool) {
+    DIRECT_COMPRESSED_OUTPUT.store(enabled, Ordering::Relaxed);
+}
+
+/// Override direct compressed output on this thread for tests and benchmarks.
+/// `None` restores the process setting.
+pub fn set_direct_compressed_output_override(enabled: Option<bool>) {
+    DIRECT_COMPRESSED_OUTPUT_OVERRIDE.with(|cell| cell.set(enabled));
+}
+
+fn direct_compressed_output() -> bool {
+    DIRECT_COMPRESSED_OUTPUT_OVERRIDE
+        .with(|cell| cell.get())
+        .unwrap_or_else(|| DIRECT_COMPRESSED_OUTPUT.load(Ordering::Relaxed))
 }
 
 /// The youngest generational depth whose spilled bodies are compressed. See
@@ -188,12 +210,12 @@ fn spill_pool() -> Option<Pool> {
     }
 }
 
-/// Scratch capacity retained across reads, in words. A read larger than this
+/// Scratch capacity retained across calls, in words. A read larger than this
 /// releases the buffer afterward, so a thread's scratch does not ratchet to
 /// the largest body it ever carried (heap no pool gauge can see).
 const SCRATCH_RETAIN_WORDS: usize = 1 << 18;
 
-/// Run `f` with this thread's read scratch, cleared of any previous use.
+/// Run `f` with this thread's scratch, cleared of any previous use.
 fn with_scratch<Out>(f: impl FnOnce(&mut Vec<u64>) -> Out) -> Out {
     READ_SCRATCH.with(|cell| {
         let mut scratch = cell.take();
@@ -447,7 +469,14 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
         let mut fences = D::Container::default();
         fences.push(view.0.get(0));
         fences.push(view.0.get(records - 1));
-        let handle = spill_column(column, pool, len_bytes, ChunkHints { depth }, codec);
+        let handle = spill_column(
+            column,
+            pool,
+            len_bytes,
+            ChunkHints { depth },
+            codec,
+            compressed && direct_compressed_output(),
+        );
         ColumnChunk::Spilled(
             Rc::new(SpilledBody {
                 records,
@@ -590,23 +619,36 @@ impl ExtentCodec for Lz4Codec {
     }
 }
 
-/// Serialize a column into a pool slot. The `Align` variant is already the
-/// serialized form and copies in directly. Other variants write their
-/// [`ContainerBytes`] encoding through a cursor over the slot memory. Sizing
-/// is exact, so a short or overlong write is a contract violation and panics.
+/// Serialize a column into the pool, optionally bypassing resident admission.
 fn spill_column<C: Columnar>(
     column: Column<C>,
     pool: &Pool,
     len_bytes: usize,
     hints: ChunkHints,
     codec: &'static dyn ExtentCodec,
+    direct: bool,
 ) -> ChunkHandle {
     mz_ore::soft_assert_eq_no_log!(len_bytes % 8, 0);
+    if direct {
+        return match column {
+            Column::Align(words) => pool.insert_cold(&words, hints, codec),
+            other => with_scratch(|words| {
+                words.resize(len_bytes / 8, 0);
+                serialize_column(other, words);
+                pool.insert_cold(words, hints, codec)
+            }),
+        };
+    }
+    pool.insert_with(len_bytes / 8, hints, codec, |dst| {
+        serialize_column(column, dst)
+    })
+}
+
+fn serialize_column<C: Columnar>(column: Column<C>, dst: &mut [u64]) {
     match column {
-        Column::Align(words) => {
-            pool.insert_with(words.len(), hints, codec, |dst| dst.copy_from_slice(&words))
-        }
-        other => pool.insert_with(len_bytes / 8, hints, codec, |dst| {
+        Column::Align(words) => dst.copy_from_slice(&words),
+        other => {
+            let len_bytes = std::mem::size_of_val(dst);
             let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst);
             let mut cursor = std::io::Cursor::new(bytes);
             other.into_bytes(&mut cursor);
@@ -615,7 +657,7 @@ fn spill_column<C: Columnar>(
                 len_bytes,
                 "serialized body must fill the chunk exactly",
             );
-        }),
+        }
     }
 }
 
@@ -2418,6 +2460,40 @@ mod tests {
         set_compute_spill_enabled(false);
         assert!(!commit(&col), "both gates off again");
         set_compress_min_depth_override(None);
+    }
+
+    #[mz_ore::test]
+    fn direct_output_respects_floor_and_preserves_serialization() {
+        let data: Vec<Tuple> = (0..2048u64).map(|k| ((k, k + 1), k % 3, 1)).collect();
+        set_compress_min_depth_override(Some(1));
+        for enabled in [false, true] {
+            set_direct_compressed_output_override(Some(enabled));
+            for depth in [0, 1] {
+                for aligned in [false, true] {
+                    let pool = Pool::new().expect("pool creation");
+                    pool.set_budget(usize::MAX);
+                    let column = build_column(&data);
+                    let mut expected = vec![0; column.length_in_bytes() / 8];
+                    serialize_column(column.clone(), &mut expected);
+                    let column = if aligned {
+                        Column::Align(expected.clone())
+                    } else {
+                        column
+                    };
+                    let chunk = TestChunk::spill_body(column, &pool, depth);
+                    assert_eq!(pool.stats().cold_inserts, u64::from(enabled && depth >= 1));
+                    assert_eq!(pool.stats().resident_bytes == 0, enabled && depth >= 1);
+                    let Column::Align(actual) = chunk.into_column() else {
+                        panic!("a spilled body must read back serialized");
+                    };
+                    assert_eq!(actual, expected);
+                    assert_eq!(pool.stats().resident_bytes, 0);
+                }
+            }
+        }
+        set_direct_compressed_output_override(None);
+        set_compress_min_depth_override(None);
+        READ_SCRATCH.with(|scratch| assert!(scratch.borrow().capacity() <= SCRATCH_RETAIN_WORDS));
     }
 
     /// Re-spilling an already-serialized body exercises the `Column::Align`

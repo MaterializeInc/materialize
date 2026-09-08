@@ -1776,12 +1776,21 @@ mod test {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
     async fn drain_reads_spilled_chunks() {
+        for direct in [false, true] {
+            assert_spilled_drain(direct);
+        }
+    }
+
+    fn assert_spilled_drain(direct: bool) {
         use mz_ore::pool::Pool;
-        use mz_timely_util::columnar::chunk::set_spill_override;
+        use mz_timely_util::columnar::chunk::{
+            set_direct_compressed_output_override, set_spill_override,
+        };
 
         let pool = Pool::new().expect("pool creation");
         pool.set_budget(0);
         set_spill_override(Some(pool.clone()));
+        set_direct_compressed_output_override(Some(direct));
 
         const KEYS: i64 = 1500;
         let actual = upsert_test!(|input, persist, worker| {
@@ -1793,6 +1802,10 @@ mod test {
 
             for k in 0..KEYS {
                 input.send(((key(k), Some(Ok(row(k, k + 1))), 1), new_ts(1), Diff::ONE));
+                if k % 500 == 499 {
+                    input.flush();
+                    worker.step();
+                }
             }
             input.advance_to(new_ts(2));
             worker.step();
@@ -1801,6 +1814,8 @@ mod test {
         });
 
         set_spill_override(None);
+        set_direct_compressed_output_override(None);
+        assert_eq!(pool.stats().cold_inserts > 0, direct);
         assert!(
             pool.stats().inserts > 0,
             "chunks should have spilled through the pool"

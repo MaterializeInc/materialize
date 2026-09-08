@@ -564,6 +564,10 @@ metrics:
   help: Pool reads submitted to the blocking executor.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
+- name: mz_column_pool_cold_inserts_total
+  help: Chunks inserted directly into an extent by caller request.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
 - name: mz_column_pool_direct_extent_inserts_total
   help: Inserts written directly to an extent because resident admission was full.
   source: src/timely-util/src/pool_config/metrics.rs

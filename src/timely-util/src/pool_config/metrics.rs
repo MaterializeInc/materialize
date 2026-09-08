@@ -41,6 +41,7 @@ pub fn register(registry: &MetricsRegistry) {
         // monotonic.
         gauge(registry, metric!(name: "mz_column_pool_async_reads_total", help: "Pool reads submitted to the blocking executor."), |s| s.async_reads);
         gauge(registry, metric!(name: "mz_column_pool_async_reads_in_flight", help: "Submitted pool reads that have not released their concurrency permit."), |s| s.async_reads_in_flight);
+        gauge(registry, metric!(name: "mz_column_pool_cold_inserts_total", help: "Chunks inserted directly into an extent by caller request."), |s| s.cold_inserts);
         gauge(registry, metric!(name: "mz_column_pool_direct_extent_inserts_total", help: "Inserts written directly to an extent because resident admission was full."), |s| s.direct_extent_inserts);
         gauge(registry, metric!(name: "mz_column_pool_resident_bytes", help: "Uncompressed bytes resident in the buffer pool."), |s| s.resident_bytes);
         gauge(registry, metric!(name: "mz_column_pool_oversize_bytes", help: "Bytes held by oversize chunks that bypass pool paging."), |s| s.oversize_bytes);
