@@ -80,10 +80,6 @@ The full docs lint builds both output formats before running `htmltest` and the
 catalog and metrics checks. Install `htmltest` with `brew install htmltest` if
 it is unavailable locally.
 
-CI uses Hugo Extended v0.152.2. A newer extended build is acceptable locally,
-but check template changes against the pinned version when they use newer Hugo
-functions.
-
 ### Regenerating checked-in artifacts
 
 Do not hand-edit generated artifacts. Run the applicable generator from the

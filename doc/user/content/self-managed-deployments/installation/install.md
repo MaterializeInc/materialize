@@ -8,7 +8,6 @@ menu:
     identifier: "install"
     weight: 5
 aliases:
-  - /get-started/key-concepts/#indexes
   - /self-managed/v25.1/get-started/install/
   - /get-started/install/
 ---
