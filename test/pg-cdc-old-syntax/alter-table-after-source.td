@@ -143,7 +143,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE remove_column DROP COLUMN f2;
 
 ! SELECT * from remove_column;
-contains:column "f2" of source table public.remove_column was dropped or renamed upstream
+contains:incompatible schema change on public.remove_column: column "f2" was dropped or renamed upstream
+hint:WITH (EXCLUDE COLUMNS ("f2")) before the upstream drop
 
 
 #
@@ -156,7 +157,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_column ALTER COLUMN f2 TYPE CHAR(2);
 
 ! SELECT * from alter_column;
-contains:the type of column "f2" of source table public.alter_column changed upstream
+contains:incompatible schema change on public.alter_column: the type of column "f2" changed upstream
+hint:WITH (TEXT COLUMNS ("f2"))
 
 
 #
@@ -169,7 +171,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_drop_nullability ALTER COLUMN f1 DROP NOT NULL;
 
 ! SELECT * FROM alter_drop_nullability WHERE f1 IS NOT NULL;
-contains:the NOT NULL constraint on column "f1" of source table public.alter_drop_nullability was dropped upstream
+contains:incompatible schema change on public.alter_drop_nullability: the NOT NULL constraint on column "f1" was dropped upstream
+hint:WITH (EXCLUDE ALL CONSTRAINTS)
 
 # We have guaranteed that this column is not null so the optimizer eagerly
 # returns the empty set.
@@ -201,7 +204,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_drop_pk DROP CONSTRAINT alter_drop_pk_pkey;
 
 ! SELECT f1 FROM alter_drop_pk;
-contains:PRIMARY KEY constraint "alter_drop_pk_pkey" (f1) on source table public.alter_drop_pk was dropped or altered upstream
+contains:incompatible schema change on public.alter_drop_pk: PRIMARY KEY constraint "alter_drop_pk_pkey" (f1) was dropped upstream
+hint:WITH (EXCLUDE CONSTRAINTS ('alter_drop_pk_pkey')) before the upstream drop
 
 
 #
@@ -230,7 +234,8 @@ ALTER TABLE alter_cycle_pk DROP CONSTRAINT alter_cycle_pk_pkey;
 ALTER TABLE alter_cycle_pk ADD PRIMARY KEY(f1);
 
 ! SELECT * FROM alter_cycle_pk;
-contains:PRIMARY KEY constraint "alter_cycle_pk_pkey" (f1) on source table public.alter_cycle_pk was dropped or altered upstream
+contains:incompatible schema change on public.alter_cycle_pk: PRIMARY KEY constraint "alter_cycle_pk_pkey" (f1) was dropped
+hint:EXCLUDE CONSTRAINTS ('alter_cycle_pk_pkey')
 
 
 #
@@ -260,7 +265,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_drop_unique DROP CONSTRAINT alter_drop_unique_f1_key;
 
 ! SELECT f1 FROM alter_drop_unique;
-contains:UNIQUE constraint "alter_drop_unique_f1_key" (f1) on source table public.alter_drop_unique was dropped or altered upstream
+contains:incompatible schema change on public.alter_drop_unique: UNIQUE constraint "alter_drop_unique_f1_key" (f1) was dropped upstream
+hint:WITH (EXCLUDE CONSTRAINTS ('alter_drop_unique_f1_key')) before the upstream drop
 
 
 #
@@ -288,7 +294,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_extend_column ALTER COLUMN f1 TYPE VARCHAR(20);
 
 ! SELECT * FROM alter_extend_column;
-contains:the type of column "f1" of source table public.alter_extend_column changed upstream
+contains:incompatible schema change on public.alter_extend_column: the type of column "f1" changed upstream
+hint:WITH (TEXT COLUMNS ("f1"))
 
 
 #
@@ -300,7 +307,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_decimal ALTER COLUMN f1 TYPE DECIMAL(6,1);
 
 ! SELECT * FROM alter_decimal;
-contains:the type of column "f1" of source table public.alter_decimal changed upstream
+contains:incompatible schema change on public.alter_decimal: the type of column "f1" changed upstream
+hint:WITH (TEXT COLUMNS ("f1"))
 
 
 #
@@ -313,7 +321,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_table_rename RENAME TO alter_table_renamed;
 
 ! SELECT * FROM alter_table_rename;
-contains:source table public.alter_table_rename with oid
+contains:incompatible schema change on public.alter_table_rename: table was renamed or moved upstream (it is now public.alter_table_renamed with oid
+hint:FROM SOURCE <source> (REFERENCE public.alter_table_renamed)
 
 #
 # Alter table rename column
@@ -327,7 +336,8 @@ ALTER TABLE alter_table_rename_column RENAME COLUMN f2 TO f1;
 ALTER TABLE alter_table_rename_column RENAME COLUMN f3 TO f2;
 
 ! SELECT * FROM alter_table_rename_column;
-contains:changed position upstream
+contains:incompatible schema change on public.alter_table_rename_column: column
+hint:CREATE SCHEMA v2;
 
 
 #
@@ -342,7 +352,8 @@ ALTER TABLE alter_table_change_attnum DROP COLUMN f2;
 ALTER TABLE alter_table_change_attnum ADD COLUMN f2 VARCHAR(10);
 
 ! SELECT * FROM alter_table_change_attnum;
-contains:column "f2" of source table public.alter_table_change_attnum changed position upstream
+contains:incompatible schema change on public.alter_table_change_attnum: column "f2" changed position upstream
+hint:CREATE SCHEMA v2;
 
 > SELECT * from alter_table_supported;
 1 1
@@ -368,7 +379,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_table_supported DROP COLUMN f2;
 
 ! SELECT * from alter_table_supported;
-contains:column "f2" of source table public.alter_table_supported was dropped or renamed upstream
+contains:incompatible schema change on public.alter_table_supported: column "f2" was dropped or renamed upstream
+hint:WITH (EXCLUDE COLUMNS ("f2")) before the upstream drop
 
 
 #

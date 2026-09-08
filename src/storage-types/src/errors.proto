@@ -38,6 +38,7 @@ message ProtoSourceErrorDetails {
 message ProtoSourceError {
   reserved 1;
   ProtoSourceErrorDetails error = 2;
+  optional string hint = 3;
 }
 
 message ProtoUpsertValueError {

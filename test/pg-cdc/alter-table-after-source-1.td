@@ -75,6 +75,10 @@ CREATE TABLE alter_add_unique (f1 INTEGER);
 ALTER TABLE alter_add_unique REPLICA IDENTITY FULL;
 INSERT INTO alter_add_unique VALUES (1);
 
+CREATE TABLE alter_rename_unique (f1 INTEGER UNIQUE);
+ALTER TABLE alter_rename_unique REPLICA IDENTITY FULL;
+INSERT INTO alter_rename_unique VALUES (1);
+
 CREATE TABLE alter_extend_column (f1 VARCHAR(2));
 ALTER TABLE alter_extend_column REPLICA IDENTITY FULL;
 INSERT INTO alter_extend_column VALUES ('ab');
@@ -126,6 +130,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > CREATE TABLE alter_cycle_pk_off FROM SOURCE mz_source (REFERENCE alter_cycle_pk_off);
 > CREATE TABLE alter_drop_unique FROM SOURCE mz_source (REFERENCE alter_drop_unique);
 > CREATE TABLE alter_add_unique FROM SOURCE mz_source (REFERENCE alter_add_unique);
+> CREATE TABLE alter_rename_unique FROM SOURCE mz_source (REFERENCE alter_rename_unique);
 > CREATE TABLE alter_extend_column FROM SOURCE mz_source (REFERENCE alter_extend_column);
 > CREATE TABLE alter_decimal FROM SOURCE mz_source (REFERENCE alter_decimal);
 > CREATE TABLE alter_table_rename FROM SOURCE mz_source (REFERENCE alter_table_rename);
@@ -175,7 +180,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_column ALTER COLUMN f2 TYPE CHAR(2);
 
 ! SELECT * from alter_column;
-contains:the type of column "f2" of source table public.alter_column changed upstream
+contains:incompatible schema change on public.alter_column: the type of column "f2" changed upstream
+hint:WITH (TEXT COLUMNS ("f2"))
 
 
 #
@@ -188,7 +194,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_drop_nullability ALTER COLUMN f1 DROP NOT NULL;
 
 ! SELECT * FROM alter_drop_nullability WHERE f1 IS NOT NULL;
-contains:the NOT NULL constraint on column "f1" of source table public.alter_drop_nullability was dropped upstream
+contains:incompatible schema change on public.alter_drop_nullability: the NOT NULL constraint on column "f1" was dropped upstream
+hint:WITH (EXCLUDE ALL CONSTRAINTS)
 
 # We have guaranteed that this column is not null so the optimizer eagerly
 # returns the empty set.
@@ -220,7 +227,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_drop_pk DROP CONSTRAINT alter_drop_pk_pkey;
 
 ! SELECT f1 FROM alter_drop_pk;
-contains:PRIMARY KEY constraint "alter_drop_pk_pkey" (f1) on source table public.alter_drop_pk was dropped or altered upstream
+contains:incompatible schema change on public.alter_drop_pk: PRIMARY KEY constraint "alter_drop_pk_pkey" (f1) was dropped upstream
+hint:WITH (EXCLUDE CONSTRAINTS ('alter_drop_pk_pkey')) before the upstream drop
 
 
 #
@@ -249,7 +257,8 @@ ALTER TABLE alter_cycle_pk DROP CONSTRAINT alter_cycle_pk_pkey;
 ALTER TABLE alter_cycle_pk ADD PRIMARY KEY(f1);
 
 ! SELECT * FROM alter_cycle_pk;
-contains:PRIMARY KEY constraint "alter_cycle_pk_pkey" (f1) on source table public.alter_cycle_pk was dropped or altered upstream
+contains:incompatible schema change on public.alter_cycle_pk: PRIMARY KEY constraint "alter_cycle_pk_pkey" (f1) was dropped
+hint:EXCLUDE CONSTRAINTS ('alter_cycle_pk_pkey')
 
 
 #
@@ -279,7 +288,27 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_drop_unique DROP CONSTRAINT alter_drop_unique_f1_key;
 
 ! SELECT f1 FROM alter_drop_unique;
-contains:UNIQUE constraint "alter_drop_unique_f1_key" (f1) on source table public.alter_drop_unique was dropped or altered upstream
+contains:incompatible schema change on public.alter_drop_unique: UNIQUE constraint "alter_drop_unique_f1_key" (f1) was dropped upstream
+hint:WITH (EXCLUDE CONSTRAINTS ('alter_drop_unique_f1_key')) before the upstream drop
+
+# The same hint is surfaced in the table's status.
+> SELECT details->>'hints' LIKE '%EXCLUDE CONSTRAINTS (''alter_drop_unique_f1_key'')%'
+  FROM mz_internal.mz_source_statuses WHERE name = 'alter_drop_unique'
+true
+
+
+#
+# Rename unique
+
+> SELECT * from alter_rename_unique
+1
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER TABLE alter_rename_unique RENAME CONSTRAINT alter_rename_unique_f1_key TO alter_rename_unique_f1_key_v2;
+
+! SELECT f1 FROM alter_rename_unique;
+contains:incompatible schema change on public.alter_rename_unique: UNIQUE constraint "alter_rename_unique_f1_key" (f1) was renamed upstream to "alter_rename_unique_f1_key_v2"
+hint:WITH (EXCLUDE CONSTRAINTS ('alter_rename_unique_f1_key_v2'));
 
 
 #
@@ -307,7 +336,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_extend_column ALTER COLUMN f1 TYPE VARCHAR(20);
 
 ! SELECT * FROM alter_extend_column;
-contains:the type of column "f1" of source table public.alter_extend_column changed upstream
+contains:incompatible schema change on public.alter_extend_column: the type of column "f1" changed upstream
+hint:WITH (TEXT COLUMNS ("f1"))
 
 
 #
@@ -319,4 +349,5 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_decimal ALTER COLUMN f1 TYPE DECIMAL(6,1);
 
 ! SELECT * FROM alter_decimal;
-contains:the type of column "f1" of source table public.alter_decimal changed upstream
+contains:incompatible schema change on public.alter_decimal: the type of column "f1" changed upstream
+hint:WITH (TEXT COLUMNS ("f1"))

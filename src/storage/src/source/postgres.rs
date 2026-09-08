@@ -89,7 +89,7 @@ use itertools::Itertools as _;
 use mz_expr::EvalError;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_postgres_util::desc::PostgresTableDesc;
+use mz_postgres_util::desc::{PostgresTableDesc, SchemaChangeError};
 use mz_postgres_util::{Client, PostgresError, Sql, query_opt, simple_query_opt, sql};
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
@@ -235,7 +235,11 @@ impl SourceRender for PostgresSourceConnection {
         let errs = snapshot_err.concat(repl_err).map(move |err| {
             // This update will cause the dataflow to restart
             let err_string = err.display_with_causes().to_string();
-            let update = HealthStatusUpdate::halting(err_string.clone(), None);
+            let hint = match &err {
+                ReplicationError::Definite(err) => err.hint(),
+                ReplicationError::Transient(_) => None,
+            };
+            let update = HealthStatusUpdate::halting(err_string.clone(), hint);
 
             let namespace = match err {
                 ReplicationError::Transient(err)
@@ -358,9 +362,8 @@ pub enum DefiniteError {
         "old row missing from replication stream. Did you forget to set REPLICA IDENTITY to FULL for your table?"
     )]
     DefaultReplicaIdentity,
-    #[error("incompatible schema change: {0}")]
-    // TODO: proper error variants for all the expected schema violations
-    IncompatibleSchema(String),
+    #[error("{0}")]
+    IncompatibleSchema(SchemaChangeError),
     #[error("invalid UTF8 string: {0:?}")]
     InvalidUTF8(Vec<u8>),
     #[error("failed to cast raw column: {0}")]
@@ -369,10 +372,20 @@ pub enum DefiniteError {
     UnexpectedBinaryData,
 }
 
+impl DefiniteError {
+    fn hint(&self) -> Option<String> {
+        match self {
+            DefiniteError::IncompatibleSchema(err) => Some(err.hint.clone()),
+            _ => None,
+        }
+    }
+}
+
 impl From<DefiniteError> for DataflowError {
     fn from(err: DefiniteError) -> Self {
         let m = err.to_string().into();
         DataflowError::SourceError(Box::new(SourceError {
+            hint: err.hint().map(Into::into),
             error: match &err {
                 DefiniteError::SlotCompactedPastResumePoint(_, _) => SourceErrorDetails::Other(m),
                 DefiniteError::TableTruncated => SourceErrorDetails::Other(m),
@@ -486,7 +499,7 @@ fn verify_schema(
         .determine_compatibility(current_desc, &allow_oids_to_change_by_col_num)
     {
         Ok(()) => Ok(()),
-        Err(err) => Err(DefiniteError::IncompatibleSchema(err.to_string())),
+        Err(err) => Err(DefiniteError::IncompatibleSchema(err)),
     }
 }
 

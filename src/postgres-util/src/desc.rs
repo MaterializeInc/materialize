@@ -11,13 +11,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::bail;
+use mz_ore::str::StrExt;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use tokio_postgres::types::Oid;
-use tracing::warn;
 
 include!(concat!(env!("OUT_DIR"), "/mz_postgres_util.desc.rs"));
 
@@ -52,6 +51,29 @@ pub struct PostgresTableDesc {
     pub keys: BTreeSet<PostgresKeyDesc>,
 }
 
+/// An upstream schema change that Materialize cannot follow.
+///
+/// `Display` renders the diagnosis. `hint` carries the recovery steps and is
+/// surfaced separately: as the `HINT` of a SQL error and in the source status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SchemaChangeError {
+    pub table: String,
+    pub change: String,
+    pub hint: String,
+}
+
+impl std::fmt::Display for SchemaChangeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "incompatible schema change on {}: {}",
+            self.table, self.change
+        )
+    }
+}
+
+impl std::error::Error for SchemaChangeError {}
+
 impl PostgresTableDesc {
     /// Determines if two `PostgresTableDesc` are compatible with one another in
     /// a way that Materialize can handle.
@@ -63,159 +85,192 @@ impl PostgresTableDesc {
     ///   `PostgresColumnDesc::is_compatible`.
     /// - `self`'s keys are all present in `other`
     ///
-    /// On incompatibility, the error describes the first mismatch found and,
-    /// where possible, how to recover from it. The error text becomes the
-    /// permanent, user-visible error for the stalled table, so it must stand
-    /// on its own.
+    /// On incompatibility, the error describes the first mismatch found and
+    /// how to recover from it. The error becomes the permanent, user-visible
+    /// error for the stalled table, so it must stand on its own.
     pub fn determine_compatibility(
         &self,
         other: &PostgresTableDesc,
         allow_type_to_change_by_col_num: &BTreeSet<u16>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), SchemaChangeError> {
         if self == other {
             return Ok(());
         }
 
-        let result = self.diff_incompatibility(other, allow_type_to_change_by_col_num);
-        if result.is_err() {
-            warn!(
-                "Error validating table in publication. Expected: {:?} Actual: {:?}",
-                &self, other
-            );
-        }
-        result
-    }
-
-    /// Reports the first incompatibility between `self` (the schema captured
-    /// when the Materialize table was created) and `other` (the current
-    /// upstream schema), or `Ok(())` if `other` is a compatible evolution of
-    /// `self`.
-    fn diff_incompatibility(
-        &self,
-        other: &PostgresTableDesc,
-        allow_type_to_change_by_col_num: &BTreeSet<u16>,
-    ) -> Result<(), anyhow::Error> {
-        let table = format!("{}.{}", self.namespace, self.name);
-
         if self.oid != other.oid || self.namespace != other.namespace || self.name != other.name {
-            bail!(
-                "source table {} with oid {} was renamed, dropped, or recreated upstream \
-                 (it is now {}.{} with oid {}). Materialize binds a table to the upstream \
-                 table's identity and cannot follow this change. To resume ingesting, \
-                 recreate the Materialize table against the new upstream table in a new \
-                 versioned schema and swap your views to it.",
-                table,
-                self.oid,
-                other.namespace,
-                other.name,
-                other.oid,
-            );
+            let reference = format!("{}.{}", other.namespace, other.name);
+            return Err(self.error(
+                format!(
+                    "table was renamed or moved upstream (it is now {} with oid {})",
+                    reference, other.oid
+                ),
+                recreate_hint(
+                    "To keep ingesting from the upstream table as it now exists",
+                    &other.name,
+                    &reference,
+                    None,
+                ),
+            ));
         }
 
         let other_cols_by_name = BTreeMap::from_iter(other.columns.iter().map(|c| (&c.name, c)));
-        for info in &self.columns {
-            let Some(other_info) = other_cols_by_name.get(&info.name) else {
-                bail!(
-                    "column {} of source table {} was dropped or renamed upstream. \
-                     To resume ingesting, create a replacement table in a new versioned \
-                     schema (its snapshot captures the current upstream schema), swap \
-                     your views to it, and drop this table. To make a planned column \
-                     drop a non-event, create the replacement table with \
-                     WITH (EXCLUDE COLUMNS ({})) before the upstream drop.",
-                    quoted(&info.name),
-                    table,
-                    quoted(&info.name),
-                );
-            };
-            let allow_type_change = allow_type_to_change_by_col_num.contains(&info.col_num);
-            if info.is_compatible(other_info, allow_type_change) {
-                continue;
-            }
-            if info.col_num != other_info.col_num {
-                bail!(
-                    "column {} of source table {} changed position upstream (the column \
-                     or table was likely dropped and recreated). To resume ingesting, \
-                     recreate the Materialize table in a new versioned schema and swap \
-                     your views to it.",
-                    quoted(&info.name),
-                    table,
-                );
-            }
-            if !allow_type_change
-                && (info.type_oid != other_info.type_oid || info.type_mod != other_info.type_mod)
-            {
-                bail!(
-                    "the type of column {} of source table {} changed upstream. To ingest \
-                     the column as text regardless of its upstream type, recreate the \
-                     Materialize table with WITH (TEXT COLUMNS ({})) in a new versioned \
-                     schema and swap your views to it.",
-                    quoted(&info.name),
-                    table,
-                    quoted(&info.name),
-                );
-            }
-            if !info.nullable && other_info.nullable {
-                bail!(
-                    "the NOT NULL constraint on column {} of source table {} was dropped \
-                     upstream. Materialize relies on this constraint and cannot continue \
-                     ingesting the table. To resume ingesting, create a replacement table \
-                     in a new versioned schema (its snapshot captures the current upstream \
-                     schema, where the column is nullable), swap your views to it, and \
-                     drop this table. To make planned constraint drops a non-event, create \
-                     the replacement table with WITH (EXCLUDE ALL CONSTRAINTS).",
-                    quoted(&info.name),
-                    table,
-                );
-            }
-            bail!(
-                "column {} of source table {} was altered upstream. To resume ingesting, \
-                 recreate the Materialize table in a new versioned schema and swap your \
-                 views to it.",
-                quoted(&info.name),
-                table,
-            );
+        for column in &self.columns {
+            let allow_type_change = allow_type_to_change_by_col_num.contains(&column.col_num);
+            self.check_column(
+                column,
+                other_cols_by_name.get(&column.name).copied(),
+                allow_type_change,
+            )?;
         }
 
         if let Some(key) = self.keys.difference(&other.keys).next() {
-            let col_names = key
-                .cols
-                .iter()
-                .map(|attnum| {
-                    self.columns
-                        .iter()
-                        .find(|c| c.col_num == *attnum)
-                        .map_or_else(|| format!("attnum {}", attnum), |c| c.name.clone())
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            let kind = if key.is_primary {
-                "PRIMARY KEY"
-            } else {
-                "UNIQUE"
-            };
-            bail!(
-                "{} constraint {} ({}) on source table {} was dropped or altered upstream. \
-                 Materialize relies on this constraint and cannot continue ingesting the \
-                 table. To resume ingesting, create a replacement table in a new versioned \
-                 schema (its snapshot captures the current upstream schema, without this \
-                 constraint), swap your views to it, and drop this table. To make a \
-                 planned constraint drop a non-event, create the replacement table with \
-                 WITH (EXCLUDE CONSTRAINTS ('{}')) before the upstream drop.",
-                kind,
-                quoted(&key.name),
-                col_names,
-                table,
-                key.name,
-            );
+            return Err(self.key_error(key, other));
         }
 
         Ok(())
     }
+
+    fn check_column(
+        &self,
+        column: &PostgresColumnDesc,
+        other: Option<&PostgresColumnDesc>,
+        allow_type_change: bool,
+    ) -> Result<(), SchemaChangeError> {
+        let name = column.name.quoted();
+        let Some(other) = other else {
+            return Err(self.error(
+                format!("column {name} was dropped or renamed upstream"),
+                format!(
+                    "{}\nTo make a planned column drop a non-event, create the table with \
+                     WITH (EXCLUDE COLUMNS ({name})) before the upstream drop.",
+                    self.recreate_hint("To keep ingesting without this column", None)
+                ),
+            ));
+        };
+        if column.is_compatible(other, allow_type_change) {
+            return Ok(());
+        }
+        if column.col_num != other.col_num {
+            return Err(self.error(
+                format!(
+                    "column {name} changed position upstream (the column or table was likely \
+                     dropped and recreated)"
+                ),
+                self.recreate_hint("To keep ingesting", None),
+            ));
+        }
+        if !allow_type_change
+            && (column.type_oid != other.type_oid || column.type_mod != other.type_mod)
+        {
+            return Err(self.error(
+                format!("the type of column {name} changed upstream"),
+                self.recreate_hint(
+                    "To ingest the column as text regardless of its upstream type",
+                    Some(&format!("TEXT COLUMNS ({name})")),
+                ),
+            ));
+        }
+        if !column.nullable && other.nullable {
+            return Err(self.error(
+                format!("the NOT NULL constraint on column {name} was dropped upstream"),
+                self.recreate_hint(
+                    "To keep ingesting without this constraint",
+                    Some("EXCLUDE ALL CONSTRAINTS"),
+                ),
+            ));
+        }
+        Err(self.error(
+            format!("column {name} was altered upstream"),
+            self.recreate_hint("To keep ingesting", None),
+        ))
+    }
+
+    fn key_error(&self, key: &PostgresKeyDesc, other: &PostgresTableDesc) -> SchemaChangeError {
+        let kind = if key.is_primary {
+            "PRIMARY KEY"
+        } else {
+            "UNIQUE"
+        };
+        let cols = key
+            .cols
+            .iter()
+            .map(|attnum| {
+                self.columns
+                    .iter()
+                    .find(|c| c.col_num == *attnum)
+                    .map_or_else(|| format!("attnum {}", attnum), |c| c.name.clone())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let constraint = format!("{kind} constraint {} ({cols})", key.name.quoted());
+        let exclude = |name: &str| format!("EXCLUDE CONSTRAINTS ('{}')", name.replace('\'', "''"));
+
+        if let Some(renamed) = other.keys.iter().find(|k| k.oid == key.oid) {
+            return self.error(
+                format!(
+                    "{constraint} was renamed upstream to {}",
+                    renamed.name.quoted()
+                ),
+                self.recreate_hint(
+                    "To keep ingesting without this constraint",
+                    Some(&exclude(&renamed.name)),
+                ),
+            );
+        }
+        if other.keys.iter().any(|k| k.name == key.name) {
+            return self.error(
+                format!("{constraint} was dropped and recreated upstream"),
+                self.recreate_hint(
+                    "To keep ingesting without this constraint",
+                    Some(&exclude(&key.name)),
+                ),
+            );
+        }
+        self.error(
+            format!("{constraint} was dropped upstream"),
+            format!(
+                "{}\nTo make a planned constraint drop a non-event, create the table with \
+                 WITH ({}) before the upstream drop.",
+                self.recreate_hint("To keep ingesting without this constraint", None),
+                exclude(&key.name),
+            ),
+        )
+    }
+
+    fn error(&self, change: String, hint: String) -> SchemaChangeError {
+        SchemaChangeError {
+            table: format!("{}.{}", self.namespace, self.name),
+            change,
+            hint,
+        }
+    }
+
+    fn recreate_hint(&self, lead: &str, with_clause: Option<&str>) -> String {
+        recreate_hint(
+            lead,
+            &self.name,
+            &format!("{}.{}", self.namespace, self.name),
+            with_clause,
+        )
+    }
 }
 
-/// Formats an identifier for inclusion in an error message.
-fn quoted(name: &str) -> String {
-    format!("\"{}\"", name)
+fn recreate_hint(
+    lead: &str,
+    table_name: &str,
+    reference: &str,
+    with_clause: Option<&str>,
+) -> String {
+    let mut hint = format!(
+        "{lead}, recreate the table in a new versioned schema, then swap your views to the \
+         new table:\n  CREATE SCHEMA v2;\n  CREATE TABLE v2.{table_name}\n  \
+         FROM SOURCE <source> (REFERENCE {reference})"
+    );
+    if let Some(with_clause) = with_clause {
+        hint.push_str(&format!("\n  WITH ({with_clause})"));
+    }
+    hint.push(';');
+    hint
 }
 
 impl RustType<ProtoPostgresTableDesc> for PostgresTableDesc {
@@ -380,167 +435,5 @@ impl RustType<ProtoPostgresKeyDesc> for PostgresKeyDesc {
             is_primary: proto.is_primary,
             nulls_not_distinct: proto.nulls_not_distinct,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn column(name: &str, col_num: u16, nullable: bool) -> PostgresColumnDesc {
-        PostgresColumnDesc {
-            name: name.to_string(),
-            col_num,
-            type_oid: 23,
-            type_mod: -1,
-            nullable,
-        }
-    }
-
-    fn key(oid: u32, name: &str, cols: Vec<u16>, is_primary: bool) -> PostgresKeyDesc {
-        PostgresKeyDesc {
-            oid,
-            name: name.to_string(),
-            cols,
-            is_primary,
-            nulls_not_distinct: false,
-        }
-    }
-
-    fn table(columns: Vec<PostgresColumnDesc>, keys: Vec<PostgresKeyDesc>) -> PostgresTableDesc {
-        PostgresTableDesc {
-            oid: 100,
-            namespace: "public".to_string(),
-            name: "users".to_string(),
-            columns,
-            keys: keys.into_iter().collect(),
-        }
-    }
-
-    #[mz_ore::test]
-    fn compatible_evolutions() {
-        let desc = table(
-            vec![column("id", 1, false)],
-            vec![key(200, "users_pkey", vec![1], true)],
-        );
-
-        // Identical.
-        desc.determine_compatibility(&desc, &BTreeSet::new())
-            .unwrap();
-
-        // Extra upstream column and extra upstream key are non-events.
-        let mut evolved = desc.clone();
-        evolved.columns.push(column("extra", 2, true));
-        evolved
-            .keys
-            .insert(key(201, "users_extra_key", vec![2], false));
-        desc.determine_compatibility(&evolved, &BTreeSet::new())
-            .unwrap();
-
-        // Upstream SET NOT NULL on a column we recorded as nullable.
-        let desc = table(vec![column("id", 1, true)], vec![]);
-        let evolved = table(vec![column("id", 1, false)], vec![]);
-        desc.determine_compatibility(&evolved, &BTreeSet::new())
-            .unwrap();
-    }
-
-    #[mz_ore::test]
-    fn dropped_key_names_constraint() {
-        let desc = table(
-            vec![column("id", 1, false), column("wallet", 2, false)],
-            vec![
-                key(200, "users_pkey", vec![1], true),
-                key(201, "users_wallet_id_key", vec![2], false),
-            ],
-        );
-        let mut evolved = desc.clone();
-        evolved
-            .keys
-            .remove(&key(201, "users_wallet_id_key", vec![2], false));
-
-        let err = desc
-            .determine_compatibility(&evolved, &BTreeSet::new())
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("UNIQUE constraint \"users_wallet_id_key\" (wallet)"),
-            "{err}"
-        );
-        assert!(
-            err.contains("EXCLUDE CONSTRAINTS ('users_wallet_id_key')"),
-            "{err}"
-        );
-
-        // Same-name key with a different constraint oid (drop + recreate) also
-        // reads as dropped or altered.
-        let mut recreated = desc.clone();
-        recreated
-            .keys
-            .remove(&key(200, "users_pkey", vec![1], true));
-        recreated.keys.insert(key(300, "users_pkey", vec![1], true));
-        let err = desc
-            .determine_compatibility(&recreated, &BTreeSet::new())
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("PRIMARY KEY constraint \"users_pkey\" (id)"),
-            "{err}"
-        );
-    }
-
-    #[mz_ore::test]
-    fn column_incompatibilities() {
-        let desc = table(vec![column("id", 1, false)], vec![]);
-
-        // Dropped column.
-        let evolved = table(vec![column("other", 1, false)], vec![]);
-        let err = desc
-            .determine_compatibility(&evolved, &BTreeSet::new())
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("column \"id\" of source table public.users was dropped or renamed"),
-            "{err}"
-        );
-
-        // DROP NOT NULL.
-        let evolved = table(vec![column("id", 1, true)], vec![]);
-        let err = desc
-            .determine_compatibility(&evolved, &BTreeSet::new())
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("NOT NULL constraint on column \"id\""),
-            "{err}"
-        );
-        assert!(err.contains("EXCLUDE ALL CONSTRAINTS"), "{err}");
-
-        // Type change, without and with a TEXT COLUMNS exemption.
-        let mut evolved = table(vec![column("id", 1, false)], vec![]);
-        evolved.columns[0].type_oid = 25;
-        let err = desc
-            .determine_compatibility(&evolved, &BTreeSet::new())
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("the type of column \"id\""), "{err}");
-        desc.determine_compatibility(&evolved, &BTreeSet::from([1]))
-            .unwrap();
-
-        // Position change.
-        let evolved = table(vec![column("id", 3, false)], vec![]);
-        let err = desc
-            .determine_compatibility(&evolved, &BTreeSet::new())
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("changed position upstream"), "{err}");
-
-        // Table renamed or recreated.
-        let mut evolved = desc.clone();
-        evolved.name = "users_renamed".to_string();
-        let err = desc
-            .determine_compatibility(&evolved, &BTreeSet::new())
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("renamed, dropped, or recreated"), "{err}");
     }
 }

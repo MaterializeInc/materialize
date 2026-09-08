@@ -455,7 +455,12 @@ notice, the ingesting table stalls permanently:
 
 ```
 ERROR:  Source error: source must be dropped and recreated due to failure:
-        incompatible schema change: source table orders with oid 16385 has been altered
+        incompatible schema change on public.orders: column "priority" was dropped or renamed upstream
+HINT:  To keep ingesting without this column, recreate the table in a new versioned schema, then swap your views to the new table:
+         CREATE SCHEMA v2;
+         CREATE TABLE v2.orders
+         FROM SOURCE <source> (REFERENCE public.orders);
+       To make a planned column drop a non-event, create the table with WITH (EXCLUDE COLUMNS ("priority")) before the upstream drop.
 ```
 
 While the table is stalled, reads against the public interface return this
