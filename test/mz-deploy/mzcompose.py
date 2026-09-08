@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -25,6 +26,7 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 
@@ -49,11 +51,15 @@ SERVICES = [
     Materialized(
         additional_system_parameter_defaults={
             "enable_create_table_from_source": "true",
+            "enable_auto_scaling_strategy": "true",
         },
     ),
     # Kafka broker for the sinks workflow. Only started by workflows that
     # exercise sinks; the others never bring it up.
     Redpanda(),
+    # MySQL for the source-references-mysql workflow. Only started by workflows
+    # that exercise MySQL sources; the others never bring it up.
+    MySql(),
     # mz-deploy runs as a prebuilt mzbuild image (see src/mz-deploy/ci) rather
     # than a host `cargo build`, so CI doesn't recompile it on every run. The
     # projects directory is mounted at /projects; the binary reaches the
@@ -189,18 +195,6 @@ def setup_base(c: Composition) -> None:
     supplied by its prebuilt mzbuild image (see src/mz-deploy/ci)."""
     c.down(destroy_volumes=True)
     c.up("postgres", "materialized")
-
-    # On PRs, mkpipeline drops this job's dependency on the image build so it
-    # starts immediately while the build runs concurrently, signalled by
-    # CI_WAITING_FOR_BUILD (see remove_dependencies_on_prs). `c.run` issues a
-    # plain pull with no retry, so the first mz-deploy invocation would fail if
-    # the image hasn't been pushed yet. Pull it up front, polling the build the
-    # same way `c.up` does for the other services. Only needed in that CI
-    # window; locally the image is loaded directly and never pulled.
-    if build := os.getenv("CI_WAITING_FOR_BUILD"):
-        c.invoke(
-            "pull", "mz-deploy", max_tries=300, build=build, stdin=subprocess.DEVNULL
-        )
 
     # Ensure profiles exist before first run_mz_deploy call
     create_profiles()
@@ -1241,6 +1235,9 @@ def workflow_system_deps(c: Composition, parser: WorkflowArgumentParser) -> None
       `pg_catalog.pg_class`, etc. without a database prefix.
     - The generated `types.lock` records each system-schema entry as
       `schema.object` (no leading database).
+    - `stage` (the runtime deploy path) accepts a view that reads from a system
+      catalog: `validate_project` must not report the existing system object as
+      a missing external dependency. `lock` alone never exercises this path.
     - Mutating the project.toml to declare a 2-part name with a non-system
       schema (e.g. `someschema.foo`) is rejected.
     """
@@ -1270,6 +1267,27 @@ def workflow_system_deps(c: Composition, parser: WorkflowArgumentParser) -> None
         assert (
             f'name = "materialize.{system_dep}"' not in contents
         ), f"unexpected 3-part form for {system_dep} in types.lock:\n{contents}"
+
+    # ── Stage path: a project that reads a system catalog must deploy ─────
+    # `lock` only resolves types; `stage` runs `validate_project` (the real
+    # deploy path), which must not report the existing `mz_catalog.mz_objects`
+    # as a missing dependency. `--dry-run` reaches validation before any DDL.
+    result = run_mz_deploy(
+        c,
+        "system-deps/v1",
+        "stage",
+        "--dry-run",
+        "--deploy-id",
+        "sysdeps",
+        "--allow-dirty",
+        "--profile",
+        "admin",
+        check=False,
+    )
+    assert result.returncode == 0, (
+        "stage rejected a view that reads a system catalog: validate_project "
+        f"wrongly flagged a system object as missing.\n{result.stdout}{result.stderr}"
+    )
 
     # ── Negative case: 2-part non-system dep is rejected ──────────────────
     project_toml = project_dir / "project.toml"
@@ -1527,6 +1545,84 @@ def workflow_promote_resume(c: Composition, parser: WorkflowArgumentParser) -> N
         assert marker("rp3") is None, "markers should be cleaned up on resume"
         assert promoted_at("rp3") is not None
         assert orders_exists(), "no data loss across crash + resume"
+
+
+def workflow_metadata_rollback(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """`stage --no-rollback` must not clean up after a metadata-recording failure.
+
+    `record_stage_metadata` writes deployment rows before any staging resources
+    exist. DEX-40 made a failure there roll those rows back so a re-stage under
+    the same name is unblocked, but that rollback must still honor `--no-rollback`
+    (the operator's documented "leave resources in place for debugging"). Skipping
+    it preserves the partial records and, critically, avoids the suffix-matching
+    `DROP ... CASCADE` in `rollback_staging_resources`, which can drop a production
+    schema whose name ends in `_<deploy_id>`.
+
+    The failure is injected by revoking the deployer's INSERT on
+    `_mz_deploy.tables.objects`: the schema rows get written, then appending the
+    object rows is denied.
+    """
+    setup_base(c)
+    assert run_mz_deploy(c, "basic/v1", "apply").returncode == 0
+
+    def deployment_rows(deploy_id: str) -> int:
+        return c.sql_query(
+            "SELECT count(*) FROM _mz_deploy.tables.deployments "
+            f"WHERE deploy_id = '{deploy_id}'",
+            user="mz_system",
+            port=6877,
+        )[0][0]
+
+    def stage_fails(deploy_id: str, *flags: str) -> None:
+        r = run_mz_deploy(
+            c,
+            "basic/v1",
+            "stage",
+            "--deploy-id",
+            deploy_id,
+            "--redeploy-all",
+            "--allow-dirty",
+            *flags,
+            check=False,
+        )
+        assert (
+            r.returncode != 0
+        ), f"stage should fail when metadata recording is denied\nstdout={r.stdout}\nstderr={r.stderr}"
+
+    # deploy_user inherits INSERT through the role, so revoke it from the role.
+    c.sql(
+        "REVOKE INSERT ON TABLE _mz_deploy.tables.objects FROM materialize_deployer",
+        user="mz_system",
+        port=6877,
+    )
+
+    with c.test_case("no-rollback-preserves-state"):
+        # A production schema colliding with the `_prod` suffix, owned by
+        # deploy_user so the (buggy) rollback running as the deployer can drop it.
+        c.sql(
+            "CREATE SCHEMA app.keep_prod; CREATE TABLE app.keep_prod.t (id int)",
+            user="deploy_user",
+            database="app",
+        )
+        stage_fails("prod", "--no-rollback")
+        assert (
+            deployment_rows("prod") >= 1
+        ), "--no-rollback must not roll back the partial deployment records"
+        assert c.sql_query(
+            "SELECT 1 FROM mz_schemas s JOIN mz_databases d ON s.database_id = d.id "
+            "WHERE s.name = 'keep_prod' AND d.name = 'app'",
+            user="mz_system",
+            port=6877,
+        ), "--no-rollback must not CASCADE-drop the colliding production schema"
+
+    with c.test_case("default-rolls-back"):
+        # Control: without --no-rollback the same failure still cleans up (DEX-40).
+        # Also proves the injection reaches the rollback path, so the case above is
+        # a real RED/GREEN signal rather than a stage that quietly succeeded.
+        stage_fails("stg")
+        assert (
+            deployment_rows("stg") == 0
+        ), "the default path must roll back the orphaned deployment records"
 
 
 def workflow_redeploy_flags(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -2296,3 +2392,435 @@ def workflow_concurrent_deploys(c: Composition, parser: WorkflowArgumentParser) 
             "SELECT name FROM mz_clusters WHERE name LIKE '%\\_ca' OR name LIKE '%\\_cb'"
         )
         assert len(rows) == 0, f"Expected no staging clusters, got {rows}"
+
+
+def workflow_autoscaling(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """AUTO SCALING STRATEGY lifecycle over the ``autoscaling/*`` projects.
+
+    Covers the three mz-deploy touchpoints for cluster autoscaling policies:
+    creation from a cluster definition file, reconciliation of policy drift
+    (alter and reset) by ``apply``, and policy inheritance when ``stage``
+    clones a production cluster."""
+    setup_base(c)
+
+    def live_strategy(cluster: str) -> tuple[str, int] | None:
+        """The (hydration_size, linger secs) of a cluster's configured
+        policy, or None when no policy is configured."""
+        rows = c.sql_query(
+            "SELECT s.strategy->'on_hydration'->>'hydration_size', "
+            "(s.strategy->'on_hydration'->'linger_duration'->>'secs')::int "
+            "FROM mz_internal.mz_cluster_auto_scaling_strategies s "
+            "JOIN mz_clusters cl ON cl.id = s.cluster_id "
+            f"WHERE cl.name = '{cluster}' AND s.strategy != 'null'::jsonb"
+        )
+        if len(rows) == 0:
+            return None
+        assert len(rows) == 1, f"expected at most one policy row, got {rows}"
+        return (rows[0][0], int(rows[0][1]))
+
+    with c.test_case("autoscaling-create"):
+        # Creating the cluster from the definition file carries the policy.
+        result = run_mz_deploy(c, "autoscaling/v1", "apply")
+        assert result.returncode == 0, f"apply v1 failed: {result.stderr}"
+        assert live_strategy("scaled") == ("scale=1,workers=2", 60)
+
+    with c.test_case("autoscaling-idempotent"):
+        # An unchanged definition reconciles to up-to-date, not altered.
+        result = run_mz_deploy(
+            c, "autoscaling/v1", "apply", "--dry-run", "--output", "json"
+        )
+        dry_run = parse_dry_run_json(result)
+        clusters_phase = find_phase(dry_run["phases"], "clusters")
+        assert (
+            len(phase_actions(clusters_phase, "altered")) == 0
+        ), f"expected no altered clusters on re-apply, got {clusters_phase}"
+        assert (
+            len(phase_actions(clusters_phase, "up_to_date")) == 1
+        ), f"expected the cluster to be up-to-date, got {clusters_phase}"
+
+    with c.test_case("autoscaling-stage-copy"):
+        # Staging clones the LIVE production cluster config, including the
+        # policy, so staged hydration bursts like production would.
+        result = run_mz_deploy(
+            c, "autoscaling/v2", "stage", "--deploy-id", "as1", "--allow-dirty"
+        )
+        assert result.returncode == 0, f"stage as1 failed: {result.stderr}"
+        # Pin the concrete policy rather than comparing the two clusters, which
+        # would pass vacuously if neither had a policy.
+        production = live_strategy("scaled")
+        assert production == (
+            "scale=1,workers=2",
+            60,
+        ), f"expected the production policy to be set, got {production}"
+        assert (
+            live_strategy("scaled_as1") == production
+        ), "staging cluster must inherit the production autoscaling policy"
+        result = run_mz_deploy(c, "autoscaling/v2", "abort", "as1")
+        assert result.returncode == 0, f"abort as1 failed: {result.stderr}"
+
+    with c.test_case("autoscaling-alter"):
+        # A policy edit in the definition file is drift and reconciles.
+        result = run_mz_deploy(
+            c, "autoscaling/v2", "apply", "--dry-run", "--output", "json"
+        )
+        dry_run = parse_dry_run_json(result)
+        clusters_phase = find_phase(dry_run["phases"], "clusters")
+        altered = phase_actions(clusters_phase, "altered")
+        assert len(altered) == 1, f"expected 1 altered cluster, got {clusters_phase}"
+        statements = " ".join(altered[0].get("statements", []))
+        assert (
+            "AUTO SCALING STRATEGY" in statements
+        ), f"expected an AUTO SCALING STRATEGY alter, got {statements}"
+
+        result = run_mz_deploy(c, "autoscaling/v2", "apply")
+        assert result.returncode == 0, f"apply v2 failed: {result.stderr}"
+        assert live_strategy("scaled") == ("scale=1,workers=4", 120)
+
+    with c.test_case("autoscaling-reset"):
+        # Removing the option from the file resets the live policy
+        # (reconciliation is declarative).
+        result = run_mz_deploy(
+            c, "autoscaling/v3", "apply", "--dry-run", "--output", "json"
+        )
+        dry_run = parse_dry_run_json(result)
+        clusters_phase = find_phase(dry_run["phases"], "clusters")
+        altered = phase_actions(clusters_phase, "altered")
+        assert len(altered) == 1, f"expected 1 altered cluster, got {clusters_phase}"
+        statements = " ".join(altered[0].get("statements", []))
+        assert (
+            "RESET (AUTO SCALING STRATEGY)" in statements
+        ), f"expected an AUTO SCALING STRATEGY reset, got {statements}"
+
+        result = run_mz_deploy(c, "autoscaling/v3", "apply")
+        assert result.returncode == 0, f"apply v3 failed: {result.stderr}"
+        assert live_strategy("scaled") is None, "expected the policy to be reset"
+
+
+def workflow_cluster_options(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Generic cluster option reconciliation over the ``cluster-options/*``
+    projects.
+
+    Reconciliation compares the definition against the `SHOW CREATE CLUSTER`
+    statement the server renders, which spells out every option including the
+    ones the definition left to their defaults. These cases pin the two halves
+    of that comparison: a default the definition omits is not drift, and a value
+    the definition declares is."""
+    setup_base(c)
+
+    def create_sql(cluster: str) -> str:
+        """The canonical CREATE CLUSTER statement the server renders."""
+        rows = c.sql_query(f'SELECT create_sql FROM (SHOW CREATE CLUSTER "{cluster}")')
+        assert len(rows) == 1, f"expected one row for cluster {cluster}, got {rows}"
+        return rows[0][0]
+
+    def await_create_sql(cluster: str, *fragments: str) -> str:
+        """Wait for a cluster's canonical statement to contain every fragment.
+
+        An `ALTER CLUSTER` that changes the replica shape, such as SIZE or
+        INTROSPECTION INTERVAL, reconfigures gracefully: the controller runs the
+        realized and target replica sets side by side, and the catalog keeps
+        reporting the realized shape until cut-over. Reading it the instant
+        `apply` returns can still show the old value."""
+        deadline = time.time() + 60
+        sql = create_sql(cluster)
+        while not all(f in sql for f in fragments) and time.time() < deadline:
+            time.sleep(1)
+            sql = create_sql(cluster)
+        for fragment in fragments:
+            assert fragment in sql, f"expected {fragment!r} in {sql}"
+        return sql
+
+    def clusters_phase(project: str) -> dict:
+        """The clusters phase of a dry-run apply."""
+        result = run_mz_deploy(c, project, "apply", "--dry-run", "--output", "json")
+        dry_run = parse_dry_run_json(result)
+        phase = find_phase(dry_run["phases"], "clusters")
+        assert phase is not None, f"no clusters phase in {dry_run}"
+        return phase
+
+    with c.test_case("cluster-options-create"):
+        result = run_mz_deploy(c, "cluster-options/v1", "apply")
+        assert result.returncode == 0, f"apply v1 failed: {result.stderr}"
+        await_create_sql(
+            "sized", "SIZE = 'scale=1,workers=1'", "REPLICATION FACTOR = 1"
+        )
+
+    with c.test_case("cluster-options-defaults-are-not-drift"):
+        # The definition names only SIZE, so every other option the server
+        # renders holds its default. This case fails the day Materialize renders
+        # a new always-present option whose default reconciliation lacks.
+        phase = clusters_phase("cluster-options/v1")
+        assert (
+            len(phase_actions(phase, "altered")) == 0
+        ), f"expected no altered clusters on re-apply, got {phase}"
+        assert (
+            len(phase_actions(phase, "up_to_date")) == 1
+        ), f"expected the cluster to be up-to-date, got {phase}"
+
+    with c.test_case("cluster-options-replication-factor"):
+        # Declaring REPLICATION FACTOR where the live value is the default is
+        # drift.
+        phase = clusters_phase("cluster-options/v2")
+        altered = phase_actions(phase, "altered")
+        assert len(altered) == 1, f"expected 1 altered cluster, got {phase}"
+        statements = " ".join(altered[0].get("statements", []))
+        assert (
+            "SET (REPLICATION FACTOR = 2)" in statements
+        ), f"expected a REPLICATION FACTOR alter, got {statements}"
+
+        result = run_mz_deploy(c, "cluster-options/v2", "apply")
+        assert result.returncode == 0, f"apply v2 failed: {result.stderr}"
+        await_create_sql(
+            "sized", "SIZE = 'scale=1,workers=1'", "REPLICATION FACTOR = 2"
+        )
+
+        # A declared value that matches the live one is not drift either.
+        phase = clusters_phase("cluster-options/v2")
+        assert (
+            len(phase_actions(phase, "up_to_date")) == 1
+        ), f"expected the cluster to be up-to-date, got {phase}"
+
+    with c.test_case("cluster-options-reset-and-resize"):
+        # Dropping REPLICATION FACTOR reverts it to the server default.
+        phase = clusters_phase("cluster-options/v3")
+        altered = phase_actions(phase, "altered")
+        assert len(altered) == 1, f"expected 1 altered cluster, got {phase}"
+        statements = altered[0].get("statements", [])
+        assert any(
+            "RESET (REPLICATION FACTOR)" in s for s in statements
+        ), f"expected a REPLICATION FACTOR reset, got {statements}"
+        assert any(
+            "SET (SIZE = 'scale=1,workers=2')" in s for s in statements
+        ), f"expected a SIZE alter, got {statements}"
+
+        result = run_mz_deploy(c, "cluster-options/v3", "apply")
+        assert result.returncode == 0, f"apply v3 failed: {result.stderr}"
+        await_create_sql(
+            "sized", "SIZE = 'scale=1,workers=2'", "REPLICATION FACTOR = 1"
+        )
+
+    with c.test_case("cluster-options-unnamed-options"):
+        # Neither option appears anywhere in the reconciler.
+        phase = clusters_phase("cluster-options/v4")
+        altered = phase_actions(phase, "altered")
+        assert len(altered) == 1, f"expected 1 altered cluster, got {phase}"
+        statements = " ".join(altered[0].get("statements", []))
+        assert (
+            "EXPERIMENTAL ARRANGEMENT COMPRESSION = true" in statements
+        ), f"expected an arrangement compression alter, got {statements}"
+
+        result = run_mz_deploy(c, "cluster-options/v4", "apply")
+        assert result.returncode == 0, f"apply v4 failed: {result.stderr}"
+
+        await_create_sql(
+            "sized",
+            "EXPERIMENTAL ARRANGEMENT COMPRESSION = true",
+            "INTROSPECTION INTERVAL = INTERVAL '00:00:05'",
+        )
+
+        # The definition writes '5s' where the server renders INTERVAL '00:00:05'.
+        phase = clusters_phase("cluster-options/v4")
+        assert (
+            len(phase_actions(phase, "up_to_date")) == 1
+        ), f"expected the cluster to be up-to-date, got {phase}"
+
+    with c.test_case("cluster-option-spellings-are-idempotent"):
+        # The planner gives bare booleans their implied true value, maps a zero
+        # introspection interval to NULL, and accepts DISK as a legacy no-op.
+        result = run_mz_deploy(c, "cluster-options/spellings", "apply")
+        assert result.returncode == 0, f"apply spellings failed: {result.stderr}"
+
+        zero_and_noops = await_create_sql(
+            "zero_and_noops",
+            "EXPERIMENTAL ARRANGEMENT COMPRESSION = true",
+            "INTROSPECTION INTERVAL = NULL",
+            "MANAGED = true",
+        )
+        assert (
+            "DISK" not in zero_and_noops
+        ), f"expected SHOW CREATE to omit DISK, got {zero_and_noops}"
+        await_create_sql("implied_debugging", "INTROSPECTION DEBUGGING = true")
+
+        phase = clusters_phase("cluster-options/spellings")
+        assert (
+            len(phase_actions(phase, "altered")) == 0
+        ), f"equivalent option spellings must not drift, got {phase}"
+        assert (
+            len(phase_actions(phase, "up_to_date")) == 2
+        ), f"expected both clusters to be up-to-date, got {phase}"
+
+    with c.test_case("cluster-options-stage-clones-every-option"):
+        # The clone is identical option for option.
+        result = run_mz_deploy(
+            c, "cluster-options/v4", "stage", "--deploy-id", "co1", "--allow-dirty"
+        )
+        assert result.returncode == 0, f"stage co1 failed: {result.stderr}"
+
+        production = create_sql("sized")
+        staged = create_sql("sized_co1")
+        assert staged == production.replace(
+            '"sized"', '"sized_co1"', 1
+        ), f"staging cluster diverged from production:\n  {production}\n  {staged}"
+
+        result = run_mz_deploy(c, "cluster-options/v4", "abort", "co1")
+        assert result.returncode == 0, f"abort co1 failed: {result.stderr}"
+
+
+def workflow_apply_all_role_ordering(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """`apply` (apply-all) must create project roles before clusters, because a
+    cluster file may grant a privilege to a project-defined role.
+
+    Before the ordering fix the clusters phase ran first and its
+    `GRANT USAGE ON CLUSTER reporting TO reader` failed with "unknown role
+    'reader'", and the failure was sticky across re-runs.
+    """
+    setup_base(c)
+
+    # The roles phase creates `reader`; grant the deploy role permission to do
+    # so. This isolates the phase-ordering bug from privilege setup.
+    c.sql("GRANT CREATEROLE ON SYSTEM TO deploy_user", user="mz_system", port=6877)
+
+    result = run_mz_deploy(c, "cluster-grant-role/v1", "apply", "--profile", "default")
+    assert result.returncode == 0, (
+        "apply-all must create roles before clusters so a cluster grant can "
+        f"reference a project role:\n{result.stdout}\n{result.stderr}"
+    )
+
+    rows = c.sql_query("SELECT name FROM mz_roles WHERE name = 'reader'")
+    assert len(rows) == 1, f"expected role 'reader' to exist, got {rows}"
+    rows = c.sql_query("SELECT name FROM mz_clusters WHERE name = 'reporting'")
+    assert len(rows) == 1, f"expected cluster 'reporting' to exist, got {rows}"
+
+
+def workflow_source_references(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """`apply tables` checks every `(REFERENCE ...)` against what its source can
+    read, and refreshes the source's references first so a table added upstream
+    after the source was created is still accepted."""
+    setup_base(c)
+
+    # v1 creates the source plus one table whose reference is valid.
+    result = run_mz_deploy(c, "source-references/v1", "apply")
+    assert result.returncode == 0, f"apply v1 failed: {result.stderr}"
+
+    with c.test_case("reject-unknown-reference"):
+        # v2 adds a table naming an upstream object that does not exist. Both
+        # the dry run and the real apply must refuse it.
+        for args in (["apply", "--dry-run"], ["apply"]):
+            result = run_mz_deploy(c, "source-references/v2", *args, check=False)
+            assert result.returncode != 0, f"{args} unexpectedly succeeded"
+            for expected in ("does not expose", "app.ingest.widgets", "public.widgets"):
+                assert (
+                    expected in result.stderr
+                ), f"{args} error missing {expected!r}:\n{result.stderr}"
+            # Nothing upstream is spelled anything like `widgets`, so the error
+            # must not reach for an unrelated name.
+            assert (
+                "did you mean" not in result.stderr
+            ), f"{args} suggested an unrelated reference:\n{result.stderr}"
+
+        rows = c.sql_query(
+            "SELECT t.name FROM mz_tables t "
+            "JOIN mz_schemas sc ON t.schema_id = sc.id "
+            "WHERE t.name = 'widgets' AND sc.name = 'ingest'",
+            database="app",
+        )
+        assert len(rows) == 0, f"widgets must not have been created, got {rows}"
+
+    with c.test_case("accept-reference-added-upstream"):
+        # A table added upstream after the source was created is absent from the
+        # source's recorded references until they are refreshed. Applying it must
+        # still work.
+        c.exec(
+            "postgres",
+            "psql",
+            "-U",
+            "postgres",
+            "-c",
+            "CREATE TABLE gadgets (gadget_id INT PRIMARY KEY, name TEXT); "
+            "ALTER TABLE gadgets REPLICA IDENTITY FULL",
+        )
+
+        result = run_mz_deploy(c, "source-references/v3", "apply")
+        assert result.returncode == 0, f"apply v3 failed: {result.stderr}"
+
+        rows = c.sql_query(
+            "SELECT t.name FROM mz_tables t "
+            "JOIN mz_schemas sc ON t.schema_id = sc.id "
+            "WHERE t.name = 'gadgets' AND sc.name = 'ingest'",
+            database="app",
+        )
+        assert len(rows) == 1, f"expected table 'gadgets', got {rows}"
+
+    with c.test_case("suggest-misspelled-reference"):
+        # v4 asks for `public.gadget`, one character off the `public.gadgets`
+        # the source does expose. The error has to name it.
+        result = run_mz_deploy(c, "source-references/v4", "apply", check=False)
+        assert result.returncode != 0, "apply v4 unexpectedly succeeded"
+        for expected in (
+            "app.ingest.gadget",
+            "did you mean: public.gadgets?",
+            "mz_internal.mz_source_references",
+        ):
+            assert (
+                expected in result.stderr
+            ), f"error missing {expected!r}:\n{result.stderr}"
+
+
+def workflow_source_references_mysql(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """The source-reference check leaves MySQL's system schemas to the server.
+
+    `mz_source_references` never lists a table in `mysql`, `sys`,
+    `performance_schema`, or `information_schema`, because both `CREATE SOURCE`
+    and `ALTER SOURCE ... REFRESH REFERENCES` retrieve MySQL tables with system
+    schemas excluded. Creating a table from such a reference does resolve it, so
+    the check must skip those references rather than call them missing, while
+    still checking every other reference on the same source."""
+    setup_base(c)
+    c.up("mysql")
+
+    def mysql(sql: str) -> None:
+        c.exec(
+            "mysql",
+            "bash",
+            "-c",
+            f"export MYSQL_PWD={MySql.DEFAULT_ROOT_PASSWORD} && mysql -u root -e {shlex.quote(sql)}",
+        )
+
+    mysql(
+        "CREATE DATABASE inventory; "
+        "CREATE TABLE inventory.items (item_id INT PRIMARY KEY, name TEXT); "
+        "INSERT INTO inventory.items VALUES (1, 'widget'); "
+        "CREATE TABLE mysql.t_in_mysql (f1 INT); "
+        "INSERT INTO mysql.t_in_mysql VALUES (1)"
+    )
+
+    result = run_mz_deploy(c, "source-references-mysql/v1", "apply")
+    assert result.returncode == 0, f"apply v1 failed: {result.stderr}"
+
+    with c.test_case("accept-system-schema-reference"):
+        # `mysql.t_in_mysql` is readable but never recorded, so the check has to
+        # leave it alone.
+        result = run_mz_deploy(c, "source-references-mysql/v2", "apply")
+        assert result.returncode == 0, f"apply v2 failed: {result.stderr}"
+
+        rows = c.sql_query(
+            "SELECT t.name FROM mz_tables t "
+            "JOIN mz_schemas sc ON t.schema_id = sc.id "
+            "WHERE t.name = 't_in_mysql' AND sc.name = 'ingest'",
+            database="app",
+        )
+        assert len(rows) == 1, f"expected table 't_in_mysql', got {rows}"
+
+    with c.test_case("reject-unknown-reference-mysql"):
+        # Skipping system schemas must not stop the check from catching a
+        # reference the source genuinely cannot read.
+        result = run_mz_deploy(c, "source-references-mysql/v3", "apply", check=False)
+        assert result.returncode != 0, "apply v3 unexpectedly succeeded"
+        for expected in ("does not expose", "app.ingest.absent", "inventory.absent"):
+            assert (
+                expected in result.stderr
+            ), f"error missing {expected!r}:\n{result.stderr}"

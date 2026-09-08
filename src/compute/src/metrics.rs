@@ -12,7 +12,9 @@ use std::sync::{Arc, Mutex};
 use mz_compute_client::metrics::{CommandMetrics, HistoryMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
-use mz_ore::metrics::{MetricTag, MetricVisibility, MetricsRegistry, UIntGauge, raw};
+use mz_ore::metrics::{
+    MakeCollectorOpts, MetricTag, MetricVisibility, MetricsRegistry, UIntGauge, raw,
+};
 use mz_repr::{GlobalId, SharedRow};
 use prometheus::core::{AtomicF64, GenericCounter};
 use prometheus::proto::LabelPair;
@@ -56,7 +58,6 @@ pub struct ComputeMetrics {
     // look at.
     timely_step_duration_seconds: HistogramVec,
     persist_peek_seconds: HistogramVec,
-    stashed_peek_seconds: HistogramVec,
     handle_command_duration_seconds: HistogramVec,
 
     // Index peek timing phases (per-cluster, no worker label)
@@ -65,9 +66,16 @@ pub struct ComputeMetrics {
     index_peek_error_scan_seconds: Histogram,
     index_peek_cursor_setup_seconds: Histogram,
     index_peek_row_iteration_seconds: Histogram,
+    index_peek_row_iteration_rows: Histogram,
     index_peek_result_sort_seconds: Histogram,
+    index_peek_result_sort_rows: Histogram,
     index_peek_frontier_check_seconds: Histogram,
     index_peek_row_collection_seconds: Histogram,
+    index_peek_walks_total: raw::IntCounterVec,
+    index_peek_stashed_total: IntCounter,
+    index_peek_permit_queue_depth: UIntGauge,
+    index_peek_permit_wait_seconds: Histogram,
+    index_peek_offload_seconds: Histogram,
 
     // memory usage
     shared_row_heap_capacity_bytes: raw::UIntGaugeVec,
@@ -83,160 +91,220 @@ pub struct ComputeMetrics {
     subscribe_snapshots_skipped_total: IntCounter,
 }
 
+/// Applies the per-role const label to `opts`, unless `role` is `Solo`.
+///
+/// The two named roles (maintenance, interactive) each get a distinct `role` label so a second
+/// compute runtime in the same process registers a distinct series rather than colliding with the
+/// first. `Solo` omits the label so a single-runtime deployment registers exactly as it did before
+/// a second runtime existed.
+fn with_role(
+    mut opts: MakeCollectorOpts,
+    role: crate::server::ComputeRuntimeRole,
+) -> MakeCollectorOpts {
+    if let Some(label) = role.label() {
+        opts.opts = opts.opts.const_label("role", label);
+    }
+    opts
+}
+
 impl ComputeMetrics {
-    pub fn register_with(registry: &MetricsRegistry) -> Self {
+    /// Registers the compute metrics for `role` into `registry`.
+    ///
+    /// The two named roles carry a `role` const label so that a second compute runtime in the same
+    /// process registers a distinct series rather than colliding with the first. `Solo` carries no
+    /// such label.
+    pub fn register_with(
+        registry: &MetricsRegistry,
+        role: crate::server::ComputeRuntimeRole,
+    ) -> Self {
         let workload_class = Arc::new(Mutex::new(None));
+        let mut index_peek_row_buckets =
+            prometheus::exponential_buckets(1.0, 2.0, 25).expect("valid parameters");
+        index_peek_row_buckets.insert(0, 0.0);
 
         // Apply a `workload_class` label to all metrics in the registry when we
         // have a known workload class.
-        registry.register_postprocessor({
-            let workload_class = Arc::clone(&workload_class);
-            move |metrics| {
-                let workload_class: Option<String> =
-                    workload_class.lock().expect("lock poisoned").clone();
-                let Some(workload_class) = workload_class else {
-                    return;
-                };
-                for metric in metrics {
-                    for metric in metric.mut_metric() {
-                        let mut label = LabelPair::default();
-                        label.set_name("workload_class".into());
-                        label.set_value(workload_class.clone());
+        //
+        // The postprocessor rewrites every metric in the whole registry, so only the maintenance
+        // runtime registers it. A second registration from the interactive runtime would push the
+        // label twice onto each metric and produce a duplicate-label scrape error.
+        if role.owns_process_globals() {
+            registry.register_postprocessor({
+                let workload_class = Arc::clone(&workload_class);
+                move |metrics| {
+                    let workload_class: Option<String> =
+                        workload_class.lock().expect("lock poisoned").clone();
+                    let Some(workload_class) = workload_class else {
+                        return;
+                    };
+                    for metric in metrics {
+                        for metric in metric.mut_metric() {
+                            let mut label = LabelPair::default();
+                            label.set_name("workload_class".into());
+                            label.set_value(workload_class.clone());
 
-                        let mut labels = metric.take_label();
-                        labels.push(label);
-                        metric.set_label(labels);
+                            let mut labels = metric.take_label();
+                            labels.push(label);
+                            metric.set_label(labels);
+                        }
                     }
                 }
-            }
-        });
+            });
+        }
 
         Self {
             workload_class,
-            history_command_count: registry.register(metric!(
+            history_command_count: registry.register(with_role(metric!(
                 name: "mz_compute_replica_history_command_count",
                 help: "The number of commands in the replica's command history.",
                 var_labels: ["worker_id", "command_type"],
-            )),
-            history_dataflow_count: registry.register(metric!(
+            ), role)),
+            history_dataflow_count: registry.register(with_role(metric!(
                 name: "mz_compute_replica_history_dataflow_count",
                 help: "The number of dataflows in the replica's command history.",
                 var_labels: ["worker_id"],
                 visibility: MetricVisibility::Public,
                 tags: [MetricTag::Compute],
-            )),
-            reconciliation_reused_dataflows_count_total: registry.register(metric!(
+            ), role)),
+            reconciliation_reused_dataflows_count_total: registry.register(with_role(metric!(
                 name: "mz_compute_reconciliation_reused_dataflows_count_total",
                 help: "The total number of dataflows that were reused during compute reconciliation.",
                 var_labels: ["worker_id"],
-            )),
-            reconciliation_replaced_dataflows_count_total: registry.register(metric!(
+            ), role)),
+            reconciliation_replaced_dataflows_count_total: registry.register(with_role(metric!(
                 name: "mz_compute_reconciliation_replaced_dataflows_count_total",
                 help: "The total number of dataflows that were replaced during compute reconciliation.",
                 var_labels: ["worker_id", "reason"],
-            )),
-            arrangement_maintenance_seconds_total: registry.register(metric!(
+            ), role)),
+            arrangement_maintenance_seconds_total: registry.register(with_role(metric!(
                 name: "mz_arrangement_maintenance_seconds_total",
                 help: "The total time spent maintaining arrangements.",
                 var_labels: ["worker_id"],
                 visibility: MetricVisibility::Public,
                 tags: [MetricTag::Compute],
-            )),
-            arrangement_maintenance_active_info: registry.register(metric!(
+            ), role)),
+            arrangement_maintenance_active_info: registry.register(with_role(metric!(
                 name: "mz_arrangement_maintenance_active_info",
                 help: "Whether maintenance is currently occuring.",
                 var_labels: ["worker_id"],
-            )),
-            timely_step_duration_seconds: registry.register(metric!(
+            ), role)),
+            timely_step_duration_seconds: registry.register(with_role(metric!(
                 name: "mz_timely_step_duration_seconds",
                 help: "The time spent in each compute step_or_park call",
                 const_labels: {"cluster" => "compute"},
                 var_labels: ["worker_id"],
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 32.0),
-            )),
-            shared_row_heap_capacity_bytes: registry.register(metric!(
+            ), role)),
+            shared_row_heap_capacity_bytes: registry.register(with_role(metric!(
                 name: "mz_dataflow_shared_row_heap_capacity_bytes",
                 help: "The heap capacity of the shared row.",
                 var_labels: ["worker_id"],
-            )),
-            persist_peek_seconds: registry.register(metric!(
+            ), role)),
+            persist_peek_seconds: registry.register(with_role(metric!(
                 name: "mz_persist_peek_seconds",
                 help: "Time spent in (experimental) Persist fast-path peeks.",
                 var_labels: ["worker_id"],
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
-            )),
-            stashed_peek_seconds: registry.register(metric!(
-                name: "mz_stashed_peek_seconds",
-                help: "Time spent reading a peek result and stashing it in the peek result stash (aka. persist blob).",
-                var_labels: ["worker_id"],
-                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
-            )),
-            handle_command_duration_seconds: registry.register(metric!(
+            ), role)),
+            handle_command_duration_seconds: registry.register(with_role(metric!(
                 name: "mz_cluster_handle_command_duration_seconds",
                 help: "Time spent in handling commands.",
                 const_labels: {"cluster" => "compute"},
                 var_labels: ["worker_id", "command_type"],
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
-            )),
-            index_peek_total_seconds: registry.register(metric!(
+            ), role)),
+            index_peek_total_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_total_seconds",
-                help: "Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.",
+                help: "Time one visit to an index peek spent on the timely worker. A peek whose walk was offloaded contributes only the inline slice that offloaded it, and its time away from the worker is `mz_index_peek_offload_seconds`.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
-            )),
-            index_peek_seek_fulfillment_seconds: registry.register(metric!(
+            ), role)),
+            index_peek_seek_fulfillment_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_seek_fulfillment_seconds",
                 help: "Time in seek_fulfillment method including frontier checks and data collection.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
-            )),
-            index_peek_error_scan_seconds: registry.register(metric!(
+            ), role)),
+            index_peek_error_scan_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_error_scan_seconds",
-                help: "Time scanning the error trace for errors.",
+                help: "Time scanning the error trace for errors, summed over the slices the scan was cut into and observed only for scans that find no error.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
-            )),
-            index_peek_cursor_setup_seconds: registry.register(metric!(
+            ), role)),
+            index_peek_cursor_setup_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_cursor_setup_seconds",
-                help: "Time setting up cursor and literal constraints.",
+                help: "Time opening the trace cursor and sorting the literal constraints, excluding the seek to those literals.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
-            )),
-            index_peek_row_iteration_seconds: registry.register(metric!(
+            ), role)),
+            index_peek_row_iteration_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_row_iteration_seconds",
-                help: "Time iterating rows and evaluating MFP.",
+                help: "Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP, summed over the slices the walk was cut into.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
-            )),
-            index_peek_result_sort_seconds: registry.register(metric!(
+            ), role)),
+            index_peek_row_iteration_rows: registry.register(with_role(metric!(
+                name: "mz_index_peek_row_iteration_rows",
+                help: "Number of arrangement rows evaluated by the index peek result iterator.",
+                buckets: index_peek_row_buckets.clone(),
+            ), role)),
+            index_peek_result_sort_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_result_sort_seconds",
-                help: "Time sorting intermediate results during peek collection.",
+                help: "Time thinning intermediate results down to the rows a peek's finishing needs.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
-            )),
-            index_peek_frontier_check_seconds: registry.register(metric!(
+            ), role)),
+            index_peek_result_sort_rows: registry.register(with_role(metric!(
+                name: "mz_index_peek_result_sort_rows",
+                help: "Number of intermediate result rows handed to thinning during peek collection, summed across the times it ran.",
+                buckets: index_peek_row_buckets,
+            ), role)),
+            index_peek_frontier_check_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_frontier_check_seconds",
                 help: "Time checking trace frontiers.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
-            )),
-            index_peek_row_collection_seconds: registry.register(metric!(
+            ), role)),
+            index_peek_row_collection_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_row_collection_seconds",
-                help: "Time constructing RowCollection from peek results.",
+                help: "Time constructing RowCollection from peek results, including converting the row counts the scan produced.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
-            )),
-            replica_expiration_timestamp_seconds: registry.register(metric!(
+            ), role)),
+            index_peek_walks_total: registry.register(with_role(metric!(
+                name: "mz_index_peek_walks_total",
+                help: "The number of index peek walks that reached an outcome, by the substrate they ended on: `inline` on the timely worker, `offloaded` away from it.",
+                var_labels: ["substrate"],
+            ), role)),
+            index_peek_stashed_total: registry.register(with_role(metric!(
+                name: "mz_index_peek_stashed_total",
+                help: "The number of index peek walks that answered with a handle to the peek response stash, always a subset of the `offloaded` substrate of `mz_index_peek_walks_total`.",
+            ), role)),
+            index_peek_permit_queue_depth: registry.register(with_role(metric!(
+                name: "mz_index_peek_permit_queue_depth",
+                help: "The number of offloaded index peek walks waiting for a permit to run.",
+            ), role)),
+            index_peek_permit_wait_seconds: registry.register(with_role(metric!(
+                name: "mz_index_peek_permit_wait_seconds",
+                help: "Time an offloaded index peek walk waited for a permit, observed only for walks that were admitted.",
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            ), role)),
+            index_peek_offload_seconds: registry.register(with_role(metric!(
+                name: "mz_index_peek_offload_seconds",
+                help: "Wall-clock time an offloaded index peek walk spent away from the timely worker, including the wait for a permit.",
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            ), role)),
+            replica_expiration_timestamp_seconds: registry.register(with_role(metric!(
                 name: "mz_dataflow_replica_expiration_timestamp_seconds",
                 help: "The replica expiration timestamp in seconds since epoch.",
                 var_labels: ["worker_id"],
-            )),
-            replica_expiration_remaining_seconds: registry.register(metric!(
+            ), role)),
+            replica_expiration_remaining_seconds: registry.register(with_role(metric!(
                 name: "mz_dataflow_replica_expiration_remaining_seconds",
                 help: "The remaining seconds until replica expiration. Can go negative, can lag behind.",
                 var_labels: ["worker_id"],
-            )),
-            collection_count: registry.register(metric!(
+            ), role)),
+            collection_count: registry.register(with_role(metric!(
                 name: "mz_compute_collection_count",
                 help: "The number and hydration status of maintained compute collections.",
                 var_labels: ["worker_id", "type", "hydrated"],
-            )),
-            subscribe_snapshots_skipped_total: registry.register(metric!(
+            ), role)),
+            subscribe_snapshots_skipped_total: registry.register(with_role(metric!(
                 name: "mz_subscribe_snapshots_skipped_total",
                 help: "The number of collection snapshots that were skipped by the subscribe snapshot optimization.",
-            )),
+            ), role)),
         }
     }
 
@@ -258,7 +326,6 @@ impl ComputeMetrics {
             .timely_step_duration_seconds
             .with_label_values(&[&worker]);
         let persist_peek_seconds = self.persist_peek_seconds.with_label_values(&[&worker]);
-        let stashed_peek_seconds = self.stashed_peek_seconds.with_label_values(&[&worker]);
         let handle_command_duration_seconds = CommandMetrics::build(|typ| {
             self.handle_command_duration_seconds
                 .with_label_values(&[worker.as_ref(), typ])
@@ -268,9 +335,19 @@ impl ComputeMetrics {
         let index_peek_error_scan_seconds = self.index_peek_error_scan_seconds.clone();
         let index_peek_cursor_setup_seconds = self.index_peek_cursor_setup_seconds.clone();
         let index_peek_row_iteration_seconds = self.index_peek_row_iteration_seconds.clone();
+        let index_peek_row_iteration_rows = self.index_peek_row_iteration_rows.clone();
         let index_peek_result_sort_seconds = self.index_peek_result_sort_seconds.clone();
+        let index_peek_result_sort_rows = self.index_peek_result_sort_rows.clone();
         let index_peek_frontier_check_seconds = self.index_peek_frontier_check_seconds.clone();
         let index_peek_row_collection_seconds = self.index_peek_row_collection_seconds.clone();
+        let index_peek_walks_inline = self.index_peek_walks_total.with_label_values(&["inline"]);
+        let index_peek_walks_offloaded = self
+            .index_peek_walks_total
+            .with_label_values(&["offloaded"]);
+        let index_peek_stashed_total = self.index_peek_stashed_total.clone();
+        let index_peek_permit_queue_depth = self.index_peek_permit_queue_depth.clone();
+        let index_peek_permit_wait_seconds = self.index_peek_permit_wait_seconds.clone();
+        let index_peek_offload_seconds = self.index_peek_offload_seconds.clone();
         let replica_expiration_timestamp_seconds = self
             .replica_expiration_timestamp_seconds
             .with_label_values(&[&worker]);
@@ -288,16 +365,23 @@ impl ComputeMetrics {
             arrangement_maintenance_active_info,
             timely_step_duration_seconds,
             persist_peek_seconds,
-            stashed_peek_seconds,
             handle_command_duration_seconds,
             index_peek_total_seconds,
             index_peek_seek_fulfillment_seconds,
             index_peek_error_scan_seconds,
             index_peek_cursor_setup_seconds,
             index_peek_row_iteration_seconds,
+            index_peek_row_iteration_rows,
             index_peek_result_sort_seconds,
+            index_peek_result_sort_rows,
             index_peek_frontier_check_seconds,
             index_peek_row_collection_seconds,
+            index_peek_walks_inline,
+            index_peek_walks_offloaded,
+            index_peek_stashed_total,
+            index_peek_permit_queue_depth,
+            index_peek_permit_wait_seconds,
+            index_peek_offload_seconds,
             replica_expiration_timestamp_seconds,
             replica_expiration_remaining_seconds,
             shared_row_heap_capacity_bytes,
@@ -323,8 +407,6 @@ pub struct WorkerMetrics {
     pub(crate) timely_step_duration_seconds: Histogram,
     /// Histogram of persist peek durations.
     pub(crate) persist_peek_seconds: Histogram,
-    /// Histogram of stashed peek durations.
-    pub(crate) stashed_peek_seconds: Histogram,
     /// Histogram of command handling durations.
     pub(crate) handle_command_duration_seconds: CommandMetrics<Histogram>,
     /// Histogram of total index peek durations.
@@ -337,12 +419,35 @@ pub struct WorkerMetrics {
     pub(crate) index_peek_cursor_setup_seconds: Histogram,
     /// Histogram of index peek row iteration durations.
     pub(crate) index_peek_row_iteration_seconds: Histogram,
+    /// Histogram of index peek rows processed by the result iterator.
+    pub(crate) index_peek_row_iteration_rows: Histogram,
     /// Histogram of index peek result sort durations.
     pub(crate) index_peek_result_sort_seconds: Histogram,
+    /// Histogram of index peek rows sorted across all result sort operations.
+    pub(crate) index_peek_result_sort_rows: Histogram,
     /// Histogram of index peek frontier check durations.
     pub(crate) index_peek_frontier_check_seconds: Histogram,
     /// Histogram of index peek row collection construction durations.
     pub(crate) index_peek_row_collection_seconds: Histogram,
+    /// Counts index peek walks that ran on the timely worker.
+    ///
+    /// Both substrate series are resolved when the worker's metrics are built, so each exists at
+    /// zero before its first walk. A series at zero says the offload never engaged, where an absent
+    /// series says nothing.
+    pub(crate) index_peek_walks_inline: IntCounter,
+    /// Counts index peek walks that ran away from the timely worker.
+    pub(crate) index_peek_walks_offloaded: IntCounter,
+    /// Counts index peek walks that answered from the peek response stash.
+    ///
+    /// Resolved when the worker's metrics are built, so it reports zero before the first stashed
+    /// answer rather than being absent. Whether a peek reached the stash has no other signal.
+    pub(crate) index_peek_stashed_total: IntCounter,
+    /// How many offloaded index peek walks are waiting for a permit.
+    pub(crate) index_peek_permit_queue_depth: UIntGauge,
+    /// Histogram of how long an offloaded index peek walk waited for its permit.
+    pub(crate) index_peek_permit_wait_seconds: Histogram,
+    /// Histogram of how long an offloaded index peek walk was away from the worker.
+    pub(crate) index_peek_offload_seconds: Histogram,
     /// The timestamp of replica expiration.
     pub(crate) replica_expiration_timestamp_seconds: UIntGauge,
     /// Remaining seconds until replica expiration.
@@ -512,5 +617,66 @@ impl Drop for CollectionMetrics {
     fn drop(&mut self) {
         self.metrics
             .dec_collection_count(self.collection_type, self.collection_hydrated);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use mz_ore::metrics::MetricsRegistry;
+
+    use super::ComputeMetrics;
+    use crate::server::ComputeRuntimeRole;
+
+    /// The `Solo` (single-runtime) role registers exactly as compute did before a second runtime
+    /// existed: no metric carries a `role` label, so single-runtime dashboards and exact-match
+    /// alerts are byte-unchanged.
+    #[mz_ore::test]
+    fn solo_runtime_omits_role_label() {
+        let registry = MetricsRegistry::new();
+        let metrics = ComputeMetrics::register_with(&registry, ComputeRuntimeRole::Solo);
+        // Instantiate the per-worker children so the `*Vec` families emit rows to inspect.
+        let _worker = metrics.for_worker(0);
+
+        for family in registry.gather() {
+            for metric in family.get_metric() {
+                for label in metric.get_label() {
+                    assert_ne!(
+                        label.name(),
+                        "role",
+                        "solo metric {} unexpectedly carries a role label",
+                        family.name(),
+                    );
+                }
+            }
+        }
+    }
+
+    /// The two named roles each carry their own `role` label, so two runtimes in one process
+    /// register distinct series rather than colliding. Registering both on one registry also
+    /// exercises the non-collision that lets them coexist.
+    #[mz_ore::test]
+    fn named_roles_carry_distinct_role_label() {
+        let registry = MetricsRegistry::new();
+        let maintenance = ComputeMetrics::register_with(&registry, ComputeRuntimeRole::Maintenance);
+        let interactive = ComputeMetrics::register_with(&registry, ComputeRuntimeRole::Interactive);
+        let _maintenance_worker = maintenance.for_worker(0);
+        let _interactive_worker = interactive.for_worker(0);
+
+        let mut roles = BTreeSet::new();
+        for family in registry.gather() {
+            for metric in family.get_metric() {
+                let role = metric
+                    .get_label()
+                    .iter()
+                    .find(|label| label.name() == "role")
+                    .unwrap_or_else(|| panic!("metric {} missing a role label", family.name()));
+                roles.insert(role.value().to_string());
+            }
+        }
+
+        assert!(roles.contains("maintenance"), "roles seen: {roles:?}");
+        assert!(roles.contains("interactive"), "roles seen: {roles:?}");
     }
 }

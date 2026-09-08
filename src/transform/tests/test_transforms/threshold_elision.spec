@@ -34,7 +34,7 @@ Source defined as t1
 # ```sql
 # (select * from x) except all (select * from x where a < 7)
 # ```
-apply pipeline=threshold_elision
+apply pipeline=ThresholdElision
 Threshold
   Union
     Get x
@@ -53,7 +53,7 @@ Union
 # ```sql
 # (select * from x) except all (select * from y where a < 7)
 # ```
-apply pipeline=threshold_elision
+apply pipeline=ThresholdElision
 Threshold
   Union
     Get x
@@ -73,7 +73,7 @@ Threshold
 # ```sql
 # (select * from x) except (select * from x where a < 7)
 # ```
-apply pipeline=threshold_elision
+apply pipeline=ThresholdElision
 Threshold
   Union
     Distinct project=[#0, #1]
@@ -96,7 +96,7 @@ Union
 # ```sql
 # (select * from x) except (select * from y where a > 7)
 # ```
-apply pipeline=threshold_elision
+apply pipeline=ThresholdElision
 Threshold
   Union
     Distinct project=[#0, #1]
@@ -121,7 +121,7 @@ Threshold
 # with r as (select * from x except select * from x where a < 7)
 # select * from r except all select * from r where a > 9;
 # ```
-apply pipeline=threshold_elision
+apply pipeline=ThresholdElision
 Return
   Threshold
     Union

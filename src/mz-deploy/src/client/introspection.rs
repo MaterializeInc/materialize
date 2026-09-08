@@ -16,10 +16,10 @@
 
 use crate::client::connection::{Client, IntrospectionClient};
 use crate::client::errors::ConnectionError;
-use crate::client::models::{Cluster, ClusterConfig, ClusterOptions, ClusterReplica, ObjectGrant};
-use crate::client::quote_identifier;
+use crate::client::models::{Cluster, ClusterConfig, ClusterReplica, ObjectGrant};
 use crate::client::sql_placeholders;
 use crate::client::staging_suffix_like_pattern;
+use crate::client::{parse_create_cluster, quote_identifier};
 use crate::project::SchemaQualifier;
 use crate::project::ir::object_id::ObjectId;
 use itertools::Itertools;
@@ -81,12 +81,13 @@ pub(super) async fn get_cluster(
 ) -> Result<Option<Cluster>, ConnectionError> {
     let query = r#"
         SELECT
-            id,
-            name,
-            size,
-            replication_factor::bigint AS replication_factor
-        FROM mz_catalog.mz_clusters
-        WHERE name = $1
+            c.id,
+            c.name,
+            c.managed,
+            c.size,
+            c.replication_factor::bigint AS replication_factor
+        FROM mz_catalog.mz_clusters c
+        WHERE c.name = $1
     "#;
 
     let rows = client.query(query, &[&name]).await?;
@@ -99,21 +100,36 @@ pub(super) async fn get_cluster(
     Ok(Some(Cluster {
         id: row.get("id"),
         name: row.get("name"),
+        managed: row.get("managed"),
         size: row.get("size"),
         replication_factor: row.get("replication_factor"),
     }))
+}
+
+/// The canonical `CREATE CLUSTER` statement for a cluster, as the server renders
+/// it from the catalog. Returns `None` if the cluster does not exist.
+///
+/// Errors on unmanaged clusters.
+pub(super) async fn get_cluster_create_sql(
+    client: &Client,
+    name: &str,
+) -> Result<Option<String>, ConnectionError> {
+    let query = format!("SHOW CREATE CLUSTER {}", quote_identifier(name));
+    let rows = client.query(&query, &[]).await?;
+    Ok(rows.first().map(|row| row.get("create_sql")))
 }
 
 /// List all clusters.
 pub(super) async fn list_clusters(client: &Client) -> Result<Vec<Cluster>, ConnectionError> {
     let query = r#"
         SELECT
-            id,
-            name,
-            size,
-            replication_factor::bigint AS replication_factor
-        FROM mz_catalog.mz_clusters
-        ORDER BY name
+            c.id,
+            c.name,
+            c.managed,
+            c.size,
+            c.replication_factor::bigint AS replication_factor
+        FROM mz_catalog.mz_clusters c
+        ORDER BY c.name
     "#;
 
     let rows = client.query(query, &[]).await?;
@@ -123,6 +139,7 @@ pub(super) async fn list_clusters(client: &Client) -> Result<Vec<Cluster>, Conne
         .map(|row| Cluster {
             id: row.get("id"),
             name: row.get("name"),
+            managed: row.get("managed"),
             size: row.get("size"),
             replication_factor: row.get("replication_factor"),
         })
@@ -132,7 +149,7 @@ pub(super) async fn list_clusters(client: &Client) -> Result<Vec<Cluster>, Conne
 /// Get cluster configuration including replicas and grants.
 ///
 /// This fetches all information needed to clone a cluster's configuration:
-/// - For managed clusters: size and replication factor
+/// - For managed clusters: the canonical `CREATE CLUSTER` statement
 /// - For unmanaged clusters: replica configurations
 /// - For both: privilege grants
 pub(super) async fn get_cluster_config(
@@ -142,11 +159,7 @@ pub(super) async fn get_cluster_config(
     // Query 1: Get cluster info and replicas with LEFT JOIN
     let cluster_query = r#"
         SELECT
-            c.id,
-            c.name,
             c.managed,
-            c.size,
-            c.replication_factor::bigint AS replication_factor,
             r.name AS replica_name,
             r.size AS replica_size,
             r.availability_zone
@@ -162,11 +175,7 @@ pub(super) async fn get_cluster_config(
         return Ok(None);
     }
 
-    // Extract cluster-level info from first row
-    let first_row = &cluster_rows[0];
-    let managed: bool = first_row.get("managed");
-    let size: Option<String> = first_row.get("size");
-    let replication_factor: Option<i64> = first_row.get("replication_factor");
+    let managed: bool = cluster_rows[0].get("managed");
 
     // Query 2: Get grants (excluding owner's implicit privileges)
     let grants_query = r#"
@@ -195,23 +204,14 @@ pub(super) async fn get_cluster_config(
         .collect();
 
     if managed {
-        // Managed cluster
-        let size = size.ok_or_else(|| {
-            ConnectionError::Message(format!(
-                "Managed cluster '{}' has no size (unexpected)",
-                name
-            ))
+        let create_sql = get_cluster_create_sql(client, name).await?.ok_or_else(|| {
+            ConnectionError::Message(format!("Cluster '{}' has no CREATE statement", name))
         })?;
-
-        let replication_factor = replication_factor.unwrap_or(1).try_into().map_err(|_| {
-            ConnectionError::Message(format!("Invalid replication_factor for cluster '{}'", name))
-        })?;
+        let create_stmt = parse_create_cluster(&create_sql)
+            .map_err(|e| ConnectionError::Message(format!("cluster '{}': {}", name, e)))?;
 
         Ok(Some(ClusterConfig::Managed {
-            options: ClusterOptions {
-                size,
-                replication_factor,
-            },
+            create_stmt,
             grants,
         }))
     } else {
@@ -1288,6 +1288,14 @@ impl IntrospectionClient<'_> {
     /// Get a cluster by name.
     pub async fn get_cluster(&self, name: &str) -> Result<Option<Cluster>, ConnectionError> {
         get_cluster(self.client, name).await
+    }
+
+    /// Get the canonical `CREATE CLUSTER` SQL for an existing managed cluster.
+    pub async fn get_cluster_create_sql(
+        &self,
+        name: &str,
+    ) -> Result<Option<String>, ConnectionError> {
+        get_cluster_create_sql(self.client, name).await
     }
 
     /// List all clusters.

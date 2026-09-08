@@ -25,7 +25,7 @@
    -- in, Materialize only performs work on that new data. And, all this happens without
    -- extra configurations or scheduled refreshes.
    -- For more information, please visit: https://materialize.com/docs/
-    {{ exceptions.CompilationError(
+    {{ exceptions.raise_compiler_error(
         """
         dbt-materialize does not support incremental models, because all views in
         Materialize are natively maintained incrementally.

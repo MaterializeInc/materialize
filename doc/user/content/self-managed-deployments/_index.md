@@ -4,11 +4,35 @@ description: "Learn about the key components and architecture of self-managed Ma
 disable_list: true
 aliases:
   - /self-hosted/concepts/
-  - /self-managed-deployments/appendix/legacy/appendix-legacy-terraform-releases/
+  - /self-managed/
+  - /self-managed/v25.2/
+  - /self-managed/v25.2/installation/
+  - /self-managed/v25.2/installation/configuration/
+  - /self-managed/v25.2/installation/install-on-aws/
+  - /self-managed/v25.2/installation/install-on-aws/upgrade-on-aws/
+  - /self-managed/v25.2/installation/install-on-aws/appendix-aws-configuration/
+  - /self-managed/v25.2/installation/install-on-awsappendix-deployment-guidelines/
+  - /self-managed/v25.2/installation/install-on-gcp/
+  - /self-managed/v25.2/installation/install-on-gcp/appendix-gcp-configuration/
+  - /self-managed/v25.2/installation/install-on-azure/
+  - /self-managed/v25.2/installation/install-on-azureappendix-deployment-guidelines/
+  - /self-managed/v25.2/installation/install-on-azureappendix-azure-configuration/
+  - /self-managed/v25.2/installation/install-on-azure/upgrade-on-azure/
+  - /self-managed/v25.2/installation/install-on-local-kind/
+  - /self-managed/v25.2/installation/install-on-local-minikube/
+  - /self-managed/v25.2/installation/install-on-local-minikubeupgrade-on-local-minikube/
+  - /self-managed/v25.2/installation/operational-guidelines/
+  - /self-managed/v25.2/installation/troubleshooting/
+  - /self-managed/v25.2/installation/appendix-terraforms/
+  - /self-managed/v25.2/installation/upgrading/
+  - /self-managed/v25.2/installation/troubleshooting/
+  - /self-managed/v25.2/installation/upgrade-to-swap/
+
 menu:
   main:
     identifier: "sm-deployments"
-    weight: 5
+    name: "Materialize Self-Managed"
+    weight: 120
 ---
 
 ## Overview
@@ -37,21 +61,11 @@ name="installation-landing-guides-helm" %}}
 
 {{< /note >}}
 
-{{< tabs level=4 >}}
-{{< tab "Terraform Modules (New!)" >}}
-
 Materialize provides [**Terraform
 modules**](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main?tab=readme-ov-file#materialize-self-managed-terraform-modules),
 which provides concrete examples and an opinionated model for deploying Materialize.
 
 {{< yaml-table data="self_managed/terraform_list" >}}
-
-{{< /tab >}}
-{{< tab "Legacy Terraform Modules" >}}
-
-{{< yaml-table data="self_managed/terraform_list_legacy" >}}
-{{< /tab >}}
-{{< /tabs >}}
 
 ## Architecture layers
 
@@ -258,7 +272,7 @@ SELECT * FROM my_view;
 
 Clusters are isolated pools of compute resources that execute workloads in Materialize. They provide resource isolation and fault tolerance for your data processing pipelines.
 
-For a comprehensive overview of clusters in Materialize, see the [Clusters concept page](/concepts/clusters/).
+For a comprehensive overview of clusters in Materialize, see the [Clusters concept page](/fundamentals/concepts/clusters/).
 
 #### Cluster architecture
 
@@ -344,5 +358,5 @@ components work together:
 - [Materialize CRD Field
   Descriptions](/self-managed-deployments/materialize-crd-field-descriptions/)
 - [Operational guidelines](/self-managed-deployments/deployment-guidelines/)
-- [Clusters concept page](/concepts/clusters/)
-- [Materialize architecture overview](/concepts/)
+- [Clusters concept page](/fundamentals/concepts/clusters/)
+- [Materialize architecture overview](/fundamentals/concepts/)

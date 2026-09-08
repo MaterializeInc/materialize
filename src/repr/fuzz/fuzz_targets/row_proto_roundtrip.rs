@@ -31,8 +31,7 @@ fuzz_target!(|data: &[u8]| {
 
     let proto2 = <ProtoRow as ProtoType<Row>>::from_rust(&orig);
     let bytes2 = proto2.encode_to_vec();
-    let proto3 = ProtoRow::decode(bytes2.as_slice())
-        .expect("re-encode of valid Row must decode");
+    let proto3 = ProtoRow::decode(bytes2.as_slice()).expect("re-encode of valid Row must decode");
     let round: Row = proto3
         .into_rust()
         .expect("re-encoded Row must convert back to Rust");

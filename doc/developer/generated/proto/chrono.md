@@ -1,6 +1,6 @@
 ---
 source: src/proto/src/chrono.rs
-revision: a6d6c38fee
+revision: e5dab9cc27
 ---
 
 # mz-proto::chrono

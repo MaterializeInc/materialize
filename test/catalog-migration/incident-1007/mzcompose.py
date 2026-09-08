@@ -84,10 +84,15 @@ def _mz(image: str | None) -> Materialized:
         external_metadata_store=True,
         external_blob_store=True,
         sanity_restart=False,
-        # Set the default replication factor since
-        # one of the heuristics of a "non-cloud" environment is that the
-        # replication factor is 0 for mz_system.
+        # The buggy `v80_to_v81` migration decides an environment is cloud by
+        # checking whether `mz_system`'s replication factor is above 0, so the
+        # self-managed path this test reproduces needs that factor at 0. Passed
+        # explicitly: the builtin factors do not track
+        # `default_replication_factor`, since a builtin cluster honors its own
+        # factor and most tests want one replica there regardless of what they ask
+        # for on the user cluster.
         default_replication_factor=0,
+        builtin_system_cluster_replication_factor=0,
         # MZ_SOFT_ASSERTIONS=1 turns
         # soft asserts into panics, killing environmentd mid-upgrade
         # before v83->v84 ever runs. Demote them to log-only so the upgrade

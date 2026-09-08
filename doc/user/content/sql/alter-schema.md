@@ -16,10 +16,8 @@ Use `ALTER SCHEMA` to:
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "Swap with" >}}
-
-### Swap with
 
 To swap the name of a schema with that of another schema:
 
@@ -28,16 +26,12 @@ To swap the name of a schema with that of another schema:
 {{< /tab >}}
 {{< tab "Rename schema" >}}
 
-### Rename schema
-
 To rename a schema:
 
 {{% include-syntax file="examples/alter_schema" example="syntax-rename" %}}
 
 {{< /tab >}}
 {{< tab "Change owner to" >}}
-
-### Change owner to
 
 To change the owner of a schema:
 

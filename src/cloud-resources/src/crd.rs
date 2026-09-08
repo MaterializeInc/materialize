@@ -178,7 +178,7 @@ async fn register_custom_resource(
     field_manager: &str,
 ) -> Result<(), anyhow::Error> {
     let crds = versioned_crds.crds;
-    let crd_name = format!("{}.{}", &crds[0].spec.names.plural, &crds[0].spec.group);
+    let crd_name = format!("{}.{}", crds[0].spec.names.plural, crds[0].spec.group);
     info!("Registering {} crd", &crd_name);
     let crd_api = Api::<CustomResourceDefinition>::all(kube_client);
     let mut crd = merge_crds(crds, &versioned_crds.stored_version).unwrap();

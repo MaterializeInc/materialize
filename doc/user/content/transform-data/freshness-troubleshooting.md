@@ -3,16 +3,19 @@ title: "Freshness troubleshooting"
 description: "How to diagnose and resolve freshness problems in Materialize."
 menu:
   main:
-    name: "Freshness troubleshooting"
+    name: "Troubleshoot freshness"
     identifier: freshness-troubleshooting
     parent: transform-data
     weight: 85
 ---
 
-[Freshness](/concepts/reaction-time/#freshness) measures the time from when a
+[Freshness](/fundamentals/concepts/reaction-time/#freshness) measures the time from when a
 change occurs in an upstream system to when it becomes visible in the results of
 a query. This guide can help diagnose why freshness is degraded for an object as
 well as measure freshness across your deployment.
+
+To track freshness for an object over time before a problem occurs, see [Monitor
+freshness](/transform-data/monitor-freshness/).
 
 ## Key concepts
 
@@ -298,7 +301,7 @@ credential expiration, or a deliberately paused source.
 ### Check source status
 
 To check if a source or its associated subsource/table is unhealthy, query
-[`mz_internal.mz_source_statuses`](/reference/system-catalog/mz_internal/#mz_source_statuses):
+[`mz_internal.mz_source_statuses`](/sql/system-catalog/mz_internal/#mz_source_statuses):
 
 
 ```mzsql
@@ -322,7 +325,7 @@ downstream objects. If the `status` for a source shows:
 
 A spike in lag refers to a sudden increase in lag. Materialize retains wallclock
 lag history for at least 30 days in
-[`mz_internal.mz_wallclock_global_lag_history`](/reference/system-catalog/mz_internal/#mz_wallclock_global_lag_history),
+[`mz_internal.mz_wallclock_global_lag_history`](/sql/system-catalog/mz_internal/#mz_wallclock_global_lag_history),
 binned by minute. You can use this data to find past spikes and determine their
 cause.
 
@@ -418,7 +421,7 @@ transient freshness degradation.
 When a decrease in freshness affects a single cluster but is not explained by
 [CPU or memory pressure](#check-the-cpu-or-memory-pressure), check whether DDL
 operations occurred during the spike window.
-[`mz_catalog.mz_audit_events`](/reference/system-catalog/mz_catalog/#mz_audit_events)
+[`mz_catalog.mz_audit_events`](/sql/system-catalog/mz_catalog/#mz_audit_events)
 records all `CREATE`, `DROP`, and `ALTER` operations (substitute `<spike_start>`
 and `<spike_end>` with your spike window):
 

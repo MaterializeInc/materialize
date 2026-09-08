@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import yaml
+
 from materialize import MZ_ROOT
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
@@ -35,9 +37,8 @@ class Minio(K8sResource):
             "true",
         )
 
-        # the PVC will be created afterwards
         for yaml_file in [
-            "minio-standalone-deployment",
+            "minio-standalone-pvc",
             "minio-standalone-service",
         ]:
             self.kubectl(
@@ -46,22 +47,20 @@ class Minio(K8sResource):
                 str(MINIO_YAML_DIRECTORY / f"{yaml_file}.yaml"),
             )
 
-        if self.apply_node_selectors:
-            self.kubectl(
-                "patch",
-                "deployment",
-                "minio-deployment",
-                "--type",
-                "json",
-                "-p",
-                '[{"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {"supporting-services": "true"} }]',
-            )
-
-        # the PVC needs to be created after patching the deployment
+        # NOTE: The deployment must carry its final nodeSelector before it is
+        # created, so it is injected here rather than patched in afterwards.
+        # The claim's storage class binds with WaitForFirstConsumer, so the
+        # provisioner pins the volume to whichever node the scheduler picks for
+        # the first pod that consumes the claim. A pod created without the
+        # nodeSelector can drive that decision even if it is replaced moments
+        # later, pinning the volume to a node the final pod may not run on. The
+        # pod then stays Pending forever, because nothing can satisfy both the
+        # volume's node affinity and the pod's node selector.
         self.kubectl(
             "create",
             "-f",
-            str(MINIO_YAML_DIRECTORY / "minio-standalone-pvc.yaml"),
+            "-",
+            input=self.deployment_manifest(),
         )
 
         self.wait(
@@ -71,6 +70,17 @@ class Minio(K8sResource):
         )
 
         self.create_buckets(["persist", "copytos3", "copyfroms3"])
+
+    def deployment_manifest(self) -> str:
+        with open(MINIO_YAML_DIRECTORY / "minio-standalone-deployment.yaml") as f:
+            deployment = yaml.safe_load(f)
+
+        if self.apply_node_selectors:
+            deployment["spec"]["template"]["spec"]["nodeSelector"] = {
+                "supporting-services": "true"
+            }
+
+        return yaml.dump(deployment)
 
     def create_buckets(self, buckets: list[str]) -> None:
         cmds = [

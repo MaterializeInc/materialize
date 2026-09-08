@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
+use std::future::Future;
 use std::io::Write as _;
 use std::str::FromStr;
 use std::time::Duration;
@@ -57,10 +58,34 @@ pub fn skip_consistency_checks(
         .args
         .string("reason")
         .context("must provide reason for skipping")?;
+    cmd.args.done()?;
     tracing::info!(reason, "Skipping consistency checks as requested.");
 
     state.consistency_checks_adhoc_skip = true;
     Ok(ControlFlow::Continue)
+}
+
+/// Runs `check` under `--consistency-check-timeout`.
+///
+/// Every check here talks to a Materialize that may have died mid-file, and
+/// both the HTTP client and persist retry internally with no deadline of their
+/// own. Without a bound the checks wait out the whole CI step, hours later,
+/// having printed nothing about which one was stuck.
+///
+/// The deadline is deliberately its own knob rather than a multiple of
+/// `--default-timeout`. A check opens the durable catalog and diffs two full
+/// dumps of it, so it costs far more than a query and scales with the size of
+/// the catalog, not with how long a single query may take. It bounds a hang,
+/// so it sits far above what a healthy check costs on a loaded agent.
+async fn with_deadline<F>(state: &State, check: F) -> Result<(), anyhow::Error>
+where
+    F: Future<Output = Result<(), anyhow::Error>>,
+{
+    let deadline = state.consistency_check_timeout;
+    match tokio::time::timeout(deadline, check).await {
+        Ok(result) => result,
+        Err(_) => bail!("did not finish within {deadline:?}"),
+    }
 }
 
 /// Runs consistency checks against multiple parts of Materialize to make sure we haven't violated
@@ -71,10 +96,14 @@ pub async fn run_consistency_checks(state: &State) -> Result<ControlFlow, anyhow
         return Ok(ControlFlow::Continue);
     }
 
-    let coordinator = check_coordinator(state).await.context("coordinator");
-    let catalog_state = check_catalog_state(state).await.context("catalog state");
+    let coordinator = with_deadline(state, check_coordinator(state))
+        .await
+        .context("coordinator");
+    let catalog_state = with_deadline(state, check_catalog_state(state))
+        .await
+        .context("catalog state");
     let statement_logging_state = if state.check_statement_logging {
-        check_statement_logging(state)
+        with_deadline(state, check_statement_logging(state))
             .await
             .context("statement logging state")
     } else {
@@ -110,6 +139,7 @@ pub async fn run_check_shard_tombstone(
     state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let shard_id = cmd.args.string("shard-id")?;
+    cmd.args.done()?;
     check_shard_tombstone(state, &shard_id).await?;
     Ok(ControlFlow::Continue)
 }
@@ -296,7 +326,7 @@ ALTER SYSTEM SET enable_rbac_checks = false
   WHERE
     (finished_at IS NULL OR finished_status IS NULL)
     AND sql NOT LIKE '%__FILTER-OUT-THIS-QUERY__%'
-    AND finished_status != 'aborted';
+    AND finished_status IS DISTINCT FROM 'aborted';
 0
 
 $ postgres-execute connection=postgres://mz_system:materialize@{0}

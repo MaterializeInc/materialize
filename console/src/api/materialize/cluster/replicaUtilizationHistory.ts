@@ -7,13 +7,22 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import * as Sentry from "@sentry/react";
 import { QueryKey } from "@tanstack/react-query";
 import { sql } from "kysely";
 
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
+import { buildSubscribeQuery } from "~/api/materialize/buildSubscribeQuery";
 
 import { fetchClusterDeploymentLineage } from "./clusterDeploymentLineage";
+import {
+  attachOfflineEvents,
+  bucketRowsToBucketsByReplicaId,
+  rebucketUtilizationSamples,
+  UtilizationBucketRow,
+} from "./replicaUtilizationBinning";
+
+// Re-exported for existing importers of these data types.
+export type { Bucket, OfflineEvent } from "./replicaUtilizationBinning";
 
 export type ReplicaUtilizationHistoryParameters = {
   // Filter per cluster
@@ -27,11 +36,15 @@ export type ReplicaUtilizationHistoryParameters = {
   // Size of the time buckets in milliseconds
   bucketSizeMs: number;
 
-  // Whether to use the console cluster utilization overview view
+  // Whether to use the console cluster utilization overview view (14d/1h).
   shouldUseConsoleClusterUtilizationOverviewView?: boolean;
+  // Finer indexed-view tiers for shorter windows. "unbinned3h" reads the un-binned
+  // 3h base and bins client-side; "overview24h" reads the 24h/5min binned view.
+  // Unset (and `shouldUse...` false) falls back to the ad-hoc whole-fleet query.
+  utilizationView?: "unbinned3h" | "overview24h";
 };
-// We have an equivalent query in `builtin.rs` in the MaterializeInc/materialize.
-// This should query should be kept in sync with `mz_console_cluster_utilization_overview`.
+// We have an equivalent query in `builtin.rs` in MaterializeInc/materialize.
+// This query should be kept in sync with `mz_console_cluster_utilization_overview`.
 export function buildReplicaUtilizationHistoryQuery({
   clusterIds,
   replicaId,
@@ -433,18 +446,32 @@ export function buildReplicaUtilizationHistoryQuery({
 }
 
 /**
- * This is an optimized version of buildReplicaUtilizationHistoryQuery
- * that uses a time period of 14 days and a bucket of 8 hours via a built-in index+view.
+ * Optimized version of `buildReplicaUtilizationHistoryQuery` that reads a
+ * maintained overview index+view (`_overview` 14d or `_overview_24h` 24h).
  */
 export function buildConsoleClusterUtilizationOverviewQuery({
   clusterIds,
   replicaId,
+  startDate,
+  view = "mz_console_cluster_utilization_overview",
+  resolveLineage = false,
 }: {
   clusterIds?: string[];
   replicaId?: string;
+  // Clip to the requested window (the view retains more than shorter windows).
+  startDate?: string;
+  // The `_overview` (14d/1h) and `_overview_24h` (24h/5min) views share the same
+  // output columns, so one builder serves both.
+  view?:
+    | "mz_console_cluster_utilization_overview"
+    | "mz_console_cluster_utilization_overview_24h";
+  // When true, expand clusterIds to past blue-green deployments in SQL. The
+  // poll path pre-resolves lineage in JS instead (it also needs the reverse
+  // map to relabel rows), so only the SUBSCRIBE paths set this.
+  resolveLineage?: boolean;
 }) {
   let query = queryBuilder
-    .selectFrom("mz_console_cluster_utilization_overview")
+    .selectFrom(view)
     .select([
       "bucket_start as bucketStart",
       "replica_id as replicaId",
@@ -469,9 +496,95 @@ export function buildConsoleClusterUtilizationOverviewQuery({
     .orderBy("bucketStart");
 
   if (clusterIds !== undefined && clusterIds.length > 0) {
-    query = query.where("cluster_id", "in", clusterIds);
+    if (resolveLineage) {
+      // Include the cluster's past blue-green deployments (continuous history
+      // across a swap), plus the cluster itself (system clusters have no lineage).
+      query = query.where((eb) =>
+        eb.or([
+          eb(
+            "cluster_id",
+            "in",
+            eb
+              .selectFrom("mz_cluster_deployment_lineage")
+              .select("cluster_id")
+              .where("current_deployment_cluster_id", "in", clusterIds),
+          ),
+          eb("cluster_id", "in", clusterIds),
+        ]),
+      );
+    } else {
+      query = query.where("cluster_id", "in", clusterIds);
+    }
   }
 
+  if (replicaId) {
+    query = query.where("replica_id", "=", replicaId);
+  }
+
+  if (startDate) {
+    query = query.where(
+      "bucket_start",
+      ">=",
+      sql<Date>`${sql.lit(startDate)}::timestamptz`,
+    );
+  }
+
+  return query;
+}
+
+/**
+ * Point-lookup the un-binned 3h view (`_overview_3h`) by cluster. The Console
+ * bins the returned samples client-side (`rebucketUtilizationSamples`).
+ */
+export function buildConsoleClusterUtilizationUnbinned3hQuery({
+  clusterIds,
+  replicaId,
+  resolveLineage = false,
+}: {
+  clusterIds?: string[];
+  replicaId?: string;
+  // When true, expand clusterIds to past blue-green deployments in SQL. The
+  // poll path pre-resolves lineage in JS instead (it also needs the reverse
+  // map to relabel rows), so only the SUBSCRIBE paths set this.
+  resolveLineage?: boolean;
+}) {
+  let query = queryBuilder
+    .selectFrom("mz_console_cluster_utilization_overview_3h")
+    .select([
+      "replica_id as replicaId",
+      "cluster_id as clusterId",
+      "size",
+      "name",
+      "occurred_at as occurredAt",
+      "cpu_percent as cpuPercent",
+      "memory_percent as memoryPercent",
+      "disk_percent as diskPercent",
+      "heap_percent as heapPercent",
+      "memory_and_disk_percent as memoryAndDiskPercent",
+    ]);
+
+  if (clusterIds !== undefined && clusterIds.length > 0) {
+    if (resolveLineage) {
+      // Include the cluster's past blue-green deployments (so history is
+      // continuous across a swap), plus the cluster itself (system clusters
+      // have no lineage row).
+      query = query.where((eb) =>
+        eb.or([
+          eb(
+            "cluster_id",
+            "in",
+            eb
+              .selectFrom("mz_cluster_deployment_lineage")
+              .select("cluster_id")
+              .where("current_deployment_cluster_id", "in", clusterIds),
+          ),
+          eb("cluster_id", "in", clusterIds),
+        ]),
+      );
+    } else {
+      query = query.where("cluster_id", "in", clusterIds);
+    }
+  }
   if (replicaId) {
     query = query.where("replica_id", "=", replicaId);
   }
@@ -479,49 +592,130 @@ export function buildConsoleClusterUtilizationOverviewQuery({
   return query;
 }
 
-export type OfflineEvent = {
-  replicaId: string;
-  occurredAt: string;
-  status: string;
-  reason: string;
-};
+/**
+ * Live SUBSCRIBE to the un-binned 3h view by cluster. The streamed samples are
+ * binned client-side (`rebucketUtilizationSamples`).
+ */
+export function buildConsoleClusterUtilizationUnbinned3hSubscribe<T>(
+  clusterIds: string[],
+  minDate: Date,
+) {
+  return buildSubscribeQuery<T>(
+    buildConsoleClusterUtilizationUnbinned3hQuery({
+      clusterIds,
+      resolveLineage: true,
+    }),
+    { asOfAtLeast: minDate, upsertKey: ["replicaId", "occurredAt"] },
+  );
+}
 
-export type Bucket = {
-  size: string | null;
-  bucketStart: Date;
-  replicaId: string;
-  bucketEnd: Date;
-  name: string;
-  // The cluster ID of the replica's current DBT deployment
-  currentDeploymentClusterId: string;
-  // The cluster ID of the replica. If the cluster was dropped,
-  // this will be different from currentDeploymentClusterId
-  clusterId: string;
-  maxMemory: {
-    percent: number | null;
-    occurredAt: Date;
-  };
-  maxDisk: {
-    percent: number | null;
-    occurredAt: Date;
-  };
-  maxCpu: {
-    percent: number | null;
-    occurredAt: Date;
-  };
-  maxHeap: {
-    percent: number | null;
-    occurredAt: Date;
-  };
-  maxMemoryAndDisk: {
-    memoryPercent: number | null;
-    diskPercent: number | null;
-    percent: number | null;
-    occurredAt: Date;
-  };
+/**
+ * Live SUBSCRIBE to the server-binned 24h view by cluster. Its rows are already
+ * binned, so unlike the 3h path they need no client-side rebinning.
+ */
+export function buildConsoleClusterUtilizationOverview24hSubscribe<T>(
+  clusterIds: string[],
+  minDate: Date,
+) {
+  return buildSubscribeQuery<T>(
+    buildConsoleClusterUtilizationOverviewQuery({
+      view: "mz_console_cluster_utilization_overview_24h",
+      clusterIds,
+      resolveLineage: true,
+      startDate: minDate.toISOString(),
+    }),
+    { asOfAtLeast: minDate, upsertKey: ["replicaId", "bucketStart"] },
+  );
+}
 
-  offlineEvents: OfflineEvent[] | null;
-};
+/**
+ * Offline events for a cluster's replicas since `startDate`, one row per
+ * event. The un-binned 3h view carries no status columns, so the <=3h tier
+ * fetches events with this query and merges them client-side
+ * (`attachOfflineEvents`).
+ */
+export function buildReplicaOfflineEventsQuery({
+  clusterIds,
+  startDate,
+  resolveLineage = false,
+}: {
+  clusterIds?: string[];
+  startDate: string;
+  // When true, expand clusterIds to past blue-green deployments in SQL, like
+  // the utilization builders. The poll path passes pre-expanded ids instead.
+  resolveLineage?: boolean;
+}) {
+  let query = queryBuilder
+    .with("charted_replicas", (qb) => {
+      const history = qb
+        .selectFrom("mz_cluster_replica_history")
+        .select(["replica_id", "cluster_id"]);
+      // Union the current replicas since mz_cluster_replica_history doesn't
+      // include system clusters.
+      const current = qb
+        .selectFrom("mz_cluster_replicas")
+        .select(["id as replica_id", "cluster_id"]);
+      return history.union(current);
+    })
+    .selectFrom("mz_cluster_replica_status_history as rsh")
+    .innerJoin("charted_replicas as r", "r.replica_id", "rsh.replica_id")
+    .select([
+      "rsh.replica_id as replicaId",
+      // Via timestamptz so the text carries an explicit offset. A naive
+      // timestamp string would parse as local time in the browser.
+      sql<string>`rsh.occurred_at::timestamptz::text`.as("occurredAt"),
+      "rsh.status",
+      "rsh.reason",
+    ])
+    // Processes should share the same state, so take the first process's.
+    .where("rsh.process_id", "=", "0")
+    .where("rsh.status", "=", "offline")
+    .where(
+      "rsh.occurred_at",
+      ">=",
+      sql<Date>`${sql.lit(startDate)}::timestamptz`,
+    );
+
+  if (clusterIds !== undefined && clusterIds.length > 0) {
+    if (resolveLineage) {
+      query = query.where((eb) =>
+        eb.or([
+          eb(
+            "r.cluster_id",
+            "in",
+            eb
+              .selectFrom("mz_cluster_deployment_lineage")
+              .select("cluster_id")
+              .where("current_deployment_cluster_id", "in", clusterIds),
+          ),
+          eb("r.cluster_id", "in", clusterIds),
+        ]),
+      );
+    } else {
+      query = query.where("r.cluster_id", "in", clusterIds);
+    }
+  }
+
+  return query;
+}
+
+export async function fetchReplicaOfflineEvents({
+  params,
+  queryKey,
+  requestOptions,
+}: {
+  params: Parameters<typeof buildReplicaOfflineEventsQuery>[0];
+  queryKey: QueryKey;
+  requestOptions?: RequestInit;
+}) {
+  const res = await executeSqlV2({
+    queries: buildReplicaOfflineEventsQuery(params).compile(),
+    queryKey,
+    requestOptions,
+    sessionVariables: { transaction_isolation: "serializable" },
+  });
+  return res.rows;
+}
 
 export async function fetchReplicaUtilizationHistory({
   params,
@@ -558,104 +752,79 @@ export async function fetchReplicaUtilizationHistory({
     return accum;
   }, [] as string[]);
 
-  let utilizationQuery = buildReplicaUtilizationHistoryQuery({
-    ...params,
-    clusterIds: clusterIdsFilter,
-  }).compile();
+  // Route to the cheapest indexed source for the requested window, falling back
+  // to the ad-hoc whole-fleet recompute only when no view covers it (>14d).
+  let rows: UtilizationBucketRow[];
 
-  if (params.shouldUseConsoleClusterUtilizationOverviewView) {
-    utilizationQuery = buildConsoleClusterUtilizationOverviewQuery({
-      clusterIds: clusterIdsFilter,
-      replicaId: params.replicaId,
-    }).compile();
-  }
-
-  const utilizationRes = await executeSqlV2({
-    queries: utilizationQuery,
-    queryKey: queryKey,
-    requestOptions,
-    sessionVariables: {
-      // We use serializable because we don't care about strict seriailizability and to get consistent performance
-      transaction_isolation: "serializable",
-    },
-  });
-
-  const bucketsByReplicaId: Record<string, Bucket[]> = {};
-
-  let minBucketStartMs = Number.POSITIVE_INFINITY;
-  let maxBucketEndMs = Number.NEGATIVE_INFINITY;
-
-  for (const row of utilizationRes.rows) {
-    minBucketStartMs = Math.min(minBucketStartMs, row.bucketStart.getTime());
-    maxBucketEndMs = Math.max(maxBucketEndMs, row.bucketEnd.getTime());
-
-    const {
-      replicaId,
-      size,
-      bucketStart,
-      bucketEnd,
-      name,
-      clusterId,
+  if (params.utilizationView === "unbinned3h") {
+    // Un-binned 3h base: cheap indexed point-lookup, then bin client-side.
+    // Offline events aren't in the un-binned view, so fetch them alongside.
+    const [unbinnedRes, offlineEvents] = await Promise.all([
+      executeSqlV2({
+        queries: buildConsoleClusterUtilizationUnbinned3hQuery({
+          clusterIds: clusterIdsFilter,
+          replicaId: params.replicaId,
+        }).compile(),
+        queryKey,
+        requestOptions,
+        sessionVariables: { transaction_isolation: "serializable" },
+      }),
+      fetchReplicaOfflineEvents({
+        params: {
+          clusterIds: clusterIdsFilter,
+          startDate: params.startDate,
+        },
+        queryKey: [...queryKey, "offlineEvents"],
+        requestOptions,
+      }),
+    ]);
+    rows = attachOfflineEvents(
+      rebucketUtilizationSamples(
+        unbinnedRes.rows,
+        params.bucketSizeMs,
+        new Date(params.startDate).getTime(),
+      ),
       offlineEvents,
-    } = row;
-
-    const buckets = bucketsByReplicaId[replicaId];
-
-    if (name === null || clusterId === null) {
-      const err = new Error(
-        `Expected name: ${name} and clusterId: ${clusterId} to be defined`,
-      );
-
-      Sentry.captureException(err);
-      throw err;
-    }
-
-    const currentDeploymentClusterId =
-      currentDeploymentByPastDeployment.get(clusterId)
-        ?.currentDeploymentClusterId ?? clusterId;
-
-    const newBucket = {
-      size,
-      bucketStart,
-      bucketEnd,
-      offlineEvents,
-      name,
-      currentDeploymentClusterId,
-      clusterId,
-      replicaId,
-      maxMemory: {
-        percent: row.maxMemoryPercent,
-        occurredAt: row.maxMemoryAt,
-      },
-      maxDisk: {
-        percent: row.maxDiskPercent,
-        occurredAt: row.maxDiskAt,
-      },
-      maxCpu: {
-        percent: row.maxCpuPercent,
-        occurredAt: row.maxCpuAt,
-      },
-      maxHeap: {
-        percent: row.maxHeapPercent ?? null,
-        occurredAt: row.maxHeapAt ?? new Date(),
-      },
-      maxMemoryAndDisk: {
-        percent: row.maxMemoryAndDiskPercent,
-        memoryPercent: row.maxMemoryAndDiskMemoryPercent,
-        diskPercent: row.maxMemoryAndDiskDiskPercent,
-        occurredAt: row.maxMemoryAndDiskAt,
-      },
-    };
-
-    if (buckets) {
-      buckets.push(newBucket);
+      params.bucketSizeMs,
+    );
+  } else {
+    let utilizationQuery;
+    if (params.utilizationView === "overview24h") {
+      utilizationQuery = buildConsoleClusterUtilizationOverviewQuery({
+        view: "mz_console_cluster_utilization_overview_24h",
+        clusterIds: clusterIdsFilter,
+        replicaId: params.replicaId,
+        startDate: params.startDate,
+      }).compile();
+    } else if (params.shouldUseConsoleClusterUtilizationOverviewView) {
+      utilizationQuery = buildConsoleClusterUtilizationOverviewQuery({
+        clusterIds: clusterIdsFilter,
+        replicaId: params.replicaId,
+        startDate: params.startDate,
+      }).compile();
     } else {
-      bucketsByReplicaId[replicaId] = [newBucket];
+      utilizationQuery = buildReplicaUtilizationHistoryQuery({
+        ...params,
+        clusterIds: clusterIdsFilter,
+      }).compile();
     }
+
+    const utilizationRes = await executeSqlV2({
+      queries: utilizationQuery,
+      queryKey: queryKey,
+      requestOptions,
+      sessionVariables: {
+        // We use serializable because we don't care about strict serializability and to get consistent performance
+        transaction_isolation: "serializable",
+      },
+    });
+    rows = utilizationRes.rows as UtilizationBucketRow[];
   }
-  return {
-    minBucketStartMs,
-    maxBucketEndMs,
-    bucketsByReplicaId,
-  };
+
+  return bucketRowsToBucketsByReplicaId(
+    rows,
+    (clusterId) =>
+      currentDeploymentByPastDeployment.get(clusterId)
+        ?.currentDeploymentClusterId,
+  );
 }

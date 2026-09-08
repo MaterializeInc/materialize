@@ -30,7 +30,7 @@ kubeadmConfigPatches:
         "service-node-port-range": "32000-32063"
 nodes:
   - role: control-plane
-    image: kindest/node:v1.32.5
+    image: kindest/node:v1.34.8
     extraMounts:
       - containerPath: /var/lib/kubelet/config.json
         hostPath: "$DOCKER_CONFIG/config.json"
@@ -165,7 +165,7 @@ nodes:
         hostPort: 32063
 
   - role: worker
-    image: kindest/node:v1.32.5
+    image: kindest/node:v1.34.8
     labels:
       materialize.cloud/swap: "true"
       materialize.cloud/availability-zone: "1"
@@ -175,7 +175,7 @@ nodes:
       - containerPath: /var/lib/kubelet/config.json
         hostPath: "$DOCKER_CONFIG/config.json"
   - role: worker
-    image: kindest/node:v1.32.5
+    image: kindest/node:v1.34.8
     labels:
       materialize.cloud/scratch-fs: "true"
       materialize.cloud/disk: "true"

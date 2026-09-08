@@ -4,6 +4,11 @@
 # (startup/SSL/cancel messages omit the tag). Seeding the type tags and the
 # special startup/SSL/cancel magic version codes lets the mutator reach the
 # per-message decoders instead of being rejected as an unknown tag.
+#
+# These are raw wire bytes, so they pay off on the target's raw-bytes branch
+# (the one the seeds in prepare-corpus.sh steer onto). On the grammar branch the
+# input is consumed as generation choices rather than wire bytes, and a token
+# there is just entropy.
 
 # Frontend message type tags.
 "Q"

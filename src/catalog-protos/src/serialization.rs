@@ -223,6 +223,7 @@ impl RustType<crate::objects::CatalogItemType> for CatalogItemType {
             CatalogItemType::Func => crate::objects::CatalogItemType::Func,
             CatalogItemType::Secret => crate::objects::CatalogItemType::Secret,
             CatalogItemType::Connection => crate::objects::CatalogItemType::Connection,
+            CatalogItemType::MetricSink => crate::objects::CatalogItemType::MetricSink,
         }
     }
 
@@ -238,6 +239,7 @@ impl RustType<crate::objects::CatalogItemType> for CatalogItemType {
             crate::objects::CatalogItemType::Func => CatalogItemType::Func,
             crate::objects::CatalogItemType::Secret => CatalogItemType::Secret,
             crate::objects::CatalogItemType::Connection => CatalogItemType::Connection,
+            crate::objects::CatalogItemType::MetricSink => CatalogItemType::MetricSink,
             crate::objects::CatalogItemType::Unknown => {
                 return Err(TryFromProtoError::unknown_enum_variant("CatalogItemType"));
             }
@@ -265,6 +267,7 @@ impl RustType<crate::objects::ObjectType> for ObjectType {
             ObjectType::Schema => crate::objects::ObjectType::Schema,
             ObjectType::Func => crate::objects::ObjectType::Func,
             ObjectType::NetworkPolicy => crate::objects::ObjectType::NetworkPolicy,
+            ObjectType::MetricSink => crate::objects::ObjectType::MetricSink,
         }
     }
 
@@ -286,6 +289,7 @@ impl RustType<crate::objects::ObjectType> for ObjectType {
             crate::objects::ObjectType::Schema => Ok(ObjectType::Schema),
             crate::objects::ObjectType::Func => Ok(ObjectType::Func),
             crate::objects::ObjectType::NetworkPolicy => Ok(ObjectType::NetworkPolicy),
+            crate::objects::ObjectType::MetricSink => Ok(ObjectType::MetricSink),
             crate::objects::ObjectType::Unknown => Err(TryFromProtoError::unknown_enum_variant(
                 "ObjectType::Unknown",
             )),
@@ -422,6 +426,9 @@ impl RustType<crate::objects::CommentObject> for CommentObjectId {
             CommentObjectId::Sink(global_id) => {
                 crate::objects::CommentObject::Sink(global_id.into_proto())
             }
+            CommentObjectId::MetricSink(global_id) => {
+                crate::objects::CommentObject::MetricSink(global_id.into_proto())
+            }
             CommentObjectId::Index(global_id) => {
                 crate::objects::CommentObject::Index(global_id.into_proto())
             }
@@ -481,6 +488,9 @@ impl RustType<crate::objects::CommentObject> for CommentObjectId {
             }
             crate::objects::CommentObject::Sink(item_id) => {
                 CommentObjectId::Sink(item_id.into_rust()?)
+            }
+            crate::objects::CommentObject::MetricSink(item_id) => {
+                CommentObjectId::MetricSink(item_id.into_rust()?)
             }
             crate::objects::CommentObject::Index(item_id) => {
                 CommentObjectId::Index(item_id.into_rust()?)

@@ -22,7 +22,7 @@ Source defined as t0
 # Equivalent branches can't be canceled
 # -------------------------------------
 
-apply pipeline=union_branch_cancellation
+apply pipeline=UnionBranchCancellation
 Union
   Negate
     Get x
@@ -36,7 +36,7 @@ Union
     Get x
 
 
-apply pipeline=union_branch_cancellation
+apply pipeline=UnionBranchCancellation
 Union
   Get x
   Get x
@@ -46,7 +46,7 @@ Union
   Get x
 
 
-apply pipeline=union_branch_cancellation
+apply pipeline=UnionBranchCancellation
 Union
   Project (#0)
     Get x
@@ -63,7 +63,7 @@ Union
 # Negated branches are canceled
 # -----------------------------
 
-apply pipeline=union_branch_cancellation
+apply pipeline=UnionBranchCancellation
 (union [(get x) (negate (get x))])
 Union
   Get x
@@ -74,7 +74,7 @@ parse error at 1:0:
 expected one of: `Constant`, `Get`, `Return`, `With`, `Project`, `Map`, `FlatMap`, `Filter`, `CrossJoin`, `Join`, `Distinct`, `Reduce`, `TopK`, `Negate`, `Threshold`, `Union`, `ArrangeBy`
 
 
-apply pipeline=union_branch_cancellation
+apply pipeline=UnionBranchCancellation
 Union
   Project (#0)
     Get x
@@ -87,7 +87,7 @@ Union
   Constant <empty>
 
 
-apply pipeline=union_branch_cancellation
+apply pipeline=UnionBranchCancellation
 Union
   Project (#0)
     Negate
@@ -100,7 +100,7 @@ Union
   Constant <empty>
 
 
-apply pipeline=union_branch_cancellation
+apply pipeline=UnionBranchCancellation
 Union
   Map (#0)
     Get x
@@ -113,7 +113,7 @@ Union
   Constant <empty>
 
 
-apply pipeline=union_branch_cancellation
+apply pipeline=UnionBranchCancellation
 Union
   Map (#0)
     Negate
@@ -126,7 +126,7 @@ Union
   Constant <empty>
 
 
-apply pipeline=union_branch_cancellation
+apply pipeline=UnionBranchCancellation
 Union
   Filter (#0 < 42)
     Get x
@@ -139,7 +139,7 @@ Union
   Constant <empty>
 
 
-apply pipeline=union_branch_cancellation
+apply pipeline=UnionBranchCancellation
 Union
   Filter (#0 < 42)
     Negate
@@ -152,7 +152,7 @@ Union
   Constant <empty>
 
 
-apply pipeline=union_branch_cancellation
+apply pipeline=UnionBranchCancellation
 Union
   Map #1
     Filter (#0 < 42)
@@ -166,7 +166,7 @@ parse error at 2:6:
 expected parentheses
 
 
-apply pipeline=union_branch_cancellation
+apply pipeline=UnionBranchCancellation
 Union
   Map #1
     Filter (#0 < 42)
@@ -181,7 +181,7 @@ expected parentheses
 
 # map -> filter in the same order, but with a Negate in between
 
-apply pipeline=union_branch_cancellation
+apply pipeline=UnionBranchCancellation
 Union
   Map (#0)
     Filter (#1 > 17)
@@ -196,7 +196,7 @@ Union
   Constant <empty>
 
 
-apply pipeline=union_branch_cancellation
+apply pipeline=UnionBranchCancellation
 Union
   Map (#0)
     Negate
@@ -212,7 +212,7 @@ Union
 
 # map -> filter in different order, branches can't be canceled
 
-apply pipeline=union_branch_cancellation
+apply pipeline=UnionBranchCancellation
 Union
   Filter (#0 = 17)
     Map (#1)
@@ -233,7 +233,7 @@ Union
 
 # first two branches cancel each other, but not the third one
 
-apply pipeline=union_branch_cancellation
+apply pipeline=UnionBranchCancellation
 Union
   Map (#0)
     Negate
@@ -252,7 +252,7 @@ Union
       Get x
 
 
-apply pipeline=union_branch_cancellation
+apply pipeline=UnionBranchCancellation
 Union
   Map (#0)
     Negate
@@ -270,7 +270,7 @@ Union
 
 # first and third cancel each other
 
-apply pipeline=union_branch_cancellation
+apply pipeline=UnionBranchCancellation
 Union
   Map (#0)
     Negate

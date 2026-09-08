@@ -920,8 +920,8 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     }
 
     fn id(&self) -> SpineId {
-        debug_assert_eq!(self.parts.first().map(|x| x.id.0), Some(self.id.0));
-        debug_assert_eq!(self.parts.last().map(|x| x.id.1), Some(self.id.1));
+        mz_ore::soft_assert_eq_no_log!(self.parts.first().map(|x| x.id.0), Some(self.id.0));
+        mz_ore::soft_assert_eq_no_log!(self.parts.last().map(|x| x.id.1), Some(self.id.1));
         self.id
     }
 
@@ -1055,8 +1055,30 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         Some(sum)
     }
 
+    /// Get the diff sum across all runs of the given batch.
+    ///
+    /// Returns `None` if any parts don't have statistics, or if any run may
+    /// hold updates outside the batch's registered desc: the statistics count
+    /// those updates but readers filter them out, so no sum computed from the
+    /// statistics can be compared against data seen through a read.
+    fn batch_diffs_sum<D: Monoid + Codec64>(
+        batch: &HollowBatch<T>,
+        metrics: &ColumnarMetrics,
+    ) -> Option<D> {
+        let mut sum = D::zero();
+        for (meta, run) in batch.runs() {
+            if meta.bounds_truncated() {
+                return None;
+            }
+            sum.plus_equals(&Self::diffs_sum(run, metrics)?);
+        }
+        Some(sum)
+    }
+
     /// Get the diff sum from the given batch for the given runs.
-    /// Returns `None` if the runs aren't present or any parts don't have statistics.
+    /// Returns `None` if the runs aren't present, any parts don't have
+    /// statistics, or any of the runs may hold updates outside the batch's
+    /// registered desc (see [Self::batch_diffs_sum]).
     fn diffs_sum_for_runs<D: Monoid + Codec64>(
         batch: &HollowBatch<T>,
         run_ids: &[RunId],
@@ -1068,6 +1090,9 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         for (meta, run) in batch.runs() {
             let id = meta.id?;
             if run_ids.remove(&id) {
+                if meta.bounds_truncated() {
+                    return None;
+                }
                 sum.plus_equals(&Self::diffs_sum(run, metrics)?);
             }
         }
@@ -1240,12 +1265,13 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
         // We need to replace a range of parts. Here we don't care about the run_indices
         // because we must be replacing the entire part(s)
-        let old_diffs_sum = Self::diffs_sum::<D>(
+        let old_diffs_sum =
             self.parts[replacement_range.clone()]
                 .iter()
-                .flat_map(|p| p.batch.parts.iter()),
-            metrics,
-        );
+                .try_fold(D::zero(), |mut sum, p| {
+                    sum.plus_equals(&Self::batch_diffs_sum::<D>(&p.batch, metrics)?);
+                    Some(sum)
+                });
 
         Self::validate_diffs_sum_match(old_diffs_sum, new_diffs_sum, "id range replacement");
 
@@ -1314,8 +1340,8 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                     new_diffs_sum,
                     "partial batch replacement",
                 );
-                let old_batch_diff_sum = Self::diffs_sum::<D>(batch.parts.iter(), metrics);
-                let new_batch_diff_sum = Self::diffs_sum::<D>(new_batch.parts.iter(), metrics);
+                let old_batch_diff_sum = Self::batch_diffs_sum::<D>(batch, metrics);
+                let new_batch_diff_sum = Self::batch_diffs_sum::<D>(&new_batch, metrics);
                 Self::validate_diffs_sum_match(
                     old_batch_diff_sum,
                     new_batch_diff_sum,
@@ -1375,10 +1401,10 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         let exact_match = res.output.desc.lower() == self.desc().lower()
             && res.output.desc.upper() == self.desc().upper();
         if exact_match {
-            let old_diffs_sum = Self::diffs_sum::<D>(
-                self.parts.iter().flat_map(|p| p.batch.parts.iter()),
-                metrics,
-            );
+            let old_diffs_sum = self.parts.iter().try_fold(D::zero(), |mut sum, p| {
+                sum.plus_equals(&Self::batch_diffs_sum::<D>(&p.batch, metrics)?);
+                Some(sum)
+            });
 
             if let (Some(old_diffs_sum), Some(new_diffs_sum)) = (old_diffs_sum, new_diffs_sum) {
                 assert_eq!(
@@ -1408,12 +1434,13 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
         // Try subset replacement
         if let Some((id, range)) = self.find_replacement_range(&res.output.desc) {
-            let old_diffs_sum = Self::diffs_sum::<D>(
+            let old_diffs_sum =
                 self.parts[range.clone()]
                     .iter()
-                    .flat_map(|p| p.batch.parts.iter()),
-                metrics,
-            );
+                    .try_fold(D::zero(), |mut sum, p| {
+                        sum.plus_equals(&Self::batch_diffs_sum::<D>(&p.batch, metrics)?);
+                        Some(sum)
+                    });
 
             if let (Some(old_diffs_sum), Some(new_diffs_sum)) = (old_diffs_sum, new_diffs_sum) {
                 assert_eq!(
@@ -1581,12 +1608,17 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
     ///
     /// If `fuel` is non-zero after the call, the merging is complete and one
     /// should call `done` to extract the merged results.
-    // TODO(benesch): rewrite to avoid usage of `as`.
-    #[allow(clippy::as_conversions)]
     fn work(&mut self, _: &[SpineBatch<T>], fuel: &mut isize) {
-        let used = std::cmp::min(*fuel as usize, self.remaining_work);
+        // A negative `fuel` means a caller already overspent, so there is
+        // nothing to spend here. Reading it as a `usize` instead would wrap to a
+        // huge budget, spend `remaining_work` against it, and then underflow the
+        // subtraction below.
+        let available = usize::try_from(*fuel).unwrap_or(0);
+        let used = std::cmp::min(available, self.remaining_work);
         self.remaining_work = self.remaining_work.saturating_sub(used);
-        *fuel -= used as isize;
+        // `used <= available <= isize::MAX`, so neither conversion nor the
+        // subtraction can overflow.
+        *fuel -= isize::try_from(used).expect("used is bounded by fuel");
     }
 
     /// Extracts merged results.
@@ -1626,7 +1658,7 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
             merged_parts.extend(b.parts)
         }
         // Sanity check the pre-size code.
-        debug_assert_eq!(merged_parts.len(), merged_parts_len);
+        mz_ore::soft_assert_eq_no_log!(merged_parts.len(), merged_parts_len);
 
         if let SpineLog::Enabled { merge_reqs } = log {
             merge_reqs.push(FueledMergeReq {
@@ -1922,14 +1954,21 @@ impl<T: Timestamp + Lattice> Spine<T> {
         // batches. We could try and make this be less, or be scaled to merges
         // based on their deficit at time of instantiation. For now, we remain
         // conservative.
-        let mut fuel = 8 << batch_index;
-        // Scale up by the effort parameter, which is calibrated to one as the
-        // minimum amount of effort.
-        fuel *= self.effort;
-        // Convert to an `isize` so we can observe any fuel shortfall.
-        // TODO(benesch): avoid dangerous usage of `as`.
-        #[allow(clippy::as_conversions)]
-        let fuel = fuel as isize;
+        //
+        // `batch_index` is derived from a batch's `len`, which for a trace
+        // reconstructed from an untrusted blob can be large enough that
+        // `8 << batch_index` overflows. Saturate at `isize::MAX` rather than
+        // wrapping: fuel is a budget, so more of it only completes merges sooner,
+        // whereas a wrapped value can land negative and starve them. The result
+        // is an `isize` so a fuel shortfall stays observable.
+        let fuel = u32::try_from(batch_index)
+            .ok()
+            .and_then(|shift| 8usize.checked_shl(shift))
+            // Scale up by the effort parameter, which is calibrated to one as the
+            // minimum amount of effort.
+            .and_then(|fuel| fuel.checked_mul(self.effort))
+            .and_then(|fuel| isize::try_from(fuel).ok())
+            .unwrap_or(isize::MAX);
 
         // Step 1.  Apply fuel to each in-progress merge.
         //
@@ -2748,5 +2787,34 @@ pub(crate) mod tests {
         assert!(matches!(result, ApplyMergeResult::NotAppliedTooManyUpdates));
         assert_eq!(sb_too_big.parts.len(), 3);
         assert_eq!(sb_too_big.len(), 30);
+    }
+
+    /// Inserting a batch whose `len` is large enough to saturate the fuel
+    /// computation must not disturb an in-progress merge's accounting.
+    ///
+    /// `introduce_batch` derives its fuel from `8 << batch_index`, where
+    /// `batch_index` is `len.next_power_of_two().trailing_zeros()`. A `len` near
+    /// `2^60` pushes that past what an `isize` holds, and `Trace::unflatten`
+    /// accepts such a `len` from an untrusted blob: its `MAX_TOTAL_LEN` guard
+    /// only caps the total at `usize::MAX >> 3`.
+    #[mz_ore::test]
+    fn spine_fuel_isize_overflow() {
+        let mut trace = Trace::<u64>::default();
+        let mut push = |lower, upper, key: &str, len| {
+            trace.push_batch_no_merge_reqs(crate::internal::state::tests::hollow::<u64>(
+                lower,
+                upper,
+                &[key],
+                len,
+            ));
+        };
+        // Two same-size batches fill a level and begin a merge whose
+        // `remaining_work` (the sum of their lens) far exceeds the `8 << 0` fuel
+        // that a subsequent len-1 batch delivers, so the merge is still in
+        // progress when the saturating batch arrives.
+        push(0, 1, "a", 100);
+        push(1, 2, "b", 100);
+        push(2, 3, "c", 1);
+        push(3, 4, "d", 1 << 60);
     }
 }

@@ -13,7 +13,6 @@ use std::cmp::Ordering;
 use std::error::Error;
 use std::{fmt, mem};
 
-use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{RustType, TryFromProtoError};
@@ -193,8 +192,7 @@ impl ArrayDimension {
     Ord,
     PartialOrd,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum InvalidArrayError {

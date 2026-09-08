@@ -984,3 +984,11 @@ query T
 SELECT unnest('{a=>NULL}'::map[text=>int4]);
 ----
 (a,)
+
+# Regression test for SQL-466: string values matching "NULL" in any case
+# must be quoted in text output, so that they round-trip.
+
+query T
+SELECT MAP['k' => 'null']::text;
+----
+{k=>"null"}

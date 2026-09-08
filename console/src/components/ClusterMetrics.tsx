@@ -197,7 +197,7 @@ export const ClusterMetricsInner = ({
         )}
         {metrics.heapPercent && (
           <RadialPercentageGraph percentage={metrics.heapPercent ?? 0}>
-            <Text textStyle="text-ui-med">Memory Utilization</Text>
+            <Text textStyle="text-ui-med">Heap Utilization</Text>
             <Text
               color={colors.foreground.secondary}
               textAlign="center"

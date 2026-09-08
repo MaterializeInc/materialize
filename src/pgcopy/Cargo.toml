@@ -13,11 +13,13 @@ workspace = true
 bytes.workspace = true
 csv-core.workspace = true
 itertools.workspace = true
-mz-ore = { path = "../ore", features = [] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 proptest.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+mz-ore = { path = "../ore", features = [] }
 
 [features]
 default = []

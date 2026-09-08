@@ -54,6 +54,7 @@ use tokio_postgres::{Client as PgClient, NoTls, Row, SimpleQueryMessage, Transac
 pub struct Client {
     client: PgClient,
     profile: Profile,
+    default_replication_factor: std::sync::OnceLock<u32>,
 }
 
 /// Domain sub-client for deployment lifecycle operations.
@@ -189,7 +190,31 @@ impl Client {
             }
         });
 
-        Ok(Client { client, profile })
+        Ok(Client {
+            client,
+            profile,
+            default_replication_factor: std::sync::OnceLock::new(),
+        })
+    }
+
+    /// The replication factor the server gives a managed cluster whose
+    /// definition omits `REPLICATION FACTOR`.
+    pub(crate) async fn default_cluster_replication_factor(&self) -> Result<u32, ConnectionError> {
+        if let Some(factor) = self.default_replication_factor.get() {
+            return Ok(*factor);
+        }
+        let row = self
+            .query_one("SHOW default_cluster_replication_factor", &[])
+            .await?;
+        let raw: String = row.get(0);
+        let factor = raw.parse().map_err(|_| {
+            ConnectionError::Message(format!(
+                "invalid default_cluster_replication_factor '{}'",
+                raw
+            ))
+        })?;
+        let _ = self.default_replication_factor.set(factor);
+        Ok(factor)
     }
 
     /// Get the profile used for this connection.

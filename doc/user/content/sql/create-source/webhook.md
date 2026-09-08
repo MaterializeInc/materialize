@@ -41,7 +41,7 @@ Column     | Type                        | Optional?                            
 ### Webhook URL
 
 After source creation, the unique URL that allows you to **POST** events to the
-source can be looked up in the [`mz_internal.mz_webhook_sources`](/reference/system-catalog/mz_internal/#mz_webhook_sources)
+source can be looked up in the [`mz_internal.mz_webhook_sources`](/sql/system-catalog/mz_internal/#mz_webhook_sources)
 system catalog table. The URL will have the following format:
 
 ```
@@ -50,7 +50,7 @@ https://<HOST>/api/webhook/<database>/<schema>/<src_name>
 
 A breakdown of each component is as follows:
 
-- `<HOST>`: The Materialize instance URL, which can be found on the [Materialize console](/console/).
+- `<HOST>`: The Materialize instance URL, which can be found on the [Materialize console](/developer-tools/console/).
 - `<database>`: The name of the database where the source is created (default is `materialize`).
 - `<schema>`: The schema name where the source gets created (default is `public`).
 - `<src_name>`: The name you provided for your source at the time of creation.
@@ -316,11 +316,15 @@ SELECT COUNT(body) FROM webhook_source_ndjson;
 
 Webhook sources apply the following limits to received requests:
 
-* The maximum size of the request body is **`2MB`**. Requests larger than this
+* The maximum size of the request body is **`5MB`**. Requests larger than this
   will fail with `413 Payload Too Large`.
 * The maximum number of concurrent requests across **all** webhook sources
   is **500**. Trying to connect when the server is at capacity will fail with
   `429 Too Many Requests`.
+* A `CHECK` expression may use at most **`20MB`** of temporary memory while
+  validating a single request. A `CHECK` that needs more, for example one that
+  builds a large string out of the request body, will fail with
+  `400 Bad Request`.
 * Requests that contain a header name specified more than once will be rejected
   with `401 Unauthorized`.
 

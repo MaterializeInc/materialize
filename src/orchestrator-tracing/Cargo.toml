@@ -23,10 +23,7 @@ mz-ore = { path = "../ore", default-features = false, features = ["tracing", "cl
 mz-repr = { path = "../repr", default-features = false, optional = true }
 mz-service = { path = "../service", default-features = false }
 mz-tracing = { path = "../tracing", default-features = false }
-sentry-tracing.workspace = true
-tracing.workspace = true
 tracing-capture = { workspace = true, optional = true }
-tracing-subscriber.workspace = true
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 

@@ -125,14 +125,30 @@ impl EquivalencePropagation {
         &self,
         expr: &mut MirRelationExpr,
         derived: DerivedView,
-        mut outer_equivalences: EquivalenceClasses,
+        outer_equivalences: EquivalenceClasses,
         get_equivalences: &mut BTreeMap<Id, EquivalenceClasses>,
         ctx: &mut TransformCtx,
     ) {
         // TODO: The top-down traversal can be coded as a worklist, with arguments tupled and enqueued.
         // This has the potential to do a lot more cloning (of `outer_equivalences`), and some care is needed
         // for `get_equivalences` which would be scoped to the whole method rather than tupled and enqueued.
+        //
+        // Until then the descent recurses once per operator, so a deep plan can
+        // run the thread's stack out. `apply` cannot report an error, which
+        // rules out `CheckedRecursion`, so grow the stack instead of failing.
+        mz_ore::stack::maybe_grow(|| {
+            self.apply_stack_safe(expr, derived, outer_equivalences, get_equivalences, ctx)
+        })
+    }
 
+    fn apply_stack_safe(
+        &self,
+        expr: &mut MirRelationExpr,
+        derived: DerivedView,
+        mut outer_equivalences: EquivalenceClasses,
+        get_equivalences: &mut BTreeMap<Id, EquivalenceClasses>,
+        ctx: &mut TransformCtx,
+    ) {
         let repr_expr_type = derived
             .value::<ReprRelationType>()
             .expect("ReprRelationType required");

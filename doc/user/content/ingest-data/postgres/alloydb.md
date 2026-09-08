@@ -71,7 +71,7 @@ Materialize with AlloyDB:
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [Materialize console's SQL Shell](/console/),
+1. In the [Materialize console's SQL Shell](/developer-tools/console/),
    or your preferred SQL client connected to Materialize, find the static egress
    IP addresses for the Materialize region you are running in:
 
@@ -105,7 +105,7 @@ network to allow traffic from the bastion host.
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
     1. In the [Materialize console's SQL
-       Shell](/console/), or your preferred SQL client
+       Shell](/developer-tools/console/), or your preferred SQL client
        connected to Materialize, get the static egress IP addresses for the
        Materialize region you are running in:
 
@@ -133,8 +133,7 @@ to assist you in setting up this proxy and generating a connection string that
 can be utilized with Materialize. Further down, we will provide you with a
 tailored approach specific to integrating Materialize.
 
-{{% include-md
-file="shared-content/self-managed/configure-network-security-intro.md" %}}
+{{% include-headless "/headless/self-managed-deployments/configure-network-security-intro" %}}
 
 {{< tabs >}}
 
@@ -269,3 +268,7 @@ your networking configuration.
 
 {{% include-from-yaml data="postgres_source_details"
 name="postgres-considerations" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="postgres" %}}

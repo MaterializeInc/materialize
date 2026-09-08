@@ -1004,6 +1004,232 @@ ALTER ROLE agent RESET restrict_to_user_objects;
 COMPLETE 0
 
 # =============================================================================
+# Data product view semantics (mz_mcp_data_products / _details)
+#
+# The RBAC cases above exercise privilege filtering. These cases pin the
+# view logic itself: which objects qualify, how the description is chosen,
+# and how column types map into the JSON Schema. They run as a
+# fully-privileged owner so the object set is deterministic and independent
+# of the agent-role grants above.
+# =============================================================================
+
+statement ok
+CREATE SCHEMA dp_semantics;
+
+statement ok
+SET search_path = dp_semantics;
+
+# A materialized view qualifies as a data product with no index required.
+statement ok
+CREATE MATERIALIZED VIEW mv_plain AS SELECT 1 AS id;
+
+# A plain (non-indexed) view does NOT qualify: reading it would trigger a
+# full recompute.
+statement ok
+CREATE VIEW v_unindexed AS SELECT 1 AS id;
+
+# A view qualifies only once it has an index.
+statement ok
+CREATE VIEW v_indexed AS SELECT 1 AS id, 'a' AS label;
+
+statement ok
+CREATE INDEX v_indexed_idx ON v_indexed (id);
+
+query T
+SELECT object_name FROM mz_internal.mz_mcp_data_products
+WHERE object_name LIKE '%"dp_semantics"%' ORDER BY object_name;
+----
+"materialize"."dp_semantics"."mv_plain"
+"materialize"."dp_semantics"."v_indexed"
+
+# Multiple indexes on one object must not duplicate its row (SELECT DISTINCT).
+statement ok
+CREATE INDEX v_indexed_idx2 ON v_indexed (label);
+
+query T
+SELECT object_name FROM mz_internal.mz_mcp_data_products
+WHERE object_name = '"materialize"."dp_semantics"."v_indexed"';
+----
+"materialize"."dp_semantics"."v_indexed"
+
+# -----------------------------------------------------------------------------
+# Description precedence: index comment wins over object comment (COALESCE).
+# -----------------------------------------------------------------------------
+
+# No comments: description is NULL.
+query T
+SELECT description FROM mz_internal.mz_mcp_data_products
+WHERE object_name = '"materialize"."dp_semantics"."mv_plain"';
+----
+NULL
+
+# Object comment only: description is the object comment.
+statement ok
+COMMENT ON MATERIALIZED VIEW mv_plain IS 'the object comment';
+
+query T
+SELECT description FROM mz_internal.mz_mcp_data_products
+WHERE object_name = '"materialize"."dp_semantics"."mv_plain"';
+----
+the object comment
+
+# Index comment present: it takes precedence over the object comment. Uses a
+# dedicated single-index view so the COALESCE precedence is unambiguous (with
+# multiple indexes the DISTINCT can surface one row per differing description).
+statement ok
+CREATE VIEW v_desc AS SELECT 1 AS id;
+
+statement ok
+CREATE INDEX v_desc_idx ON v_desc (id);
+
+statement ok
+COMMENT ON VIEW v_desc IS 'object comment on view';
+
+statement ok
+COMMENT ON INDEX v_desc_idx IS 'index comment wins';
+
+query T
+SELECT description FROM mz_internal.mz_mcp_data_products
+WHERE object_name = '"materialize"."dp_semantics"."v_desc"';
+----
+index comment wins
+
+# -----------------------------------------------------------------------------
+# JSON Schema type mapping in mz_mcp_data_product_details.
+# -----------------------------------------------------------------------------
+
+statement ok
+CREATE MATERIALIZED VIEW mv_types AS
+SELECT
+    1::int AS c_int,
+    1.5::double AS c_double,
+    true AS c_bool,
+    'x'::text AS c_text,
+    '2024-01-01'::date AS c_date,
+    '{}'::jsonb AS c_jsonb,
+    '\x00'::bytea AS c_bytea,
+    '12:34:56'::time AS c_time,
+    '2024-01-01 12:00:00'::timestamp AS c_ts,
+    '2024-01-01 12:00:00+00'::timestamptz AS c_tstz,
+    '00000000-0000-0000-0000-000000000000'::uuid AS c_uuid;
+
+# Numeric columns map to JSON Schema type "number".
+query T
+SELECT schema->'properties'->'c_int'->>'type' FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+number
+
+query T
+SELECT schema->'properties'->'c_double'->>'type' FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+number
+
+# Boolean maps to "boolean".
+query T
+SELECT schema->'properties'->'c_bool'->>'type' FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+boolean
+
+# text falls through to the "string" default.
+query T
+SELECT schema->'properties'->'c_text'->>'type' FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+string
+
+# date is a string with a format hint.
+query TT
+SELECT schema->'properties'->'c_date'->>'type', schema->'properties'->'c_date'->>'format'
+FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+string  date
+
+# jsonb maps to a nested "object".
+query T
+SELECT schema->'properties'->'c_jsonb'->>'type' FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+object
+
+# bytea is the most distinctive branch: string with the two extra content
+# hints so a JSON Schema consumer knows to Base64-decode the value.
+query TTT
+SELECT
+    schema->'properties'->'c_bytea'->>'type',
+    schema->'properties'->'c_bytea'->>'contentEncoding',
+    schema->'properties'->'c_bytea'->>'contentMediaType'
+FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+string  base64  application/octet-stream
+
+# time is a string with format=time.
+query TT
+SELECT schema->'properties'->'c_time'->>'type', schema->'properties'->'c_time'->>'format'
+FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+string  time
+
+# timestamp and timestamptz both match the `ilike 'timestamp%'` branch and
+# map to string with format=date-time.
+query TT
+SELECT schema->'properties'->'c_ts'->>'type', schema->'properties'->'c_ts'->>'format'
+FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+string  date-time
+
+query TT
+SELECT schema->'properties'->'c_tstz'->>'type', schema->'properties'->'c_tstz'->>'format'
+FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+string  date-time
+
+# uuid is a string with format=uuid.
+query TT
+SELECT schema->'properties'->'c_uuid'->>'type', schema->'properties'->'c_uuid'->>'format'
+FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+string  uuid
+
+# -----------------------------------------------------------------------------
+# Column comments surface as the property description; absent otherwise.
+# -----------------------------------------------------------------------------
+
+statement ok
+COMMENT ON COLUMN mv_types.c_int IS 'the primary id';
+
+query T
+SELECT schema->'properties'->'c_int'->>'description' FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+the primary id
+
+# A column with no comment has no description key (jsonb_strip_nulls removes it).
+query T
+SELECT schema->'properties'->'c_double' ? 'description' FROM mz_internal.mz_mcp_data_product_details
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+false
+
+# -----------------------------------------------------------------------------
+# Cleanup for this section.
+# -----------------------------------------------------------------------------
+
+statement ok
+SET search_path = public;
+
+statement ok
+DROP SCHEMA dp_semantics CASCADE;
+
+# =============================================================================
 # Cleanup
 # =============================================================================
 

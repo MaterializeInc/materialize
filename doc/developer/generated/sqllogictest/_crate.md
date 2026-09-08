@@ -1,6 +1,6 @@
 ---
 source: src/sqllogictest/src/lib.rs
-revision: 30d929249e
+revision: 84f88ca968
 ---
 
 # sqllogictest

@@ -9,6 +9,7 @@ aliases:
   - /integrations/postgres-bastion/
   - /ops/network-security/ssh-tunnel/
   - /connect-sources/ssh-tunnel/
+  - /self-managed/v25.2/ingest-data/network-security/ssh-tunnel/
 ---
 
 {{< tabs >}}

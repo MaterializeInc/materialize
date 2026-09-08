@@ -10,21 +10,19 @@ menu:
 
 Use `CREATE VIEW` to define a view, which simply provides an alias for the
 embedded `SELECT` statement. The results of a view can be incrementally
-maintained **in memory** within a [cluster](/concepts/clusters/) by creating an
+maintained **in memory** within a [cluster](/fundamentals/concepts/clusters/) by creating an
 [index](../create-index). This allows you to serve queries without the overhead
 of materializing the view.
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "CREATE VIEW" >}}
-### Create view
 To create a view:
 
 {{% include-syntax file="examples/create_view" example="syntax" %}}
 {{< /tab >}}
 {{< tab "CREATE OR REPLACE VIEW" >}}
-### Create or replace view
 To create, or if a view exists with the same name, replace it with the view
 defined in this statement:
 

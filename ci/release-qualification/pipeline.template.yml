@@ -189,7 +189,7 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
-            # TODO(def-) Increase number of actions when database-issues#7257 is fixed
+            # TODO(def-) Increase number of actions when SS-422 is fixed
             args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=50000, --max-execution-time=4h]
 
   - group: Benchmarks
@@ -265,6 +265,26 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: sqlsmith
             args: [--max-joins=15, --explain-only, --runtime=6000]
+
+  - id: cargo-fuzz
+    label: ":rust: cargo-fuzz"
+    depends_on: []
+    timeout_in_minutes: 1440
+    agents:
+      queue: hetzner-x86-64-dedi-48cpu-192gb
+    sanitizer: skip
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cargo-fuzz
+          ci_builder: nightly
+          args:
+            - --profile=all
+            - --max-seconds=86400
+            - --wall-budget=84600
+            - --minimize-timeout=1200
+            - --corpus-sync
+    artifact_paths:
+      - src/*/fuzz/artifacts/**/*
 
   - id: test-preflight-check-rollback
     topics: [0dt-migration, upgrade]
@@ -869,7 +889,7 @@ steps:
       - id: upsert-large-scale
         topics: [kafka]
         label: Upsert large scale ingestion
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 3600
         plugins:
           - ./ci/plugins/mzcompose:

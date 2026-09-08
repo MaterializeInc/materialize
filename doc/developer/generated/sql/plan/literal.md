@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/literal.rs
-revision: a458244f1b
+revision: fe90df32c4
 ---
 
 # mz-sql::plan::literal

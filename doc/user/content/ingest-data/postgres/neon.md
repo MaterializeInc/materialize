@@ -200,7 +200,7 @@ If you use Neon's [**IP Allow**](https://neon.tech/docs/introduction/ip-allow)
 feature to limit the IP addresses that can connect to your Neon instance, you
 will need to allow inbound traffic from Materialize IP addresses.
 
-1. In the [Materialize console's SQL Shell](/console/),
+1. In the [Materialize console's SQL Shell](/developer-tools/console/),
    or your preferred SQL client connected to
    Materialize, run the following query to find the static egress IP addresses,
    for the Materialize region you are running in:
@@ -243,7 +243,7 @@ will need to allow inbound traffic from Materialize IP addresses.
 ## C. Ingest data in Materialize
 
 The steps in this section are specific to Materialize. You can run them in the
-[Materialize console's SQL Shell](/console/) or your
+[Materialize console's SQL Shell](/developer-tools/console/) or your
 preferred SQL client connected to Materialize.
 
 ### 1. (Optional) Create a cluster
@@ -323,3 +323,7 @@ your networking configuration.
 
 {{% include-from-yaml data="postgres_source_details"
 name="postgres-considerations" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="postgres" %}}

@@ -21,7 +21,6 @@ columnation.workspace = true
 dec.workspace = true
 derivative.workspace = true
 futures.workspace = true
-hex.workspace = true
 itertools.workspace = true
 mz-ore = { path = "../ore", features = ["async"] }
 mz-proto = { path = "../proto" }
@@ -45,6 +44,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+hex.workspace = true
 mz-sql-server-util = { path = ".", features = ["proptest"] }
 proptest.workspace = true
 proptest-derive.workspace = true

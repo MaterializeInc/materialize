@@ -66,12 +66,12 @@
     ]
   },
   "dependencies": {
-    "vscode-languageclient": "^9.0.1"
+    "vscode-languageclient": "^10.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",
     "@types/vscode": "^1.88.0",
-    "@vscode/vsce": "^3.2.1",
+    "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.1",
     "typescript": "^5.9.3"
   }

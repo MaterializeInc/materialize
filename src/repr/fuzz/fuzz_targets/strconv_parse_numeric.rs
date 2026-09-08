@@ -33,8 +33,18 @@ use mz_repr::strconv::parse_numeric;
 /// Special spellings: the infinity/NaN family the post-parse validation rejects
 /// (or accepts as overflow-`inf`), plus assorted casing.
 const SPECIALS: &[&str] = &[
-    "NaN", "nan", "-NaN", "+NaN", "sNaN", "Infinity", "-Infinity", "+Infinity", "inf", "-inf",
-    "Inf", "INFINITY",
+    "NaN",
+    "nan",
+    "-NaN",
+    "+NaN",
+    "sNaN",
+    "Infinity",
+    "-Infinity",
+    "+Infinity",
+    "inf",
+    "-inf",
+    "Inf",
+    "INFINITY",
 ];
 
 fn push_digits(u: &mut Unstructured, out: &mut String, n: usize) -> arbitrary::Result<()> {
@@ -117,7 +127,10 @@ fn check(s: &str) {
     };
     let formatted = n.0.to_standard_notation_string();
     let reparsed = parse_numeric(&formatted).expect("canonical numeric rendering must re-parse");
-    assert_eq!(n, reparsed, "numeric changed across parse/format round trip");
+    assert_eq!(
+        n, reparsed,
+        "numeric changed across parse/format round trip"
+    );
 }
 
 fuzz_target!(|data: &[u8]| {

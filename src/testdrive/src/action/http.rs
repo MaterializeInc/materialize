@@ -30,6 +30,7 @@ pub async fn run_request(
             .collect::<HashSet<u16>>(),
         None => HashSet::new(),
     };
+    cmd.args.done()?;
     let body = cmd.input.join("\n");
 
     println!("$ http-request {} {}\n{}", method, url, body);

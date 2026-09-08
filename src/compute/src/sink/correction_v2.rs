@@ -358,15 +358,26 @@ impl<D: Data> CorrectionV2<D> {
         &'a mut self,
         upper: &Antichain<Timestamp>,
     ) -> impl Iterator<Item = (D, Timestamp, Diff)> + Send + 'a {
+        self.consolidate_before(upper);
+        self.consolidated_updates_before(upper)
+    }
+
+    /// Return the updates before the given `upper`, as consolidated by a preceding
+    /// [`CorrectionV2::consolidate_before`] call.
+    ///
+    /// The caller must have invoked `consolidate_before` with the same `upper` and must not have
+    /// mutated the buffer since. Otherwise the returned updates are neither consolidated nor
+    /// necessarily complete.
+    pub fn consolidated_updates_before<'a>(
+        &'a self,
+        upper: &Antichain<Timestamp>,
+    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + Send + use<'a, D> {
         // All contained times are advanced to at least the `since`, so a read at an `upper` that
-        // is not beyond the `since` is always empty. Short-circuit to avoid the eager peel, merge,
-        // and `boundary` advancement that `consolidate_before` would otherwise perform. Normal
-        // reads and `consolidate_at_since` always pass an `upper` beyond the `since`.
+        // is not beyond the `since` is always empty. This mirrors the short-circuit in
+        // `consolidate_before`, which leaves `emitted` untouched in that case.
         if !PartialOrder::less_than(&self.since, upper) {
             return None.into_iter().flatten();
         }
-
-        self.consolidate_before(upper);
 
         // After `consolidate_before`, `emitted` holds exactly the updates before `upper`: every
         // path that populates it splits at `upper` (pushing the remainder to `pending_low`), and
@@ -385,9 +396,17 @@ impl<D: Data> CorrectionV2<D> {
     /// Consolidate all updates before the given `upper` into the `emitted` chain.
     ///
     /// Once this method returns, `emitted` contains all updates at times before `upper`,
-    /// consolidated. It can also contain updates at times at or beyond `upper` if `upper` is not
-    /// beyond the `since`.
-    fn consolidate_before(&mut self, upper: &Antichain<Timestamp>) {
+    /// consolidated.
+    ///
+    /// Does nothing if `upper` is not beyond the `since`: all contained times are advanced to at
+    /// least the `since`, so such a read is empty anyway, and skipping avoids an eager peel,
+    /// merge, and `boundary` advancement. Normal reads and `consolidate_at_since` always pass an
+    /// `upper` beyond the `since`.
+    pub fn consolidate_before(&mut self, upper: &Antichain<Timestamp>) {
+        if !PartialOrder::less_than(&self.since, upper) {
+            return;
+        }
+
         if let Some(mut ready) = self.stage.flush() {
             self.route(&mut ready);
         }
@@ -855,7 +874,7 @@ impl<D: Data> Chain<D> {
     /// All updates in the chunk must sort after all updates already in the chain, in
     /// (time, data)-order, to ensure the chain remains sorted.
     fn push_chunk(&mut self, chunk: Chunk<D>) {
-        debug_assert!(self.can_accept_chunk(&chunk));
+        mz_ore::soft_assert_no_log!(self.can_accept_chunk(&chunk));
 
         self.update_count += chunk.len();
         self.chunks.push(chunk);
@@ -864,9 +883,13 @@ impl<D: Data> Chain<D> {
     /// Return whether the chain can accept the given chunk at its end while preserving
     /// (time, data)-order.
     ///
-    /// Uses the cached boundary times and only materializes the boundary chunks when the times
-    /// tie (a single timestamp straddling the chunk boundary), so the common
-    /// strictly-increasing-time case checks the invariant without paging chunks in.
+    /// NOTE: The cached boundary times settle every case but a tie. On a tie the boundary updates
+    /// themselves are compared, which materializes both chunks and keeps them resident for the
+    /// rest of their lifetime. The only caller is the soft assertion in [`Chain::push_chunk`], and
+    /// soft assertions are live in any build started with `MZ_SOFT_ASSERTIONS` set, so this cost is
+    /// not confined to debug builds. Ties are reached whenever a run of updates at a single
+    /// timestamp spans a chunk boundary, which [`ChunkBuilder`] produces for any such run larger
+    /// than its byte limit.
     fn can_accept_chunk(&self, chunk: &Chunk<D>) -> bool {
         match self.chunks.last() {
             None => true,
@@ -955,8 +978,10 @@ impl<D: Data> Chain<D> {
         };
 
         for chunk in self.chunks.drain(..) {
-            // Route whole chunks by cached boundary times so a chunk that lands entirely on one
-            // side is moved without paging it in; only a straddling chunk is materialized.
+            // Route whole chunks by cached boundary times, so a chunk that lands entirely on one
+            // side is moved without paging it in. Only a straddling chunk is materialized here.
+            // With soft assertions on, `push_chunk` can still page in a chunk whose boundary time
+            // ties the chain's last one, see `Chain::can_accept_chunk`.
             if chunk.last_time() < time {
                 lower.push_chunk(chunk);
             } else if chunk.first_time() >= time {
@@ -1553,7 +1578,7 @@ impl<D: Data> ChunkBuilder<D> {
         std::iter::from_fn(move || {
             loop {
                 let col = std::mem::take(self.inner.finish()?);
-                if col.borrow().len() > 0 {
+                if !col.is_empty() {
                     return Some(Chunk::from_column(col));
                 }
             }

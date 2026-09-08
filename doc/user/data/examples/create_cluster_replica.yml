@@ -1,9 +1,15 @@
 - name: "syntax"
   code: |
-    CREATE CLUSTER REPLICA <cluster_name>.<replica_name> (
+    CREATE CLUSTER REPLICA [IF NOT EXISTS] <cluster_name>.<replica_name> (
         SIZE = <text>
     );
   syntax_elements:
+    - name: "**IF NOT EXISTS**"
+      description: |
+        *Optional.* If specified, do not throw an error if a replica with the
+        same name already exists on the cluster. Instead, issue a notice and
+        skip the replica creation. Note that the existing replica is left
+        untouched, its configuration is not updated to match the statement.
     - name: "`<cluster_name>`"
       description: |
         The cluster you want to attach a replica to.

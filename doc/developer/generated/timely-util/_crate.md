@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/lib.rs
-revision: 12181a5639
+revision: 93dcb0ef5a
 ---
 
 # timely-util
@@ -22,6 +22,7 @@ Key modules:
 * `replay` — `MzReplay` for replaying captured event streams with periodic re-activation.
 * `activator` — `RcActivator` for threshold-gated external operator wakeup.
 * `temporal` — `BucketChain` for efficient future-update storage by timestamp.
+* `pool_config` — process-wide installation and configuration point for the buffer pool that backs chunk spilling; exposes `active_pool` for spill-decision lookup and `apply_pool_config` for live retuning of the singleton pool instance.
 * `scope_label`, `pact`, `panic`, `antichain`, `capture` — profiling labels, round-robin distribution, graceful panic handling, pretty-printing, and Tokio capture adapters.
 
 Key dependencies: `timely`, `differential-dataflow`, `columnar`, `columnation`, `mz-ore`, `tokio`, `custom-labels`.

@@ -220,12 +220,20 @@ impl CastFunc {
             CastFunc::CastStringToUint64 => {
                 Ok(Datum::UInt64(strconv::parse_uint64(a).map_err(parse_err)?))
             }
-            CastFunc::CastStringToDate => {
-                Ok(Datum::Date(strconv::parse_date(a).map_err(parse_err)?))
-            }
-            CastFunc::CastStringToTime => {
-                Ok(Datum::Time(strconv::parse_time(a).map_err(parse_err)?))
-            }
+            CastFunc::CastStringToDate => Ok(Datum::Date(
+                strconv::parse_date_legacy(a).map_err(parse_err)?,
+            )),
+            // NOTE: Uses the frozen `parse_time_legacy`, which reads a string
+            // carrying no time field at all as midnight, to satisfy the
+            // stability contract above. `parse_time` now rejects such a string
+            // as PostgreSQL does, but replication re-casts the old tuple on
+            // delete, so tightening this persisted cast would let a row ingested
+            // as a value later be retracted as an error. A PostgreSQL `time`
+            // column never renders as one of those strings, so no export loses
+            // a value it could have had.
+            CastFunc::CastStringToTime => Ok(Datum::Time(
+                strconv::parse_time_legacy(a).map_err(parse_err)?,
+            )),
             CastFunc::CastStringToInterval => Ok(Datum::Interval(
                 strconv::parse_interval(a).map_err(parse_err)?,
             )),
@@ -239,7 +247,7 @@ impl CastFunc {
                 Ok(arena.push_unary_row(jsonb.into_row()))
             }
             CastFunc::CastStringToMzTimestamp => Ok(Datum::MzTimestamp(
-                strconv::parse_mz_timestamp(a).map_err(parse_err)?,
+                strconv::parse_mz_timestamp_legacy(a).map_err(parse_err)?,
             )),
 
             // Parameterized eager casts.
@@ -253,12 +261,12 @@ impl CastFunc {
                 Ok(Datum::from(d.into_inner()))
             }
             CastFunc::CastStringToTimestamp(precision) => {
-                let out = strconv::parse_timestamp(a)?;
+                let out = strconv::parse_timestamp_legacy(a)?;
                 let updated = out.round_to_precision(*precision)?;
                 Ok(Datum::Timestamp(updated))
             }
             CastFunc::CastStringToTimestampTz(precision) => {
-                let out = strconv::parse_timestamptz(a)?;
+                let out = strconv::parse_timestamptz_legacy(a)?;
                 let updated = out.round_to_precision(*precision)?;
                 Ok(Datum::TimestampTz(updated))
             }
@@ -496,6 +504,83 @@ mod tests {
         // Parsing should succeed; just verify it's a Date datum.
         let result = expr.eval(&[Datum::String("2024-01-15")], &arena).unwrap();
         assert!(matches!(result, Datum::Date(_)));
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_date_frozen_ambiguous() {
+        // Ambiguous dates keep the frozen year-month-day interpretation with
+        // no two-digit-year windowing, diverging from the SQL layer's
+        // `DateStyle = ISO, MDY` semantics. This must not change (see the
+        // stability contract above).
+        let arena = RowArena::new();
+        let expr = cast_col0(CastFunc::CastStringToDate);
+        for (input, expected) in [("01/02/03", "0001-02-03"), ("99-01-08", "0099-01-08")] {
+            let result = expr.eval(&[Datum::String(input)], &arena).unwrap();
+            let Datum::Date(d) = result else {
+                panic!("expected Date, got {:?}", result);
+            };
+            let mut buf = String::new();
+            strconv::format_date(&mut buf, d);
+            assert_eq!(buf, expected, "for input {input:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_time_frozen_fieldless() {
+        // A string carrying no time field keeps the frozen reading of midnight,
+        // diverging from the SQL layer, which rejects it as PostgreSQL does.
+        // This must not change (see the stability contract above).
+        let arena = RowArena::new();
+        let expr = cast_col0(CastFunc::CastStringToTime);
+        for input in ["", " ", ":"] {
+            let result = expr.eval(&[Datum::String(input)], &arena).unwrap();
+            let Datum::Time(t) = result else {
+                panic!("expected Time, got {:?}", result);
+            };
+            let mut buf = String::new();
+            strconv::format_time(&mut buf, t);
+            assert_eq!(buf, "00:00:00", "for input {input:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_timestamp_frozen_leap_second() {
+        // A `:60` second keeps chrono's leap-second representation on the
+        // frozen path, diverging from the SQL layer, which rolls it into the
+        // next minute. This must not change (see the stability contract
+        // above): rolling over would rewrite the datum an existing source
+        // produced for the same input string.
+        use chrono::{DateTime, NaiveDate, Utc};
+
+        let arena = RowArena::new();
+        let leap = NaiveDate::from_ymd_opt(2015, 6, 30)
+            .unwrap()
+            .and_hms_nano_opt(23, 59, 59, 1_000_000_000)
+            .unwrap();
+
+        let expr = cast_col0(CastFunc::CastStringToTimestamp(None));
+        assert_eq!(
+            expr.eval(&[Datum::String("2015-06-30 23:59:60")], &arena)
+                .unwrap(),
+            Datum::Timestamp(leap.try_into().unwrap())
+        );
+        // The leap second on chrono's maximum date is in range only because it
+        // is not rolled over. It must stay a value, not become an error.
+        assert!(
+            expr.eval(&[Datum::String("262142-12-31 23:59:60")], &arena)
+                .is_ok()
+        );
+
+        let expr = cast_col0(CastFunc::CastStringToTimestampTz(None));
+        assert_eq!(
+            expr.eval(&[Datum::String("2015-06-30 23:59:60+00")], &arena)
+                .unwrap(),
+            Datum::TimestampTz(
+                DateTime::from_naive_utc_and_offset(leap, Utc)
+                    .try_into()
+                    .unwrap()
+            )
+        );
     }
 
     #[mz_ore::test]
@@ -832,11 +917,7 @@ mod tests {
         fn error_uuid() {
             assert_eq!(
                 eval_cast_err(CastFunc::CastStringToUuid, "bad"),
-                parse_err_with_details(
-                    "uuid",
-                    "bad",
-                    "invalid length: expected length 32 for simple format, found 3"
-                ),
+                parse_err_with_details("uuid", "bad", "invalid length: found 3"),
             );
         }
 
@@ -1109,17 +1190,26 @@ mod tests {
         #[mz_ore::test]
         fn parity_time() {
             use mz_expr::func::CastStringToTime;
+            // No fieldless input here on purpose. The storage cast is frozen on
+            // `parse_time_legacy`, which reads `""`, `" "` and `":"` as midnight,
+            // while the SQL cast rejects them, so the two intentionally diverge
+            // there. See `test_cast_string_to_time_frozen_fieldless`.
             assert_parity(
                 "Time",
                 CastFunc::CastStringToTime,
                 UnaryFunc::CastStringToTime(CastStringToTime),
-                &["12:34:56", "bad", ""],
+                &["12:34:56", "bad"],
             );
         }
 
         #[mz_ore::test]
         fn parity_timestamp() {
             use mz_expr::func::CastStringToTimestamp;
+            // No `:60` input here on purpose. The storage cast is frozen on
+            // `parse_timestamp_legacy`, which keeps chrono's leap-second
+            // representation, while the SQL cast rolls it into the next
+            // minute, so the two intentionally diverge there. See
+            // `test_cast_string_to_timestamp_frozen_leap_second`.
             assert_parity(
                 "Timestamp",
                 CastFunc::CastStringToTimestamp(None),
@@ -1131,6 +1221,7 @@ mod tests {
         #[mz_ore::test]
         fn parity_timestamptz() {
             use mz_expr::func::CastStringToTimestampTz;
+            // No `:60` input here on purpose, see `parity_timestamp`.
             assert_parity(
                 "TimestampTz",
                 CastFunc::CastStringToTimestampTz(None),

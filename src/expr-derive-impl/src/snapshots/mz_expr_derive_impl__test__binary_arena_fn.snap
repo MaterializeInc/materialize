@@ -12,7 +12,6 @@ expression: "#[sqlfunc(test = true)]\nfn unary_fn<'a>(a: Datum<'a>, b: u16, temp
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect,
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
 pub struct UnaryFn;
@@ -48,6 +47,9 @@ impl std::fmt::Display for UnaryFn {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(unary_fn))
     }
+}
+impl crate::func::FuncName for UnaryFn {
+    const NAME: &'static str = stringify!(unary_fn);
 }
 fn unary_fn<'a>(a: Datum<'a>, b: u16, temp_storage: &RowArena) -> bool {
     unimplemented!()

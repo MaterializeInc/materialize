@@ -27,7 +27,7 @@ mz_now() <comparison_operator> <numeric_expr | timestamp_expr>
 ### `mz_now()` expressions to calculate past or future timestamp
 
 **Idiomatic Materialize SQL**: {{< include-md
-file="shared-content/mz_now_operators.md" >}}
+file="content/headless/mz_now_operators.md" >}}
 
 #### Examples
 
@@ -35,8 +35,7 @@ file="shared-content/mz_now_operators.md" >}}
 
 ### Disjunctions (`OR`)
 
-{{< include-md file="shared-content/mz_now_clause_disjunction_restrictions.md"
->}}
+{{% include-headless "/headless/mz_now_clause_disjunction_restrictions" %}}
 
 For example:
 

@@ -17,8 +17,15 @@ import {
   mapKyselyToTabular,
 } from "~/api/mocks/buildSqlQueryHandler";
 import server from "~/api/mocks/server";
+import { getStore } from "~/jotai";
 import { buildValidMaterializationLagHandler } from "~/test/clusterQueryBuilders";
-import { renderComponent } from "~/test/utils";
+import {
+  defaultRegionId,
+  healthyEnvironment,
+  renderComponent,
+  setFakeEnvironment,
+} from "~/test/utils";
+import { parseDbVersion } from "~/version/api";
 
 import LargestMaintainedQueries from "./LargestMaintainedQueries";
 import { clusterQueryKeys } from "./queries";
@@ -77,9 +84,11 @@ const successfulLargestReplicaHandler = buildSqlQueryHandlerV2({
 
 const failedLargestQueriesHandler = buildSqlQueryHandlerV2({
   queryKey: clusterQueryKeys.largestMaintainedQueries({
+    clusterId: "u1",
     clusterName: "quickstart",
     replicaName: "r1",
     replicaHeapLimit: 4069523456,
+    unifiedSizes: false,
   }),
   results: {
     error: {
@@ -92,9 +101,11 @@ const failedLargestQueriesHandler = buildSqlQueryHandlerV2({
 
 const successfulLargestQueriesHandler = buildSqlQueryHandlerV2({
   queryKey: clusterQueryKeys.largestMaintainedQueries({
+    clusterId: "u1",
     clusterName: "quickstart",
     replicaName: "r1",
     replicaHeapLimit: 4069523456,
+    unifiedSizes: false,
   }),
   results: mapKyselyToTabular({
     columns: largestMaintainedQueriesColumns,
@@ -124,6 +135,30 @@ const successfulLargestQueriesHandler = buildSqlQueryHandlerV2({
     ],
   }),
 });
+
+const unifiedSizesColumns = buildColumns([
+  "object_id",
+  "size",
+  { type_oid: MzDataType.numeric, name: "memoryPercentage" },
+]);
+
+const objectNamesColumns = buildColumns([
+  "id",
+  "name",
+  "type",
+  "schemaName",
+  "databaseName",
+]);
+
+/** An environment new enough to pass the mz_object_arrangement_sizes gate. */
+const environmentV2635 = {
+  ...healthyEnvironment,
+  status: {
+    health: "healthy" as const,
+    version: parseDbVersion("v26.35.0 (ea0d129f)"),
+    errors: [],
+  },
+};
 
 describe("LargestMaintainedQueries", () => {
   it("shows an error state when the largest replica query fails", async () => {
@@ -178,5 +213,84 @@ describe("LargestMaintainedQueries", () => {
     // Also shows orphaned dataflows
     await screen.findByText("materialize.deleted_schema");
     await screen.findByText("orphaned_view");
+  });
+
+  it("renders from mz_object_arrangement_sizes on Materialize >= v26.35", async () => {
+    // Query keys embed the environment version at build time, so seed the
+    // v26.35 environment before building this test's handlers.
+    const { set } = getStore();
+    await setFakeEnvironment(set, defaultRegionId, environmentV2635);
+    server.use(
+      buildSqlQueryHandlerV2({
+        queryKey: clusterQueryKeys.largestClusterReplica({ clusterId: "u1" }),
+        results: mapKyselyToTabular({
+          columns: largestReplicaColumns,
+          rows: [
+            {
+              name: "r1",
+              size: "25cc",
+              heapLimit: "4069523456",
+              isHydrated: "t",
+            },
+          ],
+        }),
+      }),
+      buildSqlQueryHandlerV2({
+        queryKey: clusterQueryKeys.largestMaintainedQueries({
+          clusterId: "u1",
+          clusterName: "quickstart",
+          replicaName: "r1",
+          replicaHeapLimit: 4069523456,
+          unifiedSizes: true,
+        }),
+        results: mapKyselyToTabular({
+          columns: unifiedSizesColumns,
+          rows: [
+            {
+              object_id: "u188",
+              size: "5469140917",
+              memoryPercentage: "31.8345902256",
+            },
+            // Not present in the names result below: an orphaned dataflow
+            // whose object was dropped from the catalog.
+            {
+              object_id: "u999",
+              size: "424919434",
+              memoryPercentage: "11.2686157226",
+            },
+          ],
+        }),
+      }),
+      buildSqlQueryHandlerV2({
+        queryKey: clusterQueryKeys.maintainedObjectNames(["u188", "u999"]),
+        results: mapKyselyToTabular({
+          columns: objectNamesColumns,
+          rows: [
+            {
+              id: "u188",
+              name: "customer_view",
+              type: "materialized-view",
+              schemaName: "public",
+              databaseName: "materialize",
+            },
+          ],
+        }),
+      }),
+      buildValidMaterializationLagHandler({ objectIds: ["u188", "u999"] }),
+    );
+    renderComponent(
+      <LargestMaintainedQueries clusterId="u1" clusterName="quickstart" />,
+      {
+        initializeState: ({ set: initializeSet }) =>
+          setFakeEnvironment(initializeSet, defaultRegionId, environmentV2635),
+      },
+    );
+
+    expect(await screen.findByText("materialize.public")).toBeVisible();
+    expect(await screen.findByText("customer_view")).toBeVisible();
+    expect(await screen.findByText("Materialized View")).toBeVisible();
+    expect(await screen.findByText("5.09 GB (31.8%)")).toBeVisible();
+    // Objects missing from the catalog fall back to displaying their id.
+    expect(await screen.findByText("u999")).toBeVisible();
   });
 });

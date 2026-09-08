@@ -19,7 +19,7 @@ use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::soft_panic_or_log;
-use mz_repr::{Datum, Diff, Timestamp};
+use mz_repr::{Datum, Timestamp};
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
@@ -30,7 +30,10 @@ use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
 use crate::extensions::arrange::MzArrangeCore;
-use crate::logging::{ComputeLog, LogCollection, LogVariant, PermutedRowPacker};
+use crate::logging::{
+    ComputeLog, LogCollection, LogVariant, PermutedRowPacker, downgrade_to_interval_boundary,
+    emit_snapshot_diff,
+};
 use crate::typedefs::RowRowSpine;
 use mz_row_spine::RowRowBuilder;
 
@@ -88,24 +91,8 @@ pub(super) fn construct(
         move |_frontiers| {
             let Some(cap) = &mut cap else { return };
 
-            // Advance the capability to the next logging interval boundary.
-            // This keeps the output frontier progressing at the logging
-            // rate, even when scrapes happen less frequently. Note that
-            // advancing the frontier implies the data is up-to-date, but
-            // the metrics snapshot may be stale by up to the scrape
-            // interval when it exceeds the logging interval.
-            let elapsed = now.elapsed().as_millis();
-            let time_ms: u128 =
-                ((elapsed + start_offset.as_millis()) / interval_ms + 1) * interval_ms;
-            let ts: Timestamp = time_ms.try_into().expect("must fit");
-            cap.downgrade(&ts);
-
-            // Schedule the next activation at the interval boundary
-            // to avoid drift from wall-clock elapsed time.
-            let next_boundary_ms = time_ms - start_offset.as_millis();
-            let next_activation =
-                now + Duration::from_millis(next_boundary_ms.try_into().expect("must fit"));
-            activator.activate_after(next_activation.saturating_duration_since(Instant::now()));
+            let ts =
+                downgrade_to_interval_boundary(cap, &activator, now, start_offset, interval_ms);
 
             // Only scrape when the scrape interval has elapsed.
             // The operator wakes every logging interval to advance the
@@ -131,44 +118,18 @@ pub(super) fn construct(
             // Diff against previous snapshot and emit packed Row pairs.
             let mut output = output.activate();
             let mut session = output.session_with_builder(&cap);
-
-            // Retract entries that were removed or changed.
-            for (key, old_val) in &prev_snapshot {
-                match new_snapshot.get(key) {
-                    Some(new_val) if new_val == old_val => {}
-                    _ => {
-                        let (row_key, row_val) = pack_row(
-                            &mut packer,
-                            &key.0,
-                            old_val.1,
-                            &key.1,
-                            old_val.0,
-                            &old_val.2,
-                            process_id,
-                        );
-                        session.give(((row_key, row_val), ts, Diff::MINUS_ONE));
-                    }
-                }
-            }
-
-            // Insert entries that are new or changed.
-            for (key, new_val) in &new_snapshot {
-                match prev_snapshot.get(key) {
-                    Some(old_val) if old_val == new_val => {}
-                    _ => {
-                        let (row_key, row_val) = pack_row(
-                            &mut packer,
-                            &key.0,
-                            new_val.1,
-                            &key.1,
-                            new_val.0,
-                            &new_val.2,
-                            process_id,
-                        );
-                        session.give(((row_key, row_val), ts, Diff::ONE));
-                    }
-                }
-            }
+            emit_snapshot_diff(
+                &mut session,
+                &mut packer,
+                &prev_snapshot,
+                &new_snapshot,
+                ts,
+                |packer, key, value| {
+                    pack_row(
+                        packer, &key.0, value.1, &key.1, value.0, &value.2, process_id,
+                    )
+                },
+            );
 
             prev_snapshot = new_snapshot;
         }

@@ -101,7 +101,7 @@ start by selecting the relevant option.
 1. Copy the URL under **Cluster hosts**. This will be your
 `<redpanda-broker-url>` going forward.
 
-1. In the Materialize [SQL shell](/console/), or your
+1. In the Materialize [SQL shell](/developer-tools/console/), or your
 preferred SQL client, create a connection with your Redpanda Cloud cluster
 access and authentication details using the [`CREATE CONNECTION`](/sql/create-connection/)
 command:
@@ -176,7 +176,7 @@ in a region supported by Materialize: `us-east-1`,`us-west-2`, or `eu-west-1`.
         '.cluster.aws_private_link'
     ```
 
-1. In the Materialize [SQL shell](/console/), or your
+1. In the Materialize [SQL shell](/developer-tools/console/), or your
 preferred SQL client, create a [PrivateLink connection](/ingest-data/network-security/privatelink/)
 using the service name from the previous step. Be sure to specify **all
 availability zones** of your Redpanda Cloud cluster.
@@ -283,9 +283,6 @@ SOURCE`](/sql/create-source/) command to your Redpanda Cloud cluster and start
 ingesting data from your target topic. By default, the source will be created in
 the active cluster; to use a different cluster, use the `IN CLUSTER` clause.
 
-```mzsql
-CREATE SOURCE rp_source
-  -- The topic you want to read from.
-  FROM KAFKA CONNECTION redpanda_cloud (TOPIC '<topic-name>')
-  FORMAT JSON;
-```
+{{< include-headless-with file="/headless/kafka-create-source-syntax"
+source="rp_source" connection="redpanda_cloud" topic="<topic-name>"
+table="rp_table" format="FORMAT JSON" >}}

@@ -28,6 +28,7 @@ pub mod operator;
 pub mod order;
 pub mod pact;
 pub mod panic;
+pub mod pool_config;
 pub mod probe;
 pub mod reclock;
 pub mod replay;

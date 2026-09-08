@@ -461,6 +461,7 @@ mod tests {
                 size: size.to_string(),
                 availability_zones: Vec::new(),
                 logging: Default::default(),
+                arrangement_compression: false,
                 replication_factor: 1,
                 optimizer_feature_overrides: Default::default(),
                 schedule: Default::default(),
@@ -498,6 +499,7 @@ mod tests {
                 }),
                 compute: ComputeReplicaConfig {
                     logging: Default::default(),
+                    arrangement_compression: false,
                 },
             },
             owner_id: RoleId::User(1),
@@ -680,6 +682,7 @@ mod tests {
                 }),
                 compute: ComputeReplicaConfig {
                     logging: Default::default(),
+                    arrangement_compression: false,
                 },
             },
             owner_id: RoleId::User(1),

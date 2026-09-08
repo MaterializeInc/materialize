@@ -20,6 +20,7 @@ from dbt.tests.adapter.incremental.test_incremental_merge_exclude_columns import
 from dbt.tests.adapter.incremental.test_incremental_on_schema_change import (
     BaseIncrementalOnSchemaChange,
 )
+from dbt.tests.util import run_dbt_and_capture
 
 
 @pytest.mark.skip(reason="dbt-materialize does not support incremental models")
@@ -30,3 +31,23 @@ class TestMergeExcludeColumns(BaseMergeExcludeColumns):
 @pytest.mark.skip(reason="dbt-materialize does not support incremental models")
 class TestIncrementalOnSchemaChange(BaseIncrementalOnSchemaChange):
     pass
+
+
+incremental_model = """
+{{ config(materialized='incremental') }}
+
+SELECT 1 AS id
+"""
+
+
+class TestIncrementalNotSupported:
+    """The incremental materialization must explain itself instead of failing
+    on the way to raising the error."""
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {"my_incremental_model.sql": incremental_model}
+
+    def test_incremental_model_explains_why_it_is_unsupported(self, project):
+        _, output = run_dbt_and_capture(["run"], expect_pass=False)
+        assert "does not support incremental models" in output

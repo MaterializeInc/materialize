@@ -1,6 +1,6 @@
 ---
 source: src/controller/src/lib.rs
-revision: 00cc513fa5
+revision: 5a4a36c4fd
 ---
 
 # controller
@@ -10,6 +10,7 @@ Provides the top-level `Controller` that unifies the storage controller, storage
 `Controller` holds `Box<dyn StorageController>`, `Arc<dyn StorageCollections>`, and `ComputeController`; it multiplexes their readiness via `tokio::select!` in `ready()` and dispatches to the appropriate subsystem in `process()`.
 It also implements the _watch set_ mechanism: callers install a set of `GlobalId`s and a timestamp, and the controller fires a `WatchSetFinished` response once all frontier uppers have advanced past that timestamp.
 Replica metrics (CPU, memory, disk, heap) are polled from the orchestrator and written into the `ReplicaMetricsHistory` introspection collection.
+`Controller` maintains a sparse `replica_dyncfg_overrides` map (`BTreeMap<ReplicaId, ConfigUpdates>`) for `ParameterScope::Replica` parameters that LaunchDarkly targets to a specific replica. `update_replica_dyncfg_overrides` replaces this map and propagates the overrides to the compute and storage controllers; replicas absent from the new map have their overrides cleared. These overrides are baked into a replica's process configuration at provisioning time via `provision_replica`.
 Key dependencies are `mz-compute-client`, `mz-storage-client`, `mz-storage-controller`, `mz-orchestrator`, and `mz-persist-client`; the crate is consumed exclusively by `environmentd`.
 
 ## Modules

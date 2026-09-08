@@ -176,7 +176,7 @@ pub fn encode_arrays<W: Write + Send>(
         .set_compression(config.compression.into())
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .set_data_page_size_limit(1024 * 1024)
-        .set_max_row_group_size(usize::MAX)
+        .set_max_row_group_row_count(None)
         .build();
     let mut writer = ArrowWriter::try_new(w, Arc::clone(&schema), Some(props))?;
 

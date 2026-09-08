@@ -39,7 +39,7 @@ Source defined as t2
 
 
 # Absorb project in a constant
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#2, #1, #0)
   Constant // { types: "(bigint, bigint, bigint)" }
     - (1, 3, 4)
@@ -51,7 +51,7 @@ Project (#2, #1, #0)
     - (2, 5, 6)
 
 # Project around a project
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#2, #1, #1, #0)
   Project (#0, #2, #1)
     Map (7)
@@ -67,7 +67,7 @@ Project (#2, #1, #1, #0)
         - (2, 5, 6)
 
 # Project around a filter (1)
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#2, #2)
   Filter (#0 = #2)
     Constant // { types: "(bigint, bigint, bigint)" }
@@ -83,7 +83,7 @@ Project (#0, #0)
           - (2, 5, 6)
 
 # Project around a filter (2)
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1)
   Filter #2 IS NULL
     Constant // { types: "(bigint, bigint, bigint)" }
@@ -98,7 +98,7 @@ Project (#0)
         - (2, 5, 6)
 
 # Project around a map
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#3)
   Map ((#1 + #0), 7)
     Constant // { types: "(bigint, bigint, bigint)" }
@@ -113,7 +113,7 @@ Project (#2)
         - (2, 5, 6)
 
 # Project around a column where a scalar refers to another fellow member of `scalars`
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#3, #5, #5, #5, #3)
   Map ((#1 + #0), 7, (#4 + 7))
     Constant // { types: "(bigint, bigint, bigint)" }
@@ -129,7 +129,7 @@ Project (#0, #1, #1, #1, #0)
           - (2, 5, 6)
 
 # Projection pushdown causes elimination of unnecessary map scalars (1)
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#3)
   Filter (#2 >= #1)
     Map ((#1 + #2), 7)
@@ -146,7 +146,7 @@ Project (#2)
           - (2, 5, 6)
 
 # Projection pushdown causes elimination of unnecessary map scalars (2)
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#2, #1, #0)
   Map ("dummy")
     Reduce group_by=[#0] aggregates=[sum(#1)]
@@ -163,7 +163,7 @@ Project (#2, #1, #0)
           - (2, 5, 6)
 
 # Project around a join
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#3)
   Join on=(#0 = #5)
     Filter (#2 >= #1)
@@ -187,7 +187,7 @@ Project (#1)
 
 # An unused int64 `generate_series` with a unit step collapses to a
 # `repeat_row_non_negative` of the same cardinality, in cheap `i64` arithmetic.
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1)
   FlatMap generate_series(#0, #2, 1)
     Get x
@@ -198,7 +198,7 @@ Project (#1)
 
 # A literal lower bound folds the `+ 1` into it; `generate_series(1, n)` with a
 # unit step collapses to just the upper bound.
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1)
   FlatMap generate_series(1, #2, 1)
     Get x
@@ -209,7 +209,7 @@ Project (#0)
       Get x
 
 # A non-unit literal lower bound folds to `stop + (1 - lo)`.
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1)
   FlatMap generate_series(5, #2, 1)
     Get x
@@ -221,7 +221,7 @@ Project (#0)
 
 # With a negative unit step the upper bound is the subtracted one, so a literal
 # there folds the same way.
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1)
   FlatMap generate_series(#0, 1, -1)
     Get x
@@ -232,7 +232,7 @@ Project (#1)
       Get x
 
 # Query using the column newly created by FlatMap: no collapse.
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#3)
   FlatMap generate_series(#0, #2, 1)
     Get x
@@ -244,7 +244,7 @@ Project (#2)
 
 # A non-unit positive step collapses too, but in `numeric`: a feasible series
 # can have a span too wide for `i64`, so the synthesized arithmetic must not.
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1)
   FlatMap generate_series(#0, #2, 3)
     Get x
@@ -254,7 +254,7 @@ Project (#1)
     Get x
 
 # A negative step flips the emptiness guard to `<=`; also `numeric`.
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1)
   FlatMap generate_series(#0, #2, -2)
     Get x
@@ -264,7 +264,7 @@ Project (#1)
     Get x
 
 # A non-literal step is left alone (we can't specialize on its sign).
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1)
   FlatMap generate_series(#0, #2, #1)
     Get x
@@ -274,7 +274,7 @@ Project (#1)
     Get x
 
 # The int32 variant widens its `i64`-step bounds with `integer_to_bigint`.
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1)
   FlatMap generate_series_i32(#0, #2, 1)
     Get xi
@@ -284,7 +284,7 @@ Project (#1)
     Get xi
 
 # The int32 variant widens its `numeric`-step bounds with `integer_to_numeric`.
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1)
   FlatMap generate_series_i32(#0, #2, 2)
     Get xi
@@ -295,7 +295,7 @@ Project (#1)
 
 # All-literal arguments fold to an exact count at rewrite time:
 # (11 - 2) / 3 + 1 = 4.
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1)
   FlatMap generate_series(2, 11, 3)
     Get x
@@ -305,7 +305,7 @@ FlatMap repeat_row_non_negative(4)
     Get x
 
 # An all-literal empty series folds to a count of zero.
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1)
   FlatMap generate_series(11, 2, 3)
     Get x
@@ -315,7 +315,7 @@ FlatMap repeat_row_non_negative(0)
     Get x
 
 # An all-literal descending series folds exactly: (2 - 11) / -3 + 1 = 4.
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1)
   FlatMap generate_series(11, 2, -3)
     Get x
@@ -326,7 +326,7 @@ FlatMap repeat_row_non_negative(4)
 
 # A literal span too wide for `i64` still folds when the count fits:
 # 10^19 / 10^18 + 1 = 11.
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1)
   FlatMap generate_series(-5000000000000000000, 5000000000000000000, 1000000000000000000)
     Get x
@@ -337,7 +337,7 @@ FlatMap repeat_row_non_negative(11)
 
 # A literal count beyond `i64` declines to collapse: the original enumerates it
 # without error, so the rewrite must not introduce one.
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1)
   FlatMap generate_series(-5000000000000000000, 5000000000000000000, 1)
     Get x
@@ -349,7 +349,7 @@ Project (#0)
 
 
 # Project around a union (1)
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1, #0)
   Union
     Get x
@@ -362,7 +362,7 @@ Union
     Get y
 
 # Project around a union (2)
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1, #1)
   Union
     Get x
@@ -376,7 +376,7 @@ Project (#0, #0)
       Get y
 
 # Project around a negate
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#0, #2)
   Union
     Get x
@@ -393,7 +393,7 @@ Union
         Get x
 
 # Project around an ArrangeBy (1) - barrier!
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#2)
   ArrangeBy keys=[[#0], [#1]]
     Get x
@@ -403,7 +403,7 @@ Project (#2)
     Get x
 
 # Project around an ArrangeBy (2) - barrier!
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1)
   ArrangeBy keys=[[#0], [#1]]
     Get x
@@ -413,7 +413,7 @@ Project (#1)
     Get x
 
 # Project around an ArrangeBy (3) - barrier!
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1, #0)
   ArrangeBy keys=[[#0], [#1]]
     Get x
@@ -423,7 +423,7 @@ Project (#1, #0)
     Get x
 
 # Project around a Reduce (1)
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project ()
   Distinct project=[(#0 + #2)]
     Get x
@@ -434,7 +434,7 @@ Project ()
       Get x
 
 # Project around a Reduce (2)
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1)
   Reduce group_by=[#0] aggregates=[sum((#0 * #2))]
     Get x
@@ -445,7 +445,7 @@ Project (#1)
       Get x
 
 # Project around a Reduce (3)
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#1, #0)
   Reduce group_by=[#0] aggregates=[sum((#0 * #2))]
     Get x
@@ -456,7 +456,7 @@ Project (#1, #0)
       Get x
 
 # Project around a TopK (1)
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#2, #2, #2)
   TopK group_by=[#0] order_by=[#1 asc nulls_first, #2 asc nulls_first] limit=(#0 + 4)
     Get x
@@ -467,7 +467,7 @@ Project (#0, #0, #0)
       Get x
 
 # Project around a TopK (2)
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#2, #2)
   TopK order_by=[#1 asc nulls_first]
     Get x
@@ -479,7 +479,7 @@ Project (#0, #0)
         Get x
 
 # Project around a TopK (3)
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Project (#2, #1)
   TopK group_by=[#2] order_by=[#1 asc nulls_first] limit=(#2 + 4)
     Get x
@@ -489,7 +489,7 @@ TopK group_by=[#0] order_by=[#1 asc nulls_first] limit=(#0 + 4)
     Get x
 
 # Project around a Let (1)
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Return
   Project (#5)
     Join on=(#0 = #8)
@@ -518,7 +518,7 @@ Return
         Get l0
 
 # Project around a Let (2)
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Return
   Project (#2)
     Join on=(#0 = #8)
@@ -546,7 +546,7 @@ Return
         Get l0
 
 # Project around a Let (3)
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Return
   Union
     Project (#0, #4, #5, #6)
@@ -580,7 +580,7 @@ Return
 
 
 # Project around a LetRec (1)
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Return
   Project (#5)
     Join on=(#0 = #8)
@@ -609,7 +609,7 @@ Return
         Get l0
 
 # Project around a LetRec (2)
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Return
   Project (#2)
     Join on=(#0 = #8)
@@ -637,7 +637,7 @@ Return
         Get l0
 
 # Project around a LetRec (3)
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Return
   Union
     Project (#0, #4, #5, #6)
@@ -667,7 +667,7 @@ Return
 
 
 # Three bindings, l0 and l2 are not recursive
-apply pipeline=projection_pushdown
+apply pipeline=ProjectionPushdown
 Return
   Project (#0, #3)
     Join on=(#0 = #3)

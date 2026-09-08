@@ -15,3 +15,11 @@ set -euo pipefail
 
 STEP_START_TIMESTAMP_WITH_TZ=$(date +"%Y-%m-%d %H:%M:%S%z")
 export STEP_START_TIMESTAMP_WITH_TZ
+
+# The command hook collects every junit_*.xml under the checkout, and agents on
+# the dedicated queues reuse their checkout across builds and pipelines. A
+# report left behind by an earlier step, for example
+# `target/nextest/ci/junit_cargo-test.xml`, would otherwise be uploaded and
+# annotated as a failure of this step. Delete the leftovers before the step
+# runs so only what it produces itself is collected.
+find . -name 'junit_*.xml' -type f -delete || true

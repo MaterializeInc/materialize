@@ -16,7 +16,6 @@ use std::hash::{Hash, Hasher};
 use bitflags::bitflags;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
-use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
 use postgres_protocol::types;
 #[cfg(any(test, feature = "proptest"))]
@@ -785,8 +784,7 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum InvalidRangeError {

@@ -1,6 +1,6 @@
 ---
 source: src/testdrive/src/action/mysql/execute.rs
-revision: e757b4d11b
+revision: 253293ef87
 ---
 
 # testdrive::action::mysql::execute

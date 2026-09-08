@@ -67,7 +67,7 @@ Install the [aws-cli](https://docs.aws.amazon.com/cli/latest/userguide/getting-s
 Install some k8s utils:
 
 ```shell
-brew install kubectl@1.24 k9s kind
+brew install kubernetes-cli@1.34 k9s kind
 ```
 
 Run the commands below to configure your aws account and k8s contexts

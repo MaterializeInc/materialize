@@ -12,7 +12,6 @@ use std::str::FromStr;
 
 use anyhow::{Error, anyhow};
 use columnar::Columnar;
-use mz_lowertest::MzReflect;
 use mz_ore::id_gen::AtomicIdGen;
 #[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
@@ -36,7 +35,6 @@ use crate::CatalogItemId;
     Hash,
     Serialize,
     Deserialize,
-    MzReflect,
     Columnar
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]

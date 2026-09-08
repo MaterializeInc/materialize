@@ -84,7 +84,7 @@ class PreExecutionInternalOutputInconsistencyIgnoreFilter(
                     isinstance(arg_type_spec, NumericReturnTypeSpec)
                     and not arg_type_spec.only_integer
                 ):
-                    return YesIgnore("database-issues#4341")
+                    return YesIgnore("DB-191")
 
         return NoIgnore()
 
@@ -104,13 +104,13 @@ class PreExecutionInternalOutputInconsistencyIgnoreFilter(
             "var_pop",
         }:
             if ExpressionCharacteristics.MAX_VALUE in all_involved_characteristics:
-                return YesIgnore("database-issues#4341")
+                return YesIgnore("DB-191")
 
             if (
                 ExpressionCharacteristics.DECIMAL in all_involved_characteristics
                 and ExpressionCharacteristics.TINY_VALUE in all_involved_characteristics
             ):
-                return YesIgnore("database-issues#4341")
+                return YesIgnore("DB-191")
 
         return NoIgnore()
 

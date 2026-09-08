@@ -5,6 +5,7 @@ disable_list: true
 menu:
   main:
     parent: "sm-deployments"
+    name: "Upgrade"
     weight: 30
     identifier: "upgrading"
 ---
@@ -33,9 +34,6 @@ name="upgrade-landing-guides-helm" %}}
 
 {{% include-from-yaml data="self_managed/upgrades"
 name="upgrade-landing-guides-unified" %}}
-
-{{% include-from-yaml data="self_managed/upgrades"
-name="upgrade-landing-guides-legacy" %}}
 
 ## Upgrading the Helm Chart and Materialize Operator
 

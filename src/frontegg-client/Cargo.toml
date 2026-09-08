@@ -12,12 +12,10 @@ workspace = true
 [dependencies]
 jsonwebtoken.workspace = true
 mz-frontegg-auth = { path = "../frontegg-auth" }
-mz-ore = { path = "../ore", features = ["network"] }
 reqwest.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-serde_json.workspace = true
 uuid = { workspace = true, features = ["serde"] }
 url.workspace = true
 

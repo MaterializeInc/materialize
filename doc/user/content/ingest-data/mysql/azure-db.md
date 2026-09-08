@@ -70,7 +70,7 @@ Select the option that works best for you.
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](/console/), or your preferred SQL
+1. In the [SQL Shell](/developer-tools/console/), or your preferred SQL
    client connected to Materialize, find the static egress IP addresses for the
    Materialize region you are running in:
 
@@ -102,7 +102,7 @@ to serve as your SSH bastion host.
 
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
-    1. In the [SQL Shell](/console/), or your preferred
+    1. In the [SQL Shell](/developer-tools/console/), or your preferred
        SQL client connected to Materialize, get the static egress IP addresses for
        the Materialize region you are running in:
 
@@ -124,8 +124,7 @@ to serve as your SSH bastion host.
 
 {{< tab "Self-Managed">}}
 
-{{% include-md
-file="shared-content/self-managed/configure-network-security-intro.md" %}}
+{{% include-headless "/headless/self-managed-deployments/configure-network-security-intro" %}}
 
 {{< tabs >}}
 
@@ -215,3 +214,7 @@ your networking configuration.
 ## Considerations
 
 {{% include-headless "/headless/mysql-considerations" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="mysql" %}}

@@ -17,12 +17,10 @@ enum-kinds.workspace = true
 itertools.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["stack", "assert-no-tracing"] }
 mz-sql-lexer = { path = "../sql-lexer", default-features = false }
-phf.workspace = true
 serde.workspace = true
 smallvec = { workspace = true, features = ["union"] }
 thiserror.workspace = true
 tracing.workspace = true
-uncased.workspace = true
 unicode-width = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

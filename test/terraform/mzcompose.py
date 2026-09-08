@@ -11,6 +11,8 @@ Tests the mz command line tool against a real Cloud instance
 """
 
 import argparse
+import datetime
+import getpass
 import json
 import os
 import re
@@ -28,7 +30,7 @@ from typing import IO
 import psycopg
 import yaml
 
-from materialize import MZ_ROOT, ci_util, git, spawn
+from materialize import MZ_ROOT, ci_util, spawn
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
@@ -196,7 +198,7 @@ def testdrive(no_reset: bool) -> Testdrive:
 
 
 def get_tag(tag: str | None) -> str:
-    return tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
+    return tag or ci_util.dev_docker_tag()
 
 
 def get_operator_version() -> str:
@@ -728,6 +730,26 @@ class AWS(State):
                 "-var",
                 f"license_key={license_key}",
             ]
+
+        if prefix == PREFIX_AWS_PERSISTENT:
+            delete_after = "2099-12-31T00:00:00Z"
+        else:
+            delete_after = (
+                datetime.datetime.now(datetime.timezone.utc)
+                + datetime.timedelta(hours=24)
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        tags = {
+            "Environment": "dev",
+            "Terraform": "true",
+            "owner": os.getenv("BUILDKITE_BUILD_CREATOR_EMAIL") or getpass.getuser(),
+            "reason": "materialize test/terraform CI run",
+            "team": "qa",
+            "deleteAfter": delete_after,
+        }
+        self.base_vars += [
+            "-var",
+            f"tags={json.dumps(tags)}",
+        ]
 
         # Full vars includes environmentd_version for initial setup
         vars = self.base_vars + [

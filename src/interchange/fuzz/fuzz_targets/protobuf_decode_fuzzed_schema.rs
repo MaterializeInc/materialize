@@ -23,13 +23,15 @@
 //! repeated -> list, nested message -> record). Instead we keep the schema
 //! structured (`MsgDef`/`FieldTy`), build the `FileDescriptorSet` from it, and
 //! protobuf-binary-encode a valid body for the top message against that same
-//! structure, bounding recursion through cyclic message refs by emitting empty
-//! nested messages at the depth limit. Both wire formats are exercised: the
-//! Confluent variant gets the 5-byte schema-registry header prepended so its
-//! body decodes just as deeply. We keep the error-path coverage a random body
-//! gave, though: a quarter of the inputs feed the raw remaining bytes, and
-//! others truncate or single-byte-corrupt the valid encoding. Neither
-//! validation nor decoding may panic.
+//! structure, bounding recursion through cyclic message refs by omitting
+//! message fields entirely once the depth limit is reached. The wire format is
+//! fuzzer-chosen per input: the Confluent variant gets the six-byte
+//! schema-registry header prepended (magic byte, schema id, message index) so
+//! its body decodes just as deeply, and one input in eight instead lets the
+//! fuzzer pick those bytes so the header's rejection arms stay covered. We keep
+//! the error-path coverage a random body gave, though: a quarter of the inputs
+//! feed the raw remaining bytes, and others truncate or single-byte-corrupt the
+//! valid encoding. Neither validation nor decoding may panic.
 //!
 //! Beyond the well-formed-schema happy path, we drive the descriptor-validation
 //! surface harder. Some schemas grow a `map<string,string>` field (a repeated
@@ -157,7 +159,8 @@ fn gen_schema(u: &mut Unstructured) -> arbitrary::Result<(Vec<MsgDef>, Vec<u8>)>
     Ok((msgs, enum_nvals))
 }
 
-fn field_proto(f: &FieldDef) -> FieldDescriptorProto {
+/// Build the descriptor entry for the `fi`th field of a message.
+fn field_proto(fi: usize, f: &FieldDef) -> FieldDescriptorProto {
     let (ty, type_name) = match &f.ty {
         FieldTy::Int32 => (Type::Int32, None),
         FieldTy::Int64 => (Type::Int64, None),
@@ -186,7 +189,14 @@ fn field_proto(f: &FieldDef) -> FieldDescriptorProto {
         Label::Optional
     };
     FieldDescriptorProto {
-        name: Some(format!("f{}", f.number - 1)),
+        // NOTE: the name must come from the position, not from `f.number`. A
+        // name derived from the number makes every duplicate number a duplicate
+        // *name* too, and `DescriptorPool::decode` rejects the name clash first
+        // ("camel-case name of field 'f0' conflicts with field 'f0'"). The
+        // duplicate-number descriptor this target means to generate would then
+        // never exist, and the reject rate would swallow a large share of all
+        // inputs before any Materialize code runs.
+        name: Some(format!("f{fi}")),
         number: Some(f.number),
         label: Some(label as i32),
         r#type: Some(ty as i32),
@@ -219,7 +229,12 @@ fn build_fds(msgs: &[MsgDef], enum_nvals: &[u8]) -> Vec<u8> {
         .enumerate()
         .map(|(mi, m)| DescriptorProto {
             name: Some(format!("M{mi}")),
-            field: m.fields.iter().map(field_proto).collect(),
+            field: m
+                .fields
+                .iter()
+                .enumerate()
+                .map(|(fi, f)| field_proto(fi, f))
+                .collect(),
             ..Default::default()
         })
         .collect();
@@ -286,6 +301,24 @@ fn encode_len_delimited(number: i32, bytes: &[u8], out: &mut Vec<u8>) {
     out.extend_from_slice(bytes);
 }
 
+/// Pick a value for a field of enum `E{j}`, whose declared values are
+/// `0..nvals`.
+///
+/// One draw in eight is `nvals` itself, which is out of range. prost decodes it
+/// fine (proto3 enums are open, the number survives as `Value::EnumNumber`),
+/// but `pack_value` then fails the row with "unknown enum value" and
+/// `pack_message` propagates that, so every field *after* the enum goes
+/// unpacked. Keeping it a minority leaves most bodies packing in full while
+/// still covering the rejection.
+fn enum_value(enum_nvals: &[u8], j: u8, u: &mut Unstructured) -> arbitrary::Result<u64> {
+    let nvals = u64::from(enum_nvals[usize::from(j)]);
+    if u.int_in_range(0u8..=7)? == 0 {
+        Ok(nvals)
+    } else {
+        Ok(u.int_in_range(0..=nvals - 1)?)
+    }
+}
+
 /// Encode one occurrence of a field (tag + value).
 fn encode_field(
     msgs: &[MsgDef],
@@ -330,10 +363,7 @@ fn encode_field(
         }
         FieldTy::Enum(j) => {
             encode_tag(n, 0, out);
-            // Valid values are 0..nvals. `nvals` itself is one out-of-range
-            // index (proto3 open enums accept it, the decoder maps it).
-            let nvals = u64::from(enum_nvals[usize::from(*j)]);
-            encode_varint(u.int_in_range(0u64..=nvals)?, out);
+            encode_varint(enum_value(enum_nvals, *j, u)?, out);
         }
         // wire type 1: 64-bit.
         FieldTy::Fixed64 => {
@@ -379,12 +409,12 @@ fn encode_field(
             encode_len_delimited(n, &b, out);
         }
         FieldTy::Message(r) => {
-            // Bound recursion through cyclic refs: at the depth limit emit an
-            // empty (all-defaults) nested message.
+            // Recursion through cyclic message refs terminates because
+            // `encode_message` gives a message field zero occurrences once
+            // `depth` reaches 0, so this arm only ever runs with `depth > 0`
+            // and `depth - 1` cannot underflow.
             let mut nested = Vec::new();
-            if depth > 0 {
-                encode_message(msgs, enum_nvals, usize::from(*r), depth - 1, u, &mut nested)?;
-            }
+            encode_message(msgs, enum_nvals, usize::from(*r), depth - 1, u, &mut nested)?;
             encode_len_delimited(n, &nested, out);
         }
         FieldTy::Map => {
@@ -453,10 +483,7 @@ fn encode_scalar_value(
             encode_varint(((v << 1) ^ (v >> 63)) as u64, out);
         }
         FieldTy::Bool => encode_varint(u.int_in_range(0u64..=1)?, out),
-        FieldTy::Enum(j) => {
-            let nvals = u64::from(enum_nvals[usize::from(*j)]);
-            encode_varint(u.int_in_range(0u64..=nvals)?, out);
-        }
+        FieldTy::Enum(j) => encode_varint(enum_value(enum_nvals, *j, u)?, out),
         FieldTy::Fixed64 => out.extend_from_slice(&u.arbitrary::<u64>()?.to_le_bytes()),
         FieldTy::Sfixed64 => out.extend_from_slice(&u.arbitrary::<i64>()?.to_le_bytes()),
         FieldTy::Double => out.extend_from_slice(&u.arbitrary::<f64>()?.to_le_bytes()),
@@ -484,7 +511,8 @@ fn encode_message(
     for f in &msg.fields {
         // Repeated fields get 0..=3 occurrences, singular fields 0..=1
         // (proto3 fields are optional). Message fields at the depth limit are
-        // omitted entirely to break cycles.
+        // omitted entirely to break cycles. `encode_field` relies on that: it
+        // decrements `depth` unguarded for a message field.
         let max = if matches!(f.ty, FieldTy::Message(_)) && depth == 0 {
             0
         } else if f.repeated {
@@ -522,6 +550,35 @@ fn run(mut u: Unstructured) -> arbitrary::Result<()> {
     let root = usize::from(u.int_in_range(0u8..=u8::try_from(msgs.len() - 1).unwrap())?);
     let root_name = format!("fuzz.M{root}");
 
+    // The wire format is chosen per input rather than both being run over the
+    // same body. Once `extract_protobuf_header` has stripped the prefix the two
+    // paths are byte-identical, so running both would just rebuild the whole
+    // descriptor pool (the most expensive step here) to repeat the same decode.
+    let confluent_wire_format = bool::arbitrary(&mut u)?;
+
+    // The Confluent protobuf prefix is magic byte 0, a 4-byte big-endian schema
+    // id, then a message-index array. `extract_protobuf_header` accepts only the
+    // single-byte `0` form (the file's first message), so a well-formed prefix
+    // is SIX zero bytes, not five. At five the body's own first byte stands in
+    // for the message index, and for a structured body that byte is always a
+    // field tag `(number << 3) | wire_type` with `number >= 1`, hence always
+    // `>= 8`, hence always rejected. The body would never once be decoded.
+    //
+    // One input in eight lets the fuzzer pick the prefix instead, so the header's
+    // rejection arms (bad magic, nonzero message index, buffer too short to hold
+    // magic + schema id, or to hold a message index after them) stay covered
+    // rather than depending on the accident of a body starting with a zero.
+    let confluent_prefix = if u.int_in_range(0u8..=7)? == 0 {
+        let len = u.int_in_range(0usize..=6)?;
+        let mut p = Vec::with_capacity(len);
+        for _ in 0..len {
+            p.push(u.arbitrary::<u8>()?);
+        }
+        p
+    } else {
+        vec![0u8; 6]
+    };
+
     // Body for the root message: usually a valid encoding (so prost decodes
     // through to the Row conversion), but a quarter of the time the raw remaining
     // bytes, and otherwise a valid encoding occasionally truncated or single-byte
@@ -546,25 +603,20 @@ fn run(mut u: Unstructured) -> arbitrary::Result<()> {
         b
     };
 
-    for confluent_wire_format in [false, true] {
-        let Ok(descriptors) = DecodedDescriptors::from_bytes(&fds, root_name.clone()) else {
-            return Ok(());
-        };
-        let Ok(mut decoder) = Decoder::new(descriptors, confluent_wire_format) else {
-            return Ok(());
-        };
-        // The Confluent variant strips a 5-byte schema-registry header (magic
-        // byte 0 + 4-byte schema id) before the body. Prepend one so its body
-        // decodes just as deeply as the raw variant.
-        let payload = if confluent_wire_format {
-            let mut p = vec![0u8; 5];
-            p.extend_from_slice(&body);
-            p
-        } else {
-            body.clone()
-        };
-        let _ = decoder.decode(&payload);
-    }
+    let Ok(descriptors) = DecodedDescriptors::from_bytes(&fds, root_name) else {
+        return Ok(());
+    };
+    let Ok(mut decoder) = Decoder::new(descriptors, confluent_wire_format) else {
+        return Ok(());
+    };
+    let payload = if confluent_wire_format {
+        let mut p = confluent_prefix;
+        p.extend_from_slice(&body);
+        p
+    } else {
+        body
+    };
+    let _ = decoder.decode(&payload);
     Ok(())
 }
 

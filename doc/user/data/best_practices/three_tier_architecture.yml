@@ -4,7 +4,7 @@ columns:
 rows:
   - "Tier": "**Source cluster(s)**"
     Description: |
-      **A dedicated cluster(s)** for [sources](/concepts/sources/).
+      **A dedicated cluster(s)** for [sources](/fundamentals/concepts/sources/).
 
       {{% include-from-yaml data="best_practices_details" name="architecture-upsert-source" %}}
 
@@ -12,12 +12,12 @@ rows:
     Description: |
       **A dedicated cluster(s)** for compute/transformation:
 
-      - [Materialized views](/concepts/views/#materialized-views) to persist, in
+      - [Materialized views](/fundamentals/concepts/views/#materialized-views) to persist, in
         durable storage, the results that will be served. Results of
         materialized views are available across all clusters.
 
         {{< tip >}}
-        {{< include-md file="shared-content/stacked-view-consideration.md" >}}
+        {{< include-md file="content/headless/stacked-view-consideration.md" >}}
         {{< /tip >}}
 
       - Indexes, **only as needed**, to make transformation fast (such as
@@ -37,5 +37,5 @@ rows:
     Description: |
       <a name="tier-serving-clusters"></a>
       **A dedicated cluster(s)** for serving queries, including
-      [indexes](/concepts/indexes/) on the materialized views. Indexes are local
+      [indexes](/fundamentals/concepts/indexes/) on the materialized views. Indexes are local
       to the cluster in which they are created.

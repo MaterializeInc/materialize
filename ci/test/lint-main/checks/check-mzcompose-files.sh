@@ -24,7 +24,6 @@ check_all_files_referenced_in_ci() {
         -not -wholename "./misc/monitoring/mzcompose.py" `# Only run manually` \
         -not -wholename "./test/canary-environment/mzcompose.py" `# Only run manually` \
         -not -wholename "./test/console/mzcompose.py" `# Only run manually` \
-        -not -wholename "./test/cargo-fuzz/mzcompose.py" `# Enabled in release qualification later in the cargo-fuzz stack` \
         -not -wholename "./test/mzcompose_examples/mzcompose.py" `# Example only` \
         -not -wholename "./test/get-cloud-hostname/mzcompose.py" `# Utility, no test` \
         | sed -e "s|.*/\([^/]*\)/mzcompose.py|\1|")
@@ -56,6 +55,7 @@ check_default_workflow_references_others() {
         -not -wholename "./test/workload-replay/mzcompose.py" `# Handled differently` \
         -not -wholename "./test/race-condition/mzcompose.py" `# rotate-keys-race workflow is run separately` \
         -not -wholename "./test/aws-glue-schema-registry/mzcompose.py" `# 'aws' workflow runs against real AWS, opt-in via nightly only` \
+        -not -wholename "./test/txn-wal-fencing/mzcompose.py" `# mixed-mode-read-then-write workflow is run separately` \
     )
 
     for file in "${MZCOMPOSE_TEST_FILES[@]}"; do

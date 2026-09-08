@@ -21,7 +21,7 @@ use hyper_util::rt::TokioIo;
 use mz_build_info::{BuildInfo, build_info};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_cluster_client::client::TimelyConfig;
-use mz_compute::server::ComputeInstanceContext;
+use mz_compute::server::{ComputeInstanceContext, ComputeRuntimeRole};
 use mz_http_util::DynamicFilterTarget;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
@@ -268,7 +268,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     emit_boot_diagnostics!(&BUILD_INFO);
 
     mz_alloc::register_metrics_into(&metrics_registry).await;
-    mz_metrics::register_metrics_into(&metrics_registry, mz_dyncfgs::all_dyncfgs()).await;
+    mz_metrics::register_metrics_into(
+        &metrics_registry,
+        mz_dyncfgs::all_dyncfgs(),
+        args.scratch_directory.clone(),
+    )
+    .await;
 
     if let Some(heap_limit) = args.heap_limit {
         mz_compute::memory_limiter::start_limiter(heap_limit, &metrics_registry);
@@ -470,6 +475,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     // Start compute server.
     let compute_client_builder = mz_compute::server::serve(
         compute_timely_config,
+        ComputeRuntimeRole::Solo,
         &metrics_registry,
         persist_clients,
         txns_ctx,

@@ -351,6 +351,66 @@ impl Ord for Row {
     }
 }
 
+/// A [`Row`] that serializes as protobuf-encoded [`ProtoRow`] bytes.
+///
+/// `Row`'s own serde impl emits the raw bytes of the in-memory `Tag` based
+/// datum encoding, which is free to change between releases. Use this wrapper
+/// instead wherever a row is serialized into a durable, cross-version format,
+/// such as the stable LIR plan format. `ProtoRow` already carries the needed
+/// backward compatibility obligation: it is persist's storage codec for
+/// `SourceData`, and `row.proto` is covered by the buf breaking lint.
+#[derive(
+    Clone,
+    Default,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize
+)]
+pub struct StableRow(#[serde(with = "stable_row_proto")] pub Row);
+
+impl From<Row> for StableRow {
+    fn from(row: Row) -> Self {
+        StableRow(row)
+    }
+}
+
+impl Deref for StableRow {
+    type Target = Row;
+
+    fn deref(&self) -> &Row {
+        &self.0
+    }
+}
+
+impl Debug for StableRow {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+mod stable_row_proto {
+    use mz_proto::RustType;
+    use prost::Message;
+    use serde::de::Error;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    use crate::row::{ProtoRow, Row};
+
+    pub fn serialize<S: Serializer>(row: &Row, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(&row.into_proto().encode_to_vec())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Row, D::Error> {
+        let bytes = serde_bytes::ByteBuf::deserialize(deserializer)?;
+        let proto = ProtoRow::decode(bytes.as_slice()).map_err(D::Error::custom)?;
+        Row::from_proto(proto).map_err(D::Error::custom)
+    }
+}
+
 #[allow(missing_debug_implementations)]
 mod columnation {
     use columnation::{Columnation, Region};
@@ -557,7 +617,7 @@ mod columnar {
         const SLICE_COUNT: usize = BC::SLICE_COUNT + VC::SLICE_COUNT;
         #[inline(always)]
         fn get_byte_slice(&self, index: usize) -> (u64, &'a [u8]) {
-            debug_assert!(index < Self::SLICE_COUNT);
+            mz_ore::soft_assert_no_log!(index < Self::SLICE_COUNT);
             if index < BC::SLICE_COUNT {
                 self.bounds.get_byte_slice(index)
             } else {
@@ -837,6 +897,18 @@ pub struct RowArena {
     // writer's lifetime. That keeps nested writers sound: a writer obtained while another is live
     // finds the slot empty and allocates its own buffer instead of double-borrowing.
     scratch: RefCell<Option<Vec<u8>>>,
+    // Optional ceiling on the bytes this arena will hold, and a running total of what it holds.
+    // `None` is unbounded, which is what every arena in a dataflow must keep using: a budget that
+    // can change mid-run would make dataflow evaluation non-deterministic (see
+    // [`RowArena::with_budget`]). A budget is for evaluating a user-authored expression in a shared
+    // process, where that expression's memory use must be bounded (see `mz_adapter::webhook`).
+    //
+    // NOTE: exceeding the budget does not make a push fail. The pushes are infallible, and a
+    // refused push would hand back a truncated value, i.e. a corrupt datum. The budget is instead a
+    // *reported* condition: `over_budget` is polled by whoever is able to return an error, which
+    // for scalar expressions is the evaluator between calls.
+    budget: Option<usize>,
+    allocated: Cell<usize>,
 }
 
 // DatumList and DatumDict defined here rather than near Datum because we need private access to the unsafe data field
@@ -1071,11 +1143,6 @@ enum Tag {
     Null,
     False,
     True,
-    Int16,
-    Int32,
-    Int64,
-    UInt8,
-    UInt32,
     Float32,
     Float64,
     Date,
@@ -1083,6 +1150,10 @@ enum Tag {
     Timestamp,
     TimestampTz,
     Interval,
+    // The length-prefixed tags: for each of the three kinds, four tags ordered by the width of
+    // the length prefix in front of the payload, so a tag's distance from its kind's first tag
+    // selects the width. Each kind has its own `read_datum` arm naming the `Datum` constructor,
+    // since the kind never varies within a column; the width does, so it stays inside the arm.
     BytesTiny,
     BytesShort,
     BytesLong,
@@ -1091,18 +1162,16 @@ enum Tag {
     StringShort,
     StringLong,
     StringHuge,
-    Uuid,
-    Array,
     ListTiny,
     ListShort,
     ListLong,
     ListHuge,
+    Uuid,
+    Array,
     Dict,
     JsonNull,
     Dummy,
     Numeric,
-    UInt16,
-    UInt64,
     MzTimestamp,
     Range,
     MzAclItem,
@@ -1126,60 +1195,63 @@ enum Tag {
     //
     // Separate tags for non-negative and negative numbers are used to avoid having to
     // waste one bit in the actual data space to encode the sign.
+    // A signed family alternates non-negative and negative at each payload width, so a tag
+    // splits into both by arithmetic: the width is its distance from the family's first tag
+    // shifted right by one, and the sign is that distance's low bit. Keeping the two signs
+    // apart would make the width a subtraction from one of two bases, chosen by a compare.
+    //
+    // The family ends at the width where the payload is the whole integer. There the sign is
+    // already the payload's top bit, so one tag serves both and the alternation stops, which is
+    // why the fixed-width tag sits there rather than in a family of its own.
     NonNegativeInt16_0, // i.e., 0
+    NegativeInt16_0,    // i.e., -1
     NonNegativeInt16_8,
-    NonNegativeInt16_16,
+    NegativeInt16_8,
+    Int16,
 
     NonNegativeInt32_0,
+    NegativeInt32_0,
     NonNegativeInt32_8,
+    NegativeInt32_8,
     NonNegativeInt32_16,
+    NegativeInt32_16,
     NonNegativeInt32_24,
-    NonNegativeInt32_32,
+    NegativeInt32_24,
+    Int32,
 
     NonNegativeInt64_0,
-    NonNegativeInt64_8,
-    NonNegativeInt64_16,
-    NonNegativeInt64_24,
-    NonNegativeInt64_32,
-    NonNegativeInt64_40,
-    NonNegativeInt64_48,
-    NonNegativeInt64_56,
-    NonNegativeInt64_64,
-
-    NegativeInt16_0, // i.e., -1
-    NegativeInt16_8,
-    NegativeInt16_16,
-
-    NegativeInt32_0,
-    NegativeInt32_8,
-    NegativeInt32_16,
-    NegativeInt32_24,
-    NegativeInt32_32,
-
     NegativeInt64_0,
+    NonNegativeInt64_8,
     NegativeInt64_8,
+    NonNegativeInt64_16,
     NegativeInt64_16,
+    NonNegativeInt64_24,
     NegativeInt64_24,
+    NonNegativeInt64_32,
     NegativeInt64_32,
+    NonNegativeInt64_40,
     NegativeInt64_40,
+    NonNegativeInt64_48,
     NegativeInt64_48,
+    NonNegativeInt64_56,
     NegativeInt64_56,
-    NegativeInt64_64,
+    Int64,
 
-    // These are like the ones above, but for unsigned types. The
-    // situation is slightly simpler as we don't have negatives.
+    // These are like the ones above, but for unsigned types. The situation is slightly simpler
+    // as we don't have negatives, so the width is the whole distance from the family's first
+    // tag, and the fixed-width tag is again the widest member.
     UInt8_0, // i.e., 0
-    UInt8_8,
+    UInt8,
 
     UInt16_0,
     UInt16_8,
-    UInt16_16,
+    UInt16,
 
     UInt32_0,
     UInt32_8,
     UInt32_16,
     UInt32_24,
-    UInt32_32,
+    UInt32,
 
     UInt64_0,
     UInt64_8,
@@ -1189,40 +1261,86 @@ enum Tag {
     UInt64_40,
     UInt64_48,
     UInt64_56,
-    UInt64_64,
+    UInt64,
 }
 
 impl Tag {
-    fn actual_int_length(self) -> Option<usize> {
-        use Tag::*;
-        let val = match self {
-            NonNegativeInt16_0 | NonNegativeInt32_0 | NonNegativeInt64_0 | UInt8_0 | UInt16_0
-            | UInt32_0 | UInt64_0 => 0,
-            NonNegativeInt16_8 | NonNegativeInt32_8 | NonNegativeInt64_8 | UInt8_8 | UInt16_8
-            | UInt32_8 | UInt64_8 => 1,
-            NonNegativeInt16_16 | NonNegativeInt32_16 | NonNegativeInt64_16 | UInt16_16
-            | UInt32_16 | UInt64_16 => 2,
-            NonNegativeInt32_24 | NonNegativeInt64_24 | UInt32_24 | UInt64_24 => 3,
-            NonNegativeInt32_32 | NonNegativeInt64_32 | UInt32_32 | UInt64_32 => 4,
-            NonNegativeInt64_40 | UInt64_40 => 5,
-            NonNegativeInt64_48 | UInt64_48 => 6,
-            NonNegativeInt64_56 | UInt64_56 => 7,
-            NonNegativeInt64_64 | UInt64_64 => 8,
-            NegativeInt16_0 | NegativeInt32_0 | NegativeInt64_0 => 0,
-            NegativeInt16_8 | NegativeInt32_8 | NegativeInt64_8 => 1,
-            NegativeInt16_16 | NegativeInt32_16 | NegativeInt64_16 => 2,
-            NegativeInt32_24 | NegativeInt64_24 => 3,
-            NegativeInt32_32 | NegativeInt64_32 => 4,
-            NegativeInt64_40 => 5,
-            NegativeInt64_48 => 6,
-            NegativeInt64_56 => 7,
-            NegativeInt64_64 => 8,
-
-            _ => return None,
-        };
-        Some(val)
+    /// The tag's discriminant, usable in const context.
+    #[allow(clippy::as_conversions)]
+    const fn byte(self) -> u8 {
+        self as u8
     }
 }
+
+/// Assert that the listed tags are consecutive, in the order given.
+///
+/// Every family below is addressed by arithmetic rather than by name: `push_datum` writes
+/// `first + n` for a payload of `n` bytes, and `read_signed_varint`/`read_unsigned_varint`
+/// invert that by subtraction. A variant inserted into the middle of a family, or two members
+/// swapped, silently changes how many bytes a tag claims, which corrupts the datum rather than
+/// failing to compile. These assertions turn that into a compile error at the definition.
+macro_rules! assert_consecutive {
+    ($($tag:ident),+ $(,)?) => {
+        const _: () = {
+            let tags: &[u8] = &[$(Tag::$tag.byte()),+];
+            let mut i = 1;
+            while i < tags.len() {
+                assert!(
+                    tags[i] == tags[i - 1] + 1,
+                    concat!("tags are not consecutive: ", stringify!($($tag),+))
+                );
+                i += 1;
+            }
+        };
+    };
+}
+
+assert_consecutive!(BytesTiny, BytesShort, BytesLong, BytesHuge);
+assert_consecutive!(StringTiny, StringShort, StringLong, StringHuge);
+assert_consecutive!(ListTiny, ListShort, ListLong, ListHuge);
+assert_consecutive!(
+    NonNegativeInt16_0,
+    NegativeInt16_0,
+    NonNegativeInt16_8,
+    NegativeInt16_8,
+    Int16,
+);
+assert_consecutive!(
+    NonNegativeInt32_0,
+    NegativeInt32_0,
+    NonNegativeInt32_8,
+    NegativeInt32_8,
+    NonNegativeInt32_16,
+    NegativeInt32_16,
+    NonNegativeInt32_24,
+    NegativeInt32_24,
+    Int32,
+);
+assert_consecutive!(
+    NonNegativeInt64_0,
+    NegativeInt64_0,
+    NonNegativeInt64_8,
+    NegativeInt64_8,
+    NonNegativeInt64_16,
+    NegativeInt64_16,
+    NonNegativeInt64_24,
+    NegativeInt64_24,
+    NonNegativeInt64_32,
+    NegativeInt64_32,
+    NonNegativeInt64_40,
+    NegativeInt64_40,
+    NonNegativeInt64_48,
+    NegativeInt64_48,
+    NonNegativeInt64_56,
+    NegativeInt64_56,
+    Int64,
+);
+assert_consecutive!(UInt8_0, UInt8,);
+assert_consecutive!(UInt16_0, UInt16_8, UInt16,);
+assert_consecutive!(UInt32_0, UInt32_8, UInt32_16, UInt32_24, UInt32,);
+assert_consecutive!(
+    UInt64_0, UInt64_8, UInt64_16, UInt64_24, UInt64_32, UInt64_40, UInt64_48, UInt64_56, UInt64,
+);
 
 // --------------------------------------------------------------------------------
 // reading data
@@ -1238,90 +1356,146 @@ fn read_untagged_bytes<'a>(data: &mut &'a [u8]) -> &'a [u8] {
     bytes
 }
 
-/// Read a data whose length is encoded in the row before its contents.
+/// Read a byte slice preceded by its length, the width of the length prefix given by the tag's
+/// distance from `first`, its kind's `*Tiny` tag.
 ///
-/// Updates `offset` to point to the first byte after the end of the read region.
+/// Each arm reads the prefix at a constant width, which is a plain load; deriving the width and
+/// reading that many bytes measured twice as slow on long payloads.
 ///
 /// # Safety
 ///
-/// This function is safe if the datum's length and contents were previously written by `push_lengthed_bytes`,
-/// and it was only written with a `String` tag if it was indeed UTF-8.
-unsafe fn read_lengthed_datum<'a>(data: &mut &'a [u8], tag: Tag) -> Datum<'a> {
-    let len = match tag {
-        Tag::BytesTiny | Tag::StringTiny | Tag::ListTiny => usize::from(read_byte(data)),
-        Tag::BytesShort | Tag::StringShort | Tag::ListShort => {
-            usize::from(u16::from_le_bytes(read_byte_array(data)))
-        }
-        Tag::BytesLong | Tag::StringLong | Tag::ListLong => {
-            usize::cast_from(u32::from_le_bytes(read_byte_array(data)))
-        }
-        Tag::BytesHuge | Tag::StringHuge | Tag::ListHuge => {
-            usize::cast_from(u64::from_le_bytes(read_byte_array(data)))
-        }
-        _ => unreachable!(),
+/// The contents are whatever `push_lengthed_bytes` wrote, so a caller may treat them as UTF-8
+/// only for a `String` tag.
+#[inline(always)]
+fn read_lengthed_bytes<'a>(data: &mut &'a [u8], tag: Tag, first: Tag) -> &'a [u8] {
+    let len = match u8::from(tag).wrapping_sub(u8::from(first)) {
+        0 => usize::from(read_byte(data)),
+        1 => usize::from(u16::from_le_bytes(read_byte_array(data))),
+        2 => usize::cast_from(u32::from_le_bytes(read_byte_array(data))),
+        _ => usize::cast_from(u64::from_le_bytes(read_byte_array(data))),
     };
     let (bytes, next) = data.split_at(len);
     *data = next;
-    match tag {
-        Tag::BytesTiny | Tag::BytesShort | Tag::BytesLong | Tag::BytesHuge => Datum::Bytes(bytes),
-        Tag::StringTiny | Tag::StringShort | Tag::StringLong | Tag::StringHuge => {
-            Datum::String(str::from_utf8_unchecked(bytes))
-        }
-        Tag::ListTiny | Tag::ListShort | Tag::ListLong | Tag::ListHuge => {
-            Datum::List(DatumList::new(bytes))
-        }
-        _ => unreachable!(),
-    }
+    bytes
 }
 
+#[inline(always)]
 fn read_byte(data: &mut &[u8]) -> u8 {
     let byte = data[0];
     *data = &data[1..];
     byte
 }
 
-/// Read `length` bytes from `data` at `offset`, updating the
-/// latter. Extend the resulting buffer to an array of `N` bytes by
-/// inserting `FILL` in the k most significant bytes, where k = N - length.
+/// The payload of a variable-length integer whose datum ends within eight bytes of the end of
+/// `data`, so the wide load in [`read_varint_word`] would run off the end.
 ///
-/// SAFETY:
-///   * length <= N
-///   * offset + length <= data.len()
-fn read_byte_array_sign_extending<const N: usize, const FILL: u8>(
-    data: &mut &[u8],
-    length: usize,
-) -> [u8; N] {
-    let mut raw = [FILL; N];
-    let (prev, next) = data.split_at(length);
-    (raw[..prev.len()]).copy_from_slice(prev);
-    *data = next;
-    raw
-}
-/// Read `length` bytes from `data` at `offset`, updating the
-/// latter. Extend the resulting buffer to a negative `N`-byte
-/// twos complement integer by filling the remaining bits with 1.
-///
-/// SAFETY:
-///   * length <= N
-///   * offset + length <= data.len()
-fn read_byte_array_extending_negative<const N: usize>(data: &mut &[u8], length: usize) -> [u8; N] {
-    read_byte_array_sign_extending::<N, 255>(data, length)
-}
-
-/// Read `length` bytes from `data` at `offset`, updating the
-/// latter. Extend the resulting buffer to a positive or zero `N`-byte
-/// twos complement integer by filling the remaining bits with 0.
-///
-/// SAFETY:
-///   * length <= N
-///   * offset + length <= data.len()
-fn read_byte_array_extending_nonnegative<const N: usize>(
-    data: &mut &[u8],
-    length: usize,
-) -> [u8; N] {
-    read_byte_array_sign_extending::<N, 0>(data, length)
+/// Out of line and cold: this is at most the tail of a row, or of a nested list or map.
+#[cold]
+#[inline(never)]
+fn read_varint_word_tail(data: &[u8], len: usize) -> u64 {
+    #[inline(always)]
+    fn ext<const L: usize>(data: &[u8]) -> u64 {
+        let mut raw = [0; 8];
+        raw[..L].copy_from_slice(&data[..L]);
+        u64::from_le_bytes(raw)
+    }
+    // Each arm reads a constant width, which is a load rather than a `memcpy`. This path serves
+    // the last datum or two of every row, which at low arity is a real share of all datums.
+    match len {
+        0 => 0,
+        1 => u64::from(data[0]),
+        2 => ext::<2>(data),
+        3 => ext::<3>(data),
+        4 => ext::<4>(data),
+        5 => ext::<5>(data),
+        6 => ext::<6>(data),
+        7 => ext::<7>(data),
+        // An eight-byte payload needs eight bytes past the tag, which this path's caller found
+        // wanting, so a valid row cannot reach here.
+        _ => panic!("payload runs past the end of the row"),
+    }
 }
 
+/// Read the `len` payload bytes of a variable-length integer, returning them in the low
+/// `len * 8` bits of a word. Bits above that are zero or belong to whatever follows in the row,
+/// so a caller must mask them off.
+///
+/// Loading a fixed eight bytes is what keeps `len` out of the load, and so off a branch. Those
+/// bytes exist except at the very end of the buffer.
+#[inline(always)]
+fn read_varint_word(data: &mut &[u8], len: usize) -> u64 {
+    let word = match data.first_chunk::<8>() {
+        Some(chunk) => u64::from_le_bytes(*chunk),
+        None => read_varint_word_tail(data, len),
+    };
+    *data = &data[len..];
+    word
+}
+
+/// Mask covering the low `len` bytes of a word.
+///
+/// `len` reaches eight for a 64-bit value that needs every byte, where a shift of 64 would be
+/// undefined, so that case saturates instead.
+#[inline(always)]
+fn payload_mask(len: usize) -> u64 {
+    if len >= 8 {
+        u64::MAX
+    } else {
+        (1u64 << (len * 8)) - 1
+    }
+}
+
+/// The low `N` bytes of `word`, little-endian.
+#[inline(always)]
+fn truncate<const N: usize>(word: u64) -> [u8; N] {
+    word.to_le_bytes()[..N].try_into().expect("N <= 8")
+}
+
+/// Read the payload of a variable-length integer of either sign, extended to `N` bytes.
+///
+/// A signed family alternates the two signs at each payload width, so the tag's distance from
+/// `first` holds the width above its low bit and the sign in it. Both fall out by shifting and
+/// masking, with no compare and nothing to dispatch on: a column's tag varies with the magnitude
+/// and sign of every value, so any branch on it is one the predictor cannot learn.
+///
+/// # Correctness
+///
+/// `tag` must belong to the family starting at `first`, and `data` must hold its payload.
+#[inline(always)]
+fn read_signed_varint<const N: usize>(data: &mut &[u8], tag: Tag, first: Tag) -> [u8; N] {
+    let delta = u8::from(tag).wrapping_sub(u8::from(first));
+    let len = usize::from(delta >> 1);
+    // All ones for a negative value, so the bytes above the payload sign-extend, and zero
+    // otherwise. A `len` of zero leaves the whole word filled, which is the -1 the encoder means.
+    let negative = delta & 1 == 1;
+    read_varint_payload(data, len, negative)
+}
+
+/// Read a `len` byte payload and extend it to `N` bytes, with ones above it when `negative`.
+///
+/// `len` must not exceed `N`, since `truncate` keeps only the low `N` bytes and a wider payload
+/// would lose its top ones.
+#[inline(always)]
+fn read_varint_payload<const N: usize>(data: &mut &[u8], len: usize, negative: bool) -> [u8; N] {
+    let mask = payload_mask(len);
+    let fill = 0u64.wrapping_sub(u64::from(negative));
+    truncate((read_varint_word(data, len) & mask) | (fill & !mask))
+}
+
+/// Read the payload of an unsigned variable-length integer, zero-extended to `N` bytes.
+///
+/// As [`read_signed_varint`], without the sign.
+///
+/// # Correctness
+///
+/// `tag` must belong to the family starting at `first`, and `data` must hold its payload.
+#[inline(always)]
+fn read_unsigned_varint<const N: usize>(data: &mut &[u8], tag: Tag, first: Tag) -> [u8; N] {
+    let len = usize::from(u8::from(tag).wrapping_sub(u8::from(first)));
+    read_varint_payload(data, len, false)
+}
+
+#[inline(always)]
 pub(super) fn read_byte_array<const N: usize>(data: &mut &[u8]) -> [u8; N] {
     let (prev, next) = data.split_first_chunk().unwrap();
     *data = next;
@@ -1359,87 +1533,63 @@ pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
         Tag::Null => Datum::Null,
         Tag::False => Datum::False,
         Tag::True => Datum::True,
-        Tag::UInt8_0 | Tag::UInt8_8 => {
-            let i = u8::from_le_bytes(read_byte_array_extending_nonnegative(
-                data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::UInt8(i)
-        }
-        Tag::Int16 => {
-            let i = i16::from_le_bytes(read_byte_array(data));
-            Datum::Int16(i)
-        }
-        Tag::NonNegativeInt16_0 | Tag::NonNegativeInt16_16 | Tag::NonNegativeInt16_8 => {
-            // SAFETY:`tag.actual_int_length()` is <= 16 for these tags,
-            // and `data` is big enough because it was encoded validly. These assumptions
-            // are checked in debug asserts.
-            let i = i16::from_le_bytes(read_byte_array_extending_nonnegative(
-                data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::Int16(i)
-        }
-        Tag::UInt16_0 | Tag::UInt16_8 | Tag::UInt16_16 => {
-            let i = u16::from_le_bytes(read_byte_array_extending_nonnegative(
-                data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::UInt16(i)
-        }
-        Tag::Int32 => {
-            let i = i32::from_le_bytes(read_byte_array(data));
-            Datum::Int32(i)
-        }
+        Tag::NonNegativeInt16_0
+        | Tag::NegativeInt16_0
+        | Tag::NonNegativeInt16_8
+        | Tag::NegativeInt16_8
+        | Tag::Int16 => Datum::Int16(i16::from_le_bytes(read_signed_varint(
+            data,
+            tag,
+            Tag::NonNegativeInt16_0,
+        ))),
         Tag::NonNegativeInt32_0
-        | Tag::NonNegativeInt32_32
+        | Tag::NegativeInt32_0
         | Tag::NonNegativeInt32_8
+        | Tag::NegativeInt32_8
         | Tag::NonNegativeInt32_16
-        | Tag::NonNegativeInt32_24 => {
-            // SAFETY:`tag.actual_int_length()` is <= 32 for these tags,
-            // and `data` is big enough because it was encoded validly. These assumptions
-            // are checked in debug asserts.
-            let i = i32::from_le_bytes(read_byte_array_extending_nonnegative(
-                data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::Int32(i)
-        }
-        Tag::UInt32_0 | Tag::UInt32_8 | Tag::UInt32_16 | Tag::UInt32_24 | Tag::UInt32_32 => {
-            let i = u32::from_le_bytes(read_byte_array_extending_nonnegative(
-                data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::UInt32(i)
-        }
-        Tag::Int64 => {
-            let i = i64::from_le_bytes(read_byte_array(data));
-            Datum::Int64(i)
-        }
+        | Tag::NegativeInt32_16
+        | Tag::NonNegativeInt32_24
+        | Tag::NegativeInt32_24
+        | Tag::Int32 => Datum::Int32(i32::from_le_bytes(read_signed_varint(
+            data,
+            tag,
+            Tag::NonNegativeInt32_0,
+        ))),
         Tag::NonNegativeInt64_0
-        | Tag::NonNegativeInt64_64
+        | Tag::NegativeInt64_0
         | Tag::NonNegativeInt64_8
+        | Tag::NegativeInt64_8
         | Tag::NonNegativeInt64_16
+        | Tag::NegativeInt64_16
         | Tag::NonNegativeInt64_24
+        | Tag::NegativeInt64_24
         | Tag::NonNegativeInt64_32
+        | Tag::NegativeInt64_32
         | Tag::NonNegativeInt64_40
+        | Tag::NegativeInt64_40
         | Tag::NonNegativeInt64_48
-        | Tag::NonNegativeInt64_56 => {
-            // SAFETY:`tag.actual_int_length()` is <= 64 for these tags,
-            // and `data` is big enough because it was encoded validly. These assumptions
-            // are checked in debug asserts.
-
-            let i = i64::from_le_bytes(read_byte_array_extending_nonnegative(
+        | Tag::NegativeInt64_48
+        | Tag::NonNegativeInt64_56
+        | Tag::NegativeInt64_56
+        | Tag::Int64 => Datum::Int64(i64::from_le_bytes(read_signed_varint(
+            data,
+            tag,
+            Tag::NonNegativeInt64_0,
+        ))),
+        Tag::UInt8_0 | Tag::UInt8 => Datum::UInt8(u8::from_le_bytes(read_unsigned_varint(
+            data,
+            tag,
+            Tag::UInt8_0,
+        ))),
+        Tag::UInt16_0 | Tag::UInt16_8 | Tag::UInt16 => Datum::UInt16(u16::from_le_bytes(
+            read_unsigned_varint(data, tag, Tag::UInt16_0),
+        )),
+        Tag::UInt32_0 | Tag::UInt32_8 | Tag::UInt32_16 | Tag::UInt32_24 | Tag::UInt32 => {
+            Datum::UInt32(u32::from_le_bytes(read_unsigned_varint(
                 data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::Int64(i)
+                tag,
+                Tag::UInt32_0,
+            )))
         }
         Tag::UInt64_0
         | Tag::UInt64_8
@@ -1449,76 +1599,12 @@ pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
         | Tag::UInt64_40
         | Tag::UInt64_48
         | Tag::UInt64_56
-        | Tag::UInt64_64 => {
-            let i = u64::from_le_bytes(read_byte_array_extending_nonnegative(
-                data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::UInt64(i)
-        }
-        Tag::NegativeInt16_0 | Tag::NegativeInt16_16 | Tag::NegativeInt16_8 => {
-            // SAFETY:`tag.actual_int_length()` is <= 16 for these tags,
-            // and `data` is big enough because it was encoded validly. These assumptions
-            // are checked in debug asserts.
-            let i = i16::from_le_bytes(read_byte_array_extending_negative(
-                data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::Int16(i)
-        }
-        Tag::NegativeInt32_0
-        | Tag::NegativeInt32_32
-        | Tag::NegativeInt32_8
-        | Tag::NegativeInt32_16
-        | Tag::NegativeInt32_24 => {
-            // SAFETY:`tag.actual_int_length()` is <= 32 for these tags,
-            // and `data` is big enough because it was encoded validly. These assumptions
-            // are checked in debug asserts.
-            let i = i32::from_le_bytes(read_byte_array_extending_negative(
-                data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::Int32(i)
-        }
-        Tag::NegativeInt64_0
-        | Tag::NegativeInt64_64
-        | Tag::NegativeInt64_8
-        | Tag::NegativeInt64_16
-        | Tag::NegativeInt64_24
-        | Tag::NegativeInt64_32
-        | Tag::NegativeInt64_40
-        | Tag::NegativeInt64_48
-        | Tag::NegativeInt64_56 => {
-            // SAFETY:`tag.actual_int_length()` is <= 64 for these tags,
-            // and `data` is big enough because the row was encoded validly. These assumptions
-            // are checked in debug asserts.
-            let i = i64::from_le_bytes(read_byte_array_extending_negative(
-                data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::Int64(i)
-        }
+        | Tag::UInt64 => Datum::UInt64(u64::from_le_bytes(read_unsigned_varint(
+            data,
+            tag,
+            Tag::UInt64_0,
+        ))),
 
-        Tag::UInt8 => {
-            let i = u8::from_le_bytes(read_byte_array(data));
-            Datum::UInt8(i)
-        }
-        Tag::UInt16 => {
-            let i = u16::from_le_bytes(read_byte_array(data));
-            Datum::UInt16(i)
-        }
-        Tag::UInt32 => {
-            let i = u32::from_le_bytes(read_byte_array(data));
-            Datum::UInt32(i)
-        }
-        Tag::UInt64 => {
-            let i = u64::from_le_bytes(read_byte_array(data));
-            Datum::UInt64(i)
-        }
         Tag::Float32 => {
             let f = f32::from_bits(u32::from_le_bytes(read_byte_array(data)));
             Datum::Float32(OrderedFloat::from(f))
@@ -1579,18 +1665,20 @@ pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
                 micros,
             })
         }
-        Tag::BytesTiny
-        | Tag::BytesShort
-        | Tag::BytesLong
-        | Tag::BytesHuge
-        | Tag::StringTiny
-        | Tag::StringShort
-        | Tag::StringLong
-        | Tag::StringHuge
-        | Tag::ListTiny
-        | Tag::ListShort
-        | Tag::ListLong
-        | Tag::ListHuge => read_lengthed_datum(data, tag),
+        Tag::BytesTiny | Tag::BytesShort | Tag::BytesLong | Tag::BytesHuge => {
+            Datum::Bytes(read_lengthed_bytes(data, tag, Tag::BytesTiny))
+        }
+        Tag::StringTiny | Tag::StringShort | Tag::StringLong | Tag::StringHuge => {
+            // SAFETY: the bytes were written from a `str` under a `String` tag.
+            Datum::String(str::from_utf8_unchecked(read_lengthed_bytes(
+                data,
+                tag,
+                Tag::StringTiny,
+            )))
+        }
+        Tag::ListTiny | Tag::ListShort | Tag::ListLong | Tag::ListHuge => Datum::List(
+            DatumList::new(read_lengthed_bytes(data, tag, Tag::ListTiny)),
+        ),
         Tag::Uuid => Datum::Uuid(Uuid::from_bytes(read_byte_array(data))),
         Tag::Array => {
             // See the comment in `Row::push_array` for details on the encoding
@@ -1851,34 +1939,37 @@ where
         Datum::False => data.push(Tag::False.into()),
         Datum::True => data.push(Tag::True.into()),
         Datum::Int16(i) => {
+            // The family alternates the signs at each width, so the width is two tags apart and
+            // the sign is the low bit. The clamp folds both signs onto the widest tag, where the
+            // payload carries its own sign. See `read_signed_varint`, which takes this apart.
+            const WIDEST_DELTA: u8 = Tag::Int16.byte() - Tag::NonNegativeInt16_0.byte();
             let mbs = min_bytes_signed(i);
-            let tag = u8::from(if i.is_negative() {
-                Tag::NegativeInt16_0
-            } else {
-                Tag::NonNegativeInt16_0
-            }) + mbs;
+            let delta = ((mbs << 1) + u8::from(i.is_negative())).min(WIDEST_DELTA);
+            let tag = u8::from(Tag::NonNegativeInt16_0) + delta;
 
             data.push(tag);
             data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
         }
         Datum::Int32(i) => {
+            // The family alternates the signs at each width, so the width is two tags apart and
+            // the sign is the low bit. The clamp folds both signs onto the widest tag, where the
+            // payload carries its own sign. See `read_signed_varint`, which takes this apart.
+            const WIDEST_DELTA: u8 = Tag::Int32.byte() - Tag::NonNegativeInt32_0.byte();
             let mbs = min_bytes_signed(i);
-            let tag = u8::from(if i.is_negative() {
-                Tag::NegativeInt32_0
-            } else {
-                Tag::NonNegativeInt32_0
-            }) + mbs;
+            let delta = ((mbs << 1) + u8::from(i.is_negative())).min(WIDEST_DELTA);
+            let tag = u8::from(Tag::NonNegativeInt32_0) + delta;
 
             data.push(tag);
             data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
         }
         Datum::Int64(i) => {
+            // The family alternates the signs at each width, so the width is two tags apart and
+            // the sign is the low bit. The clamp folds both signs onto the widest tag, where the
+            // payload carries its own sign. See `read_signed_varint`, which takes this apart.
+            const WIDEST_DELTA: u8 = Tag::Int64.byte() - Tag::NonNegativeInt64_0.byte();
             let mbs = min_bytes_signed(i);
-            let tag = u8::from(if i.is_negative() {
-                Tag::NegativeInt64_0
-            } else {
-                Tag::NonNegativeInt64_0
-            }) + mbs;
+            let delta = ((mbs << 1) + u8::from(i.is_negative())).min(WIDEST_DELTA);
+            let tag = u8::from(Tag::NonNegativeInt64_0) + delta;
 
             data.push(tag);
             data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
@@ -3045,13 +3136,16 @@ impl<'a> Iterator for DatumDictIter<'a> {
                 "Dict keys must be strings, got {:?}",
                 key_tag
             );
-            let key = unsafe { read_lengthed_datum(&mut self.data, key_tag).unwrap_str() };
+            let bytes = read_lengthed_bytes(&mut self.data, key_tag, Tag::StringTiny);
+            // SAFETY: the bytes were written from a `str` under a `String` tag.
+            let key = unsafe { str::from_utf8_unchecked(bytes) };
             let val = unsafe { read_datum(&mut self.data) };
 
-            // if in debug mode, sanity check keys
-            if cfg!(debug_assertions) {
+            // Gate the `prev_key` bookkeeping on the same flag as the assert it feeds, so builds
+            // with soft assertions off pay nothing for it.
+            if mz_ore::assert::soft_assertions_enabled() {
                 if let Some(prev_key) = self.prev_key {
-                    debug_assert!(
+                    mz_ore::soft_assert_no_log!(
                         prev_key < key,
                         "Dict keys must be unique and given in ascending order: {} came before {}",
                         prev_key,
@@ -3078,6 +3172,54 @@ impl RowArena {
         RowArena {
             inner: RefCell::new(vec![]),
             scratch: RefCell::new(None),
+            budget: None,
+            allocated: Cell::new(0),
+        }
+    }
+
+    /// Creates a `RowArena` that reports itself [`RowArena::over_budget`] once it holds more than
+    /// `budget` bytes.
+    ///
+    /// The budget is advisory to the arena itself: pushes still succeed, because handing back a
+    /// truncated value would corrupt the datum. It is the caller's job to poll `over_budget` at a
+    /// point where it can fail, so the bytes an arena actually reaches is `budget` plus whatever the
+    /// operation in flight at the time added.
+    ///
+    /// NOTE: a budget bounds a single ad-hoc evaluation in a shared process (see
+    /// `mz_adapter::webhook`). It must not be given to an arena that feeds a compute dataflow. A
+    /// dataflow re-evaluates the same expression against the same input and must return the same
+    /// result every time. Whether an evaluation is over budget depends on what else the arena has
+    /// accumulated, and the webhook budget is a runtime dyncfg, so a budgeted dataflow arena would
+    /// make the result depend on when it ran. Differential then turns a changed-but-not-retracted
+    /// result into non-accumulating diffs that corrupt the collection. A dataflow that ever needs a
+    /// budget must fix it for the lifetime of a cluster replica.
+    pub fn with_budget(budget: usize) -> Self {
+        RowArena {
+            budget: Some(budget),
+            ..RowArena::new()
+        }
+    }
+
+    /// Bytes this arena currently holds.
+    pub fn allocated_bytes(&self) -> usize {
+        self.allocated.get()
+    }
+
+    /// Whether this arena holds more than its budget. Always false without one.
+    pub fn over_budget(&self) -> bool {
+        self.budget
+            .is_some_and(|budget| self.allocated.get() > budget)
+    }
+
+    /// Bytes this arena can still take before it is [`RowArena::over_budget`], or `usize::MAX`
+    /// without a budget.
+    ///
+    /// Intended for an operation that can predict its own size and would rather fail than build a
+    /// value it is about to be told is too big.
+    pub fn budget_remaining(&self) -> usize {
+        match self.budget {
+            None => usize::MAX,
+            Some(budget) => budget.saturating_sub(self.allocated.get()),
         }
     }
 
@@ -3090,7 +3232,7 @@ impl RowArena {
         }
         RowArena {
             inner: RefCell::new(inner),
-            scratch: RefCell::new(None),
+            ..RowArena::new()
         }
     }
 
@@ -3148,6 +3290,7 @@ impl RowArena {
         let region = inner.last_mut().expect("region present");
         let start = region.len();
         region.extend_from_slice(bytes);
+        self.allocated.set(self.allocated.get() + need);
         let copied = &region[start..];
         unsafe {
             // This is safe because:
@@ -3163,11 +3306,62 @@ impl RowArena {
         }
     }
 
-    /// Copies `string` into the arena and returns a reference valid for its lifetime.
+    /// Moves `bytes` into the arena and returns a reference valid for its lifetime.
+    ///
+    /// Prefer this to [`RowArena::push_bytes`] whenever the bytes are already owned: a value large
+    /// enough that it would get a region to itself has its allocation adopted as that region, rather
+    /// than a fresh region being allocated and copied into, which for a large value halves the peak.
+    /// Smaller values are copied, so the arena keeps bump allocating.
+    pub fn push_owned_bytes<'a>(&'a self, bytes: Vec<u8>) -> &'a [u8] {
+        /// Never adopt below this, however empty the arena. `last_cap` alone would let every value
+        /// on a fresh or small arena look big enough, and then each gets an exactly-sized region
+        /// with no headroom: one region and one `Vec<u8>` header per value.
+        const MIN_ADOPT_BYTES: usize = 4 * 1024;
+
+        let need = bytes.len();
+        if need == 0 {
+            return &[];
+        }
+
+        let mut inner = self.inner.borrow_mut();
+        // Adopt only when `push_bytes` would have given these bytes a dedicated, `need`-sized region
+        // anyway, i.e. when `need` exceeds the `last_cap * 2` it would otherwise allocate. There's
+        // no headroom to lose, so adoption saves a copy for free. Below that we copy, because
+        // `push_bytes` grows a region *with* headroom that later values reuse. Adopting there would
+        // defeat the bump allocator: adoption leaves an empty region (capacity 0) on top, so nothing
+        // would ever grow a region with headroom again.
+        let last_cap = inner.last().map_or(0, |region| region.capacity());
+        let adopt = need > std::cmp::max(MIN_ADOPT_BYTES, last_cap.saturating_mul(2));
+        if !adopt {
+            drop(inner);
+            return self.push_bytes(&bytes[..]);
+        }
+
+        // `push_bytes` would allocate a fresh region here and copy into it, so adopt the caller's
+        // allocation as that region. Sound for the same reasons as `push_bytes`: the reference
+        // points into a heap buffer the arena now owns for `'a`, and the buffer is never resized
+        // while it holds data.
+        //
+        // Inserted *below* the active region rather than appended, because `push_bytes` sizes a new
+        // region as twice the last one's capacity: leaving a large adopted buffer on top would make
+        // the next push allocate twice its size.
+        self.allocated.set(self.allocated.get() + need);
+        let idx = inner.len().saturating_sub(1);
+        inner.insert(idx, bytes);
+        if inner.len() == 1 {
+            // There was no active region to insert below, so keep an empty one on top for the same
+            // reason. `Vec::new` does not allocate.
+            inner.push(Vec::new());
+        }
+        let adopted = &inner[idx][..];
+        unsafe { transmute::<&[u8], &'a [u8]>(adopted) }
+    }
+
+    /// Moves `string` into the arena and returns a reference valid for its lifetime.
     pub fn push_string<'a>(&'a self, string: String) -> &'a str {
-        let copied = self.push_bytes(string.as_bytes());
+        let copied = self.push_owned_bytes(string.into_bytes());
         unsafe {
-            // This is safe because we just copied the bytes of a valid `String`.
+            // This is safe because we just moved in the bytes of a valid `String`.
             std::str::from_utf8_unchecked(copied)
         }
     }
@@ -3294,6 +3488,7 @@ impl RowArena {
             inner.truncate(1);
             inner[0].clear();
         }
+        self.allocated.set(0);
     }
 }
 
@@ -3491,6 +3686,158 @@ mod tests {
 
     use super::*;
 
+    // StableRow's wire format is proto bytes, not the in-memory datum
+    // encoding, so rows of every column type must roundtrip exactly through
+    // both a self-describing format (JSON) and a compact binary one
+    // (bincode). Equality on Row compares the packed in-memory bytes, so
+    // this also catches any datum normalization sneaking into the
+    // Row -> ProtoRow -> Row conversion.
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow, and decNumber uses FFI
+        fn stable_row_serde_roundtrip(
+            stable in crate::relation::arb_relation_desc(1..8)
+                .prop_flat_map(|desc| crate::relation::arb_row_for_relation(&desc))
+                .prop_map(StableRow)
+        ) {
+            let json = serde_json::to_string(&stable).expect("serializes to JSON");
+            let from_json: StableRow =
+                serde_json::from_str(&json).expect("deserializes from JSON");
+            prop_assert_eq!(&stable, &from_json);
+
+            let bytes = bincode::serialize(&stable).expect("serializes to bincode");
+            let from_bincode: StableRow =
+                bincode::deserialize(&bytes).expect("deserializes from bincode");
+            prop_assert_eq!(&stable, &from_bincode);
+        }
+    }
+
+    /// Every width a variable-length integer can take, at both ends of its range and either
+    /// side of each byte boundary, plus the values whose payload is empty.
+    fn varint_edge_cases() -> Vec<Datum<'static>> {
+        let mut datums = vec![
+            Datum::Int16(0),
+            Datum::Int16(-1),
+            Datum::Int16(i16::MIN),
+            Datum::Int16(i16::MAX),
+            Datum::Int32(0),
+            Datum::Int32(-1),
+            Datum::Int32(i32::MIN),
+            Datum::Int32(i32::MAX),
+            Datum::Int64(0),
+            Datum::Int64(-1),
+            Datum::Int64(i64::MIN),
+            Datum::Int64(i64::MAX),
+            Datum::UInt8(0),
+            Datum::UInt8(u8::MAX),
+            Datum::UInt16(0),
+            Datum::UInt16(u16::MAX),
+            Datum::UInt32(0),
+            Datum::UInt32(u32::MAX),
+            Datum::UInt64(0),
+            Datum::UInt64(u64::MAX),
+        ];
+        // One below, at, and one above every point where the payload grows a byte.
+        for bits in 1..64 {
+            let boundary = 1u64 << bits;
+            for delta in [-1i64, 0, 1] {
+                let Some(v) = boundary.checked_add_signed(delta) else {
+                    continue;
+                };
+                datums.push(Datum::UInt64(v));
+                if let Ok(v) = u32::try_from(v) {
+                    datums.push(Datum::UInt32(v));
+                }
+                if let Ok(v) = u16::try_from(v) {
+                    datums.push(Datum::UInt16(v));
+                }
+                if let Ok(v) = u8::try_from(v) {
+                    datums.push(Datum::UInt8(v));
+                }
+                let Ok(v) = i64::try_from(v) else {
+                    continue;
+                };
+                datums.push(Datum::Int64(v));
+                datums.push(Datum::Int64(-v));
+                if let Ok(v) = i32::try_from(v) {
+                    datums.push(Datum::Int32(v));
+                    datums.push(Datum::Int32(-v));
+                }
+                if let Ok(v) = i16::try_from(v) {
+                    datums.push(Datum::Int16(v));
+                    datums.push(Datum::Int16(-v));
+                }
+            }
+        }
+        datums
+    }
+
+    /// Both signed families of a width share one match arm, which recovers the payload width by
+    /// subtracting the family's first tag. A value whose tag falls outside the family it is
+    /// decoded as would read the wrong number of bytes, so check every boundary lands where the
+    /// arithmetic expects.
+    #[mz_ore::test]
+    fn varint_tags_land_in_their_family() {
+        for datum in varint_edge_cases() {
+            let row = Row::pack_slice(&[datum]);
+            let tag = Tag::try_from_primitive(row.data[0]).expect("valid tag");
+            let (first, len, negative, widest) = match datum {
+                Datum::Int16(i) => (Tag::NonNegativeInt16_0, min_bytes_signed(i), i < 0, 2),
+                Datum::Int32(i) => (Tag::NonNegativeInt32_0, min_bytes_signed(i), i < 0, 4),
+                Datum::Int64(i) => (Tag::NonNegativeInt64_0, min_bytes_signed(i), i < 0, 8),
+                Datum::UInt8(u) => (Tag::UInt8_0, min_bytes_unsigned(u), false, 1),
+                Datum::UInt16(u) => (Tag::UInt16_0, min_bytes_unsigned(u), false, 2),
+                Datum::UInt32(u) => (Tag::UInt32_0, min_bytes_unsigned(u), false, 4),
+                Datum::UInt64(u) => (Tag::UInt64_0, min_bytes_unsigned(u), false, 8),
+                other => panic!("not a variable-length integer: {other:?}"),
+            };
+            let delta = u8::from(tag) - u8::from(first);
+            let signed = matches!(datum, Datum::Int16(_) | Datum::Int32(_) | Datum::Int64(_));
+            if signed {
+                // Interleaved: the width sits above the low bit, the sign in it. At the widest
+                // width the alternation stops, one tag serving both signs.
+                assert_eq!(delta >> 1, len, "wrong payload width in tag for {datum:?}");
+                let sign_bit = if len == widest { 0 } else { u8::from(negative) };
+                assert_eq!(delta & 1, sign_bit, "wrong sign in tag for {datum:?}");
+            } else {
+                assert_eq!(delta, len, "wrong payload width in tag for {datum:?}");
+            }
+            assert_eq!(row.unpack_first(), datum, "did not round-trip: {datum:?}");
+        }
+    }
+
+    /// The wide load in `read_varint_word` reads eight bytes whatever the payload's width, so
+    /// the datums at the end of a row, where those bytes do not exist, take the tail path.
+    #[mz_ore::test]
+    fn varint_at_end_of_row_reads_exact_width() {
+        for datum in varint_edge_cases() {
+            // Alone in a row, and behind padding long enough to push the fast path back in.
+            for prefix in [None, Some(Datum::String("0123456789abcdef"))] {
+                let row = match prefix {
+                    Some(p) => Row::pack_slice(&[p, datum]),
+                    None => Row::pack_slice(&[datum]),
+                };
+                assert_eq!(
+                    row.iter().last(),
+                    Some(datum),
+                    "did not round-trip at end of row: {datum:?}"
+                );
+            }
+            // And nested, where the list's slice ends before the row's data does.
+            let mut row = Row::default();
+            let mut packer = row.packer();
+            packer.push_list_with(|packer| packer.push(datum));
+            packer.push(Datum::Int64(1));
+            let list = match row.unpack_first() {
+                Datum::List(list) => list,
+                other => panic!("expected a list, got {other:?}"),
+            };
+            assert_eq!(list.iter().next(), Some(datum), "did not round-trip nested");
+        }
+    }
+
     // Regression: comparing deeply nested list values must not overflow the
     // stack (STACK-7). `Datum` ordering recurses once per nesting level.
     #[mz_ore::test]
@@ -3594,6 +3941,111 @@ mod tests {
         arena.clear();
         let empty: &[u8] = &[];
         assert_eq!(arena.push_bytes(Vec::<u8>::new()), empty);
+    }
+
+    #[mz_ore::test]
+    fn miri_test_arena_adopts_owned_bytes_and_keeps_references() {
+        // `push_owned_bytes` adopts a buffer too large for the active region instead of copying it,
+        // which puts a region the arena never wrote into in the middle of the stack. References
+        // handed out before and after that must all stay valid.
+        let arena = RowArena::new();
+        let before = arena.push_bytes(vec![1u8; 8]);
+        let adopted = arena.push_owned_bytes(vec![2u8; 64 * 1024]);
+        let after = arena.push_bytes(vec![3u8; 8]);
+        // A small buffer fits the active region, so it is copied rather than given a region.
+        let small = arena.push_owned_bytes(vec![4u8; 4]);
+
+        assert_eq!(before, &[1u8; 8]);
+        assert_eq!(adopted, &vec![2u8; 64 * 1024][..]);
+        assert_eq!(after, &[3u8; 8]);
+        assert_eq!(small, &[4u8; 4]);
+
+        let empty: &[u8] = &[];
+        assert_eq!(arena.push_owned_bytes(vec![]), empty);
+    }
+
+    #[mz_ore::test]
+    fn test_arena_owned_pushes_keep_bump_allocating() {
+        // Adoption never *creates* a region with headroom: it inserts the caller's buffer, whose
+        // capacity equals its length, below whatever is on top. Only `push_bytes` grows the arena
+        // geometrically (`new_cap = max(need, last_cap * 2)`), so once the active region cannot fit
+        // an incoming value it never can again and every later owned push adopts: one retained
+        // allocation and one `Vec<u8>` header per value, rather than `O(log n)` regions. That is the
+        // default path for every `String`- and `Vec<u8>`-returning scalar function, and the arenas
+        // in the MFP and join paths outlive a single row, so the region list grows with the number
+        // of string values in a batch. `RowArena::clear` scans every region, so it degrades too.
+        const VALUES: usize = 500;
+        const VALUE: &str = "0123456789";
+
+        let regions = |arena: &RowArena| arena.inner.borrow().len();
+        let push_all = |arena: &RowArena, owned: bool| {
+            for _ in 0..VALUES {
+                match owned {
+                    true => _ = arena.push_string(VALUE.to_string()),
+                    false => _ = arena.push_bytes(VALUE.as_bytes()),
+                }
+            }
+        };
+
+        // The bump allocator working as intended, as the baseline to hold the owned path to.
+        let copied = RowArena::new();
+        push_all(&copied, false);
+
+        let owned = RowArena::new();
+        push_all(&owned, true);
+
+        // Seeding with ordinary copies first must not change the answer. The arena never recovers,
+        // so this is not just the empty-arena case where the placeholder on top has capacity 0.
+        let seeded = RowArena::new();
+        let _ = seeded.push_bytes(VALUE.as_bytes());
+        push_all(&seeded, true);
+
+        // Compare against the copy path rather than an absolute count, so this pins the property (a
+        // run of small owned pushes still ends with a region that has headroom) and leaves the
+        // adoption predicate to the fix.
+        let (copied, owned, seeded) = (regions(&copied), regions(&owned), regions(&seeded));
+        assert!(
+            owned <= copied * 2 && seeded <= copied * 2,
+            "{VALUES} owned pushes left {owned} regions on an empty arena and {seeded} on a seeded \
+             one, against {copied} for the same bytes copied",
+        );
+    }
+
+    #[mz_ore::test]
+    fn miri_test_arena_budget() {
+        // Without a budget nothing is ever over it, however much is pushed.
+        let arena = RowArena::new();
+        let _ = arena.push_bytes(vec![0u8; 1024]);
+        assert!(!arena.over_budget());
+        assert_eq!(arena.budget_remaining(), usize::MAX);
+
+        let arena = RowArena::with_budget(100);
+        assert!(!arena.over_budget());
+        assert_eq!(arena.budget_remaining(), 100);
+
+        // Staying within the budget leaves it satisfied, and the remaining count tracks what a
+        // caller that predicts its own size would consult.
+        let _ = arena.push_bytes(vec![0u8; 60]);
+        assert!(!arena.over_budget());
+        assert_eq!(arena.budget_remaining(), 40);
+        assert_eq!(arena.allocated_bytes(), 60);
+
+        // Crossing it reports, rather than refusing the push: a truncated push would corrupt the
+        // datum, so the value is intact and it is the caller's job to fail.
+        let pushed = arena.push_bytes(vec![7u8; 80]);
+        assert_eq!(pushed, &[7u8; 80]);
+        assert!(arena.over_budget());
+        assert_eq!(arena.budget_remaining(), 0);
+
+        // An adopted buffer counts against the budget too, or adoption would be a way around it.
+        // Large enough to actually be adopted rather than copied.
+        let mut arena = RowArena::with_budget(100);
+        let _ = arena.push_owned_bytes(vec![0u8; 8 * 1024]);
+        assert!(arena.over_budget());
+
+        arena.clear();
+        assert!(!arena.over_budget());
+        assert_eq!(arena.allocated_bytes(), 0);
     }
 
     #[mz_ore::test]

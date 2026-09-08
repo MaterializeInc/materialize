@@ -25,13 +25,14 @@
 //!
 //! All `create_*` methods use `IF NOT EXISTS` (or catch "already exists" errors)
 //! so that re-running provisioning on an already-provisioned environment is a
-//! no-op. `alter_cluster` is the exception — it always applies the requested
-//! configuration, which may be a no-op if options haven't changed.
+//! no-op.
 
 use crate::client::connection::ProvisioningClient;
 use crate::client::errors::ConnectionError;
-use crate::client::models::{ClusterConfig, ClusterOptions};
+use crate::client::models::ClusterConfig;
 use crate::client::quote_identifier;
+use mz_sql_parser::ast::Ident;
+use mz_sql_parser::ast::display::AstDisplay;
 
 impl ProvisioningClient<'_> {
     /// Create a database if it does not already exist.
@@ -70,35 +71,6 @@ impl ProvisioningClient<'_> {
         Ok(())
     }
 
-    /// Create a managed cluster with the requested size and replication factor.
-    pub async fn create_cluster(
-        &self,
-        name: &str,
-        options: &ClusterOptions,
-    ) -> Result<(), ConnectionError> {
-        let sql = format!(
-            "CREATE CLUSTER {} (SIZE = '{}', REPLICATION FACTOR = {})",
-            quote_identifier(name),
-            options.size,
-            options.replication_factor
-        );
-
-        self.client.execute(&sql, &[]).await.map_err(|e| {
-            if e.to_string().contains("already exists") {
-                ConnectionError::ClusterAlreadyExists {
-                    name: name.to_string(),
-                }
-            } else {
-                ConnectionError::ClusterCreationFailed {
-                    name: name.to_string(),
-                    source: Box::new(e),
-                }
-            }
-        })?;
-
-        Ok(())
-    }
-
     /// Create a cluster from a captured cluster configuration.
     pub async fn create_cluster_with_config(
         &self,
@@ -106,8 +78,33 @@ impl ProvisioningClient<'_> {
         config: &ClusterConfig,
     ) -> Result<(), ConnectionError> {
         let grants = match config {
-            ClusterConfig::Managed { options, grants } => {
-                self.create_cluster(name, options).await?;
+            ClusterConfig::Managed {
+                create_stmt,
+                grants,
+            } => {
+                let mut create_stmt = create_stmt.clone();
+                create_stmt.name =
+                    Ident::new(name).map_err(|e| ConnectionError::ClusterCreationFailed {
+                        name: name.to_string(),
+                        source: Box::new(e),
+                    })?;
+
+                self.client
+                    .execute(&create_stmt.to_ast_string_simple(), &[])
+                    .await
+                    .map_err(|e| {
+                        if e.to_string().contains("already exists") {
+                            ConnectionError::ClusterAlreadyExists {
+                                name: name.to_string(),
+                            }
+                        } else {
+                            ConnectionError::ClusterCreationFailed {
+                                name: name.to_string(),
+                                source: Box::new(e),
+                            }
+                        }
+                    })?;
+
                 grants
             }
             ClusterConfig::Unmanaged { replicas, grants } => {
@@ -171,26 +168,6 @@ impl ProvisioningClient<'_> {
                 ))
             })?;
         }
-
-        Ok(())
-    }
-
-    /// Update options for an existing managed cluster.
-    pub async fn alter_cluster(
-        &self,
-        name: &str,
-        options: &ClusterOptions,
-    ) -> Result<(), ConnectionError> {
-        let sql = format!(
-            "ALTER CLUSTER {} SET (SIZE = '{}', REPLICATION FACTOR = {})",
-            quote_identifier(name),
-            options.size,
-            options.replication_factor
-        );
-
-        self.client.execute(&sql, &[]).await.map_err(|e| {
-            ConnectionError::Message(format!("Failed to alter cluster '{}': {}", name, e))
-        })?;
 
         Ok(())
     }

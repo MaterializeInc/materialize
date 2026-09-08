@@ -1451,7 +1451,7 @@ impl PolymorphicSolution {
                 assert_eq!(
                     c, &compat_class,
                     "do not know how to correlate polymorphic classes {:?} and {:?}",
-                    c, &compat_class,
+                    c, compat_class,
                 )
             }
         };
@@ -3844,7 +3844,12 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 // prevents `sum(NULL)` from choosing the `Float64`
                 // implementation, so that we match PostgreSQL's behavior.
                 // Plus we will one day want to support this overload.
-                bail_unsupported!("sum(interval)");
+                //
+                // The message mentions `avg` because `avg(interval)` desugars
+                // to `sum(interval) / count(interval)` before type checking
+                // (see `plan_avg` in `transform_ast.rs`), so this error is all
+                // a user who typed only `avg` gets to see.
+                bail_unsupported!("sum(interval) and avg(interval)");
             }) => Interval, 2113;
         },
 
@@ -4709,6 +4714,56 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 ))
             }) => String, oid::FUNC_MZ_ENVIRONMENT_ID_OID;
         },
+        // The three AWS-context functions below are plan-time constants, fixed
+        // for the lifetime of the envd process, folded to a literal here for the
+        // same reason as `mz_environment_id`: the mz_aws_connections and
+        // mz_aws_privatelink_connections materialized views reproduce the AWS
+        // principal, external id, and trust policy in SQL, and a materialized
+        // view cannot reference an unmaterializable function. They return NULL
+        // on environments without the corresponding context (non-cloud/local).
+        //
+        // Like `mz_environment_id`, they are not gated by
+        // `restrict_to_user_objects`. The fold bakes the value into any stored
+        // view that references it, so a gate here could only catch direct calls,
+        // not values already materialized into a view, which is more misleading
+        // than no gate. Restricted sessions are still blocked from the system
+        // connection views themselves (they are system relations). See
+        // doc/developer/design/20260508_restrict_to_user_objects.md.
+        "mz_aws_account_id" => Scalar {
+            params!() => Operation::nullary(|ecx| {
+                Ok(match &ecx.catalog().config().aws_account_id {
+                    Some(account_id) => {
+                        HirScalarExpr::literal(Datum::String(account_id), SqlScalarType::String)
+                    }
+                    None => HirScalarExpr::literal_null(SqlScalarType::String),
+                })
+            }) => String, oid::FUNC_MZ_AWS_ACCOUNT_ID_OID;
+        },
+        "mz_aws_external_id_prefix" => Scalar {
+            params!() => Operation::nullary(|ecx| {
+                let prefix = ecx
+                    .catalog()
+                    .config()
+                    .connection_context
+                    .aws_external_id_prefix
+                    .as_ref()
+                    .map(|p| p.to_string());
+                Ok(match prefix {
+                    Some(prefix) => {
+                        HirScalarExpr::literal(Datum::String(&prefix), SqlScalarType::String)
+                    }
+                    None => HirScalarExpr::literal_null(SqlScalarType::String),
+                })
+            }) => String, oid::FUNC_MZ_AWS_EXTERNAL_ID_PREFIX_OID;
+        },
+        "mz_aws_connection_role_arn" => Scalar {
+            params!() => Operation::nullary(|ecx| {
+                Ok(match &ecx.catalog().config().connection_context.aws_connection_role_arn {
+                    Some(arn) => HirScalarExpr::literal(Datum::String(arn), SqlScalarType::String),
+                    None => HirScalarExpr::literal_null(SqlScalarType::String),
+                })
+            }) => String, oid::FUNC_MZ_AWS_CONNECTION_ROLE_ARN_OID;
+        },
         "mz_is_superuser" => Scalar {
             params!() => UnmaterializableFunc::MzIsSuperuser
                 => SqlScalarType::Bool, oid::FUNC_MZ_IS_SUPERUSER;
@@ -5300,6 +5355,11 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
             params!(Jsonb) => UnaryFunc::ParseCatalogId(func::ParseCatalogId)
                 => String, oid::FUNC_PARSE_CATALOG_ID_OID;
         },
+        "parse_catalog_item_references" => Scalar {
+            params!(String) => UnaryFunc::ParseCatalogItemReferences(
+                func::ParseCatalogItemReferences,
+            ) => Jsonb, oid::FUNC_PARSE_CATALOG_ITEM_REFERENCES_OID;
+        },
         "parse_catalog_privileges" => Scalar {
             params!(Jsonb) => UnaryFunc::ParseCatalogPrivileges(func::ParseCatalogPrivileges)
                 => SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)),
@@ -5314,6 +5374,16 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
             params!(String) => UnaryFunc::ParsePostgresSourceDetails(
                 func::ParsePostgresSourceDetails,
             ) => Jsonb, oid::FUNC_PARSE_POSTGRES_SOURCE_DETAILS_OID;
+        },
+        "parse_source_export_details" => Scalar {
+            params!(String) => UnaryFunc::ParseSourceExportDetails(
+                func::ParseSourceExportDetails,
+            ) => Jsonb, oid::FUNC_PARSE_SOURCE_EXPORT_DETAILS_OID;
+        },
+        "parse_connection_details" => Scalar {
+            params!(String) => UnaryFunc::ParseConnectionDetails(
+                func::ParseConnectionDetails,
+            ) => Jsonb, oid::FUNC_PARSE_CONNECTION_DETAILS_OID;
         },
         "redact_sql" => Scalar {
             params!(String) => UnaryFunc::RedactSql(func::RedactSql)

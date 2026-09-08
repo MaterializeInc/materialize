@@ -16,7 +16,9 @@ MZFROM openssh-static AS openssh-static
 
 # In production, we use distroless images based on Debian 13.
 # We retain apt and install more packages in this image for development.
-FROM debian:13-slim
+# Pinned by rolling tag + multi-arch index digest, matching debian-base, so
+# dependabot refreshes the digest for security fixes.
+FROM debian:13-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258
 
 ARG CI_SANITIZER=none
 
@@ -65,11 +67,6 @@ RUN groupadd --system --gid=999 materialize \
     && mkdir -p /mzdata /scratch /var/run/postgresql /var/lib/nginx /var/log/nginx \
     && touch /run/nginx.pid \
     && chown -R materialize /mzdata /scratch /var/run/postgresql /var/lib/nginx /var/log/nginx /run/nginx.pid
-
-# FoundationDB client library, dynamically linked by materialized. Keep this
-# version identical to the COPY in debian-base and distroless-prod-base: all
-# three share one FoundationDB cluster during a rolling upgrade.
-COPY --from=foundationdb/foundationdb:7.3.71 /usr/lib/libfdb_c.so /usr/lib/
 
 COPY postgresql.conf pg_hba.conf /etc/postgresql/
 

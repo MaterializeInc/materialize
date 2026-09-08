@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 import random
+import threading
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, TypeVar
@@ -19,6 +21,20 @@ if TYPE_CHECKING:
     from materialize.zippy.scenarios import Scenario
 
 
+def ci_additional_system_parameter_defaults() -> dict[str, str]:
+    """Parse the CI_MZ_SYSTEM_PARAMETER_DEFAULT environment variable."""
+    defaults = {}
+    system_parameter_default = os.getenv("CI_MZ_SYSTEM_PARAMETER_DEFAULT", "")
+    if system_parameter_default:
+        for val in system_parameter_default.split(";"):
+            x = val.split("=", maxsplit=1)
+            assert (
+                len(x) == 2
+            ), f"CI_MZ_SYSTEM_PARAMETER_DEFAULT '{val}' should be the format <key>=<val>"
+            defaults[x[0]] = x[1]
+    return defaults
+
+
 class State:
     mz_service: str
     deploy_generation: int
@@ -28,8 +44,15 @@ class State:
         self.mz_service = "materialized"
         self.deploy_generation = 0
         self.system_parameter_defaults = get_default_system_parameters()
-        self.iceberg_username: str | None = None
-        self.iceberg_key: str | None = None
+        # Every action that (re)starts Mz must pass these along, otherwise a
+        # feature flag under test silently reverts to its builtin default.
+        self.additional_system_parameter_defaults = (
+            ci_additional_system_parameter_defaults()
+        )
+        # Threads spawned by actions (e.g. parallel Kafka ingestion). They are
+        # joined at the end of the test and any errors they collected fail it.
+        self.background_threads: list[threading.Thread] = []
+        self.background_errors: list[Exception] = []
 
 
 class Capability:
@@ -101,8 +124,10 @@ class Capabilities:
         ]
         existing_object_names = self.get_capability_names(capability)
         remaining_object_names = set(all_object_names) - set(existing_object_names)
+        # sorted() so that the same --seed picks the same names regardless of
+        # set iteration order (which depends on PYTHONHASHSEED).
         return (
-            random.choice(list(remaining_object_names))
+            random.choice(sorted(remaining_object_names))
             if len(remaining_object_names) > 0
             else None
         )
@@ -191,6 +216,10 @@ class Test:
         self._actions: list[Action] = []
         self._final_actions: list[Action] = []
         self._capabilities = Capabilities()
+        # The exact Capability instances each action added at generation time.
+        # Trimming in run() removes by identity, and provides() may build new
+        # instances on each call, so the originals must be remembered here.
+        self._provided_capabilities: dict[Action, list[Capability]] = {}
         self._actions_with_weight: dict[ActionOrFactory, float] = (
             self._scenario.actions_with_weight()
         )
@@ -215,11 +244,10 @@ class Test:
             )
 
         for action in actions:
-            print("test:", action)
-            self._capabilities._extend(action.provides())
-            print(" - ", self._capabilities, action.provides())
+            provided = action.provides()
+            self._provided_capabilities[action] = provided
+            self._capabilities._extend(provided)
             self._capabilities._remove(action.withholds())
-            print(" - ", self._capabilities, action.withholds())
 
         return actions
 
@@ -237,10 +265,19 @@ class Test:
                 executed_count = i + 1
                 break
 
+        # Surface failures from background threads instead of dropping them.
+        for thread in self._state.background_threads:
+            thread.join()
+        if self._state.background_errors:
+            raise self._state.background_errors[0]
+
         # Remove capability effects of actions that were never executed,
         # so that finalization only validates objects that actually exist.
+        # Capabilities withheld by unexecuted actions are not restored. That
+        # is fine because only the *IsRunning capabilities are ever withheld
+        # and finalization unconditionally starts those services again.
         for action in self._actions[executed_count:]:
-            for cap in action.provides():
+            for cap in self._provided_capabilities[action]:
                 self._capabilities.remove_capability_instance(cap)
 
         # Generate finalization actions now, after the main loop, so that

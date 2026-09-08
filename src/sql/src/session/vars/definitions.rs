@@ -41,7 +41,7 @@ use uncased::UncasedStr;
 use crate::session::user::{SUPPORT_USER, SYSTEM_USER, User};
 use crate::session::vars::constraints::{
     BYTESIZE_AT_LEAST_1MB, DomainConstraint, NON_ZERO_DURATION, NUMERIC_BOUNDED_0_1_INCLUSIVE,
-    NUMERIC_NON_NEGATIVE, ValueConstraint,
+    NUMERIC_NON_NEGATIVE, U32_AT_LEAST_1, ValueConstraint,
 };
 use crate::session::vars::errors::VarError;
 use crate::session::vars::polyfill::{LazyValueFn, lazy_value, value};
@@ -340,7 +340,7 @@ pub static DEFAULT_CLUSTER_REPLICATION_FACTOR: VarDefinition = VarDefinition::ne
 
 pub static EXTRA_FLOAT_DIGITS: VarDefinition = VarDefinition::new(
     "extra_float_digits",
-    value!(i32; 3),
+    value!(i32; 1),
     "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
     true,
 );
@@ -643,6 +643,24 @@ pub static ALLOWED_CLUSTER_REPLICA_SIZES: VarDefinition = VarDefinition::new(
     value!(Vec<Ident>; Vec::new()),
     "The allowed sizes when creating a new cluster replica (Materialize).",
     true,
+);
+
+/// Sizes the OCC write semaphore at boot. Zero permits would block every
+/// read-then-write until its `statement_timeout`, so the value must be at
+/// least 1.
+pub static MAX_CONCURRENT_OCC_WRITES: VarDefinition = VarDefinition::new(
+    "max_concurrent_occ_writes",
+    value!(u32; 4),
+    "Maximum number of concurrent read-then-write (DELETE/UPDATE) operations using OCC. Read at startup; changes require an environmentd restart (Materialize).",
+    false,
+)
+.with_constraint(&U32_AT_LEAST_1);
+
+pub static MAX_OCC_RETRIES: VarDefinition = VarDefinition::new(
+    "max_occ_retries",
+    value!(u32; 1000),
+    "Maximum number of OCC retry attempts per read-then-write operation before giving up (Materialize).",
+    false,
 );
 
 pub static PERSIST_FAST_PATH_LIMIT: VarDefinition = VarDefinition::new(
@@ -1047,6 +1065,15 @@ pub static MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT: VarDefinition = VarDefinitio
     false,
 );
 
+/// Sets the `wait_timeout` session value on connections used during the
+/// snapshotting phase of MySQL sources.
+pub static MYSQL_SOURCE_SNAPSHOT_WAIT_TIMEOUT: VarDefinition = VarDefinition::new(
+    "mysql_source_snapshot_wait_timeout",
+    value!(Duration; mz_mysql_util::DEFAULT_SNAPSHOT_WAIT_TIMEOUT),
+    "Sets the `wait_timeout` value to use on connections during the snapshotting phase of MySQL sources (Materialize)",
+    false,
+);
+
 /// Sets the timeout for establishing an authenticated connection to MySQL
 pub static MYSQL_SOURCE_CONNECT_TIMEOUT: VarDefinition = VarDefinition::new(
     "mysql_source_connect_timeout",
@@ -1417,6 +1444,19 @@ pub static ENABLE_STATEMENT_ARRIVAL_LOGGING: VarDefinition = VarDefinition::new(
     false,
 );
 
+/// Off is the escape hatch for clients that pipeline statements Materialize
+/// cannot run in one transaction, for example a read or a DDL after a write.
+/// Those fail while this is on, rather than silently committing the writes
+/// staged before them.
+pub static ENABLE_EXTENDED_PROTOCOL_IMPLICIT_TRANSACTION: VarDefinition = VarDefinition::new(
+    "enable_extended_protocol_implicit_transaction",
+    value!(bool; true),
+    "Whether an implicit write transaction started by the extended query \
+    protocol spans the whole pipeline up to the client's Sync, so that the \
+    pipeline commits or rolls back atomically as in PostgreSQL (Materialize).",
+    false,
+);
+
 pub static AUTO_ROUTE_CATALOG_QUERIES: VarDefinition = VarDefinition::new(
     "auto_route_catalog_queries",
     value!(bool; true),
@@ -1658,17 +1698,6 @@ pub mod cluster_scheduling {
         "How often to poll readiness checks for cluster alter",
         false,
     );
-
-    const DEFAULT_CHECK_SCHEDULING_POLICIES_INTERVAL: Duration = Duration::from_secs(3);
-
-    pub static CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL: VarDefinition = VarDefinition::new(
-        "cluster_check_scheduling_policies_interval",
-        value!(Duration; DEFAULT_CHECK_SCHEDULING_POLICIES_INTERVAL),
-        "How often policies are invoked to automatically start/stop clusters, e.g., \
-            for REFRESH EVERY materialized views.",
-        false,
-    )
-    .with_constraint(&NON_ZERO_DURATION);
 
     pub static CLUSTER_SECURITY_CONTEXT_ENABLED: VarDefinition = VarDefinition::new(
         "cluster_security_context_enabled",
@@ -1941,6 +1970,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: unsafe_enable_incomplete_view_column_lists,
+        desc: "declaring a view with fewer column names than columns",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: unsafe_enable_table_check_constraint,
         desc: "CREATE TABLE with a check constraint",
         default: false,
@@ -2193,6 +2228,14 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_metric_sink,
+        desc: "CREATE METRIC SINK",
+        default: false,
+        // Boot re-parses every item's `create_sql`, so turning this off would leave any
+        // already-created metric sink unparseable and take the whole catalog down with it.
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_unlimited_retain_history,
         desc: "Disable limits on RETAIN HISTORY (below 1s default, and 0 disables compaction).",
         default: false,
@@ -2211,12 +2254,6 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_zero_downtime_cluster_reconfiguration,
-        desc: "Enable zero-downtime reconfiguration for alter cluster",
-        default: false,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_network_policies,
         desc: "ENABLE NETWORK POLICIES",
         default: true,
@@ -2229,6 +2266,13 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_exclude_constraints_option,
+        desc: "Whether to allow the EXCLUDE CONSTRAINTS / EXCLUDE ALL CONSTRAINTS options \
+               in CREATE TABLE .. FROM SOURCE.",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_join_prioritize_arranged,
         desc: "Whether join planning should prioritize already-arranged keys over keys with more fields.",
         default: false,
@@ -2238,6 +2282,13 @@ feature_flags!(
     {
         name: enable_projection_pushdown_after_relation_cse,
         desc: "Run ProjectionPushdown one more time after the last RelationCSE.",
+        default: true,
+        enable_for_item_parsing: false,
+        scope: ParameterScope::Cluster,
+    },
+    {
+        name: enable_union_cancellation_after_relation_cse,
+        desc: "Run UnionBranchCancellation one more time after the last RelationCSE.",
         default: true,
         enable_for_item_parsing: false,
         scope: ParameterScope::Cluster,
@@ -2312,6 +2363,12 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
+        name: enable_simplify_from_less_existence,
+        desc: "Allow the optimizer to collapse EXISTS/NOT EXISTS over a FROM-less correlated subquery into a plain Filter during HIR-to-MIR lowering.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_coalesce_case_transform,
         desc: "Allow the optimizer to push `COALESCE` into `CASE WHEN`.",
         default: true,
@@ -2325,8 +2382,12 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_bounded_staleness_isolation,
-        desc: "the `bounded staleness <duration>` transaction isolation level",
+        // An escape hatch: the `CASE` guard defeats the batched lowering that shares one
+        // `unnest` across several `ANY`/`ALL` operands, so a query with multiple `ANY`/`ALL`
+        // over a non-constant array plans into more arrangements than before. Turning the flag
+        // off restores the old plans at the cost of the wrong answer for a NULL array.
+        name: enable_any_all_null_array_semantics,
+        desc: "PostgreSQL-compatible NULL semantics for `ANY`/`ALL` over a NULL array or list.",
         default: true,
         enable_for_item_parsing: false,
     },
@@ -2346,6 +2407,8 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_join_prioritize_arranged: vars.enable_join_prioritize_arranged(),
             enable_projection_pushdown_after_relation_cse: vars
                 .enable_projection_pushdown_after_relation_cse(),
+            enable_union_cancellation_after_relation_cse: vars
+                .enable_union_cancellation_after_relation_cse(),
             enable_less_reduce_in_eqprop: vars.enable_less_reduce_in_eqprop(),
             enable_dequadratic_eqprop_map: vars.enable_dequadratic_eqprop_map(),
             enable_eq_classes_withholding_errors: vars.enable_eq_classes_withholding_errors(),
@@ -2353,6 +2416,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_cast_elimination: vars.enable_cast_elimination(),
             enable_case_literal_transform: vars.enable_case_literal_transform(),
             enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
+            enable_simplify_from_less_existence: vars.enable_simplify_from_less_existence(),
             enable_coalesce_case_transform: vars.enable_coalesce_case_transform(),
             enable_will_distinct_propagation: vars.enable_will_distinct_propagation(),
             enable_fixed_correlated_cte_lowering: vars.enable_fixed_correlated_cte_lowering(),
@@ -2377,6 +2441,12 @@ mod tests {
         // We do this in a roundabout way, by first constructing all-false `OptimizerFeatures` and
         // then assigning them to their respective system vars, to ensure we don't forget to update
         // this test when new optimizer features are added.
+        //
+        // NOTE: if the new feature ships enabled, also turn it on in
+        // `mz_transform_fuzz::fuzz_features`, which the cargo-fuzz optimizer targets plan with.
+        // That helper falls back to `Default` (all-`false`) for anything it does not name, so a
+        // flag missing from it silently fuzzes the disabled path. This exhaustive destructuring is
+        // the tripwire for both.
         let false_features = OptimizerFeatures::default();
         let OptimizerFeatures {
             enable_eq_classes_withholding_errors,
@@ -2390,12 +2460,14 @@ mod tests {
             reoptimize_imported_views,
             enable_join_prioritize_arranged,
             enable_projection_pushdown_after_relation_cse,
+            enable_union_cancellation_after_relation_cse,
             enable_less_reduce_in_eqprop,
             enable_dequadratic_eqprop_map,
             enable_fast_path_plan_insights,
             enable_cast_elimination,
             enable_case_literal_transform,
             enable_simplify_quantified_comparisons,
+            enable_simplify_from_less_existence,
             enable_coalesce_case_transform,
             enable_will_distinct_propagation,
             enable_fixed_correlated_cte_lowering,
@@ -2421,12 +2493,14 @@ mod tests {
         let _ = reoptimize_imported_views; // no corresponding var
         set_var!(enable_join_prioritize_arranged);
         set_var!(enable_projection_pushdown_after_relation_cse);
+        set_var!(enable_union_cancellation_after_relation_cse);
         set_var!(enable_less_reduce_in_eqprop);
         set_var!(enable_dequadratic_eqprop_map);
         set_var!(enable_fast_path_plan_insights);
         set_var!(enable_cast_elimination);
         set_var!(enable_case_literal_transform);
         set_var!(enable_simplify_quantified_comparisons);
+        set_var!(enable_simplify_from_less_existence);
         set_var!(enable_coalesce_case_transform);
         set_var!(enable_will_distinct_propagation);
         set_var!(enable_fixed_correlated_cte_lowering);

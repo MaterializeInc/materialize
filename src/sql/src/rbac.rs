@@ -31,8 +31,10 @@ use crate::names::{
 };
 use crate::plan::{self, PlanKind};
 use crate::plan::{
-    DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, UpdatePrivilege,
+    DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, TableDataSource,
+    UpdatePrivilege,
 };
+use crate::pure::StatementSource;
 use crate::session::metadata::SessionMetadata;
 use crate::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use crate::session::vars::SystemVars;
@@ -397,6 +399,43 @@ pub fn check_usage(
     Ok(())
 }
 
+/// Authorizes a statement for purification, which runs before planning and so
+/// escapes the [`check_plan`] gate. `source` is the existing source the
+/// statement would drive, as resolved by [`crate::pure::statement_source`].
+///
+/// The requirements are the same ones planning enforces later, so a statement
+/// that passes here can still be rejected by [`check_plan`], never the reverse.
+pub fn check_purification(
+    catalog: &impl SessionCatalog,
+    session: &dyn SessionMetadata,
+    source: Option<StatementSource>,
+    resolved_ids: &ResolvedIds,
+) -> Result<(), UnauthorizedError> {
+    // Like `check_plan`: `validate` reads the current role's membership through
+    // the panicking `get_role`, so the concurrent-role-drop case must be turned
+    // into a clean error before anything else runs.
+    rbac_check_preamble(catalog, session)?;
+
+    let role_id = session.role_metadata().current_role;
+    let mut requirements = RbacRequirements {
+        item_usage: &CREATE_ITEM_USAGE,
+        ..Default::default()
+    };
+    match source {
+        Some(StatementSource::Altered(id)) => {
+            requirements.ownership = vec![ObjectId::Item(id)];
+        }
+        Some(StatementSource::Read(id)) => {
+            requirements.privileges = generate_read_privileges(catalog, iter::once(id), role_id);
+        }
+        // Statements that name their connection are covered by `item_usage`.
+        None => {}
+    }
+
+    let requirements = filter_requirements(catalog, session, requirements);
+    requirements.validate(catalog, session, resolved_ids)
+}
+
 /// Checks if a session is authorized to execute a plan. If not, an error is returned.
 ///
 /// `sql_impl_resolved_ids` contains resolved IDs discovered inside SQL-implemented function
@@ -532,6 +571,7 @@ fn generate_rbac_requirements(
             name: _,
             variant: _,
             workload_class: _,
+            if_not_exists: _,
         }) => RbacRequirements {
             privileges: vec![(SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id)],
             item_usage: &CREATE_ITEM_USAGE,
@@ -541,6 +581,7 @@ fn generate_rbac_requirements(
             cluster_id,
             name: _,
             config: _,
+            if_not_exists: _,
         }) => RbacRequirements {
             ownership: vec![ObjectId::Cluster(*cluster_id)],
             item_usage: &CREATE_ITEM_USAGE,
@@ -633,17 +674,35 @@ fn generate_rbac_requirements(
         }
         Plan::CreateTable(plan::CreateTablePlan {
             name,
-            table: _,
+            table,
             if_not_exists: _,
-        }) => RbacRequirements {
-            privileges: vec![(
+        }) => {
+            let mut privileges = vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
                 AclMode::CREATE,
                 role_id,
-            )],
-            item_usage: &CREATE_ITEM_USAGE,
-            ..Default::default()
-        },
+            )];
+            // `CREATE TABLE ... FROM SOURCE` reads the source's data, so it
+            // requires `SELECT` on the source. `check_purification` enforces
+            // the same read requirement before purification; keep them in sync
+            // or its subset invariant inverts.
+            if let TableDataSource::DataSource {
+                desc: DataSourceDesc::IngestionExport { ingestion_id, .. },
+                timeline: _,
+            } = &table.data_source
+            {
+                privileges.extend(generate_read_privileges(
+                    catalog,
+                    iter::once(*ingestion_id),
+                    role_id,
+                ));
+            }
+            RbacRequirements {
+                privileges,
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
         Plan::CreateView(plan::CreateViewPlan {
             name,
             view: _,
@@ -715,6 +774,33 @@ fn generate_rbac_requirements(
                         role_id,
                     ),
                 ],
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
+        Plan::CreateMetricSink(plan::CreateMetricSinkPlan {
+            name,
+            metric_sink,
+            if_not_exists: _,
+        }) => {
+            // A metric sink republishes the FROM relation's rows on the replica's scrape
+            // endpoint, so it is an egress path for that relation's contents, exactly like
+            // CREATE SINK. The guard is therefore read privileges on the source, not
+            // ownership of it.
+            let mut privileges = vec![(
+                SystemObjectId::Object(name.qualifiers.clone().into()),
+                AclMode::CREATE,
+                role_id,
+            )];
+            let items = iter::once(metric_sink.from).map(|gid| catalog.resolve_item_id(&gid));
+            privileges.extend_from_slice(&generate_read_privileges(catalog, items, role_id));
+            privileges.push((
+                SystemObjectId::Object(metric_sink.cluster_id.into()),
+                AclMode::CREATE,
+                role_id,
+            ));
+            RbacRequirements {
+                privileges,
                 item_usage: &CREATE_ITEM_USAGE,
                 ..Default::default()
             }
@@ -1123,6 +1209,8 @@ fn generate_rbac_requirements(
             ownership: vec![ObjectId::Item(*id)],
             ..Default::default()
         },
+        // `check_purification` enforces the same ownership requirement before
+        // purification; keep them in sync or its subset invariant inverts.
         Plan::AlterSource(plan::AlterSourcePlan {
             item_id,
             ingestion_id: _,
@@ -1772,7 +1860,10 @@ fn generate_read_privileges_inner(
                 CatalogItemType::Type | CatalogItemType::Secret | CatalogItemType::Connection => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::USAGE, role_id));
                 }
-                CatalogItemType::Sink | CatalogItemType::Index | CatalogItemType::Func => {}
+                CatalogItemType::Sink
+                | CatalogItemType::MetricSink
+                | CatalogItemType::Index
+                | CatalogItemType::Func => {}
             }
         }
     }
@@ -1886,6 +1977,7 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::MaterializedView) => AclMode::SELECT,
         SystemObjectType::Object(ObjectType::Source) => AclMode::SELECT,
         SystemObjectType::Object(ObjectType::Sink) => EMPTY_ACL_MODE,
+        SystemObjectType::Object(ObjectType::MetricSink) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Index) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Type) => AclMode::USAGE,
         SystemObjectType::Object(ObjectType::Role) => EMPTY_ACL_MODE,
@@ -1917,6 +2009,7 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         | ObjectType::Source => AclMode::SELECT,
         ObjectType::Type | ObjectType::Schema => AclMode::USAGE,
         ObjectType::Sink
+        | ObjectType::MetricSink
         | ObjectType::Index
         | ObjectType::Role
         | ObjectType::Cluster

@@ -12,7 +12,6 @@ expression: "#[sqlfunc(Greatest, sqlname = \"greatest\", could_error = false, is
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect,
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
 pub struct Greatest;
@@ -55,6 +54,9 @@ impl std::fmt::Display for Greatest {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("greatest")
     }
+}
+impl crate::func::FuncName for Greatest {
+    const NAME: &'static str = stringify!(greatest);
 }
 fn greatest<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a> {
     datums.into_iter().max().unwrap_or(Datum::Null)

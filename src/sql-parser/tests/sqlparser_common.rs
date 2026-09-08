@@ -378,6 +378,27 @@ fn test_grant_revoke_all_policies_roundtrips() {
 }
 
 #[mz_ore::test]
+fn test_alter_default_privileges_policies_roundtrips() {
+    for sql in [
+        "ALTER DEFAULT PRIVILEGES FOR ROLE owner GRANT USAGE ON POLICIES TO j",
+        "ALTER DEFAULT PRIVILEGES FOR ROLE owner REVOKE USAGE ON POLICIES FROM j",
+    ] {
+        let displayed = parse_statements(sql)
+            .unwrap_or_else(|e| panic!("{sql:?} should parse: {e}"))
+            .into_iter()
+            .next()
+            .unwrap()
+            .ast
+            .to_ast_string_simple();
+        assert!(
+            displayed.contains("ON POLICIES") && !displayed.contains("POLICYS"),
+            "{sql:?} mis-pluralized network policies: {displayed:?}"
+        );
+        assert_display_roundtrips(sql);
+    }
+}
+
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_negated_cast_display_roundtrip() {
     // `- <number>` folds into a negative literal at parse time and the `::` cast
@@ -873,6 +894,29 @@ fn test_list_keyword_bare_identifier_subscript_display_roundtrip() {
         r#"SELECT "list"[1:2]"#,
         r#"SELECT "list"['a':0]"#,
         r#"SELECT "list""#,
+    ] {
+        assert_display_roundtrips(sql);
+    }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_map_keyword_bare_identifier_option_value_display_roundtrip() {
+    // A `MAP` that no `[` follows is the item name `map`, which is how a quoted
+    // `"map"` prints. `parse_option_map` used to commit on the keyword alone, so
+    // the printed form failed to reparse in every generic option-value position.
+    // Regression for the sql_roundtrip fuzz finding `(TOPIC = "map")`.
+    for sql in [
+        r#"CREATE SINK s FROM t INTO KAFKA CONNECTION c (TOPIC = "map") FORMAT BYTES ENVELOPE DEBEZIUM"#,
+        r#"CREATE SOURCE s FROM KAFKA CONNECTION c (TOPIC = "map") FORMAT BYTES"#,
+        r#"CREATE MATERIALIZED VIEW v WITH (PARTITION BY = "map") AS SELECT 1"#,
+        // A real map-literal option value still takes the map branch.
+        r#"CREATE SINK s FROM t INTO KAFKA CONNECTION c (TOPIC = 't', TOPIC CONFIG = MAP['a' => 'b']) FORMAT BYTES ENVELOPE DEBEZIUM"#,
+        // Expression position needs no quoting: a subscripted receiver prints as
+        // `(map)[1]`, which is why `can_be_printed_bare` has no `MAP` clause.
+        r#"SELECT "map""#,
+        r#"SELECT "map"[1]"#,
+        r#"SELECT map['a' => 1]"#,
     ] {
         assert_display_roundtrips(sql);
     }

@@ -24,7 +24,7 @@ from materialize.github import (
     KnownGitHubIssue,
 )
 
-LINEAR_CLOSED_STATE_TYPES = {"completed", "canceled"}
+LINEAR_CLOSED_STATE_TYPES = {"completed", "canceled", "duplicate"}
 LINEAR_STALE_STATE_NAMES = {"stale"}
 
 

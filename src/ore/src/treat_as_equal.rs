@@ -20,7 +20,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 
-/// Behaves like `T`, but has trivial `Hash`, `Eq`, `MzReflect`, and `Ord`
+/// Behaves like `T`, but has trivial `Hash`, `Eq`, and `Ord`
 /// implementations. Does not appear in `Debug` output, but _is_ serialized.
 #[derive(Clone, Default, Derivative)]
 #[derivative(Debug = "transparent")]

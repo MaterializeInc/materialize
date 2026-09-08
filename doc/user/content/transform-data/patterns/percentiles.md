@@ -3,6 +3,7 @@ title: "Percentile calculation"
 description: "How to use histograms to efficiently calculate percentiles in Materialize."
 aliases:
   - /sql/patterns/percentiles/
+  - /self-managed/v25.2/transform-data/patterns/percentiles/
 menu:
   main:
     parent: 'sql-patterns'

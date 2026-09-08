@@ -11,7 +11,12 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests',
-  fullyParallel: false, // Run serially since we share a single Materialize instance
+  // Every test shares one Materialize instance, and the introspection queries
+  // behind the visualizer are unindexed scans. Two workers on a CI agent turn
+  // those into multi-second waits that trip the assertion timeouts below, so
+  // pin the suite to a single worker rather than only serializing each file.
+  fullyParallel: false,
+  workers: 1,
   retries: 1,
   reporter: 'list',
   use: {
@@ -22,5 +27,16 @@ export default defineConfig({
       : 'http://localhost:6878',
     trace: 'on-first-retry',
   },
-  timeout: 30000,
+  expect: {
+    // The visualizer pages load in stages, each rendering its own `Loading...`
+    // while its introspection query is in flight. Those queries are unindexed
+    // scans, so a busy CI agent can take seconds over each one. Set the budget
+    // once here rather than per assertion.
+    timeout: 30000,
+  },
+  // A test can wait out two page loads in a row (the dataflow list, then one
+  // dataflow's operators), so this has to exceed the sum of the assertion
+  // timeouts a single test can accumulate. Otherwise a slow page reports as an
+  // opaque test timeout instead of naming the element it was waiting for.
+  timeout: 90000,
 });

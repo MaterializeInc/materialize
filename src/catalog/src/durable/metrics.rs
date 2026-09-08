@@ -12,17 +12,17 @@
 use mz_ore::metric;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
 use mz_ore::stats::histogram_seconds_buckets;
-use prometheus::{Counter, Histogram, IntGauge, IntGaugeVec};
+use prometheus::{Histogram, IntGauge, IntGaugeVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
     pub transactions_started: IntCounter,
     pub transaction_commits: IntCounter,
-    pub transaction_commit_latency_seconds: Counter,
+    pub transaction_commit_latency_seconds: Histogram,
     pub snapshots_taken: IntCounter,
-    pub snapshot_latency_seconds: Counter,
+    pub snapshot_latency_seconds: Histogram,
     pub syncs: IntCounter,
-    pub sync_latency_seconds: Counter,
+    pub sync_latency_seconds: Histogram,
     pub collection_entries: IntGaugeVec,
     pub allocate_id_seconds: Histogram,
     pub snapshot_consolidations: IntCounter,
@@ -43,7 +43,8 @@ impl Metrics {
             )),
             transaction_commit_latency_seconds: registry.register(metric!(
                 name: "mz_catalog_transaction_commit_latency_seconds",
-                help: "Total latency for committing a durable catalog transactions.",
+                help: "Latency for committing a durable catalog transaction.",
+                buckets: histogram_seconds_buckets(0.000_128, 32.0),
             )),
             snapshots_taken: registry.register(metric!(
                 name: "mz_catalog_snapshots_taken",
@@ -51,7 +52,8 @@ impl Metrics {
             )),
             snapshot_latency_seconds: registry.register(metric!(
                 name: "mz_catalog_snapshot_latency_seconds",
-                help: "Total latency for fetching a snapshot of the durable catalog.",
+                help: "Latency for fetching a snapshot of the durable catalog.",
+                buckets: histogram_seconds_buckets(0.000_128, 32.0),
             )),
             syncs: registry.register(metric!(
                 name: "mz_catalog_syncs",
@@ -59,7 +61,8 @@ impl Metrics {
             )),
             sync_latency_seconds: registry.register(metric!(
                 name: "mz_catalog_sync_latency_seconds",
-                help: "Total latency for syncing the in-memory state of the durable catalog with the persisted contents.",
+                help: "Latency for syncing the in-memory state of the durable catalog with the persisted contents.",
+                buckets: histogram_seconds_buckets(0.000_128, 32.0),
             )),
             collection_entries: registry.register(metric!(
                 name: "mz_catalog_collection_entries",

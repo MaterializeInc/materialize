@@ -24,7 +24,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::stream::StreamExt;
 use futures_util::{FutureExt, stream};
-use mz_dyncfg::Config;
+use mz_dyncfg::{Config, ParameterScope};
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
@@ -376,18 +376,21 @@ pub(crate) const BATCH_DELETE_ENABLED: Config<bool> = Config::new(
     "persist_batch_delete_enabled",
     true,
     "Whether to actually delete blobs when batch delete is called (Materialize).",
+    ParameterScope::Environment,
 );
 
 pub(crate) const ENCODING_ENABLE_DICTIONARY: Config<bool> = Config::new(
     "persist_encoding_enable_dictionary",
     true,
     "A feature flag to enable dictionary encoding for Parquet data (Materialize).",
+    ParameterScope::Environment,
 );
 
 pub(crate) const ENCODING_COMPRESSION_FORMAT: Config<&'static str> = Config::new(
     "persist_encoding_compression_format",
     "none",
     "A feature flag to enable compression of Parquet data (Materialize).",
+    ParameterScope::Environment,
 );
 
 pub(crate) const STRUCTURED_KEY_LOWER_LEN: Config<usize> = Config::new(
@@ -395,6 +398,7 @@ pub(crate) const STRUCTURED_KEY_LOWER_LEN: Config<usize> = Config::new(
     256,
     "The maximum size in proto bytes of any structured key-lower metadata to preserve. \
     (If we're unable to fit the lower in budget, or the budget is zero, no metadata is kept.)",
+    ParameterScope::Environment,
 );
 
 pub(crate) const MAX_RUN_LEN: Config<usize> = Config::new(
@@ -402,6 +406,7 @@ pub(crate) const MAX_RUN_LEN: Config<usize> = Config::new(
     usize::MAX,
     "The maximum length a run can have before it will be spilled as a hollow run \
     into the blob store.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const MAX_RUNS: Config<usize> = Config::new(
@@ -410,6 +415,7 @@ pub(crate) const MAX_RUNS: Config<usize> = Config::new(
     "The maximum number of runs a batch builder should generate for user batches. \
     (Compaction outputs always generate a single run.) \
     The minimum value is 2; below this, compaction is disabled.",
+    ParameterScope::Environment,
 );
 
 /// A target maximum size of blob payloads in bytes. If a logical "batch" is
@@ -422,12 +428,14 @@ pub(crate) const BLOB_TARGET_SIZE: Config<usize> = Config::new(
     "persist_blob_target_size",
     128 * MiB,
     "A target maximum size of persist blob payloads in bytes (Materialize).",
+    ParameterScope::Environment,
 );
 
 pub(crate) const INLINE_WRITES_SINGLE_MAX_BYTES: Config<usize> = Config::new(
     "persist_inline_writes_single_max_bytes",
     4096,
     "The (exclusive) maximum size of a write that persist will inline in metadata.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const INLINE_WRITES_TOTAL_MAX_BYTES: Config<usize> = Config::new(
@@ -436,6 +444,7 @@ pub(crate) const INLINE_WRITES_TOTAL_MAX_BYTES: Config<usize> = Config::new(
     "\
     The (exclusive) maximum total size of inline writes in metadata before \
     persist will backpressure them by flushing out to s3.",
+    ParameterScope::Environment,
 );
 
 impl BatchBuilderConfig {
@@ -1357,12 +1366,20 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     }
 }
 
+/// Validates that `batch` may be appended under the desc `truncate`.
+///
+/// Returns whether `truncate` cuts into `batch`'s own desc, i.e. whether the
+/// batch's parts may hold updates outside the desc they are registered under.
+/// Readers filter such updates out against the registered desc, but write-time
+/// part statistics still count them, so callers must record the bit (see
+/// `RunMeta::bounds_truncated`) to keep stats-based accounting from trusting
+/// the statistics.
 pub(crate) fn validate_truncate_batch<T: Timestamp>(
     batch: &HollowBatch<T>,
     truncate: &Description<T>,
     any_batch_rewrite: bool,
     validate_part_bounds_on_write: bool,
-) -> Result<(), InvalidUsage<T>> {
+) -> Result<bool, InvalidUsage<T>> {
     // If rewrite_ts is used, we don't allow truncation, to keep things simpler
     // to reason about.
     if any_batch_rewrite {
@@ -1391,8 +1408,17 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
         }
     }
 
+    // The rewrite checks above prove that no part holds data outside
+    // `truncate`: the upper matches exactly and every part's effective lower
+    // bound (its rewrite ts) is at or above `truncate.lower()`. The batch's
+    // own desc being wider does not mean anything is filtered on read, so
+    // comparing against it would spuriously mark every rewritten batch.
+    let bounds_truncated = !any_batch_rewrite
+        && (!PartialOrder::less_equal(truncate.lower(), batch.desc.lower())
+            || !PartialOrder::less_equal(batch.desc.upper(), truncate.upper()));
+
     if !validate_part_bounds_on_write {
-        return Ok(());
+        return Ok(bounds_truncated);
     }
 
     let batch = &batch.desc;
@@ -1407,7 +1433,7 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
         });
     }
 
-    Ok(())
+    Ok(bounds_truncated)
 }
 
 #[derive(Debug)]
@@ -1786,5 +1812,51 @@ mod tests {
         };
         // Verifies that the structured key lower is stored and decoded.
         assert!(part.structured_key_lower().is_some());
+    }
+
+    #[mz_ore::test]
+    fn validate_truncate_batch_bounds() {
+        use crate::internal::state::tests::hollow;
+
+        let desc = |lower: u64, upper: u64| {
+            Description::new(
+                Antichain::from_elem(lower),
+                Antichain::from_elem(upper),
+                Antichain::from_elem(0),
+            )
+        };
+
+        // Appending under the batch's own desc is not a truncation.
+        let batch = hollow(0, 5, &["k"], 1);
+        assert_eq!(
+            validate_truncate_batch(&batch, &desc(0, 5), false, true).expect("valid"),
+            false
+        );
+
+        // A narrower append desc may leave part data outside the registered
+        // bounds, on either side.
+        assert_eq!(
+            validate_truncate_batch(&batch, &desc(1, 5), false, true).expect("valid"),
+            true
+        );
+        assert_eq!(
+            validate_truncate_batch(&batch, &desc(0, 4), false, true).expect("valid"),
+            true
+        );
+
+        // A ts-rewritten batch keeps its write-time lower, but the rewrite
+        // validation proves that no part holds data outside the append desc,
+        // so it must not count as a truncation.
+        let mut rewritten = hollow(0, 5, &["k"], 1);
+        for part in rewritten.parts.iter_mut() {
+            let RunPart::Single(BatchPart::Hollow(part)) = part else {
+                panic!("expected hollow part");
+            };
+            part.ts_rewrite = Some(Antichain::from_elem(3));
+        }
+        assert_eq!(
+            validate_truncate_batch(&rewritten, &desc(2, 5), true, true).expect("valid"),
+            false
+        );
     }
 }

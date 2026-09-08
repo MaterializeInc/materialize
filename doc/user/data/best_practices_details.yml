@@ -1,7 +1,7 @@
 - name: architecture-one-tier
   content: |
     If the [recommended three-tier
-    architecture](/manage/operational-guidelines/#three-tier-architecture)
+    architecture](/clusters/operational-guidelines/#three-tier-architecture)
     is infeasible or unnecessary due to low volume or a **non**-production setup, a
     one-tier architecture may suffice for your sources, compute objects,
     and query serving needs.
@@ -25,7 +25,7 @@
       sharing the cluster.
 
     - [Blue/green
-      deployment](/manage/dbt/blue-green-deployments/) is
+      deployment](/developer-tools/dbt/blue-green-deployments/) is
       unsupported since sources would need to be dropped and recreated, putting strain on your upstream system during source recreation.
 
       To support blue/green deployments, use a two-tier architecture by moving
@@ -34,7 +34,7 @@
 - name: architecture-two-tier
   content: |
     If the [recommended three-tier
-    architecture](/manage/operational-guidelines/#three-tier-architecture)
+    architecture](/clusters/operational-guidelines/#three-tier-architecture)
     is infeasible or unnecessary due to low volume or a **non**-production setup, a
     two-tier architecture may suffice. A two-tier architecture consists of:
 
@@ -46,7 +46,7 @@
     Benefits of a two-tier architecture include:
 
     - Support for [blue/green
-      deployments](/manage/dbt/blue-green-deployments/)
+      deployments](/developer-tools/dbt/blue-green-deployments/)
 
     - More cost effective than a three-tier architecture.
 
@@ -74,7 +74,7 @@
     Benefits of a three-tier architecture include:
 
     - Support for [blue/green
-      deployments](/manage/dbt/blue-green-deployments/)
+      deployments](/developer-tools/dbt/blue-green-deployments/)
 
     - Independent scaling of each tier.
 

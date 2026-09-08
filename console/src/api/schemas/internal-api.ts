@@ -73,14 +73,14 @@ export interface paths {
         };
         /**
          * Retrieve the region (EnvironmentAssignment resource) for the provided organization_id
-         * @description in the current cloud region
+         *     in the current cloud region
          */
         get: operations["get_region_by_org"];
         put?: never;
         post?: never;
         /**
          * Disable the region (EnvironmentAssignment resource) for the provided
-         * @description organization_id in the current cloud region
+         *     organization_id in the current cloud region
          *     This sets the `disable_scheduled_at` field to a date 30 days from now
          */
         delete: operations["disable_region_for_org"];
@@ -88,7 +88,7 @@ export interface paths {
         head?: never;
         /**
          * Update (or create) the region (EnvironmentAssignment resource) for the provided
-         * @description organization_id in the current cloud region
+         *     organization_id in the current cloud region
          */
         patch: operations["enable_region_for_org"];
         trace?: never;
@@ -97,16 +97,6 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description All API responses that return a list use this standard pagination envelope */
-        CensusEntries: {
-            /** @description The data in this page. */
-            data: components["schemas"]["CensusEntry"][];
-            /** @description The cursor to provide to the next API call to retrieve the next
-             *     page of results.
-             *
-             *     Set to `None` if there are no further pages. */
-            nextCursor?: string | null;
-        };
         CensusEntry: {
             /** Format: uuid */
             organizationId: string;
@@ -115,6 +105,50 @@ export interface components {
         };
         /** @enum {string} */
         OrgType: "customer" | "e2e_test";
+        /** @description All API responses that return a list use this standard pagination envelope */
+        Paginated_CensusEntry: {
+            /** @description The data in this page. */
+            data: {
+                /** Format: uuid */
+                organizationId: string;
+                /** Format: int32 */
+                ordinal: number;
+            }[];
+            /**
+             * @description The cursor to provide to the next API call to retrieve the next
+             *     page of results.
+             *
+             *     Set to `None` if there are no further pages.
+             */
+            nextCursor?: string | null;
+        };
+        /** @description All API responses that return a list use this standard pagination envelope */
+        Paginated_RegionInternal: {
+            /** @description The data in this page. */
+            data: {
+                /** Format: uuid */
+                organizationId: string;
+                /** Format: date-time */
+                enabledAt?: string | null;
+                provisioned: boolean;
+                /** Format: date-time */
+                disableScheduledAt?: string | null;
+                /** Format: date-time */
+                deprovisionedAt?: string | null;
+                environmentBase32Id: string;
+                /** Format: int32 */
+                ordinal: number;
+                upToDate: boolean;
+                orgType: components["schemas"]["OrgType"];
+            }[];
+            /**
+             * @description The cursor to provide to the next API call to retrieve the next
+             *     page of results.
+             *
+             *     Set to `None` if there are no further pages.
+             */
+            nextCursor?: string | null;
+        };
         RegionInternal: {
             /** Format: uuid */
             organizationId: string;
@@ -131,19 +165,11 @@ export interface components {
             upToDate: boolean;
             orgType: components["schemas"]["OrgType"];
         };
-        /** @description All API responses that return a list use this standard pagination envelope */
-        RegionInternals: {
-            /** @description The data in this page. */
-            data: components["schemas"]["RegionInternal"][];
-            /** @description The cursor to provide to the next API call to retrieve the next
-             *     page of results.
-             *
-             *     Set to `None` if there are no further pages. */
-            nextCursor?: string | null;
-        };
         RegionRequest: {
             environmentdImageRef?: string | null;
             environmentdExtraArgs?: string[] | null;
+            environmentdCpuAllocation?: string | null;
+            environmentdMemoryAllocation?: string | null;
             forceRollout?: boolean | null;
             cancelRollout?: boolean | null;
             inPlaceRollout?: boolean | null;
@@ -175,7 +201,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CensusEntries"];
+                    "application/json": components["schemas"]["Paginated_CensusEntry"];
                 };
             };
         };
@@ -198,7 +224,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CensusEntries"];
+                    "application/json": components["schemas"]["Paginated_CensusEntry"];
                 };
             };
         };
@@ -221,7 +247,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RegionInternals"];
+                    "application/json": components["schemas"]["Paginated_RegionInternal"];
                 };
             };
         };
@@ -259,8 +285,10 @@ export interface operations {
             header?: never;
             path: {
                 seconds: number | null;
-                /** @description Whether to do a real soft-deletion
-                 *     use ?realSoftDelete=true to set this */
+                /**
+                 * @description Whether to do a real soft-deletion
+                 *     use ?realSoftDelete=true to set this
+                 */
                 realSoftDelete: boolean | null;
             };
             cookie?: never;

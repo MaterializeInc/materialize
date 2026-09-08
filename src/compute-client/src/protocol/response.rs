@@ -9,12 +9,17 @@
 
 //! Compute protocol responses.
 
+use std::fmt;
+
+use bytesize::ByteSize;
+use mz_expr::EvalError;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_types::ShardId;
 use mz_repr::{GlobalId, RelationDesc, Timestamp, UpdateCollection};
+use mz_storage_types::errors::DataflowError;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use uuid::Uuid;
@@ -187,6 +192,11 @@ impl FrontiersResponse {
 ///
 /// Note that each `Peek` expects to generate exactly one `PeekResponse`, i.e.
 /// we expect a 1:1 contract between `Peek` and `PeekResponse`.
+///
+/// Encoded with bincode, which identifies a variant by its position, so both ends of a connection
+/// have to agree on this declaration. They do: the CTP handshake refuses a peer whose version
+/// differs from its own (`mz_service::transport`), so a replica never speaks to a controller that
+/// declares a different shape, and the encoding is free to change with the type.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PeekResponse {
     /// Returned rows of a successful peek.
@@ -194,7 +204,7 @@ pub enum PeekResponse {
     /// Results of the peek were stashed in persist batches.
     Stashed(Box<StashedPeekResponse>),
     /// Error of an unsuccessful peek.
-    Error(String),
+    Error(PeekError),
     /// The peek was canceled.
     Canceled,
 }
@@ -207,6 +217,68 @@ impl PeekResponse {
             Self::Stashed(stashed) => stashed.inline_rows.iter().map(|r| r.byte_len()).sum(),
             Self::Error(_) | Self::Canceled => 0,
         }
+    }
+}
+
+/// The error of an unsuccessful peek.
+///
+/// The variant decides what the user sees: a `Dataflow` error keeps the structure the dataflow
+/// produced and so gets the same SQLSTATE constant folding would have assigned, a
+/// `RowIterationLimitExceeded` names a limit the user can raise, and an `Unstructured` error is
+/// reported as an internal error. Prefer the structured variants whenever the source has one.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum PeekError {
+    /// An error produced while executing the dataflow, for example evaluating an expression over
+    /// a collection.
+    Dataflow(Box<DataflowError>),
+    /// An error from the peek machinery itself, with no structured form.
+    Unstructured(String),
+    /// A worker examined more rows than `compute_peek_row_iteration_limit` allows.
+    RowIterationLimitExceeded {
+        /// The limit that was in effect, in rows.
+        limit: usize,
+    },
+    /// A worker accumulated more answer bytes than `max_result_size` allows.
+    ResultExceedsMaxSize {
+        /// The ceiling that was in effect, in bytes.
+        max_result_size: usize,
+    },
+}
+
+impl PeekError {
+    /// Constructs an unstructured peek error.
+    pub fn unstructured(message: impl Into<String>) -> Self {
+        Self::Unstructured(message.into())
+    }
+}
+
+impl fmt::Display for PeekError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Dataflow(error) => error.fmt(f),
+            Self::Unstructured(error) => f.write_str(error),
+            Self::RowIterationLimitExceeded { limit } => write!(
+                f,
+                "query exceeded the configured row iteration limit of {limit} rows"
+            ),
+            Self::ResultExceedsMaxSize { max_result_size } => write!(
+                f,
+                "result exceeds max size of {}",
+                ByteSize::b(u64::cast_from(*max_result_size))
+            ),
+        }
+    }
+}
+
+impl From<DataflowError> for PeekError {
+    fn from(error: DataflowError) -> Self {
+        Self::Dataflow(Box::new(error))
+    }
+}
+
+impl From<EvalError> for PeekError {
+    fn from(error: EvalError) -> Self {
+        Self::Dataflow(Box::new(error.into()))
     }
 }
 
@@ -304,7 +376,6 @@ pub struct SubscribeBatch {
 impl SubscribeBatch {
     /// Converts `self` to an error if a maximum size is exceeded.
     fn to_error_if_exceeds(&mut self, max_result_size: usize) {
-        use bytesize::ByteSize;
         if let Ok(updates) = &self.updates {
             let total_size: usize = updates.iter().map(|updates| updates.byte_len()).sum();
             if total_size > max_result_size {

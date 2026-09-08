@@ -31,7 +31,7 @@ the account.
 
 ## Materialize Console
 
-1. [Log in to the Materialize Console](/console/).
+1. [Log in to the Materialize Console](/developer-tools/console/).
 
 1. In the side navigation bar, click **+ Create New** > **App Password**.
 
@@ -142,7 +142,7 @@ To use a different client to connect,
     ```
 
 For general guidance on using the Materialize Terraform provider to manage
-resources in your region, see the [reference documentation](/manage/terraform/).
+resources in your region, see the [reference documentation](/developer-tools/terraform/).
 
 ## Next steps
 

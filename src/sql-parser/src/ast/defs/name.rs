@@ -19,7 +19,9 @@
 // limitations under the License.
 
 use mz_ore::str::StrExt;
-use mz_sql_lexer::keywords::{ALL, ANY, AS, DISTINCT, INTO, Keyword, LIST, PREPARE, SOME, WHEN};
+use mz_sql_lexer::keywords::{
+    ALL, ANY, AS, DISTINCT, IF, INTO, Keyword, LIST, PREPARE, SOME, WHEN,
+};
 use mz_sql_lexer::lexer::{IdentString, MAX_IDENTIFIER_LENGTH};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -333,9 +335,12 @@ impl Ident {
                         // (`list[1]` is a valid one-element list), so a bare `list`
                         // identifier that gets subscripted — `"list"[1]` — would
                         // reparse as a list literal instead of a subscript. (`ARRAY`
-                        // is reserved-in-scalar-expression and so already quoted;
-                        // `MAP[...]` requires `=>`, so `map[1]` is unambiguously a
-                        // subscript.)
+                        // is reserved-in-scalar-expression and so already quoted.
+                        // `MAP` needs no clause here even though `map[…]` is a
+                        // literal too: `MAP` is a context-sensitive keyword, so
+                        // `write_subscript_receiver` parenthesizes the receiver into
+                        // `(map)[1]`, and every grammar that starts a map literal
+                        // requires a `[` right after the keyword.)
                         || kw == LIST
                         // `DEALLOCATE [PREPARE] <name>` accepts an optional
                         // `PREPARE` keyword before the name, so a bare `prepare`
@@ -356,6 +361,12 @@ impl Ident {
                         // (`COPY into FROM x` -> `COPY INTO <name=from> …`, which
                         // then fails expecting the FROM/TO direction).
                         || kw == INTO
+                        // The `IF [NOT] EXISTS` clauses of CREATE/DROP/ALTER sit
+                        // exactly where the object name goes, so a bare `if` name
+                        // is consumed as the start of such a clause on reparse
+                        // (`CREATE CLUSTER if (SIZE …)` -> "expected NOT, found
+                        // left parenthesis").
+                        || kw == IF
                 })
                 .unwrap_or(false)
     }

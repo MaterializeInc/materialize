@@ -41,6 +41,8 @@ export interface SubscribeState<T> {
   /** The current values at the most recent closed timestamp */
   data: T[];
   snapshotComplete: boolean;
+  /** True while a re-subscribe holds the previous snapshot as `data`. */
+  resubscribing?: boolean;
   error: SubscribeError | undefined;
 }
 
@@ -83,19 +85,25 @@ export class SubscribeManager<T extends object, R> implements Connectable {
    * The subscribe statement must include WITH (PROGRESS) and ENVELOPE UPSERT.
    */
   upsert?: UpsertSubscribeOptions<T>;
-  /** The snapshot state exposed to listeners */
+  /**
+   * The snapshot state exposed to listeners. Normally a projection of
+   * `currentState`, but through a re-subscribe it holds the previous
+   * connection's view until the new snapshot completes (see `onOpen`).
+   */
   snapshotState: SubscribeState<R>;
   private sqlRequest: SqlRequest | undefined;
   private listeners = new Set<() => void>();
   private columns: ColumnMetadata[] = [];
   private closeSocketOnComplete: boolean = false;
   private querySent: boolean = false;
+  /** True when the socket signalled ready before any request was set. */
+  private readyAwaitingRequest: boolean = false;
   private currentTimestamp: number | undefined;
   /** Holds completed timestamp messages, waiting for the flush interval */
   private closedTimestampBuffer: SubscribeRow<T>[] = [];
   /** Holds messages from the socket until the timestamp is closed */
   private currentTimestampBuffer = new Map<number, Array<SubscribeRow<T>>>();
-  /** The current state used internally */
+  /** Per-connection accumulation that `setState` projects into `snapshotState`. */
   private currentState: SubscribeState<SubscribeRow<T>> = {
     data: [],
     snapshotComplete: false,
@@ -141,8 +149,20 @@ export class SubscribeManager<T extends object, R> implements Connectable {
     );
   };
 
+  /** Returns true if a query was already sent on the current connection. */
+  hasActiveQuery() {
+    return this.querySent;
+  }
+
   setRequest = (request: SqlRequest) => {
     this.sqlRequest = request;
+    // ReadyForQuery fires once per connection. If it already fired with no
+    // request set, send now or the query would never be issued.
+    if (this.readyAwaitingRequest && !this.querySent && this.isConnected()) {
+      this.readyAwaitingRequest = false;
+      this.socket.send(request);
+      this.querySent = true;
+    }
   };
 
   disconnect = () => {
@@ -186,11 +206,7 @@ export class SubscribeManager<T extends object, R> implements Connectable {
   }
 
   reset = () => {
-    this.columns = [];
-    this.querySent = false;
-    this.closedTimestampBuffer = [];
-    this.currentTimestamp = undefined;
-    this.currentTimestampBuffer = new Map();
+    this.resetForNewConnection();
     this.setState({
       data: [],
       snapshotComplete: false,
@@ -198,10 +214,36 @@ export class SubscribeManager<T extends object, R> implements Connectable {
     });
   };
 
+  /** Clears connection state and internal buffers without touching the exposed snapshot. */
+  private resetForNewConnection = () => {
+    this.columns = [];
+    this.querySent = false;
+    this.readyAwaitingRequest = false;
+    this.closedTimestampBuffer = [];
+    this.currentTimestamp = undefined;
+    this.currentTimestampBuffer = new Map();
+    this.currentState = {
+      data: [],
+      snapshotComplete: false,
+      error: undefined,
+    };
+  };
+
   onOpen = () => {
-    // We wait until the socket opens successfully to reset state so that we can continue
-    // to show stale data if the socket is closed unexpectedly.
-    this.reset();
+    // Keep showing the previous data until the new snapshot arrives, rather
+    // than flashing the loading state on every reconnect. `resubscribing`
+    // marks the held data. Any following setState clears it.
+    this.resetForNewConnection();
+    if (this.snapshotState.snapshotComplete || this.snapshotState.error) {
+      this.snapshotState = {
+        ...this.snapshotState,
+        resubscribing: this.snapshotState.snapshotComplete,
+        error: undefined,
+      };
+      for (const callback of this.listeners) {
+        callback();
+      }
+    }
   };
 
   onChange = (callback: () => void) => {
@@ -245,6 +287,8 @@ export class SubscribeManager<T extends object, R> implements Connectable {
     if (this.sqlRequest) {
       this.socket.send(this.sqlRequest);
       this.querySent = true;
+    } else {
+      this.readyAwaitingRequest = true;
     }
   };
 

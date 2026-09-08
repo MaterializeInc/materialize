@@ -20,6 +20,7 @@ explicitly with `$<skill-name>` in Codex and `/<skill-name>` in Claude Code.
 | **mz-pr-review** | Reviewing code changes | Local code review against Materialize standards for tests, style, error messages, architecture, and polish |
 | **mz-debug-ci** | CI failures, red builds, Buildkite issues | Investigates Buildkite failures using `gh` and `bk` CLI tools to identify root causes |
 | **mz-dbt-release** | Cutting a new `dbt-materialize` PyPI release | Bumps the version in `__version__.py` + `setup.py`, dates the `Unreleased` CHANGELOG entry, opens the release PR |
+| **mz-release-signoff** | Verifying a release candidate on the Grafana dashboards | Compares metrics across the release boundary per area and region. Metric references with measured baselines for compute, adapter, sources and sinks, persist, and the release-health and networking dashboards |
 
 ## Performance
 

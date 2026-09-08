@@ -49,6 +49,63 @@ pub fn try_parse_mir(catalog: &TestCatalog, s: &str) -> Result<mz_expr::MirRelat
     Ok(expr)
 }
 
+/// Builds a [mz_expr::MirScalarExpr] from a string.
+pub fn try_parse_scalar(s: &str) -> Result<mz_expr::MirScalarExpr, String> {
+    let parser = |input: syn::parse::ParseStream| {
+        let expr = scalar::parse_expr(input)?;
+        if !input.is_empty() {
+            Err(Error::new(
+                input.span(),
+                "unexpected input after expression",
+            ))?
+        }
+        Ok(expr)
+    };
+    parser.parse_str(s).map_err(|err| {
+        let (line, column) = (err.span().start().line, err.span().start().column);
+        format!("parse error at {line}:{column}:\n{err}\n")
+    })
+}
+
+/// Builds a comma-separated list of [mz_expr::MirScalarExpr]s from a string.
+pub fn try_parse_scalars(s: &str) -> Result<Vec<mz_expr::MirScalarExpr>, String> {
+    let parser = |input: syn::parse::ParseStream| {
+        let exprs = scalar::parse_exprs(input)?;
+        if !input.is_empty() {
+            Err(Error::new(
+                input.span(),
+                "unexpected input after expressions",
+            ))?
+        }
+        Ok(exprs)
+    };
+    parser.parse_str(s).map_err(|err| {
+        let (line, column) = (err.span().start().line, err.span().start().column);
+        format!("parse error at {line}:{column}:\n{err}\n")
+    })
+}
+
+/// Parses a parenthesized, comma-separated column type list, for example
+/// `(bigint, text?)`. A trailing `?` marks a column as nullable.
+pub fn try_parse_column_types(s: &str) -> Result<Vec<mz_repr::SqlColumnType>, String> {
+    let parser = |input: syn::parse::ParseStream| {
+        let inner;
+        syn::parenthesized!(inner in input);
+        let types = inner.parse_comma_sep(analyses::parse_column_type)?;
+        if !input.is_empty() {
+            Err(Error::new(input.span(), "unexpected input after type list"))?
+        }
+        Ok(types
+            .iter()
+            .map(mz_repr::SqlColumnType::from_repr)
+            .collect())
+    };
+    parser.parse_str(s).map_err(|err| {
+        let (line, column) = (err.span().start().line, err.span().start().column);
+        format!("parse error at {line}:{column}:\n{err}\n")
+    })
+}
+
 /// Builds a source definition from a string.
 pub fn try_parse_def(catalog: &TestCatalog, s: &str) -> Result<Def, String> {
     // Define a Parser that constructs a (read-only) parsing context `ctx` and
@@ -120,7 +177,7 @@ mod relation {
         }
     }
 
-    fn parse_constant(ctx: CtxRef, input: ParseStream) -> Result {
+    fn parse_constant(_ctx: CtxRef, input: ParseStream) -> Result {
         let constant = input.parse::<kw::Constant>()?;
 
         let parse_typ = |input: ParseStream| -> syn::Result<ReprRelationType> {
@@ -141,12 +198,15 @@ mod relation {
         } else {
             let typ = parse_typ(input)?;
             let parse_children = ParseChildren::new(input, constant.span().start());
-            let rows = Ok(parse_children.parse_many(ctx, parse_constant_entry)?);
+            let rows = Ok(parse_children.parse_many(&typ, parse_constant_entry)?);
             Ok(MirRelationExpr::Constant { rows, typ })
         }
     }
 
-    fn parse_constant_entry(_ctx: CtxRef, input: ParseStream) -> syn::Result<(Row, Diff)> {
+    fn parse_constant_entry(
+        typ: &ReprRelationType,
+        input: ParseStream,
+    ) -> syn::Result<(Row, Diff)> {
         input.parse::<syn::Token![-]>()?;
 
         let (row, diff);
@@ -157,14 +217,14 @@ mod relation {
         if inner1.peek(syn::token::Paren) {
             let inner2;
             syn::parenthesized!(inner2 in inner1);
-            row = inner2.parse::<Parsed<Row>>()?.into();
+            row = row::parse_row(&inner2, &typ.column_types)?;
             inner1.parse::<kw::x>()?;
             diff = match inner1.parse::<syn::Lit>()? {
                 syn::Lit::Int(l) => Ok(l.base10_parse::<Diff>()?),
                 _ => Err(Error::new(inner1.span(), "expected Diff literal")),
             }?;
         } else {
-            row = inner1.parse::<Parsed<Row>>()?.into();
+            row = row::parse_row(&inner1, &typ.column_types)?;
             diff = Diff::ONE;
         }
 
@@ -726,8 +786,12 @@ mod relation {
 /// Support for parsing [mz_expr::MirScalarExpr].
 mod scalar {
     use mz_expr::{BinaryFunc, ColumnOrder, MirScalarExpr, UnaryFunc, VariadicFunc, func};
+    use mz_ore::collections::CollectionExt;
+    use mz_repr::adt::jsonb::JsonbPacker;
+    use mz_repr::adt::numeric::NumericMaxScale;
     use mz_repr::{
-        AsColumnType, Datum, ReprColumnType, ReprScalarType, Row, RowArena, SqlScalarType,
+        AsColumnType, ColumnName, Datum, ReprColumnType, ReprScalarType, Row, RowArena,
+        SqlScalarType, strconv,
     };
 
     use super::*;
@@ -1040,28 +1104,78 @@ mod scalar {
                 nullable: true,
             }
         } else {
-            match input.parse::<syn::Lit>()? {
-                syn::Lit::Str(l) => {
-                    packer.push(Datum::from(l.value().as_str()));
-                    Ok(ReprColumnType::from(&String::as_column_type()))
+            let lit = input.parse::<syn::Lit>()?;
+            if input.peek(syn::Token![::]) {
+                // A literal with an explicit type, e.g. `2000.0::numeric` or
+                // `"{}"::jsonb`. Coerce the literal token to the target type.
+                input.parse::<syn::Token![::]>()?;
+                let scalar_type = analyses::parse_scalar_type(input)?;
+                parse_typed_literal(&mut packer, &lit, &scalar_type)?;
+                ReprColumnType {
+                    scalar_type,
+                    nullable: false,
                 }
-                syn::Lit::Int(l) => {
-                    packer.push(Datum::from(l.base10_parse::<i64>()?));
-                    Ok(ReprColumnType::from(&i64::as_column_type()))
-                }
-                syn::Lit::Float(l) => {
-                    packer.push(Datum::from(l.base10_parse::<f64>()?));
-                    Ok(ReprColumnType::from(&f64::as_column_type()))
-                }
-                syn::Lit::Bool(l) => {
-                    packer.push(Datum::from(l.value));
-                    Ok(ReprColumnType::from(&bool::as_column_type()))
-                }
-                _ => Err(Error::new(input.span(), "cannot parse literal")),
-            }?
+            } else {
+                match lit {
+                    syn::Lit::Str(l) => {
+                        packer.push(Datum::from(l.value().as_str()));
+                        Ok(ReprColumnType::from(&String::as_column_type()))
+                    }
+                    syn::Lit::Int(l) => {
+                        packer.push(Datum::from(l.base10_parse::<i64>()?));
+                        Ok(ReprColumnType::from(&i64::as_column_type()))
+                    }
+                    syn::Lit::Float(l) => {
+                        packer.push(Datum::from(l.base10_parse::<f64>()?));
+                        Ok(ReprColumnType::from(&f64::as_column_type()))
+                    }
+                    syn::Lit::Bool(l) => {
+                        packer.push(Datum::from(l.value));
+                        Ok(ReprColumnType::from(&bool::as_column_type()))
+                    }
+                    _ => Err(Error::new(input.span(), "cannot parse literal")),
+                }?
+            }
         };
 
         Ok(MirScalarExpr::Literal(Ok(row), typ))
+    }
+
+    /// Packs a literal token coerced to the given target type.
+    fn parse_typed_literal(
+        packer: &mut mz_repr::RowPacker,
+        lit: &syn::Lit,
+        scalar_type: &ReprScalarType,
+    ) -> syn::Result<()> {
+        use syn::Lit::*;
+        let err = |msg: String| Error::new(lit.span(), msg);
+        match (lit, scalar_type) {
+            (Int(l), ReprScalarType::Int16) => packer.push(Datum::from(l.base10_parse::<i16>()?)),
+            (Int(l), ReprScalarType::Int32) => packer.push(Datum::from(l.base10_parse::<i32>()?)),
+            (Int(l), ReprScalarType::Int64) => packer.push(Datum::from(l.base10_parse::<i64>()?)),
+            (Int(l), ReprScalarType::Float64) => packer.push(Datum::from(l.base10_parse::<f64>()?)),
+            (Float(l), ReprScalarType::Float64) => {
+                packer.push(Datum::from(l.base10_parse::<f64>()?))
+            }
+            (Int(l), ReprScalarType::Numeric { .. }) => {
+                let n = strconv::parse_numeric(l.base10_digits())
+                    .map_err(|e| err(format!("invalid numeric literal: {e}")))?;
+                packer.push(Datum::Numeric(n));
+            }
+            (Float(l), ReprScalarType::Numeric { .. }) => {
+                let n = strconv::parse_numeric(l.base10_digits())
+                    .map_err(|e| err(format!("invalid numeric literal: {e}")))?;
+                packer.push(Datum::Numeric(n));
+            }
+            (Str(l), ReprScalarType::String) => packer.push(Datum::from(l.value().as_str())),
+            (Str(l), ReprScalarType::Jsonb) => {
+                JsonbPacker::new(packer)
+                    .pack_str(&l.value())
+                    .map_err(|e| err(format!("invalid jsonb literal: {e}")))?;
+            }
+            _ => Err(err("unsupported literal type annotation".to_string()))?,
+        }
+        Ok(())
     }
     fn parse_literal_err(input: ParseStream) -> Result {
         input.parse::<kw::error>()?;
@@ -1139,6 +1253,12 @@ mod scalar {
     fn parse_apply(input: ParseStream) -> Result {
         let ident = input.parse::<syn::Ident>()?;
 
+        // Function variants with parameters take them in brackets before the
+        // argument list, e.g. `cast_int32_to_numeric[127](#0)`.
+        if input.peek(syn::token::Bracket) {
+            return parse_apply_parameterized(&ident, input);
+        }
+
         // parse parentheses
         let inner;
         syn::parenthesized!(inner in input);
@@ -1172,7 +1292,98 @@ mod scalar {
             // Supported variadic functions:
             "greatest" => parse_variadic(VariadicFunc::Greatest(func::variadic::Greatest)),
             "coalesce" => parse_variadic(VariadicFunc::Coalesce(func::variadic::Coalesce)),
-            _ => Err(Error::new(ident.span(), "unsupported function name")),
+            // Supported unmaterializable functions:
+            "mz_now" => Ok(MirScalarExpr::CallUnmaterializable(
+                mz_expr::UnmaterializableFunc::MzNow,
+            )),
+            // Exact function variants by their canonical name, dispatched on
+            // the argument count (unary and binary win over variadic).
+            name => {
+                let exprs = inner.parse_comma_sep(parse_expr)?;
+                parse_apply_variant(&ident, name, exprs)
+            }
+        }
+    }
+
+    /// Applies a function variant named by its canonical (snake_case) name,
+    /// e.g. `add_int32(#0, #1)`. See `FuncName` in `mz_expr`.
+    fn parse_apply_variant(
+        ident: &syn::Ident,
+        name: &str,
+        mut exprs: Vec<MirScalarExpr>,
+    ) -> Result {
+        if exprs.len() == 1 {
+            if let Some(func) = UnaryFunc::from_variant_name(name) {
+                let expr = Box::new(exprs.into_element());
+                return Ok(MirScalarExpr::CallUnary { func, expr });
+            }
+        }
+        if exprs.len() == 2 {
+            if let Some(func) = BinaryFunc::from_variant_name(name) {
+                let expr2 = Box::new(exprs.pop().expect("two exprs"));
+                let expr1 = Box::new(exprs.pop().expect("two exprs"));
+                return Ok(MirScalarExpr::CallBinary { func, expr1, expr2 });
+            }
+        }
+        if let Some(func) = VariadicFunc::from_variant_name(name) {
+            return Ok(MirScalarExpr::CallVariadic { func, exprs });
+        }
+        Err(Error::new(ident.span(), "unsupported function name"))
+    }
+
+    /// Applies a parameterized function variant. The variant's parameters
+    /// appear in brackets between the name and the argument list.
+    fn parse_apply_parameterized(ident: &syn::Ident, input: ParseStream) -> Result {
+        let params;
+        syn::bracketed!(params in input);
+        let inner;
+        syn::parenthesized!(inner in input);
+
+        match ident.to_string().to_lowercase().as_str() {
+            "cast_int32_to_numeric" => {
+                let max_scale = if params.is_empty() {
+                    None
+                } else {
+                    let scale = params.parse::<syn::LitInt>()?.base10_parse::<i64>()?;
+                    let scale = NumericMaxScale::try_from(scale)
+                        .map_err(|e| Error::new(params.span(), e.to_string()))?;
+                    Some(scale)
+                };
+                let expr = Box::new(parse_expr(&inner)?);
+                Ok(MirScalarExpr::CallUnary {
+                    func: func::CastInt32ToNumeric(max_scale).into(),
+                    expr,
+                })
+            }
+            "record_get" => {
+                let index = params.parse::<syn::LitInt>()?.base10_parse::<usize>()?;
+                let expr = Box::new(parse_expr(&inner)?);
+                Ok(MirScalarExpr::CallUnary {
+                    func: func::RecordGet(index).into(),
+                    expr,
+                })
+            }
+            "record_create" => {
+                let field_names = params
+                    .parse_comma_sep(|p| Ok(ColumnName::from(p.parse::<syn::LitStr>()?.value())))?;
+                let exprs = inner.parse_comma_sep(parse_expr)?;
+                Ok(MirScalarExpr::call_variadic(
+                    func::variadic::RecordCreate { field_names },
+                    exprs,
+                ))
+            }
+            "list_create" => {
+                let elem_type = SqlScalarType::from_repr(&analyses::parse_scalar_type(&params)?);
+                let exprs = inner.parse_comma_sep(parse_expr)?;
+                Ok(MirScalarExpr::call_variadic(
+                    func::variadic::ListCreate { elem_type },
+                    exprs,
+                ))
+            }
+            _ => Err(Error::new(
+                ident.span(),
+                "unsupported parameterized function",
+            )),
         }
     }
 
@@ -1232,6 +1443,14 @@ mod aggregate {
             "max" => MaxInt64,
             "min" => MinInt64,
             "sum" => SumInt64,
+            // Exact variants, for tests that pin a specific width.
+            "max_int32" => MaxInt32,
+            "max_int64" => MaxInt64,
+            "min_int32" => MinInt32,
+            "min_int64" => MinInt64,
+            "sum_int16" => SumInt16,
+            "sum_int32" => SumInt32,
+            "sum_int64" => SumInt64,
             _ => Err(Error::new(ident.span(), "unsupported function name"))?,
         };
 
@@ -1259,57 +1478,60 @@ mod aggregate {
 
 /// Support for parsing [mz_repr::Row].
 mod row {
-    use mz_repr::{Datum, Row, RowPacker};
+    use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row};
 
     use super::*;
 
-    impl Parse for Parsed<Row> {
-        fn parse(input: ParseStream) -> syn::Result<Self> {
-            let mut row = Row::default();
-            let mut packer = ParseRow::new(&mut row);
+    /// Parses a comma-separated datum list into a [`Row`], coercing each datum
+    /// to the corresponding column type where the literal admits it.
+    ///
+    /// Literals that do not match their column type (and datums beyond the
+    /// column count) fall back to type inference from the literal alone. The
+    /// parser deliberately does not reject such rows, ill-typed constants are
+    /// valid parser output that tests feed to the typechecker.
+    pub fn parse_row(input: ParseStream, types: &[ReprColumnType]) -> syn::Result<Row> {
+        let mut row = Row::default();
+        let mut packer = row.packer();
 
-            loop {
-                if input.is_empty() {
-                    break;
-                }
-                packer.parse_datum(input)?;
-                if input.is_empty() {
-                    break;
-                }
-                input.parse::<syn::Token![,]>()?;
+        let mut types = types.iter();
+        loop {
+            if input.is_empty() {
+                break;
             }
-
-            Ok(Parsed(row))
+            parse_datum(input, &mut packer, types.next())?;
+            if input.is_empty() {
+                break;
+            }
+            input.parse::<syn::Token![,]>()?;
         }
+
+        Ok(row)
     }
 
-    impl From<Parsed<Row>> for Row {
-        fn from(parsed: Parsed<Row>) -> Self {
-            parsed.0
+    fn parse_datum(
+        input: ParseStream,
+        packer: &mut mz_repr::RowPacker,
+        typ: Option<&ReprColumnType>,
+    ) -> syn::Result<()> {
+        use ReprScalarType::*;
+        if input.eat(kw::null) {
+            packer.push(Datum::Null);
+            return Ok(());
         }
-    }
-
-    struct ParseRow<'a>(RowPacker<'a>);
-
-    impl<'a> ParseRow<'a> {
-        fn new(row: &'a mut Row) -> Self {
-            Self(row.packer())
+        let lit = input.parse::<syn::Lit>()?;
+        match (&lit, typ.map(|t| &t.scalar_type)) {
+            (syn::Lit::Int(l), Some(Int16)) => packer.push(Datum::from(l.base10_parse::<i16>()?)),
+            (syn::Lit::Int(l), Some(Int32)) => packer.push(Datum::from(l.base10_parse::<i32>()?)),
+            (syn::Lit::Int(l), Some(Float64)) => packer.push(Datum::from(l.base10_parse::<f64>()?)),
+            // Literal-only inference, also the fallback for literals that do
+            // not match their column type.
+            (syn::Lit::Str(l), _) => packer.push(Datum::from(l.value().as_str())),
+            (syn::Lit::Int(l), _) => packer.push(Datum::from(l.base10_parse::<i64>()?)),
+            (syn::Lit::Float(l), _) => packer.push(Datum::from(l.base10_parse::<f64>()?)),
+            (syn::Lit::Bool(l), _) => packer.push(Datum::from(l.value)),
+            (lit, _) => Err(Error::new(lit.span(), "cannot parse literal"))?,
         }
-
-        fn parse_datum(&mut self, input: ParseStream) -> syn::Result<()> {
-            if input.eat(kw::null) {
-                self.0.push(Datum::Null)
-            } else {
-                match input.parse::<syn::Lit>()? {
-                    syn::Lit::Str(l) => self.0.push(Datum::from(l.value().as_str())),
-                    syn::Lit::Int(l) => self.0.push(Datum::from(l.base10_parse::<i64>()?)),
-                    syn::Lit::Float(l) => self.0.push(Datum::from(l.base10_parse::<f64>()?)),
-                    syn::Lit::Bool(l) => self.0.push(Datum::from(l.value)),
-                    _ => Err(Error::new(input.span(), "cannot parse literal"))?,
-                }
-            }
-            Ok(())
-        }
+        Ok(())
     }
 }
 
@@ -1348,12 +1570,17 @@ mod analyses {
                         let value = inner.parse::<syn::LitStr>()?.value();
                         analyses.types = Some(parse_types.parse_str(&value)?);
                     }
-                    // TODO: support keys
+                    "keys" => {
+                        inner.parse::<syn::Token![:]>()?;
+                        let value = inner.parse::<syn::LitStr>()?.value();
+                        analyses.keys = Some(parse_keys.parse_str(&value)?);
+                    }
                     key => {
                         let msg = format!("unexpected analysis type `{}`", key);
                         Err(Error::new(inner.span(), msg))?;
                     }
                 }
+                inner.eat(syn::Token![,]);
             }
         }
         Ok(analyses)
@@ -1363,6 +1590,18 @@ mod analyses {
         let inner;
         syn::parenthesized!(inner in input);
         inner.parse_comma_sep(parse_column_type)
+    }
+
+    /// Parses a unique keys annotation in the format printed by EXPLAIN,
+    /// e.g. `([0], [1, 2])`.
+    fn parse_keys(input: ParseStream) -> syn::Result<Vec<Vec<usize>>> {
+        let inner;
+        syn::parenthesized!(inner in input);
+        inner.parse_comma_sep(|input| {
+            let inner;
+            syn::bracketed!(inner in input);
+            inner.parse_comma_sep(|input| input.parse::<syn::LitInt>()?.base10_parse::<usize>())
+        })
     }
 
     pub fn parse_column_type(input: ParseStream) -> syn::Result<ReprColumnType> {
@@ -1392,6 +1631,10 @@ mod analyses {
             ReprScalarType::Int16
         } else if input.look_and_eat(text, &lookahead) {
             ReprScalarType::String
+        } else if input.look_and_eat(jsonb, &lookahead) {
+            ReprScalarType::Jsonb
+        } else if input.look_and_eat(numeric, &lookahead) {
+            ReprScalarType::Numeric
         } else {
             Err(lookahead.error())?
         };
@@ -1404,6 +1647,8 @@ mod analyses {
     syn::custom_keyword!(character);
     syn::custom_keyword!(double);
     syn::custom_keyword!(integer);
+    syn::custom_keyword!(jsonb);
+    syn::custom_keyword!(numeric);
     syn::custom_keyword!(precision);
     syn::custom_keyword!(smallint);
     syn::custom_keyword!(text);
@@ -1578,9 +1823,6 @@ mod util {
 
     pub type CtxRef<'a> = &'a Ctx<'a>;
 
-    /// Newtype for external types that need to implement [Parse].
-    pub struct Parsed<T>(pub T);
-
     /// Provides facilities for parsing
     pub struct ParseChildren<'a> {
         stream: ParseStream<'a>,
@@ -1687,4 +1929,72 @@ mod kw {
     syn::custom_keyword!(when);
     syn::custom_keyword!(With);
     syn::custom_keyword!(x);
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_expr::{MirScalarExpr, func};
+    use mz_repr::{ReprScalarType, SqlScalarType};
+
+    use super::*;
+
+    #[mz_ore::test]
+    fn parse_scalar_variant_names() {
+        let actual = try_parse_scalar("is_null(add_int32(#1, #0))").unwrap();
+        let expected = MirScalarExpr::CallUnary {
+            func: func::IsNull.into(),
+            expr: Box::new(MirScalarExpr::CallBinary {
+                func: func::AddInt32.into(),
+                expr1: Box::new(MirScalarExpr::column(1)),
+                expr2: Box::new(MirScalarExpr::column(0)),
+            }),
+        };
+        assert_eq!(actual, expected);
+    }
+
+    #[mz_ore::test]
+    fn parse_scalar_parameterized() {
+        let actual = try_parse_scalar("record_get[1](#0)").unwrap();
+        let expected = MirScalarExpr::CallUnary {
+            func: func::RecordGet(1).into(),
+            expr: Box::new(MirScalarExpr::column(0)),
+        };
+        assert_eq!(actual, expected);
+
+        let actual = try_parse_scalar("list_create[integer](#0)").unwrap();
+        let expected = MirScalarExpr::call_variadic(
+            func::variadic::ListCreate {
+                elem_type: SqlScalarType::Int32,
+            },
+            vec![MirScalarExpr::column(0)],
+        );
+        assert_eq!(actual, expected);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn parse_scalar_typed_literals() {
+        let actual = try_parse_scalar(r#""{\"a\": 1}"::jsonb"#).unwrap();
+        let MirScalarExpr::Literal(Ok(_), typ) = &actual else {
+            panic!("expected literal, got {actual:?}");
+        };
+        assert_eq!(typ.scalar_type, ReprScalarType::Jsonb);
+
+        let actual = try_parse_scalar("2000.5::numeric").unwrap();
+        let MirScalarExpr::Literal(Ok(row), typ) = &actual else {
+            panic!("expected literal, got {actual:?}");
+        };
+        assert_eq!(typ.scalar_type, ReprScalarType::Numeric);
+        assert_eq!(row.unpack_first().to_string(), "2000.5");
+    }
+
+    #[mz_ore::test]
+    fn parse_column_types() {
+        let actual = try_parse_column_types("(bigint, text?)").unwrap();
+        assert_eq!(actual.len(), 2);
+        assert_eq!(actual[0].scalar_type, SqlScalarType::Int64);
+        assert!(!actual[0].nullable);
+        assert_eq!(actual[1].scalar_type, SqlScalarType::String);
+        assert!(actual[1].nullable);
+    }
 }

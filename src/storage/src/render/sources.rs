@@ -339,6 +339,13 @@ where
                         if dyncfgs::ENABLE_UPSERT_V2
                             .get(storage_state.storage_configuration.config_set())
                         {
+                            // Resolved here, at operator construction, so the
+                            // dataflow keeps one stash flavor for its whole
+                            // life even if the flag flips underneath it.
+                            let stash_flavor =
+                                crate::upsert_continual_feedback_v2::UpsertStashFlavor::from_config(
+                                    storage_state.storage_configuration.config_set(),
+                                );
                             crate::upsert::upsert_v2(
                                 upsert_input.enter(scope),
                                 upsert_envelope.clone(),
@@ -347,6 +354,7 @@ where
                                 previous_token,
                                 export_config,
                                 backpressure_metrics,
+                                stash_flavor,
                             )
                         } else {
                             crate::upsert::upsert(

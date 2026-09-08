@@ -32,5 +32,3 @@ workspace = true
 
 [features]
 default = []
-
-[package.metadata.cargo-udeps.ignore]

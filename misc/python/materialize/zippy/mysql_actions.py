@@ -40,20 +40,6 @@ class MySqlStart(Action):
         )
 
 
-class MySqlStop(Action):
-    """Stop the MySQL instance."""
-
-    @classmethod
-    def requires(cls) -> set[type[Capability]]:
-        return {MySqlRunning}
-
-    def withholds(self) -> set[type[Capability]]:
-        return {MySqlRunning}
-
-    def run(self, c: Composition, state: State) -> None:
-        c.kill("mysql")
-
-
 class MySqlRestart(Action):
     """Restart the MySql instance."""
 
@@ -80,8 +66,7 @@ class CreateMySqlTable(Action):
 
         if len(existing_mysql_tables) == 0:
             self.new_mysql_table = True
-            # A PK is now required for Debezium
-            this_mysql_table.has_pk = True
+            this_mysql_table.has_pk = random.choice([True, False])
 
             self.mysql_table = this_mysql_table
         elif len(existing_mysql_tables) == 1:

@@ -1969,8 +1969,21 @@ fn plan_set_expr(
                 }
                 SetOperator::Except => Hir::except(all, lhs, rhs),
                 SetOperator::Intersect => {
+                    // Planning below duplicates whichever input ends up on the left, so a
+                    // left-deep chain of INTERSECTs doubles the plan at every level, i.e. would be
+                    // exponential. INTERSECT is commutative, so put the cheaper input on the left.
+                    // A subtree is then only duplicated when it is the smaller of the two, so plan
+                    // size obeys T(a + b) <= 2*T(a) + T(b) for input sizes a <= b. The worst case
+                    // is balanced trees, where this solves to O(n^log2(3)) instead of O(2^n).
+                    let (lhs, rhs) = if lhs.relation_node_count() > rhs.relation_node_count() {
+                        (rhs, lhs)
+                    } else {
+                        (lhs, rhs)
+                    };
                     // TODO: Let's not duplicate the left-hand expression into TWO dataflows!
-                    // Though we believe that render() does The Right Thing (TM)
+                    // The optimizer de-duplicates at some point, but it would be good to already
+                    // not duplicate here.
+                    //
                     // Also note that we do *not* need another threshold() at the end of the method chain
                     // because the right-hand side of the outer union only produces existing records,
                     // i.e., the record counts for differential data flow definitely remain non-negative.
@@ -2052,6 +2065,10 @@ fn plan_set_expr(
                 ShowStatement::ShowCreateSink(stmt) => to_hirscope(
                     show::plan_show_create_sink(qcx.scx, stmt.clone())?,
                     show::describe_show_create_sink(qcx.scx, stmt)?,
+                ),
+                ShowStatement::ShowCreateMetricSink(stmt) => to_hirscope(
+                    show::plan_show_create_metric_sink(qcx.scx, stmt.clone())?,
+                    show::describe_show_create_metric_sink(qcx.scx, stmt)?,
                 ),
                 ShowStatement::ShowCreateSource(stmt) => to_hirscope(
                     show::plan_show_create_source(qcx.scx, stmt.clone())?,
@@ -2334,14 +2351,26 @@ fn plan_select_from_where(
         visitor.into_result()?
     };
     let mut table_func_names: BTreeMap<String, Ident> = BTreeMap::new();
+    // Table functions in the SELECT list apply to the output of the reduce
+    // (GROUP BY, aggregates, HAVING), but their columns must already be in
+    // scope when the SELECT list is expanded and GROUP BY items are planned,
+    // so the join is planned here regardless. Step 5 decides whether the
+    // reduce consumes this join or the saved pre-join relation, and in the
+    // latter case Step 8.5 plans the join again on top of the reduce.
+    let pre_table_funcs_arity = from_scope.len();
+    let mut pre_table_funcs_relation = None;
+    let mut table_funcs_deferred = false;
     if !table_funcs.is_empty() {
         let (expr, scope) = plan_scalar_table_funcs(
             qcx,
-            table_funcs,
+            &table_funcs,
             &mut table_func_names,
             &relation_expr,
             &from_scope,
         )?;
+        if !aggregates.is_empty() || !s.group_by.is_empty() || s.having.is_some() {
+            pre_table_funcs_relation = Some(relation_expr.clone());
+        }
         relation_expr = relation_expr.join(expr, HirScalarExpr::literal_true(), JoinKind::Inner);
         from_scope = from_scope.product(scope)?;
     }
@@ -2473,6 +2502,35 @@ fn plan_select_from_where(
                 .push(ScopeItem::from_expr(Expr::Function(sql_function.clone())));
         }
         if !agg_exprs.is_empty() || !group_key.is_empty() || s.having.is_some() {
+            // Table functions join after the reduce only when no group key or
+            // aggregate references their columns, e.g. GROUP BY on a SELECT
+            // list alias of a table function.
+            if let Some(pre_relation_expr) = pre_table_funcs_relation.take() {
+                let mut references_table_funcs = false;
+                let mut check = |column: usize| {
+                    if column >= pre_table_funcs_arity {
+                        references_table_funcs = true;
+                    }
+                };
+                for expr in &group_hir_exprs {
+                    expr.visit_columns_referring_to_root_level(&mut check);
+                }
+                for agg_expr in &agg_exprs {
+                    agg_expr
+                        .expr
+                        .visit_columns_referring_to_root_level(&mut check);
+                }
+                if !references_table_funcs {
+                    relation_expr = pre_relation_expr;
+                    // The group keys point past the table functions' columns,
+                    // which the saved relation does not have.
+                    for (i, key) in group_key.iter_mut().enumerate() {
+                        *key = pre_table_funcs_arity + i;
+                    }
+                    table_funcs_deferred = true;
+                }
+            }
+
             // apply GROUP BY / aggregates
             relation_expr = relation_expr.map(group_hir_exprs).reduce(
                 group_key,
@@ -2485,7 +2543,14 @@ fn plan_select_from_where(
             // from scope. These items need to *exist* because they might shadow
             // variables in outer scopes that would otherwise be valid to
             // reference, but accessing them needs to produce an error.
-            for i in 0..from_scope.len() {
+            // Deferred table functions' columns come back into scope in Step
+            // 8.5, so they must not be recorded as ungrouped.
+            let ungrouped_arity = if table_funcs_deferred {
+                pre_table_funcs_arity
+            } else {
+                from_scope.len()
+            };
+            for i in 0..ungrouped_arity {
                 if !select_all_mapping.contains_key(&i) {
                     let scope_item = &ecx.scope.items[i];
                     group_scope.ungrouped_columns.push(ScopeUngroupedColumn {
@@ -2580,6 +2645,25 @@ fn plan_select_from_where(
         relation_expr = relation_expr.filter(vec![expr]);
     }
 
+    // Step 8.5. Join the table functions deferred in Step 5. Planning them
+    // again rebinds their arguments' column references to the reduced
+    // relation.
+    if table_funcs_deferred {
+        let (expr, scope) = plan_scalar_table_funcs(
+            qcx,
+            &table_funcs,
+            &mut table_func_names,
+            &relation_expr,
+            &group_scope,
+        )?;
+        relation_expr = relation_expr.join(expr, HirScalarExpr::literal_true(), JoinKind::Inner);
+        // `product` resets `ungrouped_columns`, but the ungrouped column
+        // errors from the reduce must survive for the SELECT list.
+        let ungrouped_columns = mem::take(&mut group_scope.ungrouped_columns);
+        group_scope = group_scope.product(scope)?;
+        group_scope.ungrouped_columns = ungrouped_columns;
+    }
+
     // Step 9. Handle SELECT clause.
     let output_columns = {
         let mut new_exprs = vec![];
@@ -2670,6 +2754,19 @@ fn plan_select_from_where(
                 relation_expr = relation_expr.distinct();
             }
             Some(Distinct::On(exprs)) => {
+                // The table functions deferred in Step 5 join below this TopK,
+                // so the distinct would collapse their expansion rather than
+                // expand the rows the distinct picks. PostgreSQL instead
+                // evaluates a SELECT list table function after the distinct
+                // whenever the query has an ORDER BY and the function's output
+                // is not itself a distinct or sort key. Reject these queries
+                // rather than answer them differently.
+                if table_funcs_deferred && !order_by_exprs.is_empty() {
+                    bail_unsupported!(
+                        "SELECT list table function with DISTINCT ON and ORDER BY over an aggregation"
+                    );
+                }
+
                 let ecx = &ExprContext {
                     qcx,
                     name: "DISTINCT ON clause",
@@ -2769,7 +2866,7 @@ fn plan_select_from_where(
 
 fn plan_scalar_table_funcs(
     qcx: &QueryContext,
-    table_funcs: BTreeMap<Function<Aug>, String>,
+    table_funcs: &BTreeMap<Function<Aug>, String>,
     table_func_names: &mut BTreeMap<String, Ident>,
     relation_expr: &HirRelationExpr,
     from_scope: &Scope,

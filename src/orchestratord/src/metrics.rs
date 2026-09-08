@@ -21,18 +21,42 @@ use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 
 #[derive(Debug)]
 pub struct Metrics {
+    pub is_leader: UIntGauge,
     pub environmentd_needs_update: UIntGauge,
 }
 
 impl Metrics {
     pub fn register_into(registry: &MetricsRegistry) -> Self {
         Self {
+            is_leader: registry.register(
+                metric! {
+                    name: "orchestratord_is_leader",
+                    help: "Whether this operator replica holds the controller leadership lease, and is therefore the replica reconciling. Summed across the replicas this should be 1. A sustained 0 means no replica can take the lease, for instance because the service account lacks permission on leases, and the operator is reconciling nothing.",
+                }),
             environmentd_needs_update: registry.register(
                 metric! {
                     name: "environmentd_needs_update",
-                    help: "Count of organizations in this cluster which are running outdated pod templates",
+                    help: "Count of organizations in this cluster which are running outdated pod templates. Only the operator replica holding the leadership lease reconciles, so the others report zero.",
                 }),
         }
+    }
+
+    /// Records that this replica has taken the leadership lease.
+    pub fn leadership_acquired(&self) {
+        self.is_leader.set(1);
+    }
+
+    /// Records that this replica no longer holds the leadership lease, and
+    /// resets the metrics that only mean anything while it is reconciling.
+    ///
+    /// Those are derived from what reconciliation observed, and the process
+    /// outlives its own leadership: it keeps serving the conversion webhook
+    /// after losing the lease. Without this, a former leader would go on
+    /// publishing its last observation forever, so summing across the
+    /// replicas would count the same organizations once per past leader.
+    pub fn leadership_lost(&self) {
+        self.is_leader.set(0);
+        self.environmentd_needs_update.set(0);
     }
 }
 

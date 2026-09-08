@@ -213,7 +213,7 @@ const IndexTable = (props: IndexTableProps) => {
             <Th>Name</Th>
             <Th>Object Name</Th>
             <Th>Type</Th>
-            <Th>Memory Utilization</Th>
+            <Th>Heap Utilization</Th>
             <Th>Freshness</Th>
             {dataflowVisualizerEnabled && <Th></Th>}
           </Tr>

@@ -16,22 +16,14 @@ import { SentryRoutes } from "~/sentry";
 import EnableRegion from "./EnableRegion";
 import { EnvironmentNotReadyLayout } from "./Layout";
 import { OnboardingSteps } from "./OnboardingSteps";
-import OnboardingSurvey from "./OnboardingSurvey";
 
 export const EnvironmentNotReadyRoutes = ({ user }: { user: User }) => {
   return (
     <EnvironmentNotReadyLayout user={user}>
       <SentryRoutes>
-        <Route
-          path="onboarding-survey"
-          element={<OnboardingSurvey user={user} />}
-        />
         <Route path="enable-region" element={<EnableRegion user={user} />} />
         <Route path=":step" element={<OnboardingSteps user={user} />} />
-        <Route
-          path="*"
-          element={<Navigate to="../onboarding-survey" replace />}
-        />
+        <Route path="*" element={<Navigate to="../enable-region" replace />} />
       </SentryRoutes>
     </EnvironmentNotReadyLayout>
   );

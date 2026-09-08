@@ -10,13 +10,20 @@
 #![allow(missing_docs)]
 
 //! The tunable knobs for persist.
+//!
+//! Persist configs are `ParameterScope::Environment` as a class, including the
+//! ones only ever read on `clusterd`. The same client code runs in
+//! `environmentd`, and every copy of it acts on shared durable state, so a
+//! replica-scoped persist config could not reach the `environmentd` client and
+//! a rollout targeting replicas would leave a shard's other writer on the old
+//! value indefinitely. Declare new persist configs `Environment` too.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mz_build_info::BuildInfo;
-use mz_dyncfg::{Config, ConfigDefault, ConfigSet, ConfigUpdates};
+use mz_dyncfg::{Config, ConfigDefault, ConfigSet, ConfigUpdates, ParameterScope};
 use mz_ore::instrument;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::BlobKnobs;
@@ -281,6 +288,15 @@ pub(crate) const MiB: usize = 1024 * 1024;
 
 /// Adds the full set of all persist [Config]s.
 ///
+/// Persist configs are [`ParameterScope::Environment`] by default, because a
+/// persist client runs in every `clusterd` process and the per-replica dyncfg
+/// push reaches its `ConfigSet` (the compute worker applies the pushed updates
+/// to `persist_clients.cfg()`). `environmentd`'s own persist clients read the
+/// same configs and see the environment-wide value, which is what "replica-
+/// local" means for a config that both processes run. The exceptions are the
+/// configs read only from `environmentd`'s catalog and expression cache, which
+/// are [`ParameterScope::Environment`].
+///
 /// TODO(cfg): Consider replacing this with a static global registry powered by
 /// something like the `ctor` or `inventory` crate. This would involve managing
 /// the footgun of a Config being linked into one binary but not the other.
@@ -392,6 +408,7 @@ pub const CONSENSUS_CONNECTION_POOL_MAX_SIZE: Config<usize> = Config::new(
     "persist_consensus_connection_pool_max_size",
     50,
     "The maximum size the connection pool to Postgres/CRDB will grow to.",
+    ParameterScope::Environment,
 );
 
 /// Sets the maximum amount of time we'll wait to acquire a connection from
@@ -402,6 +419,7 @@ const CONSENSUS_CONNECTION_POOL_MAX_WAIT: Config<Duration> = Config::new(
     "persist_consensus_connection_pool_max_wait",
     Duration::from_secs(60),
     "The amount of time we'll wait for a connection to become available.",
+    ParameterScope::Environment,
 );
 
 /// The minimum TTL of a connection to Postgres/CRDB before it is proactively
@@ -413,6 +431,7 @@ const CONSENSUS_CONNECTION_POOL_TTL: Config<Duration> = Config::new(
     "\
     The minimum TTL of a Consensus connection to Postgres/CRDB before it is \
     proactively terminated",
+    ParameterScope::Environment,
 );
 
 /// The minimum time between TTLing connections to Postgres/CRDB. This delay is
@@ -426,6 +445,7 @@ const CONSENSUS_CONNECTION_POOL_TTL_STAGGER: Config<Duration> = Config::new(
     "persist_consensus_connection_pool_ttl_stagger",
     Duration::from_secs(6),
     "The minimum time between TTLing Consensus connections to Postgres/CRDB.",
+    ParameterScope::Environment,
 );
 
 /// The duration to wait for a Consensus Postgres/CRDB connection to be made
@@ -434,6 +454,7 @@ pub const CRDB_CONNECT_TIMEOUT: Config<Duration> = Config::new(
     "crdb_connect_timeout",
     Duration::from_secs(5),
     "The time to connect to CockroachDB before timing out and retrying.",
+    ParameterScope::Environment,
 );
 
 /// The TCP user timeout for a Consensus Postgres/CRDB connection. Specifies the
@@ -446,6 +467,7 @@ pub const CRDB_TCP_USER_TIMEOUT: Config<Duration> = Config::new(
     The TCP timeout for connections to CockroachDB. Specifies the amount of \
     time that transmitted data may remain unacknowledged before the TCP \
     connection is forcibly closed.",
+    ParameterScope::Environment,
 );
 
 pub const CRDB_KEEPALIVES_IDLE: Config<Duration> = Config::new(
@@ -454,12 +476,14 @@ pub const CRDB_KEEPALIVES_IDLE: Config<Duration> = Config::new(
     "\
     The amount of idle time before a TCP keepalive packet is sent on CRDB \
     connections.",
+    ParameterScope::Environment,
 );
 
 pub const CRDB_KEEPALIVES_INTERVAL: Config<Duration> = Config::new(
     "crdb_keepalives_interval",
     Duration::from_secs(5),
     "The time interval between TCP keepalive probes on CRDB connections.",
+    ParameterScope::Environment,
 );
 
 pub const CRDB_KEEPALIVES_RETRIES: Config<u32> = Config::new(
@@ -468,6 +492,7 @@ pub const CRDB_KEEPALIVES_RETRIES: Config<u32> = Config::new(
     "\
     The maximum number of TCP keepalive probes that will be sent before \
     dropping a CRDB connection.",
+    ParameterScope::Environment,
 );
 
 /// Migrate the txns code to use the critical since when opening a new read handle.
@@ -475,6 +500,7 @@ pub const USE_CRITICAL_SINCE_TXN: Config<bool> = Config::new(
     "persist_use_critical_since_txn",
     true,
     "Use the critical since (instead of the overall since) when initializing a subscribe.",
+    ParameterScope::Environment,
 );
 
 /// Migrate the catalog to use the critical since when opening a new read handle.
@@ -482,6 +508,7 @@ pub const USE_CRITICAL_SINCE_CATALOG: Config<bool> = Config::new(
     "persist_use_critical_since_catalog",
     false,
     "Use the critical since (instead of the overall since) for the Persist-backed catalog.",
+    ParameterScope::Environment,
 );
 
 /// Migrate the persist source to use the critical since when opening a new read handle.
@@ -489,6 +516,7 @@ pub const USE_CRITICAL_SINCE_SOURCE: Config<bool> = Config::new(
     "persist_use_critical_since_source",
     false,
     "Use the critical since (instead of the overall since) in the Persist source.",
+    ParameterScope::Environment,
 );
 
 /// While the source is catching up to the shard upper observed at hydration,
@@ -500,6 +528,7 @@ pub const SOURCE_HYDRATION_FRONTIER_COALESCE_BYTES: Config<usize> = Config::new(
     0,
     "While catching up to the hydration-time upper, the persist source coalesces \
      frontier downgrades until this many encoded bytes have been emitted (0 disables).",
+    ParameterScope::Environment,
 );
 
 /// Maximum number of part fetches the persist source issues concurrently, per
@@ -511,6 +540,7 @@ pub const SOURCE_FETCH_CONCURRENCY: Config<usize> = Config::new(
     1,
     "Maximum number of part fetches the persist source issues concurrently per worker \
      (1 = serial).",
+    ParameterScope::Environment,
 );
 
 /// Migrate snapshots to use the critical since when opening a new read handle.
@@ -518,6 +548,7 @@ pub const USE_CRITICAL_SINCE_SNAPSHOT: Config<bool> = Config::new(
     "persist_use_critical_since_snapshot",
     false,
     "Use the critical since (instead of the overall since) when taking snapshots in the controller or in fast-path peeks.",
+    ParameterScope::Environment,
 );
 
 /// The maximum number of parts (s3 blobs) that [crate::batch::BatchBuilder]
@@ -527,6 +558,7 @@ pub const BATCH_BUILDER_MAX_OUTSTANDING_PARTS: Config<usize> = Config::new(
     "persist_batch_builder_max_outstanding_parts",
     2,
     "The number of writes a batch builder can have outstanding before we slow down the writer.",
+    ParameterScope::Environment,
 );
 
 /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
@@ -536,6 +568,7 @@ pub const COMPACTION_HEURISTIC_MIN_INPUTS: Config<usize> = Config::new(
     "persist_compaction_heuristic_min_inputs",
     8,
     "Don't skip compaction if we have more than this many hollow batches as input.",
+    ParameterScope::Environment,
 );
 
 /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
@@ -545,6 +578,7 @@ pub const COMPACTION_HEURISTIC_MIN_PARTS: Config<usize> = Config::new(
     "persist_compaction_heuristic_min_parts",
     8,
     "Don't skip compaction if we have more than this many parts as input.",
+    ParameterScope::Environment,
 );
 
 /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
@@ -554,6 +588,7 @@ pub const COMPACTION_HEURISTIC_MIN_UPDATES: Config<usize> = Config::new(
     "persist_compaction_heuristic_min_updates",
     1024,
     "Don't skip compaction if we have more than this many updates as input.",
+    ParameterScope::Environment,
 );
 
 /// The upper bound on compaction's memory consumption. The value must be at
@@ -564,6 +599,7 @@ pub const COMPACTION_MEMORY_BOUND_BYTES: Config<usize> = Config::new(
     "persist_compaction_memory_bound_bytes",
     1024 * MiB,
     "Attempt to limit compaction to this amount of memory.",
+    ParameterScope::Environment,
 );
 
 /// The maximum number of concurrent blob deletes during garbage collection.
@@ -571,6 +607,7 @@ pub const GC_BLOB_DELETE_CONCURRENCY_LIMIT: Config<usize> = Config::new(
     "persist_gc_blob_delete_concurrency_limit",
     32,
     "Limit the number of concurrent deletes GC can perform to this threshold.",
+    ParameterScope::Environment,
 );
 
 /// The # of diffs to initially scan when fetching the latest consensus state, to
@@ -586,6 +623,7 @@ pub const STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT: Config<usize> = Config::new(
     "persist_state_versions_recent_live_diffs_limit",
     30 * 128,
     "Fetch this many diffs when fetching recent diffs.",
+    ParameterScope::Environment,
 );
 
 /// The maximum number of concurrent state fetches during usage computation.
@@ -593,6 +631,7 @@ pub const USAGE_STATE_FETCH_CONCURRENCY_LIMIT: Config<usize> = Config::new(
     "persist_usage_state_fetch_concurrency_limit",
     8,
     "Limit the concurrency in of fetching in the perioding Persist-storage-usage calculation.",
+    ParameterScope::Environment,
 );
 
 impl PostgresClientKnobs for PersistConfig {
@@ -678,24 +717,28 @@ pub(crate) const BLOB_OPERATION_TIMEOUT: Config<Duration> = Config::new(
     "persist_blob_operation_timeout",
     Duration::from_secs(180),
     "Maximum time allowed for a network call, including retry attempts.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const BLOB_OPERATION_ATTEMPT_TIMEOUT: Config<Duration> = Config::new(
     "persist_blob_operation_attempt_timeout",
     Duration::from_secs(90),
     "Maximum time allowed for a single network call.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const BLOB_CONNECT_TIMEOUT: Config<Duration> = Config::new(
     "persist_blob_connect_timeout",
     Duration::from_secs(7),
     "Maximum time to wait for a socket connection to be made.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const BLOB_READ_TIMEOUT: Config<Duration> = Config::new(
     "persist_blob_read_timeout",
     Duration::from_secs(10),
     "Maximum time to wait to read the first byte of a response, including connection time.",
+    ParameterScope::Environment,
 );
 
 impl BlobKnobs for PersistConfig {

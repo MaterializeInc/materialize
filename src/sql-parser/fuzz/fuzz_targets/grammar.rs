@@ -88,15 +88,6 @@ impl<'a, T: AstInfo> VisitMut<'a, T> for RemoveParens {
     }
 }
 
-/// Reparse errors that are a known printer/parser asymmetry rather than a bug.
-fn benign_reparse_error(msg: &str) -> bool {
-    msg.contains("exceeds nested expression limit")
-        || msg.contains("Expected left square bracket")
-        || msg.contains("Expected left parenthesis")
-        || msg.contains("Expected IN, found")
-        || msg.contains("Expected arrow, found")
-}
-
 fn check_pretty(sql: &str, orig_ast: &Statement<Raw>) {
     for width in [100, 1] {
         let pretty = match pretty_str_simple(sql, width) {
@@ -106,15 +97,16 @@ fn check_pretty(sql: &str, orig_ast: &Statement<Raw>) {
         let reparsed = match parse_statements(&pretty) {
             Ok(r) => r,
             Err(e) => {
-                if benign_reparse_error(&e.to_string()) {
-                    continue;
-                }
-                panic!("pretty output failed to reparse: pretty={pretty:?} width={width} err={e}");
+                panic!("pretty output failed to reparse: pretty={pretty:?} width={width} err={e}")
             }
         };
-        let Some(stmt) = reparsed.into_iter().next() else {
-            continue;
-        };
+        assert_eq!(
+            reparsed.len(),
+            1,
+            "pretty output reparsed to {} statements, expected 1\ninput:  {sql:?}\nwidth:  {width}\npretty: {pretty:?}",
+            reparsed.len(),
+        );
+        let stmt = reparsed.into_iter().next().unwrap();
         let mut reparsed_ast = stmt.ast;
         normalize(&mut reparsed_ast);
         assert_eq!(
@@ -128,16 +120,14 @@ fn check_display(orig_ast: &Statement<Raw>) {
     let displayed = orig_ast.to_ast_string_simple();
     let reparsed = match parse_statements(&displayed) {
         Ok(r) => r,
-        Err(e) => {
-            if benign_reparse_error(&e.to_string()) {
-                return;
-            }
-            panic!("AstDisplay output failed to reparse: displayed={displayed:?} err={e}");
-        }
+        Err(e) => panic!("AstDisplay output failed to reparse: displayed={displayed:?} err={e}"),
     };
-    if reparsed.len() != 1 {
-        return;
-    }
+    assert_eq!(
+        reparsed.len(),
+        1,
+        "AstDisplay output reparsed to {} statements, expected 1\ndisplayed: {displayed:?}",
+        reparsed.len(),
+    );
     let mut reparsed_ast = reparsed.into_iter().next().unwrap().ast;
     // Normalize the reparse too (mirroring `check_pretty`): the parser may
     // re-insert a semantically-redundant `Expr::Nested` (e.g. it parenthesizes a
@@ -168,13 +158,36 @@ fn check_display(orig_ast: &Statement<Raw>) {
 /// printer's quoting decision (bare names, quoted keyword collisions, names that
 /// only round-trip when quoted).
 const IDENTS: &[&str] = &[
-    "a", "b", "c", "x", "y", "col", "foo", "bar", "t1", "t2", "\"select\"", "\"from\"", "\"any\"",
-    "\"Mixed\"", "\"with space\"", "\"a.b\"", "\"1col\"", "\"qu\"\"ote\"",
+    "a",
+    "b",
+    "c",
+    "x",
+    "y",
+    "col",
+    "foo",
+    "bar",
+    "t1",
+    "t2",
+    "\"select\"",
+    "\"from\"",
+    "\"any\"",
+    "\"Mixed\"",
+    "\"with space\"",
+    "\"a.b\"",
+    "\"1col\"",
+    "\"qu\"\"ote\"",
 ];
 
 /// String literals for `@str`, weighted toward lexing/escaping edge cases.
 const STRINGS: &[&str] = &[
-    "'a'", "''", "'foo bar'", "'it''s'", "'a\"b'", "'%'", "'_'", "'100'",
+    "'a'",
+    "''",
+    "'foo bar'",
+    "'it''s'",
+    "'a\"b'",
+    "'%'",
+    "'_'",
+    "'100'",
 ];
 
 /// Every keyword the lexer knows, for `@kw` (a bare keyword used as an

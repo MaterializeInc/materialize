@@ -27,6 +27,7 @@ from materialize.cloudtest.k8s.environmentd import (
     EnvironmentdStatefulSet,
     ListenersConfigMap,
     MaterializedAliasService,
+    MzInstanceIdentity,
 )
 from materialize.cloudtest.k8s.minio import Minio
 from materialize.cloudtest.k8s.mysql import mysql_resources
@@ -52,9 +53,10 @@ class MaterializeApplication(CloudtestApplicationBase):
         apply_node_selectors: bool = False,
     ) -> None:
         self.tag = tag
+        self.instance_identity = MzInstanceIdentity.generate()
         self.secret = EnvironmentdSecret()
         self.listeners_configmap = ListenersConfigMap()
-        self.environmentd = EnvironmentdService()
+        self.environmentd = EnvironmentdService(self.instance_identity)
         self.materialized_alias = MaterializedAliasService()
         self.testdrive = TestdrivePod(
             release_mode=release_mode,
@@ -86,6 +88,7 @@ class MaterializeApplication(CloudtestApplicationBase):
             self.secret,
             self.listeners_configmap,
             EnvironmentdStatefulSet(
+                instance_identity=self.instance_identity,
                 release_mode=self.release_mode,
                 tag=self.tag,
                 log_filter=log_filter,
@@ -149,12 +152,20 @@ class MaterializeApplication(CloudtestApplicationBase):
         wait(condition="condition=Ready", resource="pod/environmentd-0")
 
         start = datetime.now()
-        while datetime.now() - start < timedelta(seconds=300):
+        while True:
             try:
                 self.environmentd.sql("SELECT 1")
                 break
-            except InterfaceError as e:
-                # Since we crash environmentd, we expect some errors that we swallow.
+            except (InterfaceError, OSError) as e:
+                if datetime.now() - start > timedelta(seconds=300):
+                    raise
+                # Since we crash environmentd, we expect some errors that we
+                # swallow. pg8000 wraps most connection failures in
+                # InterfaceError, but raw socket errors from its SSL
+                # negotiation (e.g. ConnectionResetError when the connection
+                # is accepted by the port-forwarding proxy and then reset
+                # because environmentd is not listening yet) leak through
+                # unwrapped.
                 LOGGER.info(f"SQL interface not ready, {e} while SELECT 1. Waiting...")
                 time.sleep(2)
 

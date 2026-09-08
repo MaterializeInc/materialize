@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/lib.rs
-revision: 9d0a7c3c6f
+revision: 4f0805a4d8
 ---
 
 # adapter
@@ -15,8 +15,11 @@ The crate is organized into several major subsystems:
 * `client` — the external `Client` / `SessionClient` API consumed by pgwire.
 * `session` — per-connection `Session` state including transaction management and prepared statements.
 * `config` — system-parameter synchronisation with LaunchDarkly or a JSON file.
+* `peek_client` — `PeekClient`, the session-side handle for frontend peek sequencing, holding compute instance channels, catalog snapshot cache, timestamp oracles, and storage collection access.
+* `frontend_peek` — frontend-side fast-path peek sequencing that bypasses the coordinator's main loop.
+* `frontend_read_then_write` — frontend-side OCC read-then-write sequencing for DML (INSERT, UPDATE, DELETE).
 
-Key public types re-exported from `lib.rs`: `Client`, `SessionClient`, `Handle`, `ExecuteResponse`, `AdapterError`, `AuthenticationError`, `AdapterNotice`, `CollectionIdBundle`, `ReadHolds`, `TimestampContext`, `serve`, `Config`.
+Key public types re-exported from `lib.rs`: `Client`, `SessionClient`, `Handle`, `ExecuteResponse`, `AdapterError`, `AuthenticationError`, `AdapterNotice`, `CollectionIdBundle`, `ReadHolds`, `TimestampContext`, `serve`, `Config`, `PeekClient`.
 
 Key dependencies: `mz-catalog`, `mz-controller`, `mz-compute-client`, `mz-storage-client`, `mz-sql`, `mz-expr`, `mz-transform`, `mz-persist-client`, `mz-timestamp-oracle`.
 Downstream consumers: `mz-environmentd` (calls `serve` to start the coordinator), `mz-pgwire` (uses `Client`/`SessionClient`), `mz-balancerd`.

@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 
 use differential_dataflow::lattice::Lattice;
 use mz_expr::{EvalError, Id, MfpPlan, SafeMfpPlan, TableFunc};
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, StableRow, Timestamp};
 use timely::PartialOrder;
 
 use crate::plan::interpret::{BoundedLattice, Context, Interpreter};
@@ -88,7 +88,7 @@ impl Interpreter for SingleTimeMonotonic<'_> {
     fn constant(
         &self,
         _ctx: &Context<Self::Domain>,
-        rows: &Result<Vec<(Row, Timestamp, Diff)>, EvalError>,
+        rows: &Result<Vec<(StableRow, Timestamp, Diff)>, EvalError>,
     ) -> Self::Domain {
         // A constant is physically monotonic iff the constant is an `EvalError`
         // or all its rows have `Diff` values greater than zero.
@@ -127,7 +127,7 @@ impl Interpreter for SingleTimeMonotonic<'_> {
         _ctx: &Context<Self::Domain>,
         input: Self::Domain,
         mfp: &MfpPlan<LirScalarExpr>,
-        _input_key_val: &Option<(Vec<LirScalarExpr>, Option<Row>)>,
+        _input_key_val: &Option<(Vec<LirScalarExpr>, Option<StableRow>)>,
     ) -> Self::Domain {
         // In a single-time context, we propagate the monotonicity status of the
         // input, conservatively treating an MFP with temporal predicates as

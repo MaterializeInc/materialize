@@ -1,6 +1,6 @@
 ---
 source: src/avro/src/util.rs
-revision: de06eb12d9
+revision: 4e012ea88d
 ---
 
 Contains low-level encoding and decoding primitives shared across the crate.

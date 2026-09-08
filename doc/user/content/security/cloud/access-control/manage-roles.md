@@ -26,6 +26,12 @@ organization roles, see [Users and service
 accounts](/security/cloud/users-service-accounts/).
 {{< /annotation >}}
 
+{{< tip >}}
+Instead of granting role membership by hand, you can [sync groups from your
+identity provider](/security/cloud/users-service-accounts/sync-idp-groups/) to
+manage database role membership from your IdP.
+{{</ tip >}}
+
 ## Required privileges for managing roles
 
 {{< note >}}
@@ -658,4 +664,4 @@ example="view-privileges-for-previous-owner" %}}
 
 - [Access control best practices](/security/cloud/access-control/#best-practices)
 - [Manage privileges with
-  Terraform](/manage/terraform/manage-rbac/)
+  Terraform](/developer-tools/terraform/manage-rbac/)

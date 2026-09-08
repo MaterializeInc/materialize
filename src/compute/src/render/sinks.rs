@@ -30,7 +30,7 @@ use timely::progress::Antichain;
 
 use crate::compute_state::SinkToken;
 use crate::logging::compute::LogDataflowErrors;
-use crate::render::context::Context;
+use crate::render::context::{Context, distinct_errs_collection};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::{RenderTimestamp, StartSignal};
 
@@ -130,6 +130,16 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
             err_collection = err_collection.concat(null_errs);
         }
 
+        // Normalize what the sink persists. A materialized view's error multiplicity is durable
+        // state another dataflow reads back verbatim, so leaving it at this dataflow's fan-out both
+        // multiplies across the object graph and makes the written value depend on plan shape.
+        // Placed after the null assertions so their errors, whose multiplicity follows the ok row's,
+        // are covered too. Only the persist-backed sink is re-importable: a subscribe or a one-shot
+        // copy is read once by a client, so neither pays for the arrangement.
+        if matches!(sink.connection, ComputeSinkConnection::MaterializedView(_)) {
+            err_collection = distinct_errs_collection(err_collection);
+        }
+
         let region_name = match sink.connection {
             ComputeSinkConnection::Subscribe(_) => format!("SubscribeSink({:?})", sink_id),
             ComputeSinkConnection::MaterializedView(_) => {
@@ -138,6 +148,7 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
             ComputeSinkConnection::CopyToS3Oneshot(_) => {
                 format!("CopyToS3OneshotSink({:?})", sink_id)
             }
+            ComputeSinkConnection::MetricSink(_) => format!("MetricSink({:?})", sink_id),
         };
         outer_scope.clone().region_named(&region_name, |inner| {
             let sink_render = get_sink_render_for(&sink.connection);
@@ -185,5 +196,6 @@ fn get_sink_render_for<'scope>(
         ComputeSinkConnection::Subscribe(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::MaterializedView(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::CopyToS3Oneshot(connection) => Box::new(connection.clone()),
+        ComputeSinkConnection::MetricSink(connection) => Box::new(connection.clone()),
     }
 }

@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/numeric.rs
-revision: 0a5fe195ac
+revision: 94ee2d5448
 ---
 
 # mz-expr::scalar::func::impls::numeric

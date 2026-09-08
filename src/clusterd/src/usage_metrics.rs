@@ -15,7 +15,7 @@
 use std::path::PathBuf;
 
 use serde::Serialize;
-use tracing::{debug, error};
+use tracing::error;
 
 /// A system usage metrics collector.
 pub(crate) struct Collector {
@@ -38,26 +38,14 @@ impl Collector {
     }
 
     fn collect_disk_usage(&self) -> Option<u64> {
-        let Some(root) = &self.disk_root else {
-            return None;
-        };
-
-        let stat = match nix::sys::statvfs::statvfs(root) {
-            Ok(stat) => stat,
+        let root = self.disk_root.as_deref()?;
+        match mz_metrics::usage::disk_usage(root) {
+            Ok(bytes) => Some(bytes),
             Err(err) => {
                 error!("statvfs error: {err}");
-                return None;
+                None
             }
-        };
-
-        // `fsblkcnt_t` is a `u32` on macOS but a `u64` on Linux.
-        #[allow(clippy::useless_conversion)]
-        let used_blocks = u64::from(stat.blocks() - stat.blocks_available());
-        let used_bytes = used_blocks * stat.fragment_size();
-
-        debug!("disk usage: {used_bytes}");
-
-        Some(used_bytes)
+        }
     }
 }
 
@@ -77,6 +65,7 @@ mod linux {
 
     use anyhow::{anyhow, bail};
     use mz_compute::memory_limiter;
+    use mz_metrics::usage::ProcStatus;
     use mz_ore::cast::CastInto;
     use tracing::{debug, error};
 
@@ -84,7 +73,7 @@ mod linux {
     pub fn collect_heap_usage() -> (Option<u64>, Option<u64>) {
         use mz_ore::cast::CastInto;
 
-        match memory_limiter::ProcStatus::from_proc() {
+        match ProcStatus::from_proc() {
             Ok(status) => {
                 let memory_bytes = status.vm_rss.cast_into();
                 let swap_bytes = status.vm_swap.cast_into();

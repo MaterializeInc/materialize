@@ -1,0 +1,57 @@
+# libFuzzer dictionary for the strconv_parse_timestamptz target, resolved by
+# `dict_for` in test/cargo-fuzz/mzcompose.py.
+#
+# The interesting inputs sit on the two boundaries of `CheckedTimestamp`'s
+# accepted range, and neither is reachable by mutation alone. `HIGH_DATE` is the
+# single date `262142-12-31`, and reaching it means mutating a 6-digit ASCII
+# integer onto one exact value while a late time-of-day and a westward offset are
+# already in place. There is no coverage gradient to climb: the range check
+# yields one edge for "accepted" and one for "rejected", both saturated within
+# the first few executions. Spelling the boundary dates as tokens is what puts
+# the arithmetic just past them within reach.
+#
+# The offsets and leap-second forms matter for the same reason. Overflow at the
+# high boundary needs the offset to shift the value *out* of range, and the
+# leap-second representation (chrono's sub-second >= 1s, from a `:60` literal) is
+# unconstructable at any second-of-minute other than `:59`, so an offset that is
+# not a whole number of minutes is what exercises the normalization.
+
+# The range boundaries: `HIGH_DATE` is exactly `chrono::NaiveDate::MAX`, and the
+# low bound is PostgreSQL's 4713 BC.
+"262142-12-31"
+"262143-01-01"
+"4713-12-31"
+"4714-01-01"
+" BC"
+
+# Times that round *up* across the day boundary, one per precision. The 7th
+# fractional digit drives the microsecond nudge; the shorter forms drive the
+# rounding branch that only a precision below 6 reaches.
+"23:59:59.9999995"
+"23:59:59.9995"
+"23:59:59.5"
+
+# Leap seconds, at `:59` where chrono can represent them and elsewhere where it
+# cannot.
+":60"
+"23:59:60"
+"00:00:60"
+
+# Offsets. A sub-minute offset shifts the second-of-minute off `:59`; a westward
+# offset is what pushes the high boundary out of range.
+"-01"
+"+01"
+"+00"
+"+00:00:30"
+"-05:30"
+"+16:60"
+" Europe/Amsterdam"
+" UTC"
+
+# Separators the parser keys off, so a mutated token still lands in a plausible
+# position.
+"-"
+":"
+"."
+" "
+"T"

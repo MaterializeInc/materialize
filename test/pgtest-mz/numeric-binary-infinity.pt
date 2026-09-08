@@ -1,0 +1,73 @@
+# Regression test for `±Infinity` smuggled in as a binary numeric Bind
+# parameter. The text path rejects `'Infinity'::numeric`, so the binary path
+# must reject the wire format's infinity sign words too, or a client can
+# produce a `Datum::Numeric(Infinity)` that no SQL literal can name.
+#
+# The numeric binary header is ndigits/weight/sign/dscale, four big-endian
+# 16-bit words. Sign 0xD000 is +Infinity and 0xF000 is -Infinity. An infinite
+# value carries no digit words, so the eight-byte header is the whole parameter.
+
+# +Infinity: ndigits=0, weight=0, sign=0xD000, dscale=0.
+send
+Parse {"query": "SELECT $1::numeric"}
+Bind {"param_formats": [1], "binary_values": [[0, 0, 0, 0, 208, 0, 0, 0]]}
+Execute
+Sync
+----
+
+until err_field_typs=CM
+ReadyForQuery
+----
+ParseComplete
+ErrorResponse {"fields":[{"typ":"C","value":"22023"},{"typ":"M","value":"unable to decode parameter: numeric infinity is not supported"}]}
+ReadyForQuery {"status":"I"}
+
+# -Infinity: sign=0xF000.
+send
+Parse {"query": "SELECT $1::numeric"}
+Bind {"param_formats": [1], "binary_values": [[0, 0, 0, 0, 240, 0, 0, 0]]}
+Execute
+Sync
+----
+
+until err_field_typs=CM
+ReadyForQuery
+----
+ParseComplete
+ErrorResponse {"fields":[{"typ":"C","value":"22023"},{"typ":"M","value":"unable to decode parameter: numeric infinity is not supported"}]}
+ReadyForQuery {"status":"I"}
+
+# NaN, which the text path accepts, still decodes. sign=0xC000.
+send
+Parse {"query": "SELECT $1::numeric"}
+Bind {"param_formats": [1], "binary_values": [[0, 0, 0, 0, 192, 0, 0, 0]]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["NaN"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# A finite value, 1, still decodes: ndigits=1, weight=0, sign=0, dscale=0,
+# digit[0]=1.
+send
+Parse {"query": "SELECT $1::numeric"}
+Bind {"param_formats": [1], "binary_values": [[0, 1, 0, 0, 0, 0, 0, 0, 0, 1]]}
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}

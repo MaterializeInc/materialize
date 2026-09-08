@@ -12,10 +12,8 @@ Use `ALTER DATABASE` to:
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "Rename" >}}
-
-### Rename
 
 To rename a database:
 
@@ -23,8 +21,6 @@ To rename a database:
 
 {{< /tab >}}
 {{< tab "Change owner" >}}
-
-### Change owner
 
 To change the owner of a database:
 

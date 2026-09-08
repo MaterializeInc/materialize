@@ -70,7 +70,7 @@
         Optional. A column containing headers to add to each Kafka message emitted by the sink. The column must be of type `map[text => text]` or `map[text => bytea]`. See [Headers](/sql/create-sink/kafka/#headers) for details.
     - name: "**FORMAT** `<sink_format_spec>`"
       description: |
-        Optional. Specifies the format to use for both keys and values: `AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `JSON`, `TEXT`, or `BYTES`. See [Formats](/sql/create-sink/kafka/#formats) for details.
+        Optional. Specifies the format to use for both keys and values: `AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION <glue_connection_name>`, `JSON`, `TEXT`, or `BYTES`. See [Formats](/sql/create-sink/kafka/#formats) for details.
     - name: "**KEY FORMAT** `<sink_format_spec>` **VALUE FORMAT** `<sink_format_spec>`"
       description: |
         Optional. Specifies the key format and value formats separately. See [Formats](/sql/create-sink/kafka/#formats) for details.

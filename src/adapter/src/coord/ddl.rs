@@ -26,6 +26,7 @@ use mz_cluster_client::ReplicaId;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::ClusterId;
 use mz_ore::instrument;
+use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::to_datetime;
 use mz_ore::retry::Retry;
 use mz_ore::task;
@@ -50,7 +51,7 @@ use serde_json::json;
 use tracing::{Instrument, Level, event, info_span, warn};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
-use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult};
+use crate::catalog::{DropObjectInfo, Op, TransactionResult};
 use crate::coord::Coordinator;
 use crate::coord::appends::{BuiltinTableAppendCompletion, BuiltinTableAppendNotify};
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
@@ -117,6 +118,14 @@ impl Coordinator {
         // thing to do is panic and let restart/bootstrap handle it.
         apply_implications_res.expect("cannot fail to apply catalog update implications");
 
+        // NOTE: `check_consistency` only runs with soft assertions enabled, so
+        // this phase reads about zero in production. We time it because a local
+        // rig debugging a transact stall commonly has them on, where the check is
+        // O(catalog size) and would otherwise appear as an unexplained remainder
+        // against the wrapper metric. The observation stays outside the macro,
+        // anything inside it compiles out exactly where soft assertions are off.
+        let consistency_start = Instant::now();
+
         // Note: It's important that we keep the function call inside macro, this way we only run
         // the consistency checks if soft assertions are enabled.
         mz_ore::soft_assert_eq_no_log!(
@@ -125,16 +134,39 @@ impl Coordinator {
             "coordinator inconsistency detected"
         );
 
+        self.metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["consistency_check"])
+            .observe(consistency_start.elapsed().as_secs_f64());
+
+        let side_effects_seconds = self
+            .metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["side_effects"]);
+        // Distinct from `table_updates_wait` in `catalog_transact_with_context`.
+        // Here the group commit has already been running concurrently with
+        // `apply_catalog_implications` above, so this wrapper is first polled
+        // late and only records the residual wait.
+        let table_updates_wait = self
+            .metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["table_updates_residual_wait"]);
         let side_effects_fut = side_effect(self, ctx);
 
         // Run our side effects concurrently with the table updates.
         let ((), ()) = futures::future::join(
-            side_effects_fut.instrument(info_span!(
-                "coord::catalog_transact_with_side_effects::side_effects_fut"
-            )),
-            table_updates.instrument(info_span!(
-                "coord::catalog_transact_with_side_effects::table_updates"
-            )),
+            side_effects_fut
+                .wall_time()
+                .observe(side_effects_seconds)
+                .instrument(info_span!(
+                    "coord::catalog_transact_with_side_effects::side_effects_fut"
+                )),
+            table_updates
+                .wall_time()
+                .observe(table_updates_wait)
+                .instrument(info_span!(
+                    "coord::catalog_transact_with_side_effects::table_updates"
+                )),
         )
         .await;
 
@@ -166,6 +198,10 @@ impl Coordinator {
 
         let (table_updates, catalog_updates) = self.catalog_transact_inner(conn_id, ops).await?;
 
+        let table_updates_wait = self
+            .metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["table_updates_wait"]);
         let apply_catalog_implications_fut = self.apply_catalog_implications(ctx, catalog_updates);
 
         // Apply catalog implications concurrently with the table updates.
@@ -173,9 +209,12 @@ impl Coordinator {
             apply_catalog_implications_fut.instrument(info_span!(
                 "coord::catalog_transact_with_context::side_effects_fut"
             )),
-            table_updates.instrument(info_span!(
-                "coord::catalog_transact_with_context::table_updates"
-            )),
+            table_updates
+                .wall_time()
+                .observe(table_updates_wait)
+                .instrument(info_span!(
+                    "coord::catalog_transact_with_context::table_updates"
+                )),
         )
         .await;
 
@@ -184,6 +223,10 @@ impl Coordinator {
         // let restart/bootstrap handle it.
         combined_apply_res.expect("cannot fail to apply catalog implications");
 
+        // See the note in `catalog_transact_with_side_effects` on why this is
+        // timed outside the macro and reads about zero in production.
+        let consistency_start = Instant::now();
+
         // Note: It's important that we keep the function call inside macro, this way we only run
         // the consistency checks if soft assertions are enabled.
         mz_ore::soft_assert_eq_no_log!(
@@ -191,6 +234,11 @@ impl Coordinator {
             Ok(()),
             "coordinator inconsistency detected"
         );
+
+        self.metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["consistency_check"])
+            .observe(consistency_start.elapsed().as_secs_f64());
 
         self.metrics
             .catalog_transact_seconds
@@ -206,7 +254,7 @@ impl Coordinator {
     pub(crate) async fn catalog_transact_with_ddl_transaction<F>(
         &mut self,
         ctx: &mut ExecuteContext,
-        ops: Vec<catalog::Op>,
+        mut ops: Vec<catalog::Op>,
         side_effect: F,
     ) -> Result<(), AdapterError>
     where
@@ -251,19 +299,57 @@ impl Coordinator {
             return Err(AdapterError::DDLTransactionRace);
         }
 
+        // The per-statement phases of a DDL transaction carry their own labels.
+        // The work differs from a real transaction's phases, and it is billed
+        // once per statement rather than once per transaction, so pooling the two
+        // populations under one label would blur both.
+        let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();
+
         // Clone what we need from the session before taking &mut below.
+        let clone_start = Instant::now();
         let txn_ops_clone = txn_ops.clone();
         let txn_state_clone = txn_state.clone();
+        // NOTE: `txn_snapshot` is a deep clone of the durable `Snapshot`, which is
+        // O(catalog size) in allocations, once per statement. `txn_state` next to
+        // it is cheap, `CatalogState` holds its large collections in `imbl` maps.
         let prev_snapshot = txn_snapshot.clone();
+        phase_seconds
+            .with_label_values(&["ddl_txn_snapshot_clone"])
+            .observe(clone_start.elapsed().as_secs_f64());
 
         // Validate resource limits with all accumulated + new ops (cheap O(N) counting).
+        let prep_start = Instant::now();
         let mut combined_ops = txn_ops_clone;
         combined_ops.extend(ops.iter().cloned());
+        let creates_scoped_object = ops.iter().any(|op| {
+            matches!(
+                op,
+                catalog::Op::CreateCluster { .. } | catalog::Op::CreateClusterReplica { .. }
+            )
+        });
+        if creates_scoped_object {
+            // Include accumulated creates when deriving contexts. A replica can
+            // be created in a later DDL statement than its still-uncommitted
+            // cluster, which is absent from the coordinator's live catalog.
+            if let Some(scoped_op) = self.scoped_overrides_create_op(&combined_ops) {
+                ops.push(scoped_op.clone());
+                combined_ops.push(scoped_op);
+            }
+        }
         let conn_id = ctx.session().conn_id().clone();
-        self.validate_resource_limits(&combined_ops, &conn_id)?;
+        let validate_res = self.validate_resource_limits(&combined_ops, &conn_id);
+        phase_seconds
+            .with_label_values(&["ddl_txn_prep"])
+            .observe(prep_start.elapsed().as_secs_f64());
+        validate_res?;
 
         // Get oracle timestamp for audit log entries.
-        let oracle_write_ts = self.get_local_write_ts().await.timestamp;
+        let oracle_write_ts = self
+            .get_local_write_ts()
+            .wall_time()
+            .observe(phase_seconds.with_label_values(&["ddl_txn_write_ts"]))
+            .await
+            .timestamp;
 
         // Get ConnMeta for the session.
         let conn = self.active_conns.get(ctx.session().conn_id());
@@ -282,6 +368,8 @@ impl Coordinator {
                 prev_snapshot,
                 oracle_write_ts,
             )
+            .wall_time()
+            .observe(phase_seconds.with_label_values(&["ddl_txn_dry_run"]))
             .await?;
 
         // Accumulate ops for eventual COMMIT.
@@ -311,13 +399,20 @@ impl Coordinator {
     pub(crate) async fn catalog_transact_inner(
         &mut self,
         conn_id: Option<&ConnectionId>,
-        ops: Vec<catalog::Op>,
+        mut ops: Vec<catalog::Op>,
     ) -> Result<(BuiltinTableAppendNotify, Vec<ParsedStateUpdate>), AdapterError> {
         if self.controller.read_only() {
             return Err(AdapterError::ReadOnly);
         }
 
+        if let Some(scoped_op) = self.scoped_overrides_create_op(&ops) {
+            ops.push(scoped_op);
+        }
+
         event!(Level::TRACE, ops = format!("{:?}", ops));
+
+        let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();
+        let phase_start = Instant::now();
 
         let mut webhook_sources_to_restart = BTreeSet::new();
         let mut clusters_to_drop = vec![];
@@ -457,7 +552,13 @@ impl Coordinator {
             }
         }
 
-        self.validate_resource_limits(&ops, conn_id.unwrap_or(&SYSTEM_CONN_ID))?;
+        // Observe before propagating, so a transaction rejected on resource
+        // limits still accounts for the op scan it burned on the loop.
+        let validate_res = self.validate_resource_limits(&ops, conn_id.unwrap_or(&SYSTEM_CONN_ID));
+        phase_seconds
+            .with_label_values(&["prep"])
+            .observe(phase_start.elapsed().as_secs_f64());
+        validate_res?;
 
         // This will produce timestamps that are guaranteed to increase on each
         // call, and also never be behind the system clock. If the system clock
@@ -467,7 +568,11 @@ impl Coordinator {
         // always going up, and believe we will always be close to the system
         // clock because it is well configured (chrony) and so may only rarely
         // regress or pause for 10s.
-        let oracle_write_ts = self.get_local_write_ts().await.timestamp;
+        let oracle_write_ts = self
+            .get_catalog_write_ts()
+            .wall_time()
+            .observe(phase_seconds.with_label_values(&["write_ts"]))
+            .await;
 
         let Coordinator {
             catalog,
@@ -479,6 +584,25 @@ impl Coordinator {
         let catalog = Arc::make_mut(catalog);
         let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
 
+        // Register the session as an ephemeral owner (its uuid <-> connection
+        // mapping) at its first temporary-item creation.
+        if let Some(conn) = conn {
+            let creates_temp_item = ops.iter().any(
+                |op| matches!(op, catalog::Op::CreateItem { item, .. } if item.is_temporary()),
+            );
+            if creates_temp_item && !catalog.state().has_temporary_namespace(conn.conn_id()) {
+                catalog.register_temporary_namespace(conn.conn_id(), conn.uuid());
+            }
+        }
+
+        // NOTE: This phase contains every durable `sync` and `commit` a catalog
+        // transaction performs, which is what makes `transact` minus those two
+        // histograms an estimate of the in-memory work. Two caveats. More than
+        // one sync happens per transaction, so the subtraction is only valid on
+        // rates of `_sum`, never on per-observation means. And durable
+        // `allocate_id` (user ID pool refills, storage usage batch IDs) observes
+        // into the same histograms from outside any catalog transaction, so the
+        // estimate is biased low while allocation is active.
         let TransactionResult {
             builtin_table_updates,
             catalog_updates,
@@ -490,6 +614,8 @@ impl Coordinator {
                 conn,
                 ops,
             )
+            .wall_time()
+            .observe(phase_seconds.with_label_values(&["transact"]))
             .await?;
 
         for (cluster_id, replica_id) in &cluster_replicas_to_drop {
@@ -517,10 +643,13 @@ impl Coordinator {
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
-        let (builtin_update_notify, _) = self
-            .builtin_table_update()
-            .execute(builtin_table_updates)
-            .await;
+        let stage_start = Instant::now();
+        let builtin_update_notify = self.builtin_table_update().execute(builtin_table_updates);
+        phase_seconds
+            .with_label_values(&["stage_builtin"])
+            .observe(stage_start.elapsed().as_secs_f64());
+
+        let finalize_start = Instant::now();
 
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
@@ -600,11 +729,16 @@ impl Coordinator {
             }
         }
 
+        phase_seconds
+            .with_label_values(&["finalize"])
+            .observe(finalize_start.elapsed().as_secs_f64());
+
         Ok((builtin_update_notify, catalog_updates))
     }
 
     pub(crate) fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
         self.drop_introspection_subscribes(replica_id);
+        self.drop_metric_sinks(replica_id);
 
         self.controller
             .drop_replica(cluster_id, replica_id)
@@ -625,16 +759,27 @@ impl Coordinator {
     }
 
     /// A convenience method for dropping tables.
-    pub(crate) fn drop_tables(&mut self, tables: Vec<(CatalogItemId, GlobalId)>, ts: Timestamp) {
+    pub(crate) async fn drop_tables(&mut self, tables: Vec<(CatalogItemId, GlobalId)>) {
         for (item_id, _gid) in &tables {
             self.active_webhooks.remove(item_id);
         }
 
+        let table_gids: Vec<_> = tables.into_iter().map(|(_id, gid)| gid).collect();
+
+        // FIFO ordering places the forget after every staged append.
+        let forget_ids = self
+            .controller
+            .storage
+            .txns_table_ids(table_gids.clone())
+            .unwrap_or_terminate("cannot fail to look up txns-registered tables");
+        if !forget_ids.is_empty() {
+            self.forget_tables_via_committer(forget_ids).await;
+        }
+
         let storage_metadata = self.catalog.state().storage_metadata();
-        let table_gids = tables.into_iter().map(|(_id, gid)| gid).collect();
         self.controller
             .storage
-            .drop_tables(storage_metadata, table_gids, ts)
+            .drop_tables(storage_metadata, table_gids)
             .unwrap_or_terminate("cannot fail to drop tables");
     }
 
@@ -730,8 +875,8 @@ impl Coordinator {
         // Retire off the coordinator loop. We wait for each `mz_subscriptions` retraction
         // before telling the subscribing client that the sink is gone. The returned notify
         // lets statements that caused the retirement also wait before sending their response.
-        // The wait must not happen on the loop, since that would block every other session
-        // on the group-commit oracle round trip.
+        // The wait must not happen on the coordinator loop, since that would block every
+        // other session on the group-commit oracle round trip.
         let (done_tx, done_rx) = tokio::sync::oneshot::channel();
         task::spawn(|| "retire_compute_sinks", async move {
             for (sink, write_notify, reason) in to_retire {
@@ -745,43 +890,6 @@ impl Coordinator {
         }))
     }
 
-    /// Drops all pending replicas for a set of clusters
-    /// that are undergoing reconfiguration.
-    pub async fn drop_reconfiguration_replicas(
-        &mut self,
-        cluster_ids: BTreeSet<ClusterId>,
-    ) -> Result<(), AdapterError> {
-        let pending_cluster_ops: Vec<Op> = cluster_ids
-            .iter()
-            .map(|c| {
-                self.catalog()
-                    .get_cluster(c.clone())
-                    .replicas()
-                    .filter_map(|r| match r.config.location {
-                        ReplicaLocation::Managed(ref l) if l.pending => {
-                            Some(DropObjectInfo::ClusterReplica((
-                                c.clone(),
-                                r.replica_id,
-                                ReplicaCreateDropReason::Manual,
-                            )))
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<DropObjectInfo>>()
-            })
-            .filter_map(|pending_replica_drop_ops_by_cluster| {
-                match pending_replica_drop_ops_by_cluster.len() {
-                    0 => None,
-                    _ => Some(Op::DropObjects(pending_replica_drop_ops_by_cluster)),
-                }
-            })
-            .collect();
-        if !pending_cluster_ops.is_empty() {
-            self.catalog_transact(None, pending_cluster_ops).await?;
-        }
-        Ok(())
-    }
-
     /// Cancels all active compute sinks for the identified connection.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn cancel_compute_sinks_for_conn(
@@ -790,15 +898,6 @@ impl Coordinator {
     ) -> BuiltinTableAppendCompletion {
         self.retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Canceled)
             .await
-    }
-
-    /// Cancels all active cluster reconfigurations sinks for the identified connection.
-    #[mz_ore::instrument(level = "debug")]
-    pub(crate) async fn cancel_cluster_reconfigurations_for_conn(
-        &mut self,
-        conn_id: &ConnectionId,
-    ) {
-        self.retire_cluster_reconfigurations_for_conn(conn_id).await
     }
 
     /// Retires all active compute sinks for the identified connection with the
@@ -818,30 +917,6 @@ impl Coordinator {
             .map(|sink_id| (*sink_id, reason.clone()))
             .collect();
         self.retire_compute_sinks(drop_sinks).await
-    }
-
-    /// Cleans pending cluster reconfiguraiotns for the identified connection
-    #[mz_ore::instrument(level = "debug")]
-    pub(crate) async fn retire_cluster_reconfigurations_for_conn(
-        &mut self,
-        conn_id: &ConnectionId,
-    ) {
-        let reconfiguring_clusters = self
-            .active_conns
-            .get(conn_id)
-            .expect("must exist for active session")
-            .pending_cluster_alters
-            .clone();
-        // try to drop reconfig replicas
-        self.drop_reconfiguration_replicas(reconfiguring_clusters)
-            .await
-            .unwrap_or_terminate("cannot fail to drop reconfiguration replicas");
-
-        self.active_conns
-            .get_mut(conn_id)
-            .expect("must exist for active session")
-            .pending_cluster_alters
-            .clear();
     }
 
     pub(crate) fn drop_storage_sinks(&mut self, sink_gids: Vec<GlobalId>) {
@@ -1151,15 +1226,7 @@ impl Coordinator {
                     if cluster_id.is_user() {
                         *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) += 1;
                         if let ReplicaLocation::Managed(location) = &config.location {
-                            let replica_allocation = self
-                                .catalog()
-                                .cluster_replica_sizes()
-                                .0
-                                .get(location.size_for_billing())
-                                .expect(
-                                    "location size is validated against the cluster replica sizes",
-                                );
-                            new_credit_consumption_rate += replica_allocation.credits_per_hour
+                            new_credit_consumption_rate += self.replica_credits_per_hour(location);
                         }
                     }
                 }
@@ -1203,7 +1270,8 @@ impl Coordinator {
                         | CatalogItem::View(_)
                         | CatalogItem::Index(_)
                         | CatalogItem::Type(_)
-                        | CatalogItem::Func(_) => {}
+                        | CatalogItem::Func(_)
+                        | CatalogItem::MetricSink(_) => {}
                     }
                 }
                 Op::DropObjects(drop_object_infos) => {
@@ -1221,16 +1289,8 @@ impl Coordinator {
                                     if let ReplicaLocation::Managed(location) =
                                         &cluster.config.location
                                     {
-                                        let replica_allocation = self
-                                            .catalog()
-                                            .cluster_replica_sizes()
-                                            .0
-                                            .get(location.size_for_billing())
-                                            .expect(
-                                                "location size is validated against the cluster replica sizes",
-                                            );
                                         new_credit_consumption_rate -=
-                                            replica_allocation.credits_per_hour
+                                            self.replica_credits_per_hour(location);
                                     }
                                 }
                             }
@@ -1282,7 +1342,8 @@ impl Coordinator {
                                     | CatalogItem::View(_)
                                     | CatalogItem::Index(_)
                                     | CatalogItem::Type(_)
-                                    | CatalogItem::Func(_) => {}
+                                    | CatalogItem::Func(_)
+                                    | CatalogItem::MetricSink(_) => {}
                                 }
                             }
                         }
@@ -1312,7 +1373,8 @@ impl Coordinator {
                     | CatalogItem::View(_)
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
-                    | CatalogItem::Func(_) => {}
+                    | CatalogItem::Func(_)
+                    | CatalogItem::MetricSink(_) => {}
                 },
                 Op::AlterRole { .. }
                 | Op::AlterRetainHistory { .. }
@@ -1330,7 +1392,6 @@ impl Coordinator {
                 | Op::UpdateOwner { .. }
                 | Op::RevokeRole { .. }
                 | Op::UpdateClusterConfig { .. }
-                | Op::UpdateClusterReplicaConfig { .. }
                 | Op::UpdateSourceReferences { .. }
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }

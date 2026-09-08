@@ -1,3 +1,8 @@
 edition = "2024"
+# Formatting style is repo-wide, independent of the edition a crate parses as.
+# The `src/*/fuzz` crates are still edition 2021, and `bin/fmt` overrides
+# `edition` per package so they parse at all. Without this pin they would also
+# fall back to the 2021 *style*, which sorts imports differently.
+style_edition = "2024"
 tab_spaces = 4
 merge_derives = false

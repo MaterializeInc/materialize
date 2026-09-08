@@ -4,7 +4,7 @@ columns:
 rows:
   - "Tier": "**Source cluster(s)**"
     Description: |
-      **A dedicated cluster(s)** for [sources](/concepts/sources/).
+      **A dedicated cluster(s)** for [sources](/fundamentals/concepts/sources/).
 
       {{% include-from-yaml data="best_practices_details" name="architecture-upsert-source" %}}
 
@@ -12,7 +12,7 @@ rows:
     Description: |
       **A dedicated cluster** for both compute/transformation and serving queries:
 
-      - [Views](/concepts/views/#views) that define the
+      - [Views](/fundamentals/concepts/views/#views) that define the
         transformations.
 
       - Indexes on views to maintain up-to-date results in memory and serve
@@ -21,4 +21,4 @@ rows:
       With a two-tier architecture, compute and queries compete for the same
       cluster resources.
 
-      {{< include-md file="shared-content/shared-cluster-indexed-view-tip.md" >}}
+      {{< include-md file="content/headless/shared-cluster-indexed-view-tip.md" >}}

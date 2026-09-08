@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/float32.rs
-revision: abff67db9b
+revision: 94ee2d5448
 ---
 
 # mz-expr::scalar::func::impls::float32

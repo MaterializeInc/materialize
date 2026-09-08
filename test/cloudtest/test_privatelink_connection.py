@@ -10,11 +10,9 @@
 import json
 import random
 import subprocess
-import time
 from textwrap import dedent
 
 import pytest
-import requests
 from pg8000.dbapi import DatabaseError, ProgrammingError
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
@@ -70,15 +68,16 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
 
     exists(resource=f"vpcendpoint/connection-{aws_connection_id}")
 
-    # Less flaky if we sleep before checking the status
-    time.sleep(5)
-
-    assert (
-        "unknown"
-        == mz.environmentd.sql_query(
+    # The status history row only appears once the connection's status is first
+    # reported. No environment-controller runs here, so it stays "unknown".
+    def check_status_unknown() -> None:
+        rows = mz.environmentd.sql_query(
             f"SELECT status FROM mz_internal.mz_aws_privatelink_connection_status_history WHERE connection_id = '{aws_connection_id}'"
-        )[0][0]
-    )
+        )
+        assert len(rows) > 0, "no status history row yet"
+        assert rows[0][0] == "unknown", f"unexpected status: {rows[0][0]}"
+
+    retry(f=check_status_unknown, max_attempts=30, exception_types=[AssertionError])
 
     # TODO: validate the contents of the VPC endpoint resource, rather than just
     # its existence.
@@ -296,6 +295,7 @@ def test_privatelink_e2e_connectivity(mz: MaterializeApplication) -> None:
 
     try:
         wait(condition="condition=Available", resource="deployment/toxiproxy-e2e")
+        toxiproxy_service.wait_for_admin_ready()
 
         # Step 2: Enable PrivateLink connections and create connection
         mz.environmentd.sql(
@@ -339,20 +339,11 @@ def test_privatelink_e2e_connectivity(mz: MaterializeApplication) -> None:
         privatelink_svc.create()
 
         # Step 5: Configure Toxiproxy to proxy to Redpanda
-        admin_port = toxiproxy_service.node_port("admin")
-        requests.post(
-            f"http://localhost:{admin_port}/proxies",
-            json={
-                "name": "kafka",
-                "listen": "0.0.0.0:9092",
-                "upstream": f"redpanda.{namespace}.svc.cluster.local:9092",
-                "enabled": True,
-            },
-        )
+        redpanda_addr = f"redpanda.{namespace}.svc.cluster.local:9092"
+        toxiproxy_service.create_proxy(name="kafka", upstream=redpanda_addr)
 
         # Step 6: Create Kafka connection with a static broker (for bootstrap)
         # and a catch-all MATCHING rule that routes through the PrivateLink endpoint.
-        redpanda_addr = f"redpanda.{namespace}.svc.cluster.local:9092"
         mz.environmentd.sql(dedent(f"""\
                 CREATE CONNECTION kafka_via_privatelink_e2e TO KAFKA (
                     BROKERS (
@@ -405,14 +396,8 @@ def test_privatelink_e2e_connectivity(mz: MaterializeApplication) -> None:
         )
 
         # Step 8: Disable the proxy to test error handling
-        requests.post(
-            f"http://localhost:{admin_port}/proxies/kafka",
-            json={
-                "name": "kafka",
-                "listen": "0.0.0.0:9092",
-                "upstream": f"redpanda.{namespace}.svc.cluster.local:9092",
-                "enabled": False,
-            },
+        toxiproxy_service.set_proxy_enabled(
+            name="kafka", upstream=redpanda_addr, enabled=False
         )
 
         # Wait for the source to detect connection loss
@@ -432,14 +417,8 @@ def test_privatelink_e2e_connectivity(mz: MaterializeApplication) -> None:
         )
 
         # Step 9: Re-enable the proxy and verify recovery
-        requests.post(
-            f"http://localhost:{admin_port}/proxies/kafka",
-            json={
-                "name": "kafka",
-                "listen": "0.0.0.0:9092",
-                "upstream": f"redpanda.{namespace}.svc.cluster.local:9092",
-                "enabled": True,
-            },
+        toxiproxy_service.set_proxy_enabled(
+            name="kafka", upstream=redpanda_addr, enabled=True
         )
 
         mz.testdrive.run(
@@ -601,7 +580,6 @@ def test_privatelink_pattern_matching(mz: MaterializeApplication) -> None:
 
         mz.kubectl("rollout", "status", "deployment/redpanda", "--timeout=120s")
         wait(condition="condition=Available", resource="deployment/redpanda")
-        time.sleep(5)
 
         # Step 4: Deploy two toxiproxy instances
         toxiproxy_az_deployment = ToxiproxyDeployment(namespace, name=f"toxiproxy-{az}")
@@ -620,30 +598,13 @@ def test_privatelink_pattern_matching(mz: MaterializeApplication) -> None:
 
         wait(condition="condition=Available", resource=f"deployment/toxiproxy-{az}")
         wait(condition="condition=Available", resource="deployment/toxiproxy-default")
-        time.sleep(5)
+        toxiproxy_az_service.wait_for_admin_ready()
+        toxiproxy_default_service.wait_for_admin_ready()
 
         # Configure both toxiproxies to route to Redpanda (both ENABLED initially)
-        az_admin_port = toxiproxy_az_service.node_port("admin")
-        requests.post(
-            f"http://localhost:{az_admin_port}/proxies",
-            json={
-                "name": "kafka",
-                "listen": "0.0.0.0:9092",
-                "upstream": f"redpanda.{namespace}.svc.cluster.local:9092",
-                "enabled": True,
-            },
-        )
-
-        default_admin_port = toxiproxy_default_service.node_port("admin")
-        requests.post(
-            f"http://localhost:{default_admin_port}/proxies",
-            json={
-                "name": "kafka",
-                "listen": "0.0.0.0:9092",
-                "upstream": f"redpanda.{namespace}.svc.cluster.local:9092",
-                "enabled": True,
-            },
-        )
+        redpanda_upstream = f"redpanda.{namespace}.svc.cluster.local:9092"
+        toxiproxy_az_service.create_proxy(name="kafka", upstream=redpanda_upstream)
+        toxiproxy_default_service.create_proxy(name="kafka", upstream=redpanda_upstream)
 
         # Step 5: Create PrivateLink connection
         mz.environmentd.sql(
@@ -737,24 +698,31 @@ def test_privatelink_pattern_matching(mz: MaterializeApplication) -> None:
                 ENVELOPE NONE
                 """))
 
-        # Step 9: Wait for bootstrap + initial metadata fetch to complete,
-        # then DISABLE toxiproxy-default. After this, the only working path
+        # Step 9: Push a row through while both proxies are up. Arriving data
+        # proves bootstrap and the initial metadata fetch are done, so
+        # disabling the default endpoint next tests AZ routing rather than
+        # racing against bootstrap.
+        mz.testdrive.run(
+            input=dedent(f"""\
+                $ kafka-ingest topic={topic_base} format=bytes
+                bootstrap_done
+
+                > SELECT COUNT(*) FROM privatelink_pattern_tbl
+                1
+                """),
+            no_reset=True,
+            seed=seed,
+        )
+
+        # Step 10: DISABLE toxiproxy-default. After this, the only working path
         # to Redpanda is through toxiproxy-use1-az1 (the AZ-specific proxy).
         # If pattern matching fails, traffic falls back to the default endpoint
         # which now hits a dead proxy -> source stalls.
-        time.sleep(10)
-
-        requests.post(
-            f"http://localhost:{default_admin_port}/proxies/kafka",
-            json={
-                "name": "kafka",
-                "listen": "0.0.0.0:9092",
-                "upstream": f"redpanda.{namespace}.svc.cluster.local:9092",
-                "enabled": False,
-            },
+        toxiproxy_default_service.set_proxy_enabled(
+            name="kafka", upstream=redpanda_upstream, enabled=False
         )
 
-        # Step 10: Verify data flows through the AZ-specific path.
+        # Step 11: Verify data still flows, now only via the AZ-specific path.
         # This only succeeds if resolve_broker_addr matched '*use1-az1*'
         # against the advertised address 'redpanda-use1-az1.default...:9092'
         # and routed through the AZ endpoint instead of the (now dead) default.
@@ -764,7 +732,7 @@ def test_privatelink_pattern_matching(mz: MaterializeApplication) -> None:
                 pattern_matching_works
 
                 > SELECT COUNT(*) FROM privatelink_pattern_tbl
-                1
+                2
                 """),
             no_reset=True,
             seed=seed,

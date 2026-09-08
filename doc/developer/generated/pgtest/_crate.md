@@ -1,6 +1,6 @@
 ---
 source: src/pgtest/src/lib.rs
-revision: 0c6fd21617
+revision: f9ffa16cba
 ---
 
 # mz-pgtest
@@ -18,13 +18,13 @@ Provides a datadriven test framework for the PostgreSQL wire protocol, used to s
 * `PgTest` — the public harness managing a named pool of `PgConn` connections; exposes `send` and `until` methods used by the test runner.
 * `walk` / `run_test` — integrate with the `datadriven` framework; `walk` recurses a directory of `.pt` files and `run_test` dispatches `send` and `until` directives.
 * Frontend message types (`Query`, `Parse`, `Bind`, `Execute`, `Describe`) — JSON-deserializable structs representing client messages that `send` serialises onto the wire.
-* Backend message types (`ReadyForQuery`, `RowDescription`, `DataRow`, `CommandComplete`, `ErrorResponse`, etc.) — JSON-serialisable structs used to format received server messages as human-readable test output.
+* Backend message types (`ReadyForQuery`, `RowDescription`, `DataRow`, `CommandComplete`, `ErrorResponse`, `ParameterStatus`, etc.) — JSON-serialisable structs used to format received server messages as human-readable test output.
 
 ## Directives
 
 Test files use two directives:
 * `send` — encodes and transmits one or more frontend messages.
-* `until` — accumulates backend messages until a named message type is received; supports `conn=`, `err_field_typs=`, `no_error_fields`, and `ignore=` arguments.
+* `until` — accumulates backend messages until a named message type is received; supports `conn=`, `err_field_typs=`, `no_error_fields`, `ignore=`, and `parameter_status=` arguments. `ParameterStatus` messages are skipped unless the parameter name appears in the `parameter_status=` set.
 
 ## Dependencies
 

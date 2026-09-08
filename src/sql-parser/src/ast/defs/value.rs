@@ -249,8 +249,9 @@ impl FromStr for DateTimeField {
 pub struct IntervalValue {
     /// The raw `[value]` that was present in `INTERVAL '[value]'`
     pub value: String,
-    /// The most significant DateTimeField to propagate to Interval in
-    /// compute_interval.
+    /// The high end of the range qualifier, e.g. HOUR in `INTERVAL '...'
+    /// HOUR TO MINUTE`. Only disambiguates parsing of ambiguous time-like
+    /// parts of `value`. Fields above it are kept, as in PostgreSQL.
     pub precision_high: DateTimeField,
     /// The least significant DateTimeField to propagate to Interval in
     /// compute_interval.

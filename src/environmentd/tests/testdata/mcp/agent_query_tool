@@ -27,14 +27,14 @@ mcp-agent
 {"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SELECT 1 AS val"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":10,"result":{"content":[{"type":"text","text":"[\n  [\n    \"1\"\n  ]\n]"}],"isError":false}}
+{"jsonrpc":"2.0","id":10,"result":{"content":[{"type":"text","text":"[\n  [\"1\"]\n]"}],"isError":false}}
 
 # SHOW statement should work.
 mcp-agent
 {"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SHOW DATABASES"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":11,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\",\n    \"\"\n  ]\n]"}],"isError":false}}
+{"jsonrpc":"2.0","id":11,"result":{"content":[{"type":"text","text":"[\n  [\"materialize\",\"\"]\n]"}],"isError":false}}
 
 # =============================================================================
 # query tool - DDL rejected

@@ -13,6 +13,7 @@ rules:
   dangerous-triggers:
     ignore:
       - cla.yml
+      - linear_links.yml
       - slack_notify_design_doc.yml
       - slack_notify_labeled.yml
       - slack_notify_qa_risky.yml

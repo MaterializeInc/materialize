@@ -1,6 +1,6 @@
 ---
 source: src/catalog-protos/src/audit_log.rs
-revision: 8598d82c1c
+revision: 39dcae2fba
 ---
 
 # mz-catalog-protos::audit_log

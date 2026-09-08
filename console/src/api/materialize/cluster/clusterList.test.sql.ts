@@ -30,6 +30,7 @@ describe("buildClusterSubscribe", () => {
     expect(result.rows.find((r) => r.name == "quickstart")).toEqual({
       id: expect.any(String),
       isOwner: true,
+      ownerId: expect.any(String),
       name: "quickstart",
       disk: true,
       managed: true,
@@ -66,6 +67,7 @@ describe("buildClusterSubscribe", () => {
     expect(result.rows).toEqual([
       {
         id: expect.any(String),
+        ownerId: expect.any(String),
         name: "quickstart",
         disk: true,
         managed: true,

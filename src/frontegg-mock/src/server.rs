@@ -298,7 +298,7 @@ impl FronteggMockServer {
     }
 
     pub fn auth_api_token_url(&self) -> String {
-        format!("{}{}", &self.base_url, AUTH_API_TOKEN_PATH)
+        format!("{}{}", self.base_url, AUTH_API_TOKEN_PATH)
     }
 }
 

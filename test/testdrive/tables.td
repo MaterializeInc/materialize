@@ -266,8 +266,11 @@ name    type   cluster   comment
 ! INSERT INTO view VALUES (1)
 contains:cannot insert into view 'materialize.public.view'
 
-! INSERT INTO mz_kafka_sinks VALUES ('bad', 'bad')
-contains:cannot insert into system table 'mz_catalog.mz_kafka_sinks'
+# Pick a target that will stay a system table: the builtin schema migration
+# validator refuses to convert mz_storage_usage_by_shard, so this keeps
+# testing the system-table path rather than some other error.
+! INSERT INTO mz_internal.mz_storage_usage_by_shard VALUES (1, 'bad', 1, now())
+contains:cannot insert into system table 'mz_internal.mz_storage_usage_by_shard'
 
 > CREATE TABLE j (time TIMESTAMP NOT NULL);
 

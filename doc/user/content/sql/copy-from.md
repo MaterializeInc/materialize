@@ -114,6 +114,14 @@ When importing parquet files, entire row groups are held in memory at once, so e
 Materialize instance has enough available memory to accomodate your parquet files. If you are
 encountering memory issues, and are unable to reduce the sizes of your row groups, please [contact support](/support/).
 
+### Atomicity
+
+`COPY FROM` is atomic. When you copy from a location that contains multiple
+files, Materialize stages the data from every file and commits it in a single
+transaction. If any part of the operation fails, for example a file cannot be
+read or a row cannot be parsed, the entire `COPY FROM` fails and no data is
+committed. You are never left with some files ingested and others missing.
+
 ## Examples
 
 ### From STDIN

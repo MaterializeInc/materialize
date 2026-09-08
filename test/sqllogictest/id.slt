@@ -69,6 +69,18 @@ CREATE TABLE bad_type (x [u100 AS materialize.public.foo])
 statement error specifying a version for a type reference is not supported
 CREATE TABLE bad_type (x [u1 AS materialize.public.x VERSION 5])
 
+# Regression test for SQL-300: the same reference in expression position, where
+# a cast reaches type resolution through the expression fold rather than a
+# column definition.
+statement error specifying a version for a type reference is not supported
+SELECT '1'::[u1 AS materialize.public.x VERSION 5]
+
+statement error specifying a version for a type reference is not supported
+SELECT '{1}'::[u1 AS materialize.public.x VERSION 5] list
+
+statement error specifying a version for a type reference is not supported
+SELECT '1'::[u1 AS materialize.public.x VERSION 5][]
+
 statement ok
 CREATE VIEW foo AS SELECT * FROM x
 

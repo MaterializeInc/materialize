@@ -159,6 +159,7 @@ const LargestReplicaLoader = (props: LargestMaintainedQueriesProps) => {
 };
 
 const LargestMaintainedQueriesInner = ({
+  clusterId,
   clusterName,
   replicaName,
   replicaHeapLimit,
@@ -171,6 +172,7 @@ const LargestMaintainedQueriesInner = ({
   const workflowGraphPath = useBuildWorkflowGraphPath();
 
   const { data: largestMaintainedQueries } = useLargestMaintainedQueries({
+    clusterId,
     clusterName,
     replicaName,
     replicaHeapLimit,
@@ -220,7 +222,7 @@ const LargestMaintainedQueriesInner = ({
             <Th>Type</Th>
             <Th>
               <HStack>
-                <Text>Memory Utilization</Text>
+                <Text>Heap Utilization</Text>
                 <Tooltip
                   display="inline"
                   label="Includes intermediate state required to efficiently maintain the object."

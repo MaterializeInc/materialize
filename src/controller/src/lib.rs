@@ -37,7 +37,7 @@ use mz_compute_client::controller::{
     ComputeController, ComputeControllerResponse, PeekNotification,
 };
 use mz_compute_client::protocol::response::SubscribeBatch;
-use mz_controller_types::WatchSetId;
+use mz_controller_types::{ClusterId, WatchSetId};
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
@@ -203,6 +203,12 @@ pub struct Controller {
     /// Dynamic system configuration.
     dyncfg: ConfigSet,
 
+    /// The replica-local scoped overrides of [`Self::dyncfg`], by replica.
+    ///
+    /// Sparse: only replicas LaunchDarkly targets to a replica-specific value
+    /// have an entry. See [`Self::update_replica_dyncfg_overrides`].
+    replica_dyncfg_overrides: BTreeMap<ReplicaId, ConfigUpdates>,
+
     /// Locator for HTTP addresses of cluster replicas.
     replica_http_locator: Arc<ReplicaHttpLocator>,
 }
@@ -211,6 +217,36 @@ impl Controller {
     /// Update the controller configuration.
     pub fn update_configuration(&mut self, updates: ConfigUpdates) {
         updates.apply(&self.dyncfg);
+    }
+
+    /// Replaces the per-replica dyncfg overrides of the replica-local scoped
+    /// system parameters, in this controller and in the compute and storage
+    /// controllers beneath it.
+    ///
+    /// Replicas absent from `overrides` have their overrides cleared, so a
+    /// replica that no longer has one reverts to the environment-wide
+    /// configuration. Callers should follow with a configuration push so
+    /// running replicas observe the new values.
+    ///
+    /// The three layers realize a [`ParameterScope::Replica`] config in
+    /// different places, which is why all three are fed from one call. The
+    /// compute and storage controllers specialize the configuration they push
+    /// to a running replica. This controller resolves the overrides that are
+    /// baked into a replica's process configuration when it is provisioned.
+    ///
+    /// [`ParameterScope::Replica`]: mz_dyncfg::ParameterScope::Replica
+    pub fn update_replica_dyncfg_overrides(
+        &mut self,
+        overrides: BTreeMap<ClusterId, BTreeMap<ReplicaId, ConfigUpdates>>,
+    ) {
+        self.replica_dyncfg_overrides = overrides
+            .values()
+            .flat_map(|replicas| replicas.iter())
+            .map(|(replica_id, updates)| (*replica_id, updates.clone()))
+            .collect();
+        self.compute
+            .update_replica_dyncfg_overrides(overrides.clone());
+        self.storage.update_replica_dyncfg_overrides(overrides);
     }
 
     /// Start sinking the compute controller's introspection data into storage.
@@ -266,6 +302,7 @@ impl Controller {
             watch_set_id_gen: _,
             immediate_watch_sets,
             dyncfg: _,
+            replica_dyncfg_overrides: _,
             replica_http_locator: _,
         } = self;
 
@@ -717,6 +754,7 @@ impl Controller {
             watch_set_id_gen: Gen::default(),
             immediate_watch_sets: Vec::new(),
             dyncfg: mz_dyncfgs::all_dyncfgs(),
+            replica_dyncfg_overrides: BTreeMap::new(),
             replica_http_locator: config.replica_http_locator,
         };
 

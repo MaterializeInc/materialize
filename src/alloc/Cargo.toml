@@ -26,9 +26,9 @@ default = []
 # Whether to use jemalloc instead of the system allocator.
 jemalloc = ["tikv-jemallocator", "mz-prof", "mz-prof-http/jemalloc"]
 
-[package.metadata.cargo-udeps.ignore]
+[package.metadata.unused-deps]
 # The only reason we depend on mz-prof-http from this package is so that we can
 # force its `jemalloc` option to be enabled when this package's is, which makes
 # all the Materialize binaries correctly serve heap profiling tools at the
 # `/prof` endpoints.
-normal = ["mz-prof-http"]
+ignore = ["mz-prof-http"]

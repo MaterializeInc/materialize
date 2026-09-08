@@ -13,12 +13,9 @@ workspace = true
 anyhow.workspace = true
 mz-ore = { path = "../ore", default-features = false }
 openssl.workspace = true
-openssl-sys.workspace = true
 postgres-openssl.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
 tokio-postgres.workspace = true
-tracing.workspace = true
 
 [dev-dependencies]
 mz-ore = { path = "../ore", features = ["test"] }

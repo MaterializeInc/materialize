@@ -98,8 +98,7 @@ where
         for (i, item) in object_list.items.iter().enumerate() {
             let file_name = file_path.join(format!(
                 "{}.yaml",
-                &item
-                    .meta()
+                item.meta()
                     .name
                     .clone()
                     .unwrap_or_else(|| format!("unknown_{}", i))

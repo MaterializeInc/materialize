@@ -10,7 +10,6 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow.workspace = true
 chrono.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -18,7 +17,6 @@ url.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 mz-frontegg-client = { path = "../frontegg-client" }
-mz-frontegg-auth = { path = "../frontegg-auth" }
 
 [features]
 default = []

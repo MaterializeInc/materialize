@@ -31,6 +31,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{IdentError, UnresolvedItemName};
 use mz_sql_parser::parser::{ParserError, ParserStatementError};
 use mz_sql_server_util::SqlServerError;
+use mz_storage_types::connections::InvalidAwsPrivatelinkServiceName;
 use mz_storage_types::sources::ExternalReferenceResolutionError;
 
 use crate::catalog::{
@@ -237,6 +238,7 @@ pub enum PlanError {
         name: String,
         supported_azs: BTreeSet<String>,
     },
+    InvalidPrivatelinkServiceName(InvalidAwsPrivatelinkServiceName),
     DuplicatePrivatelinkAvailabilityZone {
         duplicate_azs: BTreeSet<String>,
     },
@@ -310,6 +312,7 @@ pub enum PlanError {
     NetworkPolicyInUse,
     /// Expected a constant expression that evaluates without an error to a non-null value.
     ConstantExpressionSimplificationFailed(String),
+    InvalidLimit(String),
     InvalidOffset(String),
     /// The named cursor does not exist.
     UnknownCursor(String),
@@ -456,6 +459,7 @@ impl PlanError {
                 let supported_azs_str = supported_azs.iter().join("\n  ");
                 Some(format!("Did you supply an availability zone name instead of an ID? Known availability zone IDs:\n  {}", supported_azs_str))
             }
+            Self::InvalidPrivatelinkServiceName(err) => Some(err.hint()),
             Self::DuplicatePrivatelinkAvailabilityZone { duplicate_azs, ..} => {
                 let duplicate_azs  = duplicate_azs.iter().join("\n  ");
                 Some(format!("Duplicated availability zones:\n  {}", duplicate_azs))
@@ -761,6 +765,7 @@ impl fmt::Display for PlanError {
                 })
             },
             Self::InvalidPrivatelinkAvailabilityZone { name, ..} => write!(f, "invalid AWS PrivateLink availability zone {}", name.quoted()),
+            Self::InvalidPrivatelinkServiceName(err) => err.fmt(f),
             Self::DuplicatePrivatelinkAvailabilityZone {..} =>   write!(f, "connection cannot contain duplicate availability zones"),
             Self::InvalidSchemaName => write!(f, "no valid schema selected"),
             Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
@@ -876,6 +881,7 @@ impl fmt::Display for PlanError {
                 write!(f, "TIMEOUT=<duration> option is required for ALTER CLUSTER ... WITH (WAIT UNTIL READY ( ... ))")
             },
             Self::ConstantExpressionSimplificationFailed(e) => write!(f, "{}", e),
+            Self::InvalidLimit(e) => write!(f, "Invalid LIMIT clause: {}", e),
             Self::InvalidOffset(e) => write!(f, "Invalid OFFSET clause: {}", e),
             Self::UnknownCursor(name) => {
                 write!(f, "cursor {} does not exist", name.quoted())

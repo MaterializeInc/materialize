@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/treat_as_equal.rs
-revision: 61dbb85ca1
+revision: 94ee2d5448
 ---
 
 # mz-ore::treat_as_equal

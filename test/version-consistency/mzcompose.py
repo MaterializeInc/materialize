@@ -31,6 +31,7 @@ from materialize.output_consistency.execution.query_output_mode import (
 from materialize.output_consistency.output_consistency_test import (
     upload_output_consistency_results_to_test_analytics,
 )
+from materialize.ui import UIError
 from materialize.version_ancestor_overrides import (
     ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS,
 )
@@ -87,6 +88,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     port_mz_default_this, port_mz_system_this = 6875, 6877
     port_mz_default_other, port_mz_system_other = 16875, 16877
     tag_mz_other = resolve_tag(args.other_tag)
+
+    if tag_mz_other is None:
+        raise UIError(
+            f"Could not resolve --other-tag={args.other_tag} to an image tag, "
+            f"no version to compare against"
+        )
 
     print(f"Using {tag_mz_other} as tag for other mz version")
 

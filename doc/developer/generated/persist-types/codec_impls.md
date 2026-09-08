@@ -1,6 +1,6 @@
 ---
 source: src/persist-types/src/codec_impls.rs
-revision: 901d0526a1
+revision: 1c250c3597
 ---
 
 # persist-types::codec_impls

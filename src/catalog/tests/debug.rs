@@ -369,6 +369,7 @@ async fn test_debug_edit_fencing(state_builder: TestCatalogStateBuilder) {
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
+    let _ = state.sync_to_current_updates().await.unwrap();
 
     let mut debug_state = state_builder
         .clone()

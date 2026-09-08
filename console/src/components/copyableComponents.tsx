@@ -97,6 +97,7 @@ export const CopyButton: React.FC<
 
 export interface CopyableBoxProps extends BoxProps {
   contents: string;
+  obfuscatedContents?: string;
   variant?: "default" | "compact";
   maxHeight?: string;
   wrap?: boolean;
@@ -105,6 +106,7 @@ export interface CopyableBoxProps extends BoxProps {
 /** Copyable component with a bg box but no line breaks  */
 export const CopyableBox: React.FC<CopyableBoxProps> = ({
   contents,
+  obfuscatedContents,
   variant = "default",
   maxHeight,
   wrap,
@@ -112,9 +114,10 @@ export const CopyableBox: React.FC<CopyableBoxProps> = ({
   ...props
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
+  const [showContents, setShowContents] = useState(false);
   return (
     <HStack
-      alignItems="center"
+      alignItems={wrap ? "flex-start" : "center"}
       spacing={0}
       borderRadius="lg"
       bg={colors.background.secondary}
@@ -140,13 +143,23 @@ export const CopyableBox: React.FC<CopyableBoxProps> = ({
           overflow: "auto",
         })}
       >
-        {props.children ?? contents}
+        {props.children ??
+          (obfuscatedContents && !showContents ? obfuscatedContents : contents)}
       </Box>
+      {obfuscatedContents && (
+        <IconButton
+          variant="transparent"
+          size={variant === "compact" ? "sm" : "md"}
+          aria-label="visibility"
+          icon={showContents ? <EyeOpenIcon /> : <EyeClosedIcon />}
+          onClick={() => setShowContents(!showContents)}
+        />
+      )}
       <CopyButton
         fontSize="md"
         contents={contents}
         size={variant === "compact" ? "sm" : "md"}
-        minH="full"
+        minH={wrap ? undefined : "full"}
         onCopy={onCopy}
       />
     </HStack>

@@ -41,7 +41,7 @@ echo "Output directory: $OUTPUT_DIR"
 # Build documentation with skill output format
 cd doc/user
 hugo --config config.toml,config.skill.toml \
-     --disableKinds sitemap,robotsTXT,taxonomy \
+     --disableKinds 404,sitemap,robotsTXT,taxonomy \
      --destination "../../$OUTPUT_DIR" \
      --cleanDestinationDir \
      --gc \

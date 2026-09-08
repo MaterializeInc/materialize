@@ -9,9 +9,6 @@
 
 # Bounded staleness isolation — happy-path coverage.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_bounded_staleness_isolation = true
-
 > CREATE TABLE bs_t (a int);
 > INSERT INTO bs_t VALUES (1), (2), (3);
 

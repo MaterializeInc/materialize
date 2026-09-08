@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/column_pager/policy.rs
-revision: bfa6499c3b
+revision: ee5a16d9e4
 ---
 
 # timely-util::column_pager::policy

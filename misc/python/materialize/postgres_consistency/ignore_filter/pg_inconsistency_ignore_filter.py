@@ -35,7 +35,6 @@ from materialize.output_consistency.ignore_filter.expression_matchers import (
     matches_op_by_any_pattern,
     matches_op_by_pattern,
     matches_x_and_y,
-    matches_x_or_y,
 )
 from materialize.output_consistency.ignore_filter.ignore_verdict import (
     IgnoreVerdict,
@@ -267,7 +266,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         if db_function.function_name_in_lower_case == "replace":
             # replace is not working properly with empty text; however, it is not possible to reliably determine if an
             # expression is an empty text, we therefore need to exclude the function completely
-            return YesIgnore("database-issues#6619: replace")
+            return YesIgnore("DB-189: replace")
 
         if db_function.function_name_in_lower_case == "regexp_replace":
             if expression.args[2].has_any_characteristic(
@@ -991,17 +990,6 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             True,
         ):
             return YesIgnore("database-issues#6623: mod")
-
-        if query_template.matches_specific_select_or_filter_expression(
-            col_index,
-            partial(
-                matches_x_or_y,
-                x=partial(matches_fun_by_name, function_name_in_lower_case="date_part"),
-                y=partial(matches_op_by_pattern, pattern="EXTRACT($ FROM $)"),
-            ),
-            True,
-        ):
-            return YesIgnore("database-issues#7089")
 
         if query_template.matches_specific_select_or_filter_expression(
             col_index, matches_math_op_with_large_or_tiny_val, True

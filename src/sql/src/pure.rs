@@ -60,7 +60,8 @@ use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
 use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
 use mz_storage_types::sources::{
-    GenericSourceConnection, SourceDesc, SourceExportStatementDetails, SqlServerSourceExtras,
+    GenericSourceConnection, SourceConnection, SourceDesc, SourceExportStatementDetails,
+    SqlServerSourceExtras,
 };
 use prost::Message;
 use protobuf_native::MessageLite;
@@ -271,6 +272,55 @@ pub enum PurifiedExportDetails {
         table: Option<RelationDesc>,
         output: LoadGeneratorOutput,
     },
+}
+
+/// The existing source a statement drives, and how the statement uses it.
+///
+/// Resolved from the statement rather than from `ResolvedIds`: `ALTER SOURCE`
+/// carries its target as an `UnresolvedItemName` that name resolution never
+/// records.
+#[derive(Debug, Clone, Copy)]
+pub enum StatementSource {
+    Altered(CatalogItemId),
+    Read(CatalogItemId),
+}
+
+impl StatementSource {
+    pub fn id(&self) -> CatalogItemId {
+        match self {
+            StatementSource::Altered(id) | StatementSource::Read(id) => *id,
+        }
+    }
+}
+
+/// Resolves the existing source that `stmt` drives, mirroring how the
+/// purification paths below resolve it themselves.
+///
+/// `None` means the statement drives no such source: it names its connection
+/// outright (`CREATE SOURCE`, `CREATE SINK`), or the name does not resolve to a
+/// source. Purification reports the latter itself, and bails on it before
+/// opening any connection. A [`Statement`] variant that instead reaches
+/// upstream through an existing catalog item needs an arm here, or callers see
+/// no source at all.
+pub fn statement_source(
+    catalog: &impl SessionCatalog,
+    stmt: &Statement<Aug>,
+) -> Option<StatementSource> {
+    let scx = StatementContext::new(None, catalog);
+    match stmt {
+        Statement::AlterSource(stmt) => {
+            let item = scx
+                .resolve_item(RawItemName::Name(stmt.source_name.clone()))
+                .ok()?;
+            (item.item_type() == CatalogItemType::Source)
+                .then(|| StatementSource::Altered(item.id()))
+        }
+        Statement::CreateTableFromSource(stmt) => {
+            let item = scx.get_item_by_resolved_name(&stmt.source).ok()?;
+            (item.item_type() == CatalogItemType::Source).then(|| StatementSource::Read(item.id()))
+        }
+        _ => None,
+    }
 }
 
 /// Purifies a statement, removing any dependencies on external state.
@@ -625,8 +675,10 @@ async fn purify_create_sink(
             // Now that we've validated the sink's storage creds (if they exist)
             // we _could_ use them to build a complete Iceberg client (both catalog and storage).
             // TODO(kynan): Actually use those sink-specific creds here instead of ignoring them.
+            // Purification only proves the catalog is reachable, so it needs no table-scoped
+            // storage credentials.
             let _catalog = connection
-                .connect(storage_configuration, InTask::No)
+                .connect(storage_configuration, InTask::No, None)
                 .await
                 .map_err(|e| IcebergSinkPurificationError::CatalogError(Arc::new(e)))?;
         }
@@ -949,6 +1001,8 @@ async fn purify_create_source(
                 external_references,
                 text_columns,
                 exclude_columns,
+                &BTreeSet::new(),
+                false,
                 source_name,
                 &reference_policy,
             )
@@ -1510,6 +1564,8 @@ async fn purify_alter_source_add_subsources(
                 &Some(ExternalReferences::SubsetTables(external_references)),
                 text_columns,
                 exclude_columns,
+                &BTreeSet::new(),
+                false,
                 &unresolved_source_name,
                 &SourceReferencePolicy::Required,
             )
@@ -1803,6 +1859,8 @@ async fn purify_create_table_from_source(
     let crate::plan::statement::ddl::TableFromSourceOptionExtracted {
         text_columns,
         exclude_columns,
+        exclude_constraints,
+        exclude_all_constraints,
         retain_history: _,
         details,
         partition_by: _,
@@ -1811,6 +1869,14 @@ async fn purify_create_table_from_source(
     if details.is_some() {
         sql_bail!("DETAILS option cannot be explicitly set");
     }
+
+    if !exclude_constraints.is_empty() || exclude_all_constraints {
+        scx.require_feature_flag(&crate::session::vars::ENABLE_EXCLUDE_CONSTRAINTS_OPTION)?;
+    }
+    if !exclude_constraints.is_empty() && exclude_all_constraints {
+        sql_bail!("EXCLUDE ALL CONSTRAINTS cannot be combined with EXCLUDE CONSTRAINTS");
+    }
+    let exclude_constraints: BTreeSet<String> = exclude_constraints.into_iter().collect();
 
     // Our text column values are unqualified (just column names), but the purification methods below
     // expect to match the fully-qualified names against the full set of tables in upstream, so we
@@ -1850,6 +1916,15 @@ async fn purify_create_table_from_source(
         }])
     });
 
+    if (!exclude_constraints.is_empty() || exclude_all_constraints)
+        && !matches!(desc.connection, GenericSourceConnection::Postgres(_))
+    {
+        sql_bail!(
+            "EXCLUDE CONSTRAINTS is not supported for {} sources",
+            desc.connection.name()
+        );
+    }
+
     // Run purification work specific to each source type: resolve the external reference to
     // a fully qualified name and obtain the appropriate details for the source-export statement
     let purified_export = match desc.connection {
@@ -1880,6 +1955,8 @@ async fn purify_create_table_from_source(
                 &requested_references,
                 qualified_text_columns,
                 qualified_exclude_columns,
+                &exclude_constraints,
+                exclude_all_constraints,
                 &unresolved_source_name,
                 &SourceReferencePolicy::Required,
             )

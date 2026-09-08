@@ -51,6 +51,7 @@ use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_ore::{cli::KeyValueArg, instrument};
 use mz_server_core::listeners::AuthenticatorKind;
 
+#[derive(Clone)]
 pub struct Config {
     pub enable_security_context: bool,
     pub enable_prometheus_scrape_annotations: bool,

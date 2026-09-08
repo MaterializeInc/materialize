@@ -141,8 +141,11 @@ pub enum ReducePlan {
 
 /// All reduce plans depend on a notion of aggregation.
 ///
-/// We could use `mz_expr::AggregateExpr`, but it explicitly names `MirScalarExpr`
-/// and derives `MzReflect` (which cannot accommodate type parameters).
+/// We could use `mz_expr::AggregateExpr`, but it explicitly names
+/// `MirScalarExpr`, while LIR aggregates contain `LirScalarExpr`. This
+/// duplication exists because the old MzReflect test framework could not
+/// accommodate type parameters. TODO: with that framework gone, this will
+/// be resolved shortly by parameterizing over the scalar expression type.
 ///
 /// We don't build a separate `AggregateFunc`, since we'd only eliminate one variant
 /// and need to duplicate the evaluation code.

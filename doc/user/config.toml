@@ -6,6 +6,7 @@ disableKinds = ['taxonomy']
 
 [params]
 repo = "//github.com/MaterializeInc/materialize"
+canonicalHost = "https://materialize.com"
 bannerMessage = ""
 bannerLink = ""
 
@@ -18,13 +19,14 @@ publishDate = ["publishDate"]
     label = "English"
     weight = 1
 #
-# Get started
+# Reader journey
 #
 
 [[menu.main]]
 identifier = "get-started"
-name = "Get started"
-weight = 5
+name = "Getting started"
+url = "/get-started/"
+weight = 10
 
 #
 # Connect sources
@@ -34,35 +36,29 @@ weight = 5
 name = "CockroachDB"
 parent = 'ingest-data'
 identifier = 'crdb'
-weight = 20
+weight = 60
 
 [[menu.main]]
 name = "Redpanda"
 parent = 'ingest-data'
 identifier = 'redpanda'
-weight = 25
+weight = 70
 
 [[menu.main]]
 identifier = "webhooks"
 name = "Webhooks"
 parent = 'ingest-data'
-weight = 30
+weight = 80
 
 [[menu.main]]
 identifier = "network-security"
 name = "Network configuration"
 parent = 'ingest-data'
-weight = 35
+weight = 85
 
 #
 # Transform data
 #
-
-[[menu.main]]
-identifier = "transform-data"
-name = "Transform data"
-weight = 12
-
 
 #
 # Reference
@@ -70,18 +66,19 @@ weight = 12
 
 [[menu.main]]
 identifier = "sql"
-name = "SQL Reference"
-weight = 75
+name = "SQL and catalog reference"
+weight = 140
 
+#
+# Legacy Create Source
+#
 
 [[menu.main]]
-identifier = "reference"
-name = "Reference"
-weight = 76
+name = "Legacy Syntax"
+parent = 'create-source'
+identifier = 'create-source-legacy'
+weight = 90
 
-#
-# Releases
-#
 
 #
 # About
@@ -90,7 +87,7 @@ weight = 76
 [[menu.main]]
 identifier = "about"
 name = "About"
-weight = 90
+weight = 150
 
 [[menu.main]]
 name = "Materialize Cloud Security and Compliance"
@@ -112,6 +109,18 @@ weight = 55
   baseName = "index"
   isPlainText = true
   notAlternative = true
+
+#
+# Custom output format for the llms.txt docs index
+#
+[outputFormats.llmstxt]
+  mediaType = "text/plain"
+  baseName = "llms"
+  isPlainText = true
+  notAlternative = true
+
+[outputs]
+  home = ["HTML", "RSS", "llmstxt"]
 
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works
@@ -139,6 +148,3 @@ include = "docs/**"
 #
 # include = "**.html" # would only include files with ".html" suffix
 # exclude = "**.{jpg, png}" # would exclude files with ".jpg" or ".png" suffix
-
-# Avoid deleting self-managed docs which are deployed from the self-managed-docs branches.
-exclude = "docs/{self-managed/v25.2}/**"

@@ -4,7 +4,7 @@ description: "Connecting Materialize to a SQL Server database for Change Data Ca
 pagerank: 40
 menu:
   main:
-    parent: 'create-source'
+    parent: 'create-source-legacy'
     identifier: cs_sql-server
     name: SQL Server (Legacy Syntax)
     weight: 31
@@ -22,6 +22,8 @@ and [`SNAPSHOT` transaction isolation](https://learn.microsoft.com/en-us/dotnet/
 for the database that you would like to replicate. Then [create a connection](#creating-a-connection)
 in Materialize that specifies access and authentication parameters.
 {{% /create-source/intro %}}
+
+{{% include-headless "/headless/sql-server-deployment-guides" %}}
 
 ## Syntax
 
@@ -108,6 +110,10 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 {{% include-headless "/headless/sql-server-considerations" %}}
 
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="sql-server" %}}
+
 ## Examples
 
 {{< important >}}
@@ -168,7 +174,9 @@ an SSH bastion server to accept connections from Materialize, check
 
 ### Creating a source {#create-source-example}
 
-You **must** enable Change Data Capture, see [Enable Change Data Capture SQL Server Instructions](/ingest-data/sql-server/self-hosted/#a-configure-sql-server).
+You **must** enable Change Data Capture. See the setup instructions for
+[Azure SQL Database](/ingest-data/sql-server/azure-db/#a-configure-azure-sql-database)
+or [self-hosted SQL Server](/ingest-data/sql-server/self-hosted/#a-configure-sql-server).
 
 Once CDC is enabled for all of the relevant tables, you can create a `SOURCE` in
 Materialize to begin replicating data!
@@ -208,7 +216,7 @@ CREATE SOURCE mz_source
 
 {{% include-headless "/headless/schema-changes-in-progress" %}}
 
-To handle upstream [schema changes](#schema-changes) or errored subsources, use
+To handle upstream [schema changes](#handling-upstream-operations) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
 subsource, and then [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to add
 the subsource back to the source.

@@ -101,6 +101,9 @@ impl RustType<crate::objects::audit_log_event_v1::ObjectType> for mz_audit_log::
             mz_audit_log::ObjectType::MaterializedView => {
                 crate::objects::audit_log_event_v1::ObjectType::MaterializedView
             }
+            mz_audit_log::ObjectType::MetricSink => {
+                crate::objects::audit_log_event_v1::ObjectType::MetricSink
+            }
             mz_audit_log::ObjectType::NetworkPolicy => {
                 crate::objects::audit_log_event_v1::ObjectType::NetworkPolicy
             }
@@ -153,6 +156,9 @@ impl RustType<crate::objects::audit_log_event_v1::ObjectType> for mz_audit_log::
             }
             crate::objects::audit_log_event_v1::ObjectType::MaterializedView => {
                 Ok(mz_audit_log::ObjectType::MaterializedView)
+            }
+            crate::objects::audit_log_event_v1::ObjectType::MetricSink => {
+                Ok(mz_audit_log::ObjectType::MetricSink)
             }
             crate::objects::audit_log_event_v1::ObjectType::NetworkPolicy => {
                 Ok(mz_audit_log::ObjectType::NetworkPolicy)

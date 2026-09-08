@@ -13,7 +13,7 @@
 //! dropped and recreated from [`CREATE_SQL`] — safe because nothing here is
 //! authoritative.
 
-pub(super) const SCHEMA_VERSION: i64 = 11;
+pub(super) const SCHEMA_VERSION: i64 = 12;
 
 pub(super) const DROP_SQL: &str = "
     DROP TABLE IF EXISTS meta;

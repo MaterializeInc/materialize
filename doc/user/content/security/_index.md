@@ -5,7 +5,7 @@ disable_list: true
 menu:
   main:
     identifier: "security"
-    weight: 45
+    weight: 100
 ---
 
 ## Cloud
@@ -13,6 +13,7 @@ menu:
 | Guide | Description |
 |-------|-------------|
 | [User and service accounts](/security/cloud/users-service-accounts/) | Add user/service accounts |
+| [Sync identity provider groups](/security/cloud/users-service-accounts/sync-idp-groups/) | Provision groups via SCIM and map them to database roles |
 | [Access control](/security/cloud/access-control/) | Reference for role-based access management (RBAC) |
 | [Manage network policies](/security/cloud/manage-network-policies/) | Set up network policies |
 

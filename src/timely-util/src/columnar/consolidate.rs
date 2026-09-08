@@ -21,13 +21,11 @@
 //!    stays bounded. Cancellations and same-key updates collapse here before reaching the
 //!    column-shaped storage. A drain-multiple-of-half-cap trick keeps the leftover in staging,
 //!    so cross-batch keys with the same `(D, T)` continue consolidating on the next sort.
-//! 2. SoA accumulator: one sub-container per column (`D::Container`, `T::Container`,
-//!    `R::Container`). Drains push in fixed-size chunks (`DRAIN_CHUNK_ROWS`) with three
-//!    sequential per-column passes per chunk, so the inner pushes autovectorize. After each
-//!    chunk, check the serialized size; once the accumulator reaches the flush threshold
-//!    (90% of `OUTPUT_TARGET_WORDS`), serialize into an aligned `Vec<u64>` (no zero-fill —
-//!    written by `indexed::encode`) and ship as `Column::Align`. Per-chunk granularity bounds
-//!    overshoot to `K * row_words`. The trailing partial on `finish` ships as `Column::Typed`.
+//! 2. SoA accumulator: one sub-container per column. Drains push in fixed-size chunks
+//!    (`DRAIN_CHUNK_ROWS`) with three sequential per-column passes per chunk, checking the
+//!    serialized size per chunk; at the flush threshold the accumulator is serialized into an
+//!    aligned `Vec<u64>` and shipped as `Column::Align`, and the trailing partial on `finish`
+//!    ships as `Column::Typed`.
 //!
 //! Generic over `(D, T, R): Columnar` via the columnar tuple decomposition
 //! `<(D, T, R) as Columnar>::Container = (D::Container, T::Container, R::Container)`.
@@ -70,13 +68,7 @@ const FLUSH_THRESHOLD_WORDS: usize = OUTPUT_TARGET_WORDS - OUTPUT_TARGET_WORDS /
 const DRAIN_CHUNK_ROWS: usize = 16;
 
 /// A container builder that consolidates `(D, T, R)` updates and emits `Column<(D, T, R)>`.
-///
-/// Stages updates in an AoS `Vec` for in-place consolidation, then drains consolidated rows
-/// in `DRAIN_CHUNK_ROWS`-sized chunks (three sequential per-column passes per chunk) into SoA
-/// sub-containers, flushing whenever the accumulator hits the flush threshold (90% of
-/// `OUTPUT_TARGET_WORDS`). Flushed accumulators are written into aligned `Vec<u64>` (via
-/// `indexed::encode`, no zero-fill) and queued as `Column::Align`. The trailing partial on
-/// `finish` ships as `Column::Typed`.
+/// See the module docs for the two-level buffering pipeline.
 ///
 /// Does **not** maintain FIFO ordering (consolidation reorders updates).
 pub struct ConsolidatingColumnBuilder<D, T, R>
@@ -144,11 +136,8 @@ where
             return;
         }
 
-        // Drain in chunks of `DRAIN_CHUNK_ROWS` rows. Three sequential per-column passes inside
-        // the chunk give the compiler streamable loops it can autovectorize for primitive
-        // containers; the per-chunk size check bounds overshoot of the 90%-of-2-MiB threshold to
-        // ~`K * row_words`. After each chunk, check the serialized size (via `length_in_words`,
-        // not item count, so output Columns stay bounded for variable-width `D` like `Row`).
+        // The per-chunk size check reads serialized words, not item count, so
+        // output columns stay bounded for variable-width `D` like `Row`.
         let mut consumed = 0;
         while consumed < drain_n {
             let take = (drain_n - consumed).min(DRAIN_CHUNK_ROWS);

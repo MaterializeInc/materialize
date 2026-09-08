@@ -76,7 +76,6 @@ use tracing::debug;
 
 use crate::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_SYSTEM_CLUSTER};
 use crate::durable;
-use crate::durable::objects::item_type;
 
 /// Used to update `self` from the input value while consuming the input value.
 pub trait UpdateFrom<T>: From<T> {
@@ -404,6 +403,13 @@ impl Cluster {
         }
     }
 
+    /// Builds the plan that a `CREATE CLUSTER` statement for this cluster would
+    /// have produced.
+    ///
+    /// Clusters are stored as a structured config, not as SQL text, so `SHOW
+    /// CREATE CLUSTER` cannot just print a stored statement. It rebuilds one,
+    /// and this is the first half of that: config to plan. `unplan_create_cluster`
+    /// then turns the plan back into a statement.
     pub fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError> {
         let name = self.name.clone();
         let variant = match &self.config.variant {
@@ -411,6 +417,7 @@ impl Cluster {
                 size,
                 availability_zones,
                 logging,
+                arrangement_compression,
                 replication_factor,
                 optimizer_feature_overrides,
                 schedule,
@@ -433,7 +440,10 @@ impl Cluster {
                         interval: None,
                     } => None,
                 };
-                let compute = ComputeReplicaConfig { introspection };
+                let compute = ComputeReplicaConfig {
+                    introspection,
+                    arrangement_compression: *arrangement_compression,
+                };
                 CreateClusterVariant::Managed(CreateClusterManagedPlan {
                     replication_factor: replication_factor.clone(),
                     size: size.clone(),
@@ -458,6 +468,10 @@ impl Cluster {
             name,
             variant,
             workload_class,
+            // Nothing about `IF NOT EXISTS` is stored. It only ever affected how
+            // the original statement handled a name collision, so the rebuilt
+            // statement never shows it.
+            if_not_exists: false,
         })
     }
 }
@@ -851,23 +865,7 @@ pub enum CatalogItem {
     Func(Func),
     Secret(Secret),
     Connection(Connection),
-}
-
-impl From<CatalogEntry> for durable::Item {
-    fn from(entry: CatalogEntry) -> durable::Item {
-        let (create_sql, global_id, extra_versions) = entry.item.into_serialized();
-        durable::Item {
-            id: entry.id,
-            oid: entry.oid,
-            global_id,
-            schema_id: entry.name.qualifiers.schema_spec.into(),
-            name: entry.name.item,
-            create_sql,
-            owner_id: entry.owner_id,
-            privileges: entry.privileges.into_all_values().collect(),
-            extra_versions,
-        }
-    }
+    MetricSink(MetricSink),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1329,6 +1327,10 @@ impl Sink {
     }
 
     /// Envelope of the sink.
+    ///
+    /// NOTE: the `mz_sinks` view works this out from `create_sql` instead, in
+    /// the `CreateSink` arm of `parse_catalog_create_sql`. Kafka gets it from
+    /// `ENVELOPE` there, iceberg from `MODE`. Change both or they drift.
     pub fn envelope(&self) -> Option<&str> {
         match &self.envelope {
             SinkEnvelope::Debezium => Some("debezium"),
@@ -1341,6 +1343,9 @@ impl Sink {
     /// if the key-format is none or the key & value formats are
     /// both the same (either avro or json), we return the value format name,
     /// otherwise we return a composite name.
+    ///
+    /// NOTE: `parse_catalog_create_sql` redoes this collapse for the `mz_sinks`
+    /// `format` column. Change both or they drift.
     pub fn combined_format(&self) -> Option<Cow<'_, str>> {
         match &self.connection {
             StorageSinkConnection::Kafka(connection) => Some(connection.format.get_format_name()),
@@ -1349,6 +1354,10 @@ impl Sink {
     }
 
     /// Output distinct key_format and value_format of the sink.
+    ///
+    /// NOTE: also derived from `create_sql` for `mz_sinks`. Watch out that a key
+    /// format exists only when the sink has a `KEY`, so the SQL side has to work
+    /// that out from the statement for itself.
     pub fn formats(&self) -> Option<(Option<&str>, &str)> {
         match &self.connection {
             StorageSinkConnection::Kafka(connection) => {
@@ -1603,6 +1612,40 @@ impl Index {
     }
 }
 
+/// A sink that exports a relation's rows as Prometheus metrics.
+#[derive(Debug, Clone, Serialize)]
+pub struct MetricSink {
+    /// Parse-able SQL that defines this metric sink.
+    pub create_sql: String,
+    /// [`GlobalId`] used to reference this metric sink from outside the catalog, e.g. compute.
+    pub global_id: GlobalId,
+    /// Collection we read into this metric sink.
+    pub from: GlobalId,
+    /// Other catalog objects referenced by this metric sink.
+    pub resolved_ids: ResolvedIds,
+    /// Cluster this metric sink runs on.
+    pub cluster_id: ClusterId,
+    /// Prepended to every metric name this sink publishes. Not durable on its own: like `from`
+    /// and `cluster_id`, it rides in `create_sql` and is recovered by re-parsing that on boot.
+    pub prefix: String,
+    /// Optimized global MIR plan, set after global optimization.
+    #[serde(skip)]
+    pub optimized_plan: Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
+    /// Physical (LIR) plan, set after physical optimization.
+    #[serde(skip)]
+    pub physical_plan: Option<Arc<DataflowDescription<ComputePlan>>>,
+    /// Dataflow metainfo (optimizer notices, etc.), set after optimization.
+    #[serde(skip)]
+    pub dataflow_metainfo: Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
+}
+
+impl MetricSink {
+    /// The [`GlobalId`] that refers to this metric sink.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Type {
     /// Parse-able SQL that defines this type.
@@ -1732,6 +1775,7 @@ impl CatalogItem {
             CatalogItem::Func(_) => CatalogItemType::Func,
             CatalogItem::Secret(_) => CatalogItemType::Secret,
             CatalogItem::Connection(_) => CatalogItemType::Connection,
+            CatalogItem::MetricSink(_) => CatalogItemType::MetricSink,
         }
     }
 
@@ -1750,6 +1794,7 @@ impl CatalogItem {
             CatalogItem::Type(ty) => ty.global_id,
             CatalogItem::Secret(secret) => secret.global_id,
             CatalogItem::Connection(conn) => conn.global_id,
+            CatalogItem::MetricSink(metric_sink) => metric_sink.global_id,
             CatalogItem::Table(table) => {
                 return itertools::Either::Left(table.collections.values().copied());
             }
@@ -1772,6 +1817,7 @@ impl CatalogItem {
             CatalogItem::Type(ty) => ty.global_id,
             CatalogItem::Secret(secret) => secret.global_id,
             CatalogItem::Connection(conn) => conn.global_id,
+            CatalogItem::MetricSink(metric_sink) => metric_sink.global_id,
             CatalogItem::Table(table) => table.global_id_writes(),
         }
     }
@@ -1781,6 +1827,7 @@ impl CatalogItem {
         match self {
             CatalogItem::Index(idx) => idx.optimized_plan.as_ref(),
             CatalogItem::MaterializedView(mv) => mv.optimized_plan.as_ref(),
+            CatalogItem::MetricSink(ms) => ms.optimized_plan.as_ref(),
             _ => None,
         }
     }
@@ -1790,6 +1837,7 @@ impl CatalogItem {
         match self {
             CatalogItem::Index(idx) => idx.physical_plan.as_ref(),
             CatalogItem::MaterializedView(mv) => mv.physical_plan.as_ref(),
+            CatalogItem::MetricSink(ms) => ms.physical_plan.as_ref(),
             _ => None,
         }
     }
@@ -1799,6 +1847,17 @@ impl CatalogItem {
         match self {
             CatalogItem::Index(idx) => idx.dataflow_metainfo.as_ref(),
             CatalogItem::MaterializedView(mv) => mv.dataflow_metainfo.as_ref(),
+            CatalogItem::MetricSink(ms) => ms.dataflow_metainfo.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Returns a mutable reference to the dataflow metainfo, if this item has one.
+    pub fn dataflow_metainfo_mut(&mut self) -> Option<&mut DataflowMetainfo<Arc<OptimizerNotice>>> {
+        match self {
+            CatalogItem::Index(idx) => idx.dataflow_metainfo.as_mut(),
+            CatalogItem::MaterializedView(mv) => mv.dataflow_metainfo.as_mut(),
+            CatalogItem::MetricSink(ms) => ms.dataflow_metainfo.as_mut(),
             _ => None,
         }
     }
@@ -1825,6 +1884,11 @@ impl CatalogItem {
                 &mut mv.physical_plan,
                 &mut mv.dataflow_metainfo,
             )),
+            CatalogItem::MetricSink(ms) => Some((
+                &mut ms.optimized_plan,
+                &mut ms.physical_plan,
+                &mut ms.dataflow_metainfo,
+            )),
             _ => None,
         }
     }
@@ -1842,7 +1906,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => false,
         }
     }
 
@@ -1868,7 +1933,8 @@ impl CatalogItem {
             | CatalogItem::Sink(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::Type(_) => None,
+            | CatalogItem::Type(_)
+            | CatalogItem::MetricSink(_) => None,
         }
     }
 
@@ -1935,6 +2001,7 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => &mview.resolved_ids,
             CatalogItem::Secret(_) => &*EMPTY,
             CatalogItem::Connection(connection) => &connection.resolved_ids,
+            CatalogItem::MetricSink(metric_sink) => &metric_sink.resolved_ids,
         }
     }
 
@@ -1961,8 +2028,36 @@ impl CatalogItem {
             }
             CatalogItem::Secret(_) => {}
             CatalogItem::Connection(_) => {}
+            CatalogItem::MetricSink(_) => {}
         }
         uses
+    }
+
+    /// Returns direct dependencies to traverse when finding this item's query leaves.
+    ///
+    /// Functions and views return all of their uses. Materialized views do the
+    /// same except for the replacement target, which is lifecycle metadata. All
+    /// other items are query leaves or cannot be selected from.
+    pub fn query_dependencies(&self) -> BTreeSet<CatalogItemId> {
+        match self {
+            CatalogItem::Func(_) | CatalogItem::View(_) => self.uses(),
+            CatalogItem::MaterializedView(mv) => {
+                let mut dependencies = self.uses();
+                if let Some(target) = mv.replacement_target {
+                    dependencies.remove(&target);
+                }
+                dependencies
+            }
+            CatalogItem::Index(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::Table(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => BTreeSet::new(),
+        }
     }
 
     /// Returns the connection ID that this item belongs to, if this item is
@@ -1979,7 +2074,8 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => None,
         }
     }
 
@@ -1997,7 +2093,8 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Connection(_) => (),
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => (),
         }
     }
 
@@ -2021,7 +2118,8 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Connection(_) => {
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => {
                 unreachable!("only views, indexes, and tables can be temporary")
             }
         }
@@ -2103,6 +2201,11 @@ impl CatalogItem {
                 Ok(CatalogItem::Type(i))
             }
             CatalogItem::Func(i) => Ok(CatalogItem::Func(i.clone())),
+            CatalogItem::MetricSink(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::MetricSink(i))
+            }
         }
     }
 
@@ -2173,6 +2276,11 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Connection(i))
             }
+            CatalogItem::MetricSink(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::MetricSink(i))
+            }
         }
     }
 
@@ -2234,6 +2342,11 @@ impl CatalogItem {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql);
                 CatalogItem::Connection(i)
+            }
+            CatalogItem::MetricSink(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::MetricSink(i)
             }
         }
     }
@@ -2412,7 +2525,8 @@ impl CatalogItem {
             | CatalogItem::MaterializedView(MaterializedView { create_sql, .. })
             | CatalogItem::Index(Index { create_sql, .. })
             | CatalogItem::Secret(Secret { create_sql, .. })
-            | CatalogItem::Connection(Connection { create_sql, .. }) => Some(create_sql),
+            | CatalogItem::Connection(Connection { create_sql, .. })
+            | CatalogItem::MetricSink(MetricSink { create_sql, .. }) => Some(create_sql),
             CatalogItem::Func(_) | CatalogItem::Log(_) => None,
         };
         let Some(create_sql) = create_sql else {
@@ -2438,6 +2552,7 @@ impl CatalogItem {
     pub fn is_compute_object_on_cluster(&self) -> Option<ClusterId> {
         match self {
             CatalogItem::Index(index) => Some(index.cluster_id),
+            CatalogItem::MetricSink(metric_sink) => Some(metric_sink.cluster_id),
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::Log(_)
@@ -2452,12 +2567,20 @@ impl CatalogItem {
     }
 
     /// Whether this item runs a dataflow on its cluster's replicas and so has
-    /// hydration state: an index, materialized view, sink, or ingestion
-    /// source. Non-ingestion sources (webhooks, ingestion exports) are bound
-    /// to a cluster but run no dataflow on any replica.
+    /// hydration state: an index, materialized view, sink, or ingestion source.
+    /// Non-ingestion sources (webhooks, ingestion exports) are bound to a
+    /// cluster but run no dataflow on any replica.
+    ///
+    /// NOTE: `Coordinator::cluster_has_hydratable_objects` routes a cluster onto
+    /// the hydration-aware scheduling and reconfiguration path off this answer,
+    /// so an item that ships no dataflow must answer `false` even where the
+    /// per-replica hydration check would resolve vacuously.
     pub fn is_hydratable(&self) -> bool {
         match self {
-            CatalogItem::Index(_) | CatalogItem::MaterializedView(_) | CatalogItem::Sink(_) => true,
+            CatalogItem::Index(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::MetricSink(_) => true,
             CatalogItem::Source(source) => matches!(
                 source.data_source,
                 DataSourceDesc::Ingestion { .. } | DataSourceDesc::OldSyntaxIngestion { .. }
@@ -2476,6 +2599,7 @@ impl CatalogItem {
         match self {
             CatalogItem::MaterializedView(mv) => Some(mv.cluster_id),
             CatalogItem::Index(index) => Some(index.cluster_id),
+            CatalogItem::MetricSink(metric_sink) => Some(metric_sink.cluster_id),
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion { cluster_id, .. }
                 | DataSourceDesc::OldSyntaxIngestion { cluster_id, .. } => Some(*cluster_id),
@@ -2513,7 +2637,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => None,
         }
     }
 
@@ -2534,7 +2659,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => return None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => return None,
         };
         Some(cw)
     }
@@ -2558,7 +2684,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => return None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => return None,
         };
         Some(custom_logical_compaction_window.unwrap_or(CompactionWindow::Default))
     }
@@ -2578,7 +2705,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => false,
         }
     }
 
@@ -2635,6 +2763,7 @@ impl CatalogItem {
                 BTreeMap::new(),
             ),
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+            CatalogItem::MetricSink(ms) => (ms.create_sql.clone(), ms.global_id, BTreeMap::new()),
         }
     }
 
@@ -2680,6 +2809,7 @@ impl CatalogItem {
                 (connection.create_sql, connection.global_id, BTreeMap::new())
             }
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+            CatalogItem::MetricSink(ms) => (ms.create_sql, ms.global_id, BTreeMap::new()),
         }
     }
 
@@ -2698,6 +2828,7 @@ impl CatalogItem {
             CatalogItem::Func(func) => return Some(func.global_id),
             CatalogItem::Secret(secret) => return Some(secret.global_id),
             CatalogItem::Connection(conn) => return Some(conn.global_id),
+            CatalogItem::MetricSink(metric_sink) => return Some(metric_sink.global_id),
         };
         match version {
             RelationVersionSelector::Latest => collections.values().last().copied(),
@@ -2902,7 +3033,8 @@ impl CatalogEntry {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => None,
         }
     }
 
@@ -2934,6 +3066,11 @@ impl CatalogEntry {
     /// Reports whether this catalog entry is an index.
     pub fn is_index(&self) -> bool {
         matches!(self.item(), CatalogItem::Index(_))
+    }
+
+    /// Reports whether this catalog entry is a metric sink.
+    pub fn is_metric_sink(&self) -> bool {
+        matches!(self.item(), CatalogItem::MetricSink(_))
     }
 
     /// Reports whether this catalog entry can be treated as a relation, it can produce rows.
@@ -3031,6 +3168,7 @@ impl CatalogEntry {
             Connection => CommentObjectId::Connection(self.id),
             Type => CommentObjectId::Type(self.id),
             Secret => CommentObjectId::Secret(self.id),
+            MetricSink => CommentObjectId::MetricSink(self.id),
         }
     }
 }
@@ -3344,6 +3482,8 @@ pub struct ClusterVariantManaged {
     pub size: String,
     pub availability_zones: Vec<String>,
     pub logging: ReplicaLogging,
+    /// Whether arrangements on this cluster's replicas request dictionary compression.
+    pub arrangement_compression: bool,
     pub replication_factor: u32,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
     pub schedule: ClusterSchedule,
@@ -3362,6 +3502,7 @@ pub struct ManagedReplicaConfigShape<'a> {
     pub size: &'a str,
     pub availability_zones: &'a [String],
     pub logging: &'a ReplicaLogging,
+    pub arrangement_compression: bool,
 }
 
 impl<'a> ManagedReplicaConfigShape<'a> {
@@ -3370,11 +3511,13 @@ impl<'a> ManagedReplicaConfigShape<'a> {
         size: &'a str,
         availability_zones: &'a [String],
         logging: &'a ReplicaLogging,
+        arrangement_compression: bool,
     ) -> Self {
         Self {
             size,
             availability_zones,
             logging,
+            arrangement_compression,
         }
     }
 }
@@ -3386,6 +3529,7 @@ impl ClusterVariantManaged {
             size,
             availability_zones,
             logging,
+            arrangement_compression,
             replication_factor: _,
             optimizer_feature_overrides: _,
             schedule: _,
@@ -3393,7 +3537,7 @@ impl ClusterVariantManaged {
             reconfiguration: _,
             burst: _,
         } = self;
-        ManagedReplicaConfigShape::new(size, availability_zones, logging)
+        ManagedReplicaConfigShape::new(size, availability_zones, logging, *arrangement_compression)
     }
 
     /// Returns this managed cluster's realized shape as a reconfiguration target.
@@ -3402,6 +3546,7 @@ impl ClusterVariantManaged {
             size,
             availability_zones,
             logging,
+            arrangement_compression,
             replication_factor,
             optimizer_feature_overrides: _,
             schedule: _,
@@ -3414,7 +3559,28 @@ impl ClusterVariantManaged {
             replication_factor: *replication_factor,
             availability_zones: availability_zones.clone(),
             logging: logging.clone(),
+            arrangement_compression: *arrangement_compression,
         }
+    }
+
+    /// Advances this config's realized shape to `target`, the write a
+    /// reconfiguration cut-over performs. The inverse of
+    /// [`ClusterVariantManaged::realized_reconfiguration_target`].
+    pub fn apply_reconfiguration_target(&mut self, target: ReconfigurationTarget) {
+        // Destructured so a new target dimension fails to compile until it is
+        // applied here too.
+        let ReconfigurationTarget {
+            size,
+            replication_factor,
+            availability_zones,
+            logging,
+            arrangement_compression,
+        } = target;
+        self.size = size;
+        self.replication_factor = replication_factor;
+        self.availability_zones = availability_zones;
+        self.logging = logging;
+        self.arrangement_compression = arrangement_compression;
     }
 
     /// Whether the in-flight `burst` record is no longer warranted by this
@@ -3446,6 +3612,7 @@ impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
             size,
             availability_zones,
             logging,
+            arrangement_compression,
             replication_factor,
             optimizer_feature_overrides,
             schedule,
@@ -3457,6 +3624,7 @@ impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
             size,
             availability_zones,
             logging,
+            arrangement_compression,
             replication_factor,
             optimizer_feature_overrides: optimizer_feature_overrides.into(),
             schedule,
@@ -3475,6 +3643,7 @@ impl From<durable::ClusterVariantManaged> for ClusterVariantManaged {
             size,
             availability_zones,
             logging,
+            arrangement_compression,
             replication_factor,
             optimizer_feature_overrides,
             schedule,
@@ -3486,6 +3655,7 @@ impl From<durable::ClusterVariantManaged> for ClusterVariantManaged {
             size,
             availability_zones,
             logging,
+            arrangement_compression,
             replication_factor,
             optimizer_feature_overrides: optimizer_feature_overrides.into(),
             schedule,
@@ -3626,6 +3796,7 @@ pub struct ReconfigurationTarget {
     pub replication_factor: u32,
     pub availability_zones: Vec<String>,
     pub logging: ReplicaLogging,
+    pub arrangement_compression: bool,
 }
 
 impl ReconfigurationTarget {
@@ -3644,12 +3815,14 @@ impl From<ReconfigurationTarget> for durable::ReconfigurationTarget {
             replication_factor,
             availability_zones,
             logging,
+            arrangement_compression,
         } = target;
         Self {
             size,
             replication_factor,
             availability_zones,
             logging,
+            arrangement_compression,
         }
     }
 }
@@ -3663,12 +3836,14 @@ impl From<durable::ReconfigurationTarget> for ReconfigurationTarget {
             replication_factor,
             availability_zones,
             logging,
+            arrangement_compression,
         } = target;
         Self {
             size,
             replication_factor,
             availability_zones,
             logging,
+            arrangement_compression,
         }
     }
 }
@@ -4002,6 +4177,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             }
             CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,
             CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
+            CatalogItem::MetricSink(MetricSink { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "<builtin>",
             CatalogItem::Log(_) => "<builtin>",
         }
@@ -4143,10 +4319,6 @@ pub enum StateUpdateKind {
     ReplicaSystemConfiguration(durable::objects::ReplicaSystemConfiguration),
     SourceReferences(durable::objects::SourceReferences),
     SystemObjectMapping(durable::objects::SystemObjectMapping),
-    // Temporary items are not actually updated via the durable catalog, but
-    // this allows us to model them the same way as all other items in parts of
-    // the pipeline.
-    TemporaryItem(TemporaryItem),
     Item(durable::objects::Item),
     Comment(durable::objects::Comment),
     AuditLog(durable::objects::AuditLog),
@@ -4178,174 +4350,6 @@ impl TryFrom<Diff> for StateDiff {
             Diff::MINUS_ONE => Ok(Self::Retraction),
             Diff::ONE => Ok(Self::Addition),
             diff => Err(format!("invalid diff {diff}")),
-        }
-    }
-}
-
-/// Information needed to process an update to a temporary item.
-#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
-pub struct TemporaryItem {
-    pub id: CatalogItemId,
-    pub oid: u32,
-    pub global_id: GlobalId,
-    pub schema_id: SchemaId,
-    pub name: String,
-    pub conn_id: Option<ConnectionId>,
-    pub create_sql: String,
-    pub owner_id: RoleId,
-    pub privileges: Vec<MzAclItem>,
-    pub extra_versions: BTreeMap<RelationVersion, GlobalId>,
-}
-
-impl From<CatalogEntry> for TemporaryItem {
-    fn from(entry: CatalogEntry) -> Self {
-        let conn_id = entry.conn_id().cloned();
-        let (create_sql, global_id, extra_versions) = entry.item.to_serialized();
-
-        TemporaryItem {
-            id: entry.id,
-            oid: entry.oid,
-            global_id,
-            schema_id: entry.name.qualifiers.schema_spec.into(),
-            name: entry.name.item,
-            conn_id,
-            create_sql,
-            owner_id: entry.owner_id,
-            privileges: entry.privileges.into_all_values().collect(),
-            extra_versions,
-        }
-    }
-}
-
-impl TemporaryItem {
-    pub fn item_type(&self) -> CatalogItemType {
-        item_type(&self.create_sql)
-    }
-}
-
-/// The same as [`StateUpdateKind`], but without `TemporaryItem` so we can derive [`Ord`].
-#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub enum BootstrapStateUpdateKind {
-    Role(durable::objects::Role),
-    RoleAuth(durable::objects::RoleAuth),
-    Database(durable::objects::Database),
-    Schema(durable::objects::Schema),
-    DefaultPrivilege(durable::objects::DefaultPrivilege),
-    SystemPrivilege(MzAclItem),
-    SystemConfiguration(durable::objects::SystemConfiguration),
-    Cluster(durable::objects::Cluster),
-    ClusterSystemConfiguration(durable::objects::ClusterSystemConfiguration),
-    NetworkPolicy(durable::objects::NetworkPolicy),
-    IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
-    ClusterReplica(durable::objects::ClusterReplica),
-    ReplicaSystemConfiguration(durable::objects::ReplicaSystemConfiguration),
-    SourceReferences(durable::objects::SourceReferences),
-    SystemObjectMapping(durable::objects::SystemObjectMapping),
-    Item(durable::objects::Item),
-    Comment(durable::objects::Comment),
-    AuditLog(durable::objects::AuditLog),
-    // Storage updates.
-    StorageCollectionMetadata(durable::objects::StorageCollectionMetadata),
-    UnfinalizedShard(durable::objects::UnfinalizedShard),
-}
-
-impl From<BootstrapStateUpdateKind> for StateUpdateKind {
-    fn from(value: BootstrapStateUpdateKind) -> Self {
-        match value {
-            BootstrapStateUpdateKind::Role(kind) => StateUpdateKind::Role(kind),
-            BootstrapStateUpdateKind::RoleAuth(kind) => StateUpdateKind::RoleAuth(kind),
-            BootstrapStateUpdateKind::Database(kind) => StateUpdateKind::Database(kind),
-            BootstrapStateUpdateKind::Schema(kind) => StateUpdateKind::Schema(kind),
-            BootstrapStateUpdateKind::DefaultPrivilege(kind) => {
-                StateUpdateKind::DefaultPrivilege(kind)
-            }
-            BootstrapStateUpdateKind::SystemPrivilege(kind) => {
-                StateUpdateKind::SystemPrivilege(kind)
-            }
-            BootstrapStateUpdateKind::SystemConfiguration(kind) => {
-                StateUpdateKind::SystemConfiguration(kind)
-            }
-            BootstrapStateUpdateKind::ClusterSystemConfiguration(kind) => {
-                StateUpdateKind::ClusterSystemConfiguration(kind)
-            }
-            BootstrapStateUpdateKind::ReplicaSystemConfiguration(kind) => {
-                StateUpdateKind::ReplicaSystemConfiguration(kind)
-            }
-            BootstrapStateUpdateKind::SourceReferences(kind) => {
-                StateUpdateKind::SourceReferences(kind)
-            }
-            BootstrapStateUpdateKind::Cluster(kind) => StateUpdateKind::Cluster(kind),
-            BootstrapStateUpdateKind::NetworkPolicy(kind) => StateUpdateKind::NetworkPolicy(kind),
-            BootstrapStateUpdateKind::IntrospectionSourceIndex(kind) => {
-                StateUpdateKind::IntrospectionSourceIndex(kind)
-            }
-            BootstrapStateUpdateKind::ClusterReplica(kind) => StateUpdateKind::ClusterReplica(kind),
-            BootstrapStateUpdateKind::SystemObjectMapping(kind) => {
-                StateUpdateKind::SystemObjectMapping(kind)
-            }
-            BootstrapStateUpdateKind::Item(kind) => StateUpdateKind::Item(kind),
-            BootstrapStateUpdateKind::Comment(kind) => StateUpdateKind::Comment(kind),
-            BootstrapStateUpdateKind::AuditLog(kind) => StateUpdateKind::AuditLog(kind),
-            BootstrapStateUpdateKind::StorageCollectionMetadata(kind) => {
-                StateUpdateKind::StorageCollectionMetadata(kind)
-            }
-            BootstrapStateUpdateKind::UnfinalizedShard(kind) => {
-                StateUpdateKind::UnfinalizedShard(kind)
-            }
-        }
-    }
-}
-
-impl TryFrom<StateUpdateKind> for BootstrapStateUpdateKind {
-    type Error = TemporaryItem;
-
-    fn try_from(value: StateUpdateKind) -> Result<Self, Self::Error> {
-        match value {
-            StateUpdateKind::Role(kind) => Ok(BootstrapStateUpdateKind::Role(kind)),
-            StateUpdateKind::RoleAuth(kind) => Ok(BootstrapStateUpdateKind::RoleAuth(kind)),
-            StateUpdateKind::Database(kind) => Ok(BootstrapStateUpdateKind::Database(kind)),
-            StateUpdateKind::Schema(kind) => Ok(BootstrapStateUpdateKind::Schema(kind)),
-            StateUpdateKind::DefaultPrivilege(kind) => {
-                Ok(BootstrapStateUpdateKind::DefaultPrivilege(kind))
-            }
-            StateUpdateKind::SystemPrivilege(kind) => {
-                Ok(BootstrapStateUpdateKind::SystemPrivilege(kind))
-            }
-            StateUpdateKind::SystemConfiguration(kind) => {
-                Ok(BootstrapStateUpdateKind::SystemConfiguration(kind))
-            }
-            StateUpdateKind::ClusterSystemConfiguration(kind) => {
-                Ok(BootstrapStateUpdateKind::ClusterSystemConfiguration(kind))
-            }
-            StateUpdateKind::ReplicaSystemConfiguration(kind) => {
-                Ok(BootstrapStateUpdateKind::ReplicaSystemConfiguration(kind))
-            }
-            StateUpdateKind::Cluster(kind) => Ok(BootstrapStateUpdateKind::Cluster(kind)),
-            StateUpdateKind::NetworkPolicy(kind) => {
-                Ok(BootstrapStateUpdateKind::NetworkPolicy(kind))
-            }
-            StateUpdateKind::IntrospectionSourceIndex(kind) => {
-                Ok(BootstrapStateUpdateKind::IntrospectionSourceIndex(kind))
-            }
-            StateUpdateKind::ClusterReplica(kind) => {
-                Ok(BootstrapStateUpdateKind::ClusterReplica(kind))
-            }
-            StateUpdateKind::SourceReferences(kind) => {
-                Ok(BootstrapStateUpdateKind::SourceReferences(kind))
-            }
-            StateUpdateKind::SystemObjectMapping(kind) => {
-                Ok(BootstrapStateUpdateKind::SystemObjectMapping(kind))
-            }
-            StateUpdateKind::TemporaryItem(kind) => Err(kind),
-            StateUpdateKind::Item(kind) => Ok(BootstrapStateUpdateKind::Item(kind)),
-            StateUpdateKind::Comment(kind) => Ok(BootstrapStateUpdateKind::Comment(kind)),
-            StateUpdateKind::AuditLog(kind) => Ok(BootstrapStateUpdateKind::AuditLog(kind)),
-            StateUpdateKind::StorageCollectionMetadata(kind) => {
-                Ok(BootstrapStateUpdateKind::StorageCollectionMetadata(kind))
-            }
-            StateUpdateKind::UnfinalizedShard(kind) => {
-                Ok(BootstrapStateUpdateKind::UnfinalizedShard(kind))
-            }
         }
     }
 }

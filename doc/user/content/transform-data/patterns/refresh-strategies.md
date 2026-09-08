@@ -10,7 +10,7 @@ build:
 {{< private-preview />}}
 
 Materialized views in Materialize are incrementally maintained by default, meaning their results are automatically updated as soon as new data arrives.
-This guarantees that queries returns the most up-to-date information available with minimal delay and that results are always as [fresh](/concepts/reaction-time) as the input data itself.
+This guarantees that queries returns the most up-to-date information available with minimal delay and that results are always as [fresh](/fundamentals/concepts/reaction-time) as the input data itself.
 
 In most cases, this default behavior is ideal.
 However, in some very specific scenarios like reporting over slow changing historical data, it may be acceptable to relax freshness in order to reduce compute usage.
@@ -149,7 +149,7 @@ Because the materialized view is hosted on a scheduled cluster that is
 configured to **turn on ahead of any scheduled refreshes**, you can expect
 `my_scheduled_cluster` to be provisioned at 11PM UTC — or, 1 hour ahead of the
 scheduled refresh time for `mv_refresh_every`. This means that the cluster can
-backfill the view with pre-existing data — a process known as [_hydration_](/transform-data/troubleshooting/#hydrating-upstream-objects)
+backfill the view with pre-existing data — a process known as [_hydration_](/serve-results/troubleshooting/#hydrating-objects)
 — ahead of the refresh operation, which **reduces the total unavailability window
 of the view** to just the duration of the refresh.
 
@@ -172,8 +172,8 @@ SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '30 minutes'));
 
 To check details about the (non-default) refresh strategies associated with any materialized
 view in the system, you can query
-the [`mz_internal.mz_materialized_view_refresh_strategies`](/reference/system-catalog/mz_internal/#mz_materialized_view_refresh_strategies)
-and [`mz_internal.mz_materialized_view_refreshes`](/reference/system-catalog/mz_internal/#mz_materialized_view_refreshes)
+the [`mz_internal.mz_materialized_view_refresh_strategies`](/sql/system-catalog/mz_internal/#mz_materialized_view_refresh_strategies)
+and [`mz_internal.mz_materialized_view_refreshes`](/sql/system-catalog/mz_internal/#mz_materialized_view_refreshes)
 system catalog tables:
 
 ```mzsql
@@ -255,7 +255,7 @@ ALTER CLUSTER c1 SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour')
 ### Scheduling strategy
 
 To check the scheduling strategy associated with a cluster, you can query the
-[`mz_internal.mz_cluster_schedules`](/reference/system-catalog/mz_internal/#mz_cluster_schedules)
+[`mz_internal.mz_cluster_schedules`](/sql/system-catalog/mz_internal/#mz_cluster_schedules)
 system catalog table:
 
 ```mzsql
@@ -269,7 +269,7 @@ WHERE c.name = 'my_refresh_cluster';
 ```
 
 To check if a scheduled cluster is turned on, you can query the
-[`mz_catalog.mz_cluster_replicas`](/reference/system-catalog/mz_catalog/#mz_cluster_replicas) system catalog table:
+[`mz_catalog.mz_cluster_replicas`](/sql/system-catalog/mz_catalog/#mz_cluster_replicas) system catalog table:
 
 ```mzsql
 SELECT cs.cluster_id,
@@ -282,7 +282,7 @@ JOIN mz_clusters c ON cs.cluster_id = c.id AND cs.type = 'on-refresh'
 LEFT JOIN mz_cluster_replicas cr ON c.id = cr.cluster_id;
 ```
 
-You can also use the [audit log](/reference/system-catalog/mz_catalog/#mz_audit_events)
+You can also use the [audit log](/sql/system-catalog/mz_catalog/#mz_audit_events)
 to observe the commands that are automatically run when a scheduled cluster is
 turned on and off for materialized view refreshes:
 
@@ -293,5 +293,8 @@ WHERE object_type = 'cluster-replica'
 ORDER BY occurred_at DESC;
 ```
 
-Any commands attributed to scheduled refreshes will be marked with
-`"reason":"schedule"` under the `details` column.
+A replica created for a scheduled refresh is marked with `"reason":"schedule"`
+under the `details` column, along with a `scheduling_policies` entry that names
+the materialized views behind the decision. When the refresh window closes, the
+replica's `drop` event is marked with `"reason":"retired"` and carries no
+further detail.

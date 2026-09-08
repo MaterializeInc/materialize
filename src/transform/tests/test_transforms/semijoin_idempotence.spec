@@ -29,7 +29,7 @@ Source defined as t1
 
 
 # Basic case
-apply pipeline=semijoin_idempotence
+apply pipeline=SemijoinIdempotence
 Return
   Union
     Map (null::bigint, null::text)

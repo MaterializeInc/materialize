@@ -38,6 +38,13 @@ const MAX_RETRIES: usize = 20;
 /// Fixed backoff duration between retries.
 const RETRY_BACKOFF: Duration = Duration::from_millis(100);
 
+/// Executes `query`, retrying transient errors.
+///
+/// NOTE: a retry re-executes `query` in its entirety. If `query` contains
+/// multiple statements (e.g. with `split-lines=false`), statements that
+/// committed before the transient error are executed again, duplicating their
+/// side effects. Callers must pass a single statement, or statements that are
+/// safe to re-execute.
 async fn execute_with_retry(
     client: &mut mz_sql_server_util::Client,
     query: &str,

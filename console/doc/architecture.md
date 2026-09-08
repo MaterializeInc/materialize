@@ -69,3 +69,11 @@ state is stored in components with the useState hook. Storing state globally
 can be tricky to get right, in particular when it comes to invalidating /
 cleaning up the state. With component state, we get that behavior for free
 because the component gets unmounted.
+
+Server state is split by shape. Request/response data (polled telemetry,
+one-shot queries, mutations) goes through React Query and the `useSql` hooks.
+Live catalog data goes through the sync engine: app-session `SUBSCRIBE`s feed
+subscribe sessions, which reduce into jotai atoms and TanStack DB collections,
+with a per-tenant localStorage cache for instant load. See
+[the sync engine design doc](design/20260902_sync_engine.md) for the full
+architecture and adoption recipes.

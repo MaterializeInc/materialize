@@ -1,2 +1,6 @@
+{{- /* Inline an included markdown fragment. The target may be a headless
+       content page, so strip a leading front-matter block before rendering. */ -}}
 {{- $path := .Get "file" -}}
-{{- readFile $path | markdownify -}}
+{{- $content := readFile $path -}}
+{{- $content = replaceRE "(?s)^---\n.*?\n---\n" "" $content -}}
+{{- $content | markdownify -}}

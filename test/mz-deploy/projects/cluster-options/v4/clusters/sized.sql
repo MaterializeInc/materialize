@@ -1,0 +1,16 @@
+-- Copyright Materialize, Inc. and contributors. All rights reserved.
+--
+-- Use of this software is governed by the Business Source License
+-- included in the LICENSE file.
+--
+-- As of the Change Date specified in that file, in accordance with
+-- the Business Source License, use of this software will be governed
+-- by the Apache License, Version 2.0.
+
+-- Two options no part of mz-deploy names by hand, one of them written in a
+-- non-canonical spelling.
+CREATE CLUSTER sized (
+    SIZE = 'scale=1,workers=2',
+    EXPERIMENTAL ARRANGEMENT COMPRESSION = true,
+    INTROSPECTION INTERVAL = '5s'
+);

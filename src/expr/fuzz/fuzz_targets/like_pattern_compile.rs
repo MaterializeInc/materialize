@@ -14,18 +14,29 @@
 //!
 //!  1. Compiling an arbitrary pattern and matching arbitrary text never panics.
 //!  2. A pattern built by escaping every wildcard/escape character in `text` is
-//!     a pure literal, and `LIKE` is anchored, so it must match exactly `text`.
+//!     a pure literal, and `LIKE` is anchored, so it must match exactly `text`:
+//!     `text` matches, and `text` with a character appended does not.
 //!
 //! A pattern/text pair of random Unicode rarely contains the wildcard/escape
 //! metacharacters or the literal overlap that drives the interesting code, so it
 //! plateaus on shallow shapes. Instead we mostly draw both the pattern and the
 //! match text from a tiny shared alphabet of literals plus the LIKE
-//! metacharacters `%`, `_`, and `\`. Generating *multiple* `%` is deliberate: at
-//! two-or-more `%` (`many_subpatterns > 1`) `compile` abandons the backtracking
-//! string matcher and routes to the linear-time regex engine, a boundary the
-//! string-only inputs never reach. Drawing the text from the same alphabet means
-//! it actually matches the wildcards, exercising the `%`-suffix-search /
-//! backtracking and the regex path on real (not always-empty) matches.
+//! metacharacters `%`, `_`, and `\`. Generating *several* `%` interleaved with
+//! literals is deliberate, because that is what crosses the routing boundary
+//! between the two matcher implementations: `compile` abandons the backtracking
+//! string matcher for the linear-time regex engine once two or more `%`
+//! subpatterns carry a *non-empty* suffix (so `%a%b`, but not `%%%%`, which
+//! collapses into one subpattern, and not `%a%`, whose trailing `%` has an empty
+//! suffix), or once the subpattern count exceeds `MAX_SUBPATTERNS`, which the
+//! `%`-heavy weighting reaches most often in practice.
+//!
+//! Drawing the text from the same alphabet means it actually matches the
+//! wildcards, exercising the `%`-suffix-search / backtracking and the regex path
+//! on real (not always-empty) matches. The alphabet carries multi-byte
+//! characters so byte offsets and character counts diverge: the `%` backtracking
+//! in `is_match_subpatterns` mixes character counting with byte indexing and
+//! walks back over char boundaries by byte, and with a single-byte alphabet that
+//! walk degenerates to one iteration and can never expose an off-by-one.
 
 #![no_main]
 
@@ -34,11 +45,14 @@ use libfuzzer_sys::fuzz_target;
 use mz_expr::like_pattern;
 
 /// Literals shared between pattern and text, so wildcards match real characters.
-const LITERALS: &[char] = &['a', 'b', 'c'];
+/// `é` (2 bytes) and `漢` (3 bytes) make byte offsets and character counts
+/// diverge, so the char-boundary walk in `is_match_subpatterns` runs for more
+/// than one iteration.
+const LITERALS: &[char] = &['a', 'b', 'c', 'é', '漢'];
 
 /// Builds a LIKE pattern over the literal alphabet plus the `%`/`_`/`\`
-/// metacharacters, weighted toward emitting several `%` so the >1-`%` regex
-/// routing boundary is crossed.
+/// metacharacters, weighted toward emitting several `%` so patterns land on both
+/// sides of the string-matcher/regex routing boundary.
 fn gen_pattern(u: &mut Unstructured) -> arbitrary::Result<String> {
     let mut p = String::new();
     let n = u.int_in_range(0usize..=16)?;
@@ -53,7 +67,7 @@ fn gen_pattern(u: &mut Unstructured) -> arbitrary::Result<String> {
                 // reachable when this is the last iteration.
                 p.push('\\');
                 if u.int_in_range(0u8..=3)? != 0 {
-                    p.push(*u.choose(&['%', '_', '\\', 'a'])?);
+                    p.push(*u.choose(&['%', '_', '\\', 'a', 'é'])?);
                 }
             }
             _ => p.push(*u.choose(LITERALS)?),
@@ -96,11 +110,31 @@ fn run(mut u: Unstructured) -> arbitrary::Result<()> {
         }
         literal.push(c);
     }
-    if let Ok(matcher) = like_pattern::compile(&literal, case_insensitive) {
-        assert!(
-            matcher.is_match(&text),
-            "literal LIKE pattern {literal:?} must match its source text {text:?}"
-        );
+    match like_pattern::compile(&literal, case_insensitive) {
+        Ok(matcher) => {
+            assert!(
+                matcher.is_match(&text),
+                "literal LIKE pattern {literal:?} must match its source text {text:?}"
+            );
+            // And nothing else: the pattern is anchored at both ends and every
+            // one of its characters consumes exactly one text character, under
+            // `ILIKE` too, since simple case folding maps a character to other
+            // single characters. So appending anything must break the match. This
+            // is the direction that catches over-matching regressions, such as a
+            // lost anchor in the regex or an escaped metacharacter that falls
+            // back to wildcard semantics.
+            let longer = format!("{text}a");
+            assert!(
+                !matcher.is_match(&longer),
+                "literal LIKE pattern {literal:?} must not match {longer:?}"
+            );
+        }
+        // Every escape sequence in `literal` is terminated by construction, so
+        // the documented pattern-length limit is the only legitimate rejection.
+        Err(e) => assert!(
+            literal.len() > 8 << 10,
+            "valid literal pattern {literal:?} failed to compile: {e}"
+        ),
     }
     Ok(())
 }

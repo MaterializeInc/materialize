@@ -20,6 +20,7 @@ cd "$(dirname "$0")/../../../.."
 if ! helm-docs --version >/dev/null 2>/dev/null; then
   echo "lint: helm-docs is not installed"
   echo "hint: refer to https://github.com/norwoodj/helm-docs?tab=readme-ov-file#installation for install instructions"
+  exit 1
 fi
 
 ci_collapsed_heading "Verify that helm docs are up-to-date"

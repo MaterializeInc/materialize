@@ -29,6 +29,8 @@ from materialize.data_ingest.data_type import (
     MzTimestamp,
     Numeric,
     Numeric383,
+    Record,
+    RecordList,
     RecordSize,
     Text,
     TextTextMap,
@@ -43,6 +45,7 @@ from materialize.data_ingest.data_type import (
 from materialize.parallel_workload.column import (
     Column,
     KafkaColumn,
+    LoadGeneratorColumn,
     MySqlColumn,
     PostgresColumn,
     SqlServerColumn,
@@ -80,6 +83,8 @@ for dt in DATA_TYPES:
 
     if dt not in (
         IntList,
+        RecordList,
+        Record,
         IntArray,
         TextTextMap,
         Bytea,
@@ -92,7 +97,16 @@ for dt in DATA_TYPES:
             FuncOp("{} || {}", [Text, dt]),
         ]
 
-    if dt not in (IntList, IntArray, TextTextMap, Bytea, Jsonb, *RANGE_TYPES):
+    if dt not in (
+        IntList,
+        RecordList,
+        Record,
+        IntArray,
+        TextTextMap,
+        Bytea,
+        Jsonb,
+        *RANGE_TYPES,
+    ):
         FUNC_OPS[Boolean] += [
             FuncOp("{} > {}", [dt, dt]),
             FuncOp("{} < {}", [dt, dt]),
@@ -194,6 +208,10 @@ FUNC_OPS[Boolean] += [
     FuncOp("mz_is_superuser()", [], unsupported=ExprKind.MATERIALIZABLE),
 ]
 
+FUNC_OPS[Record] += [FuncOp("row{}", [Int])]
+
+FUNC_OPS[RecordList] += [FuncOp("list[{}]", [Record])]
+
 FUNC_OPS[Text] += [
     FuncOp("lower{}", [Text]),
     FuncOp("upper{}", [Text]),
@@ -225,6 +243,7 @@ FUNC_OPS[Int] += [
     FuncOp("char_length{}", [Text]),
     FuncOp("map_length{}", [TextTextMap]),
     FuncOp("list_length{}", [IntList]),
+    FuncOp("list_length{}", [RecordList]),
     FuncOp("mz_version_num()", [], unsupported=ExprKind.MATERIALIZABLE),
     FuncOp("pg_backend_pid()", [], unsupported=ExprKind.MATERIALIZABLE),
     FuncOp("{} - {}", [Date, Date]),
@@ -322,11 +341,33 @@ for rt in RANGE_TYPES:
 # ]
 
 
+# Edge-case literals injected at low probability as leaves of read/filter
+# expressions (ExprKind.ALL only), to surface NaN/Infinity handling in
+# arithmetic, comparisons, and aggregation. The generator's `Float` is float4,
+# so these MUST be float4: a wider literal (float8/int8) injected where a float4
+# is expected breaks function overload resolution (e.g. round(numeric, bigint)),
+# producing spurious failures rather than findings.
+#
+# Scope is deliberately narrow: NaN/Infinity are the genuinely-new coverage
+# (random_value never produces them). Numeric/int boundary and overflow values
+# are NOT injected here, because the existing LARGE record size already
+# generates overflow-inducing magnitudes and mis-widthed literals only break
+# overload resolution. Extreme-year date/timestamp literals are also omitted:
+# a 6-digit year deterministically trips the known SS-345 date-parser bug in
+# every context, spamming a known-unfixed issue rather than finding new ones.
+EDGE_VALUES: dict[type, list[str]] = {
+    Float: ["'NaN'::float4", "'Infinity'::float4", "'-Infinity'::float4"],
+}
+
+
 def expression(
     data_type: type[DataType],
     columns: list[Column] | (
         list[MySqlColumn]
-        | (list[PostgresColumn] | (list[SqlServerColumn] | list[KafkaColumn]))
+        | (
+            list[PostgresColumn]
+            | (list[SqlServerColumn] | (list[KafkaColumn] | list[LoadGeneratorColumn]))
+        )
     ),
     rng: random.Random,
     kind: ExprKind = ExprKind.ALL,
@@ -352,6 +393,12 @@ def expression(
             for col in rng.sample(columns, len(columns)):
                 if col.data_type == data_type:
                     return str(col)
+
+    # Only in read/filter contexts: overflow/eval errors are tolerated there,
+    # but not in write (INSERT value) or materialized-view-body contexts.
+    edges = EDGE_VALUES.get(data_type)
+    if edges and kind == ExprKind.ALL and rng.random() < 0.2:
+        return rng.choice(edges)
 
     record_size = rng.choice(
         [RecordSize.TINY, RecordSize.SMALL, RecordSize.MEDIUM, RecordSize.LARGE]

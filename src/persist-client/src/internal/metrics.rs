@@ -32,7 +32,7 @@ use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
     Blob, BlobMetadata, CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData,
 };
-use mz_persist::metrics::{ColumnarMetrics, S3BlobMetrics};
+use mz_persist::metrics::{BlobHedgeMetrics, ColumnarMetrics, S3BlobMetrics};
 use mz_persist::retry::RetryStream;
 use mz_persist_types::Codec64;
 use mz_postgres_client::metrics::PostgresClientMetrics;
@@ -110,6 +110,8 @@ pub struct Metrics {
 
     /// Metrics for S3-backed blob implementation
     pub s3_blob: S3BlobMetrics,
+    /// Metrics for hedged blob gets
+    pub blob_hedge: BlobHedgeMetrics,
     /// Metrics for Postgres-backed consensus implementation
     pub postgres_consensus: PostgresClientMetrics,
 
@@ -168,6 +170,7 @@ impl Metrics {
             semaphore: SemaphoreMetrics::new(cfg.clone(), registry.clone()),
             sink: SinkMetrics::new(registry),
             s3_blob,
+            blob_hedge: BlobHedgeMetrics::new(registry),
             postgres_consensus: PostgresClientMetrics::new(registry, "mz_persist"),
             _vecs: vecs,
             _uptime: uptime,

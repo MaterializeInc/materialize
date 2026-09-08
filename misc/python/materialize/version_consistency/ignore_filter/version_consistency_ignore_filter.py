@@ -43,6 +43,9 @@ from materialize.output_consistency.ignore_filter.internal_output_inconsistency_
 from materialize.output_consistency.input_data.operations.string_operations_provider import (
     TAG_REGEX,
 )
+from materialize.output_consistency.input_data.types.date_time_types_provider import (
+    INTERVAL_TYPE_IDENTIFIER,
+)
 from materialize.output_consistency.input_data.types.number_types_provider import (
     NON_INTEGER_TYPE_IDENTIFIERS,
 )
@@ -66,6 +69,7 @@ MZ_VERSION_0_109_0 = MzVersion.parse_mz("v0.109.0")
 MZ_VERSION_0_117_0 = MzVersion.parse_mz("v0.117.0")
 MZ_VERSION_0_118_0 = MzVersion.parse_mz("v0.118.0")
 MZ_VERSION_0_128_0 = MzVersion.parse_mz("v0.128.0")
+MZ_VERSION_26_35_0 = MzVersion.parse_mz("v26.35.0")
 
 
 class VersionConsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
@@ -313,6 +317,20 @@ class VersionPostExecutionInconsistencyIgnoreFilter(
             # the involvement of unnest affects all columns, therefore use matches_any_expression
             return YesIgnore(
                 "Involvement of unnest changes order with PR#29422 for both DFR and CTF"
+            )
+
+        if (
+            self.lower_version <= MZ_VERSION_26_35_0 <= self.higher_version
+            and query_template.matches_any_expression(
+                partial(
+                    is_known_to_involve_exact_data_types,
+                    internal_data_type_identifiers={INTERVAL_TYPE_IDENTIFIER},
+                ),
+                True,
+            )
+        ):
+            return YesIgnore(
+                "Interval text output changed from 'month(s)' to 'mon(s)' with SQL-463"
             )
 
         return super()._shall_ignore_content_mismatch(

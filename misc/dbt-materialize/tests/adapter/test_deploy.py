@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import os
+import re
 import threading
 import time
 
@@ -31,6 +32,26 @@ from fixtures import (
 )
 
 
+def get_deploy_cluster_auto_scaling_strategy(project):
+    """Return (hydration_size, linger_secs) for the deploy cluster's
+    configured autoscaling strategy, or None when no strategy is
+    configured."""
+    result = project.run_sql(
+        """
+        SELECT
+            s.strategy->'on_hydration'->>'hydration_size',
+            (s.strategy->'on_hydration'->'linger_duration'->>'secs')::bigint
+        FROM mz_internal.mz_cluster_auto_scaling_strategies s
+        JOIN mz_clusters c ON c.id = s.cluster_id
+        WHERE c.name = 'prod_dbt_deploy'
+        """,
+        fetch="one",
+    )
+    if result is None or result[0] is None:
+        return None
+    return result
+
+
 class TestApplyGrantsAndPrivileges:
     @pytest.fixture(autouse=True)
     def cleanup(self, project):
@@ -43,14 +64,18 @@ class TestApplyGrantsAndPrivileges:
             project.run_sql("DROP ROLE IF EXISTS my_role")
         project.run_sql("DROP SCHEMA IF EXISTS blue_schema CASCADE")
         project.run_sql("DROP SCHEMA IF EXISTS green_schema CASCADE")
+        project.run_sql('DROP SCHEMA IF EXISTS "Green_Schema" CASCADE')
         project.run_sql("DROP CLUSTER IF EXISTS blue_cluster CASCADE")
         project.run_sql("DROP CLUSTER IF EXISTS green_cluster CASCADE")
 
-    def test_apply_schema_default_privileges(self, project):
+    # `deploy_init` creates the deployment schema with a quoted name, so a
+    # non-lowercase name has to survive into the generated statements too.
+    @pytest.mark.parametrize("to_schema", ["green_schema", "Green_Schema"])
+    def test_apply_schema_default_privileges(self, project, to_schema):
         project.run_sql("CREATE ROLE my_role")
         project.run_sql("GRANT my_role TO materialize")
         project.run_sql("CREATE SCHEMA blue_schema")
-        project.run_sql("CREATE SCHEMA green_schema")
+        project.run_sql(f'CREATE SCHEMA "{to_schema}"')
         project.run_sql(
             "ALTER DEFAULT PRIVILEGES FOR ROLE my_role IN SCHEMA blue_schema GRANT SELECT ON TABLES TO my_role"
         )
@@ -60,15 +85,15 @@ class TestApplyGrantsAndPrivileges:
                 "run-operation",
                 "internal_copy_schema_default_privs",
                 "--args",
-                "{from: blue_schema, to: green_schema}",
+                f"{{from: blue_schema, to: {to_schema}}}",
             ]
         )
 
         result = project.run_sql(
-            """SELECT count(*) = 1
+            f"""SELECT count(*) = 1
              FROM mz_internal.mz_show_default_privileges
              WHERE database = current_database()
-                AND schema = 'green_schema'
+                AND schema = '{to_schema}'
                 AND grantee = 'my_role'
                 AND object_type = 'table'
                 AND privilege_type = 'SELECT'""",
@@ -520,9 +545,34 @@ class TestTargetDeploy:
             assert (
                 "Deployment by" in tagged_schema_comment[0]
             ), f"Missing deployment info in {schema_name} comment"
-            assert (
-                "on" in tagged_schema_comment[0]
-            ), f"Missing timestamp in {schema_name} comment"
+            # The user and timestamp are read out of a single-row result, so
+            # match on their values rather than on the surrounding words.
+            assert re.search(
+                r"Deployment by \S+ on \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}",
+                tagged_schema_comment[0],
+            ), f"Missing user or timestamp in {schema_name} comment: {tagged_schema_comment[0]}"
+
+    def test_dbt_deploy_init_tags_schema_with_ci_tag(self, project, monkeypatch):
+        monkeypatch.setenv("CI_TAG", "gh_ci_123")
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        for schema_name in ["prod_dbt_deploy", "staging_dbt_deploy"]:
+            comment = project.run_sql(
+                f"""
+                SELECT c.comment
+                FROM mz_internal.mz_comments c
+                JOIN mz_schemas s USING (id)
+                WHERE s.name = '{schema_name}';
+                """,
+                fetch="one",
+            )
+
+            assert comment is not None, f"No CI tag on schema {schema_name}"
+            assert comment[0] == "gh_ci_123"
 
     def test_dbt_deploy_with_force(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
@@ -580,6 +630,128 @@ class TestTargetDeploy:
         project.run_sql("CREATE SCHEMA prod")
 
         run_dbt(["run-operation", "deploy_promote"], expect_pass=False)
+
+    def test_dbt_deploy_init_inherits_auto_scaling_strategy(self, project):
+        try:
+            project.run_sql(
+                "CREATE CLUSTER prod ("
+                "SIZE = 'scale=1,workers=1', "
+                "AUTO SCALING STRATEGY = (ON HYDRATION ("
+                "HYDRATION SIZE = 'scale=1,workers=2', LINGER DURATION = '15s')))"
+            )
+        except psycopg2.Error as e:
+            pytest.skip(f"local Materialize image rejects AUTO SCALING STRATEGY: {e}")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        strategy = get_deploy_cluster_auto_scaling_strategy(project)
+        assert strategy == ("scale=1,workers=2", 15)
+
+    def test_dbt_deploy_init_auto_scaling_strategy_idempotent(self, project):
+        try:
+            project.run_sql(
+                "CREATE CLUSTER prod ("
+                "SIZE = 'scale=1,workers=1', "
+                "AUTO SCALING STRATEGY = (ON HYDRATION ("
+                "HYDRATION SIZE = 'scale=1,workers=2')))"
+            )
+        except psycopg2.Error as e:
+            pytest.skip(f"local Materialize image rejects AUTO SCALING STRATEGY: {e}")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        run_dbt(["run-operation", "deploy_init"])
+        # The second run takes the existing-deploy-cluster branch, where the
+        # inherited strategy is validated but the cluster is not recreated.
+        run_dbt(["run-operation", "deploy_init"])
+
+        strategy = get_deploy_cluster_auto_scaling_strategy(project)
+        assert strategy == ("scale=1,workers=2", None)
+
+    def test_dbt_deploy_promote_keeps_auto_scaling_strategy(self, project):
+        try:
+            project.run_sql(
+                "CREATE CLUSTER prod ("
+                "SIZE = 'scale=1,workers=1', "
+                "AUTO SCALING STRATEGY = (ON HYDRATION ("
+                "HYDRATION SIZE = 'scale=1,workers=2', LINGER DURATION = '15s')))"
+            )
+        except psycopg2.Error as e:
+            pytest.skip(f"local Materialize image rejects AUTO SCALING STRATEGY: {e}")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        green_cluster_id = project.run_sql(
+            "SELECT id FROM mz_clusters WHERE name = 'prod_dbt_deploy'",
+            fetch="one",
+        )[0]
+
+        run_dbt(["run-operation", "deploy_promote"])
+
+        # The strategy travels with the swapped cluster: the promoted (formerly
+        # green) cluster is now production and still carries it.
+        promoted = project.run_sql(
+            """
+            SELECT
+                c.id,
+                s.strategy->'on_hydration'->>'hydration_size',
+                (s.strategy->'on_hydration'->'linger_duration'->>'secs')::bigint
+            FROM mz_clusters c
+            JOIN mz_internal.mz_cluster_auto_scaling_strategies s ON s.cluster_id = c.id
+            WHERE c.name = 'prod'
+            """,
+            fetch="one",
+        )
+        assert promoted == (green_cluster_id, "scale=1,workers=2", 15)
+
+        run_dbt(["run-operation", "deploy_cleanup"])
+
+        result = project.run_sql(
+            "SELECT count(*) = 0 FROM mz_clusters WHERE name = 'prod_dbt_deploy'",
+            fetch="one",
+        )
+        assert bool(result[0])
+
+    def test_dbt_deploy_init_auto_scaling_subsecond_linger(self, project):
+        try:
+            project.run_sql(
+                "CREATE CLUSTER prod ("
+                "SIZE = 'scale=1,workers=1', "
+                "AUTO SCALING STRATEGY = (ON HYDRATION ("
+                "HYDRATION SIZE = 'scale=1,workers=2', LINGER DURATION = '1500ms')))"
+            )
+        except psycopg2.Error as e:
+            pytest.skip(f"local Materialize image rejects AUTO SCALING STRATEGY: {e}")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        # The read-back keeps whole seconds only, so 1500ms is inherited as 1s.
+        strategy = get_deploy_cluster_auto_scaling_strategy(project)
+        assert strategy == ("scale=1,workers=2", 1)
+
+    def test_dbt_deploy_init_without_auto_scaling_strategy(self, project):
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        strategy_count = project.run_sql(
+            """
+            SELECT count(*)
+            FROM mz_internal.mz_cluster_auto_scaling_strategies s
+            JOIN mz_clusters c ON c.id = s.cluster_id
+            WHERE c.name = 'prod_dbt_deploy'
+            """,
+            fetch="one",
+        )
+        assert strategy_count == (0,)
 
     def test_dbt_deploy_init_unmanaged_empty(self, project):
         project.run_sql("CREATE CLUSTER prod REPLICAS ()")

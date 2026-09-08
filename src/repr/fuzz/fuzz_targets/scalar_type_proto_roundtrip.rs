@@ -13,19 +13,21 @@
 //!
 //! Two arms (the first byte selects):
 //!  - Arbitrary arm: drive `SqlScalarType`'s proptest `Arbitrary` strategy from
-//!    the fuzzer bytes to build a *valid, deeply-nested* type (the recursive
-//!    `List`/`Map`/`Array`/`Record`/`Range` variants, boundary `max_scale` and
-//!    char/varchar `length`, custom OIDs, etc.) and assert
-//!    `from_proto(into_proto(v)) == v`. Random proto bytes almost never reach
-//!    these variants, so this arm is what actually exercises the encoder.
+//!    the fuzzer bytes to build a *valid* type (boundary `max_scale` and
+//!    char/varchar `length`, custom OIDs, the recursive `List`/`Map`/`Record`
+//!    variants up to the strategy's depth cap of 2) and assert it survives an
+//!    encode/decode through the wire codec. Valid values are where a proto3
+//!    presence bug shows up: a default-valued field that silently stops being
+//!    written to the wire still passes an in-memory `RustType` round-trip.
 //!  - Raw-bytes arm: decode arbitrary bytes as `ProtoScalarType`, into Rust, and
 //!    re-encode, keeping coverage of the bare wire decoder against hostile
-//!    input.
+//!    input. `prost` is built with `no-recursion-limit`, so this is also the arm
+//!    that reaches deep nesting, far past what the strategy above produces.
 
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use mz_proto::{ProtoType, RustType};
+use mz_proto::{ProtoType, protobuf_roundtrip};
 use mz_repr::{ProtoScalarType, SqlScalarType};
 use proptest::strategy::{Strategy, ValueTree};
 use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
@@ -36,6 +38,13 @@ fn arbitrary_arm(seed: &[u8]) {
     for (dst, src) in buf.iter_mut().zip(seed.iter()) {
         *dst = *src;
     }
+    // NOTE: hashing the fuzzer bytes into a ChaCha seed costs libFuzzer its
+    // mutation gradient, one flipped bit re-rolls the whole value. The obvious
+    // fix, `RngAlgorithm::PassThrough`, hangs: it feeds the fuzzer bytes in as
+    // the random stream and then yields zeros forever once they run out, and
+    // `rand`'s Lemire sampler loops until a draw clears `thresh`, which a zero
+    // never does for a range that is not a power of two. Every strategy here
+    // outdraws a 4096-byte input.
     let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &buf);
     let mut runner = TestRunner::new_with_rng(Config::default(), rng);
     let value = match <SqlScalarType as proptest::arbitrary::Arbitrary>::arbitrary()
@@ -45,8 +54,8 @@ fn arbitrary_arm(seed: &[u8]) {
         Err(_) => return,
     };
 
-    let proto = value.into_proto();
-    let back = SqlScalarType::from_proto(proto).expect("valid SqlScalarType must round-trip");
+    let back = protobuf_roundtrip::<_, ProtoScalarType>(&value)
+        .expect("valid SqlScalarType must round-trip");
     assert_eq!(value, back, "SqlScalarType changed across proto roundtrip");
 }
 

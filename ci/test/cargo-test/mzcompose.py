@@ -17,30 +17,29 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from argparse import Namespace
 from typing import Any, Literal
+from urllib.parse import quote
 
 from materialize import MZ_ROOT, buildkite, rustc_flags, spawn, ui
 from materialize.cli.run import SANITIZER_TARGET
 from materialize.mzbuild import (
+    CargoRegistryFetchFailure,
     RustIncrementalBuildFailure,
-    run_and_detect_rust_incremental_build_failure,
+    run_and_detect_retryable_build_failure,
 )
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.services.azurite import Azurite
-from materialize.mzcompose.services.foundationdb import FoundationDB
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.rustc_flags import Sanitizer
 from materialize.util import PropagatingThread
 from materialize.xcompile import Arch, target
-
-FDB_PORT = 40108
 
 SERVICES = [
     Kafka(
@@ -58,13 +57,8 @@ SERVICES = [
     ),
     SchemaRegistry(),
     Postgres(),
+    MySql(),
     CockroachOrPostgresMetadata(),
-    FoundationDB(
-        # We need the same port inside and outside because FDB validates
-        # that the advertised port matches the connection port.
-        ports=[f"{FDB_PORT}:{FDB_PORT}"],
-        allow_host_ports=True,
-    ),
     Minio(
         # We need a stable port exposed to the host since we can't pass any arguments
         # to the .pt files used in the tests.
@@ -80,10 +74,6 @@ SERVICES = [
         "clusterd", {"mzbuild": "clusterd"}
     ),  # Only to download the binary
 ]
-
-
-def flatten(xss):
-    return [x for xs in xss for x in xs]
 
 
 def pull_image(image: str) -> None:
@@ -108,23 +98,25 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("args", nargs="*")
     args = parser.parse_args()
 
-    # Delete stale junit xml before anything else, including c.up(). The
-    # mzcompose plugin cleanup hook uploads all junit_*.xml it finds, even
-    # when the build is canceled. If we only delete after c.up(), a
-    # cancellation during service startup leaves the previous build's xml
-    # on disk and it gets uploaded as if it belongs to this build.
-    junit_path = (
-        os.getenv("CARGO_TARGET_DIR", "target") + "/nextest/ci/junit_cargo-test.xml"
-    )
-    if os.path.exists(junit_path):
-        os.remove(junit_path)
+    coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
+
+    # Miri excludes the network-based tests, so it needs none of the services
+    # below and pulls none of their mzbuild images. Dispatch before `c.up()` so
+    # the Buildkite step has nothing to depend on the build for.
+    if not coverage:
+        if args.miri_full:
+            run_miri_slow(dict(os.environ))
+            return
+        if args.miri_fast:
+            run_miri_fast(dict(os.environ))
+            return
 
     c.up(
         "kafka",
         "schema-registry",
         "postgres",
+        "mysql",
         c.metadata_store(),
-        "foundationdb",
         "minio",
         "azurite",
     )
@@ -133,32 +125,28 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     postgres_url = (
         f"postgres://postgres:postgres@localhost:{c.default_port('postgres')}"
     )
+    mysql_url = (
+        f"mysql://root:{quote(MySql.DEFAULT_ROOT_PASSWORD, safe='')}"
+        f"@localhost:{c.default_port('mysql')}"
+    )
     metadata_backend_url = (
         f"postgres://root@localhost:{c.default_port(c.metadata_store())}"
     )
-
-    # Create FDB cluster file for tests running on the host
-    fdb_cluster_file = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".cluster", delete=False
-    )
-    fdb_cluster_file.write(f"docker:docker@127.0.0.1:{FDB_PORT}")
-    fdb_cluster_file.close()
 
     env = dict(
         os.environ,
         KAFKA_ADDRS="localhost:30123",
         SCHEMA_REGISTRY_URL=f"http://localhost:{c.default_port('schema-registry')}",
         POSTGRES_URL=postgres_url,
+        MZ_TEST_MYSQL_URL=mysql_url,
         METADATA_BACKEND_URL=metadata_backend_url,
         MZ_SOFT_ASSERTIONS="1",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mz-test-persist-1d-lifecycle-delete",
         MZ_S3_UPLOADER_TEST_S3_BUCKET="mz-test-1d-lifecycle-delete",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_AZURE_CONTAINER="mz-test-azure",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=metadata_backend_url,
-        FDB_CLUSTER_FILE=fdb_cluster_file.name,
     )
 
-    coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
 
     metadata = json.loads(
@@ -169,10 +157,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     if coverage:
         run_coverage_test(args, env)
-    elif args.miri_full:
-        run_miri_slow(env)
-    elif args.miri_fast:
-        run_miri_fast(env)
     elif sanitizer != Sanitizer.none:
         run_sanitizer(args, env, metadata, sanitizer)
     else:
@@ -262,12 +246,9 @@ def run_sanitizer(
 ):
     cflags = [
         f"--target={target(Arch.host())}",
-        f"--gcc-toolchain=/opt/x-tools/{target(Arch.host())}/",
-        f"--sysroot=/opt/x-tools/{target(Arch.host())}/{target(Arch.host())}/sysroot",
     ] + rustc_flags.sanitizer_cflags[sanitizer]
     ldflags = cflags + [
         "-fuse-ld=lld",
-        f"-L/opt/x-tools/{target(Arch.host())}/{target(Arch.host())}/lib64",
     ]
     extra_env = {
         "CFLAGS": " ".join(cflags),
@@ -276,21 +257,26 @@ def run_sanitizer(
         "CXXSTDLIB": "stdc++",
         "CC": "cc",
         "CXX": "c++",
-        "CPP": "clang-cpp-18",
+        "CPP": "clang-cpp-19",
         "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
         "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
-        "PATH": f"/sanshim:/opt/x-tools/{target(Arch.host())}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "PATH": "/sanshim:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "RUSTFLAGS": (
             env.get("RUSTFLAGS", "") + " " + " ".join(rustc_flags.sanitizer[sanitizer])
         ),
         "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
     }
+    # `bin/ci-builder run` forwards only an allowlist of host variables, so the
+    # sanitizer environment has to be set inside the container. `env` also
+    # resolves `cargo` through the `PATH` it just set, which is what puts the
+    # `/sanshim` compiler wrappers ahead of the real ones.
+    env_prefix = ["env", *(f"{key}={val}" for key, val in extra_env.items())]
     spawn.runv(
         [
             "bin/ci-builder",
             "run",
             "nightly",
-            *flatten([["--env", f"{key}={val}"] for key, val in extra_env.items()]),
+            *env_prefix,
             "cargo",
             "build",
             "--workspace",
@@ -312,9 +298,7 @@ def run_sanitizer(
                     "bin/ci-builder",
                     "run",
                     "nightly",
-                    *flatten(
-                        [["--env", f"{key}={val}"] for key, val in extra_env.items()]
-                    ),
+                    *env_prefix,
                     "cargo",
                     "nextest",
                     "run",
@@ -425,7 +409,7 @@ def run_cargo_nextest(
         clusterd_thread = PropagatingThread(target=worker)
         clusterd_thread.start()
         try:
-            run_and_detect_rust_incremental_build_failure(
+            run_and_detect_retryable_build_failure(
                 [
                     "cargo",
                     "nextest",
@@ -439,10 +423,12 @@ def run_cargo_nextest(
             )
         except RustIncrementalBuildFailure:
             _handle_incremental_build_failure()
+        except CargoRegistryFetchFailure:
+            _handle_registry_fetch_failure()
         clusterd_thread.join()
 
     try:
-        run_and_detect_rust_incremental_build_failure(
+        run_and_detect_retryable_build_failure(
             [
                 "cargo",
                 "nextest",
@@ -462,6 +448,8 @@ def run_cargo_nextest(
         )
     except RustIncrementalBuildFailure:
         _handle_incremental_build_failure()
+    except CargoRegistryFetchFailure:
+        _handle_registry_fetch_failure()
 
 
 def _handle_incremental_build_failure() -> None:
@@ -469,4 +457,9 @@ def _handle_incremental_build_failure() -> None:
     for dir in ["target", "target-xcompile"]:
         if os.path.exists(dir):
             shutil.rmtree(dir, ignore_errors=True)
+    sys.exit(199)
+
+
+def _handle_registry_fetch_failure() -> None:
+    print("--- Detected transient cargo registry failure, retrying")
     sys.exit(199)

@@ -206,7 +206,7 @@ pub async fn drop_replication_slots(
             _ => {
                 return Err(PostgresError::Generic(anyhow::anyhow!(
                     "multiple pg_replication_slots entries for slot {}",
-                    &slot
+                    slot
                 )));
             }
         }

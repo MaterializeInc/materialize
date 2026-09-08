@@ -11,7 +11,6 @@ use std::error::Error;
 use std::fmt;
 
 use anyhow::bail;
-use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_proto::{RustType, TryFromProtoError};
 #[cfg(any(test, feature = "proptest"))]
@@ -47,9 +46,12 @@ pub struct Char<S: AsRef<str>>(pub S);
     PartialOrd,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
+// The serde name distinguishes this type from the `char_length` SQL function's
+// generated struct, which is also named `CharLength`. The stable LIR schema
+// registry requires container names to be unique.
+#[serde(rename = "CharMaxLength")]
 pub struct CharLength(pub(crate) u32);
 
 impl CharLength {
@@ -79,12 +81,11 @@ impl Arbitrary for CharLength {
     type Strategy = BoxedStrategy<CharLength>;
 
     fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        proptest::arbitrary::any::<u32>()
-            // We cap the maximum CharLength to prevent generating massive
-            // strings which can greatly slow down tests and are relatively
-            // uninteresting.
-            .prop_map(|len| CharLength(len % 300))
-            .boxed()
+        // We cap the maximum CharLength to prevent generating massive strings
+        // which can greatly slow down tests and are relatively uninteresting.
+        // The lower bound is the type's own: a `char(0)` does not exist, and
+        // `arb_datum_for_scalar` builds a string of `length` chars from this.
+        (1..300u32).prop_map(CharLength).boxed()
     }
 }
 
@@ -205,8 +206,15 @@ impl RustType<ProtoCharLength> for CharLength {
         ProtoCharLength { value: self.0 }
     }
 
+    // NOTE: `from_proto` is a trust boundary for durable and protocol state, so it
+    // enforces the same domain as `TryFrom<i64>` rather than trusting the wire.
     fn from_proto(proto: ProtoCharLength) -> Result<Self, TryFromProtoError> {
-        Ok(CharLength(proto.value))
+        CharLength::try_from(i64::from(proto.value)).map_err(|e| {
+            TryFromProtoError::InvalidFieldError(format!(
+                "ProtoCharLength::value {}: {e}",
+                proto.value
+            ))
+        })
     }
 }
 

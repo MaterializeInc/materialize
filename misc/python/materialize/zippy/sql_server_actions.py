@@ -45,20 +45,6 @@ class SqlServerStart(Action):
         )
 
 
-class SqlServerStop(Action):
-    """Stop the SQL Server instance."""
-
-    @classmethod
-    def requires(cls) -> set[type[Capability]]:
-        return {SqlServerRunning}
-
-    def withholds(self) -> set[type[Capability]]:
-        return {SqlServerRunning}
-
-    def run(self, c: Composition, state: State) -> None:
-        c.kill("sql-server")
-
-
 class SqlServerRestart(Action):
     """Restart the SqlServer instance."""
 
@@ -87,8 +73,7 @@ class CreateSqlServerTable(Action):
 
         if len(existing_sql_server_tables) == 0:
             self.new_sql_server_table = True
-            # A PK is now required for Debezium
-            this_sql_server_table.has_pk = True
+            this_sql_server_table.has_pk = random.choice([True, False])
 
             self.sql_server_table = this_sql_server_table
         elif len(existing_sql_server_tables) == 1:

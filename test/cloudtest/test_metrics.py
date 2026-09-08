@@ -65,7 +65,7 @@ def test_prometheus_sql_metrics(mz: MaterializeApplication) -> None:
         assert found, "could not read metrics"
 
     check_metrics("mz_frontier", "mz_read_frontier")
-    check_metrics("mz_usage", "mz_clusters_count")
+    check_metrics("mz_usage", "mz_compute_cluster_status")
     check_metrics("mz_compute", "mz_compute_replica_park_duration_seconds_total")
     check_metrics("mz_storage", "mz_storage_objects")
 

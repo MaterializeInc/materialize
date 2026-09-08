@@ -68,7 +68,8 @@ class BuildDataStorage(BaseDataStorage):
             );
             """)
 
-        self.database_connector.add_update_statements(sql_statements)
+        # The build_id guard makes the INSERT safe to replay.
+        self.database_connector.add_update_statements(sql_statements, idempotent=True)
 
     def add_build_job(
         self,
@@ -149,7 +150,9 @@ class BuildDataStorage(BaseDataStorage):
             ;
             """)
 
-        self.database_connector.add_update_statements(sql_statements)
+        # The build_job_id guard makes the INSERT safe to replay, and the
+        # UPDATE assigns a fixed value.
+        self.database_connector.add_update_statements(sql_statements, idempotent=True)
 
     def update_build_job_success(
         self,
@@ -164,7 +167,7 @@ class BuildDataStorage(BaseDataStorage):
             WHERE build_job_id = {as_sanitized_literal(job_id)};
             """)
 
-        self.database_connector.add_update_statements(sql_statements)
+        self.database_connector.add_update_statements(sql_statements, idempotent=True)
 
     def add_build_job_failure(
         self,

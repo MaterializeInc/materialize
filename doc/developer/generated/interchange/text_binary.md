@@ -1,6 +1,6 @@
 ---
 source: src/interchange/src/text_binary.rs
-revision: db271c31b1
+revision: 10a94621ed
 ---
 
 # interchange::text_binary

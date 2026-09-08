@@ -148,8 +148,13 @@ class ZeroDowntimeUpgradeEntireMzOnce(Scenario):
                 system_parameter_defaults=system_parameter_defaults,
             ),
             Manipulate(self, phase=1, mz_service="mz_1"),
-            # Set to a lower timeout since we'd like this scenario to fail fast
-            WaitReadyMz(mz_service="mz_2", timeout=30),
+            # mz_2 has to react to the DDL that Manipulate ran against mz_1
+            # while mz_2 was catching up. It halts and reboots in read-only
+            # mode once, paying a restart backoff plus a second catch-up round,
+            # so a healthy run needs roughly 25s here. The budget stays far
+            # below the 1200s default so that a genuinely stuck cutover still
+            # fails the pipeline quickly.
+            WaitReadyMz(mz_service="mz_2", timeout=180),
             PromoteMz(mz_service="mz_2"),
             Manipulate(self, phase=2, mz_service="mz_2"),
             Validate(self, mz_service="mz_2"),

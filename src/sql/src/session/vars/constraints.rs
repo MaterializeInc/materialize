@@ -28,6 +28,8 @@ pub static NUMERIC_BOUNDED_0_1_INCLUSIVE: NumericInRange<RangeInclusive<f64>> =
 pub static BYTESIZE_AT_LEAST_1MB: ByteSizeInRange<RangeFrom<ByteSize>> =
     ByteSizeInRange(ByteSize::mb(1)..);
 
+pub static U32_AT_LEAST_1: U32InRange<RangeFrom<u32>> = U32InRange(1..);
+
 #[derive(Debug)]
 pub enum ValueConstraint {
     /// Variable is read-only and cannot be updated.
@@ -192,6 +194,28 @@ where
             Err(VarError::InvalidParameterValue {
                 name: var.name(),
                 invalid_values: vec![size.to_string()],
+                reason: format!("only supports values in range {:?}", self.0),
+            })
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct U32InRange<R>(pub R);
+
+impl<R> DomainConstraint for U32InRange<R>
+where
+    R: RangeBounds<u32> + std::fmt::Debug + Send + Sync + 'static,
+{
+    type Value = u32;
+
+    fn check(&self, var: &dyn Var, n: &u32) -> Result<(), VarError> {
+        if self.0.contains(n) {
+            Ok(())
+        } else {
+            Err(VarError::InvalidParameterValue {
+                name: var.name(),
+                invalid_values: vec![n.to_string()],
                 reason: format!("only supports values in range {:?}", self.0),
             })
         }

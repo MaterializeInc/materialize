@@ -38,8 +38,8 @@ use regex::Regex;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::action::file::Compression;
+use crate::action::file::Contents;
 use crate::action::file::build_compression;
-use crate::action::file::build_contents;
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
@@ -72,7 +72,7 @@ pub async fn run_verify_data(
     loop {
         attempts += 1;
         if attempts > 10 {
-            bail!("found incomplete sentinel file in path {key} after 10 attempts")
+            bail!("S3 path {key} was still incomplete or empty after 10 attempts")
         }
 
         let files = client
@@ -89,7 +89,9 @@ pub async fn run_verify_data(
             {
                 thread::sleep(Duration::from_secs(1))
             }
-            None => bail!("no files found in bucket {bucket} key {key}"),
+            // An empty prefix means the writer has not uploaded anything yet,
+            // so retry just like for the INCOMPLETE sentinel.
+            None => thread::sleep(Duration::from_secs(1)),
             Some(files) => {
                 all_files = files;
                 break;
@@ -155,20 +157,21 @@ pub async fn run_verify_keys(
             .prefix(&format!("{}/", prefix_path))
             .send()
             .await?;
-        match files.contents {
-            Some(files) => {
-                let files: Vec<_> = files
-                    .iter()
-                    .filter(|obj| key_pattern.is_match(obj.key().unwrap()))
-                    .map(|obj| obj.key().unwrap())
-                    .collect();
-                if !files.is_empty() {
-                    println!("Found matching files: {files:?}");
-                    return Ok(ControlFlow::Continue);
-                }
+        if let Some(files) = files.contents {
+            let files: Vec<_> = files
+                .iter()
+                .filter(|obj| key_pattern.is_match(obj.key().unwrap()))
+                .map(|obj| obj.key().unwrap())
+                .collect();
+            if !files.is_empty() {
+                println!("Found matching files: {files:?}");
+                return Ok(ControlFlow::Continue);
             }
-            _ => thread::sleep(Duration::from_secs(1)),
         }
+        // Sleep whenever no attempt matched, not only when the prefix was
+        // empty. Otherwise the presence of any non-matching object burns all
+        // attempts back-to-back without giving the writer time to catch up.
+        thread::sleep(Duration::from_secs(1));
     }
 
     bail!("Did not find matching files in bucket {bucket} prefix {prefix_path}");
@@ -220,18 +223,18 @@ pub async fn run_upload(
     };
 
     let compression = build_compression(&mut cmd)?;
-    let content = build_contents(&mut cmd)?;
+    let contents = Contents::parse(&mut cmd)?;
+    cmd.args.done()?;
+
+    // S3 puts need the full body in memory, so materialize the streamed
+    // contents into a buffer before compressing and uploading.
+    let mut body = Vec::new();
+    contents.write_to(&mut body).await?;
 
     let aws_client = mz_aws_util::s3::new_client(&state.aws_config);
 
     // TODO(parkmycar): Stream data to S3. The ByteStream type from the AWS config is a bit
     // cumbersome to work with, so for now just stick with this.
-    let mut body = vec![];
-    for line in content {
-        body.extend(&line);
-        body.push(b'\n');
-    }
-
     let mut reader: Pin<Box<dyn AsyncRead + Send + Sync>> = match compression {
         Compression::None => Box::pin(&body[..]),
         Compression::Gzip => Box::pin(GzipEncoder::new(&body[..])),
@@ -272,6 +275,7 @@ pub async fn run_set_presigned_url(
     let key = cmd.args.string("key")?;
     let bucket = cmd.args.string("bucket")?;
     let var_name = cmd.args.string("var-name")?;
+    cmd.args.done()?;
 
     let aws_client = mz_aws_util::s3::new_client(&state.aws_config);
     let presign_config = mz_aws_util::s3::new_presigned_config();

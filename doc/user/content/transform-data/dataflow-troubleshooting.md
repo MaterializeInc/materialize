@@ -3,14 +3,16 @@ title: "Dataflow troubleshooting"
 description: "How to troubleshoot common dataflow-level scenarios where Materialize is not working as expected."
 menu:
   main:
-    name: "Dataflow troubleshooting"
+    name: "Troubleshoot dataflows"
     identifier: dataflow-troubleshooting
     parent: transform-data
     weight: 88
+aliases:
+  - /self-managed/v25.2/transform-data/troubleshooting/
 ---
 
 If you're unable to troubleshoot your issue using the [`Ingest data`](/ingest-data/troubleshooting/)
-and [`Transform data`](/transform-data/troubleshooting/) troubleshooting guides,
+and [`Transform data`](/serve-results/troubleshooting/) troubleshooting guides,
 going a level deeper in the stack might be needed. This guide collects common
 questions around dataflows to help you troubleshoot your queries.
 
@@ -26,7 +28,7 @@ arrives.
 
 Materialize dataflows act on collections of data. To provide fast access to the
 changes to individual records, the records can be stored in an indexed
-representation called [arrangements](/get-started/arrangements/#arrangements).
+representation called [arrangements](/fundamentals/concepts/arrangements/#arrangements).
 Arrangements can be manually created by users on views by creating an index on
 the view. But they are also used internally in dataflows, for instance, when
 joining relations.
@@ -111,7 +113,7 @@ just important to know than that they define a hierarchy on the operators.
 ## The system catalog and introspection relations
 
 Materialize collects a lot of useful information about the dataflows and
-operators in the system catalog in [introspection relations](/reference/system-catalog/mz_introspection).
+operators in the system catalog in [introspection relations](/sql/system-catalog/mz_introspection).
 The introspection relations are useful to troubleshoot and understand what is
 happening under the hood when Materialize is not behaving as expected. However,
 it is important to understand that most of the statistics we need for
@@ -389,11 +391,11 @@ ORDER BY mas.size DESC;
 
 In the [Materialize Console](https://console.materialize.com),
 
-- The [**Cluster Overview**](/console/clusters/) page displays the cluster
+- The [**Cluster Overview**](/developer-tools/console/clusters/) page displays the cluster
   resource utilization for a selected cluster as well as the resource intensive
   objects in the cluster.
 
-- The [**Environment Overview**](/console/monitoring/) page displays the
+- The [**Environment Overview**](/developer-tools/console/monitoring/) page displays the
   resource utilization for all your clusters. You can select a specific cluster
   to view its **Overview** page.
 
@@ -536,6 +538,6 @@ index, you have to drop and recreate all downstream dependencies.
 {{< warning >}}
 Forcing a re-plan using the approach above **will trigger hydration**,
 which incurs downtime while the objects are recreated and backfilled with
-pre-existing data. We recommend doing a [blue/green deployment](/manage/dbt/blue-green-deployments/)
+pre-existing data. We recommend doing a [blue/green deployment](/developer-tools/dbt/blue-green-deployments/)
 to handle these changes in production environments.
 {{< /warning >}}

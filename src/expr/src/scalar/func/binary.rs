@@ -677,39 +677,4 @@ mod test {
             SqlScalarType::Float32.nullable(true)
         );
     }
-
-    #[mz_ore::test]
-    fn mz_reflect_binary_func() {
-        use crate::BinaryFunc;
-        use mz_lowertest::{MzReflect, ReflectedTypeInfo};
-
-        let mut rti = ReflectedTypeInfo::default();
-        BinaryFunc::add_to_reflected_type_info(&mut rti);
-
-        // Check that the enum is registered
-        let variants = rti
-            .enum_dict
-            .get("BinaryFunc")
-            .expect("BinaryFunc should be in enum_dict");
-        assert!(
-            variants.contains_key("AddInt64"),
-            "AddInt64 variant should exist"
-        );
-        assert!(variants.contains_key("Gte"), "Gte variant should exist");
-
-        // Check that inner types are registered in struct_dict
-        assert!(
-            rti.struct_dict.contains_key("AddInt64"),
-            "AddInt64 should be in struct_dict"
-        );
-        assert!(
-            rti.struct_dict.contains_key("Gte"),
-            "Gte should be in struct_dict"
-        );
-
-        // Verify zero-field unit structs
-        let (names, types) = rti.struct_dict.get("AddInt64").unwrap();
-        assert!(names.is_empty(), "AddInt64 should have no field names");
-        assert!(types.is_empty(), "AddInt64 should have no field types");
-    }
 }

@@ -624,7 +624,7 @@ impl<'a> Ord for ArrayIdx<'a> {
         }
         match (&self.array, &other.array) {
             (ArrayOrd::Null(s), ArrayOrd::Null(o)) => {
-                debug_assert!(
+                mz_ore::soft_assert_no_log!(
                     self.idx < s.len() && other.idx < o.len(),
                     "null array indices in bounds"
                 );

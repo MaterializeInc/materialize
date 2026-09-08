@@ -10,7 +10,7 @@
 /// A copy of [`std::convert::From`] so we can work around Rust's orphan rules.
 ///
 /// The protobuf objects we durably persist for the catalog live in the
-/// [`mz_catalog_protos`] crate, because [`prost`]s heavy usage of proc-macros
+/// [`mz_catalog_protos`] crate, because `prost`'s heavy usage of proc-macros
 /// results in very long compile times. By moving them into a separate crate we
 /// need to recompile them a lot less frequently.
 pub(crate) trait UpgradeFrom<T>: Sized {

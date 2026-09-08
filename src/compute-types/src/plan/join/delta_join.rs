@@ -48,8 +48,13 @@ pub struct DeltaJoinPlan {
 pub struct DeltaPathPlan {
     /// The relation whose updates seed the dataflow path.
     pub source_relation: usize,
-    /// The key we expect the source relation to be arranged by.
-    pub source_key: Vec<LirScalarExpr>,
+    /// The key we expect the source relation to be arranged by, or `None` when the source
+    /// relation is consumed as a raw (unarranged) collection.
+    ///
+    /// The `None` case arises only in single-time dataflows (e.g. a `SELECT` or other one-shot
+    /// query), where a single delta path suffices and its source can be hydrated directly from a
+    /// collection rather than an arrangement.
+    pub source_key: Option<Vec<LirScalarExpr>>,
     /// An initial closure to apply before any stages.
     pub initial_closure: JoinClosure,
     /// A *sequence* of stages to apply one after the other.
@@ -254,7 +259,7 @@ impl DeltaJoinPlan {
                 initial_closure,
                 stage_plans,
                 final_closure,
-                source_key: source_key.to_vec(),
+                source_key: Some(source_key.to_vec()),
             });
         }
 

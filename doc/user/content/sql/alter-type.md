@@ -12,10 +12,8 @@ Use `ALTER TYPE` to:
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "Rename" >}}
-
-### Rename
 
 To rename a type:
 
@@ -23,8 +21,6 @@ To rename a type:
 
 {{< /tab >}}
 {{< tab "Change owner" >}}
-
-### Change owner
 
 To change the owner of a type:
 

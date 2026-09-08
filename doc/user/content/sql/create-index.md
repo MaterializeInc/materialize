@@ -8,9 +8,9 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE INDEX` creates an in-memory [index](/concepts/indexes/) on a source, view, or materialized view.
+`CREATE INDEX` creates an in-memory [index](/fundamentals/concepts/indexes/) on a source, view, or materialized view.
 
-In Materialize, indexes store query results in memory within a specific [cluster](/concepts/clusters/), and keep these results **incrementally updated** as new data arrives. This ensures that indexed data remains [fresh](/concepts/reaction-time), reflecting the latest changes with minimal latency.
+In Materialize, indexes store query results in memory within a specific [cluster](/fundamentals/concepts/clusters/), and keep these results **incrementally updated** as new data arrives. This ensures that indexed data remains [fresh](/fundamentals/concepts/reaction-time), reflecting the latest changes with minimal latency.
 
 The primary use case for indexes is to accelerate direct queries issued via [`SELECT`](/sql/select/) statements.
 By maintaining fresh, up-to-date results in memory, indexes can significantly [optimize query performance](/transform-data/optimization/), reducing both response time and compute load—especially for resource-intensive operations such as joins, aggregations, and repeated subqueries.
@@ -20,9 +20,8 @@ Because indexes are scoped to a single cluster, they are most useful for acceler
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "CREATE INDEX" >}}
-### Create index
 
 Create an index using the specified columns as the index key.
 
@@ -30,7 +29,6 @@ Create an index using the specified columns as the index key.
 
 {{< /tab >}}
 {{< tab "CREATE DEFAULT INDEX" >}}
-### Create default index
 
 Create a default index using a set of columns that uniquely identify each row.
 If this set of columns cannot be inferred, all columns are used.

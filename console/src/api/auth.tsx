@@ -14,6 +14,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 
+import { AppConfig } from "~/config/AppConfig";
 import { CloudRuntimeConfig } from "~/config/AppConfigSwitch";
 import { useAppConfig } from "~/config/useAppConfig";
 import {
@@ -170,6 +171,20 @@ export function useSelfManagedSubscription() {
   return { subscription, isLoading, isError, error };
 }
 
+/**
+ * Whether this deployment fetches the current organization at all. This also
+ * decides the organization half of the sync-engine cache key
+ * (store/syncEngineCache.ts), which isolates tenants' caches on a shared
+ * origin, so every caller must use this one predicate.
+ */
+export function isOrganizationFetchEnabled(appConfig: AppConfig): boolean {
+  const isLocalImpersonation =
+    appConfig.mode === "cloud" &&
+    appConfig.isImpersonating &&
+    appConfig.isLocalImpersonation;
+  return appConfig.mode !== "self-managed" && !isLocalImpersonation;
+}
+
 // Convenience hook for getting the current organization ID based on
 // the app's deployment mode. Although "organizations" don't really exist in
 // self managed environments, a lot of our code uses the organization ID as part of a key to cache
@@ -177,13 +192,8 @@ export function useSelfManagedSubscription() {
 // in deployment modes where the organization ID is not available.
 export function useMaybeCurrentOrganizationId() {
   const appConfig = useAppConfig();
-  const isLocalImpersonation =
-    appConfig.mode === "cloud" &&
-    appConfig.isImpersonating &&
-    appConfig.isLocalImpersonation;
-
   const isCurrentOrganizationFetchEnabled =
-    appConfig.mode !== "self-managed" && !isLocalImpersonation;
+    isOrganizationFetchEnabled(appConfig);
 
   const res = useQuery({
     queryKey: queryKeys.currentOrganization(),
@@ -233,16 +243,35 @@ export function useCanViewBilling({
   return !!flags["billing-ui-3756"] && isOrgAdmin;
 }
 
-export function useCanViewUsage({
-  runtimeConfig,
+/**
+ * Whether the Usage & Billing nav tab should be visible. Pulled out of
+ * `useCanViewUsage` as a pure function so its branches (impersonation,
+ * non-production stacks, plan-type gating) are unit-testable without a
+ * provider wrapper.
+ */
+export function canViewUsage({
+  isImpersonating,
+  currentStack,
+  hasInvoiceRead,
+  isBillingVisible,
+  subscriptionType,
 }: {
-  runtimeConfig: CloudRuntimeConfig;
-}) {
-  const { organization } = useCurrentOrganization();
-  const isBillingVisible = useCanViewBilling({ runtimeConfig });
-
+  isImpersonating: boolean;
+  /** `null` outside cloud mode, where there is no stack concept. */
+  currentStack: string | null;
+  hasInvoiceRead: boolean;
+  isBillingVisible: boolean;
+  subscriptionType: string | undefined;
+}): boolean {
   // We assume impersonation users can always view usage pages
-  if (runtimeConfig.isImpersonating) {
+  if (isImpersonating) {
+    return true;
+  }
+
+  // Non-production stacks (staging, dev, personal stacks) always show Usage &
+  // Billing: demo/test orgs there don't reliably have a real subscription or
+  // the invoice-read permission a production customer would.
+  if (currentStack !== null && currentStack !== "production") {
     return true;
   }
 
@@ -252,8 +281,28 @@ export function useCanViewUsage({
   }
 
   return (
-    hasInvoiceReadPermission(runtimeConfig.user) &&
-    !!organization?.subscription?.type &&
-    allowedPlanTypes.includes(organization.subscription.type)
+    hasInvoiceRead &&
+    !!subscriptionType &&
+    allowedPlanTypes.includes(subscriptionType)
   );
+}
+
+export function useCanViewUsage({
+  runtimeConfig,
+}: {
+  runtimeConfig: CloudRuntimeConfig;
+}) {
+  const { organization } = useCurrentOrganization();
+  const isBillingVisible = useCanViewBilling({ runtimeConfig });
+  const appConfig = useAppConfig();
+
+  return canViewUsage({
+    isImpersonating: runtimeConfig.isImpersonating,
+    currentStack: appConfig.mode === "cloud" ? appConfig.currentStack : null,
+    hasInvoiceRead:
+      !runtimeConfig.isImpersonating &&
+      hasInvoiceReadPermission(runtimeConfig.user),
+    isBillingVisible,
+    subscriptionType: organization?.subscription?.type,
+  });
 }

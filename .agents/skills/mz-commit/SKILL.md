@@ -32,8 +32,15 @@ Materialize uses squash merging, so the PR title becomes the commit subject on `
 
 Write a thorough PR description explaining the rationale for the change.
 Mention which tests were added or modified in the pull request description, but do not list which tests were run.
-To auto-close issues, include `Fixes database-issues#NNNN`.
 Add release notes for user-visible changes (should complete "This release will...").
+
+## Issue tracking: Linear only for new issues
+
+New issues are filed in Linear, never in the `database-issues` GitHub repo. `database-issues` is legacy. Its open issues are still valid to read, link, and close, so an existing `database-issues#NNNN` reference in code or a comment stays as it is.
+
+Reference the Linear issue by its its key, e.g. `Closes: SQL-450`. Don't include the full URL containing the issue title.
+
+When a change closes a legacy GitHub issue, `Fixes database-issues#NNNN` works for auto-closing.
 
 ## Cargo.lock discipline
 
@@ -54,3 +61,11 @@ Never regenerate the entire Cargo.lock — bare `cargo update` bumps every semve
 * Push branches to your fork.
 * Pull requests target `main` on `MaterializeInc/materialize`.
 * Each PR should contain one semantic change.
+
+## Splitting large branches
+
+The repo is squash-merge-only: every PR lands as exactly one commit on `main`, however many commits it had internally. Keep each commit/PR under ~500 changed lines, split by concern, not by the chronology of how the code was written.
+
+* Prefer GitHub's native stacked-PR support to land a chain of dependent PRs, where it's set up for the branch. Where it isn't, fall back to sequential landing, one PR at a time: cut a PR from the front, merge, `git fetch upstream && git rebase upstream/main` the remaining tail, repeat. Squash-only means merging an earlier PR always replaces its commits with one new commit, so any later branch still built on the old commits needs a rebase either way; sequential landing keeps that to one clean rebase per merge instead of compounding across an unmanaged chain.
+* Land foundational or low-conflict commits (design docs, scaffolding, new deps) first. The longer a tail branch lives, the more likely a concurrent unrelated PR touches the same files and turns a clean rebase into a real conflict.
+* To split one large diff into smaller commits, or squash a long messy history into fewer reviewable units, as an alternative to interactive rebase: `git reset --soft <base>` stages the full diff, then stage per group with `git add <files>` for a file-level split, or use `git checkout <sha> -- .` to reproduce an exact historical checkpoint's tree for a chronological squash. (Claude Code's Bash tool has no interactive terminal, so agents need this non-interactive form; use whichever you prefer by hand.) `git checkout <sha> -- .` only adds or updates paths present in `<sha>`, it never removes files that shouldn't exist yet at that checkpoint: compute the removal set first with `comm -23 <(git ls-files|sort) <(git ls-tree -r --name-only <sha>|sort)` and `git rm -f` those, or the checkpoint commit silently carries files from later history. Verify every checkpoint with `git diff HEAD <sha>` (must be empty) before moving to the next. Reattach already-clean commits on top with `git rebase --onto <new-branch> <old-base>` (also non-interactive).

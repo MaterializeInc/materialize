@@ -41,7 +41,9 @@ use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use crate::command_channel;
-use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
+use crate::compute_state::{
+    ActiveComputeState, ComputeState, PeekPermits, PendingPeek, ReportedFrontier,
+};
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
 
 /// Caller-provided configuration for compute.
@@ -54,6 +56,70 @@ pub struct ComputeInstanceContext {
     /// Context required to connect to an external sink from compute,
     /// like the `CopyToS3OneshotSink` compute sink.
     pub connection_context: ConnectionContext,
+}
+
+/// Which of a process's compute runtimes a given runtime is.
+///
+/// A clusterd process runs a single `Solo` runtime by default. When an interactive runtime is
+/// configured, the process instead runs a `Maintenance` and an `Interactive` runtime side by side.
+/// The named roles share per-process resources (persist cache, metrics registry, log spans). The
+/// role distinguishes them so that only the globals-owning runtime runs the non-idempotent
+/// process-global initializers, and so metric series and log spans do not collide.
+///
+/// `Solo` exists so the single-runtime default stays behaviorally identical to a deployment without
+/// a second runtime: no `role` metric label, and it owns the process globals just as the sole
+/// runtime always has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComputeRuntimeRole {
+    /// The sole runtime of a single-runtime process. Owns index maintenance and the process-global
+    /// initializers.
+    Solo,
+    /// The maintenance runtime of a two-runtime process. Owns index maintenance and the
+    /// process-global initializers.
+    Maintenance,
+    /// The interactive runtime of a two-runtime process. Shares the process globals owned by
+    /// maintenance and serves reads.
+    ///
+    /// Test-only until the interactive runtime exists to construct it. It is present because the
+    /// `role` label's entire purpose is that two named roles register into one process registry
+    /// without colliding, and nothing else can express that: `Solo` registers the same metric names
+    /// with no `role` label, so prometheus rejects it alongside a named role for differing label
+    /// dimensions rather than treating it as a second series. Verifying non-collision therefore
+    /// needs a second *named* role.
+    ///
+    /// TODO: drop the `cfg` when the interactive runtime lands and constructs this.
+    #[cfg(test)]
+    Interactive,
+}
+
+impl ComputeRuntimeRole {
+    /// The `role` metric/log label for this role, or `None` for `Solo`.
+    ///
+    /// `Solo` omits the label so a single-runtime deployment registers exactly as it did before a
+    /// second runtime existed, keeping exact-match dashboards and alerts unchanged.
+    pub fn label(self) -> Option<&'static str> {
+        match self {
+            ComputeRuntimeRole::Solo => None,
+            ComputeRuntimeRole::Maintenance => Some("maintenance"),
+            #[cfg(test)]
+            ComputeRuntimeRole::Interactive => Some("interactive"),
+        }
+    }
+
+    /// Whether this role runs the non-idempotent, process-global initializers.
+    ///
+    /// `Solo` and `Maintenance` run them. An interactive runtime shares the same process and
+    /// inherits the globals maintenance installs, so re-running them would either double-apply a
+    /// non-idempotent effect or race maintenance.
+    ///
+    /// NOTE: every role a release build can construct owns the globals, so this is constantly true
+    /// outside tests. The distinction becomes load-bearing when the interactive runtime lands.
+    pub fn owns_process_globals(self) -> bool {
+        matches!(
+            self,
+            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance
+        )
+    }
 }
 
 /// Type alias for the storage timely log reader.
@@ -77,6 +143,8 @@ struct Config {
     pub metrics_registry: MetricsRegistry,
     /// The number of timely workers per process.
     pub workers_per_process: usize,
+    /// Bounds how many offloaded peek walks run at once, shared by every worker this server runs.
+    pub peek_permits: Arc<PeekPermits>,
     /// A reader for each storage worker in this process.
     pub storage_log_readers: Arc<Mutex<Vec<Option<StorageTimelyLogReader>>>>,
 }
@@ -84,6 +152,7 @@ struct Config {
 /// Initiates a timely dataflow computation, processing compute commands.
 pub async fn serve(
     timely_config: TimelyConfig,
+    role: ComputeRuntimeRole,
     metrics_registry: &MetricsRegistry,
     persist_clients: Arc<PersistClientCache>,
     txns_ctx: TxnsContext,
@@ -105,15 +174,19 @@ pub async fn serve(
         metrics_registry,
         mz_timely_util::column_pager::tiered_policy(),
     );
+    mz_timely_util::pool_config::metrics::register(metrics_registry);
 
     let config = Config {
         persist_clients,
         txns_ctx,
         tracing_handle,
-        metrics: ComputeMetrics::register_with(metrics_registry),
+        metrics: ComputeMetrics::register_with(metrics_registry, role),
         context,
         metrics_registry: metrics_registry.clone(),
         workers_per_process,
+        // NOTE: per compute runtime, not global. A process running a maintenance and an
+        // interactive runtime calls `serve` twice and admits the bound once per call.
+        peek_permits: Arc::new(PeekPermits::new(workers_per_process)),
         storage_log_readers: Arc::new(Mutex::new(storage_log_readers)),
     };
     let tokio_executor = tokio::runtime::Handle::current();
@@ -198,7 +271,11 @@ pub(crate) struct ResponseSender {
 }
 
 impl ResponseSender {
-    fn new(inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>, worker_id: usize) -> Self {
+    /// `pub(crate)` rather than private so the peek tests can build the sender a worker holds.
+    pub(crate) fn new(
+        inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>,
+        worker_id: usize,
+    ) -> Self {
         Self {
             inner,
             worker_id,
@@ -207,7 +284,7 @@ impl ResponseSender {
     }
 
     /// Set the cluster protocol nonce.
-    fn set_nonce(&mut self, nonce: Uuid) {
+    pub(crate) fn set_nonce(&mut self, nonce: Uuid) {
         self.nonce = Some(nonce);
     }
 
@@ -248,6 +325,9 @@ struct Worker<'w> {
     metrics_registry: MetricsRegistry,
     /// The number of timely workers per process.
     workers_per_process: usize,
+    /// Bounds how many offloaded peek walks run at once, shared by the workers of one `serve`
+    /// call rather than by the process.
+    peek_permits: Arc<PeekPermits>,
     /// Reader for storage timely logging events.
     storage_log_reader: Option<StorageTimelyLogReader>,
 }
@@ -300,6 +380,7 @@ impl ClusterSpec for Config {
             tracing_handle: Arc::clone(&self.tracing_handle),
             metrics_registry: self.metrics_registry.clone(),
             workers_per_process: self.workers_per_process,
+            peek_permits: Arc::clone(&self.peek_permits),
             storage_log_reader,
         }
         .run()
@@ -406,6 +487,13 @@ impl<'w> Worker<'w> {
                 sleep_duration = Some(next_maintenance.saturating_duration_since(now))
             };
 
+            // Do not sleep while a peek waits for its turn. Only the sweep below gives it one,
+            // and nothing else leaves an activation behind to end the park.
+            let sleep_duration = match &self.compute_state {
+                Some(state) if state.peeks_awaiting_turn() => Some(Duration::ZERO),
+                _ => sleep_duration,
+            };
+
             // Step the timely worker, recording the time taken.
             let timer = self.metrics.timely_step_duration_seconds.start_timer();
             self.timely_worker.step_or_park(sleep_duration);
@@ -438,6 +526,7 @@ impl<'w> Worker<'w> {
                 self.context.clone(),
                 self.metrics_registry.clone(),
                 self.workers_per_process,
+                Arc::clone(&self.peek_permits),
                 self.storage_log_reader.take(),
             ));
         }
@@ -681,8 +770,10 @@ impl<'w> Worker<'w> {
             // All re-used dataflows should roll back any believed communicated information (e.g. frontiers)
             // so that they recommunicate that information as if from scratch.
 
-            // Remove all pending peeks.
-            for (_, peek) in std::mem::take(&mut compute_state.pending_peeks) {
+            // Remove all peeks, whether they have started or are still awaiting a turn.
+            let queued = std::mem::take(&mut compute_state.queued_peeks);
+            let pending = std::mem::take(&mut compute_state.pending_peeks);
+            for peek in queued.into_iter().map(PendingPeek::Index).chain(pending) {
                 // Log dropping the peek request.
                 if let Some(logger) = compute_state.compute_logger.as_mut() {
                     logger.log(&peek.as_log_event(false));

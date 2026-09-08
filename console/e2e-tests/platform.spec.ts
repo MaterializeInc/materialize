@@ -92,19 +92,7 @@ for (const region of REGIONS) {
     // Create api key
     await context.goto(`${CONSOLE_ADDR}/access`);
     console.log("Creating app password", apiKeyName);
-    const appPasswordLink = page.getByRole("link", {
-      name: "App Password",
-      exact: true,
-    });
-    // Clicking "Create new" opens a Chakra popover. Under WebKit in CI the
-    // click occasionally lands before the popover is wired up, so the menu
-    // never opens and the "App Password" entry never appears. Retry clicking
-    // until the popover is actually open.
-    await expect(async () => {
-      await page.getByRole("button", { name: "Create new" }).click();
-      await expect(appPasswordLink).toBeVisible({ timeout: 2_000 });
-    }).toPass({ timeout: 30_000 });
-    await appPasswordLink.click();
+    await page.getByRole("button", { name: "Create New App Password" }).click();
     await page.getByRole("dialog", { name: "New app password" }).waitFor();
     await page.getByRole("textbox", { name: "Name" }).fill(apiKeyName);
     await page.getByRole("button", { name: "Create password" }).click();
@@ -130,9 +118,8 @@ for (const region of REGIONS) {
     //   await testAccountBlocking(page, context, region);
     // }
 
-    // Wait for the onboarding survey to load then skip it
-    await page.getByTestId("onboarding-survey").waitFor();
-    await context.goto(`${CONSOLE_ADDR}/environment-not-ready/enable-region`);
+    // Wait for the enable region page to load
+    await page.getByTestId("enable-region").waitFor();
 
     await retry(
       async () => {

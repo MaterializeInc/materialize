@@ -403,9 +403,9 @@ fn typecheck_node(
             .create_stub_table(dep_id, &dep_value.columns)
             .map_err(|err| {
                 ObjectTypeCheckError::internal(
-                    dep_id.clone(),
+                    node_id.clone(),
                     db_obj.path.clone(),
-                    format!("failed to stub dependency: {err}"),
+                    format!("internal: failed to stub dependency: {err}"),
                 )
             })?;
     }
@@ -504,6 +504,53 @@ mod run_tests {
             merged
                 .tables
                 .contains_key(&"materialize.storage.t1".parse::<ObjectId>().unwrap())
+        );
+    }
+
+    /// Needs three objects: `sum()` types as `Numeric { max_scale: Some(0) }`,
+    /// but that type only has to survive SQL round-tripping once a dependent
+    /// forces the aggregate to be stubbed.
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    #[mz_ore::test]
+    fn sum_of_integer_column_stubs_for_dependents() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        write_sql(
+            root,
+            "models/materialize/storage/t1.sql",
+            "CREATE TABLE t1 (u uint8, b bigint, g int)",
+        );
+        write_sql(
+            root,
+            "models/materialize/public/agg.sql",
+            "CREATE VIEW agg AS SELECT sum(u) AS su, sum(b) AS sb, g \
+             FROM materialize.storage.t1 GROUP BY g",
+        );
+        write_sql(
+            root,
+            "models/materialize/public/downstream.sql",
+            "CREATE VIEW downstream AS SELECT su, sb, g FROM materialize.public.agg",
+        );
+
+        let fs = crate::fs::FileSystem::new();
+        let project = compile_sync(&fs, root, None, None, &BTreeMap::new()).unwrap();
+        let (merged, _stats) = run(
+            root,
+            "default",
+            None,
+            &BTreeMap::new(),
+            &project,
+            Types::default(),
+        )
+        .unwrap();
+
+        let agg = &merged.tables[&"materialize.public.agg".parse::<ObjectId>().unwrap()];
+        assert_eq!(agg["su"].r#type, "numeric(39,0)");
+        assert_eq!(agg["sb"].r#type, "numeric(39,0)");
+        assert!(
+            merged
+                .tables
+                .contains_key(&"materialize.public.downstream".parse::<ObjectId>().unwrap())
         );
     }
 

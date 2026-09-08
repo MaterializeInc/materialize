@@ -1,0 +1,155 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_internal.mz_aws_connections. The view is a
+# BuiltinMaterializedView backed by SQL over mz_internal.mz_catalog_raw: see
+# MZ_AWS_CONNECTIONS in src/catalog/src/builtin/mz_internal.rs and the
+# parse_connection_details helper in
+# src/expr/src/scalar/func/impls/jsonb.rs. The assume-role columns (principal,
+# external_id, example_trust_policy) are reconstructed from the AWS context
+# functions; the sqllogictest env configures that context (see
+# ConnectionContext::for_tests), so the built-in mz_analytics connection
+# doubles as the assume-role parity check here. Real credential connections
+# with live AWS are exercised by test/aws-localstack/aws-connection/.
+
+mode cockroach
+
+reset-server
+
+# --- Schema -------------------------------------------------------------------
+
+# Lock down: 13 columns, canonical order, types, and nullability.
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_aws_connections' AND s.name = 'mz_internal'
+ORDER BY c.position
+----
+id  text  false
+endpoint  text  true
+region  text  true
+access_key_id  text  true
+access_key_id_secret_id  text  true
+secret_access_key_secret_id  text  true
+session_token  text  true
+session_token_secret_id  text  true
+assume_role_arn  text  true
+assume_role_session_name  text  true
+principal  text  true
+external_id  text  true
+example_trust_policy  jsonb  true
+
+# --- Fresh env: only the built-in mz_analytics connection ---------------------
+
+# Anchor count. mz_analytics is the sole AWS connection on a fresh env.
+query I
+SELECT count(*) FROM mz_internal.mz_aws_connections
+----
+1
+
+# mz_analytics is an assume-role connection. With the configured AWS context,
+# principal, external_id, and example_trust_policy are reconstructed exactly as
+# AwsAssumeRole::external_id / example_trust_policy produced them: principal is
+# the connection role ARN, external_id is mz_<prefix>_<conn_id>, and the trust
+# policy carries both. This is the SQL<->Rust parity check for the assume-role
+# branch.
+query TTTT
+SELECT
+    ac.assume_role_arn,
+    ac.principal,
+    ac.external_id = 'mz_test-aws-external-id-prefix_' || ac.id,
+    ac.example_trust_policy = jsonb_build_object(
+        'Version', '2012-10-17',
+        'Statement', jsonb_build_array(jsonb_build_object(
+            'Effect', 'Allow',
+            'Principal', jsonb_build_object(
+                'AWS', 'arn:aws:iam::123456789000:role/MaterializeConnection'),
+            'Action', 'sts:AssumeRole',
+            'Condition', jsonb_build_object(
+                'StringEquals', jsonb_build_object(
+                    'sts:ExternalId', 'mz_test-aws-external-id-prefix_' || ac.id))
+        ))
+    )
+FROM mz_internal.mz_aws_connections ac
+JOIN mz_connections c USING (id)
+WHERE c.name = 'mz_analytics'
+----
+(empty)  arn:aws:iam::123456789000:role/MaterializeConnection  true  true
+
+# --- A credentials connection populates the create_sql-derived columns --------
+
+statement ok
+CREATE SECRET sak AS 'secret-access-key'
+
+statement ok
+CREATE CONNECTION ac TO AWS (
+    ENDPOINT = 'http://localhost:4566',
+    REGION = 'us-east-1',
+    ACCESS KEY ID = 'AKIAEXAMPLE',
+    SECRET ACCESS KEY = SECRET sak
+) WITH (VALIDATE = false)
+
+# The inline access key id is shown; the secret access key is shown as its
+# secret id (matching mz_secrets.id). The assume-role and context columns are
+# NULL for a credentials connection.
+query TTTTTTTTTT
+SELECT
+    endpoint,
+    region,
+    access_key_id,
+    access_key_id_secret_id,
+    secret_access_key_secret_id = (SELECT id FROM mz_secrets WHERE name = 'sak'),
+    assume_role_arn,
+    assume_role_session_name,
+    principal,
+    external_id,
+    example_trust_policy
+FROM mz_internal.mz_aws_connections ac
+JOIN mz_connections c USING (id)
+WHERE c.name = 'ac'
+----
+http://localhost:4566  us-east-1  AKIAEXAMPLE  NULL  true  NULL  NULL  NULL  NULL  NULL
+
+# --- Non-aws connections are excluded -----------------------------------------
+
+statement ok
+CREATE CONNECTION kc TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)
+
+query I
+SELECT count(*) FROM mz_internal.mz_aws_connections ac
+JOIN mz_connections c USING (id)
+WHERE c.type != 'aws'
+----
+0
+
+# --- FK-like invariant: every row joins its parent connection -----------------
+
+query I
+SELECT count(*) FROM mz_internal.mz_aws_connections ac
+LEFT JOIN mz_connections c ON ac.id = c.id
+WHERE c.id IS NULL
+----
+0
+
+# No duplicate ids.
+query I
+SELECT count(*) - count(DISTINCT id) FROM mz_internal.mz_aws_connections
+----
+0
+
+statement ok
+DROP CONNECTION ac
+
+statement ok
+DROP CONNECTION kc
+
+statement ok
+DROP SECRET sak

@@ -186,6 +186,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<StorageSinkConnection, R>
 
 impl<C: ConnectionAccess> StorageSinkConnection<C> {
     /// returns an option to not constrain ourselves in the future
+    ///
+    /// NOTE: `mz_sinks` digs this out of `create_sql` instead. Note the iceberg
+    /// case reports the catalog connection, not the optional AWS one.
     pub fn connection_id(&self) -> Option<CatalogItemId> {
         use StorageSinkConnection::*;
         match self {
@@ -198,6 +201,9 @@ impl<C: ConnectionAccess> StorageSinkConnection<C> {
     }
 
     /// Returns the name of the sink connection.
+    ///
+    /// NOTE: `mz_sinks.type` comes from `create_sql`, not from here, so the two
+    /// sets of strings have to stay identical.
     pub fn name(&self) -> &'static str {
         use StorageSinkConnection::*;
         match self {
@@ -485,6 +491,8 @@ impl<C: ConnectionAccess> KafkaSinkFormatType<C> {
 }
 
 impl<C: ConnectionAccess> KafkaSinkFormat<C> {
+    /// NOTE: the `mz_sinks` `format` column reimplements this in SQL, in
+    /// `parse_catalog_create_sql`. Change both or they drift.
     pub fn get_format_name<'a>(&'a self) -> Cow<'a, str> {
         // For legacy reasons, if the key-format is none or the key & value formats are
         // both the same (either avro or json), we return the value format name,

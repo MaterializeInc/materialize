@@ -12,7 +12,6 @@ use std::mem::size_of;
 use std::str::FromStr;
 
 use anyhow::{Error, anyhow};
-use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
 #[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
@@ -40,8 +39,7 @@ const PUBLIC_BYTE: u8 = b'p';
     PartialOrd,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum RoleId {

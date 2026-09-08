@@ -1,0 +1,88 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_catalog.mz_ssh_tunnel_connections. The view is a
+# BuiltinMaterializedView backed by SQL over mz_internal.mz_catalog_raw: see
+# MZ_SSH_TUNNEL_CONNECTIONS in src/catalog/src/builtin/mz_catalog.rs and the
+# parse_connection_details helper in
+# src/expr/src/scalar/func/impls/jsonb.rs. The end-to-end SSH tunnel behaviour
+# is exercised by test/ssh-connection/*; this file pins the column shape and
+# the parent-type filtering.
+
+mode cockroach
+
+reset-server
+
+# --- Schema -------------------------------------------------------------------
+
+# Lock down: 3 columns, canonical order, types, and nullability.
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_ssh_tunnel_connections' AND s.name = 'mz_catalog'
+ORDER BY c.position
+----
+id  text  false
+public_key_1  text  false
+public_key_2  text  false
+
+# --- Empty on a fresh env -----------------------------------------------------
+
+query I
+SELECT count(*) FROM mz_ssh_tunnel_connections
+----
+0
+
+# --- An ssh connection populates the view with generated public keys ----------
+
+statement ok
+CREATE CONNECTION sc TO SSH TUNNEL (HOST 'ssh.example.com', USER 'mz')
+
+query TT
+SELECT public_key_1 LIKE 'ssh-ed25519%', public_key_2 LIKE 'ssh-ed25519%'
+FROM mz_ssh_tunnel_connections stc
+JOIN mz_connections c USING (id)
+WHERE c.name = 'sc'
+----
+true  true
+
+# --- Non-ssh connections are excluded -----------------------------------------
+
+statement ok
+CREATE CONNECTION kc TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)
+
+query I
+SELECT count(*) FROM mz_ssh_tunnel_connections stc
+JOIN mz_connections c USING (id)
+WHERE c.type != 'ssh-tunnel'
+----
+0
+
+# --- FK-like invariant: every row joins its parent connection -----------------
+
+query I
+SELECT count(*) FROM mz_ssh_tunnel_connections stc
+LEFT JOIN mz_connections c ON stc.id = c.id
+WHERE c.id IS NULL
+----
+0
+
+# No duplicate ids.
+query I
+SELECT count(*) - count(DISTINCT id) FROM mz_ssh_tunnel_connections
+----
+0
+
+statement ok
+DROP CONNECTION sc
+
+statement ok
+DROP CONNECTION kc

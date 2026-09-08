@@ -20,6 +20,10 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 mz-avro = { path = ".." }
+# Version must match the root `Cargo.toml`'s. `avro_schema_parse` needs a
+# `serde_json::Value` to reach `Schema::parse`, and that value has to be the same
+# type `mz-avro` was compiled against.
+serde_json = "1.0.150"
 
 [[bin]]
 name = "reader_decode"

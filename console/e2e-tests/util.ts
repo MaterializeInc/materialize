@@ -168,8 +168,8 @@ export class TestContext {
 
     // Navigate to the home page && wait for that to load.
     await context.goto(CONSOLE_ADDR);
-    // We assume the first page is the onboarding survey
-    await page.waitForSelector("[data-testid=onboarding-survey]");
+    // We assume the first page is the enable region page
+    await page.waitForSelector("[data-testid=enable-region]");
     return context;
   }
 

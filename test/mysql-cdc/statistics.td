@@ -247,3 +247,46 @@ t2 true
 t1 1
 
 > DROP CLUSTER stats_cluster CASCADE
+
+#
+# Estimated snapshot size. Lowering mysql_source_snapshot_exact_count_max_rows
+# below the table size makes the leader report the optimizer's row estimate
+# instead of an exact COUNT(*). The estimate is approximate, so the gauge is
+# only asserted to land in a sane band, while the staged count stays exact.
+#
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET mysql_source_snapshot_exact_count_max_rows = 100
+
+$ mysql-execute name=mysql
+USE public;
+CREATE TABLE big1 (f1 INT PRIMARY KEY);
+SET @i := 0;
+INSERT INTO big1 SELECT @i := @i + 1 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
+ANALYZE TABLE big1;
+
+> CREATE CLUSTER estimate_cluster SIZE '${arg.default-replica-size}'
+
+> CREATE SOURCE estimate_source IN CLUSTER estimate_cluster FROM MYSQL CONNECTION mysqc;
+> CREATE TABLE big1 FROM SOURCE estimate_source (REFERENCE public.big1);
+
+> SELECT COUNT(*) FROM big1;
+1000
+
+> SELECT
+    s.name,
+    SUM(u.snapshot_records_known) BETWEEN 800 AND 1200,
+    SUM(u.snapshot_records_staged)
+  FROM mz_internal.mz_source_statuses s
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  WHERE s.name = 'big1'
+  GROUP BY s.name
+big1 true 1000
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM RESET mysql_source_snapshot_exact_count_max_rows
+
+> DROP CLUSTER estimate_cluster CASCADE
+
+$ mysql-execute name=mysql
+DROP TABLE big1;

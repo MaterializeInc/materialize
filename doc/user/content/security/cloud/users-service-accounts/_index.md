@@ -44,8 +44,8 @@ applications and services to Materialize.
 {{</ tip >}}
 
 As an **Organization admin**, you can create a new service account via
-the [Materialize Console](/console/) or via
-[Terraform](/manage/terraform/).
+the [Materialize Console](/developer-tools/console/) or via
+[Terraform](/developer-tools/terraform/).
 
 {{< note >}}
 
@@ -72,8 +72,18 @@ all systems in your organization.
 To configure SSO for your Materialize organization, follow [this step-by-step
 guide](./sso/).
 
+## Group sync
+
+As an **Organization admin**, you can provision groups from your identity
+provider via SCIM and map them to existing Materialize database roles, so that
+database role membership is managed from your identity provider. Roles you
+grant manually are not affected by sync.
+
+To configure group sync for your Materialize organization, see [Sync identity
+provider groups to database roles](./sync-idp-groups/).
+
 ## See also
 
 - [Role-based access control](/security/cloud/access-control/)
-- [Manage with dbt](/manage/dbt/)
-- [Manage with Terraform](/manage/terraform/)
+- [Manage with dbt](/developer-tools/dbt/)
+- [Manage with Terraform](/developer-tools/terraform/)

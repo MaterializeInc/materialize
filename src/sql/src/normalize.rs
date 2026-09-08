@@ -22,11 +22,11 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
-    CreateTableFromSourceStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement,
-    CreateWebhookSourceStatement, CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior,
-    MutRecBlock, Op, Query, Statement, TableFactor, TableFromSourceColumns, UnresolvedItemName,
-    UnresolvedSchemaName, Value, ViewDefinition,
+    CreateMetricSinkStatement, CreateSecretStatement, CreateSinkStatement, CreateSourceStatement,
+    CreateSubsourceStatement, CreateTableFromSourceStatement, CreateTableStatement,
+    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CteBlock, Function,
+    FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement, TableFactor,
+    TableFromSourceColumns, UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
 };
 
 use crate::names::{Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier};
@@ -372,6 +372,17 @@ pub fn create_statement(
             if let Some(name) = name {
                 *name = allocate_name(name)?;
             }
+            *if_not_exists = false;
+        }
+
+        Statement::CreateMetricSink(CreateMetricSinkStatement {
+            name,
+            in_cluster: _,
+            if_not_exists,
+            from: _,
+            with_options: _,
+        }) => {
+            *name = allocate_name(name)?;
             *if_not_exists = false;
         }
 

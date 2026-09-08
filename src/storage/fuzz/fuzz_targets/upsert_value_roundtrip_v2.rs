@@ -83,7 +83,9 @@ fn push_scalar(packer: &mut RowPacker, u: &mut Unstructured) -> arbitrary::Resul
         }
         7 => {
             if let Some(dt) = gen_naive_dt(u)? {
-                packer.push(Datum::Timestamp(CheckedTimestamp::from_timestamplike(dt).unwrap()));
+                packer.push(Datum::Timestamp(
+                    CheckedTimestamp::from_timestamplike(dt).unwrap(),
+                ));
             } else {
                 packer.push(Datum::Null);
             }
@@ -103,9 +105,9 @@ fn push_scalar(packer: &mut RowPacker, u: &mut Unstructured) -> arbitrary::Resul
             i32::arbitrary(u)?,
             i64::arbitrary(u)?,
         ))),
-        10 => packer.push(Datum::Uuid(uuid::Uuid::from_bytes(
-            <[u8; 16]>::arbitrary(u)?,
-        ))),
+        10 => packer.push(Datum::Uuid(uuid::Uuid::from_bytes(<[u8; 16]>::arbitrary(
+            u,
+        )?))),
         11 => packer.push(Datum::MzTimestamp(Timestamp::from(u64::arbitrary(u)?))),
         12 => {
             let len = u.int_in_range(0usize..=20)?;
@@ -218,10 +220,7 @@ fn push_datum(packer: &mut RowPacker, u: &mut Unstructured) -> arbitrary::Result
 
 /// Generate a vector of `n` scalar datums by packing them into a scratch row and
 /// borrowing them back. (Composite packers need an iterator of `Datum`.)
-fn gen_scalar_vec<'a>(
-    u: &mut Unstructured,
-    n: usize,
-) -> arbitrary::Result<Vec<Datum<'static>>> {
+fn gen_scalar_vec<'a>(u: &mut Unstructured, n: usize) -> arbitrary::Result<Vec<Datum<'static>>> {
     // We only emit `Copy`, `'static`-safe scalar datums here so the returned
     // `Datum`s don't borrow from a scratch buffer. That covers ints, bools,
     // numerics, dates, timestamps, intervals, uuids, and mz-timestamps.
@@ -336,7 +335,10 @@ fn run(u: &mut Unstructured) -> arbitrary::Result<()> {
     container.push_into(row);
     let decoded = datum_seq_to_upsert_value(container.index(0));
 
-    assert_eq!(value, decoded, "v2 upsert value encoding did not round-trip");
+    assert_eq!(
+        value, decoded,
+        "v2 upsert value encoding did not round-trip"
+    );
     Ok(())
 }
 

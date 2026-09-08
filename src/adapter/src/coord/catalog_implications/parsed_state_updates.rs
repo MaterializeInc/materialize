@@ -45,12 +45,6 @@ pub enum ParsedStateUpdateKind {
         connection: Option<GenericSourceConnection>,
         parsed_full_name: String,
     },
-    TemporaryItem {
-        durable_item: memory::objects::TemporaryItem,
-        parsed_item: memory::objects::CatalogItem,
-        connection: Option<GenericSourceConnection>,
-        parsed_full_name: String,
-    },
     Cluster {
         durable_cluster: durable::objects::Cluster,
         parsed_cluster: memory::objects::Cluster,
@@ -70,6 +64,12 @@ pub enum ParsedStateUpdateKind {
     /// up in the `tracing::trace!` of the parsed update.
     ReplicaSystemConfiguration {
         durable: durable::objects::ReplicaSystemConfiguration,
+    },
+    /// An environment-wide system-parameter changed. The implication re-runs the
+    /// `SystemVars` callbacks against the committed values, so it does not
+    /// consume `durable`. We keep the row only for the `tracing::trace!`.
+    SystemConfiguration {
+        durable: durable::objects::SystemConfiguration,
     },
 }
 
@@ -97,7 +97,6 @@ pub fn parse_state_update(
 ) -> Option<ParsedStateUpdate> {
     let kind = match state_update.kind {
         StateUpdateKind::Item(item) => Some(parse_item_update(catalog, item)),
-        StateUpdateKind::TemporaryItem(item) => Some(parse_temporary_item_update(catalog, item)),
         StateUpdateKind::Cluster(cluster) => Some(parse_cluster_update(catalog, cluster)),
         StateUpdateKind::ClusterReplica(replica) => {
             Some(parse_cluster_replica_update(catalog, replica))
@@ -107,6 +106,9 @@ pub fn parse_state_update(
         }
         StateUpdateKind::ReplicaSystemConfiguration(durable) => {
             Some(ParsedStateUpdateKind::ReplicaSystemConfiguration { durable })
+        }
+        StateUpdateKind::SystemConfiguration(durable) => {
+            Some(ParsedStateUpdateKind::SystemConfiguration { durable })
         }
         _ => {
             // The controllers are currently not interested in other kinds of
@@ -139,22 +141,6 @@ fn parse_item_update(
     }
 }
 
-fn parse_temporary_item_update(
-    catalog: &CatalogState,
-    durable_item: memory::objects::TemporaryItem,
-) -> ParsedStateUpdateKind {
-    let (parsed_item, connection, parsed_full_name) =
-        parse_item_update_common(catalog, &durable_item.id);
-
-    ParsedStateUpdateKind::TemporaryItem {
-        durable_item,
-        parsed_item,
-        connection,
-        parsed_full_name,
-    }
-}
-
-// Shared between temporary items and durable items.
 fn parse_item_update_common(
     catalog: &CatalogState,
     item_id: &CatalogItemId,
@@ -225,7 +211,7 @@ fn parse_cluster_replica_update(
 
 #[cfg(test)]
 mod tests {
-    use mz_catalog::durable::objects::ReplicaSystemConfiguration;
+    use mz_catalog::durable::objects::{ReplicaSystemConfiguration, SystemConfiguration};
     use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
     use mz_controller_types::ReplicaId;
     use mz_repr::Timestamp;
@@ -256,6 +242,34 @@ mod tests {
             assert!(matches!(
                 parsed.kind,
                 ParsedStateUpdateKind::ReplicaSystemConfiguration { .. }
+            ));
+        })
+        .await
+    }
+
+    /// An environment-wide system-parameter change must produce a parsed update
+    /// so the `SystemVars` callback notification fires from
+    /// `apply_catalog_implications`, including on a follower `environmentd` that
+    /// only replays the committed diff. It was previously dropped as a change the
+    /// controllers were not interested in.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function on OS `linux`
+    async fn system_configuration_is_parsed() {
+        Catalog::with_debug(|catalog| async move {
+            let durable = SystemConfiguration {
+                name: "max_connections".to_string(),
+                value: "42".to_string(),
+            };
+            let update = StateUpdate {
+                kind: StateUpdateKind::SystemConfiguration(durable),
+                ts: Timestamp::MIN,
+                diff: StateDiff::Addition,
+            };
+            let parsed = parse_state_update(catalog.state(), update)
+                .expect("system configuration must produce a parsed update");
+            assert!(matches!(
+                parsed.kind,
+                ParsedStateUpdateKind::SystemConfiguration { .. }
             ));
         })
         .await

@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![recursion_limit = "256"]
+
 //! A driver for sqllogictest, a SQL correctness testing framework.
 //!
 //! sqllogictest is developed as part of the SQLite project.

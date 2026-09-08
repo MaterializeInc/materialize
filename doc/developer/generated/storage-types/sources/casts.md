@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/sources/casts.rs
-revision: f2a5b6012b
+revision: 1c250c3597
 ---
 
 # storage-types::sources::casts

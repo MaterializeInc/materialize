@@ -217,6 +217,27 @@ SHOW SINKS FROM foo.bar IN CLUSTER baz
 Show(ShowObjects(ShowObjectsStatement { object_type: Sink { in_cluster: Some(Unresolved(Ident("baz"))) }, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), filter: None }))
 
 parse-statement
+SHOW METRIC SINKS
+----
+SHOW METRIC SINKS
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: MetricSink { in_cluster: None }, from: None, filter: None }))
+
+parse-statement
+SHOW METRIC SINKS FROM foo.bar IN CLUSTER baz
+----
+SHOW METRIC SINKS FROM foo.bar IN CLUSTER baz
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: MetricSink { in_cluster: Some(Unresolved(Ident("baz"))) }, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), filter: None }))
+
+parse-statement
+SHOW METRIC SINKS LIKE '%foo%'
+----
+SHOW METRIC SINKS LIKE '%foo%'
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: MetricSink { in_cluster: None }, from: None, filter: Some(Like("%foo%")) }))
+
+parse-statement
 SHOW TABLES LIKE '%foo%'
 ----
 SHOW TABLES LIKE '%foo%'
@@ -369,6 +390,20 @@ SHOW CREATE SINK foo
 SHOW CREATE SINK foo
 =>
 Show(ShowCreateSink(ShowCreateSinkStatement { sink_name: Name(UnresolvedItemName([Ident("foo")])), redacted: false }))
+
+parse-statement
+SHOW CREATE METRIC SINK foo
+----
+SHOW CREATE METRIC SINK foo
+=>
+Show(ShowCreateMetricSink(ShowCreateMetricSinkStatement { metric_sink_name: Name(UnresolvedItemName([Ident("foo")])), redacted: false }))
+
+parse-statement
+SHOW REDACTED CREATE METRIC SINK foo
+----
+SHOW REDACTED CREATE METRIC SINK foo
+=>
+Show(ShowCreateMetricSink(ShowCreateMetricSinkStatement { metric_sink_name: Name(UnresolvedItemName([Ident("foo")])), redacted: true }))
 
 parse-statement
 SHOW CREATE INDEX foo

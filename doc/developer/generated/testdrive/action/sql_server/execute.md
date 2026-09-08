@@ -1,6 +1,6 @@
 ---
 source: src/testdrive/src/action/sql_server/execute.rs
-revision: 9419e9ad0d
+revision: 5b2cefc829
 ---
 
 # testdrive::action::sql_server::execute

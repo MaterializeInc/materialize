@@ -46,7 +46,6 @@ ANALYZE;
 
 # Configure Materialize
 
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET storage_statistics_collection_interval = 100
 ALTER SYSTEM SET storage_statistics_interval = 200

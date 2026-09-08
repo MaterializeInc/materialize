@@ -15,15 +15,14 @@
 //! A frame is `[type:1][len:4 BE][body:len-4]`. Random bytes rarely have a
 //! length field that matches the bytes that follow, so the decoder bails in the
 //! header before reaching the per-message body parsers (Query/Parse/Bind/
-//! Describe/Execute/…), and once one frame errors, the streaming decoder stops,
-//! so later frames never decode either. So we consume the byte stream as grammar
-//! choices and emit correctly-framed messages: a valid type tag, the right
-//! length, and (usually) a valid body for that type, concatenating several so
-//! the decoder walks frame after frame. A quarter of inputs are still the raw
-//! bytes, and a quarter of frames carry an arbitrary body, so the header
-//! validation and per-message error paths stay covered.
+//! Describe/Execute/…). So we consume the byte stream as grammar choices and emit
+//! correctly-framed messages: a valid type tag, the right length, and (usually) a
+//! valid body for that type, concatenating several so the decoder walks frame
+//! after frame. A quarter of inputs are still the raw bytes, and a quarter of
+//! frames carry an arbitrary body, so the header validation and per-message error
+//! paths stay covered.
 //!
-//! Beyond well-formed frames we deliberately stress two thin spots:
+//! Beyond well-formed frames we deliberately stress three thin spots:
 //!
 //! * **Count-driven loops.** The body parsers for Parse and Bind read an `i16`
 //!   element count (param-type / format-code / parameter counts) and then loop
@@ -31,8 +30,8 @@
 //!   own `i32` byte length. We sometimes emit a huge count or length (up to
 //!   `i16::MAX` / a large positive `i32`) backed by a body far too short to
 //!   satisfy it, so the loops read off the end of the cursor and must error out
-//!   gracefully rather than over-read, over-allocate, or panic. Long cstrings
-//!   feed the same idea on the string side.
+//!   gracefully rather than over-read or panic. Long cstrings feed the same idea
+//!   on the string side.
 //!
 //! * **Streaming / partial-frame reassembly.** The codec is a `tokio_util`
 //!   `Decoder`: it advances `Head -> Data -> Head` across calls and returns
@@ -43,15 +42,32 @@
 //!   chunks, so it parks in the `Data` await-more-bytes state and resumes when
 //!   the rest shows up.
 //!
+//! * **The pre-auth SASL/password grammars.** `Codec::decode` does not parse
+//!   auth payloads. Its `b'p'` arm copies the body verbatim into
+//!   `RawAuthentication`, and `protocol` later picks a parser based on where the
+//!   handshake is. Those parsers are hand-rolled, byte-at-a-time, and run before
+//!   the client has authenticated, so `feed_and_drain` runs all three on every
+//!   payload and `gen_auth_body` generates the shapes they accept.
+//!
 //! Errors are expected. What we assert is the absence of panics and
 //! memory-safety violations.
+//!
+//! Note that allocation amplification is *not* in scope. The only speculative
+//! `reserve` is on the declared frame length, which `parse_frame_len` caps at
+//! `MAX_FRAME_SIZE` (64 MiB), far under the runner's `-rss_limit_mb`. The
+//! count-driven loops push one element per successful cursor read, so they are
+//! bounded by the bytes actually present. No oracle here can catch an
+//! over-allocation, so don't read one into the target.
 
 #![no_main]
 
 use bytes::BytesMut;
 use libfuzzer_sys::arbitrary::{self, Unstructured};
 use libfuzzer_sys::fuzz_target;
-use mz_pgwire::fuzz_exports::Codec;
+use mz_pgwire::fuzz_exports::{
+    Codec, Cursor, FrontendMessage, decode_password, decode_sasl_initial_response,
+    decode_sasl_response,
+};
 use tokio_util::codec::Decoder;
 
 /// Frontend message type tags the codec dispatches on.
@@ -118,8 +134,8 @@ fn gen_body(u: &mut Unstructured, tag: u8, out: &mut Vec<u8>) -> arbitrary::Resu
         b'X' | b'S' | b'H' | b'c' => {}
         // Simple query / copy-fail: a single cstring.
         b'Q' | b'f' => maybe_long_cstr(u, out)?,
-        // Password / generic auth: a cstring is a plausible password message.
-        b'p' => maybe_long_cstr(u, out)?,
+        // Auth: shapes for the sub-parsers `feed_and_drain` runs on the payload.
+        b'p' => gen_auth_body(u, out)?,
         // CopyData: arbitrary payload.
         b'd' => {
             for _ in 0..u.int_in_range(0usize..=16)? {
@@ -128,7 +144,11 @@ fn gen_body(u: &mut Unstructured, tag: u8, out: &mut Vec<u8>) -> arbitrary::Resu
         }
         // Describe / Close: a 'S'tatement|'P'ortal byte then a name cstring.
         b'D' | b'C' => {
-            out.push(if u.int_in_range(0u8..=1)? == 0 { b'S' } else { b'P' });
+            out.push(if u.int_in_range(0u8..=1)? == 0 {
+                b'S'
+            } else {
+                b'P'
+            });
             maybe_long_cstr(u, out)?;
         }
         // Execute: portal cstring + max-rows i32.
@@ -188,6 +208,101 @@ fn gen_body(u: &mut Unstructured, tag: u8, out: &mut Vec<u8>) -> arbitrary::Resu
     Ok(())
 }
 
+/// Append a comma-free printable run. Every SASL field is comma-delimited and
+/// goes through `String::from_utf8`, so restricting tokens to `0x2d..=0x7e`
+/// (printable ASCII above `,`) is what lets the parser advance past a field
+/// instead of stopping short or erroring on invalid UTF-8.
+fn push_token(u: &mut Unstructured, out: &mut Vec<u8>) -> arbitrary::Result<()> {
+    for _ in 0..u.int_in_range(0usize..=8)? {
+        out.push(u.int_in_range(0x2du8..=0x7e)?);
+    }
+    Ok(())
+}
+
+/// Build an auth-message payload targeting the three sub-parsers: a cleartext
+/// password, a SASL initial response, or a SASL client-final message.
+fn gen_auth_body(u: &mut Unstructured, out: &mut Vec<u8>) -> arbitrary::Result<()> {
+    match u.int_in_range(0u8..=2)? {
+        // `decode_password` reads a single cstring.
+        0 => maybe_long_cstr(u, out)?,
+        // `decode_sasl_initial_response`: mechanism cstring, a declared response
+        // length it only rejects when negative, then a client-first-message
+        // parsed out of whatever is left.
+        1 => {
+            match u.int_in_range(0u8..=2)? {
+                0 => out.extend_from_slice(b"SCRAM-SHA-256\0"),
+                1 => out.extend_from_slice(b"SCRAM-SHA-256-PLUS\0"),
+                _ => push_cstr(u, out)?,
+            }
+            // The parser rejects a negative declared length and then ignores the
+            // value entirely, parsing whatever follows regardless. Mostly
+            // declare a non-negative one so the client-first grammar is reached,
+            // occasionally go negative to cover the rejection.
+            let declared = if u.int_in_range(0u8..=7)? == 0 {
+                u.int_in_range(i32::MIN..=-1)?
+            } else {
+                u.int_in_range(0i32..=i32::MAX)?
+            };
+            be32(out, declared);
+            gen_sasl_client_first(u, out)?;
+        }
+        _ => gen_sasl_client_final(u, out)?,
+    }
+    Ok(())
+}
+
+/// A SCRAM `client-first-message` (RFC 5802): `gs2-cbind-flag "," [authzid] ","
+/// ["m=" mext ","] "n=" user "," "r=" nonce ["," ext]*`. Kept well-formed
+/// because the parser aborts on the first unexpected byte, so an approximation
+/// of the grammar would never reach the later fields.
+fn gen_sasl_client_first(u: &mut Unstructured, out: &mut Vec<u8>) -> arbitrary::Result<()> {
+    match u.int_in_range(0u8..=2)? {
+        0 => out.push(b'n'),
+        1 => out.push(b'y'),
+        // Channel binding required: "p=" carries the channel name.
+        _ => {
+            out.extend_from_slice(b"p=");
+            push_token(u, out)?;
+        }
+    }
+    out.push(b',');
+    if u.int_in_range(0u8..=1)? == 0 {
+        out.extend_from_slice(b"a=");
+        push_token(u, out)?;
+    }
+    out.push(b',');
+    if u.int_in_range(0u8..=3)? == 0 {
+        out.extend_from_slice(b"m=");
+        push_token(u, out)?;
+        out.push(b',');
+    }
+    out.extend_from_slice(b"n=");
+    push_token(u, out)?;
+    out.extend_from_slice(b",r=");
+    push_token(u, out)?;
+    for _ in 0..u.int_in_range(0usize..=2)? {
+        out.push(b',');
+        push_token(u, out)?;
+    }
+    Ok(())
+}
+
+/// A SCRAM `client-final-message` (RFC 5802): `"c=" cbind "," "r=" nonce
+/// ["," ext]* "," "p=" proof`. The proof is mandatory and last.
+fn gen_sasl_client_final(u: &mut Unstructured, out: &mut Vec<u8>) -> arbitrary::Result<()> {
+    out.extend_from_slice(b"c=");
+    push_token(u, out)?;
+    out.extend_from_slice(b",r=");
+    push_token(u, out)?;
+    for _ in 0..u.int_in_range(0usize..=2)? {
+        out.push(b',');
+        push_token(u, out)?;
+    }
+    out.extend_from_slice(b",p=");
+    push_token(u, out)?;
+    Ok(())
+}
+
 /// A cstring that is usually short but occasionally long, to stress the scan
 /// and downstream string allocations.
 fn maybe_long_cstr(u: &mut Unstructured, out: &mut Vec<u8>) -> arbitrary::Result<()> {
@@ -239,20 +354,57 @@ fn pump(u: &mut Unstructured, data: &[u8], chunked: bool) -> arbitrary::Result<(
 
     let mut feed_and_drain = |buf: &mut BytesMut| {
         // The codec is a streaming decoder, so pump it until it stops returning
-        // complete messages or errors out. Errors are expected. What we care
-        // about is the absence of panics and memory-safety violations.
+        // complete messages or runs out of forward progress. Errors are
+        // expected. What we care about is the absence of panics and
+        // memory-safety violations.
         loop {
+            let before = buf.len();
             match codec.decode(buf) {
-                Ok(Some(_msg)) => continue,
+                Ok(Some(msg)) => {
+                    if std::env::var_os("MZ_FUZZ_TRACE").is_some() {
+                        eprintln!("TRACE decoded {}", msg.name());
+                        if let FrontendMessage::RawAuthentication(d) = &msg {
+                            eprintln!(
+                                "TRACE   password={:?} sasl_init={:?} sasl_resp={:?}",
+                                decode_password(Cursor::new(d)).is_ok(),
+                                decode_sasl_initial_response(Cursor::new(d)).is_ok(),
+                                decode_sasl_response(Cursor::new(d)).is_ok(),
+                            );
+                        }
+                    }
+                    // `decode_auth` copies the payload verbatim without parsing
+                    // it. The real parsers run in `protocol`, which picks one by
+                    // handshake state: the two SASL parsers during SCRAM,
+                    // `decode_password` for cleartext. This target has no
+                    // connection state, so run all three on every payload. That
+                    // is a superset of what a single connection reaches, but each
+                    // is reachable pre-auth, so a panic in any of them is a real
+                    // pre-auth availability bug.
+                    if let FrontendMessage::RawAuthentication(data) = msg {
+                        let _ = decode_password(Cursor::new(&data));
+                        let _ = decode_sasl_initial_response(Cursor::new(&data));
+                        let _ = decode_sasl_response(Cursor::new(&data));
+                    }
+                    continue;
+                }
                 Ok(None) => break,
-                // NOTE: this breaks out of the drain but does not latch the
-                // error, so in chunked mode the outer loop keeps feeding the
-                // same codec afterwards. Production `FramedConn` instead tears
-                // the connection down on the first error, leaving `decode_state`
-                // mid-frame. Continuing is intentional and harmless here: frame
-                // body parsing is stateless per frame, so anything reachable
-                // after an error is also reachable from a fresh stream.
-                Err(_) => break,
+                Err(_) => {
+                    // Production `FramedConn` tears the connection down on the
+                    // first error, so nothing ever resumes mid-frame. Match that
+                    // by starting over rather than leaving `decode_state` stuck
+                    // in `Data(stale_tag, stale_len)`, which would shred every
+                    // later frame at the stale length and re-parse it under the
+                    // stale tag instead of its own.
+                    codec = Codec::new();
+                    // A body-parse error has already split the frame off, so the
+                    // buffer shrank and the next frame is aligned. A header
+                    // rejection (`parse_frame_len`, or the aggregate size cap)
+                    // consumes nothing, so continuing would spin on the same
+                    // bytes forever.
+                    if buf.len() == before {
+                        break;
+                    }
+                }
             }
         }
     };
@@ -276,7 +428,16 @@ fn pump(u: &mut Unstructured, data: &[u8], chunked: bool) -> arbitrary::Result<(
 
 fn run(mut u: Unstructured) -> arbitrary::Result<()> {
     // A quarter of the time, the raw bytes: keeps the header-framing and
-    // unknown-tag error paths covered.
+    // unknown-tag error paths covered, and is the only path on which a
+    // hand-written wire capture reaches the decoder as written.
+    //
+    // NOTE: `int_in_range` consumes from the *front*, one byte per decision, so
+    // this prefix is a wire format the corpus depends on: `data[0] % 4 == 0`
+    // selects this branch, `data[1] % 2 == 0` selects chunked, and `data[2..]` is
+    // what the decoder sees byte for byte. `prepare-corpus.sh` prepends
+    // `\x00\x00` to every seed to land here. Reordering these two decisions, or
+    // adding a third ahead of them, silently repurposes every seed's leading
+    // bytes and strands the corpus.
     if u.int_in_range(0u8..=3)? == 0 {
         let chunked = u.int_in_range(0u8..=1)? == 0;
         let rest = u.take_rest();

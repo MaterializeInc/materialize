@@ -191,7 +191,7 @@ fn json_to_config_val(json: &JsonValue, template: &ConfigVal) -> Result<ConfigVa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_dyncfg::Config;
+    use mz_dyncfg::{Config, ParameterScope};
     use std::io::Write;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -199,9 +199,18 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     async fn test_file_sync() {
         let mut config_file = tempfile::NamedTempFile::new().unwrap();
-        const BOOL_CONFIG: Config<bool> = Config::new("test_bool", true, "A test boolean config");
-        const STRING_CONFIG: Config<&str> =
-            Config::new("test_string", "default", "A test string config");
+        const BOOL_CONFIG: Config<bool> = Config::new(
+            "test_bool",
+            true,
+            "A test boolean config",
+            ParameterScope::Environment,
+        );
+        const STRING_CONFIG: Config<&str> = Config::new(
+            "test_string",
+            "default",
+            "A test string config",
+            ParameterScope::Environment,
+        );
         let set = ConfigSet::default().add(&BOOL_CONFIG).add(&STRING_CONFIG);
 
         // Start sync with empty file (should create it)
@@ -247,8 +256,12 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn test_file_sync_opt_string() {
-        const OPT_STRING_CONFIG: Config<Option<&str>> =
-            Config::new("test_opt_string", None, "A test optional string config");
+        const OPT_STRING_CONFIG: Config<Option<&str>> = Config::new(
+            "test_opt_string",
+            None,
+            "A test optional string config",
+            ParameterScope::Environment,
+        );
         let set = ConfigSet::default().add(&OPT_STRING_CONFIG);
 
         let mut config_file = tempfile::NamedTempFile::new().unwrap();

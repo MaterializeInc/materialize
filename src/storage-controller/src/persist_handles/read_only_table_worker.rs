@@ -49,6 +49,7 @@ use crate::persist_handles::{PersistTableWriteCmd, append_work};
 pub(crate) async fn read_only_mode_table_worker(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<(Span, PersistTableWriteCmd)>,
     txns_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+    persist_client: mz_persist_client::PersistClient,
 ) {
     let mut write_handles =
         BTreeMap::<GlobalId, WriteHandle<SourceData, (), Timestamp, StorageDiff>>::new();
@@ -93,7 +94,7 @@ pub(crate) async fn read_only_mode_table_worker(
                     commands.push_back(cmd);
                 }
 
-                let result = handle_commands(&mut write_handles, commands).await;
+                let result = handle_commands(&mut write_handles, commands, &persist_client).await;
 
                 match result {
                     ControlFlow::Continue(_) => {
@@ -115,6 +116,7 @@ pub(crate) async fn read_only_mode_table_worker(
 async fn handle_commands(
     write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
     mut commands: VecDeque<(Span, PersistTableWriteCmd)>,
+    persist_client: &mz_persist_client::PersistClient,
 ) -> ControlFlow<String> {
     let mut shutdown = false;
 
@@ -124,7 +126,9 @@ async fn handle_commands(
 
     while let Some((span, command)) = commands.pop_front() {
         match command {
-            PersistTableWriteCmd::Register(_register_ts, ids_handles, tx) => {
+            PersistTableWriteCmd::Register(_register_ts, tables, tx) => {
+                let ids_handles =
+                    crate::persist_handles::open_table_write_handles(persist_client, tables).await;
                 for (id, write_handle) in ids_handles {
                     // As of today, we can only migrate builtin (system) tables.
                     assert!(id.is_system(), "trying to register non-system id {id}");
@@ -135,22 +139,7 @@ async fn handle_commands(
                     }
                 }
                 // We don't care if our waiter has gone away.
-                let _ = tx.send(());
-            }
-            PersistTableWriteCmd::Update {
-                existing_collection,
-                new_collection,
-                handle,
-                forget_ts: _,
-                register_ts: _,
-                tx,
-            } => {
-                write_handles.remove(&existing_collection);
-                write_handles.insert(new_collection, handle).expect(
-                    "PersistTableWriteCmd::Update only valid for updating extant write handles",
-                );
-                // We don't care if our waiter has gone away.
-                let _ = tx.send(());
+                let _ = tx.send(Ok(()));
             }
             PersistTableWriteCmd::DropHandles {
                 forget_ts: _,
@@ -167,7 +156,7 @@ async fn handle_commands(
                     write_handles.remove(&id);
                 }
                 // We don't care if our waiter has gone away.
-                let _ = tx.send(());
+                let _ = tx.send(Ok(()));
             }
             PersistTableWriteCmd::Append {
                 write_ts,

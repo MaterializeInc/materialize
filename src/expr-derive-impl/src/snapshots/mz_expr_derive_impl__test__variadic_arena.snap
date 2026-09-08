@@ -50,3 +50,6 @@ impl std::fmt::Display for ArrayFill {
         f.write_str("array_fill")
     }
 }
+impl crate::func::FuncName for ArrayFill {
+    const NAME: &'static str = stringify!(array_fill);
+}

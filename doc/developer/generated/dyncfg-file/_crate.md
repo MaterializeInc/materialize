@@ -1,6 +1,6 @@
 ---
 source: src/dyncfg-file/src/lib.rs
-revision: 0742993af5
+revision: 5a4a36c4fd
 ---
 
 # mz-dyncfg-file

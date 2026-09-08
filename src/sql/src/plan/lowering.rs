@@ -143,6 +143,7 @@ pub struct Config {
     pub enable_simplify_quantified_comparisons: bool,
     /// See the feature flag of the same name.
     pub enable_fixed_correlated_cte_lowering: bool,
+    pub enable_simplify_from_less_existence: bool,
 }
 
 impl Default for Config {
@@ -153,6 +154,7 @@ impl Default for Config {
             enable_cast_elimination: false,
             enable_simplify_quantified_comparisons: false,
             enable_fixed_correlated_cte_lowering: false,
+            enable_simplify_from_less_existence: false,
         }
     }
 }
@@ -165,6 +167,7 @@ impl From<&SystemVars> for Config {
             enable_cast_elimination: vars.enable_cast_elimination(),
             enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
             enable_fixed_correlated_cte_lowering: vars.enable_fixed_correlated_cte_lowering(),
+            enable_simplify_from_less_existence: vars.enable_simplify_from_less_existence(),
         }
     }
 }
@@ -211,6 +214,9 @@ impl HirRelationExpr {
                     &mut other,
                     context.config.enable_simplify_quantified_comparisons,
                 )?;
+                if context.config.enable_simplify_from_less_existence {
+                    transform_hir::simplify_from_less_existence_subqueries(&mut other)?;
+                }
                 transform_hir::fuse_window_functions(&mut other, &context)?;
                 MirRelationExpr::constant(vec![vec![]], ReprRelationType::new(vec![])).let_in(
                     &mut id_gen,

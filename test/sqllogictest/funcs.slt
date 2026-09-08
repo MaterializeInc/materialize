@@ -167,37 +167,37 @@ SELECT date_trunc(field, TIMESTAMP '2019-11-26 15:56:46.241150') FROM date_trunc
 query T
 SELECT date_trunc('microseconds',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
 ----
-1234 years 11 months 23 days 23:59:12.123457
+1234 years 11 mons 23 days 23:59:12.123457
 
 query T
 SELECT date_trunc('milliseconds',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
 ----
-1234 years 11 months 23 days 23:59:12.123
+1234 years 11 mons 23 days 23:59:12.123
 
 query T
 SELECT date_trunc('milliseconds',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
 ----
-1234 years 11 months 23 days 23:59:12.123
+1234 years 11 mons 23 days 23:59:12.123
 
 query T
 SELECT date_trunc('seconds',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
 ----
-1234 years 11 months 23 days 23:59:12
+1234 years 11 mons 23 days 23:59:12
 
 query T
 SELECT date_trunc('minutes',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
 ----
-1234 years 11 months 23 days 23:59:00
+1234 years 11 mons 23 days 23:59:00
 
 query T
 SELECT date_trunc('hours',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
 ----
-1234 years 11 months 23 days 23:00:00
+1234 years 11 mons 23 days 23:00:00
 
 query T
 SELECT date_trunc('days',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
 ----
-1234 years 11 months 23 days
+1234 years 11 mons 23 days
 
 query error unit 'weeks' not recognized
 SELECT date_trunc('weeks',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
@@ -205,7 +205,7 @@ SELECT date_trunc('weeks',  INTERVAL '1234 years 11 months 23 days 23:59:12.1234
 query T
 SELECT date_trunc('months',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
 ----
-1234 years 11 months
+1234 years 11 mons
 
 query T
 SELECT date_trunc('years',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
@@ -1769,3 +1769,22 @@ SELECT textrecv()
 
 query error cannot call function with arguments of type internal
 SELECT textrecv('abc')
+
+# `mz_internal.parse_catalog_item_references` extracts the catalog item
+# references from a stored `create_sql` string.
+
+query T
+SELECT mz_internal.parse_catalog_item_references('CREATE VIEW "materialize"."public"."v" AS SELECT "pg_catalog"."abs"("a"::[s20 AS "pg_catalog"."int4"]) FROM [u1 AS "materialize"."public"."t"]')
+----
+{"ids":["s20","u1"],"named_funcs":[{"name":"abs","schema":"pg_catalog"}],"named_relations":[],"named_types":[]}
+
+# Name-based relation references never appear in stored SQL, which prints
+# relations as id references. Reporting them keeps a statement that violates
+# that from silently losing its dependency edges.
+query T
+SELECT mz_internal.parse_catalog_item_references('CREATE VIEW "materialize"."public"."v" AS SELECT * FROM "mz_catalog"."mz_tables"')
+----
+{"ids":[],"named_funcs":[],"named_relations":[{"name":"mz_tables","schema":"mz_catalog"}],"named_types":[]}
+
+query error invalid catalog JSON: failed to parse create_sql
+SELECT mz_internal.parse_catalog_item_references('NOT SQL')

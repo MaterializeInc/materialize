@@ -44,6 +44,7 @@ mod coord;
 mod error;
 mod explain;
 mod frontend_peek;
+mod frontend_read_then_write;
 mod notice;
 mod optimize;
 mod util;

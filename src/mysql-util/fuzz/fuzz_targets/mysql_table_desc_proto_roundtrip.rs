@@ -14,7 +14,7 @@
 //! Input generation is split across three arms keyed off the first input
 //! byte so a single byte stream exercises all of them over time:
 //!
-//! 1. **Valid-value arm.** A 32-byte seed (drawn from the input) drives
+//! 1. **Valid-value arm.** A 32-byte seed (zero-padded from the input) drives
 //!    proptest's `Arbitrary for MySqlTableDesc` to build a *structurally
 //!    valid, deeply-populated* descriptor. Non-empty columns with real
 //!    `SqlColumnType`s, every `MySqlColumnMeta` variant, and a populated
@@ -24,11 +24,12 @@
 //!    decodes to near-empty messages).
 //!
 //! 2. **Duplicate/unsorted-keys arm.** Crafts a `ProtoMySqlTableDesc`
-//!    whose `keys` field (a repeated proto `Vec`) contains duplicates and
-//!    out-of-order entries to probe the classic `Vec -> BTreeSet -> Vec`
-//!    round-trip trap: the *first* decode normalizes (dedups + sorts), so
-//!    we assert the conversion is a *fixed point* afterwards rather than
-//!    byte-identical to the crafted input.
+//!    whose `keys` field (a repeated proto `Vec`) contains duplicates in
+//!    non-sorted order, then asserts the two properties the
+//!    `Vec -> BTreeSet` decode owes its callers: the decoded descriptor does
+//!    not depend on the wire order, and the duplicates collapse. The
+//!    conversion itself must succeed, because the crafted proto is valid by
+//!    construction.
 //!
 //! 3. **Raw-bytes arm.** Decode arbitrary bytes and, if they happen to form a
 //!    valid descriptor, check the proto round-trip is stable. This guards
@@ -36,12 +37,31 @@
 
 #![no_main]
 
+use std::sync::OnceLock;
+
 use libfuzzer_sys::fuzz_target;
-use mz_mysql_util::{MySqlKeyDesc, MySqlTableDesc, ProtoMySqlKeyDesc, ProtoMySqlTableDesc};
+use mz_mysql_util::{MySqlTableDesc, ProtoMySqlKeyDesc, ProtoMySqlTableDesc};
 use mz_proto::{ProtoType, RustType};
-use proptest::strategy::{Strategy, ValueTree};
+use proptest::strategy::{BoxedStrategy, Strategy, ValueTree};
 use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
 use prost::Message;
+
+// `Arbitrary::arbitrary()` rebuilds the entire boxed strategy graph on every
+// call: `SqlScalarType`'s ~31-variant `Union` plus a second copy of it for
+// `Array`, the `prop_recursive` wrapper, and a `.*` regex compile per
+// `any::<String>()` leaf. `Config::default()` re-reads the process environment.
+// Both are per-process constants, so pay for them once instead of once per
+// execution. libFuzzer runs a single execution at a time per process, so a
+// `thread_local` suffices for the non-`Sync` strategy.
+thread_local! {
+    static DESC_STRATEGY: BoxedStrategy<MySqlTableDesc> =
+        <MySqlTableDesc as proptest::arbitrary::Arbitrary>::arbitrary().boxed();
+}
+
+fn config() -> Config {
+    static CONFIG: OnceLock<Config> = OnceLock::new();
+    CONFIG.get_or_init(Config::default).clone()
+}
 
 /// Assert that a `MySqlTableDesc` survives a full Rust round-trip through
 /// its proto representation unchanged, including a re-encode/decode of the
@@ -54,13 +74,17 @@ fn assert_rust_roundtrip(orig: &MySqlTableDesc) {
     let round: MySqlTableDesc = proto2
         .into_rust()
         .expect("re-encoded MySqlTableDesc must convert back to Rust");
-    assert_eq!(orig, &round, "MySqlTableDesc changed across proto roundtrip");
+    assert_eq!(
+        orig, &round,
+        "MySqlTableDesc changed across proto roundtrip"
+    );
 }
 
 /// Decode `bytes` as a proto, and if it is a valid descriptor, assert the
-/// proto round-trip is stable. Used by both the crafted and raw-bytes arms,
-/// where the *first* decode may normalize a `Vec`-shaped field into a
-/// `BTreeSet`, so we only require idempotence from that normalized value on.
+/// proto round-trip is stable. Used by the raw-bytes arm, where a decode or
+/// conversion failure is a legitimate outcome, and where the *first* decode may
+/// normalize a `Vec`-shaped field into a `BTreeSet`, so we only require
+/// idempotence from that normalized value on.
 fn check_decoded(bytes: &[u8]) {
     let Ok(proto) = ProtoMySqlTableDesc::decode(bytes) else {
         return;
@@ -101,63 +125,72 @@ fn craft_unsorted_dup_keys(data: &[u8]) -> ProtoMySqlTableDesc {
     }
 }
 
+/// Encode a hand-built proto, decode the wire bytes, and convert to Rust. Every
+/// step must succeed: the input is structurally valid by construction, so a
+/// failure is the bug the crafted arm exists to catch, for example a
+/// `from_proto` hardened to reject duplicate or unsorted wire keys.
+fn decode_crafted(proto: &ProtoMySqlTableDesc) -> MySqlTableDesc {
+    ProtoMySqlTableDesc::decode(proto.encode_to_vec().as_slice())
+        .expect("hand-built proto must decode")
+        .into_rust()
+        .expect("duplicate/unsorted keys must convert")
+}
+
 fuzz_target!(|data: &[u8]| {
-    // Reserve the first byte as a mode selector and the next 32 bytes as the
-    // proptest seed. Everything after that feeds the raw-bytes / crafting
-    // logic so a single input can drive any arm.
+    // The first byte selects the arm, everything after it is that arm's input.
+    // The arms overlap in the byte stream on purpose: only one of them runs per
+    // execution, so reading them all from byte 1 keeps every mutation live for
+    // whichever arm the mode byte picks. The proptest seed is zero-padded rather
+    // than all-or-nothing, otherwise every input shorter than 33 bytes would
+    // reuse the all-zero seed and libFuzzer grows inputs up from empty.
     let mode = data.first().copied().unwrap_or(0);
+    let tail = data.get(1..).unwrap_or(&[]);
     let mut seed = [0u8; 32];
-    let seed_src = data.get(1..33).unwrap_or(&[]);
-    seed[..seed_src.len()].copy_from_slice(seed_src);
-    let rest = data.get(33..).unwrap_or(&[]);
+    let n = tail.len().min(32);
+    seed[..n].copy_from_slice(&tail[..n]);
 
     match mode % 3 {
         0 => {
             // Valid-value arm: drive proptest's Arbitrary from the seed.
-            let mut runner = TestRunner::new_with_rng(
-                Config::default(),
-                TestRng::from_seed(RngAlgorithm::ChaCha, &seed),
-            );
-            let value = match <MySqlTableDesc as proptest::arbitrary::Arbitrary>::arbitrary()
-                .new_tree(&mut runner)
-            {
+            let mut runner =
+                TestRunner::new_with_rng(config(), TestRng::from_seed(RngAlgorithm::ChaCha, &seed));
+            let value = match DESC_STRATEGY.with(|s| s.new_tree(&mut runner)) {
                 Ok(tree) => tree.current(),
                 Err(_) => return,
             };
             assert_rust_roundtrip(&value);
-
-            // The proptest-built value is already normalized (its keys come
-            // from a BTreeSet). Sanity-check that the BTreeSet semantics hold
-            // after a wire decode by encoding and re-decoding, then confirm
-            // re-collecting the keys into a fresh set is idempotent.
-            let decoded: MySqlTableDesc = value
-                .into_proto()
-                .encode_to_vec()
-                .as_slice()
-                .pipe(ProtoMySqlTableDesc::decode)
-                .expect("decode")
-                .into_rust()
-                .expect("into_rust");
-            let recollected: std::collections::BTreeSet<MySqlKeyDesc> =
-                decoded.keys.iter().cloned().collect();
-            assert_eq!(decoded.keys, recollected, "key set not idempotent");
         }
         1 => {
             // Duplicate/unsorted-keys arm.
-            let proto = craft_unsorted_dup_keys(rest);
-            check_decoded(proto.encode_to_vec().as_slice());
+            let proto = craft_unsorted_dup_keys(tail);
+            let decoded = decode_crafted(&proto);
+            // The wire field is a repeated Vec and the Rust field a BTreeSet, so
+            // decoding must be insensitive to the wire order and must collapse
+            // the duplicates rather than keep them or reject the message.
+            //
+            // NOTE: rotate, don't reverse. `craft_unsorted_dup_keys` lays the
+            // keys out as a palindrome, so reversing them would re-encode the
+            // very same wire bytes and assert nothing.
+            let mut permuted = proto;
+            permuted.keys.rotate_left(1);
+            assert_eq!(
+                decoded,
+                decode_crafted(&permuted),
+                "wire key order changed the decoded descriptor"
+            );
+            // `craft_unsorted_dup_keys` builds exactly two distinct keys (their
+            // `columns` differ in length, so they can never compare equal),
+            // each repeated twice.
+            assert_eq!(
+                decoded.keys.len(),
+                2,
+                "duplicate wire keys did not collapse"
+            );
+            assert_rust_roundtrip(&decoded);
         }
         _ => {
             // Raw-bytes arm: decode arbitrary bytes directly.
-            check_decoded(rest);
+            check_decoded(tail);
         }
     }
 });
-
-/// Tiny extension trait so the valid-value arm can read top-to-bottom.
-trait Pipe: Sized {
-    fn pipe<R>(self, f: impl FnOnce(Self) -> R) -> R {
-        f(self)
-    }
-}
-impl<T> Pipe for T {}

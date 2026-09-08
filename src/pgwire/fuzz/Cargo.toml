@@ -16,8 +16,8 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 mz-pgwire = { path = "..", features = ["fuzzing"] }
-bytes = "1"
-tokio-util = { version = "0.7", features = ["codec"] }
+bytes = "1.11.1"
+tokio-util = { version = "0.7.18", features = ["codec"] }
 
 [[bin]]
 name = "codec_decode"

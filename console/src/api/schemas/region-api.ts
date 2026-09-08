@@ -35,7 +35,7 @@ export interface paths {
         head?: never;
         /**
          * Enable the region for the authenticated organization in the current cloud region
-         * @description If the region already exists it will be updated to match any request parameters
+         *     If the region already exists it will be updated to match any request parameters
          *     If the region is soft-deleted the deletion state will be cleared
          */
         patch: operations["enable_region"];
@@ -45,9 +45,15 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description Enum version of the Kubernetes Condition.status field
+         * @enum {string}
+         */
+        ConditionStatus: "True" | "False" | "Unknown";
         /** @description Cloud Region */
         Region: {
-            regionInfo?: components["schemas"]["RegionInfo"] | null;
+            regionInfo?: null | components["schemas"]["RegionInfo"];
+            /** @description This field was introduced with API Version 1 */
             regionState: components["schemas"]["RegionState"];
         };
         /** @description Connection details for an active region */
@@ -55,12 +61,15 @@ export interface components {
             sqlAddress: string;
             httpAddress: string;
             resolvable: boolean;
+            upToDate: components["schemas"]["ConditionStatus"];
             /** Format: date-time */
             enabledAt: string;
         };
         RegionRequest: {
             environmentdImageRef?: string | null;
             environmentdExtraArgs?: string[] | null;
+            environmentdCpuAllocation?: string | null;
+            environmentdMemoryAllocation?: string | null;
         };
         /** @enum {string} */
         RegionState: "enabled" | "enablement-pending" | "deletion-pending" | "soft-deleted";
@@ -113,7 +122,7 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description Whether to do a hard deletion */
-                hardDelete?: boolean | null;
+                hardDelete?: boolean;
             };
             header?: never;
             path?: never;

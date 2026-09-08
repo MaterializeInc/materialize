@@ -46,6 +46,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/costs/breakdown/daily": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the per-account, per-cluster cost breakdown bucketed by UTC day. */
+        get: operations["get_cost_breakdown_daily"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/costs/daily": {
         parameters: {
             query?: never;
@@ -89,7 +106,7 @@ export interface paths {
         };
         /**
          * Get recent invoices from Orb for an organization
-         * @description This endpoint returns the 20 most recent invoices for the given user,
+         *     This endpoint returns the 20 most recent invoices for the given user,
          *     including draft, paid, void, and issued invoices by default.
          */
         get: operations["get_invoices"];
@@ -111,6 +128,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["issue_license_key"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/license-key/revoked": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_revoked_license_keys"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -237,8 +270,10 @@ export interface components {
     schemas: {
         /** @description Costs for all tracked resources. */
         AllCosts: {
-            compute: components["schemas"]["ComputeCosts"];
-            storage: components["schemas"]["StorageCosts"];
+            /** @description Compute resource costs. */
+            compute: components["schemas"]["Cost_ComputePrice"];
+            /** @description Storage resource costs. */
+            storage: components["schemas"]["Cost_StoragePrice"];
         };
         Card: {
             /** @description The last 4 digits of the card number. */
@@ -254,17 +289,6 @@ export interface components {
              */
             expYear: number;
         };
-        ComputeCosts: {
-            /** @description The resource-specific pricing breakdown. Either `ComputePrice`,
-             *     `NetworkPrice`, or `StoragePrice`. */
-            prices: components["schemas"]["ComputePrice"][];
-            /** @description The total cost for the resource in the timeframe, excluding any
-             *     minimums and discounts. */
-            subtotal: string;
-            /** @description The total cost for the resource in the timeframe, including any
-             *     minimums and discounts. */
-            total: string;
-        };
         /** @description The price for a specific class of compute resource. */
         ComputePrice: {
             /** @description The ID of the region in which the compute resource was used (e.g., `aws/us-east-1`). */
@@ -276,8 +300,68 @@ export interface components {
             /** @description The total cost for the resource type in the region, excluding any minimums and discounts. */
             subtotal: string;
         };
+        /** @description Cost breakdown for one Orb account (parent or child) within a billing period. */
+        CostBreakdownAccount: {
+            external_customer_id: string;
+            /**
+             * @description The account's display name (Orb `Customer.name`, which the sync-server
+             *     keeps equal to the Frontegg org name). Empty when the name could not be
+             *     resolved; the breakdown itself is still returned.
+             */
+            name: string;
+            clusters: components["schemas"]["CostBreakdownCluster"][];
+        };
+        /** @description Per-cluster cost breakdown for a single Orb account within a billing period. */
+        CostBreakdownCluster: {
+            /** @description The environment that owns this cluster (event property `environment_id`). */
+            environment_id: string;
+            /**
+             * @description Human-readable cluster key in `cluster_name.replica_name` form
+             *     (event property `cluster_grouping_key`). Empty for storage/egress rows
+             *     that have no per-cluster breakdown.
+             */
+            cluster_grouping_key: string;
+            /**
+             * @description Resource category for rows that aren't a compute cluster — "Storage" or
+             *     "Egress", derived from the Orb price's item name — so storage and egress
+             *     (which share an empty `cluster_grouping_key`) render as separate rows.
+             *     Empty for compute rows, which are identified by `cluster_grouping_key`.
+             */
+            category: string;
+            /**
+             * @description Cloud region in `provider/region` form, e.g. "aws/us-east-1" (event
+             *     property `region`). Lets the frontend qualify each row ("aws/us-east-1 /
+             *     Storage"), matching the daily "Spend between …" table.
+             */
+            region: string;
+            /** @description Map from price_id to the computed dollar amount (e.g. "1.23"). */
+            amounts: {
+                [key: string]: string;
+            };
+            /**
+             * Format: double
+             * @description Usage quantity for this row, summed across every price folded into it.
+             *     In credits for compute rows, GB for storage/egress rows (see `category`).
+             */
+            usage: number;
+        };
+        /** @description Per-account cost breakdown for a single calendar day. */
+        CostBreakdownDay: {
+            /**
+             * Format: date-time
+             * @description Start of the day (inclusive).
+             */
+            startDate: string;
+            /**
+             * Format: date-time
+             * @description End of the day (exclusive).
+             */
+            endDate: string;
+            accounts: components["schemas"]["CostBreakdownAccount"][];
+        };
         /** @description The daily costs for a given customer. */
         CostBucket: {
+            /** @description All resource costs */
             costs: components["schemas"]["AllCosts"];
             /** @description The total cost for the timeframe, excluding any minimums and discounts. */
             subtotal: string;
@@ -294,12 +378,88 @@ export interface components {
              */
             endDate: string;
         };
+        Cost_ComputePrice: {
+            /**
+             * @description The resource-specific pricing breakdown. Either `ComputePrice`,
+             *     `NetworkPrice`, or `StoragePrice`.
+             */
+            prices: {
+                /** @description The ID of the region in which the compute resource was used (e.g., `aws/us-east-1`). */
+                regionId: string;
+                /** @description The size of the compute resource replica (e.g., `xsmall`) */
+                replicaSize: string;
+                /** @description The rate per unit of usage. */
+                unitAmount: string;
+                /** @description The total cost for the resource type in the region, excluding any minimums and discounts. */
+                subtotal: string;
+            }[];
+            /**
+             * @description The total cost for the resource in the timeframe, excluding any
+             *     minimums and discounts.
+             */
+            subtotal: string;
+            /**
+             * @description The total cost for the resource in the timeframe, including any
+             *     minimums and discounts.
+             */
+            total: string;
+        };
+        Cost_NetworkPrice: {
+            /**
+             * @description The resource-specific pricing breakdown. Either `ComputePrice`,
+             *     `NetworkPrice`, or `StoragePrice`.
+             */
+            prices: {
+                /** @description The ID of the region in which the network resource was used (e.g., `aws/us-east-1`). */
+                regionId: string;
+                /** @description The rate per unit of usage. */
+                unitAmount: string;
+                /** @description The total cost for the resource type in the region, excluding any minimums and discounts. */
+                subtotal: string;
+            }[];
+            /**
+             * @description The total cost for the resource in the timeframe, excluding any
+             *     minimums and discounts.
+             */
+            subtotal: string;
+            /**
+             * @description The total cost for the resource in the timeframe, including any
+             *     minimums and discounts.
+             */
+            total: string;
+        };
+        Cost_StoragePrice: {
+            /**
+             * @description The resource-specific pricing breakdown. Either `ComputePrice`,
+             *     `NetworkPrice`, or `StoragePrice`.
+             */
+            prices: {
+                /** @description The ID of the region in which the storage resource was used (e.g., `aws/us-east-1`). */
+                regionId: string;
+                /** @description The rate per unit of usage. */
+                unitAmount: string;
+                /** @description The total cost for the resource type in the region, excluding any minimums and discounts. */
+                subtotal: string;
+            }[];
+            /**
+             * @description The total cost for the resource in the timeframe, excluding any
+             *     minimums and discounts.
+             */
+            subtotal: string;
+            /**
+             * @description The total cost for the resource in the timeframe, including any
+             *     minimums and discounts.
+             */
+            total: string;
+        };
         CreateCommunityLicenseKeyRequest: {
             email: string;
+            environmentId?: string | null;
+            licenseKey?: string | null;
         };
         CreateLicenseKeyRequest: {
             /** Format: uuid */
-            useCaseId?: string | null;
+            environmentId?: string | null;
         };
         CreateLicenseKeyResponse: {
             licenseKey: string;
@@ -314,15 +474,13 @@ export interface components {
             /** @description The amount paid per credit. */
             perUnitCostBasis?: string | null;
         };
-        /** @description All API responses that return a list use this standard pagination envelope */
-        CreditBlocks: {
-            /** @description The data in this page. */
-            data: components["schemas"]["CreditBlock"][];
-            /** @description The cursor to provide to the next API call to retrieve the next
-             *     page of results.
-             *
-             *     Set to `None` if there are no further pages. */
-            nextCursor?: string | null;
+        /**
+         * @description Response for `GET /api/costs/breakdown/daily` — the per-account,
+         *     per-cluster breakdown bucketed by UTC day. Dense: one entry per UTC day in
+         *     the requested window, with empty `accounts` for days that had no usage.
+         */
+        DailyCostBreakdownResponse: {
+            days: components["schemas"]["CostBreakdownDay"][];
         };
         /** @description The daily costs for a given customer. */
         DailyCostResponse: {
@@ -351,10 +509,12 @@ export interface components {
              * @description The issue date of the invoice.
              */
             issueDate: string;
-            /** @description The URL at which a PDF representation of the invoice can be retrieved.
+            /**
+             * @description The URL at which a PDF representation of the invoice can be retrieved.
              *
              *     Typically `None` for `draft` invoices, in which case `html_url` should
-             *     be `Some`, though this is not guaranteed by the Orb API documentation. */
+             *     be `Some`, though this is not guaranteed by the Orb API documentation.
+             */
             pdfUrl?: string | null;
             /** @description An ISO 4217 currency string, or "credits" */
             currency: string;
@@ -367,29 +527,24 @@ export interface components {
              * @description The time at which the invoice was created.
              */
             createdAt: string;
-            /** @description The URL at which a web-page representation of the invoice can be retrieved.
+            /**
+             * @description The URL at which a web-page representation of the invoice can be retrieved.
              *
              *     May be `None`, typically after the invoice is well past its issue date, in which
              *     case `pdf_url` should be `Some`, although this is not guaranteed by the Orb
-             *     API documentation. */
+             *     API documentation.
+             */
             webUrl?: string | null;
             /** @description The status (see [`orb_billing::InvoiceStatusFilter`] for details). */
             status: string;
             /** @description An automatically generated number to help track and reconcile invoices. */
             invoiceNumber: string;
         };
-        /** @description All API responses that return a list use this standard pagination envelope */
-        Invoices: {
-            /** @description The data in this page. */
-            data: components["schemas"]["Invoice"][];
-            /** @description The cursor to provide to the next API call to retrieve the next
-             *     page of results.
-             *
-             *     Set to `None` if there are no further pages. */
-            nextCursor?: string | null;
-        };
         IpAddress: {
             ip: string;
+        };
+        ListRevokedLicenseKeysResponse: {
+            jtis: string[];
         };
         MakePaymentMethodDefaultRequest: {
             paymentMethodId: string;
@@ -399,17 +554,6 @@ export interface components {
          * @enum {string}
          */
         Marketplace: "aws" | "direct";
-        NetworkCosts: {
-            /** @description The resource-specific pricing breakdown. Either `ComputePrice`,
-             *     `NetworkPrice`, or `StoragePrice`. */
-            prices: components["schemas"]["NetworkPrice"][];
-            /** @description The total cost for the resource in the timeframe, excluding any
-             *     minimums and discounts. */
-            subtotal: string;
-            /** @description The total cost for the resource in the timeframe, including any
-             *     minimums and discounts. */
-            total: string;
-        };
         /** @description The price for a specific class of network resource. */
         NetworkPrice: {
             /** @description The ID of the region in which the network resource was used (e.g., `aws/us-east-1`). */
@@ -431,7 +575,7 @@ export interface components {
             blocked: boolean;
             /** @description Whether or not the organization has been flagged as having completed onboarding. */
             onboarded: boolean;
-            subscription?: components["schemas"]["Subscription"] | null;
+            subscription?: null | components["schemas"]["Subscription"];
             /**
              * Format: date-time
              * @description The date the organization's trial ends.
@@ -442,10 +586,99 @@ export interface components {
             /** @description The ID of the default payment method for the organization. */
             defaultPaymentMethodId?: string | null;
         };
+        /** @description All API responses that return a list use this standard pagination envelope */
+        Paginated_CreditBlock: {
+            /** @description The data in this page. */
+            data: {
+                /**
+                 * Format: double
+                 * @description The available value in this block of credits.
+                 */
+                balance: number;
+                /** @description The amount paid per credit. */
+                perUnitCostBasis?: string | null;
+            }[];
+            /**
+             * @description The cursor to provide to the next API call to retrieve the next
+             *     page of results.
+             *
+             *     Set to `None` if there are no further pages.
+             */
+            nextCursor?: string | null;
+        };
+        /** @description All API responses that return a list use this standard pagination envelope */
+        Paginated_Invoice: {
+            /** @description The data in this page. */
+            data: {
+                /**
+                 * Format: date-time
+                 * @description The issue date of the invoice.
+                 */
+                issueDate: string;
+                /**
+                 * @description The URL at which a PDF representation of the invoice can be retrieved.
+                 *
+                 *     Typically `None` for `draft` invoices, in which case `html_url` should
+                 *     be `Some`, though this is not guaranteed by the Orb API documentation.
+                 */
+                pdfUrl?: string | null;
+                /** @description An ISO 4217 currency string, or "credits" */
+                currency: string;
+                /** @description The total after any minimums, discounts, and taxes have been applied. */
+                total: string;
+                /** @description The amount the customer will be charged due to this invoice */
+                amountDue: string;
+                /**
+                 * Format: date-time
+                 * @description The time at which the invoice was created.
+                 */
+                createdAt: string;
+                /**
+                 * @description The URL at which a web-page representation of the invoice can be retrieved.
+                 *
+                 *     May be `None`, typically after the invoice is well past its issue date, in which
+                 *     case `pdf_url` should be `Some`, although this is not guaranteed by the Orb
+                 *     API documentation.
+                 */
+                webUrl?: string | null;
+                /** @description The status (see [`orb_billing::InvoiceStatusFilter`] for details). */
+                status: string;
+                /** @description An automatically generated number to help track and reconcile invoices. */
+                invoiceNumber: string;
+            }[];
+            /**
+             * @description The cursor to provide to the next API call to retrieve the next
+             *     page of results.
+             *
+             *     Set to `None` if there are no further pages.
+             */
+            nextCursor?: string | null;
+        };
+        /** @description All API responses that return a list use this standard pagination envelope */
+        Paginated_Region: {
+            /** @description The data in this page. */
+            data: {
+                /** @description A unique identifier for the region, e.g. `aws/us-east-1` */
+                id: string;
+                /** @description The (provider-specific) region string -- e.g. `us-east-1` */
+                name: string;
+                /** @description The cloud provider hosting the region. Currently this can only be "aws" */
+                cloudProvider: string;
+                /** @description The URL at which the Region API can be reached */
+                url: string;
+            }[];
+            /**
+             * @description The cursor to provide to the next API call to retrieve the next
+             *     page of results.
+             *
+             *     Set to `None` if there are no further pages.
+             */
+            nextCursor?: string | null;
+        };
         PaymentMethod: {
             /** @description The type of payment method (e.g. "card"). */
             type: string;
-            card?: components["schemas"]["Card"] | null;
+            card?: null | components["schemas"]["Card"];
             /** @description The ID of the payment method. */
             id: string;
             /**
@@ -472,16 +705,6 @@ export interface components {
             /** @description The URL at which the Region API can be reached */
             url: string;
         };
-        /** @description All API responses that return a list use this standard pagination envelope */
-        Regions: {
-            /** @description The data in this page. */
-            data: components["schemas"]["Region"][];
-            /** @description The cursor to provide to the next API call to retrieve the next
-             *     page of results.
-             *
-             *     Set to `None` if there are no further pages. */
-            nextCursor?: string | null;
-        };
         SetupIntent: {
             /** @description The ID of the SetupIntent. */
             id: string;
@@ -489,17 +712,6 @@ export interface components {
             clientSecret: string;
             /** @description The status of the SetupIntent. */
             status: string;
-        };
-        StorageCosts: {
-            /** @description The resource-specific pricing breakdown. Either `ComputePrice`,
-             *     `NetworkPrice`, or `StoragePrice`. */
-            prices: components["schemas"]["StoragePrice"][];
-            /** @description The total cost for the resource in the timeframe, excluding any
-             *     minimums and discounts. */
-            subtotal: string;
-            /** @description The total cost for the resource in the timeframe, including any
-             *     minimums and discounts. */
-            total: string;
         };
         /** @description The price for a specific class of storage resource. */
         StoragePrice: {
@@ -511,7 +723,9 @@ export interface components {
             subtotal: string;
         };
         Subscription: {
+            /** @description Possible plans that customers may be subscribed to. */
             type: components["schemas"]["PlanType"];
+            /** @description The marketplace the organization is billed through. */
             marketplace: components["schemas"]["Marketplace"];
         };
     };
@@ -538,7 +752,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Regions"];
+                    "application/json": components["schemas"]["Paginated_Region"];
                 };
             };
         };
@@ -565,8 +779,54 @@ export interface operations {
                     "application/json": components["schemas"]["CreateLicenseKeyResponse"];
                 };
             };
+            /** @description Invalid environment id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Failed to issue license key */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_cost_breakdown_daily: {
+        parameters: {
+            query: {
+                /** @example 2026-06-17 */
+                startDate: string;
+                /** @example 2026-06-17 */
+                endDate: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Organization Daily Cost Breakdown */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyCostBreakdownResponse"];
+                };
+            };
+            /** @description Missing or invalid startDate/endDate query params */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permissions */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -577,8 +837,8 @@ export interface operations {
     get_current_organization_daily_costs: {
         parameters: {
             query: {
-                startDate: string | null;
-                endDate: string | null;
+                startDate: string;
+                endDate: string;
             };
             header?: never;
             path?: never;
@@ -612,7 +872,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CreditBlocks"];
+                    "application/json": components["schemas"]["Paginated_CreditBlock"];
                 };
             };
         };
@@ -643,7 +903,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Invoices"];
+                    "application/json": components["schemas"]["Paginated_Invoice"];
                 };
             };
             /** @description No permissions to get invoices */
@@ -677,7 +937,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreateLicenseKeyResponse"];
                 };
             };
-            /** @description Cannot specify a use case id */
+            /** @description Cannot specify an environment id */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -692,6 +952,33 @@ export interface operations {
                 content?: never;
             };
             /** @description Failed to issue license key */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_revoked_license_keys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked license key JTIs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListRevokedLicenseKeysResponse"];
+                };
+            };
+            /** @description Failed to list revoked license keys */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -841,7 +1128,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                useCaseId: string | null;
+                environmentId: string | null;
             };
             cookie?: never;
         };
@@ -856,7 +1143,7 @@ export interface operations {
                     "application/json": components["schemas"]["GetSelfManagedSubscriptionResponse"];
                 };
             };
-            /** @description Cannot specify a use case id */
+            /** @description Cannot specify an environment id */
             400: {
                 headers: {
                     [name: string]: unknown;

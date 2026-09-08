@@ -133,7 +133,7 @@ impl TieredPolicy {
             let shrink = prev - new_total;
             let _ = self
                 .budget
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
                     Some(cur.saturating_sub(shrink))
                 });
         }

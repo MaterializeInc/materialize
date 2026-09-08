@@ -12,7 +12,6 @@ expression: "#[sqlfunc(Concat, sqlname = \"concat\", is_associative = true)]\nfn
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect,
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
 pub struct Concat;
@@ -52,6 +51,9 @@ impl std::fmt::Display for Concat {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("concat")
     }
+}
+impl crate::func::FuncName for Concat {
+    const NAME: &'static str = stringify!(concat);
 }
 fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {
     Ok(strs.into_iter().flatten().collect())

@@ -1,6 +1,6 @@
 ---
 source: src/persist/src/indexed/encoding.rs
-revision: 9f96edabe3
+revision: 253293ef87
 ---
 
 # persist::indexed::encoding

@@ -1,0 +1,68 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Rewrite bare Linear issue references (e.g. SS-319) in PR descriptions into
+# Markdown links to https://linear.app/materializeinc/issue/<ref>.
+
+name: Linear Issue Links
+
+on:
+  # NOTE: pull_request_target grants a write token to PRs from forks. That is
+  # safe here because this workflow never checks out or executes PR code, it
+  # only rewrites the PR description.
+  pull_request_target:
+    types: [opened, edited]
+
+permissions:
+  pull-requests: write
+
+concurrency:
+  group: linear-links-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  linkify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const body = context.payload.pull_request.body;
+            if (!body) {
+              return;
+            }
+
+            const teamKeys = [
+              'CDX', 'CLO', 'CLU', 'CNS', 'CPU', 'CS', 'DB', 'DEP', 'DEX',
+              'EDU', 'GTM', 'MZC', 'PER', 'PRD', 'QAR', 'SAS', 'SEC', 'SQL',
+              'SS', 'STG',
+            ];
+
+            // Don't touch code blocks, inline code, and URLs
+            const skip = /(```[\s\S]*?```|`[^`\n]*`|https?:\/\/\S+)/;
+            const ref = new RegExp(
+              `(?<![\\w[-])(?:${teamKeys.join('|')})-\\d+(?![\\w-])`, 'g');
+
+            const linked = body
+              .split(skip)
+              .map((segment, i) =>
+                i % 2 === 1
+                  ? segment
+                  : segment.replace(
+                      ref, '[$&](https://linear.app/materializeinc/issue/$&)'))
+              .join('');
+
+            if (linked !== body) {
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+                body: linked,
+              });
+            }

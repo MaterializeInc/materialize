@@ -18,6 +18,20 @@
       description: |
         Optional. List of columns to decode as `text` for types that are unsupported in Materialize.
 
+- name: "syntax-refresh-references"
+  code: |
+    ALTER SOURCE [IF EXISTS] <name> REFRESH REFERENCES;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the source whose available upstream references you want to
+        refresh.
+  addenda: |
+    Refreshing references updates the upstream objects Materialize records for
+    the source in `mz_internal.mz_source_references`. It does not change the
+    data the source ingests. See [Refreshing available upstream
+    references](#refreshing-available-upstream-references).
+
 - name: "syntax-rename"
   code: |
     ALTER SOURCE <name> RENAME TO <new_name>;
@@ -54,7 +68,7 @@
         The name of the source you want to alter.
     - name: "`<retention_period>`"
       description: |
-        ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+        ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/serve-results/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
 
 - name: "syntax-reset-retain-history"
   code: |

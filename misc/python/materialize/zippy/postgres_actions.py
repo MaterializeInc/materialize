@@ -27,20 +27,6 @@ class PostgresStart(Action):
         c.up("postgres")
 
 
-class PostgresStop(Action):
-    """Stop the Postgres instance."""
-
-    @classmethod
-    def requires(cls) -> set[type[Capability]]:
-        return {PostgresRunning}
-
-    def withholds(self) -> set[type[Capability]]:
-        return {PostgresRunning}
-
-    def run(self, c: Composition, state: State) -> None:
-        c.kill("postgres")
-
-
 class PostgresRestart(Action):
     """Restart the Postgres instance."""
 
@@ -69,8 +55,7 @@ class CreatePostgresTable(Action):
 
         if len(existing_postgres_tables) == 0:
             self.new_postgres_table = True
-            # A PK is now required for Debezium
-            this_postgres_table.has_pk = True
+            this_postgres_table.has_pk = random.choice([True, False])
 
             self.postgres_table = this_postgres_table
         elif len(existing_postgres_tables) == 1:

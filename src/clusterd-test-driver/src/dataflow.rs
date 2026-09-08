@@ -24,6 +24,7 @@
 //! [`ComputeCommand::CreateDataflow`]: mz_compute_client::protocol::command::ComputeCommand::CreateDataflow
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use mz_compute_types::dataflows::{
     BuildDesc, DataflowDescription, IndexDesc, IndexImport, SourceImport,
@@ -31,13 +32,16 @@ use mz_compute_types::dataflows::{
 use mz_compute_types::plan::LirRelationExpr;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, MaterializedViewSinkConnection, SubscribeSinkConnection,
+    ComputeSinkConnection, ComputeSinkDesc, MaterializedViewSinkConnection, MetricSinkConnection,
+    SubscribeSinkConnection,
 };
 use mz_compute_types::sources::SourceInstanceDesc;
+use mz_expr::explain::ExplainContext;
 use mz_expr::{
     AggregateExpr, AggregateFunc, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
 };
 use mz_persist_types::{PersistLocation, ShardId};
+use mz_repr::explain::{DummyHumanizer, Explain, ExplainConfig, ExplainFormat, UsedIndexes};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{GlobalId, RelationDesc, ReprRelationType, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
@@ -382,6 +386,35 @@ impl DataflowBuilder {
         self
     }
 
+    /// Export a metric sink `sink_id` publishing the collection `from_id` into the replica's
+    /// in-process Prometheus registry.
+    ///
+    /// Like a subscribe, a metric sink writes no shard, so it needs no storage metadata.
+    /// `from_desc` must be the shaped canonical row shape the operator reads: `metric_name`,
+    /// `metric_type`, `labels`, `value`, `help`, plus the planner-computed `metric_kind` and
+    /// `name_valid` columns (see `mz_adapter::optimize::metric_sink::shape_metric_sink_source`).
+    /// The sink has no upper bound, matching a maintained (non-`UP TO`) export.
+    pub fn export_metric_sink(
+        &mut self,
+        sink_id: GlobalId,
+        from_id: GlobalId,
+        from_desc: RelationDesc,
+    ) -> &mut Self {
+        let desc = ComputeSinkDesc {
+            from: from_id,
+            from_desc,
+            connection: ComputeSinkConnection::MetricSink(MetricSinkConnection {
+                label: sink_id.to_string(),
+            }),
+            with_snapshot: true,
+            up_to: Antichain::new(),
+            non_null_assertions: vec![],
+            refresh_schedule: None,
+        };
+        self.mir.export_sink(sink_id, desc);
+        self
+    }
+
     /// Set the dataflow's `as_of` (the read frontier hydration starts from).
     pub fn as_of(&mut self, t: Timestamp) -> &mut Self {
         self.mir.as_of = Some(Antichain::from_elem(t));
@@ -415,34 +448,82 @@ impl DataflowBuilder {
     /// column out of range, or an unbalanced object graph), so a caller driving
     /// this from external input — notably the script reader — can surface a clean
     /// error instead of crashing the process.
-    pub fn finish(mut self) -> anyhow::Result<DataflowDescription<RenderPlan, CollectionMetadata>> {
+    pub fn finish(self) -> anyhow::Result<DataflowDescription<RenderPlan, CollectionMetadata>> {
         let features = OptimizerFeatures::default();
+        let lowered = Self::lower(self.mir, self.optimize, &features)?;
+        augment(lowered, &self.sources, &self.sinks)
+    }
+
+    /// Render the lowered dataflow as `EXPLAIN PHYSICAL PLAN`-style text — the LIR
+    /// the dataflow ships — so a script can golden-assert the optimized
+    /// plan shape and catch optimizer (or lowering) drift, which a result-only
+    /// assertion misses.
+    ///
+    /// Honors [`Self::optimize`] exactly like [`Self::finish`], so the explained
+    /// plan is the one that would be shipped. A no-catalog [`DummyHumanizer`]
+    /// renders ids as `u123` and columns as `#n` — stable and matching the `.spec`
+    /// MIR vocabulary, with no catalog to thread in. Literals render verbatim,
+    /// independent of the build profile.
+    pub fn explain(self) -> anyhow::Result<String> {
+        let features = OptimizerFeatures::default();
+        let mut lowered = Self::lower(self.mir, self.optimize, &features)?;
+        // `redacted` is pinned rather than taken from `ExplainConfig::default`, which
+        // derives it from the build's soft-assertion setting: a default-configured
+        // render would anonymize literals in the release-profile driver image and
+        // print them verbatim under `cargo test` or a `PROFILE=dev` local run. A
+        // golden must not depend on how the binary was built.
+        let config = ExplainConfig {
+            redacted: false,
+            ..ExplainConfig::default()
+        };
+        let context = ExplainContext {
+            config: &config,
+            features: &features,
+            humanizer: &DummyHumanizer,
+            cardinality_stats: BTreeMap::new(),
+            used_indexes: UsedIndexes::default(),
+            finishing: None,
+            duration: Duration::default(),
+            target_cluster: None,
+            optimizer_notices: Vec::new(),
+        };
+        lowered
+            .explain(&ExplainFormat::Text, &context)
+            .map_err(|e| anyhow::anyhow!("explaining dataflow failed: {e}"))
+    }
+
+    /// Optionally run the MIR dataflow optimizer, then lower MIR to LIR.
+    /// Shared by [`Self::finish`] (which augments the result with persist metadata)
+    /// and [`Self::explain`] (which renders it). Deterministic and self-contained.
+    fn lower(
+        mut mir: DataflowDescription<OptimizedMirRelationExpr, ()>,
+        optimize: bool,
+        features: &OptimizerFeatures,
+    ) -> anyhow::Result<DataflowDescription<LirRelationExpr, ()>> {
         // Optionally run the MIR dataflow optimizer first (e.g. to fill a `Join`'s
         // implementation). The index oracle is built from this dataflow's own
         // `index_imports`, so the optimizer recognizes imported arrangements and
         // plans `Get`s over them as arrangement reads (not persist reads); the
         // statistics oracle is empty — no catalog stats — so join planning falls
         // back to a differential join, which lowers.
-        if self.optimize {
-            let indexes = ImportedIndexOracle::new(&self.mir.index_imports);
+        if optimize {
+            let indexes = ImportedIndexOracle::new(&mir.index_imports);
             let typecheck_ctx = empty_typechecking_context();
             let mut df_meta = DataflowMetainfo::default();
             let mut ctx = TransformCtx::global(
                 &indexes,
                 &EmptyStatisticsOracle,
-                &features,
+                features,
                 &typecheck_ctx,
                 &mut df_meta,
                 None,
             );
-            optimize_dataflow(&mut self.mir, &mut ctx, false)
+            optimize_dataflow(&mut mir, &mut ctx, false)
                 .map_err(|e| anyhow::anyhow!("optimizing dataflow failed: {e}"))?;
         }
         // Lower MIR -> LIR. Deterministic and self-contained.
-        let lowered: DataflowDescription<LirRelationExpr, ()> =
-            LirRelationExpr::finalize_dataflow(self.mir, &features, None)
-                .map_err(|e| anyhow::anyhow!("lowering dataflow failed: {e}"))?;
-        augment(lowered, &self.sources, &self.sinks)
+        LirRelationExpr::finalize_dataflow(mir, features, None)
+            .map_err(|e| anyhow::anyhow!("lowering dataflow failed: {e}"))
     }
 }
 
@@ -600,6 +681,9 @@ fn augment(
                 })
             }
             ComputeSinkConnection::Subscribe(conn) => ComputeSinkConnection::Subscribe(conn),
+            // A metric sink writes into the process-local metrics registry, not persist, so it
+            // carries no storage metadata to splice.
+            ComputeSinkConnection::MetricSink(conn) => ComputeSinkConnection::MetricSink(conn),
             ComputeSinkConnection::CopyToS3Oneshot(_) => {
                 anyhow::bail!("copy-to-s3 sink {id} is not implemented")
             }
@@ -817,6 +901,52 @@ mod tests {
         assert!(assemble(true).is_ok());
     }
 
+    /// `explain` renders the lowered LIR plan as text, so a script can assert the
+    /// optimized plan shape. Build the optimized two-source join and confirm the
+    /// rendered plan mentions a `Join` (the operator the optimizer selected).
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn explain_join_renders_plan() {
+        let loc = PersistLocation {
+            blob_uri: "mem://".parse().unwrap(),
+            consensus_uri: "mem://".parse().unwrap(),
+        };
+        let mut builder = DataflowBuilder::new("headless-explain-test");
+        let left = builder.import_persist(
+            GlobalId::User(1000),
+            PersistSource {
+                shard: ShardId::new(),
+                location: loc.clone(),
+                desc: crate::data::sample_desc(),
+                upper: Timestamp::from(1),
+            },
+        );
+        let right = builder.import_persist(
+            GlobalId::User(1001),
+            PersistSource {
+                shard: ShardId::new(),
+                location: loc.clone(),
+                desc: crate::data::sample_desc(),
+                upper: Timestamp::from(1),
+            },
+        );
+        let join = MirRelationExpr::join_scalars(
+            vec![left.get(), right.get()],
+            vec![vec![MirScalarExpr::column(0), MirScalarExpr::column(2)]],
+        );
+        builder.build(GlobalId::User(2000), join);
+        builder.optimize();
+        builder.as_of(Timestamp::from(0));
+        builder.export_index(GlobalId::User(2001), GlobalId::User(2000), vec![0]);
+        let text = builder.explain().unwrap();
+        // Print so the rendered shape is visible under `--nocapture`.
+        println!("{text}");
+        assert!(
+            text.contains("Join"),
+            "explain output missing Join:\n{text}"
+        );
+    }
+
     /// A single dataflow can export both an index and a materialized view over the
     /// same built object (binding). Both exports reference that object; the index
     /// arranges it and the MV sink writes it to a target shard.
@@ -875,6 +1005,52 @@ mod tests {
         assert!(matches!(
             sink.connection,
             ComputeSinkConnection::MaterializedView(_)
+        ));
+    }
+
+    /// A metric sink assembles like any other export: a source import, a view binding built over
+    /// it, and one sink export whose connection is a payload-free `MetricSink`. Unlike a
+    /// materialized view, the augment step splices no storage metadata into it.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn metric_sink_dataflow_structure() {
+        let desc = crate::data::sample_desc();
+        let loc = PersistLocation {
+            blob_uri: "mem://".parse().unwrap(),
+            consensus_uri: "mem://".parse().unwrap(),
+        };
+        let (source_id, view_id, sink_id) = (
+            GlobalId::User(1000),
+            GlobalId::User(1001),
+            GlobalId::User(1002),
+        );
+
+        let mut builder = DataflowBuilder::new("headless-metric-sink");
+        let src = builder.import_persist(
+            source_id,
+            PersistSource {
+                shard: ShardId::new(),
+                location: loc,
+                desc: desc.clone(),
+                upper: Timestamp::from(1),
+            },
+        );
+        builder.build(
+            view_id,
+            src.get().filter(vec![MirScalarExpr::literal_true()]),
+        );
+        builder.as_of(Timestamp::from(0));
+        builder.export_metric_sink(sink_id, view_id, desc);
+        let df = builder.finish().unwrap();
+
+        assert_eq!(df.sink_exports.len(), 1);
+        let (sid, sink) = df.sink_exports.iter().next().unwrap();
+        assert_eq!(*sid, sink_id);
+        assert_eq!(sink.from, view_id);
+        // The metric sink carries a payload-free connection and no storage metadata.
+        assert!(matches!(
+            sink.connection,
+            ComputeSinkConnection::MetricSink(MetricSinkConnection { .. })
         ));
     }
 

@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/str.rs
-revision: 9dfbf57db2
+revision: 253293ef87
 ---
 
 # mz-ore::str

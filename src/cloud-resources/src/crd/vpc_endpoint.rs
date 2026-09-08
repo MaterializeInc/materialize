@@ -195,7 +195,7 @@ mod tests {
         assert_eq!(
             &crd_json, exported_crd_json,
             "VpcEndpoint CRD json does not match exported json.\n\nCRD:\n{}\n\nExported CRD:\n{}",
-            &crd_json, exported_crd_json,
+            crd_json, exported_crd_json,
         );
     }
 }

@@ -12,31 +12,17 @@ import React from "react";
 
 import { Cluster } from "~/api/materialize/cluster/clusterList";
 import { ErrorCode } from "~/api/materialize/types";
-import {
-  buildSqlQueryHandlerV2,
-  mapKyselyToTabular,
-} from "~/api/mocks/buildSqlQueryHandler";
-import server from "~/api/mocks/server";
 import { getStore } from "~/jotai";
 import { allClusters } from "~/store/allClusters";
-import {
-  clustersFetchColumns,
-  emptyClustersResponse,
-  validClustersResponse,
-} from "~/test/clusterQueryBuilders";
 import { mockSubscribeState } from "~/test/mockSubscribe";
 import { renderComponent, RenderWithPathname } from "~/test/utils";
 
 import ClusterRoutes from "./ClusterRoutes";
 import { buildClusterServerResponse } from "./clustersTestUtils";
 import { CLUSTERS_FETCH_ERROR_MESSAGE } from "./constants";
-import { clusterQueryKeys, useClusters } from "./queries";
 
 vi.mock("~/platform/clusters/ClusterDetail", () => ({
   default: function () {
-    // Given we're mocking the default export, we don't need to capitalize the function name
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    useClusters();
     return <div>ClusterDetail component</div>;
   },
 }));
@@ -55,6 +41,7 @@ const validCluster: Cluster = {
   name: "default",
   size: "50cc",
   managed: true,
+  ownerId: "u1",
   replicas: [
     {
       id: "u678",
@@ -76,30 +63,6 @@ const validCluster: Cluster = {
   latestStatusUpdate: "2024-01-01T00:00:00.000Z",
 };
 
-export const noSystemObjectClustersResponse = buildSqlQueryHandlerV2({
-  queryKey: clusterQueryKeys.list({
-    includeSystemObjects: false,
-  }),
-  results: mapKyselyToTabular({
-    columns: clustersFetchColumns,
-    rows: [
-      buildClusterServerResponse({ id: "u1", name: "default" }),
-      buildClusterServerResponse({ id: "u2", name: "user_cluster" }),
-    ],
-  }),
-});
-
-export const errorClustersResponse = buildSqlQueryHandlerV2({
-  queryKey: clusterQueryKeys.list({ includeSystemObjects: false }),
-  results: {
-    error: {
-      message: "Something went wrong",
-      code: ErrorCode.INTERNAL_ERROR,
-    },
-    notices: [],
-  },
-});
-
 describe("ClusterRoutes", () => {
   beforeEach(() => {
     const store = getStore();
@@ -107,7 +70,11 @@ describe("ClusterRoutes", () => {
   });
 
   it("shows a spinner initially", async () => {
-    server.use(emptyClustersResponse);
+    const store = getStore();
+    store.set(
+      allClusters,
+      mockSubscribeState<Cluster>({ data: [], snapshotComplete: false }),
+    );
     renderComponent(<ClusterRoutes />);
 
     expect(await screen.findByText("Clusters")).toBeVisible();
@@ -117,22 +84,42 @@ describe("ClusterRoutes", () => {
   });
 
   it("shows the empty state when there are no results", async () => {
-    server.use(emptyClustersResponse);
+    const store = getStore();
+    store.set(allClusters, mockSubscribeState<Cluster>({ data: [] }));
     renderComponent(<ClusterRoutes />);
 
     expect(await screen.findByText("No available clusters")).toBeVisible();
   });
 
-  it("shows an error state when clusters fail to load", async () => {
-    server.use(errorClustersResponse);
+  it("shows an error state when the clusters subscribe fails", async () => {
+    const store = getStore();
+    store.set(
+      allClusters,
+      mockSubscribeState<Cluster>({
+        data: [],
+        snapshotComplete: false,
+        error: {
+          code: ErrorCode.INTERNAL_ERROR,
+          message: "Something went wrong",
+        },
+      }),
+    );
     renderComponent(<ClusterRoutes />);
 
     expect(await screen.findByText(CLUSTERS_FETCH_ERROR_MESSAGE)).toBeVisible();
   });
 
   it("renders the cluster list", async () => {
-    // The cluster routes use the unfiltered response and the list uses the filtered response
-    server.use(noSystemObjectClustersResponse);
+    const store = getStore();
+    store.set(
+      allClusters,
+      mockSubscribeState({
+        data: [
+          buildClusterServerResponse({ id: "u1", name: "default" }),
+          buildClusterServerResponse({ id: "u2", name: "user_cluster" }),
+        ],
+      }),
+    );
     renderComponent(<ClusterRoutes />);
 
     expect(await screen.findByText("Clusters")).toBeVisible();
@@ -161,7 +148,6 @@ describe("ClusterRoutes", () => {
   });
 
   it("shows cluster details", async () => {
-    server.use(validClustersResponse);
     renderComponent(<ClusterRoutes />, {
       initialRouterEntries: ["/u1/default"],
     });
@@ -170,7 +156,6 @@ describe("ClusterRoutes", () => {
   });
 
   it("updates the path when the name has changed", async () => {
-    server.use(validClustersResponse);
     renderComponent(
       <RenderWithPathname>
         <ClusterRoutes />
@@ -185,7 +170,6 @@ describe("ClusterRoutes", () => {
   });
 
   it("updates the path when the id has changed", async () => {
-    server.use(validClustersResponse);
     renderComponent(
       <RenderWithPathname>
         <ClusterRoutes />
@@ -199,12 +183,23 @@ describe("ClusterRoutes", () => {
     expect(screen.getByText("ClusterDetail component")).toBeVisible();
   });
 
-  it("shows an error state when clusters fail to load on the details page", async () => {
-    server.use(errorClustersResponse);
+  it("still renders the details page when the clusters subscribe errors", async () => {
+    const store = getStore();
+    store.set(
+      allClusters,
+      mockSubscribeState<Cluster>({
+        data: [],
+        snapshotComplete: false,
+        error: {
+          code: ErrorCode.INTERNAL_ERROR,
+          message: "Something went wrong",
+        },
+      }),
+    );
     renderComponent(<ClusterRoutes />, {
       initialRouterEntries: ["/u1/default"],
     });
 
-    expect(await screen.findByText(CLUSTERS_FETCH_ERROR_MESSAGE)).toBeVisible();
+    expect(await screen.findByText("ClusterDetail component")).toBeVisible();
   });
 });

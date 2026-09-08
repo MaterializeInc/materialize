@@ -37,11 +37,13 @@ INSERT INTO t15_pk VALUES ('a', 'hello world'), ('b', 'foobar'), ('c', 'anotha o
 
 > CREATE SOURCE t15_pk_sql_server
   FROM SQL SERVER CONNECTION sql_server_test_15_connection
-  FOR ALL TABLES
   EXPOSE PROGRESS AS t15_renamed_progress_relation;
 
+> CREATE TABLE t15_pk FROM SOURCE t15_pk_sql_server (REFERENCE dbo.t15_pk);
+
+# `t15_pk` is a table, not a subsource, so only the source and its progress
+# relation show up in `mz_sources`.
 > SELECT name FROM mz_sources WHERE name LIKE 't15%';
-t15_pk
 t15_pk_sql_server
 t15_renamed_progress_relation
 

@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/session/vars/constraints.rs
-revision: 2b5b078528
+revision: 4f0805a4d8
 ---
 
 # mz-sql::session::vars::constraints

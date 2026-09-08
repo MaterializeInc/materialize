@@ -13,7 +13,6 @@
 > DROP SECRET IF EXISTS mysql_pass;
 
 # Override MySQL connect timeout to 2s
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET mysql_source_connect_timeout = '2s';
 
@@ -41,7 +40,6 @@ $ http-request method=POST url=http://toxiproxy:8474/proxies/mysql/toxics conten
 contains:connection attempt timed out after 2s
 
 # Override MySQL connect timeout to 30s
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET mysql_source_connect_timeout = '30s';
 

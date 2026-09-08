@@ -22,7 +22,6 @@ mz-cloud-resources = { path = "../cloud-resources"}
 mz-ore = { path = "../ore", features = ["cli", "test"] }
 mz-postgres-util = { path = "../postgres-util" }
 mz-server-core = { path = "../server-core"}
-mz-sql-parser = { path = "../sql-parser" }
 mz-tls-util = { path = "../tls-util" }
 postgres-openssl.workspace = true
 regex.workspace = true

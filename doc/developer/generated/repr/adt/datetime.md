@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/adt/datetime.rs
-revision: 89b4fd6a04
+revision: 26305d8cb0
 ---
 
 # mz-repr::adt::datetime

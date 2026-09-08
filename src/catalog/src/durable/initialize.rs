@@ -386,6 +386,7 @@ pub(crate) async fn initialize(
             ObjectType::MaterializedView => mz_audit_log::ObjectType::MaterializedView,
             ObjectType::Source => mz_audit_log::ObjectType::Source,
             ObjectType::Sink => mz_audit_log::ObjectType::Sink,
+            ObjectType::MetricSink => mz_audit_log::ObjectType::MetricSink,
             ObjectType::Index => mz_audit_log::ObjectType::Index,
             ObjectType::Type => mz_audit_log::ObjectType::Type,
             ObjectType::Role => mz_audit_log::ObjectType::Role,
@@ -790,6 +791,7 @@ fn default_cluster_config(args: &BootstrapArgs) -> Result<ClusterConfig, Catalog
                 log_logging: false,
                 interval: Some(Duration::from_secs(1)),
             },
+            arrangement_compression: false,
             optimizer_feature_overrides: Default::default(),
             schedule: Default::default(),
             auto_scaling_strategy: None,
@@ -814,5 +816,6 @@ fn default_replica_config(args: &BootstrapArgs) -> Result<ReplicaConfig, Catalog
             log_logging: false,
             interval: Some(Duration::from_secs(1)),
         },
+        arrangement_compression: false,
     })
 }

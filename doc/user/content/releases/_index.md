@@ -5,15 +5,467 @@ disable_list: true
 menu:
   main:
     identifier: "releases"
-    weight: 80
+    name: "Release notes"
+    weight: 130
 aliases:
   - /self-managed/v25.1/release-notes/
+  - /self-managed/v25.2/release-notes/
+  - /self-managed/v25.2/release-notes/compatibility/
+  - /self-managed/v25.2/release-notes/versioning_lifecycle/
+  - /self-managed/v25.2/release-notes/compatibility/
 ---
 
 {{< note >}}
 Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
+
+## v26.40.2
+*Released to Materialize Cloud: 2026-09-07* <br>
+*Released to Materialize Self-Managed: 2026-09-08* <br>
+
+### Bug Fixes {#v26.40.2-bug-fixes}
+- Fixed `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` run while a zero-downtime upgrade was in progress leaving the upgraded environment on the view's previous definition, which either put `environmentd` into a crash loop that restarting could not clear or left the view silently computing and serving the replaced definition.
+
+## v26.40.0
+*Released to Materialize Cloud: 2026-09-02* <br>
+*Released to Materialize Self-Managed: 2026-09-03* <br>
+
+### Iceberg support for Databricks on AWS {#v26.40-iceberg-support-for-databricks-on-aws}
+
+{{< public-preview />}}
+
+Iceberg sinks can now write to Apache Iceberg tables registered in [Databricks
+Unity Catalog](/export-data/iceberg-databricks/) on AWS, reached through
+Unity Catalog's Iceberg REST catalog endpoint. Two new Iceberg catalog
+connection options make this work: `OAUTH2 SERVER URL`, which names a token
+endpoint that does not sit under the catalog URI, and `ACCESS DELEGATION =
+'vended-credentials'`, which asks the catalog for temporary, table-scoped
+storage credentials instead of static keys. Materialize refreshes both the
+OAuth2 token and the vended credentials while the sink runs, so a sink that
+outlives one credential lifetime keeps writing.
+
+```mzsql
+CREATE SECRET databricks_oauth
+  AS '<client_id>:<client_secret>';
+
+CREATE CONNECTION iceberg_catalog_connection TO ICEBERG CATALOG (
+    CATALOG TYPE = 'rest',
+    URL = 'https://<workspace>.cloud.databricks.com/api/2.1/unity-catalog/iceberg-rest',
+    WAREHOUSE = '<catalog_name>',
+    CREDENTIAL = SECRET databricks_oauth,
+    OAUTH2 SERVER URL = 'https://<workspace>.cloud.databricks.com/oidc/v1/token',
+    SCOPE = 'all-apis',
+    ACCESS DELEGATION = 'vended-credentials'
+);
+
+CREATE SINK <sink_name>
+  IN CLUSTER <sink_cluster>
+  FROM <my_materialize_object>
+  INTO ICEBERG CATALOG CONNECTION iceberg_catalog_connection (
+    NAMESPACE = '<unity_catalog_schema>',
+    TABLE = '<my_iceberg_table>'
+  )
+  MODE APPEND
+  WITH (COMMIT INTERVAL = '<commit_interval>');
+```
+
+For more information, see:
+- [Guide: Databricks on AWS](/export-data/iceberg-databricks/)
+- [`CREATE CONNECTION`: Iceberg catalog](/sql/create-connection/#iceberg-catalog), including [storage access delegation](/sql/create-connection/#iceberg-catalog-access-delegation)
+- [`CREATE SINK`: Iceberg](/sql/create-sink/iceberg/), including [append mode](/sql/create-sink/iceberg/#append-mode)
+
+### Improvements {#v26.40-improvements}
+- **Query History for Self-Managed**: Self-Managed deployments can now use the Console's Query History view to debug latency and performance.
+- **Bounded staleness isolation is generally available**: The [`bounded staleness <duration>`](/serve-results/isolation-level/#bounded-staleness) transaction [isolation level](/serve-results/isolation-level/) is out of public preview and is now a supported part of the [`transaction_isolation`](/serve-results/isolation-level/#setting-isolation-level) surface. See [when to use bounded staleness](/serve-results/isolation-level/#when-to-use-bounded-staleness) and its [restrictions](/serve-results/isolation-level/#restrictions).
+- **Replica resource usage introspection**: A new `mz_introspection.mz_cluster_replica_resource_usage` relation reports each replica process's own memory, swap, and disk observations at a higher cadence than the roughly once-a-minute orchestrator samples, so a spike between two samples is no longer invisible.
+- **Self-Managed: Automatic rollouts on GKE node pool upgrades**: The Materialize operator can now detect GKE node pool upgrades and automatically trigger rollouts to move workloads onto the new nodes, preventing outages from automatic node evictions. Deployments that use the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules) (v9.0.0 and later) get this configured for them, with no action needed; for all other deployments, see [GKE node pool upgrades](/self-managed-deployments/deployment-guidelines/gke-node-pool-upgrades/) for the setup steps.
+
+### Agent Skills {#v26.40-agent-skills}
+- **mz-optimize-memory**: A new skill that works top-down from a cluster's largest arrangements to a table of memory-reducing fixes — index changes, outer-join and subquery rewrites, window-function patterns, and arrangement size hints — with rules for estimating each saving before making the change and verifying it afterwards.
+
+### Bug Fixes {#v26.40-bug-fixes}
+- Fixed the MCP servers rejecting `tools/list`, `ping`, and `notifications/initialized` requests that carry any `params` — including the `_meta` field MCP clients are allowed to attach — with a non-JSON-RPC HTTP 422 that clients read as the server being unavailable.
+- Fixed `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` leaving a stale cached query plan behind, which put `environmentd` into a crash loop on every subsequent restart once a dependency of the replaced definition was dropped, and could otherwise leave the view computing its old definition.
+- `CREATE TABLE ... FROM SOURCE` now requires `SELECT` on the source and `USAGE` on its schema, closing a case where `CREATE` on any schema a role controlled was enough to read a source that role had been denied; deployments where a platform team owns sources and application teams attach tables into their own schemas will need those `SELECT` grants added.
+- Fixed `ALTER CONNECTION` letting a connection owner keep secrets and connections they lack `USAGE` privileges on, and read those secrets during content checks or connection validation.
+- Fixed `ANY`/`ALL` over a `NULL` array or list returning the empty-set answer instead of `NULL`, and `array_position` failing to find `NULL` elements, both now matching PostgreSQL.
+- Fixed `round(numeric, scale)` erroring on a scale that reaches past the value's fractional digits, such as `round(123::numeric, 38)`, which could also let filter pushdown discard data a query matched.
+- Fixed identity-provider group sync silently finding nothing when `oidc_group_claim` names a claim the token declares directly, such as `roles`, so group-to-role mapping now works without a custom claim or JWT prehook.
+- Fixed Arrow ADBC clients failing to connect by adding the missing `pg_type.typsend` column, and fixed `typreceive` rendering as a numeric OID rather than the function name, so those clients resolve every column to its real type.
+- Fixed Iceberg sinks ignoring a table's `write.data.path` property and always writing data files to the default location.
+- Fixed sources on the Console's Objects page being described in replica-hydration terms, which could show a healthy source as `Not Hydrated`, leave a webhook source with no status, and hold a completed snapshot at 99%.
+- Fixed several `dbt-materialize` error paths reporting confusing failures instead of the intended messages, covering the index config parser, renaming a view, dropping an unsupported relation type, connection option parsing, and the version check against a server that is not Materialize.
+- Fixed the `mz` CLI failing on read-only commands such as `mz sql` when `mz.toml` sits on a read-only mount.
+
+## v26.39.0
+*Released to Materialize Cloud: 2026-08-26* <br>
+*Released to Materialize Self-Managed: 2026-08-27* <br>
+
+### Improvements {#v26.39-improvements}
+- **Improved connect modal in the console**: We've updated the UI to make it easier to connect coding agents to our MCP servers, and connect applications to Materialize.
+- **Faster MySQL table snapshots** (private preview): Initial snapshots for MySQL tables are now parallelized. We saw speedups of up to 80%. When we tested a snapshot of a 2bn row table (2.45TB), previously the snapshot completed in 220 minutes. With the new parallelization, the snapshot completed in 43 minutes. Tables are eligible for parallel snapshots when they have a single-column `CHAR` or `VARCHAR` primary key using the `utf8mb4` character set with the `utf8mb4_bin` collation. For more information, see [MySQL snapshot parallelism](/ingest-data/mysql/snapshot-parallelism/).
+- **App password expiration** (<red>*Materialize Cloud only*</red>): When creating an app password in the [Materialize Console](/developer-tools/console/), you can now set an optional expiration, after which the app password is no longer valid.
+
+### Agent Skills {#v26.39-agent-skills}
+- **mz-ontology-design**: A new skill that structures a Materialize SQL code base as a canonical ontology — a shared `raw` database, a shared `core` database, and one database per use case — with rules for semantic object grain and identity, temporal semantics, and a machine-readable relationship registry.
+- **materialize-debug-freshness**: A new skill that diagnoses why an object is behind wall-clock time, sweeping source and sink status, attributing lag hop by hop, and ranking the dataflows and operators responsible.
+
+### Bug Fixes {#v26.39-bug-fixes}
+- Fixed zero-downtime upgrades cutting over before built-in materialized views rebuilt by the upgrade had hydrated, which made them all hydrate at once at cut-over, spiking `mz_catalog_server` CPU and slowing catalog queries.
+- Fixed crashes and coordinator stalls when planning queries with long `JOIN` chains or long chains of CTEs.
+- Fixed a `column "table_func_0" does not exist` error when a table function in the `SELECT` list is combined with `GROUP BY`, aggregates, or `HAVING`.
+- Fixed out-of-memory crashes caused by large `SELECT` results over the HTTP and WebSocket APIs and by slow-reading `SUBSCRIBE` clients, with results now streaming incrementally over the WebSocket API, the result size limit now enforced on the HTTP API, and an error returned when a `SUBSCRIBE` client falls too far behind.
+- Fixed hangs where a `SUBSCRIBE` over a query the optimizer folds to a constant would never end, and stopped dataflows from retaining source collections none of their outputs read.
+- Fixed filter pushdown skipping data that matched a query, which could return too few rows, and fixed replica crashes when reading data with legacy or malformed statistics.
+- Fixed SQL Server sources reporting inflated ingestion lag during the initial snapshot.
+- `CREATE CONNECTION`, `ALTER CONNECTION`, and `VALIDATE CONNECTION` for AWS PrivateLink now reject a `SERVICE NAME` that is not an AWS VPC endpoint service name, such as a DNS hostname, instead of failing later with a misleading missing-availability-zones error.
+
+## v26.38.2
+*Released to Materialize Cloud: 2026-08-19* <br>
+*Released to Materialize Self-Managed: 2026-08-25* <br>
+
+### Dictionary compression {#v26.38-dictionary-compression}
+
+{{< public-preview />}}
+
+Dictionary compression reduces the memory that
+[arrangements](/fundamentals/concepts/arrangements/#arrangements) use when a column holds the same values repeatedly. Instead of storing a repeated column value each time it appears, Materialize stores that value once and has each row reference it. This can reduce steady state memory requirements after [hydration](/fundamentals/concepts/hydration/) has completed.
+
+Dictionary compression is off by default. You opt in per cluster with the
+`EXPERIMENTAL ARRANGEMENT COMPRESSION` option:
+
+```mzsql
+-- Turn compression on for a new cluster
+CREATE CLUSTER my_cluster (
+    SIZE = '100cc',
+    EXPERIMENTAL ARRANGEMENT COMPRESSION = true
+);
+
+-- Or turn it on for an existing cluster
+ALTER CLUSTER my_cluster SET (EXPERIMENTAL ARRANGEMENT COMPRESSION = true);
+```
+
+For more information, see:
+- [Guide: Dictionary compression](/transform-data/dictionary-compression/), including [when it helps and when it does not](/transform-data/dictionary-compression/#the-tradeoff)
+- [`CREATE CLUSTER`: Dictionary compression](/sql/create-cluster/#dictionary-compression)
+- [`ALTER CLUSTER`: Dictionary compression](/sql/alter-cluster/#dictionary-compression)
+
+
+### Integrate with your observability stack {#v26.38-self-managed-observability}
+
+<red>*Materialize Self-Managed only*</red>
+
+Materialize Self-Managed now integrates with the observability tools you already
+run. You can export metrics, and optionally logs, from Materialize to Datadog,
+Honeycomb, Google Cloud Monitoring, Prometheus remote write, or any monitoring
+backend with an Open Telemetry (OTLP) endpoint. Template dashboards and alerts are provided to
+help you get started.
+
+Follow the instructions for your destination:
+- [Datadog](/observability/self-managed/datadog/)
+- [Honeycomb](/observability/self-managed/honeycomb/)
+- [Google Cloud Monitoring](/observability/self-managed/google-cloud-monitoring/)
+- [Prometheus remote write](/observability/self-managed/prometheus-remote-write/), for Mimir, Amazon Managed Prometheus, or Grafana Cloud
+- [OpenTelemetry](/observability/self-managed/opentelemetry/), for any other OTLP endpoint, including your own collector
+
+If you don't have an observability stack set up, the [Materialize Terraform
+modules](/self-managed-deployments/installation/#install-using-terraform-modules)
+can deploy one alongside Materialize. It collects metrics from Materialize and
+from your Kubernetes cluster, collects Materialize's container logs and
+Kubernetes events, stores both in your own object storage, and ships [Grafana](/observability/self-managed/grafana/)
+dashboards and Alertmanager alert rules to query them. The stack is controlled by
+the `enable_observability` variable, which defaults to `true` starting with
+v11.0.0 of the modules.
+
+For more information, see:
+- [Monitoring Self-Managed Materialize](/observability/self-managed/)
+- [How logs and metrics are stored and delivered](/observability/self-managed/storage/)
+- [Alerting](/observability/self-managed/alerting/)
+
+### Improvements {#v26.38-improvements}
+- **Notice for single-replica sources on multi-replica clusters**: Materialize now warns when a command leaves a cluster holding more than one replica alongside PostgreSQL, MySQL, or SQL Server sources, which always run on a single replica, since the extra replicas make those sources neither more fault tolerant nor faster to ingest.
+- **Self-Managed: Graceful resizing of system clusters**: `ALTER CLUSTER ... SET (SIZE ...)` on a system cluster such as `mz_catalog_server` or `mz_system` now runs as a background graceful reconfiguration, with a 24-hour default deadline and a rollback on timeout, instead of recreating the whole replica set at once, so `SHOW CLUSTERS` settles on the new configuration rather than flipping to it.
+
+### Agent Skills {#v26.38-agent-skills}
+- **materialize-debug-freshness**: New agent skill for diagnosing why an object is behind wall-clock time, whether that surfaces as a stale materialized view, index, or sink, or as a freshness alert. Running on the read-only tools of the Materialize developer MCP server, it ranks what is lagging, attributes the lag to a single hop, then rules out in-progress hydration, a replica dominated by one dataflow, and per-worker skew before naming the culprit operator and the SQL responsible for the expensive work.
+- **mz-deploy**: New agent skill covering the `mz-deploy` CLI — project layout, the compile/test/apply/stage/promote workflow, deploy IDs and staging suffixes, schema-granularity conflict detection, stable API schemas, profile resolution, and the `EXECUTE UNIT TEST` grammar.
+- **mz-sql-lsp**: New Claude Code plugin, installable from the `agent-skills` repository's new `materialize` plugin marketplace, that registers the `mz-deploy` language server for `.sql` files so agents can use go-to-definition, hover, and workspace symbols in an mz-deploy project instead of text search.
+
+### Bug Fixes {#v26.38-bug-fixes}
+- Fixed an `INSERT` that ran concurrently with an `ALTER TABLE ... ADD COLUMN` crashing the server; the insert now fails with a retryable serialization error instead.
+- Fixed an environment restarting every few seconds and never becoming reachable when it held a sealed collection whose dependency had no readable history left; such a collection no longer blocks startup, so an operator can drop and recreate the affected object.
+- Fixed filter pushdown discarding data that matched the query when a float column contained negative `NaN` values, so the query returned too few rows.
+- Fixed a `TIMESTAMPTZ` literal near the end of the representable range, and rounding such a value to a lower precision, aborting the server.
+- Fixed several date/time and range text-format bugs: a sub-second value that rounded up to a full second rendered about a second early, a `TIME` string naming no time field was accepted instead of erroring, a quoted range bound kept its quotes so a `tsrange` could not survive a `::text::tsrange` round trip, and a BC date was not quoted inside a composite value.
+- Fixed a regular expression exhausting server memory before erroring — a pattern under the documented 1 MiB limit could allocate several gigabytes while being translated — by also rejecting patterns with more than 2000 character classes, counting each Unicode, Perl, or POSIX class such as `\p{L}`, `\d`, or `[[:alpha:]]`, and each range such as `a-z`.
+- Fixed a webhook source's `CHECK` expression having no bound on the memory it may allocate, which let concurrent requests to a source with an amplifying check exhaust server memory; a check that exceeds the budget, 20 MiB per request by default, is now refused with a `400` response.
+- Fixed the enforced connection limit picking up an `ALTER SYSTEM SET max_connections` from a transaction that was then rolled back, so the limit clients were held to could differ from the committed value.
+- Fixed `dbt-materialize`'s `deploy_init` failing when `CI_TAG` is set, the setup the blue/green deployment documentation prescribes, and made it quote the deployment schema consistently so a schema name that is not a bare lowercase identifier is handled correctly throughout the operation.
+- Fixed the comment `dbt-materialize`'s `deploy_promote` puts on each promoted schema ending without a timestamp.
+
+## v26.37.0
+*Released to Materialize Cloud: 2026-08-12* <br>
+*Released to Materialize Self-Managed: 2026-08-13* <br>
+
+### Improvements {#v26.37-improvements}
+- **Self-Managed: Highly available operator**: The Materialize operator now runs two replicas by default, so rolling out an operator update no longer interrupts the CRD conversion webhook. Installations that manage their own RBAC must grant the operator `get`, `create`, and `update` on `leases` in `coordination.k8s.io`, because the two replicas coordinate through lease-based leader election.
+- **`IF NOT EXISTS` for clusters and replicas**: `CREATE CLUSTER` and `CREATE CLUSTER REPLICA` now accept an `IF NOT EXISTS` clause, so an existing cluster returns an `already exists, skipping` notice instead of an error. Provisioning scripts can now run idempotently, without a pre-flight existence check.
+
+### Bug Fixes {#v26.37-bug-fixes}
+- Fixed a prepared statement with a parameterized `LIMIT` failing with `Top-level LIMIT must be a constant expression` whenever the bound parameter's type was not `bigint`.
+- Fixed `ALTER CLUSTER ... SET (REPLICATION FACTOR ...)` on a built-in cluster such as `mz_system` or `mz_support` being undone on the next restart, which could also wedge later replication-factor changes.
+- Fixed session parameter changes that an implicit transaction reverts not being announced to the client, so drivers that cache `ParameterStatus` such as pgjdbc and psycopg kept reporting a value the server had already discarded.
+- Fixed extended-protocol `Parse` and `Bind` messages carrying more than 32767 parameters, parameter types, or format codes being misdecoded, which left the rest of the message misaligned.
+- Fixed Avro object container file decoding reading a previous block's bytes into values, and bounded a block's declared object count so that a malformed file of a few dozen bytes can no longer cost minutes of decoding work.
+- Fixed a bare `map` in an option value failing to parse, which broke statements such as a Kafka sink with `TOPIC = "map"` and a materialized view's `PARTITION BY`.
+- Fixed the binary wire format accepting `Infinity` and `-Infinity` as a `numeric` parameter, a value no SQL literal can name.
+- Fixed a stalled catalog snapshot in the MCP server hanging a request indefinitely instead of failing it at the configured request timeout.
+- Fixed `balancerd` panicking at startup when the target `environmentd` service's DNS name was not yet resolvable, which could happen during an upgrade; startup now retries with backoff for a configurable 30 seconds.
+- Fixed Iceberg sinks counting every row twice in `messages_staged`, which drew the Console's Staged line at double the committed rate, and fixed the Console's sink statistics charts rendering a failed subscribe as an empty chart pinned at 0.
+- Fixed `ALTER NETWORK POLICY`, `GRANT`/`REVOKE USAGE ON NETWORK POLICY`, and `ALTER NETWORK POLICY ... OWNER TO` failing to resolve a quoted identifier such as `"hyphenated-name"`.
+- Fixed a query with a very large `LIMIT` crashing a cluster replica in a loop, which any user able to query an indexed relation could trigger with a single statement.
+- Fixed a persist command that retried for minutes committing a stale lease heartbeat, which could cost a read handle its lease.
+- Fixed Self-Managed deployments defaulting to an alternative materialized view sink implementation that could block cluster worker threads and cost readers their leases; it is now off by default, matching Materialize Cloud.
+## v26.36.0
+*Released to Materialize Cloud: 2026-08-07 on as-needs basis* <br>
+*Released to Materialize Self-Managed: 2026-08-07* <br>
+
+### Improvements {#v26.36-improvements}
+- **`dbt-materialize`: `AUTO SCALING STRATEGY` support**: The dbt adapter now supports the `AUTO SCALING STRATEGY` cluster option, so you can speed up cluster hydration from your dbt workflows. You can set, reset, and disable it on a cluster, and `deploy_init` will automatically copy strategy configuration during blue/green deploys.
+- **Updated timezone data**: The IANA timezone database has been updated from 2022g to 2025b, correcting timezone rules for Egypt, Kazakhstan, Paraguay, and Greenland that changed since 2023. Numeric timezone abbreviations (e.g., `+05`) now render correctly in `pg_timezone_names`.
+
+### Bug Fixes {#v26.36-bug-fixes}
+- Fixed a coordinator panic when a client abandoned a connection attempt that had already failed, such as an HTTP request that disconnects or times out.
+- Fixed `EXTRACT(YEAR ...)` and `make_timestamp` returning incorrect results for BC dates, where year numbering was off by one.
+- Fixed interval range qualifiers incorrectly dropping fields above the range's high end, causing expressions like `INTERVAL '1 2:03' HOUR TO MINUTE` to lose the day component.
+- Fixed date parsing to honor the `DateStyle` MDY convention, so `date '01/02/03'` now correctly parses as `2003-01-02` instead of `0001-02-03`.
+- Fixed array and list text output not quoting elements matching `NULL` case-insensitively, causing values like `'null'` to round-trip incorrectly as `NULL`.
+- Fixed interval text output spelling the months field as `month(s)` instead of `mon(s)`, which caused psycopg to silently drop all components after the months field.
+- Fixed `CREATE VIEW` and `CREATE MATERIALIZED VIEW` silently accepting a column name list shorter than the number of output columns.
+- Fixed binary-protocol time parameters outside the valid range being accepted instead of rejected with an error.
+- Fixed `INTERSECT` queries with many branches exhausting environmentd memory during query planning.
+- Fixed `DISCARD ALL` not resetting session variables to their defaults when using the extended query protocol.
+- Fixed `SET extra_float_digits` being accepted but having no effect on query output. Zero and negative values now limit float precision as in PostgreSQL.
+- Fixed out-of-range `REFRESH AT` or `ALIGNED TO` times causing a coordinator panic that dropped all client connections.
+- Fixed queries larger than 2 MiB terminating the client's connection instead of returning a recoverable error.
+- Fixed `SHOW CLUSTER REPLICAS` and `SHOW OBJECTS` returning incorrect results or missing rows when a cluster replica and a catalog item shared the same internal ID.
+- Fixed `UNION ALL` of record types failing with an internal error when fields differed only in nullability.
+- Fixed SQL Server sources with `CHAR(N)` columns using multi-byte character encodings failing to replicate correctly.
+- Fixed MySQL sources where dropping a table during snapshotting could jam the entire source instead of erroring only the affected table.
+- Fixed an `ALTER CLUSTER` without a `WITH (WAIT ...)` clause resetting the deadline of an in-flight graceful cluster reconfiguration.
+- Fixed `mz-deploy apply-all` failing when a cluster file references a project-defined role, because the roles phase ran after the clusters phase.
+- Fixed `mz-deploy compile` and `mz-deploy stage` failing with `type "text[]" does not exist` for projects whose dependencies have array-typed columns.
+
+## v26.35.0
+*Released to Materialize Cloud: 2026-07-29* <br>
+*Released to Materialize Self-Managed: 2026-07-30* <br>
+
+### Asynchronous Cluster Reconfiguration {#v26.35-background-cluster-reconfiguration}
+`ALTER CLUSTER` now runs configuration changes (such as resizing) in the background, rather than blocking until the new replica set is ready. This means you can start a reconfiguration and move on to other tasks while the process completes.
+
+Because the command is now asynchronous, you can monitor the
+progress of an in-flight reconfiguration using `SHOW CLUSTERS`.
+
+```mzsql
+SHOW CLUSTERS;
+```
+```nofmt
+    name    | replicas   |           activity           | comment
+------------+------------+------------------------------+---------
+ my_cluster | r1 (400cc) | reconfiguring size to 1600cc |
+```
+
+For detailed status, query
+[`mz_internal.mz_cluster_reconfigurations`](/sql/system-catalog/mz_internal/#mz_cluster_reconfigurations),
+which reports the target shape, the deadline, and the reconfiguration's
+lifecycle `status` (`in-progress`, then a terminal `finalized`, `timed-out`,
+`cancelled`, or `resource-exhausted`):
+
+```mzsql
+SELECT cluster_id, status, deadline, on_timeout, target, changes
+FROM mz_internal.mz_cluster_reconfigurations;
+```
+
+For more information, see [`ALTER CLUSTER`: Resizing process](/sql/alter-cluster/#resizing-process).
+
+### AWS Glue Schema Registry Support for Sinks {#v26.35-aws-glue-schema-registry-support-sinks}
+
+{{< public-preview />}}
+
+Kafka sinks can now use [AWS Glue Schema
+Registry](/sql/create-connection/#aws-glue-schema-registry) for Avro schema
+management, via the new `FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY` syntax on
+[`CREATE SINK`](/sql/create-sink/kafka/). With Glue now supported on both sources and sinks, you can manage your Kafka schemas end to end on AWS.
+
+```mzsql
+-- Authenticate to AWS Glue through an AWS connection.
+CREATE CONNECTION aws_connection TO AWS (
+    ASSUME ROLE ARN = 'arn:aws:iam::123456789000:role/MaterializeGlue'
+);
+
+CREATE CONNECTION glue_connection TO AWS GLUE SCHEMA REGISTRY (
+    AWS CONNECTION = aws_connection,
+    REGISTRY = 'default-registry'
+);
+
+-- Write Avro-encoded output, registering schemas with AWS Glue.
+CREATE SINK avro_sink
+  IN CLUSTER my_io_cluster
+  FROM my_materialized_view
+  INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  KEY (key)
+  FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_connection (
+    KEY SCHEMA NAME = 'test_topic-key',
+    VALUE SCHEMA NAME = 'test_topic-value'
+  )
+  ENVELOPE UPSERT;
+```
+
+For more information, see [`CREATE SINK`: Using AWS Glue Schema Registry](/sql/create-sink/kafka/#using-aws-glue-schema-registry).
+
+### Kafka: Source versioning {#v26.35-kafka-source-versioning}
+
+Kafka sources now support source versioning, so you can adopt upstream Avro schema changes without downtime. This uses the same mechanism already available for PostgreSQL, MySQL, and SQL Server sources, by creating a new table with the evolved schema and swapping it into place with a blue/green cutover.
+
+There is new syntax for [`CREATE SOURCE`](/sql/create-source/kafka-v2/) and [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/kafka/) for creating and versioning tables independently. Materialize resolves the latest registered Avro schema when the `CREATE TABLE` statement runs, and pins it as the table's reader schema.
+
+For more information, refer to:
+- [Guide: Handling upstream schema changes with zero
+  downtime](/ingest-data/kafka/source-versioning/)
+- [Syntax: `CREATE SOURCE`](/sql/create-source/kafka-v2/)
+- [Syntax: `CREATE TABLE`](/sql/create-table/kafka/)
+
+### Improvements {#v26.35-improvements}
+- **Faster read queries under write load**: Read-only queries (e.g., `SELECT 1`) are no longer blocked by concurrent write transactions; under high write load, victim query latency drops from multiple seconds to single-digit milliseconds.
+- **Better query plans for correlated subqueries**: Queries using patterns like `1 IN (SELECT 1 WHERE p)` and `NOT EXISTS (SELECT 1 WHERE p)` are now optimized to a simple filter, eliminating unnecessary semi/anti-joins for faster queries.
+- **Account hierarchy billing**: Organizations running multiple Materialize accounts under one parent (e.g., separate production and staging accounts) can now see consolidated billing and usage at the parent level, broken out per child account; each child account sees only its own usage. Available on request — talk to your account executive to see if you qualify.
+- **`mz-debug` CPU profiling**: The `mz-debug` diagnostic tool now automatically collects CPU profiles alongside memory profiles for Self-Managed deployments.
+
+### Bug Fixes {#v26.35-bug-fixes}
+- Fixed queries with many chained `INTERSECT` operations (e.g., 35+ inputs) exhausting environmentd memory during planning, causing the environment to become unresponsive.
+- Fixed a MySQL source stalling entirely when one of its tables was dropped while the initial snapshot was running; the dropped table now reports an error on its own and the rest of the snapshot proceeds.
+- Fixed a critical bug where a pending replacement materialized view could destroy the data of its live target materialized view after an environmentd restart.
+- Fixed `COPY FROM PARQUET` failing for columns of types `oid`, `time`, `timestamptz`, `char`, `varchar`, and `mz_timestamp`.
+- Fixed incorrect results for `variance`, `stddev`, and related aggregate functions when used with `DISTINCT` on inputs containing values that differ only in sign (e.g., `-2` and `2`).
+- Fixed `ALTER CLUSTER ... WITH (WAIT UNTIL READY ...)` hanging indefinitely and rolling back when the cluster hosts a single-replica source (PostgreSQL, MySQL, or SQL Server).
+- Fixed `mz_object_arrangement_sizes` silently omitting arrangements smaller than 10 MiB and showing stale sizes after an environmentd restart.
+- Fixed `EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW` crashing environmentd when the materialized view's cached plan referenced a since-dropped index.
+- Fixed array literals with empty dimensions (e.g., `'{{},{}}'::text[]`) and multi-dimensional `array_fill` calls silently producing incorrect results instead of returning errors matching PostgreSQL behavior.
+- Fixed replica utilization charts in the Console failing to load on initial page render and flashing a loading spinner when switching time filters.
+- Fixed replica crash and OOM markers not appearing in the "Last hour" and "Last 3 hours" Console utilization chart windows.
+
+## v26.34.1
+*Released to Materialize Self-Managed: 2026-07-24* <br>
+
+### Asynchronous Cluster Reconfiguration {#v26.34.1-graceful-cluster-reconfiguration}
+
+<red>*Materialize Self-Managed only*</red>
+
+`ALTER CLUSTER` now runs configuration changes (such as resizing) in the background, rather than blocking until the new replica set is ready. This means you can start a reconfiguration and move on to other tasks while the process completes.
+
+Because the command is now asynchronous, you can monitor the
+progress of an in-flight reconfiguration using `SHOW CLUSTERS`.
+
+```mzsql
+SHOW CLUSTERS;
+```
+```nofmt
+    name    | replicas   |           activity           | comment
+------------+------------+------------------------------+---------
+ my_cluster | r1 (400cc) | reconfiguring size to 1600cc |
+```
+
+For detailed status, query
+[`mz_internal.mz_cluster_reconfigurations`](/sql/system-catalog/mz_internal/#mz_cluster_reconfigurations),
+which reports the target shape, the deadline, and the reconfiguration's
+lifecycle `status` (`in-progress`, then a terminal `finalized`, `timed-out`,
+`cancelled`, or `resource-exhausted`):
+
+```mzsql
+SELECT cluster_id, status, deadline, on_timeout, target, changes
+FROM mz_internal.mz_cluster_reconfigurations;
+```
+
+For more information, see [`ALTER CLUSTER`: Resizing process](/sql/alter-cluster/#resizing-process).
+
+### Bug Fixes {#v26.34.1-bug-fixes}
+- Fixed an issue where `ALTER CLUSTER ... WITH (WAIT UNTIL READY ...)` would deadlock on clusters hosting single-replica sources (Postgres, MySQL, SQL Server), causing graceful reconfiguration to time out and roll back without resizing.
+
+## v26.34.0
+*Released to Materialize Cloud: 2026-07-21* <br>
+*Released to Materialize Self-Managed: 2026-07-21* <br>
+
+### Autoscaling to speed up hydration {#v26.34-autoscaling-hydration}
+
+{{< public-preview />}}
+
+Managed clusters can now temporarily scale up to accelerate hydration.
+
+Using the `AUTO SCALING STRATEGY (ON HYDRATION)` strategy, Materialize runs an extra burst replica at the
+larger `HYDRATION SIZE` while the cluster's objects are un-hydrated. Once a steady-size replica hydrates, the burst replica is retired. An optional `LINGER DURATION` keeps the burst replica running for a grace period after the steady-size replicas hydrate.
+
+```mzsql
+-- Create a cluster that spins up a 1600cc burst replica while hydrating
+CREATE CLUSTER my_cluster (
+    SIZE = '400cc',
+    AUTO SCALING STRATEGY = (
+        ON HYDRATION (HYDRATION SIZE = '1600cc', LINGER DURATION = '600s')
+    )
+);
+```
+
+You can add, change, or remove the strategy on an existing cluster with
+`ALTER CLUSTER`:
+
+```mzsql
+ALTER CLUSTER my_cluster SET (
+    AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '1600cc'))
+);
+```
+
+For more information, see the `AUTO SCALING STRATEGY` option on
+[`CREATE CLUSTER`](/sql/create-cluster/#autoscaling) and
+[`ALTER CLUSTER`](/sql/alter-cluster/#speed-up-hydration-by-autoscaling-to-a-larger-size).
+
+### Role Mapping via SCIM {#v26.34-role-mapping-scim}
+
+{{< private-preview />}}
+
+<red>*Materialize Cloud only*</red>
+
+You can now map identity provider groups to Materialize roles via SCIM, automatically syncing group membership from your identity provider to role assignments in Materialize. This keeps access in Materialize aligned with your identity provider as team membership changes, without manual role management. For details, see [Sync IdP groups](/security/cloud/users-service-accounts/sync-idp-groups/).
+
+### Improvements {#v26.34-improvements}
+- **Azure SQL source support**: Materialize can now ingest data from Azure SQL databases using the [SQL Server source connector](/ingest-data/sql-server/).
+- **Configurable Iceberg sink commit interval**: The [commit interval](/sql/create-sink/iceberg/#commit-interval-tradeoffs) of an existing Iceberg sink can now be altered using `ALTER ... SET COMMIT INTERVAL`, with a minimum of 1 second.
+- **MCP query tool replica routing**: The MCP developer query tool now accepts a `cluster_replica` parameter, enabling `EXPLAIN ANALYZE` on clusters with more than one replica.
+- **Smaller container images**: The `environmentd` and `clusterd` container images now use a distroless base, reducing image size and attack surface for Self-Managed deployments.
+
+### Agent Skills {#v26.34-agent-skills}
+To start using our skills, install them with `npx skills add MaterializeInc/agent-skills`. To update your installed skills, run `npx skills update`. For more information, see [Coding agent skills](/developer-tools/mcp-server/coding-agent-skills/).
+
+- **Materialize Terraform Provider**: New agent skill covering Terraform provider configuration for Cloud and self-managed deployments, resource conventions, cross-resource patterns, import workflows, and known gotchas.
+- **Materialize Terraform Self-Managed**: New agent skill covering the Terraform modules for deploying self-managed Materialize on AWS, Azure, and GCP, including IAM-based storage auth, upgrade procedures, and project integration patterns.
+
+### Bug Fixes {#v26.34-bug-fixes}
+- Fixed a critical bug where a pending replacement materialized view could destroy the data of its live target materialized view after an environmentd restart, by advancing the shared persist shard's since to the empty frontier.
+- Fixed a correctness bug in join processing where incoming batches could be silently dropped after trace compaction, causing lost updates without error.
+- Fixed multiple soundness bugs in persist filter pushdown that could silently drop matching rows or cause `persist filter pushdown correctness violation` panics.
+- Fixed a bug in multi-statement read transactions where a timestamp-independent first statement (e.g., a query over a constant-folded view) could cause subsequent statements to read from incorrect time domains, resulting in errors or incorrect results.
+- Fixed `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` crashing the coordinator when a temporary view or index depended on the target materialized view.
+- Fixed non-temporary objects (views, indexes, etc.) being allowed to depend on temporary objects, which could lead to dangling references when the session ended.
+- Fixed stack overflow crashes in the adapter when processing environments with deeply nested object dependencies.
+- Fixed a stack overflow when comparing deeply nested values (e.g., deeply nested JSONB) in query result ordering.
+- Fixed a stack overflow when executing read-then-write statements (e.g., `INSERT INTO ... SELECT`) over deeply chained view hierarchies.
+- Fixed stack overflow or memory exhaustion when resolving pathologically deep or wide custom types.
+- Fixed a crash on diskless replicas where restarting upsert sources could encounter stale RocksDB state.
+- Fixed environmentd crash-looping on startup when a tombstoned persist shard was still referenced in the catalog.
+- Fixed `SET TRANSACTION ... READ WRITE` silently modifying session state before returning an error.
+- `CREATE ROLE` now rejects the reserved role specification names `current_user`, `current_role`, `session_user`, `user`, and `none`.
+- Fixed a user-created schema named `information_schema` bypassing the `mz_catalog_server` cluster restriction, allowing user queries to run on a reserved system cluster.
+- Fixed `kubectl apply --server-side` failing for Materialize v1 CRDs when managed fields were originally recorded at v1alpha1, blocking GitOps tooling in Self-Managed deployments.
+- Fixed the Self-Managed Console deriving the MCP server URL from the pgwire hostname instead of the HTTP endpoint, causing MCP connections to fail when pgwire and HTTP are served on separate hostnames.
 
 ## v26.33.0
 *Released to Materialize Cloud: 2026-07-16* <br>
@@ -48,7 +500,7 @@ notes](/self-managed-deployments/upgrading/version-notes/).
 - **`EXPLAIN ANALYZE` on multi-replica clusters via MCP**: The Materialize MCP developer endpoint's `query` tool now accepts an optional cluster replica parameter, so `EXPLAIN ANALYZE` can target a specific replica.
 - **Faster queries on busy environments**: We've improved query latency on query-heavy clusters. We've reduced by caching the catalog snapshot for the duration of a session. In our tests, we've seen QPS improvements of up to 13%.
 - **Improved responsiveness under load**: A slow timestamp oracle no longer stalls unrelated sessions that are running `EXPLAIN TIMESTAMP` or `SUBSCRIBE`.
-- **New materialize-dbt [agent skill](/integrations/coding-agent-skills/)**: The
+- **New materialize-dbt [agent skill](/developer-tools/mcp-server/coding-agent-skills/)**: The
   `materialize-dbt` skill helps coding agents build and manage dbt models for
   Materialize.
 
@@ -134,7 +586,7 @@ For more information, see the [Self-Managed upgrade notes](/self-managed-deploym
 ### OAuth sign-in for MCP servers {#v26.31-mcp-oauth}
 The `materialize-agent` and `materialize-developer` MCP servers now support OAuth (browser-based) sign-in, so MCP-compatible clients such as Claude Code, Claude Desktop, and Cursor can authenticate through your browser instead of a Base64-encoded token. With OAuth, the client connects as your own user role with your existing privileges.
 
-For more information, see [MCP Server for Agents](/integrations/mcp-server/mcp-agent/) and [MCP Server for Developers](/integrations/mcp-server/mcp-developer/).
+For more information, see [MCP Server for Agents](/developer-tools/mcp-server/mcp-agent/) and [MCP Server for Developers](/developer-tools/mcp-server/mcp-developer/).
 
 ### Improvements {#v26.31-improvements}
 - **Faster `count(*)` over `generate_series`**: Queries like `SELECT count(*) FROM generate_series(1, N)` now evaluate in constant time instead of materializing all rows.
@@ -176,7 +628,7 @@ The MCP server for developers now includes a `query` tool for running `SELECT`, 
 - **mz-debug OIDC and SASL authentication**: The `mz-debug` diagnostic tool now supports OIDC and SASL authentication modes in addition to password authentication.
 - **Faster LIKE pattern matching**: `LIKE` patterns with multiple `%` wildcards (e.g., `%a%a%a`) no longer exhibit super-linear matching time against long strings, while common patterns like `%substring%` remain on the fast string matcher.
 - **Fivetran Destination restored**: The Fivetran Destination integration, which was removed in v26.29.0, has been restored.
-- **Self-managed monitoring docs refreshed**: Self-managed deployments now have a published reference of the metrics Materialize exposes: [essential metrics](/manage/monitor/essential-metrics/) and an [appendix of all metrics](/manage/monitor/appendix-metrics/). The self-managed monitoring guides for [Prometheus and Grafana](/manage/monitor/self-managed/prometheus/) and [Datadog](/manage/monitor/self-managed/datadog/) have been refreshed with updated scrape configurations and dashboards.
+- **Self-managed monitoring docs refreshed**: Self-managed deployments now have a published reference of the metrics Materialize exposes: [essential metrics](/observability/essential-metrics/) and an [appendix of all metrics](/observability/appendix-metrics/). The self-managed monitoring guides for [Prometheus and Grafana](/observability/self-managed/grafana/) and [Datadog](/observability/self-managed/datadog/) have been refreshed with updated scrape configurations and dashboards.
 
 ### Bug Fixes {#v26.30.1-bug-fixes}
 - Fixed `IS [NOT] DISTINCT FROM` binding too loosely relative to `AND`/`OR`, causing `a IS DISTINCT FROM b AND c` to silently produce wrong results by parsing as `a IS DISTINCT FROM (b AND c)` instead of `(a IS DISTINCT FROM b) AND c`.
@@ -214,18 +666,18 @@ The MCP server for developers now includes a `query` tool for running `SELECT`, 
 
 {{< public-preview />}}
 
-Bounded staleness is a new SQL isolation level that lets you set a freshness target for your queries. For example, you can configure a session to only serve data that is at most 10 seconds stale. If sufficiently fresh data is unavailable, the query immediately returns an error (`SQLSTATE 40001`) rather than blocking. This positions bounded staleness between [Serializable](/reference/isolation-level/#serializable) and [Strict Serializable](/reference/isolation-level/#strict-serializable): it never blocks on input frontiers, but errors immediately when the staleness bound cannot be met. Bounded staleness is read-only and can be set at the session or connection level.
+Bounded staleness is a new SQL isolation level that lets you set a freshness target for your queries. For example, you can configure a session to only serve data that is at most 10 seconds stale. If sufficiently fresh data is unavailable, the query immediately returns an error (`SQLSTATE 40001`) rather than blocking. This positions bounded staleness between [Serializable](/serve-results/isolation-level/#serializable) and [Strict Serializable](/serve-results/isolation-level/#strict-serializable): it never blocks on input frontiers, but errors immediately when the staleness bound cannot be met. Bounded staleness is read-only and can be set at the session or connection level.
 
 ```mzsql
 -- Serve data no more than 10 seconds stale; error immediately if unavailable.
 SET TRANSACTION_ISOLATION TO 'bounded staleness 10s';
 ```
 
-For more information, see [Bounded Staleness](/reference/isolation-level/#bounded-staleness).
+For more information, see [Bounded Staleness](/serve-results/isolation-level/#bounded-staleness).
 
 ### mz-deploy (v0.1) {#v26.29-mz-deploy}
 
-[mz-deploy](/manage/mz-deploy/) is a new CLI for declarative Materialize deployments. You can use mz-deploy to define sources, views, indexes, clusters, and other Materialize objects as code—and so can your coding agents. Projects compile locally with no running Materialize instance required: run unit tests, inspect query plans, and validate changes entirely inside a sandbox before touching a shared environment. Built in Rust, mz-deploy cold-compiles a project with 40,000+ models in under 500ms, with most incremental changes compiling in under 10ms. Deployments only redeploy changed objects, support blue-green deployments, and allow concurrent deployments with conflict detection at promote time.
+[mz-deploy](/developer-tools/mz-deploy/) is a new CLI for declarative Materialize deployments. You can use mz-deploy to define sources, views, indexes, clusters, and other Materialize objects as code—and so can your coding agents. Projects compile locally with no running Materialize instance required: run unit tests, inspect query plans, and validate changes entirely inside a sandbox before touching a shared environment. Built in Rust, mz-deploy cold-compiles a project with 40,000+ models in under 500ms, with most incremental changes compiling in under 10ms. Deployments only redeploy changed objects, support blue-green deployments, and allow concurrent deployments with conflict detection at promote time.
 
 For instance, to create a new Materialize project called `order-monitoring`:
 
@@ -248,7 +700,7 @@ order-monitoring/
 └── .gitignore
 ```
 
-For more information, see [mz-deploy](/manage/mz-deploy/).
+For more information, see [mz-deploy](/developer-tools/mz-deploy/).
 
 ### Iceberg Sinks for Google Cloud Platform {#v26.29-google-cloud-support-for-iceberg-sinks}
 
@@ -373,7 +825,7 @@ improvements, and bug fixes.
 We've made several improvements to our MCP Server for Agents, which can be used to give agents in production fresh context from Materialize.
 
 - **`query` tool enabled by default**: The MCP Server for Agents now
-  enables the [`query` tool](/integrations/mcp-server/mcp-agent-tools/#query)
+  enables the [`query` tool](/developer-tools/mcp-server/mcp-agent-tools/#query)
   by default, allowing agents to join across data products.
 - **Data product routing**: The `read_data_product` tool now
   automatically routes queries to the data product's catalog cluster,
@@ -383,7 +835,7 @@ We've made several improvements to our MCP Server for Agents, which can be used 
   to check whether a data product is fully hydrated before querying.
 
 For more information, refer to:
-- [MCP Server for Agents](/integrations/mcp-server/mcp-agent/)
+- [MCP Server for Agents](/developer-tools/mcp-server/mcp-agent/)
 
 ### Improvements {#v26.27-improvements}
 
@@ -586,20 +1038,20 @@ bug fixes.
 
 Give your agents fresh context using Materialize. Materialize environments now
 include a built-in Model Context Protocol (MCP) [server for agents
-(`/api/mcp/agent`)](/integrations/mcp-server/mcp-agent/). Once connected, an
+(`/api/mcp/agent`)](/developer-tools/mcp-server/mcp-agent/). Once connected, an
 agent can discover your data products, understand the underlying data ontology,
 and run queries to fetch fresh data.
 
-Agents can discover [materialized views](/sql/create-materialized-view/) or [indexed](/sql/create-index/) views. You can use [comments](/sql/comment-on/) to document the data products, and describe them to agents. Agents authenticate as [roles](/sql/create-role/) in Materialize, so [RBAC privileges](/manage/access-control/) govern which data products are visible. Finally, you can set up a dedicated [cluster](/concepts/clusters/) for your agents, so they're isolated from the rest of your environment.
+Agents can discover [materialized views](/sql/create-materialized-view/) or [indexed](/sql/create-index/) views. You can use [comments](/sql/comment-on/) to document the data products, and describe them to agents. Agents authenticate as [roles](/sql/create-role/) in Materialize, so [RBAC privileges](/manage/access-control/) govern which data products are visible. Finally, you can set up a dedicated [cluster](/fundamentals/concepts/clusters/) for your agents, so they're isolated from the rest of your environment.
 
 The MCP server for agents complements the [MCP server for
-developers](/integrations/mcp-server/mcp-developer/) released in v26.20.2. The
+developers](/developer-tools/mcp-server/mcp-developer/) released in v26.20.2. The
 developer server gives coding agents (like Claude Code) access to Materialize's
 observability so you can build on Materialize faster; the agent server gives
 production agents fresh, governed context from your data products.
 
 For more information, refer to:
-- [Integrations: MCP Server for Agents](/integrations/mcp-server/mcp-agent/)
+- [Integrations: MCP Server for Agents](/developer-tools/mcp-server/mcp-agent/)
 
 ### Improvements {#v26.24-improvements}
 
@@ -609,7 +1061,7 @@ For more information, refer to:
 - **`COPY FROM` rejects HTTP redirects**: `COPY FROM` now returns a clear error
   if the target URL responds with an HTTP redirect, preventing unexpected data
   sources and potential security issues.
-- **[Agent skills](/integrations/coding-agent-skills/) — improved `mcp-developer-analysis` client setup**: The skill now includes a comprehensive playbook for connecting MCP-capable clients (Claude Code, Cursor, VS Code, Zed, Continue, Windsurf, Claude Desktop) to the [MCP server for developers](/integrations/mcp-server/mcp-developer/).
+- **[Agent skills](/developer-tools/mcp-server/coding-agent-skills/) — improved `mcp-developer-analysis` client setup**: The skill now includes a comprehensive playbook for connecting MCP-capable clients (Claude Code, Cursor, VS Code, Zed, Continue, Windsurf, Claude Desktop) to the [MCP server for developers](/developer-tools/mcp-server/mcp-developer/).
 
 ### Bug Fixes {#v26.24-bug-fixes}
 
@@ -698,13 +1150,13 @@ improvements, and bug fixes.
   `interval`) at query planning time with a clear error, rather than failing at
   execution time with an opaque message.
 - **`mcp-developer-analysis`**: A new
-  [coding agent skill](/integrations/coding-agent-skills/) that pairs with the
+  [coding agent skill](/developer-tools/mcp-server/coding-agent-skills/) that pairs with the
   `/api/mcp/developer` endpoint to provide diagnostic workflows, system catalog
   references, and remediation runbooks for AI-powered troubleshooting.
 - **System catalog ontology for the MCP developer server**: The system
   catalog now exposes an ontology that describes how `mz_*` tables relate to
   one another and which tables to consult for common diagnostic questions. The
-  [MCP server for developers](/integrations/mcp-server/mcp-developer/) uses
+  [MCP server for developers](/developer-tools/mcp-server/mcp-developer/) uses
   this ontology to plan catalog queries directly instead of probing the schema,
   reducing the number of round trips needed to answer questions about
   hydration, freshness, and resource usage.
@@ -833,7 +1285,7 @@ improvements, and bug fixes.
 
 Materialize environments now include a built-in Model Context Protocol (MCP)
 [Developer endpoint
-(`/api/mcp/developer`)](/integrations/mcp-server/mcp-developer/). Connecting an
+(`/api/mcp/developer`)](/developer-tools/mcp-server/mcp-developer/). Connecting an
 MCP-compatible coding agent (such as Claude Code, Claude Desktop, or Cursor) to
 this endpoint lets you ask natural language questions about your environment.
 
@@ -841,7 +1293,7 @@ For example, you could ask *why is my materialized view stale?* or *how much mem
 
 For more information, refer to:
 - [Integrations: MCP Server for
-  Developers](/integrations/mcp-server/mcp-developer/)
+  Developers](/developer-tools/mcp-server/mcp-developer/)
 
 ### Improvements {#v26-20-improvements}
 - **Better Console schema navigation**: The schema dropdown in the SQL Shell now
@@ -882,7 +1334,7 @@ CREATE SINK events_log_iceberg
 ```
 
 For more information, refer to:
-- [Guide: Apache Iceberg sink](/serve-results/sink/iceberg/)
+- [Guide: Apache Iceberg sink](/export-data/iceberg/)
 - [Reference: `CREATE SINK ICEBERG`](/sql/create-sink/iceberg/)
 
 ### Bug Fixes {#v26.19-bug-fixes}
@@ -1012,7 +1464,7 @@ For more information, refer to:
 - **Improved [`AS OF`](/sql/subscribe/#as-of) error messages**: Error messages
   for `AS OF` queries now use user-facing terminology (e.g., "Indexed
   input", "Storage inputs") instead of internal names.
-- **Streamed [WebSocket](/integrations/websocket-api/) query results**:
+- **Streamed [WebSocket](/serve-results/websocket-api/) query results**:
   WebSocket query results are now streamed directly instead of buffered,
   reducing memory usage for large result sets.
 
@@ -1179,7 +1631,7 @@ CREATE SINK my_iceberg_sink
 ```
 
 For more information, refer to:
-- [Guide: How to export results from Materialize to Apache Iceberg Tables](/serve-results/sink/iceberg)
+- [Guide: How to export results from Materialize to Apache Iceberg Tables](/export-data/iceberg)
 - [Blog: Making Iceberg work for Operational Data](https://materialize.com/blog/making-iceberg-work-for-operational-data/)
 - [Syntax: CREATE SINK... INTO ICEBERG ](/sql/create-sink/iceberg)
 
@@ -1365,7 +1817,7 @@ v26.5.1 enhances our SQL Server source, improves performance, and strengthens Ma
 ### Improvements {#v26.5-improvements}
 - **VARCHAR(MAX) and NVARCHAR(MAX) support for SQL Server**: The Materialize SQL Server source now supports `varchar(max)` and `nvarchar(max)` data types.
 - **Faster authentication for connection poolers**: We've added an index to the `pg_authid` system catalog. This should significantly improve the performance of default authentication queries made by connection poolers like pgbouncer.
-- **Faster Kafka sink startup**: We've updated the default Kafka progress topic configuration to reduce the amount of progress data processed when creating new [Kafka sinks](/serve-results/sink/kafka/).
+- **Faster Kafka sink startup**: We've updated the default Kafka progress topic configuration to reduce the amount of progress data processed when creating new [Kafka sinks](/export-data/kafka/).
 - **dbt strict mode**: We've introduced `strict_mode` to dbt-materialize, our dbt adapter. `strict_mode` enforces production-ready isolation rules and improves cluster health monitoring. It does so by validating source idempotency, schema isolation, cluster isolation and index restrictions.
 - **SQL Server Always On HA failover support** (<red>*Materialize Self-Managed only*</red>): Materialize Self-Managed now offers better support for handling failovers, without downtime, in SQL Server Always On sources. [Contact our support team](/support/) to enable this in your environment.
 - **Auto-repair accidental changes** (<red>*Materialize Self-Managed only*</red>): Improvements to the controller logic allow Materialize to auto-repair changes such as deleting a StatefulSet. This means that your production setups should be more robust in the face of accidental changes.
@@ -1460,7 +1912,8 @@ Materialize v26.1.0 includes improved support for SQLServer, including the abili
 
 ### Upgrade notes for v26.1.0
 
-{{< include-md file="shared-content/self-managed/upgrade-notes/v26.1.md" >}}
+{{% include-headless "/headless/self-managed-deployments/upgrade-notes/v26.1"
+%}}
 
 ## Self-Managed v26.0.0
 
@@ -1474,23 +1927,9 @@ swap reduces the memory required to operate Materialize and improves cost
 efficiency.
 
 To facilitate upgrades from v25.2, Self-Managed Materialize added new labels to
-the node selectors for `clusterd` pods:
-
-- To upgrade using Materialize-provided Terraforms, upgrade your Terraform
-  version to `v0.6.1`:
-  - {{< include-md
-file="shared-content/self-managed/aws-terraform-v0.6.1-upgrade-notes.md" >}}.
-  - {{< include-md
-file="shared-content/self-managed/gcp-terraform-v0.6.1-upgrade-notes.md" >}}.
-  - {{< include-md
-  file="shared-content/self-managed/azure-terraform-v0.6.1-upgrade-notes.md"
-  >}}.
-
-- To upgrade if <red>**not**</red> using a Materialize-provided Terraforms,  you
-must prepare your nodes by adding the required labels. For detailed
-instructions, see [Prepare for swap and upgrade to
-v26.0](/self-managed-deployments/appendix/upgrade-to-swap/).
-
+the node selectors for `clusterd` pods. To upgrade, you must prepare your nodes
+by adding the required labels. For detailed instructions, see [Prepare for swap
+and upgrade to v26.0](/self-managed-deployments/appendix/upgrade-to-swap/).
 
 ### SASL/SCRAM-SHA-256 support
 
@@ -1501,7 +1940,7 @@ see [Authentication](/security/self-managed/authentication/).
 When SASL authentication is enabled:
 
 - **PostgreSQL connections** (e.g., `psql`, client libraries, [connection
-  poolers](/integrations/connection-pooling/)) use SCRAM-SHA-256 authentication
+  poolers](/serve-results/connection-pooling/)) use SCRAM-SHA-256 authentication
 - **HTTP/Web Console connections** use standard password authentication
 
 This hybrid approach provides maximum security for SQL connections while maintaining
@@ -1562,50 +2001,13 @@ For more information, see [`rolloutStrategy`](/self-managed-deployments/upgradin
 
 ### Terraform helpers
 
-Corresponding to the v26.0.0 release, the following versions of the sample
-Terraform modules have been released:
+The following sample Terraform modules are available for deploying Materialize:
 
 {{< yaml-table data="self_managed/terraform_list" >}}
 
-{{< tabs >}} {{< tab "Materialize on AWS" >}}
-
-{{< yaml-table data="self_managed/aws_terraform_versions" >}}
-
-{{% self-managed/aws-terraform-upgrade-notes %}}
-
-Click on the Terraform version link to go to the release-specific Upgrade Notes.
-
-{{</ tab >}}
-
-{{< tab "Materialize on Azure" >}}
-
-{{< yaml-table data="self_managed/azure_terraform_versions" >}}
-
-{{% self-managed/azure-terraform-upgrade-notes %}}
-
-See also Upgrade Notes for release specific notes.
-
-{{</ tab >}}
-
-{{< tab "Materialize on GCP" >}}
-
-{{< yaml-table data="self_managed/gcp_terraform_versions" >}}
-
-{{% self-managed/gcp-terraform-upgrade-notes %}}
-
-See also Upgrade Notes for release specific notes.
-
-{{</ tab >}}
-
-{{< tab "terraform-helm-materialize" >}}
-
-{{< yaml-table data="self_managed/terraform_helm_compatibility" >}}
-
-{{</ tab >}} {{</ tabs >}}
-
 #### Upgrade notes for v26.0.0
 
-{{< include-md file="shared-content/self-managed/upgrade-notes/v26.0.md" >}}
+{{% include-headless "/headless/self-managed-deployments/upgrade-notes/v26.0" %}}
 
 See also [Version-specific upgrade
 notes](/self-managed-deployments/upgrading/version-notes/).

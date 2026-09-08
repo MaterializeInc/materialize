@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/global_id.rs
-revision: d434a9e3de
+revision: 94ee2d5448
 ---
 
 # mz-repr::global_id

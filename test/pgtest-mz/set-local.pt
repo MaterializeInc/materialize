@@ -1,0 +1,75 @@
+# Unlike Postgres, which refuses `SET LOCAL` outside a transaction block, we
+# apply it for the duration of the implicit transaction and revert it at commit.
+# A client that caches `ParameterStatus` (pgjdbc, psycopg) has to hear about the
+# revert too, otherwise it keeps serving a value the server has discarded.
+
+# A session value to revert to. Promoting a non-local SET from staged to session
+# does not change the value, so that commit announces nothing.
+send
+Query {"query": "SET application_name = 'session_value'"}
+----
+
+until parameter_status=application_name
+ReadyForQuery
+----
+ParameterStatus {"name":"application_name","value":"session_value"}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+
+# Simple protocol: committed at the end of the Query message.
+send
+Query {"query": "SET LOCAL application_name = 'simple_local'"}
+Query {"query": "SHOW application_name"}
+----
+
+until parameter_status=application_name
+ReadyForQuery
+ReadyForQuery
+----
+ParameterStatus {"name":"application_name","value":"simple_local"}
+CommandComplete {"tag":"SET"}
+ParameterStatus {"name":"application_name","value":"session_value"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"application_name"}]}
+DataRow {"fields":["session_value"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# Extended protocol: committed at Sync.
+send
+Parse {"query": "SET LOCAL application_name = 'extended_local'"}
+Bind
+Execute
+Sync
+----
+
+until parameter_status=application_name
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+ParameterStatus {"name":"application_name","value":"extended_local"}
+CommandComplete {"tag":"SET"}
+ParameterStatus {"name":"application_name","value":"session_value"}
+ReadyForQuery {"status":"I"}
+
+# Explicit COMMIT already announced the revert; guard the shared path.
+send
+Query {"query": "BEGIN"}
+Query {"query": "SET LOCAL application_name = 'txn_local'"}
+Query {"query": "COMMIT"}
+----
+
+until parameter_status=application_name
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+ParameterStatus {"name":"application_name","value":"txn_local"}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"T"}
+ParameterStatus {"name":"application_name","value":"session_value"}
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}

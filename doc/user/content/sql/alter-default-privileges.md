@@ -19,9 +19,8 @@ default privilege.
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "GRANT" >}}
-### GRANT
 
 `ALTER DEFAULT PRIVILEGES` defines default privileges that will be applied to
 objects created by a role in the future. It does not affect any existing
@@ -37,7 +36,6 @@ set of roles or by all roles.
 
 {{< /tab >}}
 {{< tab "REVOKE" >}}
-### REVOKE
 
 {{< note >}}
 `ALTER DEFAULT PRIVILEGES` cannot be used to revoke the default owner privileges
@@ -105,8 +103,8 @@ The privileges required to execute this statement are:
 
 ## Useful views
 
-- [`mz_internal.mz_show_default_privileges`](/reference/system-catalog/mz_internal/#mz_show_default_privileges)
-- [`mz_internal.mz_show_my_default_privileges`](/reference/system-catalog/mz_internal/#mz_show_my_default_privileges)
+- [`mz_internal.mz_show_default_privileges`](/sql/system-catalog/mz_internal/#mz_show_default_privileges)
+- [`mz_internal.mz_show_my_default_privileges`](/sql/system-catalog/mz_internal/#mz_show_my_default_privileges)
 
 ## Related pages
 

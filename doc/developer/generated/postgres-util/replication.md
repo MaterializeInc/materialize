@@ -1,6 +1,6 @@
 ---
 source: src/postgres-util/src/replication.rs
-revision: 90cd5b67af
+revision: 253293ef87
 ---
 
 # mz-postgres-util::replication

@@ -30,11 +30,7 @@ import {
 import { MaterializeTheme } from "~/theme";
 import { DurationUnit, fromSeconds, toSeconds } from "~/utils/format";
 
-import {
-  HYDRATION_BUCKETS,
-  HYDRATION_LABELS,
-  HydrationBucket,
-} from "./filters";
+import { STATUS_FILTER_BUCKETS, STATUS_FILTER_LABELS } from "./filters";
 import { MaintainedObjectListItem } from "./queries";
 
 type AnyColumn = Column<MaintainedObjectListItem, unknown>;
@@ -70,8 +66,12 @@ const FilterCheckboxRow = ({
   );
 };
 
-export interface MultiSelectFilterPanelProps<T extends string> {
-  column: AnyColumn;
+export interface MultiSelectFilterPanelProps<
+  T extends string,
+  TData = MaintainedObjectListItem,
+> {
+  /** Any table's column. The panel reads and writes only its filter value. */
+  column: Column<TData, unknown>;
   items: readonly T[];
   getLabel?: (item: T) => React.ReactNode;
   searchable?: boolean;
@@ -83,14 +83,17 @@ export interface MultiSelectFilterPanelProps<T extends string> {
  * Multi-select filter for a TanStack column whose filter value is a `T[]`.
  * An empty selection clears the column filter.
  */
-export const MultiSelectFilterPanel = <T extends string>({
+export const MultiSelectFilterPanel = <
+  T extends string,
+  TData = MaintainedObjectListItem,
+>({
   column,
   items,
   getLabel,
   searchable = false,
   searchPlaceholder = "Search...",
   emptyMessage = "No results",
-}: MultiSelectFilterPanelProps<T>) => {
+}: MultiSelectFilterPanelProps<T, TData>) => {
   const { colors } = useTheme<MaterializeTheme>();
   const selected = (column.getFilterValue() as T[] | undefined) ?? [];
   const [search, setSearch] = React.useState("");
@@ -176,11 +179,11 @@ export const ObjectTypeFilterPanel = ({ column }: { column: AnyColumn }) => (
   />
 );
 
-export const HydrationFilterPanel = ({ column }: { column: AnyColumn }) => (
-  <MultiSelectFilterPanel<HydrationBucket>
+export const StatusFilterPanel = ({ column }: { column: AnyColumn }) => (
+  <MultiSelectFilterPanel<string>
     column={column}
-    items={HYDRATION_BUCKETS}
-    getLabel={(b) => HYDRATION_LABELS[b]}
+    items={STATUS_FILTER_BUCKETS}
+    getLabel={(b) => STATUS_FILTER_LABELS[b]}
   />
 );
 

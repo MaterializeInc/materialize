@@ -23,13 +23,14 @@ use mz_compute_types::config::ComputeReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
-use mz_repr::Timestamp;
+use mz_repr::{GlobalId, Timestamp};
 
 use crate::ClusterController;
 use crate::ctx::{
     ApplyOutcome, AutoScalingPolicy, AvailabilityZones, BurstAudit, ClusterControllerCtx,
-    ClusterState, Decision, ObservedReplica, ReconfigurationAudit, ReconfigurationStatus,
-    ReplicaShape, StateWrite,
+    ClusterSchedule, ClusterState, CreateReason, Decision, ObservedReplica, ReconfigurationAudit,
+    ReconfigurationStatus, RefreshWindowClusterInputs, RefreshWindowInputs,
+    RefreshWindowInputsBatch, ReplicaShape, StateWrite,
 };
 use crate::strategy::{ConfigSignals, DesiredReplica, LiveSignals, Strategy};
 
@@ -62,6 +63,7 @@ fn shape(size: &str) -> ReplicaShape {
         size: size.to_string(),
         availability_zones: AvailabilityZones(Vec::new()),
         logging: ComputeReplicaLogging::default(),
+        arrangement_compression: false,
     }
 }
 
@@ -88,7 +90,7 @@ fn foreign(replica_id: ReplicaId, name: &str, size: &str) -> ObservedReplica {
     }
 }
 
-/// Builds a managed cluster state with the given realized size,
+/// Builds a MANUAL managed cluster state with the given realized size,
 /// replication factor, and replicas. No reconfiguration or burst in flight and
 /// no autoscaling policy.
 fn state(
@@ -103,6 +105,8 @@ fn state(
         replication_factor,
         availability_zones: Vec::new(),
         logging: ComputeReplicaLogging::default(),
+        arrangement_compression: false,
+        schedule: ClusterSchedule::Manual,
         auto_scaling_policy: None,
         reconfiguration: None,
         burst: None,
@@ -139,6 +143,11 @@ struct FakeCtx {
     /// append. Combined with `witness_check`, this exercises the
     /// `auto_scaling_policy` field of the compare-and-append witness end-to-end.
     concurrent_policy_alter: BTreeMap<ClusterId, Option<AutoScalingPolicy>>,
+    /// As `concurrent_policy_alter`, but for the schedule: each entry's
+    /// `ClusterSchedule` is written onto the stored state, modeling an
+    /// `ALTER ... SET (SCHEDULE = ...)` that lands mid-tick. Exercises the
+    /// `schedule` field of the witness.
+    concurrent_schedule_alter: BTreeMap<ClusterId, ClusterSchedule>,
     /// Replicas the fake reports as hydrated when the controller probes. A
     /// graceful test sets this to drive cut-over.
     hydrated: BTreeSet<ReplicaId>,
@@ -153,6 +162,10 @@ struct FakeCtx {
     /// `has_hydratable_objects` pull, keeping that pull load-bearing for
     /// the seam tests.
     has_hydratable_objects: BTreeMap<ClusterId, bool>,
+    /// Refresh-window inputs the fake returns for a controller probe.
+    refresh_window: Option<RefreshWindowInputsBatch>,
+    /// The cluster ids in each batched refresh-window probe.
+    refresh_window_probes: Vec<Vec<ClusterId>>,
 }
 
 impl FakeCtx {
@@ -165,10 +178,38 @@ impl FakeCtx {
             exhaust_next: 0,
             witness_check: false,
             concurrent_policy_alter: BTreeMap::new(),
+            concurrent_schedule_alter: BTreeMap::new(),
             hydrated: BTreeSet::new(),
             hydration_probes: 0,
             has_hydratable_objects: BTreeMap::new(),
+            refresh_window: None,
+            refresh_window_probes: Vec::new(),
         }
+    }
+
+    fn set_refresh_window(&mut self, cluster_id: ClusterId, inputs: RefreshWindowInputs) {
+        let RefreshWindowInputs {
+            read_ts,
+            compaction_estimate,
+            refresh_mvs,
+        } = inputs;
+        let batch = self
+            .refresh_window
+            .get_or_insert_with(|| RefreshWindowInputsBatch {
+                read_ts,
+                cluster_inputs: BTreeMap::new(),
+            });
+        assert_eq!(
+            batch.read_ts, read_ts,
+            "one batch must use one shared read timestamp"
+        );
+        batch.cluster_inputs.insert(
+            cluster_id,
+            RefreshWindowClusterInputs {
+                compaction_estimate,
+                refresh_mvs,
+            },
+        );
     }
 
     /// All create decisions across every applied batch.
@@ -227,6 +268,32 @@ impl ClusterControllerCtx for FakeCtx {
             .unwrap_or(false)
     }
 
+    async fn refresh_window_inputs(
+        &mut self,
+        cluster_ids: &[ClusterId],
+    ) -> Option<RefreshWindowInputsBatch> {
+        self.refresh_window_probes.push(cluster_ids.to_vec());
+        let batch = self.refresh_window.as_ref()?;
+        let cluster_inputs: BTreeMap<_, _> = cluster_ids
+            .iter()
+            .filter_map(|cluster_id| {
+                batch
+                    .cluster_inputs
+                    .get(cluster_id)
+                    .cloned()
+                    .map(|inputs| (*cluster_id, inputs))
+            })
+            .collect();
+        if cluster_inputs.is_empty() {
+            None
+        } else {
+            Some(RefreshWindowInputsBatch {
+                read_ts: batch.read_ts,
+                cluster_inputs,
+            })
+        }
+    }
+
     async fn apply(&mut self, decisions: Vec<Decision>) -> ApplyOutcome {
         if self.reject_next > 0 {
             self.reject_next -= 1;
@@ -242,11 +309,16 @@ impl ClusterControllerCtx for FakeCtx {
             return ApplyOutcome::ResourceExhausted;
         }
         // Splice in a concurrent `ALTER` that lands between the controller's read
-        // and this append: rewrite the stored policy before the witness check
+        // and this append: rewrite the stored config before the witness check
         // runs, so a decision derived from the pre-`ALTER` view fails its guard.
         for (cluster_id, policy) in std::mem::take(&mut self.concurrent_policy_alter) {
             if let Some(state) = self.states.get_mut(&cluster_id) {
                 state.auto_scaling_policy = policy;
+            }
+        }
+        for (cluster_id, schedule) in std::mem::take(&mut self.concurrent_schedule_alter) {
+            if let Some(state) = self.states.get_mut(&cluster_id) {
+                state.schedule = schedule;
             }
         }
         if self.witness_check && !self.witness_holds(&decisions) {
@@ -315,6 +387,7 @@ impl FakeCtx {
                     new_replication_factor,
                     new_availability_zones,
                     new_logging,
+                    new_arrangement_compression,
                     reconfiguration,
                     burst,
                 } = write;
@@ -329,6 +402,9 @@ impl FakeCtx {
                 }
                 if let Some(logging) = new_logging {
                     state.logging = logging.clone();
+                }
+                if let Some(arrangement_compression) = new_arrangement_compression {
+                    state.arrangement_compression = *arrangement_compression;
                 }
                 if let Some(reconfiguration) = reconfiguration {
                     state.reconfiguration = reconfiguration.record.clone();
@@ -507,19 +583,15 @@ async fn wrong_shape_replica_dropped() {
 
 // ----- A second, fake additive strategy, to exercise the union/diff. -----
 
-/// Desires `count` replicas at `size`, regardless of state. Stands in for a
-/// policy strategy (graceful/burst) for union/diff tests.
+/// Desires `count` replicas at `size` with `reason`, regardless of state.
+/// Stands in for a policy strategy (graceful/burst) for union/diff tests.
 struct FixedStrategy {
-    name: &'static str,
     size: String,
     count: u32,
+    reason: CreateReason,
 }
 
 impl Strategy for FixedStrategy {
-    fn name(&self) -> &'static str {
-        self.name
-    }
-
     fn desired_replicas(
         &self,
         _state: &ClusterState,
@@ -530,6 +602,7 @@ impl Strategy for FixedStrategy {
         (0..self.count)
             .map(|_| DesiredReplica {
                 shape: shape(&self.size),
+                reason: self.reason.clone(),
             })
             .collect()
     }
@@ -566,9 +639,9 @@ async fn union_takes_max_not_sum_per_shape() {
     let controller = controller_with(vec![
         Box::new(BaselineStrategy),
         Box::new(FixedStrategy {
-            name: "extra",
             size: "100cc".to_string(),
             count: 1,
+            reason: CreateReason::Baseline,
         }),
     ]);
     controller.reconcile(&mut ctx).await;
@@ -581,41 +654,155 @@ async fn union_takes_max_not_sum_per_shape() {
 }
 
 #[mz_ore::test(tokio::test)]
-async fn distinct_shapes_union_and_attribute() {
-    use crate::strategy::{BASELINE_STRATEGY_NAME, BaselineStrategy};
+async fn distinct_shapes_union() {
+    use crate::strategy::BaselineStrategy;
 
     let c = cluster(1);
-    // Baseline desires 2 @ 100cc. The extra strategy desires 1 @ 200cc. Actual
-    // has the two 100cc replicas, so the controller creates one 200cc replica,
-    // attributed to "extra" only.
+    // Baseline desires 2 @ 100cc but only one exists, and the extra strategy
+    // desires 1 @ 200cc with a burst reason. Both shapes need a create, and
+    // each create must carry its own shape's reason: the burst reason on the
+    // 200cc create must not smear onto the baseline-shape create (per-shape
+    // reason isolation in the kernel).
     let states = vec![state(
         c,
         "100cc",
         2,
-        vec![
-            observed(replica(1), "r0", "100cc"),
-            observed(replica(2), "r1", "100cc"),
-        ],
+        vec![observed(replica(1), "r0", "100cc")],
     )];
     let mut ctx = FakeCtx::new(states);
 
     let controller = controller_with(vec![
         Box::new(BaselineStrategy),
         Box::new(FixedStrategy {
-            name: "extra",
             size: "200cc".to_string(),
             count: 1,
+            reason: CreateReason::HydrationBurst,
         }),
     ]);
     controller.reconcile(&mut ctx).await;
 
     let creates = ctx.creates();
-    assert_eq!(creates.len(), 1);
+    assert_eq!(creates.len(), 2);
     assert!(ctx.drops().is_empty());
-    if let Decision::CreateReplica { shape, reasons, .. } = creates[0] {
-        assert_eq!(shape.size, "200cc");
-        assert_eq!(reasons, &vec!["extra"]);
-        assert!(!reasons.contains(&BASELINE_STRATEGY_NAME));
+    for create in creates {
+        let Decision::CreateReplica { shape, reason, .. } = create else {
+            panic!("expected a CreateReplica, got {create:?}");
+        };
+        match shape.size.as_str() {
+            "100cc" => assert_eq!(reason, &CreateReason::Baseline),
+            "200cc" => assert_eq!(reason, &CreateReason::HydrationBurst),
+            other => panic!("unexpected create size {other}"),
+        }
+    }
+}
+
+#[mz_ore::test]
+fn shared_shape_merge_takes_highest_precedence_reason() {
+    use crate::ctx::RefreshWindowDecision;
+
+    // Two strategies desire the same shape, one with the baseline reason and
+    // one with an on-refresh window decision (the order strategies run in puts
+    // the baseline slot first). On-refresh outranks the baseline, so the
+    // merged create carries the schedule reason with the decision intact: a
+    // shape shared with another contributor still explains its on-refresh
+    // side.
+    let c = cluster(1);
+    let (state, _signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), None);
+    let decision = RefreshWindowDecision {
+        objects_needing_refresh: vec![GlobalId::User(7)],
+        objects_needing_compaction: Vec::new(),
+        hydration_time_estimate: Duration::ZERO,
+    };
+    let contributions: Vec<Vec<DesiredReplica>> = vec![
+        vec![DesiredReplica {
+            shape: shape("100cc"),
+            reason: CreateReason::Baseline,
+        }],
+        vec![DesiredReplica {
+            shape: shape("100cc"),
+            reason: CreateReason::OnRefresh(decision.clone()),
+        }],
+    ];
+    let decisions = crate::reconcile_replicas(&state, &contributions);
+    assert_eq!(decisions.len(), 1);
+    match &decisions[0] {
+        Decision::CreateReplica { reason, .. } => {
+            assert_eq!(reason, &CreateReason::OnRefresh(decision.clone()));
+        }
+        other => panic!("expected a CreateReplica, got {other:?}"),
+    }
+
+    // Graceful reconfiguration outranks on-refresh: when both desire the
+    // shape, the merged create carries the graceful reason and the window
+    // decision is discarded with the losing reason.
+    let contributions: Vec<Vec<DesiredReplica>> = vec![
+        vec![DesiredReplica {
+            shape: shape("100cc"),
+            reason: CreateReason::GracefulReconfiguration,
+        }],
+        vec![DesiredReplica {
+            shape: shape("100cc"),
+            reason: CreateReason::OnRefresh(decision),
+        }],
+    ];
+    let decisions = crate::reconcile_replicas(&state, &contributions);
+    assert_eq!(decisions.len(), 1);
+    match &decisions[0] {
+        Decision::CreateReplica { reason, .. } => {
+            assert_eq!(reason, &CreateReason::GracefulReconfiguration);
+        }
+        other => panic!("expected a CreateReplica, got {other:?}"),
+    }
+}
+
+#[mz_ore::test]
+fn create_reason_precedence_total_order() {
+    use crate::ctx::RefreshWindowDecision;
+
+    // The precedence order is load-bearing: it decides which reason a
+    // shared-shape create carries into the audit log.
+    let decision = RefreshWindowDecision {
+        objects_needing_refresh: Vec::new(),
+        objects_needing_compaction: Vec::new(),
+        hydration_time_estimate: Duration::ZERO,
+    };
+    let baseline = CreateReason::Baseline;
+    let on_refresh = CreateReason::OnRefresh(decision);
+    let burst = CreateReason::HydrationBurst;
+    let graceful = CreateReason::GracefulReconfiguration;
+    assert!(on_refresh.outranks(&baseline) && !baseline.outranks(&on_refresh));
+    assert!(burst.outranks(&on_refresh) && !on_refresh.outranks(&burst));
+    assert!(graceful.outranks(&burst) && !burst.outranks(&graceful));
+    // A reason never outranks itself, so the first contributor of a shared
+    // rank wins the merge.
+    assert!(!graceful.outranks(&graceful));
+}
+
+#[mz_ore::test]
+fn shared_shape_merge_baseline_and_graceful() {
+    // Baseline and graceful can genuinely share a shape in production: an
+    // rf-only background ALTER has a target shape equal to the realized shape,
+    // so both strategies desire slots at it. The merged create must audit as
+    // the reconfiguration's work, not as a manual baseline create.
+    let c = cluster(1);
+    let (state, _signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), None);
+    let contributions: Vec<Vec<DesiredReplica>> = vec![
+        vec![DesiredReplica {
+            shape: shape("100cc"),
+            reason: CreateReason::Baseline,
+        }],
+        vec![DesiredReplica {
+            shape: shape("100cc"),
+            reason: CreateReason::GracefulReconfiguration,
+        }],
+    ];
+    let decisions = crate::reconcile_replicas(&state, &contributions);
+    assert_eq!(decisions.len(), 1);
+    match &decisions[0] {
+        Decision::CreateReplica { reason, .. } => {
+            assert_eq!(reason, &CreateReason::GracefulReconfiguration);
+        }
+        other => panic!("expected a CreateReplica, got {other:?}"),
     }
 }
 
@@ -633,9 +820,6 @@ async fn caa_conflict_is_rejected_and_recovered() {
     // recomputed against the post-ALTER state.
     struct WritingStrategy;
     impl Strategy for WritingStrategy {
-        fn name(&self) -> &'static str {
-            "writing"
-        }
         fn update_state(
             &self,
             state: &ClusterState,
@@ -656,6 +840,7 @@ async fn caa_conflict_is_rejected_and_recovered() {
                             replication_factor: state.replication_factor,
                             availability_zones: AvailabilityZones(Vec::new()),
                             logging: ComputeReplicaLogging::default(),
+                            arrangement_compression: false,
                         },
                         deadline: now,
                         on_timeout: OnTimeout::Rollback,
@@ -679,6 +864,7 @@ async fn caa_conflict_is_rejected_and_recovered() {
             (0..state.replication_factor)
                 .map(|_| DesiredReplica {
                     shape: shape.clone(),
+                    reason: CreateReason::Baseline,
                 })
                 .collect()
         }
@@ -722,6 +908,8 @@ async fn caa_conflict_is_rejected_and_recovered() {
                 replication_factor: 1,
                 availability_zones: AvailabilityZones(Vec::new()),
                 logging: ComputeReplicaLogging::default(),
+                arrangement_compression: false,
+                schedule: ClusterSchedule::Manual,
                 auto_scaling_policy: None,
                 reconfiguration: None,
                 burst: None,
@@ -820,6 +1008,8 @@ async fn create_drop_is_caa_guarded_and_recovers() {
                 replication_factor: 1,
                 availability_zones: AvailabilityZones(Vec::new()),
                 logging: ComputeReplicaLogging::default(),
+                arrangement_compression: false,
+                schedule: ClusterSchedule::Manual,
                 auto_scaling_policy: None,
                 reconfiguration: None,
                 burst: None,
@@ -894,9 +1084,6 @@ async fn disjoint_state_writes_merge_into_one_apply() {
     // tick: the merge unions disjoint fields under one compare-and-append.
     struct WritesSize;
     impl Strategy for WritesSize {
-        fn name(&self) -> &'static str {
-            "writes-size"
-        }
         fn update_state(
             &self,
             _state: &ClusterState,
@@ -923,9 +1110,6 @@ async fn disjoint_state_writes_merge_into_one_apply() {
     }
     struct WritesReplicationFactor;
     impl Strategy for WritesReplicationFactor {
-        fn name(&self) -> &'static str {
-            "writes-rf"
-        }
         fn update_state(
             &self,
             _state: &ClusterState,
@@ -981,9 +1165,6 @@ async fn conflicting_state_writes_trip_the_tripwire() {
     // panic under the test harness's soft assertions.
     struct WantsLarge;
     impl Strategy for WantsLarge {
-        fn name(&self) -> &'static str {
-            "wants-large"
-        }
         fn update_state(
             &self,
             _state: &ClusterState,
@@ -1008,9 +1189,6 @@ async fn conflicting_state_writes_trip_the_tripwire() {
     }
     struct WantsSmall;
     impl Strategy for WantsSmall {
-        fn name(&self) -> &'static str {
-            "wants-small"
-        }
         fn update_state(
             &self,
             _state: &ClusterState,
@@ -1059,7 +1237,7 @@ fn replica_name_gen_is_one_based_and_avoids_used() {
 // ----- Graceful reconfiguration strategy. -----
 
 use crate::ctx::{OnTimeout, ReconfigurationRecord, ReconfigurationTarget};
-use crate::strategy::{GRACEFUL_RECONFIGURATION_STRATEGY_NAME, GracefulReconfigurationStrategy};
+use crate::strategy::GracefulReconfigurationStrategy;
 
 /// A reconfiguration record targeting `size` at `rf` with the given `deadline`,
 /// the (default) `Rollback` timeout action, empty AZ list and default logging.
@@ -1080,6 +1258,7 @@ fn record_on_timeout(
             replication_factor: rf,
             availability_zones: AvailabilityZones(Vec::new()),
             logging: ComputeReplicaLogging::default(),
+            arrangement_compression: false,
         },
         deadline: Timestamp::from(deadline),
         on_timeout,
@@ -1103,6 +1282,8 @@ fn reconfiguring_state(
         replication_factor: rf,
         availability_zones: Vec::new(),
         logging: ComputeReplicaLogging::default(),
+        arrangement_compression: false,
+        schedule: ClusterSchedule::Manual,
         auto_scaling_policy: None,
         reconfiguration: Some(rec),
         burst: None,
@@ -1436,7 +1617,10 @@ fn graceful_deadline_fires_at_exact_timestamp() {
             c,
             "100cc",
             1,
-            vec![observed(replica(1), "r0", "100cc")],
+            vec![
+                observed(replica(1), "r0", "100cc"),
+                observed(replica(2), "r1", "200cc"),
+            ],
             record_on_timeout("200cc", 1, deadline, on_timeout),
             BTreeSet::new(),
         )
@@ -1541,6 +1725,8 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
         replication_factor: 1,
         availability_zones: vec!["az1".to_string()],
         logging: ComputeReplicaLogging::default(),
+        arrangement_compression: false,
+        schedule: ClusterSchedule::Manual,
         auto_scaling_policy: None,
         reconfiguration: Some(ReconfigurationRecord {
             target: ReconfigurationTarget {
@@ -1548,6 +1734,7 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
                 replication_factor: 1,
                 availability_zones: AvailabilityZones(vec!["az2".to_string()]),
                 logging: ComputeReplicaLogging::default(),
+                arrangement_compression: false,
             },
             deadline: Timestamp::from(5000u64),
             on_timeout: OnTimeout::Rollback,
@@ -1561,6 +1748,7 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
                 size: "100cc".to_string(),
                 availability_zones: AvailabilityZones(vec!["az1".to_string()]),
                 logging: ComputeReplicaLogging::default(),
+                arrangement_compression: false,
             }),
             internal: false,
             billed_as: false,
@@ -1611,9 +1799,14 @@ async fn graceful_full_flow_overlap_then_cutover() {
 
     let controller = controller();
 
-    // Tick 1: overlap, create two 200cc replicas, no drops, no cut-over.
+    // Tick 1: overlap, create two 200cc replicas, no drops, no cut-over. The
+    // creates carry the graceful reason for the audit log.
     controller.reconcile(&mut ctx).await;
     assert_eq!(ctx.creates().len(), 2);
+    assert!(ctx.creates().iter().all(|d| matches!(
+        d,
+        Decision::CreateReplica { reason, .. } if *reason == CreateReason::GracefulReconfiguration
+    )));
     assert!(ctx.drops().is_empty());
     assert_eq!(ctx.states[&c].size, "100cc", "realized config unchanged");
     assert_eq!(ctx.states[&c].replicas.len(), 4);
@@ -1699,8 +1892,6 @@ async fn graceful_alter_back_finalizes_without_churn() {
     );
     assert_eq!(ctx.states[&c].size, "100cc");
     assert_eq!(ctx.states[&c].replicas.len(), 1);
-
-    let _ = GRACEFUL_RECONFIGURATION_STRATEGY_NAME;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -1852,21 +2043,17 @@ async fn graceful_commit_at_timeout_cuts_over_through_seam() {
 }
 
 #[mz_ore::test(tokio::test)]
-async fn resource_exhaustion_sheds_the_reconfiguration() {
-    // A reconfiguration is in flight and the target replica does not exist yet,
-    // so phase 2 emits a create. The apply reports resource exhaustion, and the
-    // controller must shed the reconfiguration: a follow-up state write under
-    // the same expected witness, which marks the record resource-exhausted without
-    // touching the realized config or the existing replica.
+async fn resource_exhaustion_sheds_a_zero_timeout_reconfiguration() {
+    // The elapsed commit deadline does not finalize before the target replica
+    // exists. Phase 2 attempts the swap, which reports resource exhaustion,
+    // then the controller sheds the still-in-progress reconfiguration.
     let c = cluster(1);
     let (state, _signals) = reconfiguring_state(
         c,
         "100cc",
         1,
         vec![observed(replica(1), "r0", "100cc")],
-        // A deadline far past the fake's `now`, so the deadline machinery stays
-        // out of the picture and phase 1 writes nothing.
-        record("200cc", 1, 9999),
+        record_on_timeout("200cc", 1, 0, OnTimeout::Commit),
         BTreeSet::new(),
     );
     let expected = state.expected();
@@ -1876,11 +2063,13 @@ async fn resource_exhaustion_sheds_the_reconfiguration() {
 
     controller.reconcile(&mut ctx).await;
 
-    // Two applies: the exhausted create batch, then the shed.
+    // Two applies: the exhausted swap batch, then the shed.
     assert_eq!(ctx.applied.len(), 2);
     assert!(
-        matches!(ctx.applied[0][0], Decision::CreateReplica { .. }),
-        "the exhausted batch was the target create"
+        ctx.applied[0]
+            .iter()
+            .any(|d| matches!(d, Decision::CreateReplica { .. })),
+        "the exhausted batch carries the target create"
     );
     let [shed] = &ctx.applied[1][..] else {
         panic!("the shed is a single decision, got {:?}", ctx.applied[1]);
@@ -1927,6 +2116,243 @@ async fn resource_exhaustion_sheds_the_reconfiguration() {
 }
 
 #[mz_ore::test(tokio::test)]
+async fn forced_cutover_swaps_the_replica_set_in_one_transaction() {
+    // A forced cut-over never overlaps the two replica sets: the baseline
+    // yields, so the tick that provisions the target also retires the realized
+    // replicas, in one transaction. That is what lets a reshape land on a
+    // budget with no room for both sets at once.
+    let c = cluster(1);
+    let (state, _signals) = reconfiguring_state(
+        c,
+        "100cc",
+        1,
+        vec![observed(replica(1), "r0", "100cc")],
+        record_on_timeout("200cc", 1, 0, OnTimeout::Commit),
+        BTreeSet::new(),
+    );
+    let mut ctx = FakeCtx::new(vec![state]);
+    let controller = controller();
+
+    controller.reconcile(&mut ctx).await;
+
+    assert_eq!(ctx.applied.len(), 1, "the swap is a single apply");
+    let swap = &ctx.applied[0];
+    assert_eq!(
+        swap.iter()
+            .filter(|d| matches!(d, Decision::CreateReplica { .. }))
+            .count(),
+        1,
+        "the target replica is created"
+    );
+    assert_eq!(
+        swap.iter()
+            .filter(|d| matches!(d, Decision::DropReplica { .. }))
+            .count(),
+        1,
+        "the realized replica is retired in the same batch"
+    );
+    let sizes: Vec<_> = ctx.states[&c]
+        .replicas
+        .iter()
+        .filter_map(|r| r.owned_shape().map(|shape| shape.size.as_str()))
+        .collect();
+    assert_eq!(sizes, vec!["200cc"], "no overlap was ever materialized");
+    assert_eq!(
+        ctx.states[&c].size, "100cc",
+        "the cut-over itself waits for the next tick's first phase"
+    );
+
+    // With the target now present, the deadline commits it.
+    controller.reconcile(&mut ctx).await;
+    assert_eq!(ctx.states[&c].size, "200cc", "the forced cut-over lands");
+    assert_eq!(
+        reconfiguration_status(&ctx.states[&c]),
+        Some(ReconfigurationStatus::Finalized)
+    );
+
+    // The retired record hands the set back to the baseline, which desires the
+    // same replicas the swap created. Nothing is suppressed and nothing churns.
+    let before = ctx.applied.len();
+    controller.reconcile(&mut ctx).await;
+    assert_eq!(ctx.applied.len(), before, "steady after the cut-over");
+    assert_eq!(ctx.states[&c].replicas.len(), 1);
+}
+
+#[mz_ore::test]
+fn forced_cutover_yield_is_covered_by_the_target_contribution() {
+    // The baseline yields on the same `is_in_progress` predicate that makes the
+    // graceful strategy contribute the target set, so the yield can never leave
+    // the union short. Asserted over the states that reach the yield window,
+    // because the two conditions live in different strategies and could drift.
+    use crate::strategy::BaselineStrategy;
+
+    let c = cluster(1);
+    let deadline = 1000u64;
+    let baseline = BaselineStrategy;
+    let graceful = GracefulReconfigurationStrategy;
+    let mut yields = 0;
+
+    for on_timeout in [OnTimeout::Commit, OnTimeout::Rollback] {
+        for now in [deadline - 1, deadline, deadline + 1] {
+            for status in [
+                ReconfigurationStatus::InProgress,
+                ReconfigurationStatus::Finalized,
+                ReconfigurationStatus::TimedOut,
+                ReconfigurationStatus::Cancelled,
+                ReconfigurationStatus::ResourceExhausted,
+            ] {
+                let rec = ReconfigurationRecord {
+                    status,
+                    ..record_on_timeout("200cc", 2, deadline, on_timeout)
+                };
+                let (state, signals) = reconfiguring_state(
+                    c,
+                    "100cc",
+                    2,
+                    vec![observed(replica(1), "r0", "100cc")],
+                    rec,
+                    BTreeSet::new(),
+                );
+                let now = Timestamp::from(now);
+                let from_baseline = baseline.desired_replicas(&state, &signals, &config(), now);
+                if !from_baseline.is_empty() {
+                    continue;
+                }
+                yields += 1;
+                let from_graceful = graceful.desired_replicas(&state, &signals, &config(), now);
+                assert_eq!(
+                    from_graceful.len(),
+                    2,
+                    "baseline yielded at {status:?}/{on_timeout:?}/{now} with no target set to \
+                     take its place"
+                );
+                assert!(
+                    from_graceful
+                        .iter()
+                        .all(|desired| desired.shape.size == "200cc")
+                );
+            }
+        }
+    }
+    assert_eq!(yields, 2, "the matrix must actually reach the yield window");
+}
+
+#[mz_ore::test(tokio::test)]
+async fn forced_cutover_swap_preserves_the_burst_replica() {
+    // The baseline yields, the other strategies do not. A hydration burst in
+    // flight keeps its replica (and with it the hydration work it has done)
+    // across the swap, exactly as it does across a graceful cut-over.
+    use crate::ctx::{BurstRecord, OnHydrationPolicy};
+
+    let c = cluster(1);
+    let (mut state, _signals) = reconfiguring_state(
+        c,
+        "100cc",
+        1,
+        vec![
+            observed(replica(1), "r0", "100cc"),
+            observed(replica(2), "r0-burst", "400cc"),
+        ],
+        record_on_timeout("200cc", 1, 0, OnTimeout::Commit),
+        BTreeSet::new(),
+    );
+    state.auto_scaling_policy = Some(AutoScalingPolicy {
+        on_hydration: Some(OnHydrationPolicy {
+            hydration_size: "400cc".to_string(),
+            linger_duration: Some(Duration::from_secs(60)),
+        }),
+    });
+    state.burst = Some(BurstRecord {
+        burst_size: "400cc".to_string(),
+        linger_duration: Duration::from_secs(60),
+        steady_hydrated_at: None,
+    });
+
+    let mut ctx = FakeCtx::new(vec![state]);
+    ctx.has_hydratable_objects.insert(c, true);
+    let controller = controller();
+
+    controller.reconcile(&mut ctx).await;
+
+    let mut sizes: Vec<_> = ctx.states[&c]
+        .replicas
+        .iter()
+        .filter_map(|r| r.owned_shape().map(|shape| shape.size.as_str()))
+        .collect();
+    sizes.sort();
+    assert_eq!(
+        sizes,
+        vec!["200cc", "400cc"],
+        "the realized replica was swapped out and the burst replica kept"
+    );
+    let burst_id = ctx.states[&c]
+        .replicas
+        .iter()
+        .find(|r| r.name == "r0-burst")
+        .map(|r| r.replica_id);
+    assert_eq!(burst_id, Some(replica(2)), "the burst keeps its identity");
+}
+
+#[mz_ore::test(tokio::test)]
+async fn resource_exhaustion_leaves_an_unaffordable_burst_armed() {
+    // A hydration burst is not shed on exhaustion. Nothing durable would record
+    // that it was unaffordable, so the unchanged policy would arm it again on
+    // the next tick and every cycle would write a start and a finish. The burst
+    // stays armed and its create is simply retried.
+    use crate::ctx::{BurstRecord, OnHydrationPolicy};
+
+    let c = cluster(1);
+    let (mut state, _signals) = reconfiguring_state(
+        c,
+        "100cc",
+        1,
+        vec![observed(replica(1), "r0", "100cc")],
+        record("200cc", 1, 5000),
+        BTreeSet::new(),
+    );
+    state.auto_scaling_policy = Some(AutoScalingPolicy {
+        on_hydration: Some(OnHydrationPolicy {
+            hydration_size: "400cc".to_string(),
+            linger_duration: Some(Duration::from_secs(60)),
+        }),
+    });
+    state.burst = Some(BurstRecord {
+        burst_size: "400cc".to_string(),
+        linger_duration: Duration::from_secs(60),
+        steady_hydrated_at: None,
+    });
+
+    let mut ctx = FakeCtx::new(vec![state]);
+    ctx.has_hydratable_objects.insert(c, true);
+    let controller = controller();
+
+    ctx.exhaust_next = 1;
+    controller.reconcile(&mut ctx).await;
+    assert_eq!(
+        reconfiguration_status(&ctx.states[&c]),
+        Some(ReconfigurationStatus::ResourceExhausted),
+        "the graceful reconfiguration is shed"
+    );
+    assert!(
+        ctx.states[&c].burst.is_some(),
+        "the burst survives the shed"
+    );
+
+    ctx.exhaust_next = 1;
+    let before = ctx.applied.len();
+    controller.reconcile(&mut ctx).await;
+    assert!(
+        ctx.states[&c].burst.is_some(),
+        "a later exhausted apply still leaves the burst alone"
+    );
+    assert_eq!(
+        ctx.applied.len(),
+        before + 1,
+        "the exhausted create is the only apply: no shed follows it"
+    );
+}
+
+#[mz_ore::test(tokio::test)]
 async fn resource_exhaustion_without_transient_strategy_sheds_nothing() {
     // A baseline create (replication factor above the actual replica count) hits
     // resource exhaustion. There is no transient strategy to shed, so the
@@ -1951,6 +2377,665 @@ async fn resource_exhaustion_without_transient_strategy_sheds_nothing() {
     assert_eq!(ctx.states[&c].replicas.len(), 1, "nothing was applied");
 }
 
+// ----- On-refresh scheduling strategy. -----
+
+use mz_repr::refresh_schedule::RefreshSchedule;
+use timely::progress::Antichain;
+
+use crate::ctx::{ClusterSchedule as Sched, RefreshMvInfo, RefreshWindowDecision};
+use crate::strategy::OnRefreshStrategy;
+
+/// Unwrap a [`CreateReason`] into the on-refresh window decision behind it.
+fn window_decision(reason: &CreateReason) -> &RefreshWindowDecision {
+    let CreateReason::OnRefresh(decision) = reason else {
+        panic!("expected an on-refresh create reason");
+    };
+    decision
+}
+
+/// A scheduled (`ON REFRESH`) cluster state with the given realized size,
+/// replication factor, replicas, and optional refresh-window inputs.
+fn scheduled_state(
+    cluster_id: ClusterId,
+    size: &str,
+    replication_factor: u32,
+    hydration_time_estimate_ms: u64,
+    replicas: Vec<ObservedReplica>,
+    refresh_window: Option<RefreshWindowInputs>,
+) -> (ClusterState, LiveSignals) {
+    let state = ClusterState {
+        cluster_id,
+        size: size.to_string(),
+        replication_factor,
+        availability_zones: Vec::new(),
+        logging: ComputeReplicaLogging::default(),
+        arrangement_compression: false,
+        schedule: Sched::Refresh {
+            hydration_time_estimate: Duration::from_millis(hydration_time_estimate_ms),
+        },
+        auto_scaling_policy: None,
+        reconfiguration: None,
+        burst: None,
+        replicas,
+    };
+    let signals = LiveSignals {
+        refresh_window,
+        ..Default::default()
+    };
+    (state, signals)
+}
+
+/// A `REFRESH AT` schedule with a single refresh time.
+fn refresh_at(at: u64) -> RefreshSchedule {
+    RefreshSchedule {
+        everies: Vec::new(),
+        ats: vec![Timestamp::from(at)],
+    }
+}
+
+/// Refresh-window inputs: read ts, compaction estimate, and one MV (id `u1`)
+/// with the given write frontier and schedule. `Some(ts)` is a single-element
+/// write frontier `[ts]`; `None` is the empty (sealed) frontier `[]`.
+fn window_inputs(
+    read_ts: u64,
+    compaction_ms: u64,
+    write_frontier: Option<u64>,
+    schedule: RefreshSchedule,
+) -> RefreshWindowInputs {
+    RefreshWindowInputs {
+        read_ts: Timestamp::from(read_ts),
+        compaction_estimate: Duration::from_millis(compaction_ms),
+        refresh_mvs: vec![refresh_mv(1, write_frontier, schedule)],
+    }
+}
+
+/// One REFRESH MV with id `u<id>`, the given write frontier, and schedule.
+fn refresh_mv(id: u64, write_frontier: Option<u64>, schedule: RefreshSchedule) -> RefreshMvInfo {
+    let write_frontier = match write_frontier {
+        Some(ts) => Antichain::from_elem(Timestamp::from(ts)),
+        None => Antichain::new(),
+    };
+    RefreshMvInfo {
+        id: GlobalId::User(id),
+        write_frontier,
+        refresh_schedule: schedule,
+    }
+}
+
+#[mz_ore::test]
+fn on_refresh_baseline_holds_nothing_on_scheduled() {
+    // Even with a stale non-zero rf, the baseline contributes nothing to a
+    // scheduled cluster. The on-refresh strategy is the sole contributor.
+    let c = cluster(1);
+    let (state, signals) = scheduled_state(c, "100cc", 1, 0, Vec::new(), None);
+    let baseline = crate::strategy::BaselineStrategy;
+    assert!(
+        baseline
+            .desired_replicas(&state, &signals, &config(), Timestamp::from(0u64))
+            .is_empty(),
+        "baseline must hold nothing on a scheduled cluster"
+    );
+}
+
+#[mz_ore::test]
+fn on_refresh_normalizes_replication_factor() {
+    // A scheduled cluster carrying a stale non-zero rf is normalized to 0.
+    let c = cluster(1);
+    let (state, signals) = scheduled_state(c, "100cc", 1, 0, Vec::new(), None);
+    let s = OnRefreshStrategy;
+    let write = s.update_state(&state, &signals, &config(), Timestamp::from(0u64));
+    assert_eq!(write.new_replication_factor, Some(0));
+
+    // Already 0 (or MANUAL): no write, so steady ticks stay no-ops.
+    let (normalized, normalized_signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), None);
+    assert!(
+        s.update_state(
+            &normalized,
+            &normalized_signals,
+            &config(),
+            Timestamp::from(0u64)
+        )
+        .is_empty()
+    );
+    let manual = state_(c, "100cc", 1);
+    assert!(
+        s.update_state(
+            &manual,
+            &LiveSignals::default(),
+            &config(),
+            Timestamp::from(0u64)
+        )
+        .is_empty()
+    );
+}
+
+/// A MANUAL cluster with no replicas, for the normalization no-op check.
+fn state_(cluster_id: ClusterId, size: &str, rf: u32) -> ClusterState {
+    state(cluster_id, size, rf, Vec::new())
+}
+
+#[mz_ore::test]
+fn on_refresh_in_window_desires_one_replica() {
+    // Read ts 100, MV write frontier 50 (strictly below the read ts), so the MV
+    // still needs a refresh and the cluster is On. One replica at the realized
+    // shape.
+    let c = cluster(1);
+    let inputs = window_inputs(100, 0, Some(50), refresh_at(1000));
+    let (state, signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), Some(inputs));
+    let s = OnRefreshStrategy;
+    let desired = s.desired_replicas(&state, &signals, &config(), Timestamp::from(0u64));
+    assert_eq!(desired.len(), 1, "in-window cluster desires one replica");
+    assert_eq!(desired[0].shape.size, "100cc");
+
+    // The slot carries the window decision: the refresh-due MV explains the
+    // open window, and there is no compaction reason.
+    let detail = window_decision(&desired[0].reason);
+    assert_eq!(detail.objects_needing_refresh, vec![GlobalId::User(1)]);
+    assert!(detail.objects_needing_compaction.is_empty());
+    assert_eq!(detail.hydration_time_estimate, Duration::ZERO);
+}
+
+#[mz_ore::test]
+fn on_refresh_window_decision_lists_due_mvs() {
+    // Two MVs: u1's frontier (50) is below the read ts (100), u2's (200) is
+    // past it. Only u1 appears in the window decision's refresh list. The
+    // lists name exactly the MVs that explain the open window.
+    let c = cluster(1);
+    let inputs = RefreshWindowInputs {
+        read_ts: Timestamp::from(100u64),
+        compaction_estimate: Duration::ZERO,
+        refresh_mvs: vec![
+            refresh_mv(1, Some(50), refresh_at(1000)),
+            refresh_mv(2, Some(200), refresh_at(1000)),
+        ],
+    };
+    let (state, signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), Some(inputs));
+    let s = OnRefreshStrategy;
+    let desired = s.desired_replicas(&state, &signals, &config(), Timestamp::from(0u64));
+    assert_eq!(desired.len(), 1);
+    let detail = window_decision(&desired[0].reason);
+    assert_eq!(detail.objects_needing_refresh, vec![GlobalId::User(1)]);
+    assert!(detail.objects_needing_compaction.is_empty());
+}
+
+#[mz_ore::test]
+fn on_refresh_caught_up_at_read_ts_is_off() {
+    // Frontier exactly at the read ts (and no hydration lead, no compaction
+    // window): the MV is caught up, so the cluster is Off. The needs-refresh check
+    // is strict (`frontier < read_ts + estimate`).
+    let c = cluster(1);
+    let inputs = window_inputs(100, 0, Some(100), refresh_at(50));
+    let (state, signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), Some(inputs));
+    let s = OnRefreshStrategy;
+    assert!(
+        s.desired_replicas(&state, &signals, &config(), Timestamp::from(0u64))
+            .is_empty(),
+        "a caught-up MV at the read ts leaves the cluster off"
+    );
+}
+
+#[mz_ore::test]
+fn on_refresh_empty_frontier_needs_no_refresh() {
+    // An empty (sealed) write frontier `[]` is the "complete past every timestamp"
+    // state: `Antichain::less_than` is `false` for every timestamp, so the MV never
+    // reads as needing a refresh on that count. The compaction window is also
+    // closed here (read ts 1000 is well past the last `AT 200` plus the compaction
+    // estimate), so the cluster is Off.
+    //
+    // This guards the empty/sealed-frontier arm of the window decision. A
+    // single-input total-order MV's write frontier holds at most one element, so a
+    // multi-element frontier is not reachable and is not exercised here; the
+    // `Antichain` seam keeps the model faithful regardless.
+    let c = cluster(1);
+    let inputs = window_inputs(1000, 100, None, refresh_at(200));
+    let (state, signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), Some(inputs));
+    let s = OnRefreshStrategy;
+    assert!(
+        s.desired_replicas(&state, &signals, &config(), Timestamp::from(0u64))
+            .is_empty(),
+        "an empty write frontier needs no refresh and leaves the cluster off"
+    );
+}
+
+#[mz_ore::test]
+fn on_refresh_hydration_estimate_opens_window_early() {
+    // Write frontier 200 is past the read ts 100, so on its own the MV needs no
+    // refresh. But a hydration-time estimate of 150 adjusts the read ts to 250,
+    // which the frontier (200) is now below, so the cluster turns on early to
+    // rehydrate ahead of the refresh.
+    let c = cluster(1);
+    let inputs = window_inputs(100, 0, Some(200), refresh_at(1000));
+    let (state, signals) = scheduled_state(c, "100cc", 0, 150, Vec::new(), Some(inputs));
+    let s = OnRefreshStrategy;
+    assert_eq!(
+        s.desired_replicas(&state, &signals, &config(), Timestamp::from(0u64))
+            .len(),
+        1,
+        "the hydration estimate opens the window early"
+    );
+
+    // With no estimate the same frontier leaves the cluster Off.
+    let (no_estimate, no_estimate_signals) = scheduled_state(
+        c,
+        "100cc",
+        0,
+        0,
+        Vec::new(),
+        Some(window_inputs(100, 0, Some(200), refresh_at(1000))),
+    );
+    assert!(
+        s.desired_replicas(
+            &no_estimate,
+            &no_estimate_signals,
+            &config(),
+            Timestamp::from(0u64)
+        )
+        .is_empty()
+    );
+}
+
+#[mz_ore::test]
+fn on_refresh_compaction_window_keeps_cluster_on() {
+    // The MV's frontier (300) is past the read ts (250), so it needs no refresh.
+    // But its previous refresh was recent: with frontier 300 rounded down past
+    // the `AT 200` schedule, prev_refresh = 200, and 200 + compaction_estimate
+    // (100) = 300 > read ts 250, so the cluster stays on for compaction.
+    let c = cluster(1);
+    let inputs = window_inputs(250, 100, Some(300), refresh_at(200));
+    let (state, signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), Some(inputs));
+    let s = OnRefreshStrategy;
+    let desired = s.desired_replicas(&state, &signals, &config(), Timestamp::from(0u64));
+    assert_eq!(
+        desired.len(),
+        1,
+        "the compaction window keeps the cluster on"
+    );
+
+    // The window decision attributes the open window to compaction, not a
+    // pending refresh.
+    let detail = window_decision(&desired[0].reason);
+    assert!(detail.objects_needing_refresh.is_empty());
+    assert_eq!(detail.objects_needing_compaction, vec![GlobalId::User(1)]);
+
+    // A later read ts past the compaction window turns it off: the frontier (500)
+    // needs no refresh at read ts 400, and prev_refresh 200 + compaction 100 = 300
+    // is not > read ts 400.
+    let (past, past_signals) = scheduled_state(
+        c,
+        "100cc",
+        0,
+        0,
+        Vec::new(),
+        Some(window_inputs(400, 100, Some(500), refresh_at(200))),
+    );
+    assert!(
+        s.desired_replicas(&past, &past_signals, &config(), Timestamp::from(0u64))
+            .is_empty()
+    );
+}
+
+#[mz_ore::test(tokio::test)]
+async fn on_refresh_batches_window_inputs_once_per_phase() {
+    let c1 = cluster(1);
+    let c2 = cluster(2);
+    let manual = cluster(3);
+    let (scheduled1, _) = scheduled_state(c1, "100cc", 1, 0, Vec::new(), None);
+    let (scheduled2, _) = scheduled_state(c2, "100cc", 1, 0, Vec::new(), None);
+    let mut ctx = FakeCtx::new(vec![
+        scheduled1,
+        scheduled2,
+        state(manual, "100cc", 0, Vec::new()),
+    ]);
+    let closed_window = window_inputs(100, 0, Some(200), refresh_at(50));
+    ctx.set_refresh_window(c1, closed_window.clone());
+    ctx.set_refresh_window(c2, closed_window);
+
+    controller().reconcile(&mut ctx).await;
+
+    assert_eq!(
+        ctx.refresh_window_probes,
+        vec![vec![c1, c2], vec![c1, c2]],
+        "one batch per phase, excluding the MANUAL cluster",
+    );
+}
+
+#[mz_ore::test(tokio::test)]
+async fn on_refresh_unavailable_window_inputs_skip_only_affected_cluster() {
+    let scheduled = cluster(1);
+    let manual = cluster(2);
+    let available = cluster(3);
+    let (unavailable_state, _) = scheduled_state(
+        scheduled,
+        "100cc",
+        1,
+        0,
+        vec![observed(replica(1), "r0", "100cc")],
+        None,
+    );
+    let (available_state, _) = scheduled_state(available, "100cc", 0, 0, Vec::new(), None);
+    let mut ctx = FakeCtx::new(vec![
+        unavailable_state,
+        state(manual, "100cc", 1, Vec::new()),
+        available_state,
+    ]);
+    ctx.set_refresh_window(available, window_inputs(100, 0, Some(50), refresh_at(1000)));
+
+    controller().reconcile(&mut ctx).await;
+
+    assert_eq!(ctx.refresh_window_probes, vec![vec![scheduled, available]]);
+    assert_eq!(ctx.states[&scheduled].replication_factor, 1);
+    assert_eq!(ctx.states[&scheduled].replicas.len(), 1);
+    assert!(ctx.applied.iter().flatten().all(|decision| {
+        let cluster_id = match decision {
+            Decision::CreateReplica { cluster_id, .. }
+            | Decision::DropReplica { cluster_id, .. }
+            | Decision::UpdateClusterState { cluster_id, .. } => cluster_id,
+        };
+        *cluster_id != scheduled
+    }));
+    let created_clusters: BTreeSet<_> = ctx
+        .creates()
+        .into_iter()
+        .map(|decision| match decision {
+            Decision::CreateReplica { cluster_id, .. } => *cluster_id,
+            _ => unreachable!("creates returns only create decisions"),
+        })
+        .collect();
+    assert_eq!(created_clusters, BTreeSet::from([manual, available]));
+    assert_eq!(ctx.states[&manual].replicas.len(), 1);
+    assert_eq!(ctx.states[&available].replicas.len(), 1);
+    assert!(ctx.drops().is_empty());
+}
+
+#[mz_ore::test(tokio::test)]
+async fn on_refresh_unavailable_window_input_batch_skips_scheduled_clusters() {
+    let stale_rf = cluster(1);
+    let running = cluster(2);
+    let manual = cluster(3);
+    let (stale_rf_state, _) = scheduled_state(stale_rf, "100cc", 1, 0, Vec::new(), None);
+    let (running_state, _) = scheduled_state(
+        running,
+        "100cc",
+        0,
+        0,
+        vec![observed(replica(1), "r0", "100cc")],
+        None,
+    );
+    let mut ctx = FakeCtx::new(vec![
+        stale_rf_state,
+        running_state,
+        state(manual, "100cc", 1, Vec::new()),
+    ]);
+
+    controller().reconcile(&mut ctx).await;
+
+    assert_eq!(ctx.refresh_window_probes, vec![vec![stale_rf, running]]);
+    assert_eq!(ctx.states[&stale_rf].replication_factor, 1);
+    assert_eq!(ctx.states[&running].replicas.len(), 1);
+    let creates = ctx.creates();
+    assert_eq!(creates.len(), 1, "the MANUAL cluster still reconciles");
+    assert!(matches!(
+        creates[0],
+        Decision::CreateReplica { cluster_id, .. } if *cluster_id == manual
+    ));
+    assert_eq!(ctx.states[&manual].replicas.len(), 1);
+    assert!(ctx.drops().is_empty());
+}
+
+#[mz_ore::test(tokio::test)]
+async fn on_refresh_creates_in_window_through_seam() {
+    // End-to-end through the ctx seam: a scheduled cluster with a stale rf=1 and
+    // no replicas, inside its refresh window. Phase 1 normalizes rf to 0; phase 2
+    // creates the one in-window replica.
+    let c = cluster(1);
+    let (state, _signals) = scheduled_state(c, "100cc", 1, 0, Vec::new(), None);
+    let mut ctx = FakeCtx::new(vec![state]);
+    ctx.set_refresh_window(c, window_inputs(100, 0, Some(50), refresh_at(1000)));
+
+    let controller = controller();
+    controller.reconcile(&mut ctx).await;
+
+    assert_eq!(
+        ctx.states[&c].replication_factor, 0,
+        "rf normalized to 0 at runtime"
+    );
+    let creates = ctx.creates();
+    assert_eq!(creates.len(), 1, "one in-window replica is created");
+    if let Decision::CreateReplica { reason, shape, .. } = creates[0] {
+        assert_eq!(shape.size, "100cc");
+        // The create carries the window decision inside its reason through the
+        // kernel for the audit log's `scheduling_policies` detail.
+        let detail = window_decision(reason);
+        assert_eq!(detail.objects_needing_refresh, vec![GlobalId::User(1)]);
+        assert!(detail.objects_needing_compaction.is_empty());
+    } else {
+        panic!("expected a CreateReplica");
+    }
+    assert!(ctx.drops().is_empty());
+
+    // A second tick converges: rf is 0 (no write), and the in-window replica
+    // matches the on-refresh desire, so nothing changes.
+    let before = ctx.applied.len();
+    controller.reconcile(&mut ctx).await;
+    assert_eq!(ctx.applied.len(), before, "converged inside the window");
+}
+
+#[mz_ore::test(tokio::test)]
+async fn on_refresh_schedule_alter_rejects_in_flight_decision() {
+    // The `schedule` field of the compare-and-append witness is load-bearing: a
+    // concurrent `ALTER ... SET (SCHEDULE = MANUAL)` that lands between the
+    // controller's read and its append must reject the in-flight on-refresh drop,
+    // so the on-refresh strategy never reshapes a cluster the user just handed
+    // back to the baseline. With `witness_check` on, this exercises the real
+    // per-decision compare (not the blunt `reject_next` counter), so dropping
+    // `schedule` from `ExpectedClusterState` would make this test fail.
+    let c = cluster(1);
+    // Scheduled, already-normalized (rf=0), one running replica, outside its
+    // window, so the on-refresh strategy emits a phase-2 drop and no phase-1
+    // write. The drop carries `expected.schedule = Refresh`.
+    let (state, _signals) = scheduled_state(
+        c,
+        "100cc",
+        0,
+        0,
+        vec![observed(replica(1), "r0", "100cc")],
+        None,
+    );
+    let mut ctx = FakeCtx::new(vec![state]);
+    ctx.set_refresh_window(c, window_inputs(100, 0, Some(200), refresh_at(50)));
+    ctx.witness_check = true;
+    // The `ALTER` flips only the schedule (rf, size, azs, logging unchanged), so
+    // the rejection is attributable solely to the witness `schedule` field.
+    ctx.concurrent_schedule_alter.insert(c, Sched::Manual);
+
+    let controller = controller();
+    controller.reconcile(&mut ctx).await;
+
+    // The drop was attempted but rejected by its compare-and-append guard, so the
+    // replica the user's now-MANUAL cluster owns is left untouched.
+    let drops = ctx.drops();
+    assert_eq!(drops.len(), 1, "the drop was attempted");
+    if let Decision::DropReplica { expected, .. } = drops[0] {
+        assert_eq!(
+            expected.schedule,
+            Sched::Refresh {
+                hydration_time_estimate: Duration::from_millis(0)
+            },
+            "the drop was derived from the pre-ALTER (Refresh) schedule"
+        );
+    } else {
+        panic!("expected a DropReplica");
+    }
+    assert_eq!(
+        ctx.states[&c].replicas.len(),
+        1,
+        "the rejected drop left the replica in place"
+    );
+    assert_eq!(ctx.states[&c].schedule, Sched::Manual);
+}
+
+#[mz_ore::test(tokio::test)]
+async fn on_refresh_unchanged_schedule_passes_witness() {
+    // The dual of the rejection test: with the witness check on but no concurrent
+    // `ALTER`, the matching `schedule` lets the same out-of-window drop apply, so
+    // the check is not vacuously rejecting.
+    let c = cluster(1);
+    let (state, _signals) = scheduled_state(
+        c,
+        "100cc",
+        0,
+        0,
+        vec![observed(replica(1), "r0", "100cc")],
+        None,
+    );
+    let mut ctx = FakeCtx::new(vec![state]);
+    ctx.set_refresh_window(c, window_inputs(100, 0, Some(200), refresh_at(50)));
+    ctx.witness_check = true;
+
+    let controller = controller();
+    controller.reconcile(&mut ctx).await;
+
+    assert_eq!(ctx.drops().len(), 1, "the out-of-window replica is dropped");
+    assert!(
+        ctx.states[&c].replicas.is_empty(),
+        "the drop applied under a matching witness"
+    );
+}
+
+/// A `REFRESH EVERY` schedule with the given interval in milliseconds, aligned
+/// to timestamp 0.
+fn refresh_every(interval_ms: u64) -> RefreshSchedule {
+    RefreshSchedule {
+        everies: vec![mz_repr::refresh_schedule::RefreshEvery {
+            interval: Duration::from_millis(interval_ms),
+            aligned_to: Timestamp::from(0u64),
+        }],
+        ats: Vec::new(),
+    }
+}
+
+#[mz_ore::test]
+fn on_refresh_compaction_window_with_refresh_every() {
+    // An EVERY schedule exercises the everies arm of the previous-refresh
+    // computation. The MV's frontier (500) sits at the next refresh of an
+    // `EVERY 100ms` schedule, so it needs no refresh at read ts 450, but
+    // rounding the frontier down puts the previous refresh at 400, and
+    // 400 + compaction_estimate (100) = 500 > read ts 450 keeps the cluster on.
+    let c = cluster(1);
+    let inputs = window_inputs(450, 100, Some(500), refresh_every(100));
+    let (state, signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), Some(inputs));
+    let s = OnRefreshStrategy;
+    let desired = s.desired_replicas(&state, &signals, &config(), Timestamp::from(0u64));
+    assert_eq!(
+        desired.len(),
+        1,
+        "the compaction window keeps the cluster on"
+    );
+    let detail = window_decision(&desired[0].reason);
+    assert!(detail.objects_needing_refresh.is_empty());
+    assert_eq!(detail.objects_needing_compaction, vec![GlobalId::User(1)]);
+
+    // A smaller estimate closes the window: 400 + 10 = 410 is not > 450.
+    let (closed, closed_signals) = scheduled_state(
+        c,
+        "100cc",
+        0,
+        0,
+        Vec::new(),
+        Some(window_inputs(450, 10, Some(500), refresh_every(100))),
+    );
+    assert!(
+        s.desired_replicas(&closed, &closed_signals, &config(), Timestamp::from(0u64))
+            .is_empty()
+    );
+
+    // An EVERY MV with an empty (sealed) frontier has no wall-clock handle on
+    // its last refresh (`last_refresh` is `None` for a periodic schedule), so no
+    // compaction time is scheduled even under a huge estimate.
+    let (sealed, sealed_signals) = scheduled_state(
+        c,
+        "100cc",
+        0,
+        0,
+        Vec::new(),
+        Some(window_inputs(450, 100_000, None, refresh_every(100))),
+    );
+    assert!(
+        s.desired_replicas(&sealed, &sealed_signals, &config(), Timestamp::from(0u64))
+            .is_empty()
+    );
+}
+
+#[mz_ore::test]
+fn on_refresh_skips_rf_normalization_while_reconfiguring() {
+    // While a reconfiguration record is in progress the graceful strategy owns
+    // `new_replication_factor`, so the on-refresh normalization defers to keep
+    // the field single-writer. (The sequencer never writes a record for a
+    // scheduled cluster, so the state is reachable only for a record written
+    // before the cluster acquired its schedule.)
+    let c = cluster(1);
+    let (mut state, signals) = scheduled_state(c, "100cc", 1, 0, Vec::new(), None);
+    state.reconfiguration = Some(record("200cc", 2, 5000));
+    let s = OnRefreshStrategy;
+    assert!(
+        s.update_state(&state, &signals, &config(), Timestamp::from(0u64))
+            .is_empty(),
+        "normalization defers to an in-progress reconfiguration"
+    );
+
+    // A settled record no longer owns the field: normalization resumes.
+    let mut settled = record("200cc", 2, 5000);
+    settled.status = ReconfigurationStatus::Finalized;
+    state.reconfiguration = Some(settled);
+    let write = s.update_state(&state, &signals, &config(), Timestamp::from(0u64));
+    assert_eq!(write.new_replication_factor, Some(0));
+}
+
+#[mz_ore::test(tokio::test)]
+async fn on_refresh_graceful_record_settles_then_normalizes() {
+    // A scheduled cluster carrying an in-progress reconfiguration record. The
+    // sequencer refuses both a schedule change mid-record and a new record on a
+    // scheduled cluster, so this state only arises for a record written before
+    // the cluster acquired its schedule (pre-upgrade catalog state). The
+    // graceful strategy owns the record to settlement: its cut-over writes the
+    // target (including rf 2) alone, without contending with the on-refresh
+    // normalization (a dual write of `new_replication_factor` would trip the
+    // merge tripwire's soft panic and fail this test). A following tick sees the
+    // record settled and normalizes rf back to 0.
+    let c = cluster(1);
+    let (mut state, _signals) = scheduled_state(c, "100cc", 1, 0, Vec::new(), None);
+    // The deadline (500) already passed at the fake's now (1000) under COMMIT.
+    // The first tick provisions the target set without finalizing early.
+    state.reconfiguration = Some(record_on_timeout("200cc", 2, 500, OnTimeout::Commit));
+    let mut ctx = FakeCtx::new(vec![state]);
+    ctx.set_refresh_window(c, window_inputs(100, 0, Some(200), refresh_at(50)));
+
+    let controller = controller();
+    controller.reconcile(&mut ctx).await;
+
+    assert_eq!(ctx.states[&c].size, "100cc");
+    assert_eq!(ctx.states[&c].replicas.len(), 2);
+    assert_eq!(
+        reconfiguration_status(&ctx.states[&c]),
+        Some(ReconfigurationStatus::InProgress)
+    );
+
+    // With the target materialized, the next tick cuts over without requiring
+    // hydration. The on-refresh normalization deferred at the phase-1 read, so
+    // the realized factor briefly carries the target value.
+    controller.reconcile(&mut ctx).await;
+    assert_eq!(ctx.states[&c].size, "200cc");
+    assert_eq!(ctx.states[&c].replication_factor, 2);
+    assert_eq!(
+        reconfiguration_status(&ctx.states[&c]),
+        Some(ReconfigurationStatus::Finalized)
+    );
+
+    // The following tick sees the settled record and normalizes rf back to 0.
+    controller.reconcile(&mut ctx).await;
+    assert_eq!(ctx.states[&c].replication_factor, 0);
+}
+
 mod hydration_burst {
     use std::time::Duration;
 
@@ -1963,11 +3048,9 @@ mod hydration_burst {
     };
     use crate::ctx::{
         AutoScalingPolicy, AvailabilityZones, BurstAudit, BurstFinishCause, BurstRecord,
-        BurstWrite, ClusterState, OnHydrationPolicy, ReplicaShape,
+        BurstWrite, ClusterState, CreateReason, OnHydrationPolicy, ReplicaShape,
     };
-    use crate::strategy::{
-        ConfigSignals, HYDRATION_BURST_STRATEGY_NAME, HydrationBurstStrategy, LiveSignals, Strategy,
-    };
+    use crate::strategy::{ConfigSignals, HydrationBurstStrategy, LiveSignals, Strategy};
 
     /// A MANUAL cluster carrying an `ON HYDRATION` policy at `hydration_size` with
     /// the given linger, plus an optional in-flight burst record. Evaluate against
@@ -2165,6 +3248,7 @@ mod hydration_burst {
             size: "400cc".to_string(),
             availability_zones: AvailabilityZones(s.availability_zones.clone()),
             logging: ComputeReplicaLogging::default(),
+            arrangement_compression: false,
         };
         assert!(desired[0].shape.matches(&expected));
     }
@@ -2420,7 +3504,10 @@ mod hydration_burst {
             .collect();
         assert_eq!(burst_creates.len(), 1, "one 400cc burst replica created");
         assert!(
-            matches!(&burst_creates[0], Decision::CreateReplica { reasons, .. } if reasons.contains(&HYDRATION_BURST_STRATEGY_NAME)),
+            matches!(
+                &burst_creates[0],
+                Decision::CreateReplica { reason, .. } if *reason == CreateReason::HydrationBurst
+            ),
             "the create is attributed to the burst strategy"
         );
         assert!(

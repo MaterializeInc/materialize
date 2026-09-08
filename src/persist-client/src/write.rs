@@ -18,7 +18,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
-use mz_dyncfg::Config;
+use mz_dyncfg::{Config, ParameterScope};
 use mz_ore::task::RuntimeExt;
 use mz_ore::{instrument, soft_panic_or_log};
 use mz_persist::location::Blob;
@@ -58,6 +58,7 @@ pub(crate) const COMBINE_INLINE_WRITES: Config<bool> = Config::new(
     "persist_write_combine_inline_writes",
     true,
     "If set, re-encode inline writes if they don't fit into the batch metadata limits.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const VALIDATE_PART_BOUNDS_ON_WRITE: Config<bool> = Config::new(
@@ -65,6 +66,7 @@ pub(crate) const VALIDATE_PART_BOUNDS_ON_WRITE: Config<bool> = Config::new(
     false,
     "Validate the part lower <= the batch lower and the part upper <= batch upper,\
     for the batch being appended.",
+    ParameterScope::Environment,
 );
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
@@ -301,15 +303,9 @@ where
             let desc = Description::new(lower.clone(), target.clone(), since);
             let batch = HollowBatch::empty(desc);
 
-            let heartbeat_timestamp = (self.cfg.now)();
             let res = self
                 .machine
-                .compare_and_append(
-                    &batch,
-                    &self.writer_id,
-                    &self.debug_state,
-                    heartbeat_timestamp,
-                )
+                .compare_and_append(&batch, &self.writer_id, &self.debug_state)
                 .await;
 
             use CompareAndAppendRes::*;
@@ -623,7 +619,7 @@ where
             let mut key_storage = None;
             let mut val_storage = None;
             for batch in batches.iter() {
-                let () = validate_truncate_batch(
+                let bounds_truncated = validate_truncate_batch(
                     &batch.batch,
                     &desc,
                     any_batch_rewrite,
@@ -695,7 +691,11 @@ where
                     if start_index != 0 {
                         run_splits.push(start_index);
                     }
-                    run_metas.push(run_meta.clone());
+                    let mut run_meta = run_meta.clone();
+                    if bounds_truncated {
+                        run_meta.set_bounds_truncated();
+                    }
+                    run_metas.push(run_meta);
                 }
                 num_updates += batch.batch.len;
             }
@@ -749,15 +749,9 @@ where
                 }
             }
 
-            let heartbeat_timestamp = (self.cfg.now)();
             let res = self
                 .machine
-                .compare_and_append(
-                    &combined_batch,
-                    &self.writer_id,
-                    &self.debug_state,
-                    heartbeat_timestamp,
-                )
+                .compare_and_append(&combined_batch, &self.writer_id, &self.debug_state)
                 .await;
 
             match res {

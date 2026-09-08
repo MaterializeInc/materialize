@@ -131,7 +131,6 @@ CREATE TABLE another_schema.another_table (f1 TEXT);
 INSERT INTO another_schema.another_table VALUES ('123');
 
 # Sneak in a test for mysql_source_snapshot_max_execution_time
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET mysql_source_snapshot_max_execution_time = 10000
 
@@ -152,7 +151,6 @@ $ postgres-execute connection=mz_system
 ALTER SYSTEM SET mysql_source_snapshot_max_execution_time = 0
 
 # Validate mysql_source_snapshot_lock_wait_timeout
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET mysql_source_snapshot_lock_wait_timeout = 1
 
@@ -180,6 +178,24 @@ running
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET mysql_source_snapshot_lock_wait_timeout = 3600
+
+# Validate mysql_source_snapshot_wait_timeout
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET mysql_source_snapshot_wait_timeout = '60s'
+
+> CREATE SOURCE "test_slot_source"
+  IN CLUSTER cdc_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE pk_table FROM SOURCE test_slot_source (REFERENCE public.pk_table);
+
+> SELECT COUNT(*) > 0 FROM pk_table;
+true
+
+> DROP SOURCE test_slot_source CASCADE;
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET mysql_source_snapshot_wait_timeout
 
 
 #
@@ -556,48 +572,15 @@ true
 
 > DROP SOURCE large_cluster_source CASCADE;
 
-$ mysql-execute name=mysql
-DROP TABLE IF EXISTS pk_range_test;
-CREATE TABLE pk_range_test (id BIGINT PRIMARY KEY, val BIGINT);
-SET @i := 0;
-INSERT INTO pk_range_test SELECT @i := @i + 1, @i * 7 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
-
-> CREATE CLUSTER pk_range_cluster SIZE 'scale=1,workers=4'
-
-> CREATE SOURCE pk_range_source
-  IN CLUSTER pk_range_cluster
-  FROM MYSQL CONNECTION mysql_conn;
-> CREATE TABLE pk_range_table FROM SOURCE pk_range_source (REFERENCE public.pk_range_test);
-
-# Exact row count
-> SELECT COUNT(*) FROM pk_range_table;
-1000
-
-# No duplicates: distinct count must equal total count
-> SELECT COUNT(DISTINCT id) = COUNT(*) FROM pk_range_table;
-true
-
-# Full key range present (ids 1..1000)
-> SELECT MIN(id), MAX(id) FROM pk_range_table;
-1 1000
-
-# Checksum: val = id * 7, so SUM(val) = 7 * SUM(1..1000) = 7 * 500500
-> SELECT SUM(val) FROM pk_range_table;
-3503500
-
-> DROP SOURCE pk_range_source CASCADE;
-> DROP CLUSTER pk_range_cluster CASCADE;
-
-$ mysql-execute name=mysql
-DROP TABLE pk_range_test;
-
 #
-# Same, but for a single-column non-integer (char) PK.
+# Single-column char PK with the utf8mb4_bin collation, the supported type for
+# PK-range splitting. The explicit collation matters: the database default is
+# utf8mb4_general_ci, which is not split.
 #
 
 $ mysql-execute name=mysql
 DROP TABLE IF EXISTS pk_char_test;
-CREATE TABLE pk_char_test (id CHAR(26) PRIMARY KEY, val BIGINT);
+CREATE TABLE pk_char_test (id CHAR(26) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, val BIGINT);
 SET @i := 0;
 INSERT INTO pk_char_test SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
 
@@ -621,6 +604,40 @@ INSERT INTO pk_char_test SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i FR
 
 $ mysql-execute name=mysql
 DROP TABLE pk_char_test;
+
+#
+# Same shape, but with the database-default utf8mb4_general_ci collation.
+# Only utf8mb4_bin PKs are split, so this pins the collation fallback: the
+# table is read whole by a single worker and must still be complete and
+# duplicate-free.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_general_ci_test;
+CREATE TABLE pk_general_ci_test (id CHAR(26) PRIMARY KEY, val BIGINT);
+SET @i := 0;
+INSERT INTO pk_general_ci_test SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
+
+> CREATE CLUSTER pk_general_ci_cluster SIZE 'scale=1,workers=4'
+
+> CREATE SOURCE pk_general_ci_source
+  IN CLUSTER pk_general_ci_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_general_ci_table FROM SOURCE pk_general_ci_source (REFERENCE public.pk_general_ci_test);
+
+# Exact count and no duplicate/missing keys
+> SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_general_ci_table;
+1000 1000
+
+# Checksum: val = row number, so SUM(val) = SUM(1..1000) = 500500
+> SELECT SUM(val) FROM pk_general_ci_table;
+500500
+
+> DROP SOURCE pk_general_ci_source CASCADE;
+> DROP CLUSTER pk_general_ci_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_general_ci_test;
 
 #
 # Same, but for a composite (char, int) primary key.
@@ -661,9 +678,14 @@ ee 200
 $ mysql-execute name=mysql
 DROP TABLE pk_comp_test;
 
+#
+# Splittable PK with far more workers than rows: any splitting must not
+# duplicate or drop the few rows.
+#
+
 $ mysql-execute name=mysql
 DROP TABLE IF EXISTS pk_surplus_test;
-CREATE TABLE pk_surplus_test (id CHAR(26) PRIMARY KEY, val BIGINT);
+CREATE TABLE pk_surplus_test (id CHAR(26) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, val BIGINT);
 SET @i := 0;
 INSERT INTO pk_surplus_test SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i FROM mysql.time_zone t1 LIMIT 3;
 
@@ -689,12 +711,12 @@ $ mysql-execute name=mysql
 DROP TABLE pk_surplus_test;
 
 #
-# Empty table.
+# Empty table with a splittable PK.
 #
 
 $ mysql-execute name=mysql
 DROP TABLE IF EXISTS pk_empty_test;
-CREATE TABLE pk_empty_test (id CHAR(26) PRIMARY KEY, val BIGINT);
+CREATE TABLE pk_empty_test (id CHAR(26) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, val BIGINT);
 
 > CREATE CLUSTER pk_empty_cluster SIZE 'scale=1,workers=4'
 
@@ -749,6 +771,85 @@ INSERT INTO pk_uint_test SELECT 18446744073709551115 + (@j := @j + 1), -@j FROM 
 
 $ mysql-execute name=mysql
 DROP TABLE pk_uint_test;
+
+#
+# BIT primary key. A BIT column maps to a Materialize uint64, so it is not a
+# string key and must not be split into PK ranges. The BIT(64) value
+# X'30204F5220313D31' is the eight ASCII bytes "0 OR 1=1": a splitter that
+# rendered the raw key bytes into a range predicate would turn a worker read
+# into WHERE id >= 0 OR 1=1, matching every row on every worker. Every key
+# must still be emitted exactly once.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_bit_test;
+CREATE TABLE pk_bit_test (id BIT(64) PRIMARY KEY, val BIGINT);
+INSERT INTO pk_bit_test VALUES (1, 100), (0x30204F5220313D31, 200);
+
+> CREATE CLUSTER pk_bit_cluster SIZE 'scale=1,workers=4'
+
+> CREATE SOURCE pk_bit_source
+  IN CLUSTER pk_bit_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_bit_table FROM SOURCE pk_bit_source (REFERENCE public.pk_bit_test);
+
+# Exact count and no duplicate keys. If the table were wrongly split and both
+# workers read the whole table, COUNT(*) would be 4 while COUNT(DISTINCT id)
+# stays 2.
+> SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_bit_table;
+2 2
+
+# Both keys, each exactly once. X'30204F5220313D31' decodes big-endian to
+# 3467858927221292337.
+> SELECT id, val FROM pk_bit_table ORDER BY id;
+1 100
+3467858927221292337 200
+
+> DROP SOURCE pk_bit_source CASCADE;
+> DROP CLUSTER pk_bit_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_bit_test;
+
+#
+# PK-range splitting disabled via the mysql_source_snapshot_parallelism dyncfg.
+# The same shape as the pk_char_test above, a string PK that would otherwise be
+# split, but every table must fall back to a single-worker whole-table read and
+# still produce a complete, duplicate-free snapshot.
+#
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET mysql_source_snapshot_parallelism = false
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_serial_test;
+CREATE TABLE pk_serial_test (id CHAR(26) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, val BIGINT);
+SET @i := 0;
+INSERT INTO pk_serial_test SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i * 7 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
+
+> CREATE CLUSTER pk_serial_cluster SIZE 'scale=1,workers=4'
+
+> CREATE SOURCE pk_serial_source
+  IN CLUSTER pk_serial_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_serial_table FROM SOURCE pk_serial_source (REFERENCE public.pk_serial_test);
+
+# Exact row count and no duplicates
+> SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_serial_table;
+1000 1000
+
+# Checksum: val = row number * 7, so SUM(val) = 7 * SUM(1..1000) = 7 * 500500
+> SELECT SUM(val) FROM pk_serial_table;
+3503500
+
+> DROP SOURCE pk_serial_source CASCADE;
+> DROP CLUSTER pk_serial_cluster CASCADE;
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET mysql_source_snapshot_parallelism
+
+$ mysql-execute name=mysql
+DROP TABLE pk_serial_test;
 
 #
 # Multibyte utf8mb4 PK with a binary collation. Keys mix 2-, 3-, and 4-byte code

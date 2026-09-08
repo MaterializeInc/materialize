@@ -652,12 +652,14 @@ impl From<ShardUsageCumulativeMaybeRacy<'_>> for ShardUsageAudit {
         };
 
         // These ones are guaranteed to be equal.
-        debug_assert_eq!(ret.total_bytes(), total_bytes);
-        debug_assert_eq!(ret.not_leaked_bytes(), not_leaked_bytes);
+        mz_ore::soft_assert_eq_no_log!(ret.total_bytes(), total_bytes);
+        mz_ore::soft_assert_eq_no_log!(ret.not_leaked_bytes(), not_leaked_bytes);
         // The rest might have been reduced because of the race condition.
-        debug_assert!(ret.referenced_bytes() <= referenced_bytes);
-        debug_assert!(ret.current_state_bytes() <= x.current_state_bytes);
-        debug_assert!(ret.current_state_batches_bytes <= x.current_state_batches_bytes);
+        mz_ore::soft_assert_no_log!(ret.referenced_bytes() <= referenced_bytes);
+        mz_ore::soft_assert_no_log!(ret.current_state_bytes() <= x.current_state_bytes);
+        mz_ore::soft_assert_no_log!(
+            ret.current_state_batches_bytes <= x.current_state_batches_bytes
+        );
         ret
     }
 }

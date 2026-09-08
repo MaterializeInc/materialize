@@ -54,6 +54,7 @@ use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
 pub mod generation;
 pub mod global;
 
+#[derive(Clone)]
 pub struct Config {
     pub cloud_provider: CloudProvider,
     pub region: String,
@@ -80,7 +81,8 @@ pub struct Config {
     pub scheduler_name: Option<String>,
     pub enable_security_context: bool,
     pub enable_internal_statement_logging: bool,
-    pub disable_statement_logging: bool,
+    pub statement_logging_max_sample_rate: Option<f64>,
+    pub statement_logging_target_data_rate: Option<usize>,
 
     pub orchestratord_pod_selector_labels: Vec<KeyValueArg<String, String>>,
     pub environmentd_node_selector: Vec<KeyValueArg<String, String>>,
@@ -505,7 +507,7 @@ impl k8s_controller::Context for Context {
                                      first.",
                                     last_completed_rollout_environmentd_image_ref
                                         .expect("should be set if upgrade window check fails"),
-                                    &mz.spec.environmentd_image_ref,
+                                    mz.spec.environmentd_image_ref,
                                 ),
                                 observed_generation: mz.meta().generation,
                                 reason: "FailedDeploy".into(),

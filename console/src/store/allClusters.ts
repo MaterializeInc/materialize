@@ -14,7 +14,10 @@ import {
   buildClustersQuery,
   Cluster,
 } from "~/api/materialize/cluster/clusterList";
-import { SubscribeState } from "~/api/materialize/SubscribeManager";
+import {
+  SubscribeRow,
+  SubscribeState,
+} from "~/api/materialize/SubscribeManager";
 import {
   buildSubscribeQuery,
   useGlobalUpsertSubscribe,
@@ -26,22 +29,18 @@ export const allClusters = atom<SubscribeState<Cluster>>({
   snapshotComplete: false,
 });
 
-export function useSubscribeToAllClusters() {
-  const subscribe = React.useMemo(() => {
-    return buildSubscribeQuery(
-      buildClustersQuery({ queryOwnership: false, includeSystemObjects: true }),
-      {
-        upsertKey: "id",
-      },
-    );
-  }, []);
+const ALL_CLUSTERS_SUBSCRIBE_OPTIONS = {
+  atom: allClusters,
+  subscribe: buildSubscribeQuery(
+    buildClustersQuery({ queryOwnership: false, includeSystemObjects: true }),
+    { upsertKey: "id" },
+  ),
+  select: (row: SubscribeRow<Cluster>) => row.data,
+  upsertKey: (row: SubscribeRow<Cluster>) => row.data.id,
+};
 
-  return useGlobalUpsertSubscribe({
-    atom: allClusters,
-    subscribe,
-    select: (row) => row.data,
-    upsertKey: (row) => row.data.id,
-  });
+export function useSubscribeToAllClusters() {
+  useGlobalUpsertSubscribe(ALL_CLUSTERS_SUBSCRIBE_OPTIONS);
 }
 
 export function useAllClusters() {

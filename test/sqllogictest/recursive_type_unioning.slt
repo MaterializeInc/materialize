@@ -38,3 +38,26 @@ Source materialize.public.t2
 Target cluster: quickstart
 
 EOF
+
+# Unioning record types must widen field nullability, else a null field flows
+# through a column typed non-nullable and the row fails its type check. The
+# non-nullable branch is filtered to nothing so the null row is the only one.
+
+query T
+SELECT row(a) FROM t1 WHERE a < a UNION ALL SELECT row(a) FROM t2
+----
+()
+
+# Same, with the records nested in a list. `simple` because `list` has no binary
+# output function.
+simple
+SELECT LIST[row(a)] FROM t1 WHERE a < a UNION ALL SELECT LIST[row(a)] FROM t2;
+----
+{()}
+COMPLETE 1
+
+# `CASE` unions the types of its branches the same way.
+query T
+SELECT CASE WHEN false THEN row(a) ELSE row(null::int) END FROM t1
+----
+()

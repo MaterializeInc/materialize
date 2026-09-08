@@ -13,7 +13,6 @@
 > DROP SECRET IF EXISTS mysql_pass;
 
 # Override MySQL connect timeout to 3s
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET mysql_source_connect_timeout = '3s';
 

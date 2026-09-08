@@ -21,6 +21,7 @@ proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
 serde.workspace = true
 serde_repr.workspace = true
+uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 mz-catalog-protos = { path = ".", features = ["proptest"] }

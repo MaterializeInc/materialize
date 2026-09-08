@@ -39,9 +39,5 @@ default = []
 signing = ["aws-sdk-kms", "aws-lc-rs", "base64", "pem", "serde_json", "uuid"]
 utoipa = ["dep:utoipa"]
 
-[package.metadata.cargo-udeps.ignore]
-# Used in examples only.
-development = ["mz-aws-util", "tokio"]
-
 [lints]
 workspace = true

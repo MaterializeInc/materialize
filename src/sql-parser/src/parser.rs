@@ -2060,6 +2060,9 @@ impl<'a> Parser<'a> {
         } else if self.peek_keyword(SCHEMA) {
             self.parse_create_schema()
                 .map_parser_err(StatementKind::CreateSchema)
+        } else if self.peek_keywords(&[METRIC, SINK]) {
+            self.parse_create_metric_sink()
+                .map_parser_err(StatementKind::CreateMetricSink)
         } else if self.peek_keyword(SINK) {
             self.parse_create_sink()
                 .map_parser_err(StatementKind::CreateSink)
@@ -2971,6 +2974,7 @@ impl<'a> Parser<'a> {
                 ENDPOINT,
                 GCP,
                 HOST,
+                OAUTH2,
                 PASSWORD,
                 PORT,
                 PUBLIC,
@@ -2990,10 +2994,14 @@ impl<'a> Parser<'a> {
                 USERNAME,
                 WAREHOUSE,
             ])? {
-                ACCESS => {
-                    self.expect_keywords(&[KEY, ID])?;
-                    ConnectionOptionName::AccessKeyId
-                }
+                ACCESS => match self.expect_one_of_keywords(&[KEY, DELEGATION])? {
+                    KEY => {
+                        self.expect_keyword(ID)?;
+                        ConnectionOptionName::AccessKeyId
+                    }
+                    DELEGATION => ConnectionOptionName::AccessDelegation,
+                    _ => unreachable!(),
+                },
                 ASSUME => {
                     self.expect_keyword(ROLE)?;
                     match self.expect_one_of_keywords(&[ARN, SESSION])? {
@@ -3028,6 +3036,10 @@ impl<'a> Parser<'a> {
                     ConnectionOptionName::GcpConnection
                 }
                 HOST => ConnectionOptionName::Host,
+                OAUTH2 => {
+                    self.expect_keywords(&[SERVER, URL])?;
+                    ConnectionOptionName::Oauth2ServerUrl
+                }
                 PASSWORD => ConnectionOptionName::Password,
                 PORT => ConnectionOptionName::Port,
                 PUBLIC => {
@@ -3639,6 +3651,41 @@ impl<'a> Parser<'a> {
         }?;
 
         Ok(Statement::CreateSink(statement))
+    }
+
+    fn parse_create_metric_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keywords(&[METRIC, SINK])?;
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_item_name()?;
+        let in_cluster = self.parse_optional_in_cluster()?;
+        self.expect_keyword(FROM)?;
+        let from = self.parse_raw_name()?;
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_create_metric_sink_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
+        Ok(Statement::CreateMetricSink(CreateMetricSinkStatement {
+            name,
+            in_cluster,
+            if_not_exists,
+            from,
+            with_options,
+        }))
+    }
+
+    /// Parse the PREFIX option for CREATE METRIC SINK
+    fn parse_create_metric_sink_option(
+        &mut self,
+    ) -> Result<CreateMetricSinkOption<Raw>, ParserError> {
+        self.expect_keyword(PREFIX)?;
+        Ok(CreateMetricSinkOption {
+            name: CreateMetricSinkOptionName::Prefix,
+            value: self.parse_optional_option_value()?,
+        })
     }
 
     /// Parse the name of a CREATE SINK optional parameter
@@ -4564,6 +4611,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_identifier()?;
         // For historical reasons, the parentheses around the options can be
         // omitted.
@@ -4586,6 +4634,7 @@ impl<'a> Parser<'a> {
             name,
             options,
             features,
+            if_not_exists,
         }))
     }
 
@@ -4594,6 +4643,7 @@ impl<'a> Parser<'a> {
             AUTO,
             AVAILABILITY,
             DISK,
+            EXPERIMENTAL,
             INTROSPECTION,
             MANAGED,
             REPLICAS,
@@ -4612,6 +4662,10 @@ impl<'a> Parser<'a> {
                 ClusterOptionName::AvailabilityZones
             }
             DISK => ClusterOptionName::Disk,
+            EXPERIMENTAL => {
+                self.expect_keywords(&[ARRANGEMENT, COMPRESSION])?;
+                ClusterOptionName::ExperimentalArrangementCompression
+            }
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
                 DEBUGGING => ClusterOptionName::IntrospectionDebugging,
                 INTERVAL => ClusterOptionName::IntrospectionInterval,
@@ -4806,6 +4860,7 @@ impl<'a> Parser<'a> {
             COMPUTE,
             COMPUTECTL,
             DISK,
+            EXPERIMENTAL,
             INTERNAL,
             INTROSPECTION,
             SIZE,
@@ -4830,6 +4885,10 @@ impl<'a> Parser<'a> {
                 ReplicaOptionName::ComputectlAddresses
             }
             DISK => ReplicaOptionName::Disk,
+            EXPERIMENTAL => {
+                self.expect_keywords(&[ARRANGEMENT, COMPRESSION])?;
+                ReplicaOptionName::ExperimentalArrangementCompression
+            }
             INTERNAL => ReplicaOptionName::Internal,
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
                 DEBUGGING => ReplicaOptionName::IntrospectionDebugging,
@@ -4861,6 +4920,7 @@ impl<'a> Parser<'a> {
 
     fn parse_create_cluster_replica(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.next_token();
+        let if_not_exists = self.parse_if_not_exists()?;
         let of_cluster = self.parse_identifier()?;
         self.expect_token(&Token::Dot)?;
         let name = self.parse_identifier()?;
@@ -4875,6 +4935,7 @@ impl<'a> Parser<'a> {
             CreateClusterReplicaStatement {
                 of_cluster,
                 definition: ReplicaDefinition { name, options },
+                if_not_exists,
             },
         ))
     }
@@ -5029,6 +5090,7 @@ impl<'a> Parser<'a> {
             | ObjectType::MaterializedView
             | ObjectType::Source
             | ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
@@ -5297,7 +5359,7 @@ impl<'a> Parser<'a> {
         let option = match self
             .expect_one_of_keywords(&[TEXT, EXCLUDE, IGNORE, DETAILS, PARTITION, RETAIN])?
         {
-            ref keyword @ (TEXT | EXCLUDE) => {
+            TEXT => {
                 self.expect_keyword(COLUMNS)?;
 
                 let _ = self.consume_token(&Token::Eq);
@@ -5311,14 +5373,58 @@ impl<'a> Parser<'a> {
                     });
 
                 TableFromSourceOption {
-                    name: match *keyword {
-                        TEXT => TableFromSourceOptionName::TextColumns,
-                        EXCLUDE => TableFromSourceOptionName::ExcludeColumns,
-                        _ => unreachable!(),
-                    },
+                    name: TableFromSourceOptionName::TextColumns,
                     value,
                 }
             }
+            EXCLUDE => match self.expect_one_of_keywords(&[COLUMNS, CONSTRAINTS, ALL])? {
+                COLUMNS => {
+                    let _ = self.consume_token(&Token::Eq);
+
+                    let value =
+                        self.parse_option_sequence(Parser::parse_identifier)?
+                            .map(|inner| {
+                                WithOptionValue::Sequence(
+                                    inner.into_iter().map(WithOptionValue::Ident).collect_vec(),
+                                )
+                            });
+
+                    TableFromSourceOption {
+                        name: TableFromSourceOptionName::ExcludeColumns,
+                        value,
+                    }
+                }
+                CONSTRAINTS => {
+                    let _ = self.consume_token(&Token::Eq);
+
+                    // Constraint names are raw upstream identifiers whose case
+                    // must be preserved exactly, so they are string literals
+                    // rather than SQL identifiers.
+                    let value = self
+                        .parse_option_sequence(Parser::parse_literal_string)?
+                        .map(|inner| {
+                            WithOptionValue::Sequence(
+                                inner
+                                    .into_iter()
+                                    .map(|s| WithOptionValue::Value(Value::String(s)))
+                                    .collect_vec(),
+                            )
+                        });
+
+                    TableFromSourceOption {
+                        name: TableFromSourceOptionName::ExcludeConstraints,
+                        value,
+                    }
+                }
+                ALL => {
+                    self.expect_keyword(CONSTRAINTS)?;
+                    TableFromSourceOption {
+                        name: TableFromSourceOptionName::ExcludeAllConstraints,
+                        value: None,
+                    }
+                }
+                _ => unreachable!(),
+            },
             DETAILS => TableFromSourceOption {
                 name: TableFromSourceOptionName::Details,
                 value: self.parse_optional_option_value()?,
@@ -5711,6 +5817,15 @@ impl<'a> Parser<'a> {
     fn parse_option_map(
         &mut self,
     ) -> Result<Option<BTreeMap<String, WithOptionValue<Raw>>>, ParserError> {
+        // `MAP` only begins a map literal when a `[` follows it. Committing on
+        // the keyword alone makes a bare `map` in an option-value position a hard
+        // error on the missing bracket, rather than falling through to the item
+        // name it is: `TOPIC CONFIG = "map"` prints as `TOPIC CONFIG = map`,
+        // since `map` is a legal bare identifier everywhere else, and that output
+        // then failed to reparse.
+        if !(self.peek_keyword(MAP) && self.peek_nth_token(1) == Some(Token::LBracket)) {
+            return Ok(None);
+        }
         Ok(if self.parse_keyword(MAP) {
             self.expect_token(&Token::LBracket)?;
             let mut map = BTreeMap::new();
@@ -5870,7 +5985,10 @@ impl<'a> Parser<'a> {
             ObjectType::NetworkPolicy => self
                 .parse_alter_network_policy()
                 .map_parser_err(StatementKind::AlterNetworkPolicy),
-            ObjectType::Func | ObjectType::Subsource => parser_err!(
+            // Metric sinks are adapter-created and not a user surface, so they deliberately
+            // support no ALTER at all, `RENAME TO` and `OWNER TO` included. REASSIGN OWNED
+            // works off object ids and is unaffected.
+            ObjectType::Func | ObjectType::Subsource | ObjectType::MetricSink => parser_err!(
                 self,
                 self.peek_prev_pos(),
                 format!("Unsupported ALTER on {object_type}")
@@ -6619,6 +6737,7 @@ impl<'a> Parser<'a> {
             ObjectType::View => &[SET, RENAME, OWNER, RESET],
             ObjectType::Source
             | ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Role
@@ -7465,6 +7584,7 @@ impl<'a> Parser<'a> {
             | ObjectType::Source
             | ObjectType::Subsource
             | ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
@@ -8257,6 +8377,10 @@ impl<'a> Parser<'a> {
                     let in_cluster = self.parse_optional_in_cluster()?;
                     ShowObjectType::Sink { in_cluster }
                 }
+                ObjectType::MetricSink => {
+                    let in_cluster = self.parse_optional_in_cluster()?;
+                    ShowObjectType::MetricSink { in_cluster }
+                }
                 ObjectType::Type => ShowObjectType::Type,
                 ObjectType::Role => ShowObjectType::Role,
                 ObjectType::ClusterReplica => ShowObjectType::ClusterReplica,
@@ -8349,6 +8473,13 @@ impl<'a> Parser<'a> {
                 sink_name: self.parse_raw_name()?,
                 redacted,
             }))
+        } else if self.parse_keywords(&[CREATE, METRIC, SINK]) {
+            Ok(ShowStatement::ShowCreateMetricSink(
+                ShowCreateMetricSinkStatement {
+                    metric_sink_name: self.parse_raw_name()?,
+                    redacted,
+                },
+            ))
         } else if self.parse_keywords(&[CREATE, INDEX]) {
             Ok(ShowStatement::ShowCreateIndex(ShowCreateIndexStatement {
                 index_name: self.parse_raw_name()?,
@@ -9391,6 +9522,7 @@ impl<'a> Parser<'a> {
             match self.parse_one_of_keywords(&[TEXT, JSON, DOT]) {
                 Some(TEXT) => Some(ExplainFormat::Text),
                 Some(JSON) => Some(ExplainFormat::Json),
+                Some(DOT) => Some(ExplainFormat::Dot),
                 None => return Err(ParserError::new(self.index, "expected a format")),
                 _ => unreachable!(),
             }
@@ -9451,7 +9583,7 @@ impl<'a> Parser<'a> {
             let err = parser_err!(
                 self,
                 self.peek_prev_pos(),
-                format!("WITH HOLD is unsupported for cursors")
+                "WITH HOLD is unsupported for cursors"
             )
             .map_parser_err(StatementKind::Declare);
             self.expect_keyword(HOLD)
@@ -9866,6 +9998,7 @@ impl<'a> Parser<'a> {
                 )
             }
             ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::ClusterReplica
             | ObjectType::Role
@@ -9897,6 +10030,7 @@ impl<'a> Parser<'a> {
                 MATERIALIZED,
                 SOURCE,
                 SINK,
+                METRIC,
                 INDEX,
                 TYPE,
                 ROLE,
@@ -9920,6 +10054,13 @@ impl<'a> Parser<'a> {
                 }
                 SOURCE => ObjectType::Source,
                 SINK => ObjectType::Sink,
+                METRIC => {
+                    if let Err(e) = self.expect_keyword(SINK) {
+                        self.prev_token();
+                        return Err(e);
+                    }
+                    ObjectType::MetricSink
+                }
                 INDEX => ObjectType::Index,
                 TYPE => ObjectType::Type,
                 ROLE | USER => ObjectType::Role,
@@ -9956,6 +10097,7 @@ impl<'a> Parser<'a> {
                 MATERIALIZED,
                 SOURCE,
                 SINK,
+                METRIC,
                 INDEX,
                 TYPE,
                 ROLE,
@@ -9980,6 +10122,14 @@ impl<'a> Parser<'a> {
                 }
                 SOURCE => ObjectType::Source,
                 SINK => ObjectType::Sink,
+                METRIC => {
+                    if self.parse_keyword(SINK) {
+                        ObjectType::MetricSink
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
                 INDEX => ObjectType::Index,
                 TYPE => ObjectType::Type,
                 ROLE | USER => ObjectType::Role,
@@ -10070,6 +10220,7 @@ impl<'a> Parser<'a> {
                 MATERIALIZED,
                 SOURCES,
                 SINKS,
+                METRIC,
                 INDEXES,
                 TYPES,
                 ROLES,
@@ -10095,6 +10246,14 @@ impl<'a> Parser<'a> {
                 }
                 SOURCES => ObjectType::Source,
                 SINKS => ObjectType::Sink,
+                METRIC => {
+                    if self.parse_keyword(SINKS) {
+                        ObjectType::MetricSink
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
                 INDEXES => ObjectType::Index,
                 TYPES => ObjectType::Type,
                 ROLES | USERS => ObjectType::Role,
@@ -10140,7 +10299,7 @@ impl<'a> Parser<'a> {
             return parser_err!(
                 self,
                 self.peek_prev_pos(),
-                format!("For object type MATERIALIZED VIEWS, you must specify 'TABLES'")
+                "For object type MATERIALIZED VIEWS, you must specify 'TABLES'"
             );
         }
 
@@ -10183,7 +10342,7 @@ impl<'a> Parser<'a> {
             return parser_err!(
                 self,
                 self.peek_prev_pos(),
-                format!("For object type MATERIALIZED VIEWS, you must specify 'TABLES'")
+                "For object type MATERIALIZED VIEWS, you must specify 'TABLES'"
             );
         }
 

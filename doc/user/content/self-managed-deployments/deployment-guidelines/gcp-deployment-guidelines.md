@@ -78,36 +78,35 @@ significantly degrade performance and is not supported.
 
 ### Swap support
 
-{{< tabs >}}
-{{< tab "New Terraform" >}}
-
-#### New Terraform
-
 The Materialize [Terraform module](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/gcp/examples/simple) supports configuring swap out of the box.
-
-{{< /tab >}}
-{{< tab "Legacy Terraform" >}}
-#### Legacy Terraform
-
-The Legacy Terraform provider, adds preliminary swap support in v0.6.1, via the [`swap_enabled`](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_swap_enabled) variable.
-With this change, the Terraform:
-  - Creates a node group for Materialize.
-  - Configures NVMe instance store volumes as swap using a daemonset.
-  - Enables swap at the Kubelet.
-
-See [Upgrade Notes](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#v061).
-
-{{< note >}}
-If deploying `v25.2`, Materialize clusters will not automatically use swap unless they are configured with a `memory_request` less than their `memory_limit`. In `v26`, this will be handled automatically.
-{{< /note >}}
-{{< /tab >}}
-{{< /tabs >}}
 
 ## CPU affinity
 
 It is strongly recommended to enable the Kubernetes `static` [CPU management policy](https://kubernetes.io/docs/tasks/administer-cluster/cpu-management-policies/#static-policy).
 This ensures that each worker thread of Materialize is given exclusively access to a vCPU. Our benchmarks have shown this
 to substantially improve the performance of compute-bound workloads.
+
+## Recommended metadata database sizing
+
+{{< include-md file="content/headless/self-managed-deployments/metadata-database-sizing.md" >}}
+
+### Cloud SQL machine types
+
+For the Cloud SQL for PostgreSQL instance that backs the metadata database, we
+recommend:
+
+- The **Enterprise Plus** edition with a **performance-optimized (N-series)**
+  machine type, which provides the 1:8 vCPU-to-memory ratio recommended for the
+  metadata database. Avoid shared-core machine types (`db-f1-micro`,
+  `db-g1-small`) in production.
+- A **regional (highly available)** configuration for production.
+- **SSD** storage. IOPS and throughput cannot be configured independently: they
+  scale with the provisioned size at 30 IOPS and 0.48 MB/s per GB.
+
+| Deployment size | `tier` | vCPU / memory | Storage | Provisioned IOPS | Continuously-active objects (~60% CPU) |
+|---|---|---|---|---|---|
+| Entry / small production | `db-perf-optimized-N-4` | 4 / 32 GB | 200 GB | 6,000 (set by size) | ~4,500 |
+| Recommended default | `db-perf-optimized-N-16` | 16 / 128 GB | 500 GB | 15,000 (set by size) | ~18,000 |
 
 ## TLS
 
@@ -116,9 +115,15 @@ Certificate Authority (CA) rather than self-signed certificates.
 
 ## Upgrading guideline
 
-{{< include-md file="shared-content/self-managed/general-rules-for-upgrades.md"
->}}
+{{% include-headless "/headless/self-managed-deployments/general-rules-for-upgrades" %}}
 
 ## Node pool resizing
 
 {{% include-headless "/headless/self-managed-deployments/resize-node-pool" %}}
+
+## Node pool upgrades
+
+GKE upgrades node pools automatically, and this cannot be disabled. Configure
+the operator's node upgrade rollout trigger so Materialize moves its pods to
+the replacement nodes gracefully instead of being evicted. See [GKE node pool
+upgrades](/self-managed-deployments/deployment-guidelines/gke-node-pool-upgrades/).

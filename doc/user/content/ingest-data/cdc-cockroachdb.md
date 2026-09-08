@@ -4,9 +4,11 @@ description: "How to propagate Change Data Capture (CDC) data from a CockroachDB
 menu:
   main:
     parent: "crdb"
-    name: "Using Kafka and Changefeeds"
+    name: "Use Kafka and changefeeds"
     identifier: "crdb-kafka-changefeeds"
     weight: 5
+aliases:
+  - /self-managed/v25.2/ingest-data/cdc-cockroachdb/
 ---
 
 {{< tip >}}
@@ -98,7 +100,7 @@ authentication and networking configurations, so refer to the
 [`CREATE CONNECTION`](/sql/create-connection/#kafka) documentation for further
 guidance.
 
-1. In the [SQL Shell](/console/), or your preferred SQL
+1. In the [SQL Shell](/developer-tools/console/), or your preferred SQL
    client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/)
    command to securely store the credentials to connect to your Kafka broker
    and, optionally, schema registry:
@@ -136,17 +138,14 @@ guidance.
 ### 3. Start ingesting data
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/kafka/) command to connect Materialize
-   to your Kafka broker and start ingesting data from the target topic:
+   to your Kafka broker and start ingesting data from the target topic.
+   CockroachDB's default envelope structure for changefeed messages is
+   compatible with the Debezium format, so you can use `ENVELOPE DEBEZIUM` to
+   interpret the data:
 
-   ```mzsql
-   CREATE SOURCE kafka_repl
-     IN CLUSTER ingest_kafka
-     FROM KAFKA CONNECTION kafka_connection (TOPIC 'my_table')
-     -- CockroachDB's default envelope structure for changefeed messages is
-     -- compatible with the Debezium format, so you can use ENVELOPE DEBEZIUM
-     -- to interpret the data.
-     ENVELOPE DEBEZIUM;
-   ```
+   {{< include-headless-with file="/headless/kafka-create-source-syntax"
+   source="kafka_repl" connection="kafka_connection" topic="my_table"
+   table="my_table" format="FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection ENVELOPE DEBEZIUM" >}}
 
     By default, the source will be created in the active cluster; to use a
     different cluster, use the `IN CLUSTER` clause.
@@ -179,5 +178,5 @@ new data arrives, and serving results efficiently.
   or [`SUBSCRIBE`](/sql/subscribe/) or to an external message broker with
   [`CREATE SINK`](/sql/create-sink/).
 
-- Check out the [tools and integrations](/integrations/) supported by
+- Check out the [tools and integrations](/developer-tools/integrations/) supported by
   Materialize.

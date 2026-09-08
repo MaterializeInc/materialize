@@ -30,12 +30,13 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use mz_controller_types::ReplicaId;
-use mz_repr::Timestamp;
+use mz_repr::{Timestamp, TimestampManipulation};
 
 use crate::ctx::{
-    AvailabilityZones, BurstAudit, BurstFinishCause, BurstRecord, BurstWrite, ClusterState,
-    OnTimeout, ReconfigurationAudit, ReconfigurationRecord, ReconfigurationStatus,
-    ReconfigurationWrite, ReplicaShape, StateWrite,
+    AvailabilityZones, BurstAudit, BurstFinishCause, BurstRecord, BurstWrite, ClusterSchedule,
+    ClusterState, CreateReason, OnTimeout, ReconfigurationAudit, ReconfigurationRecord,
+    ReconfigurationStatus, ReconfigurationWrite, RefreshWindowDecision, RefreshWindowInputs,
+    ReplicaShape, StateWrite,
 };
 
 /// A replica slot a strategy desires this tick. The reconcile kernel unions
@@ -44,6 +45,10 @@ use crate::ctx::{
 #[derive(Clone, Debug)]
 pub struct DesiredReplica {
     pub shape: ReplicaShape,
+    /// Why the strategy desires the slot. Carried through the kernel onto the
+    /// create decision a slot may produce (per shape, the highest-precedence
+    /// reason among the contributing slots wins).
+    pub reason: CreateReason,
 }
 
 /// One cluster-autoscaling strategy: a pair of pure functions the controller
@@ -52,10 +57,6 @@ pub struct DesiredReplica {
 /// `Send + Sync` so the controller (which holds a set of boxed strategies) can
 /// run on its own task.
 pub trait Strategy: Send + Sync {
-    /// A stable identifier used in audit attribution (which strategies desired a
-    /// create; drops carry no attribution).
-    fn name(&self) -> &'static str;
-
     /// The live signals this strategy needs to evaluate `state` this tick,
     /// declared as a pure function of the durable state and the tick's config
     /// signals. The kernel unions the requests across strategies, fetches them
@@ -105,6 +106,9 @@ pub struct SignalRequest {
     /// Check whether the cluster has at least one hydratable object bound to
     /// it. See `ClusterControllerCtx::has_hydratable_objects` for what counts.
     pub hydratable_objects: bool,
+    /// Pull the refresh-window inputs (bound REFRESH MV frontiers, schedules,
+    /// the current read timestamp).
+    pub refresh_window: bool,
 }
 
 impl SignalRequest {
@@ -115,10 +119,12 @@ impl SignalRequest {
         let SignalRequest {
             hydration,
             hydratable_objects,
+            refresh_window,
         } = other;
         SignalRequest {
             hydration: self.hydration || hydration,
             hydratable_objects: self.hydratable_objects || hydratable_objects,
+            refresh_window: self.refresh_window || refresh_window,
         }
     }
 }
@@ -149,37 +155,77 @@ pub struct LiveSignals {
     /// Whether the cluster has at least one hydratable object. `false` when not
     /// requested.
     pub has_hydratable_objects: bool,
+    /// The refresh-window inputs. `None` when not requested, or when the
+    /// cluster was gone, unmanaged, or no longer scheduled `ON REFRESH` when
+    /// the ctx pulled (see [`ClusterControllerCtx::refresh_window_inputs`]).
+    ///
+    /// [`ClusterControllerCtx::refresh_window_inputs`]:
+    ///     crate::ctx::ClusterControllerCtx::refresh_window_inputs
+    pub refresh_window: Option<RefreshWindowInputs>,
 }
 
 /// The implicit baseline strategy, always present.
 ///
 /// Desires `replication_factor` replicas at the cluster's realized shape
-/// (`cluster.size` plus its AZ pool and logging). It holds the steady-state set
-/// so that the policy strategies can be purely additive. They only ever add to
-/// the baseline. With only the baseline engaged, the desired set equals the
-/// realized set, so a steady-state managed cluster reconciles to no decisions.
+/// (`cluster.size` plus its AZ pool, logging, and arrangement compression). It
+/// holds the steady-state set so that policy strategies normally only add to
+/// it. With only the baseline engaged, the desired set equals the realized set,
+/// so a steady-state managed cluster reconciles to no decisions.
+///
+/// The baseline holds the set only for MANUAL clusters. On a scheduled cluster
+/// the controller (not the user's `replication_factor`) owns the replica set,
+/// so the baseline desires nothing there and the on-refresh strategy is the sole
+/// contributor. (The on-refresh strategy also normalizes a scheduled cluster's
+/// `replication_factor` to `0` via `update_state`, so the two views agree after
+/// the first tick regardless.)
+///
+/// The one case where the baseline steps aside is a forced cut-over, see
+/// `forced_cutover_pending`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BaselineStrategy;
 
-/// The audit-attribution name of the baseline strategy.
-pub const BASELINE_STRATEGY_NAME: &str = "baseline";
+/// Whether a forced cut-over is imminent: an in-progress reconfiguration is
+/// past its deadline under `ON TIMEOUT COMMIT`, so the next cut-over commits
+/// the target whether or not it hydrated.
+///
+/// In that window the baseline yields its realized-shape replicas. Overlapping
+/// the two sets only buys availability while the target hydrates, and a forced
+/// cut-over has given up on hydration. Yielding turns the reshape into one
+/// transaction that retires the realized replicas and creates the target's, so
+/// it has to fit the larger of the two shapes rather than their sum. That is
+/// what lets a resize succeed on a budget that has no room for overlap, and it
+/// is the only way to shrink a cluster that is already near its limit.
+///
+/// If that single transaction still does not fit, it is rejected whole and the
+/// record is left in progress for `ClusterController::shed_decision` to shed,
+/// so an unaffordable target stays observable rather than half-applied.
+fn forced_cutover_pending(state: &ClusterState, now: Timestamp) -> bool {
+    state.reconfiguration.as_ref().is_some_and(|record| {
+        record.is_in_progress()
+            && now >= record.deadline
+            && matches!(record.on_timeout, OnTimeout::Commit)
+    })
+}
 
 impl Strategy for BaselineStrategy {
-    fn name(&self) -> &'static str {
-        BASELINE_STRATEGY_NAME
-    }
-
     fn desired_replicas(
         &self,
         state: &ClusterState,
         _signals: &LiveSignals,
         _config: &ConfigSignals,
-        _now: Timestamp,
+        now: Timestamp,
     ) -> Vec<DesiredReplica> {
+        if !matches!(state.schedule, ClusterSchedule::Manual) {
+            return Vec::new();
+        }
+        if forced_cutover_pending(state, now) {
+            return Vec::new();
+        }
         let shape = state.realized_shape();
         (0..state.replication_factor)
             .map(|_| DesiredReplica {
                 shape: shape.clone(),
+                reason: CreateReason::Baseline,
             })
             .collect()
     }
@@ -194,18 +240,18 @@ impl Strategy for BaselineStrategy {
 /// `update_state` cuts over: the realized config advances to the target, the
 /// record is marked finalized, and the old replicas fall out of the union and
 /// are dropped. Success takes precedence over the deadline. On a timeout,
-/// `Commit` cuts over to the un-hydrated target anyway while `Rollback` (the
-/// default) marks the record timed out without touching the realized config and
-/// stops desiring the target replicas, reverting to the pre-reconfiguration set.
+/// `Commit` cuts over once the complete target set exists without waiting for
+/// hydration, and the baseline stops contributing in that window so the two
+/// sets swap in one transaction rather than overlapping (see
+/// `forced_cutover_pending`). `Rollback` (the default) marks the record timed
+/// out without touching the realized config and stops desiring the target
+/// replicas, reverting to the pre-reconfiguration set.
 ///
 /// Both functions are pure over the observed [`ClusterState`] and the fetched
 /// [`LiveSignals`]. Hydration is requested via [`Strategy::signal_request`]
 /// exactly while an in-progress reconfiguration is present.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GracefulReconfigurationStrategy;
-
-/// The audit-attribution name of the graceful reconfiguration strategy.
-pub const GRACEFUL_RECONFIGURATION_STRATEGY_NAME: &str = "graceful-reconfiguration";
 
 impl GracefulReconfigurationStrategy {
     /// Whether the cut-over precondition holds: at least
@@ -233,13 +279,21 @@ impl GracefulReconfigurationStrategy {
         let target_rf = usize::try_from(record.target.replication_factor).unwrap_or(usize::MAX);
         hydrated_target_replicas >= target_rf
     }
+
+    /// Whether the complete target set exists, without requiring hydration.
+    fn target_materialized(&self, state: &ClusterState, record: &ReconfigurationRecord) -> bool {
+        let target_shape = record.target.shape();
+        let target_replicas = state
+            .replicas
+            .iter()
+            .filter(|r| r.owned_shape().is_some_and(|s| s.matches(&target_shape)))
+            .count();
+        let target_rf = usize::try_from(record.target.replication_factor).unwrap_or(usize::MAX);
+        target_replicas >= target_rf
+    }
 }
 
 impl Strategy for GracefulReconfigurationStrategy {
-    fn name(&self) -> &'static str {
-        GRACEFUL_RECONFIGURATION_STRATEGY_NAME
-    }
-
     fn signal_request(&self, state: &ClusterState, _config: &ConfigSignals) -> SignalRequest {
         SignalRequest {
             hydration: state
@@ -268,25 +322,34 @@ impl Strategy for GracefulReconfigurationStrategy {
         // the record finalized on either of two conditions:
         //   1. rf-many target replicas are present and hydrated (success, which
         //      takes precedence over the deadline regardless of `on_timeout`), or
-        //   2. the deadline has been reached un-hydrated and `on_timeout` is
-        //      `Commit` (cut over to the not-yet-hydrated target anyway).
+        //   2. the deadline has been reached, `on_timeout` is `Commit`, and the
+        //      complete target set exists (cut over without waiting for hydration).
         //
         // NOTE: the deadline is reached at `now >= deadline`, not `now > deadline`.
-        // A `WAIT FOR '0s'` writes `deadline = now` to request an immediate
-        // cut-over. With a strict `>`, a first tick landing at exactly that
-        // timestamp would miss the deadline, so phase 2 would provision the overlap
-        // target replicas and only a later tick would cut over. `>=` fires the
-        // deadline the instant it is reached, so the zero-timeout cut-over happens
-        // on the first tick, before any overlap replica is desired.
+        // An `ON TIMEOUT COMMIT` with a zero timeout writes `deadline = now` to
+        // request an immediate cut-over. With a strict `>`, a first tick landing at
+        // exactly that timestamp would miss the deadline, so phase 2 would provision
+        // the overlap target replicas and only a later tick would cut over. `>=`
+        // fires the deadline the instant it is reached, so the zero-timeout cut-over
+        // happens on the first tick, before any overlap replica is desired.
+        // We require the target set to exist before a forced cut-over so its
+        // concrete create transaction can enforce resource limits. Otherwise a
+        // zero-timeout commit could finalize first, fail to create the new
+        // baseline, and leave no in-progress strategy for the controller to shed.
+        // The baseline yields while we wait (see `forced_cutover_pending`), so
+        // that create arrives in the same transaction that retires the realized
+        // replicas and does not have to fit alongside them.
         let hydrated = self.target_hydrated(state, signals, record);
         let deadline_reached = now >= record.deadline;
         let commit_on_timeout = deadline_reached && matches!(record.on_timeout, OnTimeout::Commit);
-        if hydrated || commit_on_timeout {
+        let target_materialized = self.target_materialized(state, record);
+        if hydrated || (commit_on_timeout && target_materialized) {
             return StateWrite {
                 new_size: Some(record.target.size.clone()),
                 new_replication_factor: Some(record.target.replication_factor),
                 new_availability_zones: Some(record.target.availability_zones.0.clone()),
                 new_logging: Some(record.target.logging.clone()),
+                new_arrangement_compression: Some(record.target.arrangement_compression),
                 reconfiguration: Some(ReconfigurationWrite {
                     record: Some(ReconfigurationRecord {
                         status: ReconfigurationStatus::Finalized,
@@ -361,8 +424,180 @@ impl Strategy for GracefulReconfigurationStrategy {
         (0..record.target.replication_factor)
             .map(|_| DesiredReplica {
                 shape: shape.clone(),
+                reason: CreateReason::GracefulReconfiguration,
             })
             .collect()
+    }
+}
+
+/// The `ON REFRESH` scheduling strategy.
+///
+/// Engaged for clusters with a non-MANUAL [`ClusterSchedule`]. It contributes one
+/// replica at the cluster's realized shape while the cluster is inside a refresh
+/// window, and nothing otherwise. The window decision keys on the bound REFRESH
+/// materialized views' write frontiers, their refresh schedules, the configured
+/// hydration-time estimate, and the current read timestamp, all carried in
+/// [`RefreshWindowInputs`].
+///
+/// The controller (not the user's `replication_factor`) owns a scheduled
+/// cluster's replica set, so [`Strategy::update_state`] normalizes the realized
+/// `replication_factor` to `0`. This is self-healing (no migration needed to
+/// enable the controller) and makes `mz_clusters.replication_factor` read `0` for
+/// a scheduled cluster, with `mz_cluster_replicas` authoritative for what is
+/// actually running.
+///
+/// NB: the decision is re-derived purely from the live signals each tick, with
+/// no cross-tick latch. We pull a complete decision from durable and storage
+/// state on every tick, so the first tick after a restart already decides from
+/// the same inputs as a steady tick.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct OnRefreshStrategy;
+
+impl OnRefreshStrategy {
+    /// The window decision for the cluster: which bound REFRESH MVs either still
+    /// need a refresh (their write frontier has not advanced past the read
+    /// timestamp adjusted by the hydration-time estimate) or are estimated to
+    /// still need Persist compaction after their last refresh. The cluster
+    /// should be On iff either list is non-empty
+    /// ([`RefreshWindowDecision::window_open`]), so an open window always names
+    /// the MVs that explain it.
+    ///
+    /// `hydration_time_estimate` comes from the schedule; the remaining signals
+    /// come from `inputs`. With no bound REFRESH MVs both lists are empty and
+    /// the cluster is Off.
+    fn window_decision(
+        &self,
+        hydration_time_estimate: std::time::Duration,
+        inputs: &RefreshWindowInputs,
+    ) -> RefreshWindowDecision {
+        // 1. Needs refresh: write_frontier < read_ts + hydration_time_estimate.
+        // The cluster is turned on `hydration_time_estimate` ahead of a refresh
+        // so it can rehydrate before the refresh time.
+        let read_ts_adjusted = inputs
+            .read_ts
+            .step_forward_by(&duration_to_ts(hydration_time_estimate));
+        let objects_needing_refresh = inputs
+            .refresh_mvs
+            .iter()
+            .filter(|mv| mv.write_frontier.less_than(&read_ts_adjusted))
+            .map(|mv| mv.id)
+            .collect();
+
+        // 2. Needs compaction: prev_refresh + compaction_estimate > read_ts. We
+        // keep the cluster on for a while after a refresh so Persist can compact.
+        let compaction_estimate = duration_to_ts(inputs.compaction_estimate);
+        let objects_needing_compaction = inputs
+            .refresh_mvs
+            .iter()
+            .filter(|mv| {
+                // `prev_refresh` is None in two cases, both meaning "schedule no
+                // compaction time now": no refresh has happened yet (no frontier to
+                // round down and no past `AT`), or a `REFRESH EVERY` MV with an empty
+                // write frontier (we have no wall-clock handle on its last refresh).
+                let prev_refresh = match mv.write_frontier.as_option() {
+                    Some(frontier) => frontier.round_down_minus_1(&mv.refresh_schedule),
+                    None => mv.refresh_schedule.last_refresh(),
+                };
+                prev_refresh.is_some_and(|prev| {
+                    // An estimate that overflows the timestamp space means
+                    // `prev + estimate` exceeds every possible read ts, so the
+                    // window reads as open.
+                    match prev.try_step_forward_by(&compaction_estimate) {
+                        Some(compacting_until) => compacting_until > inputs.read_ts,
+                        None => true,
+                    }
+                })
+            })
+            .map(|mv| mv.id)
+            .collect();
+
+        RefreshWindowDecision {
+            objects_needing_refresh,
+            objects_needing_compaction,
+            hydration_time_estimate,
+        }
+    }
+}
+
+impl Strategy for OnRefreshStrategy {
+    fn signal_request(&self, state: &ClusterState, _config: &ConfigSignals) -> SignalRequest {
+        SignalRequest {
+            refresh_window: !matches!(state.schedule, ClusterSchedule::Manual),
+            ..Default::default()
+        }
+    }
+
+    fn update_state(
+        &self,
+        state: &ClusterState,
+        _signals: &LiveSignals,
+        _config: &ConfigSignals,
+        _now: Timestamp,
+    ) -> StateWrite {
+        // The controller owns a scheduled cluster's replica set, so hold the
+        // realized `replication_factor` at `0`. A stale non-zero value (e.g.
+        // carried over from a cluster that was just given a schedule) would
+        // otherwise have the implicit baseline desire a replica the on-refresh
+        // strategy does not, a flap.
+        // Only write when it is actually non-zero, to keep steady ticks no-ops.
+        if matches!(state.schedule, ClusterSchedule::Manual) || state.replication_factor == 0 {
+            return StateWrite::default();
+        }
+        // While a reconfiguration record is in progress, the graceful strategy
+        // owns `new_replication_factor` (its cut-over sets it from the record's
+        // target), so skip the normalization to keep the field single-writer
+        // within a tick. The sequencer never writes a record for a scheduled
+        // cluster, so this state is reachable only for a record written before
+        // the cluster acquired its schedule (pre-upgrade catalog state). A
+        // cut-over there can briefly set a non-zero rf on the scheduled
+        // cluster. The next tick sees the record settled and normalizes it.
+        if state
+            .reconfiguration
+            .as_ref()
+            .is_some_and(|record| record.is_in_progress())
+        {
+            return StateWrite::default();
+        }
+        StateWrite {
+            new_replication_factor: Some(0),
+            ..Default::default()
+        }
+    }
+
+    fn desired_replicas(
+        &self,
+        state: &ClusterState,
+        signals: &LiveSignals,
+        _config: &ConfigSignals,
+        _now: Timestamp,
+    ) -> Vec<DesiredReplica> {
+        let ClusterSchedule::Refresh {
+            hydration_time_estimate,
+        } = state.schedule
+        else {
+            return Vec::new();
+        };
+        // The refresh-window signals are pulled for every scheduled cluster.
+        // The ctx returns `None` only when the cluster was gone, unmanaged, or
+        // no longer scheduled at pull time (a concurrent DDL moved it under the
+        // tick), so contributing nothing is the correct answer. The schedule is
+        // part of the compare-and-append witness, so a stale in-flight decision
+        // derived before such a change is rejected at apply anyway.
+        let Some(inputs) = &signals.refresh_window else {
+            return Vec::new();
+        };
+        let decision = self.window_decision(hydration_time_estimate, inputs);
+        if !decision.window_open() {
+            return Vec::new();
+        }
+        // One replica at the realized shape (`cluster.size` plus the cluster's AZ
+        // pool, logging, and arrangement compression). The window decision rides
+        // inside the reason so the create it may produce can carry the audit
+        // detail.
+        vec![DesiredReplica {
+            shape: state.realized_shape(),
+            reason: CreateReason::OnRefresh(decision),
+        }]
     }
 }
 
@@ -397,9 +632,6 @@ fn duration_to_ts(duration: std::time::Duration) -> Timestamp {
 /// [`Strategy::signal_request`] while an `ON HYDRATION` policy is active.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct HydrationBurstStrategy;
-
-/// The audit-attribution name of the hydration-burst strategy.
-pub const HYDRATION_BURST_STRATEGY_NAME: &str = "hydration-burst";
 
 impl HydrationBurstStrategy {
     /// The cluster's active `ON HYDRATION` policy, but only when burst is permitted
@@ -454,10 +686,6 @@ impl HydrationBurstStrategy {
 }
 
 impl Strategy for HydrationBurstStrategy {
-    fn name(&self) -> &'static str {
-        HYDRATION_BURST_STRATEGY_NAME
-    }
-
     fn signal_request(&self, state: &ClusterState, config: &ConfigSignals) -> SignalRequest {
         // Hydration drives both the arm check and the linger lifecycle. Object
         // existence only gates arming, so it is requested only record-less.
@@ -465,6 +693,7 @@ impl Strategy for HydrationBurstStrategy {
         SignalRequest {
             hydration: active,
             hydratable_objects: active && state.burst.is_none(),
+            ..Default::default()
         }
     }
 
@@ -598,7 +827,9 @@ impl Strategy for HydrationBurstStrategy {
                 size: record.burst_size.clone(),
                 availability_zones: AvailabilityZones(state.availability_zones.clone()),
                 logging: state.logging.clone(),
+                arrangement_compression: state.arrangement_compression,
             },
+            reason: CreateReason::HydrationBurst,
         }]
     }
 }

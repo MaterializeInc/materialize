@@ -28,7 +28,6 @@ unset CI_TEST_IDS
 unset CI_TEST_SELECTION
 unset CI_SANITIZER
 unset CI_COVERAGE_ENABLED
-unset CI_WAITING_FOR_BUILD
 
 pids=()
 for pipeline in $(find ci -name "pipeline.template.yml" -not -path "ci/test/pipeline.template.yml" -exec dirname {} \; | cut -d/ -f2); do

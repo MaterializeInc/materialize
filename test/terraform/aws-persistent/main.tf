@@ -78,6 +78,7 @@ module "karpenter" {
   oidc_provider_arn       = module.eks.oidc_provider_arn
   cluster_oidc_issuer_url = module.eks.cluster_oidc_issuer_url
   node_selector           = local.base_node_labels
+  tags                    = var.tags
 
   depends_on = [
     module.eks,

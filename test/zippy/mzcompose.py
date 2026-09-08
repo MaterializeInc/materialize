@@ -13,7 +13,6 @@ validation and other events and runs it sequentially. By keeping track of the
 expected state it can verify results for correctness.
 """
 
-import os
 import random
 import re
 import time
@@ -47,7 +46,7 @@ from materialize.mzcompose.services.ssh_bastion_host import (
     setup_default_ssh_test_connection,
 )
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.zippy.framework import Test
+from materialize.zippy.framework import Test, ci_additional_system_parameter_defaults
 from materialize.zippy.mz_actions import Mz0dtDeploy
 from materialize.zippy.scenarios import *  # noqa: F401 F403
 
@@ -120,12 +119,19 @@ class TransactionIsolation(Enum):
 
 def parse_timedelta(arg: str) -> timedelta:
     p = re.compile(
-        (r"((?P<days>-?\d+)d)?" r"((?P<hours>-?\d+)h)?" r"((?P<minutes>-?\d+)m)?"),
+        (
+            r"((?P<days>-?\d+)d)?"
+            r"((?P<hours>-?\d+)h)?"
+            r"((?P<minutes>-?\d+)m)?"
+            r"((?P<seconds>-?\d+)s)?"
+        ),
         re.IGNORECASE,
     )
 
-    m = p.match(arg)
-    assert m is not None
+    m = p.fullmatch(arg)
+    assert (
+        m is not None
+    ), f"invalid timedelta '{arg}', expected a format like '1d2h3m4s'"
 
     parts = {k: int(v) for k, v in m.groupdict().items() if v}
     td = timedelta(**parts)
@@ -212,15 +218,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     print(f"Using seed {args.seed}")
     random.seed(args.seed)
 
-    additional_system_parameter_defaults = {}
-    system_parameter_default = os.getenv("CI_MZ_SYSTEM_PARAMETER_DEFAULT", "")
-    if system_parameter_default:
-        for val in system_parameter_default.split(";"):
-            x = val.split("=", maxsplit=1)
-            assert (
-                len(x) == 2
-            ), f"CI_MZ_SYSTEM_PARAMETER_DEFAULT '{val}' should be the format <key>=<val>"
-            additional_system_parameter_defaults[x[0]] = x[1]
+    additional_system_parameter_defaults = ci_additional_system_parameter_defaults()
 
     with c.override(
         Cockroach(

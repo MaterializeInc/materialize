@@ -1,6 +1,6 @@
 ---
 source: src/catalog-debug/src/main.rs
-revision: 584bb9030c
+revision: ed7294b842
 ---
 
 # mz-catalog-debug

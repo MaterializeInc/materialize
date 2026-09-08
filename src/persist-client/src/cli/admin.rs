@@ -19,7 +19,7 @@ use anyhow::{anyhow, bail};
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures_util::{StreamExt, TryStreamExt, stream};
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::url::SensitiveUrl;
@@ -666,6 +666,7 @@ pub const CATALOG_FORCE_COMPACTION_FUEL: Config<usize> = Config::new(
     "persist_catalog_force_compaction_fuel",
     1024,
     "fuel to use in catalog dangerous_force_compaction task",
+    ParameterScope::Environment,
 );
 
 /// Exposed for `mz-catalog`.
@@ -673,6 +674,7 @@ pub const CATALOG_FORCE_COMPACTION_WAIT: Config<Duration> = Config::new(
     "persist_catalog_force_compaction_wait",
     Duration::from_secs(60),
     "wait to use in catalog dangerous_force_compaction task",
+    ParameterScope::Environment,
 );
 
 /// Exposed for `mz-catalog`.
@@ -680,6 +682,7 @@ pub const EXPRESSION_CACHE_FORCE_COMPACTION_FUEL: Config<usize> = Config::new(
     "persist_expression_cache_force_compaction_fuel",
     131_072,
     "fuel to use in expression cache dangerous_force_compaction",
+    ParameterScope::Environment,
 );
 
 /// Exposed for `mz-catalog`.
@@ -687,6 +690,7 @@ pub const EXPRESSION_CACHE_FORCE_COMPACTION_WAIT: Config<Duration> = Config::new
     "persist_expression_cache_force_compaction_wait",
     Duration::from_secs(0),
     "wait to use in expression cache dangerous_force_compaction",
+    ParameterScope::Environment,
 );
 
 /// Attempts to compact all batches in a shard into a minimal number.

@@ -113,7 +113,10 @@ SELECT 1 / 0
         "node": {
           "Constant": {
             "rows": {
-              "Err": "DivisionByZero"
+              "Err": [
+                34,
+                0
+              ]
             }
           }
         }
@@ -140,26 +143,30 @@ EXPLAIN PHYSICAL PLAN WITH(no fast path) AS JSON FOR
             "rows": {
               "Ok": [
                 [
-                  {
-                    "data": [
-                      45,
-                      1,
-                      45,
-                      2
-                    ]
-                  },
+                  [
+                    10,
+                    2,
+                    24,
+                    1,
+                    10,
+                    2,
+                    24,
+                    2
+                  ],
                   0,
                   2
                 ],
                 [
-                  {
-                    "data": [
-                      45,
-                      3,
-                      45,
-                      4
-                    ]
-                  },
+                  [
+                    10,
+                    2,
+                    24,
+                    3,
+                    10,
+                    2,
+                    24,
+                    4
+                  ],
                   0,
                   1
                 ]
@@ -343,12 +350,12 @@ SELECT a + b, 1 FROM t
                         {
                           "Literal": [
                             {
-                              "Ok": {
-                                "data": [
-                                  45,
-                                  1
-                                ]
-                              }
+                              "Ok": [
+                                10,
+                                2,
+                                24,
+                                1
+                              ]
                             },
                             {
                               "scalar_type": "Int32",
@@ -454,7 +461,7 @@ SELECT c + d, 1 FROM u
               {
                 "Ok": {
                   "data": [
-                    45,
+                    41,
                     1
                   ]
                 }
@@ -579,12 +586,12 @@ SELECT * FROM ov
                 "limit": {
                   "Literal": [
                     {
-                      "Ok": {
-                        "data": [
-                          50,
-                          5
-                        ]
-                      }
+                      "Ok": [
+                        10,
+                        2,
+                        32,
+                        5
+                      ]
                     },
                     {
                       "scalar_type": "Int64",
@@ -916,12 +923,12 @@ SELECT * FROM ov
                 "limit": {
                   "Literal": [
                     {
-                      "Ok": {
-                        "data": [
-                          50,
-                          5
-                        ]
-                      }
+                      "Ok": [
+                        10,
+                        2,
+                        32,
+                        5
+                      ]
                     },
                     {
                       "scalar_type": "Int64",
@@ -1199,12 +1206,12 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                           "expr2": {
                                             "Literal": [
                                               {
-                                                "Ok": {
-                                                  "data": [
-                                                    45,
-                                                    1
-                                                  ]
-                                                }
+                                                "Ok": [
+                                                  10,
+                                                  2,
+                                                  24,
+                                                  1
+                                                ]
                                               },
                                               {
                                                 "scalar_type": "Int32",
@@ -1285,12 +1292,12 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                           "expr2": {
                                             "Literal": [
                                               {
-                                                "Ok": {
-                                                  "data": [
-                                                    45,
-                                                    1
-                                                  ]
-                                                }
+                                                "Ok": [
+                                                  10,
+                                                  2,
+                                                  24,
+                                                  1
+                                                ]
                                               },
                                               {
                                                 "scalar_type": "Int32",
@@ -1428,12 +1435,12 @@ SELECT x * 5 FROM cte WHERE x = 5
                                                     "rows": {
                                                       "Ok": [
                                                         [
-                                                          {
-                                                            "data": [
-                                                              45,
-                                                              5
-                                                            ]
-                                                          },
+                                                          [
+                                                            10,
+                                                            2,
+                                                            24,
+                                                            5
+                                                          ],
                                                           0,
                                                           1
                                                         ]
@@ -1646,12 +1653,12 @@ SELECT x * 5 FROM cte WHERE x = 5
                     {
                       "Literal": [
                         {
-                          "Ok": {
-                            "data": [
-                              45,
-                              25
-                            ]
-                          }
+                          "Ok": [
+                            10,
+                            2,
+                            24,
+                            25
+                          ]
                         },
                         {
                           "scalar_type": "Int32",
@@ -1712,7 +1719,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                     {
                       "Ok": {
                         "data": [
-                          45,
+                          41,
                           5
                         ]
                       }
@@ -1809,12 +1816,12 @@ SELECT generate_series(a, b) from t
               {
                 "Literal": [
                   {
-                    "Ok": {
-                      "data": [
-                        45,
-                        1
-                      ]
-                    }
+                    "Ok": [
+                      10,
+                      2,
+                      24,
+                      1
+                    ]
                   },
                   {
                     "scalar_type": "Int32",
@@ -2410,9 +2417,7 @@ FROM t
                                         "rows": {
                                           "Ok": [
                                             [
-                                              {
-                                                "data": []
-                                              },
+                                              [],
                                               0,
                                               1
                                             ]
@@ -2437,11 +2442,12 @@ FROM t
                                   {
                                     "Literal": [
                                       {
-                                        "Ok": {
-                                          "data": [
-                                            0
-                                          ]
-                                        }
+                                        "Ok": [
+                                          10,
+                                          2,
+                                          8,
+                                          1
+                                        ]
                                       },
                                       {
                                         "scalar_type": "Int64",
@@ -2452,11 +2458,12 @@ FROM t
                                   {
                                     "Literal": [
                                       {
-                                        "Ok": {
-                                          "data": [
-                                            49
-                                          ]
-                                        }
+                                        "Ok": [
+                                          10,
+                                          2,
+                                          32,
+                                          0
+                                        ]
                                       },
                                       {
                                         "scalar_type": "Int64",
@@ -2872,9 +2879,7 @@ MATERIALIZED VIEW hierarchical_global_mv
                                         "rows": {
                                           "Ok": [
                                             [
-                                              {
-                                                "data": []
-                                              },
+                                              [],
                                               0,
                                               1
                                             ]
@@ -2899,11 +2904,12 @@ MATERIALIZED VIEW hierarchical_global_mv
                                   {
                                     "Literal": [
                                       {
-                                        "Ok": {
-                                          "data": [
-                                            0
-                                          ]
-                                        }
+                                        "Ok": [
+                                          10,
+                                          2,
+                                          8,
+                                          1
+                                        ]
                                       },
                                       {
                                         "scalar_type": "Int32",
@@ -2914,11 +2920,12 @@ MATERIALIZED VIEW hierarchical_global_mv
                                   {
                                     "Literal": [
                                       {
-                                        "Ok": {
-                                          "data": [
-                                            0
-                                          ]
-                                        }
+                                        "Ok": [
+                                          10,
+                                          2,
+                                          8,
+                                          1
+                                        ]
                                       },
                                       {
                                         "scalar_type": "Int32",
@@ -3214,9 +3221,7 @@ SELECT * FROM hierarchical_global
                                         "rows": {
                                           "Ok": [
                                             [
-                                              {
-                                                "data": []
-                                              },
+                                              [],
                                               0,
                                               1
                                             ]
@@ -3241,11 +3246,12 @@ SELECT * FROM hierarchical_global
                                   {
                                     "Literal": [
                                       {
-                                        "Ok": {
-                                          "data": [
-                                            0
-                                          ]
-                                        }
+                                        "Ok": [
+                                          10,
+                                          2,
+                                          8,
+                                          1
+                                        ]
                                       },
                                       {
                                         "scalar_type": "Int32",
@@ -3256,11 +3262,12 @@ SELECT * FROM hierarchical_global
                                   {
                                     "Literal": [
                                       {
-                                        "Ok": {
-                                          "data": [
-                                            0
-                                          ]
-                                        }
+                                        "Ok": [
+                                          10,
+                                          2,
+                                          8,
+                                          1
+                                        ]
                                       },
                                       {
                                         "scalar_type": "Int32",
@@ -3424,13 +3431,13 @@ GROUP BY a
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      49
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    49
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -3443,13 +3450,13 @@ GROUP BY a
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -3523,13 +3530,13 @@ GROUP BY a
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      49
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    49
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -3542,13 +3549,13 @@ GROUP BY a
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -3686,13 +3693,13 @@ GROUP BY a
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      50
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    50
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -3705,13 +3712,13 @@ GROUP BY a
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -3785,13 +3792,13 @@ GROUP BY a
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      50
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    50
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -3804,13 +3811,13 @@ GROUP BY a
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -4071,13 +4078,13 @@ FROM t
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  49
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                49
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -4090,13 +4097,13 @@ FROM t
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -4170,13 +4177,13 @@ FROM t
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  49
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                49
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -4189,13 +4196,13 @@ FROM t
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -4303,13 +4310,13 @@ FROM t
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  50
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                50
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -4322,13 +4329,13 @@ FROM t
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -4402,13 +4409,13 @@ FROM t
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  50
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                50
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -4421,13 +4428,13 @@ FROM t
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -4568,9 +4575,7 @@ FROM t
                                               "rows": {
                                                 "Ok": [
                                                   [
-                                                    {
-                                                      "data": []
-                                                    },
+                                                    [],
                                                     0,
                                                     1
                                                   ]
@@ -4595,11 +4600,12 @@ FROM t
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -4610,11 +4616,12 @@ FROM t
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -5023,13 +5030,13 @@ MATERIALIZED VIEW collated_group_by_mv
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      49
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    49
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -5042,13 +5049,13 @@ MATERIALIZED VIEW collated_group_by_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -5122,13 +5129,13 @@ MATERIALIZED VIEW collated_group_by_mv
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      49
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    49
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -5141,13 +5148,13 @@ MATERIALIZED VIEW collated_group_by_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -5285,13 +5292,13 @@ MATERIALIZED VIEW collated_group_by_mv
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      50
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    50
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -5304,13 +5311,13 @@ MATERIALIZED VIEW collated_group_by_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -5384,13 +5391,13 @@ MATERIALIZED VIEW collated_group_by_mv
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      50
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    50
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -5403,13 +5410,13 @@ MATERIALIZED VIEW collated_group_by_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -6448,13 +6455,13 @@ SELECT * FROM collated_group_by
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      49
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    49
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -6467,13 +6474,13 @@ SELECT * FROM collated_group_by
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -6547,13 +6554,13 @@ SELECT * FROM collated_group_by
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      49
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    49
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -6566,13 +6573,13 @@ SELECT * FROM collated_group_by
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -6710,13 +6717,13 @@ SELECT * FROM collated_group_by
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      50
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    50
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -6729,13 +6736,13 @@ SELECT * FROM collated_group_by
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -6809,13 +6816,13 @@ SELECT * FROM collated_group_by
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      50
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    50
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -6828,13 +6835,13 @@ SELECT * FROM collated_group_by
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -7023,481 +7030,6 @@ SELECT * FROM collated_group_by
                                 6
                               ],
                               "input_arity": 7
-                            }
-                          }
-                        }
-                      }
-                    ],
-                    "final_closure": null
-                  },
-                  {
-                    "source_relation": 1,
-                    "source_key": [
-                      {
-                        "Column": [
-                          0,
-                          null
-                        ]
-                      }
-                    ],
-                    "initial_closure": {
-                      "ready_equivalences": [],
-                      "before": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1,
-                            2
-                          ],
-                          "input_arity": 3
-                        }
-                      }
-                    },
-                    "stage_plans": [
-                      {
-                        "lookup_relation": 0,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              0,
-                              null
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          1,
-                          2
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              null
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                0,
-                                3,
-                                4,
-                                0,
-                                1,
-                                2
-                              ],
-                              "input_arity": 5
-                            }
-                          }
-                        }
-                      },
-                      {
-                        "lookup_relation": 2,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              3,
-                              null
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          0,
-                          1,
-                          2,
-                          4,
-                          5
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              null
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                1,
-                                2,
-                                3,
-                                0,
-                                4,
-                                5,
-                                6
-                              ],
-                              "input_arity": 7
-                            }
-                          }
-                        }
-                      },
-                      {
-                        "lookup_relation": 3,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              3,
-                              null
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          0,
-                          1,
-                          2,
-                          4,
-                          5,
-                          6
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              null
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                1,
-                                4,
-                                6,
-                                2,
-                                3,
-                                5,
-                                7
-                              ],
-                              "input_arity": 8
-                            }
-                          }
-                        }
-                      }
-                    ],
-                    "final_closure": null
-                  },
-                  {
-                    "source_relation": 2,
-                    "source_key": [
-                      {
-                        "Column": [
-                          0,
-                          null
-                        ]
-                      }
-                    ],
-                    "initial_closure": {
-                      "ready_equivalences": [],
-                      "before": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1
-                          ],
-                          "input_arity": 2
-                        }
-                      }
-                    },
-                    "stage_plans": [
-                      {
-                        "lookup_relation": 0,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              0,
-                              null
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          1
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              null
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                0,
-                                2,
-                                3,
-                                0,
-                                1
-                              ],
-                              "input_arity": 4
-                            }
-                          }
-                        }
-                      },
-                      {
-                        "lookup_relation": 1,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              3,
-                              null
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          0,
-                          1,
-                          2,
-                          4
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              null
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                1,
-                                2,
-                                3,
-                                5,
-                                6,
-                                0,
-                                4
-                              ],
-                              "input_arity": 7
-                            }
-                          }
-                        }
-                      },
-                      {
-                        "lookup_relation": 3,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              5,
-                              null
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          0,
-                          1,
-                          2,
-                          3,
-                          4,
-                          6
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              null
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                1,
-                                4,
-                                6,
-                                2,
-                                3,
-                                5,
-                                7
-                              ],
-                              "input_arity": 8
-                            }
-                          }
-                        }
-                      }
-                    ],
-                    "final_closure": null
-                  },
-                  {
-                    "source_relation": 3,
-                    "source_key": [
-                      {
-                        "Column": [
-                          0,
-                          null
-                        ]
-                      }
-                    ],
-                    "initial_closure": {
-                      "ready_equivalences": [],
-                      "before": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1
-                          ],
-                          "input_arity": 2
-                        }
-                      }
-                    },
-                    "stage_plans": [
-                      {
-                        "lookup_relation": 0,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              0,
-                              null
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          1
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              null
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                0,
-                                2,
-                                3,
-                                0,
-                                1
-                              ],
-                              "input_arity": 4
-                            }
-                          }
-                        }
-                      },
-                      {
-                        "lookup_relation": 1,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              3,
-                              null
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          0,
-                          1,
-                          2,
-                          4
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              null
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                1,
-                                2,
-                                3,
-                                5,
-                                6,
-                                0,
-                                4
-                              ],
-                              "input_arity": 7
-                            }
-                          }
-                        }
-                      },
-                      {
-                        "lookup_relation": 2,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              5,
-                              null
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          0,
-                          1,
-                          2,
-                          3,
-                          4,
-                          6
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              null
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                1,
-                                4,
-                                7,
-                                2,
-                                3,
-                                5,
-                                6
-                              ],
-                              "input_arity": 8
                             }
                           }
                         }
@@ -7863,13 +7395,13 @@ MATERIALIZED VIEW collated_global_mv
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  49
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                49
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -7882,13 +7414,13 @@ MATERIALIZED VIEW collated_global_mv
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -7962,13 +7494,13 @@ MATERIALIZED VIEW collated_global_mv
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  49
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                49
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -7981,13 +7513,13 @@ MATERIALIZED VIEW collated_global_mv
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -8095,13 +7627,13 @@ MATERIALIZED VIEW collated_global_mv
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  50
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                50
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -8114,13 +7646,13 @@ MATERIALIZED VIEW collated_global_mv
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -8194,13 +7726,13 @@ MATERIALIZED VIEW collated_global_mv
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  50
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                50
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -8213,13 +7745,13 @@ MATERIALIZED VIEW collated_global_mv
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -8762,9 +8294,7 @@ MATERIALIZED VIEW collated_global_mv
                                               "rows": {
                                                 "Ok": [
                                                   [
-                                                    {
-                                                      "data": []
-                                                    },
+                                                    [],
                                                     0,
                                                     1
                                                   ]
@@ -8789,11 +8319,12 @@ MATERIALIZED VIEW collated_global_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  49
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                32,
+                                                0
+                                              ]
                                             },
                                             {
                                               "scalar_type": "Int64",
@@ -8804,11 +8335,12 @@ MATERIALIZED VIEW collated_global_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -8819,11 +8351,12 @@ MATERIALIZED VIEW collated_global_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "Int32",
@@ -8834,11 +8367,12 @@ MATERIALIZED VIEW collated_global_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "Int32",
@@ -8849,11 +8383,12 @@ MATERIALIZED VIEW collated_global_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "Int64",
@@ -8864,11 +8399,12 @@ MATERIALIZED VIEW collated_global_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -9255,13 +8791,13 @@ SELECT * FROM collated_global
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  49
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                49
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -9274,13 +8810,13 @@ SELECT * FROM collated_global
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -9354,13 +8890,13 @@ SELECT * FROM collated_global
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  49
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                49
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -9373,13 +8909,13 @@ SELECT * FROM collated_global
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -9487,13 +9023,13 @@ SELECT * FROM collated_global
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  50
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                50
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -9506,13 +9042,13 @@ SELECT * FROM collated_global
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -9586,13 +9122,13 @@ SELECT * FROM collated_global
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  50
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                50
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -9605,13 +9141,13 @@ SELECT * FROM collated_global
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -9752,310 +9288,6 @@ SELECT * FROM collated_global
                                   }
                                 ],
                                 "final_closure": null
-                              },
-                              {
-                                "source_relation": 1,
-                                "source_key": [],
-                                "initial_closure": {
-                                  "ready_equivalences": [],
-                                  "before": {
-                                    "mfp": {
-                                      "expressions": [],
-                                      "predicates": [],
-                                      "projection": [
-                                        0,
-                                        1
-                                      ],
-                                      "input_arity": 2
-                                    }
-                                  }
-                                },
-                                "stage_plans": [
-                                  {
-                                    "lookup_relation": 0,
-                                    "stream_key": [],
-                                    "stream_thinning": [
-                                      0,
-                                      1
-                                    ],
-                                    "lookup_key": [],
-                                    "closure": {
-                                      "ready_equivalences": [],
-                                      "before": {
-                                        "mfp": {
-                                          "expressions": [],
-                                          "predicates": [],
-                                          "projection": [
-                                            2,
-                                            3,
-                                            0,
-                                            1
-                                          ],
-                                          "input_arity": 4
-                                        }
-                                      }
-                                    }
-                                  },
-                                  {
-                                    "lookup_relation": 2,
-                                    "stream_key": [],
-                                    "stream_thinning": [
-                                      0,
-                                      1,
-                                      2,
-                                      3
-                                    ],
-                                    "lookup_key": [],
-                                    "closure": {
-                                      "ready_equivalences": [],
-                                      "before": {
-                                        "mfp": {
-                                          "expressions": [],
-                                          "predicates": [],
-                                          "projection": [
-                                            0,
-                                            1,
-                                            2,
-                                            3,
-                                            4
-                                          ],
-                                          "input_arity": 5
-                                        }
-                                      }
-                                    }
-                                  },
-                                  {
-                                    "lookup_relation": 3,
-                                    "stream_key": [],
-                                    "stream_thinning": [
-                                      0,
-                                      1,
-                                      2,
-                                      3,
-                                      4
-                                    ],
-                                    "lookup_key": [],
-                                    "closure": {
-                                      "ready_equivalences": [],
-                                      "before": {
-                                        "mfp": {
-                                          "expressions": [],
-                                          "predicates": [],
-                                          "projection": [
-                                            0,
-                                            1,
-                                            2,
-                                            3,
-                                            4,
-                                            5
-                                          ],
-                                          "input_arity": 6
-                                        }
-                                      }
-                                    }
-                                  }
-                                ],
-                                "final_closure": null
-                              },
-                              {
-                                "source_relation": 2,
-                                "source_key": [],
-                                "initial_closure": {
-                                  "ready_equivalences": [],
-                                  "before": {
-                                    "mfp": {
-                                      "expressions": [],
-                                      "predicates": [],
-                                      "projection": [
-                                        0
-                                      ],
-                                      "input_arity": 1
-                                    }
-                                  }
-                                },
-                                "stage_plans": [
-                                  {
-                                    "lookup_relation": 0,
-                                    "stream_key": [],
-                                    "stream_thinning": [
-                                      0
-                                    ],
-                                    "lookup_key": [],
-                                    "closure": {
-                                      "ready_equivalences": [],
-                                      "before": {
-                                        "mfp": {
-                                          "expressions": [],
-                                          "predicates": [],
-                                          "projection": [
-                                            1,
-                                            2,
-                                            0
-                                          ],
-                                          "input_arity": 3
-                                        }
-                                      }
-                                    }
-                                  },
-                                  {
-                                    "lookup_relation": 1,
-                                    "stream_key": [],
-                                    "stream_thinning": [
-                                      0,
-                                      1,
-                                      2
-                                    ],
-                                    "lookup_key": [],
-                                    "closure": {
-                                      "ready_equivalences": [],
-                                      "before": {
-                                        "mfp": {
-                                          "expressions": [],
-                                          "predicates": [],
-                                          "projection": [
-                                            0,
-                                            1,
-                                            3,
-                                            4,
-                                            2
-                                          ],
-                                          "input_arity": 5
-                                        }
-                                      }
-                                    }
-                                  },
-                                  {
-                                    "lookup_relation": 3,
-                                    "stream_key": [],
-                                    "stream_thinning": [
-                                      0,
-                                      1,
-                                      2,
-                                      3,
-                                      4
-                                    ],
-                                    "lookup_key": [],
-                                    "closure": {
-                                      "ready_equivalences": [],
-                                      "before": {
-                                        "mfp": {
-                                          "expressions": [],
-                                          "predicates": [],
-                                          "projection": [
-                                            0,
-                                            1,
-                                            2,
-                                            3,
-                                            4,
-                                            5
-                                          ],
-                                          "input_arity": 6
-                                        }
-                                      }
-                                    }
-                                  }
-                                ],
-                                "final_closure": null
-                              },
-                              {
-                                "source_relation": 3,
-                                "source_key": [],
-                                "initial_closure": {
-                                  "ready_equivalences": [],
-                                  "before": {
-                                    "mfp": {
-                                      "expressions": [],
-                                      "predicates": [],
-                                      "projection": [
-                                        0
-                                      ],
-                                      "input_arity": 1
-                                    }
-                                  }
-                                },
-                                "stage_plans": [
-                                  {
-                                    "lookup_relation": 0,
-                                    "stream_key": [],
-                                    "stream_thinning": [
-                                      0
-                                    ],
-                                    "lookup_key": [],
-                                    "closure": {
-                                      "ready_equivalences": [],
-                                      "before": {
-                                        "mfp": {
-                                          "expressions": [],
-                                          "predicates": [],
-                                          "projection": [
-                                            1,
-                                            2,
-                                            0
-                                          ],
-                                          "input_arity": 3
-                                        }
-                                      }
-                                    }
-                                  },
-                                  {
-                                    "lookup_relation": 1,
-                                    "stream_key": [],
-                                    "stream_thinning": [
-                                      0,
-                                      1,
-                                      2
-                                    ],
-                                    "lookup_key": [],
-                                    "closure": {
-                                      "ready_equivalences": [],
-                                      "before": {
-                                        "mfp": {
-                                          "expressions": [],
-                                          "predicates": [],
-                                          "projection": [
-                                            0,
-                                            1,
-                                            3,
-                                            4,
-                                            2
-                                          ],
-                                          "input_arity": 5
-                                        }
-                                      }
-                                    }
-                                  },
-                                  {
-                                    "lookup_relation": 2,
-                                    "stream_key": [],
-                                    "stream_thinning": [
-                                      0,
-                                      1,
-                                      2,
-                                      3,
-                                      4
-                                    ],
-                                    "lookup_key": [],
-                                    "closure": {
-                                      "ready_equivalences": [],
-                                      "before": {
-                                        "mfp": {
-                                          "expressions": [],
-                                          "predicates": [],
-                                          "projection": [
-                                            0,
-                                            1,
-                                            2,
-                                            3,
-                                            5,
-                                            4
-                                          ],
-                                          "input_arity": 6
-                                        }
-                                      }
-                                    }
-                                  }
-                                ],
-                                "final_closure": null
                               }
                             ]
                           }
@@ -10154,9 +9386,7 @@ SELECT * FROM collated_global
                                               "rows": {
                                                 "Ok": [
                                                   [
-                                                    {
-                                                      "data": []
-                                                    },
+                                                    [],
                                                     0,
                                                     1
                                                   ]
@@ -10181,11 +9411,12 @@ SELECT * FROM collated_global
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  49
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                32,
+                                                0
+                                              ]
                                             },
                                             {
                                               "scalar_type": "Int64",
@@ -10196,11 +9427,12 @@ SELECT * FROM collated_global
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -10211,11 +9443,12 @@ SELECT * FROM collated_global
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "Int32",
@@ -10226,11 +9459,12 @@ SELECT * FROM collated_global
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "Int32",
@@ -10241,11 +9475,12 @@ SELECT * FROM collated_global
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "Int64",
@@ -10256,11 +9491,12 @@ SELECT * FROM collated_global
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -10641,12 +9877,12 @@ WHERE a = c AND d = e AND b + d > 42
                                       "expr2": {
                                         "Literal": [
                                           {
-                                            "Ok": {
-                                              "data": [
-                                                45,
-                                                42
-                                              ]
-                                            }
+                                            "Ok": [
+                                              10,
+                                              2,
+                                              24,
+                                              42
+                                            ]
                                           },
                                           {
                                             "scalar_type": "Int32",
@@ -10699,377 +9935,6 @@ WHERE a = c AND d = e AND b + d > 42
                               "projection": [
                                 1,
                                 2
-                              ],
-                              "input_arity": 3
-                            }
-                          }
-                        }
-                      }
-                    ],
-                    "final_closure": {
-                      "ready_equivalences": [],
-                      "before": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1,
-                            1
-                          ],
-                          "input_arity": 2
-                        }
-                      }
-                    }
-                  },
-                  {
-                    "source_relation": 1,
-                    "source_key": [
-                      {
-                        "Column": [
-                          0,
-                          "c"
-                        ]
-                      }
-                    ],
-                    "initial_closure": {
-                      "ready_equivalences": [],
-                      "before": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1
-                          ],
-                          "input_arity": 2
-                        }
-                      }
-                    },
-                    "stage_plans": [
-                      {
-                        "lookup_relation": 0,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              0,
-                              "c"
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          1
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              "a"
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [
-                                {
-                                  "CallBinary": {
-                                    "func": {
-                                      "AddInt32": null
-                                    },
-                                    "expr1": {
-                                      "Column": [
-                                        2,
-                                        "b"
-                                      ]
-                                    },
-                                    "expr2": {
-                                      "Column": [
-                                        1,
-                                        "d"
-                                      ]
-                                    }
-                                  }
-                                },
-                                {
-                                  "CallBinary": {
-                                    "func": {
-                                      "AddInt32": null
-                                    },
-                                    "expr1": {
-                                      "Column": [
-                                        0,
-                                        "a"
-                                      ]
-                                    },
-                                    "expr2": {
-                                      "Column": [
-                                        1,
-                                        "d"
-                                      ]
-                                    }
-                                  }
-                                }
-                              ],
-                              "predicates": [
-                                [
-                                  4,
-                                  {
-                                    "CallBinary": {
-                                      "func": {
-                                        "Gt": null
-                                      },
-                                      "expr1": {
-                                        "Column": [
-                                          3,
-                                          null
-                                        ]
-                                      },
-                                      "expr2": {
-                                        "Literal": [
-                                          {
-                                            "Ok": {
-                                              "data": [
-                                                45,
-                                                42
-                                              ]
-                                            }
-                                          },
-                                          {
-                                            "scalar_type": "Int32",
-                                            "nullable": false
-                                          }
-                                        ]
-                                      }
-                                    }
-                                  }
-                                ]
-                              ],
-                              "projection": [
-                                1,
-                                3,
-                                4
-                              ],
-                              "input_arity": 3
-                            }
-                          }
-                        }
-                      },
-                      {
-                        "lookup_relation": 2,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              0,
-                              "d"
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          1,
-                          2
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              "e"
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                1,
-                                2
-                              ],
-                              "input_arity": 3
-                            }
-                          }
-                        }
-                      }
-                    ],
-                    "final_closure": {
-                      "ready_equivalences": [],
-                      "before": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1,
-                            1
-                          ],
-                          "input_arity": 2
-                        }
-                      }
-                    }
-                  },
-                  {
-                    "source_relation": 2,
-                    "source_key": [
-                      {
-                        "Column": [
-                          0,
-                          "e"
-                        ]
-                      }
-                    ],
-                    "initial_closure": {
-                      "ready_equivalences": [],
-                      "before": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0
-                          ],
-                          "input_arity": 1
-                        }
-                      }
-                    },
-                    "stage_plans": [
-                      {
-                        "lookup_relation": 1,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              0,
-                              "e"
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              1,
-                              "d"
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                1,
-                                0
-                              ],
-                              "input_arity": 2
-                            }
-                          }
-                        }
-                      },
-                      {
-                        "lookup_relation": 0,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              0,
-                              "c"
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          1
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              "a"
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [
-                                {
-                                  "CallBinary": {
-                                    "func": {
-                                      "AddInt32": null
-                                    },
-                                    "expr1": {
-                                      "Column": [
-                                        2,
-                                        "b"
-                                      ]
-                                    },
-                                    "expr2": {
-                                      "Column": [
-                                        1,
-                                        "d"
-                                      ]
-                                    }
-                                  }
-                                },
-                                {
-                                  "CallBinary": {
-                                    "func": {
-                                      "AddInt32": null
-                                    },
-                                    "expr1": {
-                                      "Column": [
-                                        0,
-                                        "a"
-                                      ]
-                                    },
-                                    "expr2": {
-                                      "Column": [
-                                        1,
-                                        "d"
-                                      ]
-                                    }
-                                  }
-                                }
-                              ],
-                              "predicates": [
-                                [
-                                  4,
-                                  {
-                                    "CallBinary": {
-                                      "func": {
-                                        "Gt": null
-                                      },
-                                      "expr1": {
-                                        "Column": [
-                                          3,
-                                          null
-                                        ]
-                                      },
-                                      "expr2": {
-                                        "Literal": [
-                                          {
-                                            "Ok": {
-                                              "data": [
-                                                45,
-                                                42
-                                              ]
-                                            }
-                                          },
-                                          {
-                                            "scalar_type": "Int32",
-                                            "nullable": false
-                                          }
-                                        ]
-                                      }
-                                    }
-                                  }
-                                ]
-                              ],
-                              "projection": [
-                                3,
-                                4
                               ],
                               "input_arity": 3
                             }
@@ -11735,268 +10600,6 @@ WHERE a = c AND d = e AND f = a
                         }
                       }
                     }
-                  },
-                  {
-                    "source_relation": 1,
-                    "source_key": [
-                      {
-                        "Column": [
-                          0,
-                          "c"
-                        ]
-                      }
-                    ],
-                    "initial_closure": {
-                      "ready_equivalences": [],
-                      "before": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1
-                          ],
-                          "input_arity": 2
-                        }
-                      }
-                    },
-                    "stage_plans": [
-                      {
-                        "lookup_relation": 2,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              1,
-                              "d"
-                            ]
-                          },
-                          {
-                            "Column": [
-                              0,
-                              "c"
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              "e"
-                            ]
-                          },
-                          {
-                            "Column": [
-                              1,
-                              "f"
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                1,
-                                0
-                              ],
-                              "input_arity": 2
-                            }
-                          }
-                        }
-                      },
-                      {
-                        "lookup_relation": 0,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              0,
-                              "c"
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          1
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              "a"
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                0,
-                                2,
-                                1
-                              ],
-                              "input_arity": 3
-                            }
-                          }
-                        }
-                      }
-                    ],
-                    "final_closure": {
-                      "ready_equivalences": [],
-                      "before": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1,
-                            0,
-                            2,
-                            2,
-                            0
-                          ],
-                          "input_arity": 3
-                        }
-                      }
-                    }
-                  },
-                  {
-                    "source_relation": 2,
-                    "source_key": [
-                      {
-                        "Column": [
-                          0,
-                          "e"
-                        ]
-                      },
-                      {
-                        "Column": [
-                          1,
-                          "f"
-                        ]
-                      }
-                    ],
-                    "initial_closure": {
-                      "ready_equivalences": [],
-                      "before": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1
-                          ],
-                          "input_arity": 2
-                        }
-                      }
-                    },
-                    "stage_plans": [
-                      {
-                        "lookup_relation": 1,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              1,
-                              "f"
-                            ]
-                          },
-                          {
-                            "Column": [
-                              0,
-                              "e"
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              "c"
-                            ]
-                          },
-                          {
-                            "Column": [
-                              1,
-                              "d"
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                1,
-                                0
-                              ],
-                              "input_arity": 2
-                            }
-                          }
-                        }
-                      },
-                      {
-                        "lookup_relation": 0,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              1,
-                              "f"
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          0
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              "a"
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                0,
-                                2,
-                                1
-                              ],
-                              "input_arity": 3
-                            }
-                          }
-                        }
-                      }
-                    ],
-                    "final_closure": {
-                      "ready_equivalences": [],
-                      "before": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1,
-                            0,
-                            2,
-                            2,
-                            0
-                          ],
-                          "input_arity": 3
-                        }
-                      }
-                    }
                   }
                 ]
               }
@@ -12256,300 +10859,6 @@ WHERE a = c and a = e
                                 3
                               ],
                               "input_arity": 4
-                            }
-                          }
-                        }
-                      }
-                    ],
-                    "final_closure": {
-                      "ready_equivalences": [],
-                      "before": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1,
-                            0,
-                            2,
-                            0,
-                            3
-                          ],
-                          "input_arity": 4
-                        }
-                      }
-                    }
-                  },
-                  {
-                    "source_relation": 1,
-                    "source_key": [
-                      {
-                        "Column": [
-                          0,
-                          "c"
-                        ]
-                      }
-                    ],
-                    "initial_closure": {
-                      "ready_equivalences": [],
-                      "before": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1
-                          ],
-                          "input_arity": 2
-                        }
-                      }
-                    },
-                    "stage_plans": [
-                      {
-                        "lookup_relation": 0,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              0,
-                              "c"
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          1
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              "a"
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [
-                                [
-                                  1,
-                                  {
-                                    "CallUnary": {
-                                      "func": {
-                                        "Not": null
-                                      },
-                                      "expr": {
-                                        "CallUnary": {
-                                          "func": {
-                                            "IsNull": null
-                                          },
-                                          "expr": {
-                                            "Column": [
-                                              0,
-                                              "a"
-                                            ]
-                                          }
-                                        }
-                                      }
-                                    }
-                                  }
-                                ]
-                              ],
-                              "projection": [
-                                0,
-                                2,
-                                0,
-                                1
-                              ],
-                              "input_arity": 3
-                            }
-                          }
-                        }
-                      },
-                      {
-                        "lookup_relation": 2,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              2,
-                              "c"
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          0,
-                          1,
-                          3
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              "e"
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                1,
-                                2,
-                                3,
-                                4
-                              ],
-                              "input_arity": 5
-                            }
-                          }
-                        }
-                      }
-                    ],
-                    "final_closure": {
-                      "ready_equivalences": [],
-                      "before": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1,
-                            0,
-                            2,
-                            0,
-                            3
-                          ],
-                          "input_arity": 4
-                        }
-                      }
-                    }
-                  },
-                  {
-                    "source_relation": 2,
-                    "source_key": [
-                      {
-                        "Column": [
-                          0,
-                          "e"
-                        ]
-                      }
-                    ],
-                    "initial_closure": {
-                      "ready_equivalences": [],
-                      "before": {
-                        "mfp": {
-                          "expressions": [],
-                          "predicates": [],
-                          "projection": [
-                            0,
-                            1
-                          ],
-                          "input_arity": 2
-                        }
-                      }
-                    },
-                    "stage_plans": [
-                      {
-                        "lookup_relation": 0,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              0,
-                              "e"
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          1
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              "a"
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [
-                                [
-                                  1,
-                                  {
-                                    "CallUnary": {
-                                      "func": {
-                                        "Not": null
-                                      },
-                                      "expr": {
-                                        "CallUnary": {
-                                          "func": {
-                                            "IsNull": null
-                                          },
-                                          "expr": {
-                                            "Column": [
-                                              0,
-                                              "a"
-                                            ]
-                                          }
-                                        }
-                                      }
-                                    }
-                                  }
-                                ]
-                              ],
-                              "projection": [
-                                0,
-                                2,
-                                0,
-                                1
-                              ],
-                              "input_arity": 3
-                            }
-                          }
-                        }
-                      },
-                      {
-                        "lookup_relation": 1,
-                        "stream_key": [
-                          {
-                            "Column": [
-                              2,
-                              "e"
-                            ]
-                          }
-                        ],
-                        "stream_thinning": [
-                          0,
-                          1,
-                          3
-                        ],
-                        "lookup_key": [
-                          {
-                            "Column": [
-                              0,
-                              "c"
-                            ]
-                          }
-                        ],
-                        "closure": {
-                          "ready_equivalences": [],
-                          "before": {
-                            "mfp": {
-                              "expressions": [],
-                              "predicates": [],
-                              "projection": [
-                                1,
-                                2,
-                                4,
-                                3
-                              ],
-                              "input_arity": 5
                             }
                           }
                         }

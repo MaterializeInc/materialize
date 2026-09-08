@@ -53,6 +53,14 @@ pub enum TunnelConfig {
 pub const DEFAULT_TCP_KEEPALIVE: Duration = Duration::from_secs(60);
 pub const DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME: Duration = Duration::ZERO;
 pub const DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT: Duration = Duration::from_secs(3600);
+/// The `wait_timeout` to set on connections used during snapshotting, chosen
+/// to comfortably outlast even very long-running snapshots.
+pub const DEFAULT_SNAPSHOT_WAIT_TIMEOUT: Duration = Duration::from_secs(48 * 60 * 60);
+/// The minimum value MySQL accepts for `wait_timeout`.
+pub const MIN_SNAPSHOT_WAIT_TIMEOUT: Duration = Duration::from_secs(1);
+/// The maximum value MySQL accepts for `wait_timeout` on Windows, which is
+/// lower than the Unix maximum and so the portable upper bound.
+pub const MAX_SNAPSHOT_WAIT_TIMEOUT: Duration = Duration::from_secs(2147483);
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +68,7 @@ pub struct TimeoutConfig {
     // Snapshot-related configs
     pub snapshot_max_execution_time: Option<Duration>,
     pub snapshot_lock_wait_timeout: Option<Duration>,
+    pub snapshot_wait_timeout: Option<Duration>,
 
     // Socket-related configs
     pub tcp_keepalive: Option<Duration>,
@@ -78,6 +87,7 @@ impl Default for TimeoutConfig {
         Self {
             snapshot_max_execution_time: Some(DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME),
             snapshot_lock_wait_timeout: Some(DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT),
+            snapshot_wait_timeout: Some(DEFAULT_SNAPSHOT_WAIT_TIMEOUT),
             tcp_keepalive: Some(DEFAULT_TCP_KEEPALIVE),
             connect_timeout: Some(DEFAULT_CONNECT_TIMEOUT),
         }
@@ -88,6 +98,7 @@ impl TimeoutConfig {
     pub fn build(
         snapshot_max_execution_time: Duration,
         snapshot_lock_wait_timeout: Duration,
+        snapshot_wait_timeout: Duration,
         tcp_keepalive: Duration,
         connect_timeout: Duration,
     ) -> Self {
@@ -104,6 +115,21 @@ impl TimeoutConfig {
             Some(DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT)
         } else {
             Some(snapshot_lock_wait_timeout)
+        };
+
+        // https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_wait_timeout
+        let snapshot_wait_timeout = if snapshot_wait_timeout > MAX_SNAPSHOT_WAIT_TIMEOUT
+            || snapshot_wait_timeout < MIN_SNAPSHOT_WAIT_TIMEOUT
+        {
+            error!(
+                "snapshot_wait_timeout is out of range: {}. Must be within [{}, {}].",
+                snapshot_wait_timeout.as_secs(),
+                MIN_SNAPSHOT_WAIT_TIMEOUT.as_secs(),
+                MAX_SNAPSHOT_WAIT_TIMEOUT.as_secs(),
+            );
+            Some(DEFAULT_SNAPSHOT_WAIT_TIMEOUT)
+        } else {
+            Some(snapshot_wait_timeout)
         };
 
         // https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_max_execution_time
@@ -144,6 +170,7 @@ impl TimeoutConfig {
         Self {
             snapshot_max_execution_time,
             snapshot_lock_wait_timeout,
+            snapshot_wait_timeout,
             tcp_keepalive,
             connect_timeout,
         }

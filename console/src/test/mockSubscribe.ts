@@ -23,6 +23,7 @@ export function mockUpsertSubscribe<T>(
     data: [],
     isError: false,
     snapshotComplete: true,
+    resubscribing: false,
     error: undefined,
     ...overrides,
   };

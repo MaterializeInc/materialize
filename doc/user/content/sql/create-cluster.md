@@ -7,7 +7,7 @@ menu:
     parent: commands
 ---
 
-`CREATE CLUSTER` creates a new [cluster](/concepts/clusters/).
+`CREATE CLUSTER` creates a new [cluster](/fundamentals/concepts/clusters/).
 
 ## Syntax
 
@@ -85,7 +85,7 @@ The resource allocations are proportional to the number in the size name. For
 example, a cluster of size `600cc` has 2x as much CPU, memory, and disk as a
 cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster of
 size `400cc`. To determine the specific resource allocations for a size,
-query the [`mz_cluster_replica_sizes`](/reference/system-catalog/mz_catalog/#mz_cluster_replica_sizes) table.
+query the [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes) table.
 
 {{< warning >}}
 The values in the `mz_cluster_replica_sizes` table may change at any
@@ -104,7 +104,7 @@ most workloads. We recommend using cc sizes unless your workload specifically
 requires the additional disk capacity that M.1 sizes provide.
 {{< /note >}}
 
-{{< include-md file="shared-content/cluster-size-disclaimer.md" >}}
+{{% include-headless "/headless/cluster-size-disclaimer" %}}
 
 {{< yaml-table data="m1_cluster_sizing" >}}
 
@@ -160,14 +160,29 @@ See also:
 #### Cluster resizing
 
 You can change the size of a cluster to respond to changes in your workload
-using [`ALTER CLUSTER`](/sql/alter-cluster). Depending on the type of objects
-the cluster is hosting, this operation **might incur downtime**.
+using [`ALTER CLUSTER`](/sql/alter-cluster).
+
+As of **v26.35**, resizing is graceful and incurs **no downtime**: Materialize
+provisions new replicas at the target size, waits for them to hydrate, then
+retires the old ones. See [Monitoring a
+resize](/sql/alter-cluster/#monitoring-a-resize).
+
+In versions before v26.35, resizing could incur downtime, and zero-downtime
+resizing required the `WAIT UNTIL READY` option.
 
 See the reference documentation for [`ALTER
-CLUSTER`](/sql/alter-cluster#zero-downtime-cluster-resizing) for more details
+CLUSTER`](/sql/alter-cluster/#resizing) for more details
 on cluster resizing.
 
+### Autoscaling
 
+{{% include-headless "/headless/cluster-hydration-burst" %}}
+
+### Dictionary compression
+
+{{% include-headless "/headless/dictionary-compression/overview" %}}
+
+{{% include-headless "/headless/dictionary-compression/tradeoff-summary" %}}
 
 ### Replication factor
 
@@ -293,10 +308,11 @@ The privileges required to execute this statement are:
 
 - [`ALTER CLUSTER`]
 - [`DROP CLUSTER`]
+- [Dictionary compression](/transform-data/dictionary-compression/)
 
 [AWS availability zone IDs]: https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html
 [`ALTER CLUSTER`]: /sql/alter-cluster/
 [`DROP CLUSTER`]: /sql/drop-cluster/
 [`SELECT`]: /sql/select
 [`SUBSCRIBE`]: /sql/subscribe
-[`mz_cluster_replica_sizes`]: /reference/system-catalog/mz_catalog#mz_cluster_replica_sizes
+[`mz_cluster_replica_sizes`]: /sql/system-catalog/mz_catalog#mz_cluster_replica_sizes

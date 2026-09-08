@@ -15,7 +15,6 @@ async-trait.workspace = true
 base64.workspace = true
 byteorder.workspace = true
 bytes.workspace = true
-bytesize.workspace = true
 csv-core.workspace = true
 enum-kinds.workspace = true
 futures.workspace = true
@@ -36,7 +35,6 @@ mz-sql = { path = "../sql" }
 openssl.workspace = true
 postgres.workspace = true
 tokio.workspace = true
-tokio-stream.workspace = true
 tokio-openssl.workspace = true
 tokio-util = { workspace = true, features = ["codec"] }
 tokio-metrics.workspace = true

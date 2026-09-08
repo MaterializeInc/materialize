@@ -18,7 +18,6 @@
 
 use std::fmt;
 
-use mz_lowertest::MzReflect;
 use mz_repr::{ReprColumnType, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
@@ -31,8 +30,7 @@ use serde::{Deserialize, Serialize};
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub enum UnmaterializableFunc {
     CurrentDatabase,

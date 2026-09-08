@@ -216,7 +216,7 @@ $ duckdb-query name=iceberg
 SELECT id, dur FROM iceberg_scan('s3://test-bucket/default_namespace/interval_table') ORDER BY id
 1 1 day
 2 02:30:00
-3 1 year 3 months
+3 1 year 3 mons
 4 00:00:00
 
 # Test updating interval values
@@ -228,7 +228,7 @@ $ duckdb-query name=iceberg
 SELECT id, dur FROM iceberg_scan('s3://test-bucket/default_namespace/interval_table') ORDER BY id
 1 5 days 12:00:00
 2 02:30:00
-3 1 year 3 months
+3 1 year 3 mons
 4 00:00:00
 
 # Test range types (int4range)

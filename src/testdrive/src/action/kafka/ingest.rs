@@ -331,6 +331,10 @@ pub async fn run_ingest(
     let omit_value = cmd.args.opt_bool("omit-value")?.unwrap_or(false);
     let schema_id_var = cmd.args.opt_parse("set-schema-id-var")?;
     let key_schema_id_var = cmd.args.opt_parse("set-key-schema-id-var")?;
+    // `confluent-wire-format` applies to both the value and the key format.
+    // `ArgMap` reads are destructive, so read it once up front: reading it in
+    // both format matches would leave the key side always seeing `None`.
+    let confluent_wire_format_arg = cmd.args.opt_bool("confluent-wire-format")?;
     let format = match cmd.args.string("format")?.as_str() {
         "avro" => {
             let glue_schema_version_id = cmd
@@ -338,7 +342,7 @@ pub async fn run_ingest(
                 .opt_string("glue-schema-version-id")
                 .map(|s| Uuid::parse_str(&s).context("parsing glue-schema-version-id as UUID"))
                 .transpose()?;
-            let confluent_wire_format_explicit = cmd.args.opt_bool("confluent-wire-format")?;
+            let confluent_wire_format_explicit = confluent_wire_format_arg;
             if glue_schema_version_id.is_some() && confluent_wire_format_explicit == Some(true) {
                 bail!("confluent-wire-format=true is incompatible with glue-schema-version-id");
             }
@@ -364,7 +368,7 @@ pub async fn run_ingest(
                 message,
                 // This was introduced after the avro format's confluent-wire-format, so it defaults to
                 // false
-                confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(false),
+                confluent_wire_format: confluent_wire_format_arg.unwrap_or(false),
                 schema_id_subject: cmd.args.opt_string("schema-id-subject"),
                 schema_message_id: cmd.args.opt_parse::<u8>("schema-message-id")?.unwrap_or(0),
             }
@@ -380,7 +384,7 @@ pub async fn run_ingest(
                 .opt_string("key-glue-schema-version-id")
                 .map(|s| Uuid::parse_str(&s).context("parsing key-glue-schema-version-id as UUID"))
                 .transpose()?;
-            let confluent_wire_format_explicit = cmd.args.opt_bool("confluent-wire-format")?;
+            let confluent_wire_format_explicit = confluent_wire_format_arg;
             if key_glue_schema_version_id.is_some() && confluent_wire_format_explicit == Some(true)
             {
                 bail!("confluent-wire-format=true is incompatible with key-glue-schema-version-id");
@@ -407,7 +411,7 @@ pub async fn run_ingest(
             Some(Format::Protobuf {
                 descriptor_file,
                 message,
-                confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(false),
+                confluent_wire_format: confluent_wire_format_arg.unwrap_or(false),
                 schema_id_subject: cmd.args.opt_string("key-schema-id-subject"),
                 schema_message_id: cmd
                     .args

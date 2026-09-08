@@ -621,6 +621,7 @@ Snapshot {
                                 },
                             ),
                         },
+                        arrangement_compression: false,
                         optimizer_feature_overrides: [],
                         schedule: Manual,
                         auto_scaling_strategy: None,
@@ -694,6 +695,7 @@ Snapshot {
                         pending: false,
                     },
                 ),
+                arrangement_compression: false,
             },
             owner_id: System(
                 1,

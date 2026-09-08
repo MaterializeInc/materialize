@@ -11,7 +11,6 @@ use std::fmt;
 
 use chrono::{NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike};
 use mz_expr_derive::sqlfunc;
-use mz_lowertest::MzReflect;
 use mz_pgtz::timezone::Timezone;
 use mz_repr::adt::datetime::{DateTimeField, DateTimeUnits};
 use mz_repr::adt::interval::Interval;
@@ -96,8 +95,7 @@ where
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ExtractTime(pub DateTimeUnits);
 
@@ -129,8 +127,7 @@ impl fmt::Display for ExtractTime {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct DatePartTime(pub DateTimeUnits);
 
@@ -172,8 +169,7 @@ pub fn timezone_time(tz: Timezone, t: NaiveTime, wall_time: &NaiveDateTime) -> N
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct TimezoneTime {
     pub tz: Timezone,

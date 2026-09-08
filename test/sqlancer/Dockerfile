@@ -26,7 +26,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
 # ggevay: But in the meantime there have been more changes to our fork, see the `main` branch there.
 RUN git clone https://github.com/MaterializeInc/sqlancer \
     && cd sqlancer \
-    && git checkout 2705f070891104d380666aa070ccfa40f859849c \
+    && git checkout 4e116a5bb6c57ac46c2df5f68dd35c3534fcc3f4 \
     && rm -rf .git \
     && mvn package -DskipTests
 # RUN git clone --depth=1 --single-branch https://github.com/sqlancer/sqlancer \

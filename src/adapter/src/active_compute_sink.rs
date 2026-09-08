@@ -10,8 +10,9 @@
 //! Coordinator bookkeeping for active compute sinks.
 
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex};
 
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::protocol::response::SubscribeBatch;
@@ -50,10 +51,10 @@ impl ActiveComputeSink {
     }
 
     /// Reports the ID of the connection which created the sink.
-    pub fn connection_id(&self) -> &ConnectionId {
+    pub fn connection_id(&self) -> Option<&ConnectionId> {
         match &self {
-            ActiveComputeSink::Subscribe(subscribe) => &subscribe.conn_id,
-            ActiveComputeSink::CopyTo(copy_to) => &copy_to.conn_id,
+            ActiveComputeSink::Subscribe(subscribe) => subscribe.connection_id(),
+            ActiveComputeSink::CopyTo(copy_to) => Some(&copy_to.conn_id),
         }
     }
 
@@ -88,15 +89,84 @@ pub enum ActiveComputeSinkRetireReason {
     /// The compute sink was forcibly terminated because an object it depended on
     /// was dropped.
     DependencyDropped(DroppedDependency),
+    /// The compute sink was retired because its coordinator-side buffer exceeded
+    /// its budget while the client was not reading fast enough. Carries the
+    /// buffered and budget byte counts for the terminal error.
+    BufferExceeded {
+        buffered_bytes: usize,
+        max_buffered_bytes: usize,
+    },
+}
+
+/// Overhead charged to every queued message on top of its payload.
+///
+/// A frontier-only advance carries no rows, so its payload is zero bytes. It
+/// still costs real memory: a node in the unbounded channel and an entry in
+/// `footprints`. Charging payload alone would leave the backlog flat while
+/// those two grow without bound, so the retire check would never trip on a
+/// stalled client that only receives progress messages. The fixed charge makes
+/// the budget bound message *count* as well as payload bytes.
+const SUBSCRIBE_MESSAGE_OVERHEAD_BYTES: usize = 1024;
+
+/// Footprints of the subscribe messages queued to the client but not yet
+/// drained, oldest first. The producer pushes one per message sent, the
+/// client-writer task pops as it drains. FIFO delivery keeps the queue aligned
+/// with the channel.
+///
+/// The message at the front is the one the client is currently draining. It is
+/// always tolerated, however large, so a client working through one big batch is
+/// not retired. Only what is queued behind it counts as backlog.
+#[derive(Debug, Default)]
+pub struct SubscribeBacklogAccounting {
+    /// Per-message footprints, in send order.
+    footprints: VecDeque<usize>,
+    /// Sum of `footprints`.
+    total: usize,
+}
+
+impl SubscribeBacklogAccounting {
+    /// Records a queued message of the given footprint.
+    pub fn push(&mut self, footprint: usize) {
+        self.footprints.push_back(footprint);
+        self.total = self.total.saturating_add(footprint);
+    }
+
+    /// Records the oldest queued message being drained by the client writer.
+    pub fn pop(&mut self) {
+        if let Some(footprint) = self.footprints.pop_front() {
+            self.total = self.total.saturating_sub(footprint);
+        }
+    }
+
+    /// Bytes queued behind the message the client is currently draining. That
+    /// message is tolerated whatever its size, so only this counts against the
+    /// budget.
+    pub fn backlog_size(&self) -> usize {
+        self.total
+            .saturating_sub(self.footprints.front().copied().unwrap_or(0))
+    }
+}
+
+/// Ownership and cleanup scope of an active subscribe.
+#[derive(Debug)]
+pub enum ActiveSubscribeOwner {
+    /// The subscribe belongs to a SQL session.
+    Session {
+        conn_id: ConnectionId,
+        session_uuid: Uuid,
+    },
+    /// The subscribe belongs to a coordinator background task.
+    ///
+    /// Always `internal`, since there is no session to attribute a
+    /// `mz_subscriptions` row to.
+    Background,
 }
 
 /// A description of an active subscribe from coord's perspective
 #[derive(Debug)]
 pub struct ActiveSubscribe {
-    /// The ID of the connection which created the subscribe.
-    pub conn_id: ConnectionId,
-    /// The UUID of the session which created the subscribe.
-    pub session_uuid: Uuid,
+    /// The owner responsible for retiring the subscribe.
+    pub owner: ActiveSubscribeOwner,
     /// The ID of the cluster on which the subscribe is running.
     pub cluster_id: ClusterId,
     /// The IDs of the objects on which the subscribe depends.
@@ -105,6 +175,17 @@ pub struct ActiveSubscribe {
     // The responses have the form `PeekResponseUnary` but should perhaps
     // become `SubscribeResponse`.
     pub channel: mpsc::UnboundedSender<PeekResponseUnary>,
+    /// Footprints of the messages queued in `channel` but not yet drained by the
+    /// client writer. Shared with the receiver side, which pops as it drains.
+    ///
+    /// The producer runs on the non-blockable coordinator loop and cannot block
+    /// on a slow client, so instead of applying backpressure the coordinator
+    /// watches `backlog_size` against `max_buffered_bytes` and retires the
+    /// subscribe once the backlog exceeds it.
+    pub backlog_accounting: Arc<Mutex<SubscribeBacklogAccounting>>,
+    /// Budget for the buffered backlog. A snapshot of `subscribe_max_buffered_bytes`
+    /// taken when the subscribe was created.
+    pub max_buffered_bytes: usize,
     /// Whether progress information should be emitted.
     pub emit_progress: bool,
     /// The logical timestamp at which the subscribe began execution.
@@ -121,6 +202,25 @@ pub struct ActiveSubscribe {
 }
 
 impl ActiveSubscribe {
+    /// The session uuid for this subscribe's `mz_subscriptions` row, or `None`
+    /// if it does not appear there.
+    pub fn introspection_session_uuid(&self) -> Option<Uuid> {
+        match &self.owner {
+            ActiveSubscribeOwner::Session { session_uuid, .. } if !self.internal => {
+                Some(*session_uuid)
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns the owning connection, if this is a session subscribe.
+    pub fn connection_id(&self) -> Option<&ConnectionId> {
+        match &self.owner {
+            ActiveSubscribeOwner::Session { conn_id, .. } => Some(conn_id),
+            ActiveSubscribeOwner::Background => None,
+        }
+    }
+
     /// Initializes the subscription.
     ///
     /// This method must be called exactly once, after constructing an
@@ -154,8 +254,9 @@ impl ActiveSubscribe {
                 }
             }
 
+            let bytes = row_buf.byte_len();
             let row_iter = Box::new(row_buf.into_row_iter());
-            self.send(PeekResponseUnary::Rows(row_iter));
+            self.send(PeekResponseUnary::Rows(row_iter), bytes);
         }
     }
 
@@ -178,7 +279,10 @@ impl ActiveSubscribe {
                 mz_ore::iter::consolidate_update_iter(merged)
             }
             Err(s) => {
-                self.send(PeekResponseUnary::Error(s));
+                self.send(
+                    PeekResponseUnary::Error(AdapterError::Unstructured(anyhow::Error::msg(s))),
+                    0,
+                );
                 return true;
             }
         };
@@ -376,8 +480,9 @@ impl ActiveSubscribe {
         };
 
         let rows = output_builder.build();
+        let bytes = rows.byte_len();
         let rows = Box::new(rows.into_row_iter());
-        self.send(PeekResponseUnary::Rows(rows));
+        self.send(PeekResponseUnary::Rows(rows), bytes);
 
         // Emit progress message if requested. Don't emit progress for the first
         // batch if the upper is exactly `as_of` (we're guaranteed it is not
@@ -402,15 +507,31 @@ impl ActiveSubscribe {
             ActiveComputeSinkRetireReason::DependencyDropped(d) => {
                 PeekResponseUnary::DependencyDropped(d)
             }
+            ActiveComputeSinkRetireReason::BufferExceeded {
+                buffered_bytes,
+                max_buffered_bytes,
+            } => PeekResponseUnary::Error(AdapterError::SubscribeFellBehind {
+                buffered_bytes,
+                max_buffered_bytes,
+            }),
         };
-        self.send(message);
+        self.send(message, 0);
     }
 
     /// Sends a message to the client if the subscribe has not already completed
     /// and if the client has not already gone away.
-    fn send(&self, response: PeekResponseUnary) {
-        // TODO(benesch): the lack of backpressure here can result in
-        // unbounded memory usage.
+    ///
+    /// `bytes` is the message's payload size. Its footprint (payload plus a fixed
+    /// per-message overhead) is recorded in `backlog_accounting` here and
+    /// released by the receiver side when the message is drained. Overflow of
+    /// the budget is detected by the coordinator after `process_response`
+    /// returns, not here, because this method cannot retire the sink.
+    fn send(&self, response: PeekResponseUnary, bytes: usize) {
+        let footprint = bytes.saturating_add(SUBSCRIBE_MESSAGE_OVERHEAD_BYTES);
+        self.backlog_accounting
+            .lock()
+            .expect("subscribe backlog accounting poisoned")
+            .push(footprint);
         let _ = self.channel.send(response);
     }
 }
@@ -456,6 +577,13 @@ impl ActiveCopyTo {
             ActiveComputeSinkRetireReason::DependencyDropped(dep) => {
                 Err(dep.to_concurrent_dependency_drop())
             }
+            ActiveComputeSinkRetireReason::BufferExceeded {
+                buffered_bytes,
+                max_buffered_bytes,
+            } => Err(AdapterError::SubscribeFellBehind {
+                buffered_bytes,
+                max_buffered_bytes,
+            }),
         };
         let _ = self.tx.send(message);
     }
@@ -472,4 +600,50 @@ pub(crate) struct ActiveCopyFrom {
     pub table_id: CatalogItemId,
     /// Context of the SQL session that ran the statement.
     pub ctx: ExecuteContext,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::active_compute_sink::SubscribeBacklogAccounting;
+
+    /// The backlog excludes the message being drained, and zero-payload
+    /// messages (footprint = overhead only) still accumulate against it.
+    #[mz_ore::test]
+    fn test_subscribe_backlog_accounting() {
+        let mut acc = SubscribeBacklogAccounting::default();
+        assert_eq!(acc.backlog_size(), 0);
+
+        // A single large message is fully tolerated: nothing is queued behind it.
+        acc.push(10_000);
+        assert_eq!(acc.backlog_size(), 0);
+
+        // Near-empty messages (only per-message overhead) still build backlog, so
+        // a flood of frontier-only advances cannot grow without bound.
+        acc.push(1_024);
+        acc.push(1_024);
+        assert_eq!(acc.backlog_size(), 2_048);
+
+        // Draining the oldest message advances the tolerated front.
+        acc.pop();
+        assert_eq!(acc.backlog_size(), 1_024);
+
+        acc.pop();
+        acc.pop();
+        assert_eq!(acc.backlog_size(), 0);
+    }
+
+    /// A client that drains each message before the next is sent never
+    /// accumulates backlog, however many messages flow and however large they
+    /// are. This is the property that keeps a well-behaved subscribe from ever
+    /// being retired, so it is asserted after every step rather than at the end.
+    #[mz_ore::test]
+    fn test_subscribe_backlog_keeping_up_client() {
+        let mut acc = SubscribeBacklogAccounting::default();
+        for i in 0..1_000 {
+            acc.push(1_024 + i * 4_096);
+            assert_eq!(acc.backlog_size(), 0, "message {i} built backlog");
+            acc.pop();
+            assert_eq!(acc.backlog_size(), 0, "message {i} left backlog behind");
+        }
+    }
 }

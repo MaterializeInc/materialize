@@ -5,4 +5,4 @@ headless: true
   sources, views, and materialized views (for PostgreSQL compatibility).
   Alternatively, you can omit the object type.
 
-- {{< include-md file="shared-content/grant-privilege-all-tables.md" >}}
+- {{% include-headless "/headless/grant-privilege-all-tables" %}}

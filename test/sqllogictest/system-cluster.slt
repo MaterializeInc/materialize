@@ -626,21 +626,26 @@ ALTER CLUSTER mz_system SET (REPLICATION FACTOR 1)
 ----
 COMPLETE 0
 
-# Replicas in system clusters should system IDs.
-
-simple conn=mz_system,user=mz_system
-ALTER CLUSTER mz_system SET (SIZE = 'scale=1,workers=2')
-----
-COMPLETE 0
+# The declared factor is written synchronously. The replica set itself is the
+# cluster controller's, converged on a later tick, so slt (which does not retry)
+# must not assert on it. `test/testdrive/system-cluster.td` covers convergence.
 
 query I
-SELECT COUNT(*) FROM mz_cluster_replicas WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'mz_system') AND id LIKE 's%';
+SELECT replication_factor FROM mz_clusters WHERE name = 'mz_system'
 ----
 1
 
-query I
-SELECT COUNT(*) FROM mz_cluster_replicas WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'mz_system') AND id LIKE 'u%';
+# Replicas of system clusters carry system ids. Asserted over mz_catalog_server,
+# whose replica this file never touches, so the row is there to check: a count
+# over mz_system alone would pass vacuously while its replica is being
+# reconciled. `test/testdrive/system-cluster.td` covers the id of a replica the
+# controller creates at runtime.
+
+query II
+SELECT COUNT(*), COUNT(*) FILTER (WHERE r.id LIKE 's%') FROM mz_cluster_replicas r
+JOIN mz_clusters c ON c.id = r.cluster_id
+WHERE c.name = 'mz_catalog_server';
 ----
-0
+1  1
 
 reset-server

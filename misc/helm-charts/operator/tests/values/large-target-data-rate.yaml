@@ -1,0 +1,15 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Helm parses values files through YAML to JSON, so numbers arrive as float64
+# and render in exponential form at or above 1e6. A rate this size has to come
+# from a values file to reproduce that, `set:` values stay integers.
+operator:
+  args:
+    statementLoggingTargetDataRate: 1048576

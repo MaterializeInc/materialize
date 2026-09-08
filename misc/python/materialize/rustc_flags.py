@@ -57,7 +57,6 @@ sanitizer = {
     Sanitizer.address: [
         "-Zsanitizer=address",
         "-Cllvm-args=-asan-use-after-scope",
-        "-Cllvm-args=-asan-use-after-return=always",
         # "-Cllvm-args=-asan-stack=false",  # Remove when database-issues#7468 is fixed
         "-Cdebug-assertions=on",
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section

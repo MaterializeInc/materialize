@@ -1763,6 +1763,18 @@ impl HirRelationExpr {
         }
     }
 
+    /// The number of relation nodes in this expression.
+    ///
+    /// Relations reached through scalar subqueries are included. The scalar
+    /// nodes themselves are not, so a large predicate over a small input still
+    /// counts as small. This is a structural size for comparing two
+    /// expressions against each other, not a cost estimate.
+    pub fn relation_node_count(&self) -> usize {
+        let mut count = 0;
+        self.visit_post(&mut |_| count += 1);
+        count
+    }
+
     /// If self is a constant, return the value and the type, otherwise `None`.
     pub fn as_const(&self) -> Option<(&Vec<Row>, &SqlRelationType)> {
         match self {
@@ -1996,8 +2008,12 @@ impl HirRelationExpr {
         F: FnMut(&'a Self, usize) -> Result<(), E>,
     {
         #[allow(deprecated)]
-        self.visit1(depth, |e: &HirRelationExpr, depth: usize| {
-            e.visit_fallible(depth, f)
+        // Grow the stack: this recurses over the relation tree, whose depth is
+        // user-controlled (e.g. a long JOIN chain or a chain of CTEs).
+        stack::maybe_grow(|| {
+            self.visit1(depth, |e: &HirRelationExpr, depth: usize| {
+                e.visit_fallible(depth, f)
+            })
         })?;
         f(self, depth)
     }
@@ -2087,8 +2103,12 @@ impl HirRelationExpr {
         F: FnMut(&mut Self, usize) -> Result<(), E>,
     {
         #[allow(deprecated)]
-        self.visit1_mut(depth, |e: &mut HirRelationExpr, depth: usize| {
-            e.visit_mut_fallible(depth, f)
+        // Grow the stack: this recurses over the relation tree, whose depth is
+        // user-controlled (e.g. a long JOIN chain or a chain of CTEs).
+        stack::maybe_grow(|| {
+            self.visit1_mut(depth, |e: &mut HirRelationExpr, depth: usize| {
+                e.visit_mut_fallible(depth, f)
+            })
         })?;
         f(self, depth)
     }
@@ -4187,6 +4207,18 @@ impl HirScalarExpr {
     ///
     /// Panics if this expression does not have type [`SqlScalarType::Int64`].
     pub fn try_into_literal_int64(self) -> Result<i64, PlanError> {
+        match self.clone().try_into_nullable_literal_int64()? {
+            Some(value) => Ok(value),
+            None => Err(PlanError::ConstantExpressionSimplificationFailed(format!(
+                "Expected an expression that evaluates to a non-null value, got {}",
+                self
+            ))),
+        }
+    }
+
+    /// Like [`try_into_literal_int64`](Self::try_into_literal_int64), but an expression that
+    /// evaluates to null is `Ok(None)` instead of an error.
+    pub fn try_into_nullable_literal_int64(self) -> Result<Option<i64>, PlanError> {
         // TODO: add the `is_constant` check also to all the other into_literal_... (by adding it to
         // `simplify_to_literal`), but those should be just soft_asserts at first that it doesn't
         // actually happen that it's weaker than `reduce`, and then add them for real after 1 week.
@@ -4198,19 +4230,14 @@ impl HirScalarExpr {
                 self
             )));
         }
-        self.clone()
-            .simplify_to_literal_with_result()
-            .and_then(|row| {
-                let datum = row.unpack_first();
-                if datum.is_null() {
-                    Err(PlanError::ConstantExpressionSimplificationFailed(format!(
-                        "Expected an expression that evaluates to a non-null value, got {}",
-                        self
-                    )))
-                } else {
-                    Ok(datum.unwrap_int64())
-                }
-            })
+        self.simplify_to_literal_with_result().map(|row| {
+            let datum = row.unpack_first();
+            if datum.is_null() {
+                None
+            } else {
+                Some(datum.unwrap_int64())
+            }
+        })
     }
 
     pub fn contains_parameters(&self) -> bool {

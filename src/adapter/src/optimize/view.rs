@@ -53,23 +53,19 @@ pub struct Optimizer<S> {
 
 impl Optimizer<ExprPrepNoop> {
     /// Creates an optimizer instance that does not perform any expression
-    /// preparation. Additionally, this instance calls constant folding with a size limit.
+    /// preparation.
     pub fn new(config: OptimizerConfig, metrics: Option<OptimizerMetrics>) -> Self {
-        Self {
-            typecheck_ctx: empty_typechecking_context(),
-            config,
-            metrics,
-            expr_prep_style: ExprPrepNoop,
-            fold_constants_limit: true,
-        }
+        Self::new_with_prep(config, metrics, ExprPrepNoop)
     }
 }
 
 impl<S> Optimizer<S> {
     /// Creates an optimizer instance that takes an [`ExprPrep`] to handle
-    /// unmaterializable functions. Additionally, this instance calls constant
-    /// folding without a size limit.
-    pub fn new_with_prep_no_limit(
+    /// unmaterializable functions.
+    ///
+    /// Constant folding runs with the usual size limit, see
+    /// [`Self::without_fold_constants_limit`].
+    pub fn new_with_prep(
         config: OptimizerConfig,
         metrics: Option<OptimizerMetrics>,
         expr_prep_style: S,
@@ -79,8 +75,15 @@ impl<S> Optimizer<S> {
             config,
             metrics,
             expr_prep_style,
-            fold_constants_limit: false,
+            fold_constants_limit: true,
         }
+    }
+
+    /// Folds constants of any size, instead of giving up above the configured
+    /// limit.
+    pub fn without_fold_constants_limit(mut self) -> Self {
+        self.fold_constants_limit = false;
+        self
     }
 }
 

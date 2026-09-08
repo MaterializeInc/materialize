@@ -9,8 +9,11 @@
 
 """Check our set of Cargo.toml files for issues"""
 
+import os
 import sys
 from pprint import pprint
+
+import toml
 
 from materialize import MZ_ROOT
 from materialize.cargo import Workspace
@@ -85,9 +88,72 @@ def check_workspace_dependencies(workspace: Workspace) -> bool:
     return success
 
 
+def check_fuzz_versions_mirror_root(workspace: Workspace) -> bool:
+    """Checks that the cargo-fuzz crates pin the same dependency versions as the
+    root workspace.
+
+    The fuzz crates live in their own workspace (test/cargo-fuzz) because
+    libFuzzer requires nightly Rust, so they cannot use `workspace = true` to
+    inherit the root `[workspace.dependencies]`. They inline versions instead,
+    which silently drift from the root and make a fuzz target exercise a
+    different dependency than production. Enforce that any inlined version whose
+    crate is also a root workspace dependency matches the root version exactly.
+    Features are intentionally not compared. Fuzz crates deliberately pull a
+    minimal feature set."""
+
+    def version_req(spec: object) -> str | None:
+        # None for path/workspace/git-only specs that pin no registry version.
+        if isinstance(spec, str):
+            return spec
+        if isinstance(spec, dict) and "path" not in spec and not spec.get("workspace"):
+            version = spec.get("version")
+            return version if isinstance(version, str) else None
+        return None
+
+    root_versions = {
+        name: version_req(spec)
+        for name, spec in workspace.workspace_dependencies.items()
+    }
+
+    fuzz_workspace = MZ_ROOT / "test" / "cargo-fuzz"
+    with open(fuzz_workspace / "Cargo.toml") as f:
+        members = toml.load(f)["workspace"]["members"]
+
+    success = True
+    for member in members:
+        with open(fuzz_workspace / member / "Cargo.toml") as f:
+            config = toml.load(f)
+        rel = os.path.normpath(os.path.join("test/cargo-fuzz", member))
+        for section in ("dependencies", "build-dependencies", "dev-dependencies"):
+            for name, spec in config.get(section, {}).items():
+                version = version_req(spec)
+                root_version = root_versions.get(name)
+                if version is None or root_version is None:
+                    continue
+                if version != root_version:
+                    print(
+                        f'{rel}/Cargo.toml: {name} = "{version}" must match the '
+                        f'root workspace version "{root_version}"',
+                        file=sys.stderr,
+                    )
+                    success = False
+    if not success:
+        print(
+            "\nhint: fuzz crates can't use `workspace = true`, so pin the exact "
+            "root version. Update each value above to match the root Cargo.toml.",
+            file=sys.stderr,
+        )
+    return success
+
+
 def main() -> None:
     workspace = Workspace(MZ_ROOT)
-    lints = [check_rust_versions, check_default_members, check_workspace_dependencies]
+    lints = [
+        check_rust_versions,
+        check_default_members,
+        check_workspace_dependencies,
+        check_fuzz_versions_mirror_root,
+    ]
     # Run every lint, then combine. `success and lint(...)` would short-circuit
     # and skip the remaining lints after the first failure, under-reporting.
     success = all([lint(workspace) for lint in lints])

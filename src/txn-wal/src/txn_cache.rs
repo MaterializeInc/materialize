@@ -469,12 +469,12 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
             match e {
                 TxnsEntry::Register(data_id, ts) => {
                     let ts = T::decode(ts);
-                    debug_assert!(ts <= t);
+                    mz_ore::soft_assert_no_log!(ts <= t);
                     self.push_register(data_id, ts, d, t);
                 }
                 TxnsEntry::Append(data_id, ts, batch) => {
                     let ts = T::decode(ts);
-                    debug_assert!(ts <= t);
+                    mz_ore::soft_assert_no_log!(ts <= t);
                     self.push_append(data_id, batch, ts, d)
                 }
             }
@@ -487,7 +487,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
         self.assert_only_data_id(&data_id);
         // Since we keep the original non-advanced timestamp around, retractions
         // necessarily might be for times in the past, so `|| diff < 0`.
-        debug_assert!(ts >= self.progress_exclusive || diff < 0);
+        mz_ore::soft_assert_no_log!(ts >= self.progress_exclusive || diff < 0);
         if let Some(only_data_id) = self.only_data_id.as_ref() {
             if only_data_id != &data_id {
                 return;
@@ -537,7 +537,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
         self.assert_only_data_id(&data_id);
         // Since we keep the original non-advanced timestamp around, retractions
         // necessarily might be for times in the past, so `|| diff < 0`.
-        debug_assert!(ts >= self.progress_exclusive || diff < 0);
+        mz_ore::soft_assert_no_log!(ts >= self.progress_exclusive || diff < 0);
         if let Some(only_data_id) = self.only_data_id.as_ref() {
             if only_data_id != &data_id {
                 return;
@@ -584,10 +584,10 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
                 .unapplied_batches
                 .remove(&idx)
                 .expect("invariant violation: batch index should exist");
-            debug_assert_eq!(data_id, prev.0);
-            debug_assert_eq!(batch, prev.1);
+            mz_ore::soft_assert_eq_no_log!(data_id, prev.0);
+            mz_ore::soft_assert_eq_no_log!(batch, prev.1);
             // Insertion timestamp should be less equal retraction timestamp.
-            debug_assert!(prev.2 <= ts);
+            mz_ore::soft_assert_no_log!(prev.2 <= ts);
         } else {
             unreachable!("only +1/-1 diffs are used");
         }
@@ -866,7 +866,7 @@ where
             |progress_exclusive| progress_exclusive > ts,
         )
         .await;
-        debug_assert!(&self.progress_exclusive > ts);
+        mz_ore::soft_assert_no_log!(&self.progress_exclusive > ts);
         debug_assert_eq!(self.validate(), Ok(()));
         &self.progress_exclusive
     }
@@ -886,7 +886,7 @@ where
             |progress_exclusive| progress_exclusive >= ts,
         )
         .await;
-        debug_assert!(&self.progress_exclusive >= ts);
+        mz_ore::soft_assert_no_log!(&self.progress_exclusive >= ts);
         debug_assert_eq!(self.validate(), Ok(()));
         &self.progress_exclusive
     }

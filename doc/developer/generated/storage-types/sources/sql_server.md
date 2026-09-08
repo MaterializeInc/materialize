@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/sources/sql_server.rs
-revision: 1704d6481e
+revision: 5a4a36c4fd
 ---
 
 # storage-types::sources::sql_server

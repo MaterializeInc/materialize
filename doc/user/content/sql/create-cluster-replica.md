@@ -53,7 +53,7 @@ The resource allocations are proportional to the number in the size name. For
 example, a cluster of size `600cc` has 2x as much CPU, memory, and disk as a
 cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster of
 size `400cc`. To determine the specific resource allocations for a size,
-query the [`mz_cluster_replica_sizes`](/reference/system-catalog/mz_catalog/#mz_cluster_replica_sizes) table.
+query the [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes) table.
 
 {{< warning >}}
 The values in the `mz_cluster_replica_sizes` table may change at any
@@ -72,7 +72,7 @@ most workloads. We recommend using cc sizes unless your workload specifically
 requires the additional disk capacity that M.1 sizes provide.
 {{< /note >}}
 
-{{< include-md file="shared-content/cluster-size-disclaimer.md" >}}
+{{% include-headless "/headless/cluster-size-disclaimer" %}}
 
 {{< yaml-table data="m1_cluster_sizing" >}}
 

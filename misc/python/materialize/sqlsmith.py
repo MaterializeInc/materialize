@@ -64,6 +64,7 @@ known_errors = [
     "step size cannot equal zero",
     "stride must be greater than zero",
     "timestamp out of range",
+    "date out of range",
     "integer out of range",
     "unterminated escape sequence in LIKE",
     "null character not permitted",
@@ -82,7 +83,7 @@ known_errors = [
     "result exceeds max size of",  # Seems expected with huge queries
     "expected expression, but found reserved keyword",  # Should fix, but only happens rarely with subqueries
     "Expected right parenthesis, found left parenthesis",  # Should fix, but only happens rarely with cast+coalesce
-    "invalid selection: operation may only (transitively) refer to non-source, non-system tables",  # Seems expected when using catalog tables
+    "invalid selection: every relation leaf must be a writable user table",  # Expected when using catalog tables
     "Unsupported temporal predicate",  # Expected, see https://github.com/MaterializeInc/database-issues/issues/5288
     "Unsupported temporal operation: NotEq",
     "Unsupported binary temporal operation: NotEq",
@@ -124,7 +125,7 @@ known_errors = [
     "window functions are not allowed in AND argument",  # wrong error message
     "window functions are not allowed in aggregate function",
     "invalid IANA Time Zone Database identifier",
-    "Top-level LIMIT must be a constant expression",
+    "Invalid LIMIT clause",
     "LIMIT must not be negative",
     "materialized view objects cannot depend on log sources",  # explain create materialized view
     "aggregate functions are not allowed in OR argument",
@@ -140,7 +141,7 @@ known_errors = [
     "regexp_extract must specify at least one capture group",
     "array_fill with arrays not yet supported",
     "not yet supported",
-    "Window function performance issue: `reduce_unnest_list_fusion` failed",  # TODO: Remove when database-issues#9644 is fixed
+    "Window function performance issue: `reduce_unnest_list_fusion` failed",  # TODO: Remove when SQL-640 is fixed
     "WITH ORDINALITY or ROWS FROM with ",
     "invalid normalization form",  # Expected with https://github.com/MaterializeInc/materialize/pull/33507
     "invalid catalog JSON",  # `parse_catalog_*` function invoked with an invalid JSON object

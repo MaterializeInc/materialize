@@ -9,6 +9,7 @@ aliases:
 menu:
   main:
     parent: "sm-deployments"
+    name: "Materialize Operator configuration"
     weight: 65
 ---
 

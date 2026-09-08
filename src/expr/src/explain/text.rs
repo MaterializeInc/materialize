@@ -22,7 +22,7 @@ use mz_repr::explain::{
     CompactScalars, ExprHumanizer, HumanizedAnalyses, IndexUsageType, Indices,
     PlanRenderingContext, RenderingContext, ScalarOps,
 };
-use mz_repr::{Datum, Diff, GlobalId, Row, UNKNOWN_COLUMN_NAME};
+use mz_repr::{Datum, Diff, GlobalId, Row, StableRow, UNKNOWN_COLUMN_NAME};
 use mz_sql_parser::ast::Ident;
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
@@ -1415,6 +1415,36 @@ where
 /// the former and handles the error case (including redaction) directly for
 /// the latter.
 impl<'a, M> fmt::Display for HumanizedExpr<'a, Result<Row, EvalError>, M>
+where
+    M: HumanizerMode,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.expr {
+            Ok(row) => self.mode.humanize_datum(row.unpack_first(), f),
+            Err(err) => {
+                if self.mode.redacted() {
+                    write!(f, "error(█)")
+                } else {
+                    write!(f, "error({})", err.to_string().escaped())
+                }
+            }
+        }
+    }
+}
+
+/// Delegates to the [`Row`] rendering of the wrapped row.
+impl HumanizeDisplay for StableRow {
+    fn humanize<'a, M: HumanizerMode>(
+        e: &HumanizedExpr<'a, Self, M>,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
+        e.child::<Row>(&e.expr.0).fmt(f)
+    }
+}
+
+/// Like the impl for `Result<Row, EvalError>`, for the stable-serialization
+/// row wrapper used by LIR literals.
+impl<'a, M> fmt::Display for HumanizedExpr<'a, Result<StableRow, EvalError>, M>
 where
     M: HumanizerMode,
 {

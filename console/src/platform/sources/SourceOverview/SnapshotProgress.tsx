@@ -10,7 +10,11 @@
 import { Box, HStack, Text, useTheme, VStack } from "@chakra-ui/react";
 import React from "react";
 
-import { ConnectorStatusInfo, snapshotting } from "~/platform/connectors/utils";
+import {
+  ConnectorStatusInfo,
+  snapshotEstimateNote,
+  snapshotting,
+} from "~/platform/connectors/utils";
 import { MaterializeTheme } from "~/theme";
 import { pluralize } from "~/util";
 
@@ -35,6 +39,7 @@ const mapSourceTypeToProgressUnit = (type: string, count: number) => {
       return pluralize(count, "record", "records");
   }
 };
+
 export const SnapshotProgress = ({
   snapshotRecordsKnown,
   snapshotRecordsStaged,
@@ -93,6 +98,9 @@ export const SnapshotProgress = ({
             {mapSourceTypeToProgressUnit(source.type, snapshotRecordsKnown)}
           </Text>
         </HStack>
+        <Text textStyle="text-small" color={colors.foreground.secondary}>
+          {snapshotEstimateNote(source.type)}
+        </Text>
       </VStack>
     </VStack>
   );

@@ -1,6 +1,6 @@
 ---
 source: src/row-spine/src/lib.rs
-revision: 12181a5639
+revision: 32dcad4ade
 ---
 
 # mz-row-spine
@@ -9,6 +9,8 @@ Packed-bytes differential dataflow spine layouts for `Row`-valued arrangements. 
 
 ## Public types
 
+* `ArcBatch<B>` — a newtype around `Arc<B>` that carries differential's batch traits (`Batch`, `BatchReader`, etc.) so that `Arc`-backed batches can be used in spines without requiring upstream blanket impls. Batches wrapped in `ArcBatch` are `Send + Sync`, enabling them to be read from threads other than the worker that maintains the trace.
+* `ArcBuilder<Bld>` — builder type pairing with `ArcBatch`-backed spines; wraps an inner builder and seals each completed batch into an `Arc`.
 * `DatumContainer` — packed-bytes container for `Row` keys or values; implements `columnar::Container` and serves as the storage type for `Row`-valued spine layouts. Also implements `PushInto<&RowRef>`, pushing the raw bytes of a `RowRef` directly into the backing byte container.
 * `DatumSeq<'a>` — borrowing view of a packed byte sequence, decoded datum-by-datum as `Datum`s; implements `ExtendDatums` and `PartialEq<&RowRef>` (comparing the underlying byte slices).
 * `OffsetOptimized` — offset list implementation wrapping `differential_dataflow`'s `OffsetList`, used in `OrdValBatch` and `OrdKeyBatch` layouts.
@@ -19,6 +21,10 @@ Packed-bytes differential dataflow spine layouts for `Row`-valued arrangements. 
 * `RowValSpine<V, T, R>` — spine with `Row` keys and arbitrary `V` values.
 * `RowSpine<T, R>` — spine with `Row` keys and `()` values.
 * `ValRowSpine<K, T, R>` — spine with arbitrary `K` keys and `Row` values.
+* `ArcOrdValSpine<K, V, T, R>` — generic `ArcBatch`-backed key/value spine for callers outside `mz_compute` that need an arrangement over non-`Row`-specialized types.
+* `ArcOrdKeySpine<K, T, R>` — generic `ArcBatch`-backed key-only spine.
+
+All production spines use `ArcBatch`-wrapped batches so that batch handles are `Send + Sync` and can be shared across threads.
 
 ## Batcher type aliases
 
@@ -28,11 +34,13 @@ All batchers use `MergeBatcher` from `differential_dataflow` with `ColumnationCh
 
 ## Builder type aliases
 
-All builders use `RcBuilder` wrapping the appropriate `OrdValBuilder` or `OrdKeyBuilder` with a `ColumnationStack` input:
+All builders use `ArcBuilder` wrapping the appropriate `OrdValBuilder` or `OrdKeyBuilder` with a `ColumnationStack` input:
 
 * `RowRowBuilder<T, R>`, `RowValBuilder<V, T, R>`, `RowBuilder<T, R>`, `ValRowBuilder<K, T, R>`
+* `ArcOrdValBuilder<K, V, T, R>` — builder pairing with `ArcOrdValSpine`.
+* `ArcOrdKeyBuilder<K, T, R>` — builder pairing with `ArcOrdKeySpine`.
 
-`RowRowColPagedBuilder<T, R>` is a `RowRowBuilder` variant that consumes `Column` chunks instead of `ColumnationStack` input. It pairs with `Col2ValPagedBatcher` for the spillable arrange path and installs a dictionary codec on both the key and value containers at seal time, gathering statistics from the sealed `Column` chain.
+`RowRowColPagedBuilder<T, R>` is a `RowRowBuilder` variant that consumes `Column` chunks instead of `ColumnationStack` input. It pairs with any batcher whose chains are `Column`s, spillable (`Col2ValPagedBatcher`) or resident (`Col2ValColBatcher`) alike, and installs a dictionary codec on both the key and value containers at seal time, gathering statistics from the sealed `Column` chain.
 `ValRowColPagedBuilder<K, T, R>` is a `ValRowBuilder` variant that consumes `Column` chunks; pairs with `Col2ValPagedBatcher<K, Row, T, R>` for the spillable arrange path where keys are arbitrary `Columnar` values and values are packed `Row` bytes. It installs a dictionary codec on the value container at seal time; keys are not `Row`-shaped and stay uncompressed.
 
 ## Layout structs (internal)

@@ -77,7 +77,12 @@ Use `~/` for imports from src: `import { foo } from "~/api/materialize"`
 ### State Management
 
 - **Jotai** for global state (sparingly used - prefer component state)
-- **React Query** for server state
+- **React Query** for polled/one-shot server state (`useSql` hooks)
+- **Sync engine** for live catalog data: SUBSCRIBE-fed sessions reduce into
+  jotai atoms and TanStack DB collections (`useLiveQuery` consumers, scoped
+  instant-load cache). See `doc/design/20260902_sync_engine.md`. Wiring between
+  the engine's singletons belongs in session objects on the jotai store
+  (`store.sub`), not in React effects.
 - **Kysely** as query builder (NOT as database driver) for type-safe SQL against Materialize system catalog
 
 ### Stacks

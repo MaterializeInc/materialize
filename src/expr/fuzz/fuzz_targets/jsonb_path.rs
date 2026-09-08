@@ -38,7 +38,7 @@ use std::str::FromStr;
 
 use libfuzzer_sys::arbitrary::{self, Unstructured};
 use libfuzzer_sys::fuzz_target;
-use mz_expr::{func, Eval, MirScalarExpr};
+use mz_expr::{Eval, MirScalarExpr, func};
 use mz_repr::adt::array::{ArrayDimension, InvalidArrayError};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{Datum, ReprScalarType, RowArena};
@@ -119,14 +119,15 @@ fn gen_json(u: &mut Unstructured, depth: u32, out: &mut String) -> arbitrary::Re
 }
 
 fn run(mut u: Unstructured) -> arbitrary::Result<()> {
-    let mut json = String::new();
-    gen_json(&mut u, 5, &mut json)?;
-    let Ok(jsonb) = Jsonb::from_str(&json) else {
-        return Ok(());
-    };
-    let value = jsonb.as_ref().into_datum();
-    let arena = RowArena::new();
-
+    // The path is drawn before the document, and the order matters. `gen_json`
+    // scales its appetite with the input it is handed and drains the buffer on
+    // anything up to libFuzzer's default `-max_len=4096`, and `Unstructured` does
+    // not error once exhausted, it returns the low end of every range. Drawing
+    // the path afterwards therefore pins `n` to 0 for the vast majority of
+    // executions, and `jsonb #> '{}'` returns the document unchanged, so the walk
+    // this target exists for would never run. `gen_json` degrades gracefully on
+    // the remainder, it emits `null` when starved.
+    //
     // Path components: object keys (hits), array indices ("0".."3"), and an
     // occasional miss, so the walk descends real structure and also dead-ends.
     let n = u.int_in_range(0usize..=5)?;
@@ -138,6 +139,14 @@ fn run(mut u: Unstructured) -> arbitrary::Result<()> {
             _ => "missing",
         });
     }
+
+    let mut json = String::new();
+    gen_json(&mut u, 5, &mut json)?;
+    let Ok(jsonb) = Jsonb::from_str(&json) else {
+        return Ok(());
+    };
+    let value = jsonb.as_ref().into_datum();
+    let arena = RowArena::new();
 
     let dims = if path.is_empty() {
         Vec::new()

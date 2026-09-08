@@ -116,223 +116,285 @@ WHERE
         }),
     }
 });
-pub static MZ_POSTGRES_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_postgres_source_tables",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_POSTGRES_SOURCE_TABLES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("schema_name", SqlScalarType::String.nullable(false))
-        .with_column("table_name", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "The ID of the subsource or table. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`.",
-        ),
-        (
-            "schema_name",
-            "The schema of the upstream table being ingested.",
-        ),
-        (
-            "table_name",
-            "The name of the upstream table being ingested.",
-        ),
-    ]),
-    is_retained_metrics_object: true,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "postgres_source_table",
-        description: "Postgres source table-level details",
-        links: &const {
-            [OntologyLink {
-                name: "describes_source_table",
-                target: "table",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
+// The three relational source-table views (postgres, mysql, sql-server) share
+// the same shape. Each reads Item rows from `mz_catalog_raw`, pulls the parent
+// source id and external reference out of the persisted `create_sql` via
+// `parse_source_export_details`, and joins `mz_sources` to keep only exports
+// whose parent is of the matching connection type. The external reference for
+// postgres and sql-server is `[database, schema, table]`, so schema/table come
+// from positions 1 and 2. MySQL references are `[schema, table]`, so positions
+// 0 and 1. This is the same slicing the removed packers applied.
+pub static MZ_POSTGRES_SOURCE_TABLES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_postgres_source_tables",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_POSTGRES_SOURCE_TABLES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("table_name", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The ID of the subsource or table. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`.",
+            ),
+            (
+                "schema_name",
+                "The schema of the upstream table being ingested.",
+            ),
+            (
+                "table_name",
+                "The name of the upstream table being ingested.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL schema_name,
+    ASSERT NOT NULL table_name
+) AS
+SELECT
+    mz_internal.parse_catalog_id(r.data->'key'->'gid') AS id,
+    details->'external_reference'->>1 AS schema_name,
+    details->'external_reference'->>2 AS table_name
+FROM
+    mz_internal.mz_catalog_raw r,
+    LATERAL (
+        SELECT mz_internal.parse_source_export_details(
+            r.data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS d(details)
+    JOIN mz_catalog.mz_sources s
+        ON s.id = details->>'source_id' AND s.type = 'postgres'
+WHERE
+    r.data->>'kind' = 'Item' AND
+    details IS NOT NULL",
+        is_retained_metrics_object: true,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "postgres_source_table",
+            description: "Postgres source table-level details",
+            links: &const {
+                [OntologyLink {
+                    name: "describes_source_table",
+                    target: "table",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
-pub static MZ_MYSQL_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_mysql_source_tables",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_MYSQL_SOURCE_TABLES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("schema_name", SqlScalarType::String.nullable(false))
-        .with_column("table_name", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "The ID of the subsource or table. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`.",
-        ),
-        (
-            "schema_name",
-            "The schema (or, database) of the upstream table being ingested.",
-        ),
-        (
-            "table_name",
-            "The name of the upstream table being ingested.",
-        ),
-    ]),
-    is_retained_metrics_object: true,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "mysql_source_table",
-        description: "MySQL source table-level details",
-        links: &const {
-            [OntologyLink {
-                name: "describes_source_table",
-                target: "table",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
+pub static MZ_MYSQL_SOURCE_TABLES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_mysql_source_tables",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_MYSQL_SOURCE_TABLES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("table_name", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The ID of the subsource or table. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`.",
+            ),
+            (
+                "schema_name",
+                "The schema (or, database) of the upstream table being ingested.",
+            ),
+            (
+                "table_name",
+                "The name of the upstream table being ingested.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL schema_name,
+    ASSERT NOT NULL table_name
+) AS
+SELECT
+    mz_internal.parse_catalog_id(r.data->'key'->'gid') AS id,
+    details->'external_reference'->>0 AS schema_name,
+    details->'external_reference'->>1 AS table_name
+FROM
+    mz_internal.mz_catalog_raw r,
+    LATERAL (
+        SELECT mz_internal.parse_source_export_details(
+            r.data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS d(details)
+    JOIN mz_catalog.mz_sources s
+        ON s.id = details->>'source_id' AND s.type = 'mysql'
+WHERE
+    r.data->>'kind' = 'Item' AND
+    details IS NOT NULL",
+        is_retained_metrics_object: true,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "mysql_source_table",
+            description: "MySQL source table-level details",
+            links: &const {
+                [OntologyLink {
+                    name: "describes_source_table",
+                    target: "table",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
-pub static MZ_SQL_SERVER_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_sql_server_source_tables",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_SQL_SERVER_SOURCE_TABLES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("schema_name", SqlScalarType::String.nullable(false))
-        .with_column("table_name", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "The ID of the subsource or table. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`.",
-        ),
-        (
-            "schema_name",
-            "The schema of the upstream table being ingested.",
-        ),
-        (
-            "table_name",
-            "The name of the upstream table being ingested.",
-        ),
-    ]),
-    is_retained_metrics_object: true,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "sql_server_source_table",
-        description: "SQL Server source table-level details",
-        links: &const {
-            [OntologyLink {
-                name: "describes_source_table",
-                target: "table",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
+pub static MZ_SQL_SERVER_SOURCE_TABLES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_sql_server_source_tables",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_SQL_SERVER_SOURCE_TABLES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("table_name", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The ID of the subsource or table. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`.",
+            ),
+            (
+                "schema_name",
+                "The schema of the upstream table being ingested.",
+            ),
+            (
+                "table_name",
+                "The name of the upstream table being ingested.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL schema_name,
+    ASSERT NOT NULL table_name
+) AS
+SELECT
+    mz_internal.parse_catalog_id(r.data->'key'->'gid') AS id,
+    details->'external_reference'->>1 AS schema_name,
+    details->'external_reference'->>2 AS table_name
+FROM
+    mz_internal.mz_catalog_raw r,
+    LATERAL (
+        SELECT mz_internal.parse_source_export_details(
+            r.data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS d(details)
+    JOIN mz_catalog.mz_sources s
+        ON s.id = details->>'source_id' AND s.type = 'sql-server'
+WHERE
+    r.data->>'kind' = 'Item' AND
+    details IS NOT NULL",
+        is_retained_metrics_object: true,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "sql_server_source_table",
+            description: "SQL Server source table-level details",
+            links: &const {
+                [OntologyLink {
+                    name: "describes_source_table",
+                    target: "table",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
-pub static MZ_KAFKA_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_kafka_source_tables",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_KAFKA_SOURCE_TABLES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("topic", SqlScalarType::String.nullable(false))
-        .with_column("envelope_type", SqlScalarType::String.nullable(true))
-        .with_column("key_format", SqlScalarType::String.nullable(true))
-        .with_column("value_format", SqlScalarType::String.nullable(true))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "The ID of the table. Corresponds to `mz_catalog.mz_tables.id`.",
-        ),
-        ("topic", "The topic being ingested."),
-        (
-            "envelope_type",
-            "The envelope type: `none`, `upsert`, or `debezium`. `NULL` for other source types.",
-        ),
-        (
-            "key_format",
-            "The format of the Kafka message key: `avro`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.",
-        ),
-        (
-            "value_format",
-            "The format of the Kafka message value: `avro`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.",
-        ),
-    ]),
-    is_retained_metrics_object: true,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "kafka_source_table",
-        description: "Kafka source table-level details",
-        links: &const {
-            [OntologyLink {
-                name: "describes_source_table",
-                target: "table",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
+pub static MZ_KAFKA_SOURCE_TABLES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_kafka_source_tables",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_KAFKA_SOURCE_TABLES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("topic", SqlScalarType::String.nullable(false))
+            .with_column("envelope_type", SqlScalarType::String.nullable(false))
+            .with_column("key_format", SqlScalarType::String.nullable(true))
+            .with_column("value_format", SqlScalarType::String.nullable(true))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The ID of the table. Corresponds to `mz_catalog.mz_tables.id`.",
+            ),
+            ("topic", "The topic being ingested."),
+            (
+                "envelope_type",
+                "The envelope type: `none`, `upsert`, or `debezium`. Defaults to `none` when the source table omits an explicit envelope.",
+            ),
+            (
+                "key_format",
+                "The format of the Kafka message key: `avro`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.",
+            ),
+            (
+                "value_format",
+                "The format of the Kafka message value: `avro`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.",
+            ),
+        ]),
+        // Kafka exports are only ever created with the new
+        // `CREATE TABLE ... FROM SOURCE` syntax (kafka has no subsource path),
+        // so the topic sits at position 0 of the single-part external
+        // reference. `parse_source_export_details` resolves the envelope and
+        // key/value formats straight from the table's own `create_sql`,
+        // reproducing the runtime `DataSourceDesc::formats()`/`envelope()` the
+        // old packer read.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL topic
+) AS
+SELECT
+    mz_internal.parse_catalog_id(r.data->'key'->'gid') AS id,
+    details->'external_reference'->>0 AS topic,
+    -- Kafka defaults to ENVELOPE NONE when the clause is omitted. The parser
+    -- helper is source-type agnostic and reports NULL for that case, so default
+    -- to 'none' here, where the join has already scoped rows to kafka.
+    COALESCE(details->>'envelope_type', 'none') AS envelope_type,
+    details->>'key_format' AS key_format,
+    details->>'value_format' AS value_format
+FROM
+    mz_internal.mz_catalog_raw r,
+    LATERAL (
+        SELECT mz_internal.parse_source_export_details(
+            r.data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS d(details)
+    JOIN mz_catalog.mz_sources s
+        ON s.id = details->>'source_id' AND s.type = 'kafka'
+WHERE
+    r.data->>'kind' = 'Item' AND
+    details IS NOT NULL",
+        is_retained_metrics_object: true,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "kafka_source_table",
+            description: "Kafka source table-level details",
+            links: &const {
+                [OntologyLink {
+                    name: "describes_source_table",
+                    target: "table",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
-pub static MZ_OBJECT_DEPENDENCIES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_object_dependencies",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_OBJECT_DEPENDENCIES_OID,
-    desc: RelationDesc::builder()
-        .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_column(
-            "referenced_object_id",
-            SqlScalarType::String.nullable(false),
-        )
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "object_id",
-            "The ID of the dependent object. Corresponds to `mz_objects.id`.",
-        ),
-        (
-            "referenced_object_id",
-            "The ID of the referenced object. Corresponds to `mz_objects.id`.",
-        ),
-    ]),
-    is_retained_metrics_object: true,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "object_dependency",
-        description: "A dependency edge: one object depends on another",
-        links: &const {
-            [
-                OntologyLink {
-                    name: "depends_on",
-                    target: "object",
-                    properties: LinkProperties::DependsOn {
-                        source_column: "object_id",
-                        target_column: "id",
-                        source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
-                        requires_mapping: None,
-                    },
-                },
-                OntologyLink {
-                    name: "dependency_is",
-                    target: "object",
-                    properties: LinkProperties::DependsOn {
-                        source_column: "referenced_object_id",
-                        target_column: "id",
-                        source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
-                        requires_mapping: None,
-                    },
-                },
-            ]
-        },
-        column_semantic_types: &const {
-            [
-                ("object_id", SemanticType::CatalogItemId),
-                ("referenced_object_id", SemanticType::CatalogItemId),
-            ]
-        },
-    }),
-});
+
 pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
     name: "mz_compute_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
@@ -586,6 +648,10 @@ pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("typinput", SqlScalarType::Oid.nullable(false))
         .with_column("typreceive", SqlScalarType::Oid.nullable(false))
+        // NOTE: `pg_type_all_databases` still needs `COALESCE` on this column,
+        // because its `LEFT JOIN` against this table yields NULLs for types with
+        // no PostgreSQL metadata.
+        .with_column("typsend", SqlScalarType::Oid.nullable(false))
         .finish(),
     column_comments: BTreeMap::new(),
     is_retained_metrics_object: false,
@@ -757,7 +823,7 @@ pub static MZ_CLUSTER_RECONFIGURATIONS: LazyLock<BuiltinMaterializedView> = Lazy
             ),
             (
                 "target",
-                "The config shape the cluster is reconfiguring to, as JSON: `size`, `replication_factor`, `availability_zones`, and `logging`. The realized (current) shape is in `mz_clusters`.",
+                "The config shape the cluster is reconfiguring to, as JSON: `size`, `replication_factor`, `availability_zones`, `logging`, and `arrangement_compression`. The realized (current) shape is in `mz_clusters`.",
             ),
             (
                 "changes",
@@ -834,7 +900,9 @@ SELECT
     CASE WHEN r.target->'availability_zones' != r.config->'availability_zones'
         THEN jsonb_build_object('availability_zones', r.target->'availability_zones') ELSE '{}'::jsonb END ||
     CASE WHEN r.target->'logging' != r.config->'logging'
-        THEN jsonb_build_object('logging', r.target->'logging') ELSE '{}'::jsonb END
+        THEN jsonb_build_object('logging', r.target->'logging') ELSE '{}'::jsonb END ||
+    CASE WHEN r.target->'arrangement_compression' != r.config->'arrangement_compression'
+        THEN jsonb_build_object('arrangement_compression', r.target->'arrangement_compression') ELSE '{}'::jsonb END
     AS changes
 FROM records r",
         is_retained_metrics_object: false,
@@ -1193,7 +1261,7 @@ pub static MZ_SOURCE_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| 
         ),
         (
             "status",
-            "The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `failed`, or `dropped`.",
+            "The status of the source: one of `starting`, `running`, `paused`, `stalled`, or `dropped`.",
         ),
         (
             "error",
@@ -2044,7 +2112,7 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
         ),
         (
             "status",
-            "The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `failed`, or `dropped`.",
+            "The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.",
         ),
         (
             "error",
@@ -2243,7 +2311,7 @@ pub static MZ_SINK_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| Bu
         ),
         (
             "status",
-            "The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.",
+            "The status of the sink: one of `starting`, `running`, `paused`, `stalled`, or `dropped`.",
         ),
         (
             "error",
@@ -2326,7 +2394,7 @@ pub static MZ_SINK_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVie
         ),
         (
             "status",
-            "The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.",
+            "The status of the sink: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.",
         ),
         (
             "error",
@@ -2466,96 +2534,179 @@ pub static MZ_STORAGE_USAGE_BY_SHARD: LazyLock<BuiltinTable> = LazyLock::new(|| 
     }),
 });
 
-pub static MZ_AWS_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_aws_connections",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_AWS_CONNECTIONS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("endpoint", SqlScalarType::String.nullable(true))
-        .with_column("region", SqlScalarType::String.nullable(true))
-        .with_column("access_key_id", SqlScalarType::String.nullable(true))
-        .with_column(
-            "access_key_id_secret_id",
-            SqlScalarType::String.nullable(true),
+// Reads Item rows from `mz_catalog_raw`, pulls the create_sql-derived fields
+// (endpoint, region, credentials, assume-role options) out via
+// `parse_connection_details`, and keeps only aws connections. The three
+// context-derived columns (principal, external_id, example_trust_policy) apply
+// to assume-role connections only and are reconstructed here from the plan-time
+// AWS context functions, because they depend on the environment, not on
+// create_sql. On an environment without the AWS context an assume-role
+// connection is dropped entirely (see the WHERE guard below), matching the
+// packer this view replaces, which bailed and wrote no row in that case. This
+// is not the same as folding the columns to NULL: `example_trust_policy` uses
+// `jsonb_build_object`, which keeps null values, so a context-less row would
+// carry a non-NULL policy object full of nulls rather than SQL NULL.
+pub static MZ_AWS_CONNECTIONS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_aws_connections",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_AWS_CONNECTIONS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("endpoint", SqlScalarType::String.nullable(true))
+            .with_column("region", SqlScalarType::String.nullable(true))
+            .with_column("access_key_id", SqlScalarType::String.nullable(true))
+            .with_column(
+                "access_key_id_secret_id",
+                SqlScalarType::String.nullable(true),
+            )
+            .with_column(
+                "secret_access_key_secret_id",
+                SqlScalarType::String.nullable(true),
+            )
+            .with_column("session_token", SqlScalarType::String.nullable(true))
+            .with_column(
+                "session_token_secret_id",
+                SqlScalarType::String.nullable(true),
+            )
+            .with_column("assume_role_arn", SqlScalarType::String.nullable(true))
+            .with_column(
+                "assume_role_session_name",
+                SqlScalarType::String.nullable(true),
+            )
+            .with_column("principal", SqlScalarType::String.nullable(true))
+            .with_column("external_id", SqlScalarType::String.nullable(true))
+            .with_column("example_trust_policy", SqlScalarType::Jsonb.nullable(true))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "The ID of the connection."),
+            ("endpoint", "The value of the `ENDPOINT` option, if set."),
+            ("region", "The value of the `REGION` option, if set."),
+            (
+                "access_key_id",
+                "The value of the `ACCESS KEY ID` option, if provided in line.",
+            ),
+            (
+                "access_key_id_secret_id",
+                "The ID of the secret referenced by the `ACCESS KEY ID` option, if provided via a secret.",
+            ),
+            (
+                "secret_access_key_secret_id",
+                "The ID of the secret referenced by the `SECRET ACCESS KEY` option, if set.",
+            ),
+            (
+                "session_token",
+                "The value of the `SESSION TOKEN` option, if provided in line.",
+            ),
+            (
+                "session_token_secret_id",
+                "The ID of the secret referenced by the `SESSION TOKEN` option, if provided via a secret.",
+            ),
+            (
+                "assume_role_arn",
+                "The value of the `ASSUME ROLE ARN` option, if set.",
+            ),
+            (
+                "assume_role_session_name",
+                "The value of the `ASSUME ROLE SESSION NAME` option, if set.",
+            ),
+            (
+                "principal",
+                "The ARN of the AWS principal Materialize will use when assuming the provided role, if the connection is configured to use role assumption.",
+            ),
+            (
+                "external_id",
+                "The external ID Materialize will use when assuming the provided role, if the connection is configured to use role assumption.",
+            ),
+            (
+                "example_trust_policy",
+                "An example of an IAM role trust policy that allows this connection's principal and external ID to assume the role.",
+            ),
+        ]),
+        // `external_id` reproduces `AwsAssumeRole::external_id` and
+        // `example_trust_policy` reproduces `AwsAssumeRole::example_trust_policy`
+        // (both in src/storage-types/src/connections/aws.rs). Keep them in sync.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id
+) AS
+SELECT
+    mz_internal.parse_catalog_id(r.data->'key'->'gid') AS id,
+    details->>'endpoint' AS endpoint,
+    details->>'region' AS region,
+    details->>'access_key_id' AS access_key_id,
+    details->>'access_key_id_secret_id' AS access_key_id_secret_id,
+    details->>'secret_access_key_secret_id' AS secret_access_key_secret_id,
+    details->>'session_token' AS session_token,
+    details->>'session_token_secret_id' AS session_token_secret_id,
+    details->>'assume_role_arn' AS assume_role_arn,
+    details->>'assume_role_session_name' AS assume_role_session_name,
+    CASE WHEN details->>'auth_kind' = 'assume-role'
+        THEN mz_aws_connection_role_arn()
+    END AS principal,
+    CASE WHEN details->>'auth_kind' = 'assume-role'
+        THEN 'mz_' || mz_aws_external_id_prefix() || '_'
+            || mz_internal.parse_catalog_id(r.data->'key'->'gid')
+    END AS external_id,
+    CASE WHEN details->>'auth_kind' = 'assume-role'
+        THEN jsonb_build_object(
+            'Version', '2012-10-17',
+            'Statement', jsonb_build_array(jsonb_build_object(
+                'Effect', 'Allow',
+                'Principal', jsonb_build_object('AWS', mz_aws_connection_role_arn()),
+                'Action', 'sts:AssumeRole',
+                'Condition', jsonb_build_object(
+                    'StringEquals', jsonb_build_object(
+                        'sts:ExternalId',
+                        'mz_' || mz_aws_external_id_prefix() || '_'
+                            || mz_internal.parse_catalog_id(r.data->'key'->'gid')
+                    )
+                )
+            ))
         )
-        .with_column(
-            "secret_access_key_secret_id",
-            SqlScalarType::String.nullable(true),
+    END AS example_trust_policy
+FROM
+    mz_internal.mz_catalog_raw r,
+    LATERAL (
+        SELECT mz_internal.parse_connection_details(
+            r.data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS d(details)
+WHERE
+    r.data->>'kind' = 'Item' AND
+    -- The connection_type filter selects the kind. A non-matching row yields a
+    -- NULL connection_type and is dropped here, so no `details IS NOT NULL` is
+    -- needed (parse_connection_details returns jsonb null, which passes it).
+    mz_internal.parse_catalog_create_sql(
+        r.data->'value'->'definition'->'V1'->>'create_sql')->>'connection_type' = 'aws' AND
+    -- Drop assume-role connections when the AWS context is absent, matching the
+    -- packer this view replaces. `AwsAssumeRole::external_id` needs the external
+    -- ID prefix and `example_trust_policy` needs the connection role ARN. Either
+    -- one missing made the packer bail and write no row. Without this guard the
+    -- view would instead emit a row whose `example_trust_policy` is a non-NULL
+    -- JSON object full of nulls, because `jsonb_build_object` keeps null values.
+    (
+        details->>'auth_kind' IS DISTINCT FROM 'assume-role' OR (
+            mz_aws_external_id_prefix() IS NOT NULL AND
+            mz_aws_connection_role_arn() IS NOT NULL
         )
-        .with_column("session_token", SqlScalarType::String.nullable(true))
-        .with_column(
-            "session_token_secret_id",
-            SqlScalarType::String.nullable(true),
-        )
-        .with_column("assume_role_arn", SqlScalarType::String.nullable(true))
-        .with_column(
-            "assume_role_session_name",
-            SqlScalarType::String.nullable(true),
-        )
-        .with_column("principal", SqlScalarType::String.nullable(true))
-        .with_column("external_id", SqlScalarType::String.nullable(true))
-        .with_column("example_trust_policy", SqlScalarType::Jsonb.nullable(true))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the connection."),
-        ("endpoint", "The value of the `ENDPOINT` option, if set."),
-        ("region", "The value of the `REGION` option, if set."),
-        (
-            "access_key_id",
-            "The value of the `ACCESS KEY ID` option, if provided in line.",
-        ),
-        (
-            "access_key_id_secret_id",
-            "The ID of the secret referenced by the `ACCESS KEY ID` option, if provided via a secret.",
-        ),
-        (
-            "secret_access_key_secret_id",
-            "The ID of the secret referenced by the `SECRET ACCESS KEY` option, if set.",
-        ),
-        (
-            "session_token",
-            "The value of the `SESSION TOKEN` option, if provided in line.",
-        ),
-        (
-            "session_token_secret_id",
-            "The ID of the secret referenced by the `SESSION TOKEN` option, if provided via a secret.",
-        ),
-        (
-            "assume_role_arn",
-            "The value of the `ASSUME ROLE ARN` option, if set.",
-        ),
-        (
-            "assume_role_session_name",
-            "The value of the `ASSUME ROLE SESSION NAME` option, if set.",
-        ),
-        (
-            "principal",
-            "The ARN of the AWS principal Materialize will use when assuming the provided role, if the connection is configured to use role assumption.",
-        ),
-        (
-            "external_id",
-            "The external ID Materialize will use when assuming the provided role, if the connection is configured to use role assumption.",
-        ),
-        (
-            "example_trust_policy",
-            "An example of an IAM role trust policy that allows this connection's principal and external ID to assume the role.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "aws_connection",
-        description: "AWS connection configuration details",
-        links: &const {
-            [OntologyLink {
-                name: "details_of",
-                target: "connection",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[],
-    }),
+    )",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "aws_connection",
+            description: "AWS connection configuration details",
+            links: &const {
+                [OntologyLink {
+                    name: "details_of",
+                    target: "connection",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[],
+        }),
+    }
 });
 
 pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY: LazyLock<BuiltinSource> =
@@ -3485,6 +3636,122 @@ pub static MZ_WEBHOOKS_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
     }),
 });
 
+pub static MZ_METRIC_SINKS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_metric_sinks",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_METRIC_SINKS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("from_id", SqlScalarType::String.nullable(false))
+            .with_column("cluster_id", SqlScalarType::String.nullable(false))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .with_key(vec![1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for the metric sink."),
+            ("oid", "A PostgreSQL-compatible OID for the metric sink."),
+            (
+                "schema_id",
+                "The ID of the schema to which the metric sink belongs. Corresponds to `mz_schemas.id`.",
+            ),
+            ("name", "The name of the metric sink."),
+            (
+                "from_id",
+                "The ID of the relation the metric sink reads. Corresponds to `mz_objects.id`.",
+            ),
+            (
+                "cluster_id",
+                "The ID of the cluster maintaining the metric sink. Corresponds to `mz_clusters.id`.",
+            ),
+            (
+                "owner_id",
+                "The role ID of the owner of the metric sink. Corresponds to `mz_roles.id`.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL from_id,
+    ASSERT NOT NULL cluster_id,
+    ASSERT NOT NULL owner_id
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    (data->'value'->>'oid')::oid AS oid,
+    mz_internal.parse_catalog_id(data->'value'->'schema_id') AS schema_id,
+    data->'value'->>'name' AS name,
+    parsed->>'from_id' AS from_id,
+    parsed->>'cluster_id' AS cluster_id,
+    mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id
+FROM
+    mz_internal.mz_catalog_raw
+    CROSS JOIN LATERAL (
+        SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS l(parsed)
+WHERE
+    data->>'kind' = 'Item' AND
+    parsed->>'type' = 'metric-sink'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "metric-sink",
+            description: "A sink that exports metrics about a relation",
+            links: &const {
+                [
+                    OntologyLink {
+                        name: "in_schema",
+                        target: "schema",
+                        properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
+                    },
+                    OntologyLink {
+                        name: "reads_relation",
+                        target: "relation",
+                        properties: LinkProperties::fk("from_id", "id", Cardinality::ManyToOne),
+                    },
+                    OntologyLink {
+                        name: "runs_on_cluster",
+                        target: "cluster",
+                        properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
+                    },
+                    OntologyLink {
+                        name: "owned_by",
+                        target: "role",
+                        properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
+                    },
+                ]
+            },
+            column_semantic_types: &const {
+                [
+                    ("id", SemanticType::CatalogItemId),
+                    ("oid", SemanticType::OID),
+                    ("schema_id", SemanticType::SchemaId),
+                    ("from_id", SemanticType::CatalogItemId),
+                    ("cluster_id", SemanticType::ClusterId),
+                    ("owner_id", SemanticType::RoleId),
+                ]
+            },
+        }),
+    }
+});
+
+pub const MZ_METRIC_SINKS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_metric_sinks_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_METRIC_SINKS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_metric_sinks (id)",
+    is_retained_metrics_object: false,
+};
+
 pub static MZ_HISTORY_RETENTION_STRATEGIES: LazyLock<BuiltinTable> = LazyLock::new(|| {
     BuiltinTable {
         name: "mz_history_retention_strategies",
@@ -3683,6 +3950,7 @@ pub static MZ_OBJECTS_ID_NAMESPACE_TYPES: LazyLock<BuiltinView> = LazyLock::new(
             ('materialized-view'),
             ('source'),
             ('sink'),
+            ('metric-sink'),
             ('index'),
             ('connection'),
             ('type'),
@@ -3691,6 +3959,66 @@ pub static MZ_OBJECTS_ID_NAMESPACE_TYPES: LazyLock<BuiltinView> = LazyLock::new(
     )
     AS _ (object_type)"#,
     access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
+
+/// Object dependency edges. Each row `(object_id, dependency_id)` means
+/// `object_id` depends on `dependency_id`.
+///
+/// Unions the dataflow dependencies between maintained objects (index,
+/// materialized view, sink, source, table) with the source-to-subsource and
+/// source-to-table edges that connect a source to the children carrying its
+/// data. Indexed on `mz_catalog_server` so the console surfaces that walk the
+/// dependency graph read one maintained arrangement instead of recomputing the
+/// union per request: the object workflow graph, critical-path freshness
+/// analysis, and impact/dependents views.
+pub static MZ_OBJECT_GRAPH_EDGES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_object_graph_edges",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_OBJECT_GRAPH_EDGES_OID,
+    desc: RelationDesc::builder()
+        .with_column("object_id", SqlScalarType::String.nullable(false))
+        .with_column("dependency_id", SqlScalarType::String.nullable(false))
+        .with_key(vec![0, 1])
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "object_id",
+            "The ID of the dependent object. Corresponds to `mz_objects.id`.",
+        ),
+        (
+            "dependency_id",
+            "The ID of the object it depends on. Corresponds to `mz_objects.id`.",
+        ),
+    ]),
+    sql: "
+SELECT md.object_id, md.dependency_id
+FROM mz_internal.mz_materialization_dependencies md
+JOIN mz_catalog.mz_objects po ON po.id = md.dependency_id
+    AND po.type IN ('index', 'materialized-view', 'sink', 'source', 'table')
+JOIN mz_catalog.mz_objects co ON co.id = md.object_id
+    AND co.type IN ('index', 'materialized-view', 'sink', 'source', 'table')
+UNION
+-- Subsource -> parent-source edges: a subsource depends on the (user) source it
+-- belongs to, an edge mz_materialization_dependencies doesn't carry.
+SELECT od.object_id, od.referenced_object_id
+FROM mz_internal.mz_object_dependencies od
+JOIN mz_catalog.mz_sources ps ON ps.id = od.referenced_object_id
+JOIN mz_catalog.mz_sources cs ON cs.id = od.object_id
+-- Progress collections are deliberately left out: their dependency edge points
+-- source -> progress, and they only exist for old-syntax sources, which the
+-- source-table migration is removing.
+WHERE ps.id LIKE 'u%' AND cs.type = 'subsource'
+UNION
+-- Select the (non-null) source id from the join rather than the nullable
+-- mz_tables.source_id, so dependency_id is non-null across all branches.
+SELECT t.id, ps.id
+FROM mz_catalog.mz_tables t
+JOIN mz_catalog.mz_sources ps ON ps.id = t.source_id",
+    access: vec![PUBLIC_SELECT],
+    // No ontology entity: these edges are already in the ontology via the
+    // DependsOn links of mz_object_dependencies and
+    // mz_materialization_dependencies. An entity here would duplicate them.
     ontology: None,
 });
 
@@ -4372,6 +4700,7 @@ pub static PG_TYPE_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| {
             .with_column("typcollation", SqlScalarType::Oid.nullable(false))
             .with_column("typdefault", SqlScalarType::String.nullable(true))
             .with_column("database_name", SqlScalarType::String.nullable(true))
+            .with_column("typsend", SqlScalarType::RegProc.nullable(false))
             .finish(),
         column_comments: BTreeMap::new(),
         sql: "
@@ -4440,7 +4769,8 @@ SELECT
     -- MZ doesn't support COLLATE so typcollation is filled with 0
     0::pg_catalog.oid AS typcollation,
     NULL::pg_catalog.text AS typdefault,
-    d.name as database_name
+    d.name as database_name,
+    COALESCE(mz_internal.mz_type_pg_metadata.typsend, 0)::pg_catalog.regproc AS typsend
 FROM
     mz_catalog.mz_types
     LEFT JOIN mz_internal.mz_type_pg_metadata ON mz_catalog.mz_types.id = mz_internal.mz_type_pg_metadata.id
@@ -4592,9 +4922,10 @@ ON mz_internal.pg_attrdef_all_databases (oid, adrelid, adnum, adbin, adsrc)",
 
 pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: LazyLock<BuiltinSource> =
     LazyLock::new(|| BuiltinSource {
-        // TODO(database-issues#8173): Rename this source to `mz_compute_error_counts_raw`. Currently this causes a
-        // naming conflict because the resolver stumbles over the source with the same name in
-        // `mz_introspection` due to the automatic schema translation.
+        // TODO(database-issues#8173): Rename this source to `mz_compute_error_counts_raw`.
+        // Currently this causes a naming conflict because the resolver stumbles over the
+        // source with the same name in `mz_introspection` due to the automatic schema
+        // translation.
         name: "mz_compute_error_counts_raw_unified",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED_OID,
@@ -4671,10 +5002,9 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED: LazyLock<BuiltinSource> = LazyLo
             ),
             (
                 "size",
-                "The total arrangement heap and batcher size in bytes for this object on this replica. \
-                 Objects smaller than 10 MiB are reported at their exact size; objects 10 MiB or larger \
-                 are rounded to the nearest 10 MiB boundary to reduce per-byte churn in the differential \
-                 collection.",
+                "The total arrangement heap and batcher size in bytes for this object on this replica, \
+                 rounded to the nearest 10 MiB boundary to reduce per-byte churn in the differential \
+                 collection. Objects with less than 5 MiB of arrangements report a size of 0.",
             ),
         ]),
         is_retained_metrics_object: true,
@@ -4720,10 +5050,10 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY: LazyLock<BuiltinTable> = LazyLock
             (
                 "size",
                 "The total arrangement heap and batcher size in bytes for this object on this replica \
-                 at `collection_timestamp`. Objects below 10 MiB are dropped from the snapshot; \
-                 objects at or above the floor are rounded to the nearest 10 MiB to reduce \
-                 per-byte churn in the underlying differential collection. May reflect a mid-build \
-                 size if `hydration_complete` is `false`.",
+                 at `collection_timestamp`, rounded to the nearest 10 MiB to reduce per-byte churn \
+                 in the underlying differential collection. Objects with less than 5 MiB of \
+                 arrangements are not recorded. May reflect a mid-build size if \
+                 `hydration_complete` is `false`.",
             ),
             (
                 "collection_timestamp",
@@ -4761,6 +5091,214 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_TS_IND: LazyLock<BuiltinIndex> =
     ON mz_internal.mz_object_arrangement_size_history (collection_timestamp)",
         is_retained_metrics_object: true,
     });
+
+/// Completed hydration episodes, one row per object, replica, and installation.
+///
+/// Exempt from the bootstrap reset and from forced shard replacement, since the
+/// contents cannot be rebuilt from anything else. Schema evolution keeps them and
+/// applies normally. Clearing them for a schema change is still allowed, see the
+/// tripwire in `validate_migration_steps`.
+pub static MZ_OBJECT_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_object_hydration_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_OBJECT_HYDRATION_HISTORY_OID,
+    desc: RelationDesc::builder()
+        .with_column("object_id", SqlScalarType::String.nullable(false))
+        .with_column("cluster_id", SqlScalarType::String.nullable(false))
+        .with_column("replica_id", SqlScalarType::String.nullable(false))
+        .with_column(
+            "installed_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column(
+            "started_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column(
+            "hydrated_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column("status", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "object_id",
+            "The ID of the object's dataflow, as reported by the replica. Join `mz_internal.mz_object_global_ids` to reach the index or materialized view while that mapping exists. Dropping the dataflow retracts the mapping, so historical IDs may no longer resolve.",
+        ),
+        ("cluster_id", "The ID of the object's cluster."),
+        (
+            "replica_id",
+            "The ID of the cluster replica. May name a replica that no longer exists.",
+        ),
+        (
+            "installed_at",
+            "When the object's dataflow was installed on the replica.",
+        ),
+        (
+            "started_at",
+            "When hydration work began, or `NULL` if the replica reported none. A replica that observed no start reports the installation time instead, so a zero interval between the two does not mean the dataflow started immediately.",
+        ),
+        ("hydrated_at", "When hydration finished."),
+        (
+            "status",
+            "The terminal status. Currently always `hydrated`.",
+        ),
+    ]),
+    // Not a retained-metrics object: that would pin a 30 day compaction window,
+    // and our history lives in the rows, which the retention sweep retracts on
+    // its own schedule. Nothing reads this table at an old timestamp.
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "object_hydration_event",
+        description: "Completed hydration of an index or materialized view on a replica",
+        // NOTE: These references outlive what they point at. A row deliberately
+        // survives the object and the replica it describes, so resolving one
+        // against the catalog can come up empty.
+        links: &const {
+            [
+                OntologyLink {
+                    name: "hydration_of_dataflow",
+                    target: "object_global_id",
+                    properties: LinkProperties::fk_typed(
+                        "object_id",
+                        "global_id",
+                        Cardinality::ManyToOne,
+                        mz_repr::SemanticType::GlobalId,
+                    ),
+                },
+                OntologyLink {
+                    name: "hydrated_on_cluster",
+                    target: "cluster",
+                    properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
+                },
+                OntologyLink {
+                    name: "hydrated_on_replica",
+                    target: "replica",
+                    properties: LinkProperties::fk_typed(
+                        "replica_id",
+                        "id",
+                        Cardinality::ManyToOne,
+                        mz_repr::SemanticType::ReplicaId,
+                    ),
+                },
+            ]
+        },
+        column_semantic_types: &[
+            ("object_id", SemanticType::GlobalId),
+            ("cluster_id", SemanticType::ClusterId),
+            ("replica_id", SemanticType::ReplicaId),
+        ],
+    }),
+});
+
+/// Successful hydration episodes for cluster replicas.
+///
+/// Exempt from the bootstrap reset and from forced shard replacement, since the
+/// contents cannot be rebuilt from anything else. Schema evolution keeps them and
+/// applies normally. Clearing them for a schema change is still allowed, see the
+/// tripwire in `validate_migration_steps`.
+pub static MZ_REPLICA_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_replica_hydration_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_REPLICA_HYDRATION_HISTORY_OID,
+    desc: RelationDesc::builder()
+        .with_column("replica_id", SqlScalarType::String.nullable(false))
+        .with_column("cluster_id", SqlScalarType::String.nullable(false))
+        .with_column(
+            "started_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column(
+            "finished_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column("object_count", SqlScalarType::UInt64.nullable(false))
+        .with_column("peak_memory_bytes", SqlScalarType::UInt64.nullable(true))
+        .with_column("peak_disk_bytes", SqlScalarType::UInt64.nullable(true))
+        .with_column("status", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "replica_id",
+            "The ID of the cluster replica. May name a replica that no longer exists.",
+        ),
+        ("cluster_id", "The ID of the replica's cluster."),
+        (
+            "started_at",
+            "The earliest maintained compute dataflow installation in the hydration episode.",
+        ),
+        (
+            "finished_at",
+            "The latest maintained compute dataflow hydration in the hydration episode.",
+        ),
+        (
+            "object_count",
+            "The number of maintained compute dataflows in the hydration episode.",
+        ),
+        (
+            "peak_memory_bytes",
+            "The largest process-lifetime cgroup memory high-water mark reported by any process when the collector recorded the episode. `NULL` if the platform reports no cgroup memory peak.",
+        ),
+        (
+            "peak_disk_bytes",
+            "The largest process-lifetime scratch-filesystem or swap high-water mark reported by any process when the collector recorded the episode. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available.",
+        ),
+        (
+            "status",
+            "The hydration episode's status. Currently always `hydrated`.",
+        ),
+    ]),
+    // Not a retained-metrics object: that would pin a 30 day compaction window,
+    // and our history lives in the rows, which the retention sweep retracts on
+    // its own schedule. Nothing reads this table at an old timestamp.
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "replica_hydration_episode",
+        description: "Successful hydration episode on a cluster replica",
+        links: &const {
+            [
+                OntologyLink {
+                    name: "hydrated_on_cluster",
+                    target: "cluster",
+                    properties: LinkProperties::ForeignKey {
+                        source_column: "cluster_id",
+                        target_column: "id",
+                        cardinality: Cardinality::ManyToOne,
+                        source_id_type: None,
+                        requires_mapping: None,
+                        nullable: false,
+                        note: Some(
+                            "Hydration samples can outlive their cluster, so this reference may not resolve.",
+                        ),
+                        extra_key_columns: None,
+                    },
+                },
+                OntologyLink {
+                    name: "hydrated_on_replica",
+                    target: "replica",
+                    properties: LinkProperties::ForeignKey {
+                        source_column: "replica_id",
+                        target_column: "id",
+                        cardinality: Cardinality::ManyToOne,
+                        source_id_type: Some(mz_repr::SemanticType::ReplicaId),
+                        requires_mapping: None,
+                        nullable: false,
+                        note: Some(
+                            "Hydration samples can outlive their replica, so this reference may not resolve.",
+                        ),
+                        extra_key_columns: None,
+                    },
+                },
+            ]
+        },
+        column_semantic_types: &[
+            ("replica_id", SemanticType::ReplicaId),
+            ("cluster_id", SemanticType::ClusterId),
+        ],
+    }),
+});
 
 pub static MZ_COMPUTE_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_compute_hydration_statuses",
@@ -5399,8 +5937,7 @@ pub static MZ_SHOW_ALL_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     )
     SELECT schema_id, name, type, COALESCE(comment, '') AS comment
     FROM mz_catalog.mz_objects AS objs
-    LEFT JOIN comments ON objs.id = comments.id
-    WHERE (comments.object_type = objs.type OR comments.object_type IS NULL)",
+    LEFT JOIN comments ON objs.id = comments.id AND comments.object_type = objs.type",
     access: vec![PUBLIC_SELECT],
     ontology: None,
 });
@@ -5451,7 +5988,8 @@ pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
                 'size to ' || (changes->>'size'),
                 'replication factor to ' || (changes->>'replication_factor'),
                 CASE WHEN changes->'availability_zones' IS NOT NULL THEN 'availability zones' END,
-                CASE WHEN changes->'logging' IS NOT NULL THEN 'introspection settings' END
+                CASE WHEN changes->'logging' IS NOT NULL THEN 'introspection settings' END,
+                CASE WHEN changes->'arrangement_compression' IS NOT NULL THEN 'arrangement compression' END
             ], ', '), '') AS summary
         FROM mz_internal.mz_cluster_reconfigurations
         WHERE status = 'in-progress'
@@ -5898,7 +6436,7 @@ FROM
             ON mz_catalog.mz_cluster_replicas.id = statuses.replica_id
         LEFT JOIN mz_internal.mz_comments comments
             ON mz_catalog.mz_cluster_replicas.id = comments.id
-WHERE (comments.object_type = 'cluster-replica' OR comments.object_type IS NULL)
+            AND comments.object_type = 'cluster-replica'
 ORDER BY 1, 2"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,
@@ -5958,8 +6496,8 @@ LEFT JOIN mz_clusters c_idx ON c_idx.id = i.cluster_id
 LEFT JOIN mz_clusters c_obj ON c_obj.id = o.cluster_id
 LEFT JOIN mz_internal.mz_show_my_cluster_privileges cp
     ON cp.name = COALESCE(c_idx.name, c_obj.name) AND cp.privilege_type = 'USAGE'
-LEFT JOIN mz_internal.mz_comments cts_idx ON cts_idx.id = i.id AND cts_idx.object_sub_id IS NULL
-LEFT JOIN mz_internal.mz_comments cts_obj ON cts_obj.id = o.id AND cts_obj.object_sub_id IS NULL
+LEFT JOIN mz_internal.mz_comments cts_idx ON cts_idx.id = i.id AND cts_idx.object_type = 'index' AND cts_idx.object_sub_id IS NULL
+LEFT JOIN mz_internal.mz_comments cts_obj ON cts_obj.id = o.id AND cts_obj.object_type = o.type AND cts_obj.object_sub_id IS NULL
 WHERE op.privilege_type = 'SELECT'
   AND (o.type = 'materialized-view'
        OR (o.type = 'view' AND i.id IS NOT NULL AND cp.name IS NOT NULL))
@@ -6088,9 +6626,9 @@ LEFT JOIN mz_clusters c_idx ON c_idx.id = i.cluster_id
 LEFT JOIN mz_clusters c_obj ON c_obj.id = o.cluster_id
 LEFT JOIN mz_internal.mz_show_my_cluster_privileges cp
     ON cp.name = COALESCE(c_idx.name, c_obj.name) AND cp.privilege_type = 'USAGE'
-LEFT JOIN mz_internal.mz_comments cts_idx ON cts_idx.id = i.id AND cts_idx.object_sub_id IS NULL
-LEFT JOIN mz_internal.mz_comments cts_obj ON cts_obj.id = o.id AND cts_obj.object_sub_id IS NULL
-LEFT JOIN mz_internal.mz_comments cts_col ON cts_col.id = o.id AND cts_col.object_sub_id = ccol.position
+LEFT JOIN mz_internal.mz_comments cts_idx ON cts_idx.id = i.id AND cts_idx.object_type = 'index' AND cts_idx.object_sub_id IS NULL
+LEFT JOIN mz_internal.mz_comments cts_obj ON cts_obj.id = o.id AND cts_obj.object_type = o.type AND cts_obj.object_sub_id IS NULL
+LEFT JOIN mz_internal.mz_comments cts_col ON cts_col.id = o.id AND cts_col.object_type = o.type AND cts_col.object_sub_id = ccol.position
 WHERE op.privilege_type = 'SELECT'
   AND (o.type = 'materialized-view'
        OR (o.type = 'view' AND i.id IS NOT NULL AND cp.name IS NOT NULL))
@@ -7406,12 +7944,11 @@ fn console_cluster_utilization_overview_desc() -> RelationDesc {
 /// `console/src/api/materialize/cluster/replicaUtilizationHistory.ts`).
 ///
 /// * `bin`: the `date_bin` bucket width, e.g. `1 MINUTE`.
-/// * `retention`: how much history the view retains, e.g. `3 HOURS`, enforced
-///   with a temporal `mz_now()` filter so the maintained arrangement stays
-///   bounded.
-/// * `group_size`: the expected number of metric samples per (replica, bucket),
-///   used for the `DISTINCT ON INPUT GROUP SIZE` top-k hint. Replica metrics are
-///   scraped roughly once per minute, so this is the bucket width in minutes.
+/// * `retention`: how much history the view retains, e.g. `3 HOURS`, enforced with a temporal
+///   `mz_now()` filter so the maintained arrangement stays bounded.
+/// * `group_size`: the expected number of metric samples per (replica, bucket), used for the
+///   `DISTINCT ON INPUT GROUP SIZE` top-k hint. Replica metrics are scraped roughly once per
+///   minute, so this is the bucket width in minutes.
 fn console_cluster_utilization_overview_sql(bin: &str, retention: &str, group_size: u32) -> String {
     format!(
         r#"WITH replica_history AS (
@@ -7765,12 +8302,11 @@ pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_24H: LazyLock<BuiltinView> =
  * cluster_name: The name of the cluster.
  * The approach taken is as follows. First, find all extant clusters and add them
  * to the result set. Per cluster, we do the following:
- * 1. Find the most recent create or rename event. This moment represents when the
- *    cluster took on its final logical identity.
- * 2. Look for a cluster that had the same name (or the same name with `_dbt_deploy`
- *    appended) that was dropped within one minute of that moment. That cluster is
- *    almost certainly the logical predecessor of the current cluster. Add the cluster
- *    to the result set.
+ * 1. Find the most recent create or rename event. This moment represents when the cluster took
+ *    on its final logical identity.
+ * 2. Look for a cluster that had the same name (or the same name with `_dbt_deploy` appended)
+ *    that was dropped within one minute of that moment. That cluster is almost certainly the
+ *    logical predecessor of the current cluster. Add the cluster to the result set.
  * 3. Repeat the procedure until a cluster with no logical predecessor is discovered.
  * Limiting the search for a dropped cluster to a window of one minute is a heuristic,
  * but one that's likely to be pretty good one. If a name is reused after more
@@ -8134,8 +8670,9 @@ ON mz_internal.mz_sink_status_history (sink_id)",
 // underlying relation.
 //
 // We append WITH_HISTORY because we want to build a separate view + index that doesn't
-// retain history. This is because retaining its history causes MZ_SOURCE_STATISTICS_WITH_HISTORY_IND
-// to hold all records/updates, which causes CPU and latency of querying it to spike.
+// retain history. This is because retaining its history causes
+// MZ_SOURCE_STATISTICS_WITH_HISTORY_IND to hold all records/updates, which causes CPU and latency
+// of querying it to spike.
 pub static MZ_SOURCE_STATISTICS_WITH_HISTORY: LazyLock<BuiltinView> =
     LazyLock::new(|| BuiltinView {
         name: "mz_source_statistics_with_history",
@@ -8554,6 +9091,15 @@ pub const MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND: BuiltinIndex = BuiltinIndex {
     oid: oid::INDEX_MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_object_transitive_dependencies (object_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_OBJECT_GRAPH_EDGES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_object_graph_edges_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_OBJECT_GRAPH_EDGES_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_object_graph_edges (object_id)",
     is_retained_metrics_object: false,
 };
 

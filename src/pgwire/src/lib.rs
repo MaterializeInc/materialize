@@ -37,7 +37,17 @@ pub use server::{Config, Server};
 /// Internal types re-exported under `cfg(feature = "fuzzing")` so the fuzz
 /// crate can drive the frontend-message decoder directly. Not for
 /// production use.
+///
+/// The auth sub-parsers are included because `Codec::decode` does not call
+/// them: its `b'p'` arm copies the payload verbatim into
+/// `FrontendMessage::RawAuthentication`, and `protocol` picks the parser from
+/// the handshake state. Without these, the pre-auth SASL/password grammars are
+/// unreachable from the decoder alone.
 #[cfg(feature = "fuzzing")]
 pub mod fuzz_exports {
-    pub use crate::codec::Codec;
+    pub use mz_pgwire_common::{Cursor, FrontendMessage};
+
+    pub use crate::codec::{
+        Codec, decode_password, decode_sasl_initial_response, decode_sasl_response,
+    };
 }

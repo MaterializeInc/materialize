@@ -20,7 +20,7 @@ Source defined as t0
 
 
 # Inline Let bindings with a single reference.
-apply pipeline=normalize_lets
+apply pipeline=NormalizeLets
 Return
   Project (#0)
     Get l0
@@ -34,7 +34,7 @@ Project (#0)
     Get t0
 
 # Inline non-recursive LetRec bindings with a single reference (1).
-apply pipeline=normalize_lets
+apply pipeline=NormalizeLets
 Return
   Project (#0)
     Get l0
@@ -48,7 +48,7 @@ Project (#0)
     Get t0
 
 # Inline non-recursive LetRec bindings with a single reference (2).
-apply pipeline=normalize_lets
+apply pipeline=NormalizeLets
 Return
   Union
     Get l1
@@ -70,7 +70,7 @@ Return
     Get l0
 
 # Promote non-recursive Let bindings up the tree.
-apply pipeline=normalize_lets
+apply pipeline=NormalizeLets
 Project (#0, #2)
   Return
     Return
@@ -114,7 +114,7 @@ Return
       Get l2
 
 # Promote LetRec nodes up the tree.
-apply pipeline=normalize_lets
+apply pipeline=NormalizeLets
 Map ("return_inner")
   Return
     Get l1
@@ -152,7 +152,7 @@ Return
     Get l1
 
 # Don't inline Let bindings with multiple references.
-apply pipeline=normalize_lets
+apply pipeline=NormalizeLets
 Return
   Union
     Project (#1)
@@ -176,7 +176,7 @@ Return
       Get l0
 
 # Fuse an outer Let into an inner LetRec.
-apply pipeline=normalize_lets
+apply pipeline=NormalizeLets
 Return
   Union
     Get l2
