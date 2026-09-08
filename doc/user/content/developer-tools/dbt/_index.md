@@ -17,7 +17,7 @@ menu:
     parent: developer-tools
     weight: 30
     identifier: "manage-dbt"
-    name: "Manage with dbt"
+    name: "dbt"
 
 ---
 

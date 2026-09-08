@@ -7,7 +7,7 @@ menu:
     parent: developer-tools
     weight: 40
     identifier: "manage-terraform"
-    name: "Manage with Terraform"
+    name: "Terraform"
 aliases:
   - /self-managed/v25.1/manage/terraform/
   - /manage/terraform/

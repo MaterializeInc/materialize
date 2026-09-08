@@ -3,10 +3,11 @@ title: "Use an ontology table"
 description: "Create an ontology table that helps agents write correct joins."
 menu:
   main:
-    parent: architecture-patterns
+    parent: 'sql-patterns'
     weight: 10
 aliases:
   - /architecture-patterns/ontology/
+  - /fundamentals/architecture-patterns/ontology/
 ---
 
 The ontology table is a curated catalog of join relationships between tables in

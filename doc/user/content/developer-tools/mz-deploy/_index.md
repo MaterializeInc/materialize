@@ -7,7 +7,7 @@ menu:
     parent: developer-tools
     weight: 20
     identifier: "manage-mz-deploy"
-    name: "Manage with mz-deploy"
+    name: "mz-deploy"
 aliases:
   - /manage/mz-deploy/
 ---

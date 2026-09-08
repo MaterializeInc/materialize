@@ -35,7 +35,7 @@ and support the MCP `initialize`, `tools/list`, and `tools/call` methods.
 
 ## See also
 
-- [Use an ontology table](/fundamentals/architecture-patterns/ontology/) to curate join
+- [Use an ontology table](/transform-data/patterns/ontology/) to curate join
   relationships that agents query through the `query` tool before writing
   multi-table SQL.
 - [MCP Server

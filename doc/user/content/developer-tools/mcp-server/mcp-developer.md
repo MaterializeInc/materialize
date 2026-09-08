@@ -599,7 +599,7 @@ authentication](#method-2-token-based-authentication).
 
 {{< tip >}}
 When the agent reads your user objects with the `query` tool, an [ontology
-table](/fundamentals/architecture-patterns/ontology/) of curated join relationships in your
+table](/transform-data/patterns/ontology/) of curated join relationships in your
 schema helps it confirm exact join keys before writing multi-table SQL.
 {{< /tip >}}
 
@@ -635,7 +635,7 @@ The privileges required to use the `materialize-developer` MCP server are:
 
 ## Related pages
 
-- [Use an ontology table](/fundamentals/architecture-patterns/ontology/)
+- [Use an ontology table](/transform-data/patterns/ontology/)
 - [`materialize-developer` MCP Server available
   tools](/developer-tools/mcp-server/mcp-developer-tools/)
 - [`materialize-developer` MCP Server
