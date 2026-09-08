@@ -371,6 +371,12 @@ pub(super) async fn purify_source_exports(
     requested_references: &Option<ExternalReferences>,
     mut text_columns: Vec<UnresolvedItemName>,
     mut exclude_columns: Vec<UnresolvedItemName>,
+    // NOTE: `exclude_constraints` and `exclude_all_constraints` are only ever
+    // non-empty/true for `CREATE TABLE .. FROM SOURCE`, which purifies exactly
+    // one export, so constraint names are validated against that single
+    // table's constraints.
+    exclude_constraints: &BTreeSet<String>,
+    exclude_all_constraints: bool,
     unresolved_source_name: &UnresolvedItemName,
     reference_policy: &SourceReferencePolicy,
 ) -> Result<PurifiedSourceExports, PlanError> {
@@ -457,6 +463,22 @@ pub(super) async fn purify_source_exports(
             let text_columns = text_column_map.remove(&desc.oid);
             let exclude_columns = exclude_column_map.remove(&desc.oid);
 
+            let missing_exclude_constraints: Vec<_> = exclude_constraints
+                .iter()
+                .filter(|n| !desc.keys.iter().any(|k| &&k.name == n))
+                .cloned()
+                .collect();
+            if !missing_exclude_constraints.is_empty() {
+                return Err(PgSourcePurificationError::ConstraintsNotFound {
+                    table: PartialItemName {
+                        database: None,
+                        schema: Some(desc.namespace.clone()),
+                        item: desc.name.clone(),
+                    },
+                    constraints: missing_exclude_constraints,
+                });
+            }
+
             if let Some(exclude_cols) = &exclude_columns {
                 let excluded_col_nums: BTreeSet<u16> = desc
                     .columns
@@ -472,6 +494,17 @@ pub(super) async fn purify_source_exports(
                 // incompatible schema change once the excluded column disappears.
                 desc.keys
                     .retain(|k| k.cols.iter().all(|c| !excluded_col_nums.contains(c)));
+            }
+
+            desc.keys.retain(|k| !exclude_constraints.contains(&k.name));
+
+            if exclude_all_constraints {
+                // Marking columns as nullable allows dropping (and adding) the
+                // NOT NULL constraint without an outage.
+                desc.keys.clear();
+                for c in &mut desc.columns {
+                    c.nullable = true;
+                }
             }
 
             if let (Some(text_cols), Some(exclude_cols)) = (&text_columns, &exclude_columns) {
