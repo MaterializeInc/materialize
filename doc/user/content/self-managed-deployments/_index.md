@@ -31,7 +31,8 @@ aliases:
 menu:
   main:
     identifier: "sm-deployments"
-    weight: 5
+    name: "Materialize Self-Managed"
+    weight: 120
 ---
 
 ## Overview

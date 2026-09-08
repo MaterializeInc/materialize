@@ -6,6 +6,7 @@ disable_list: true
 menu:
   main:
     parent: "monitor"
+    name: "Appendix: metrics"
     identifier: "monitor-appendix-metrics"
     weight: 20
 ---

@@ -3,10 +3,10 @@ title: "mz-debug"
 description: Materialize debug tool for self-managed and emulator environments.
 menu:
   main:
-    parent: integrations
-    name: "`mz-debug` Debug tool"
+    parent: developer-tools
+    name: "`mz-debug` debug tool"
     identifier: mz-debug
-    weight: 90
+    weight: 70
 disable_list: true
 ---
 

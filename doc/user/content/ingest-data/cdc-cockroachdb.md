@@ -4,7 +4,7 @@ description: "How to propagate Change Data Capture (CDC) data from a CockroachDB
 menu:
   main:
     parent: "crdb"
-    name: "Using Kafka and Changefeeds"
+    name: "Use Kafka and changefeeds"
     identifier: "crdb-kafka-changefeeds"
     weight: 5
 aliases:

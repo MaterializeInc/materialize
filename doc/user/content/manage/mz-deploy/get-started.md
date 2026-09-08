@@ -6,7 +6,7 @@ menu:
     parent: manage-mz-deploy
     weight: 10
     identifier: "get-started-mz-deploy"
-    name: "Get started"
+    name: "Getting started"
 ---
 
 `mz-deploy` is a deployment tool that gives you compile-time validation, unit

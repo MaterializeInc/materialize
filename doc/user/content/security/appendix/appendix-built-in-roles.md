@@ -4,6 +4,7 @@ description: "List of predefined built-in roles in Materialize."
 menu:
   main:
     parent: security-appendix
+    name: "Appendix: built-in roles"
     weight: 15
 aliases:
   - /manage/access-control/appendix-built-in-roles/

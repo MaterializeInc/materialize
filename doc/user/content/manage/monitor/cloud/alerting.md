@@ -4,6 +4,7 @@ description: "Alerting thresholds to use for monitoring."
 menu:
   main:
     parent: "monitor-cloud"
+    name: "Set alerts"
     weight: 15
 ---
 

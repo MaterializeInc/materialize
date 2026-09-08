@@ -3,9 +3,9 @@ title: "Download and run Materialize Emulator"
 description: "The Materialize Emulator is an all-in-one Docker image available on Docker Hub, offering the fastest way to get hands-on experience with Materialize in a local environment."
 menu:
   main:
-    parent: "get-started"
-    weight: 15
-    name: "Download and run Materialize Emulator"
+    parent: "developer-tools"
+    weight: 50
+    name: "Develop locally with the Materialize Emulator"
 
 ---
 

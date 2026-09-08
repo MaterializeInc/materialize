@@ -3,10 +3,10 @@ title: "Explain plan operators"
 description: ""
 menu:
   main:
-    parent: reference
+    parent: sql
     name: Explain plan operators
     identifier: 'explain-plan-operators'
-    weight: 140
+    weight: 130
 disable_list: true
 aliases:
   - /sql/explain-plan-operators/

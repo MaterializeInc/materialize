@@ -5,7 +5,7 @@ menu:
   main:
     parent: "manage-terraform"
     weight: 10
-    name: "Get started"
+    name: "Getting started"
 ---
 
 The following guide provides an introduction to the Materialize Terraform

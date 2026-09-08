@@ -5,7 +5,7 @@ menu:
   main:
     parent: sink
     name: "turbopuffer"
-    weight: 35
+    weight: 42
 ---
 
 This guide shows how to send results from Materialize to turbopuffer. A

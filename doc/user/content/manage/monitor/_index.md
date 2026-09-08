@@ -5,9 +5,9 @@ disable_toc: true
 disable_list: true
 menu:
   main:
-    parent: "manage"
     identifier: "monitor"
-    weight: 15
+    name: "Observability"
+    weight: 90
 ---
 
 ## Cloud

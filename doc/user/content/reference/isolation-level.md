@@ -8,9 +8,9 @@ aliases:
     - /get-started/isolation-level/
 menu:
   main:
-    parent: reference
+    parent: serve-results
     identifier: 'isolation-levels'
-    weight: 150
+    weight: 15
 ---
 
 An *isolation level* determines which effects of concurrent transactions are

@@ -5,6 +5,7 @@ mermaid: true
 menu:
   main:
     parent: 'ingest-patterns'
+    name: "Absorb upstream schema changes"
 ---
 
 When you create a table from a source, its columns are pinned to the upstream

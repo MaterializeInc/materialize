@@ -5,7 +5,8 @@ disable_list: true
 menu:
   main:
     identifier: "releases"
-    weight: 80
+    name: "Release notes"
+    weight: 130
 aliases:
   - /self-managed/v25.1/release-notes/
   - /self-managed/v25.2/release-notes/

@@ -3,9 +3,10 @@ title: "Ingestion performance"
 description: "How Materialize sustains freshness and throughput during ingestion, with predictable load on upstream systems."
 menu:
   main:
-    parent: reference
+    parent: ingest-data
+    name: "Performance and scaling"
     identifier: performance
-    weight: 160
+    weight: 91
 ---
 
 This page provides an overview of ingestion performance from internal benchmarks, so you can assess Materialize against a specific workload, size a [cluster](/concepts/clusters/), and estimate cost. The results show that Materialize sustains [fresh data](/concepts/reaction-time/#freshness) with high throughput and predictable load on upstream systems. For the full test methodology and results, see the [ingestion performance litepaper](https://materialize.com/ingestion-performance-litepaper/).

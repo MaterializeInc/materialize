@@ -7,7 +7,7 @@ menu:
   main:
     parent: sink
     name: "Snowflake"
-    weight: 45
+    weight: 51
 ---
 
 [//]: # "TODO(morsapaes) For Kafka users, it's possible to sink data to

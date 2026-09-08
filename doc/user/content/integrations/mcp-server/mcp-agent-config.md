@@ -5,6 +5,7 @@ make_table_row_headers_searchable: true
 menu:
   main:
     parent: "mcp-server-agent"
+    name: "Agent endpoint configuration"
     weight: 20
     identifier: "agent-endpoint-configuration"
 ---

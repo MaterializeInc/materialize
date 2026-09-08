@@ -4,7 +4,7 @@ description: "Learn about hydration in Materialize: reconstructing an object's i
 menu:
   main:
     parent: concepts
-    weight: 31
+    weight: 80
     identifier: 'concepts-hydration'
 ---
 

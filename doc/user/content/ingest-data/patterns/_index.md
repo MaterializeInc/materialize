@@ -4,7 +4,8 @@ description: "Learn about common Materialize ingestion patterns."
 menu:
   main:
     parent: ingest-data
-    weight: 30
+    name: "Schema changes"
+    weight: 90
     identifier: ingest-patterns
 ---
 

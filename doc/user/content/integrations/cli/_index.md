@@ -3,10 +3,10 @@ title: "mz - Materialize CLI"
 description: The Materialize command-line interface (CLI).
 menu:
   main:
-    parent: integrations
+    parent: developer-tools
     name: "`mz` - Materialize CLI"
     identifier: cli
-    weight: 99
+    weight: 60
 disable_list: true
 aliases:
   - /self-managed/v25.2/integrations/cli/

@@ -4,8 +4,8 @@ description: "Deploy and manage Materialize objects with mz-deploy, a SQL-native
 disable_list: true
 menu:
   main:
-    parent: manage
-    weight: 40
+    parent: developer-tools
+    weight: 20
     identifier: "manage-mz-deploy"
     name: "Manage with mz-deploy"
 ---

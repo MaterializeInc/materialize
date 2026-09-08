@@ -5,7 +5,7 @@ menu:
   main:
     parent: sink
     name: "Elasticsearch"
-    weight: 20
+    weight: 40
 ---
 
 This guide shows how to send results from Materialize to Elasticsearch. A

@@ -5,8 +5,9 @@ disable_list: true
 menu:
   main:
     identifier: "architecture-patterns"
-    name: "Architecture Patterns"
-    weight: 8
+    parent: fundamentals
+    name: "Reference architectures"
+    weight: 20
 ---
 
 Pattern | Description

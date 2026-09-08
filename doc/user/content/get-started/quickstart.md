@@ -1,11 +1,6 @@
 ---
 title: "Quickstart"
 description: "Learn the basics of Materialize."
-menu:
-  main:
-    parent: "get-started"
-    weight: 10
-    name: "Quickstart"
 aliases:
   - /katacoda/
   - /quickstarts/

@@ -3,8 +3,8 @@ title: "Connect to Materialize via WebSocket"
 description: "How to use Materialize via WebSocket"
 menu:
   main:
-    parent: "integrations"
-    weight: 60
+    parent: "serve-results"
+    weight: 55
     name: "WebSocket API"
 ---
 

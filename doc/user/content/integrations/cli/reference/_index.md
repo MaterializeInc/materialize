@@ -4,7 +4,7 @@ description: "Reference section for `mz`, Materialize command-line interface (CL
 menu:
   main:
     parent: cli
-    name: "`mz` Reference"
+    name: "`mz` reference"
     identifier: cli-reference
     weight: 6
 aliases:

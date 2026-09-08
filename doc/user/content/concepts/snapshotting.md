@@ -4,7 +4,7 @@ description: "Learn about snapshotting in Materialize: the initial sync of a sou
 menu:
   main:
     parent: concepts
-    weight: 30
+    weight: 40
     identifier: 'concepts-snapshotting'
 ---
 

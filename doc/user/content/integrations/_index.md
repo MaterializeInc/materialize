@@ -15,11 +15,6 @@ aliases:
   - /self-managed/v25.2/integrations/http-api/
   - /self-managed/v25.2/integrations/websocket-api/
   - /self-managed/v25.2/integrations/llm/
-menu:
-  main:
-    identifier: "integrations"
-    name: "Tools and integrations"
-    weight: 70
 ---
 
 

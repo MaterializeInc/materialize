@@ -4,7 +4,7 @@ description: Learn about views in Materialize.
 menu:
   main:
     parent: concepts
-    weight: 15
+    weight: 50
     identifier: 'concepts-views'
 aliases:
   - /get-started/key-concepts/#views

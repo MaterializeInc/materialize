@@ -6,9 +6,9 @@ aliases:
 menu:
   main:
     parent: sink
-    name: "Troubleshooting sinks"
+    name: "Troubleshoot sinks"
     identifier: sink-troubleshooting
-    weight: 50
+    weight: 90
 
 ---
 

@@ -3,7 +3,8 @@ title: "Durable subscriptions"
 description: "How to enable lossless, durable subscriptions to your changing results in Materialize"
 menu:
   main:
-    parent: 'sql-patterns'
+    parent: 'serve-results'
+    weight: 10
 aliases:
   - /transform-data/patterns/time-travel-queries/
   - /transform-data/patterns/time-travel-queries/#history-retention-period

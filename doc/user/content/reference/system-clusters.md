@@ -3,8 +3,8 @@ title: "System clusters"
 description: "Reference page on system clusters"
 menu:
   main:
-    parent: "reference"
-    weight: 190
+    parent: "clusters"
+    weight: 10
 aliases:
   - /sql/system-clusters/
 ---

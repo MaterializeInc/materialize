@@ -6,7 +6,7 @@ menu:
     parent: manage-dbt
     weight: 10
     identifier: "get-started-dbt"
-    name: "Get started"
+    name: "Getting started"
 ---
 
 [dbt](https://docs.getdbt.com/docs/introduction) has become the standard for

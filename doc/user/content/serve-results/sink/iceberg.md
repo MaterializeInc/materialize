@@ -6,7 +6,7 @@ menu:
         parent: sink
         name: "Apache Iceberg"
         identifier: sink-iceberg
-        weight: 15
+        weight: 20
 ---
 
 {{< public-preview />}}

@@ -6,7 +6,7 @@ menu:
   main:
     parent: concepts
     identifier: 'namespaces'
-    weight: 126
+    weight: 20
 ---
 
 {{% include-headless "/headless/namespaces-content" %}}

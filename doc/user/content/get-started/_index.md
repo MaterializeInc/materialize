@@ -2,13 +2,14 @@
 title: "What is Materialize?"
 description: "Learn more about Materialize"
 disable_list: true
-aliases:
-  - /overview/what-is-materialize/
 menu:
   main:
-    parent: get-started
+    parent: fundamentals
     name: "What is Materialize?"
+    identifier: fundamentals-overview
     weight: 5
+aliases:
+  - /overview/what-is-materialize/
 ---
 
 {{% include-headless "/headless/materialize-intro/intro" %}}

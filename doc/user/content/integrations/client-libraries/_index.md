@@ -4,10 +4,10 @@ description: "Connect via client libraries/SQL drivers"
 disable_list: true
 menu:
   main:
-    parent: integrations
+    parent: serve-results
     name: "Client libraries"
     identifier: client-libraries
-    weight: 15
+    weight: 35
 ---
 
 Applications can use various common language-specific PostgreSQL client

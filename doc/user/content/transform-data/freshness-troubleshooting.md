@@ -3,7 +3,7 @@ title: "Freshness troubleshooting"
 description: "How to diagnose and resolve freshness problems in Materialize."
 menu:
   main:
-    name: "Freshness troubleshooting"
+    name: "Troubleshoot freshness"
     identifier: freshness-troubleshooting
     parent: transform-data
     weight: 85

@@ -4,6 +4,7 @@ description: Use mz-debug to debug Materialize Emulator environments running in 
 menu:
   main:
     parent: mz-debug
+    name: "mz-debug Emulator"
     weight: 20
 ---
 

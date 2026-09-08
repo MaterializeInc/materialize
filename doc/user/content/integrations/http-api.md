@@ -3,7 +3,7 @@ title: "Connect to Materialize via HTTP"
 description: "How to use Materialize via HTTP"
 menu:
   main:
-    parent: "integrations"
+    parent: "serve-results"
     weight: 50
     name: "HTTP API"
 ---

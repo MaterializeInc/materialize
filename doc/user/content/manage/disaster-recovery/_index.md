@@ -4,8 +4,8 @@ description: "Learn about various disaster recovery (DR) strategies for Material
 disable_list: true
 menu:
   main:
-    parent: "manage"
-    weight: 45
+    parent: "materialize-cloud"
+    weight: 20
     identifier: "disaster-recovery"
 ---
 

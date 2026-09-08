@@ -1,10 +1,6 @@
 ---
 title: "Foreign data wrapper (FDW) "
 description: "Use FDW to access Materialize"
-menu:
-  main:
-    parent: "integrations"
-    weight: 30
 ---
 
 {{% include-headless "/headless/fdw/fdw-setup-intro" %}}

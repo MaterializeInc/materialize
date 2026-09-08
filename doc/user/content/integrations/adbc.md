@@ -3,8 +3,8 @@ title: "ADBC (Arrow Database Connectivity)"
 description: "Use the ADBC PostgreSQL driver to pull Materialize results into Apache Arrow"
 menu:
   main:
-    parent: "integrations"
-    weight: 35
+    parent: "serve-results"
+    weight: 45
 ---
 
 {{< warn-if-unreleased "v26.40" >}}

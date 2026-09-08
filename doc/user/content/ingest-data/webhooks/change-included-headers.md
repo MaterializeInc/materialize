@@ -4,7 +4,7 @@ description: "Use ALTER SCHEMA ... SWAP WITH to change which headers a webhook s
 menu:
   main:
     parent: "webhooks"
-    name: "Changing included headers"
+    name: "Change included headers"
     weight: 2
 ---
 

@@ -19,13 +19,19 @@ publishDate = ["publishDate"]
     label = "English"
     weight = 1
 #
-# Get started
+# Reader journey
 #
 
 [[menu.main]]
 identifier = "get-started"
-name = "Get started"
-weight = 5
+name = "Getting started"
+url = "/get-started/quickstart/"
+weight = 10
+
+[[menu.main]]
+identifier = "fundamentals"
+name = "Learn about Materialize"
+weight = 20
 
 #
 # Connect sources
@@ -35,25 +41,25 @@ weight = 5
 name = "CockroachDB"
 parent = 'ingest-data'
 identifier = 'crdb'
-weight = 20
+weight = 60
 
 [[menu.main]]
 name = "Redpanda"
 parent = 'ingest-data'
 identifier = 'redpanda'
-weight = 25
+weight = 70
 
 [[menu.main]]
 identifier = "webhooks"
 name = "Webhooks"
 parent = 'ingest-data'
-weight = 30
+weight = 80
 
 [[menu.main]]
 identifier = "network-security"
 name = "Network configuration"
 parent = 'ingest-data'
-weight = 35
+weight = 92
 
 #
 # Transform data
@@ -61,8 +67,23 @@ weight = 35
 
 [[menu.main]]
 identifier = "transform-data"
-name = "Transform data"
-weight = 12
+name = "Build data products"
+weight = 40
+
+[[menu.main]]
+identifier = "developer-tools"
+name = "Developer tools"
+weight = 70
+
+[[menu.main]]
+identifier = "clusters"
+name = "Clusters"
+weight = 80
+
+[[menu.main]]
+identifier = "materialize-cloud"
+name = "Materialize Cloud"
+weight = 110
 
 
 #
@@ -71,8 +92,8 @@ weight = 12
 
 [[menu.main]]
 identifier = "sql"
-name = "SQL Reference"
-weight = 75
+name = "SQL and catalog reference"
+weight = 140
 
 #
 # Legacy Create Source
@@ -85,15 +106,6 @@ identifier = 'create-source-legacy'
 weight = 90
 
 
-[[menu.main]]
-identifier = "reference"
-name = "Reference"
-weight = 76
-
-#
-# Releases
-#
-
 #
 # About
 #
@@ -101,7 +113,7 @@ weight = 76
 [[menu.main]]
 identifier = "about"
 name = "About"
-weight = 90
+weight = 150
 
 [[menu.main]]
 name = "Materialize Cloud Security and Compliance"

@@ -6,7 +6,7 @@ menu:
     name: "Dictionary compression"
     parent: transform-data
     identifier: dictionary-compression
-    weight: 35
+    weight: 45
 ---
 
 {{% include-headless "/headless/dictionary-compression/overview" %}}

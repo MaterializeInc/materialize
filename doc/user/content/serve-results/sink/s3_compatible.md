@@ -6,8 +6,8 @@ aliases:
 menu:
   main:
     parent: sink
-    name: "S3 Compatible Object Storage"
-    weight: 10
+    name: "S3-compatible object storage"
+    weight: 31
 ---
 
 This guide walks you through the steps required to export results from

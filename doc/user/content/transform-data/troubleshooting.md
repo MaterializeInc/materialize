@@ -3,9 +3,9 @@ title: "Troubleshooting"
 description: "How to troubleshoot common data transformation scenarios where Materialize is not working as expected."
 menu:
   main:
-    name: "Troubleshooting"
+    name: "Troubleshoot query performance"
     identifier: transform-troubleshooting
-    parent: transform-data
+    parent: serve-results
     weight: 90
 ---
 

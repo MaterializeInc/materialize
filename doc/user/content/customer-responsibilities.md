@@ -3,8 +3,8 @@ title: "Customer responsibility model (Cloud)"
 description: "Details about the Materialize Cloud's customer responsibility model."
 menu:
   main:
-    parent: 'about'
-    weight: 25
+    parent: 'materialize-cloud'
+    weight: 30
 ---
 
 The Materialize Cloud platform is built with a **shared responsibility model**

@@ -5,6 +5,7 @@ make_table_row_headers_searchable: true
 menu:
   main:
     parent: "mcp-server"
+    name: "MCP server for developers"
     weight: 25
     identifier: "mcp-server-developer"
 ---

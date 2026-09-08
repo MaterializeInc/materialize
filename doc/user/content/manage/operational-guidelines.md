@@ -3,7 +3,7 @@ title: "Operational guidelines"
 description: "General guidelines for production"
 menu:
   main:
-    parent: "manage"
+    parent: "clusters"
     weight: 4
     name: "Operational guidelines"
     identifier: "operational-guidelines"

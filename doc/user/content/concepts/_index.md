@@ -4,8 +4,8 @@ description: "Learn about the core concepts in Materialize."
 disable_list: true
 menu:
   main:
-    parent: get-started
-    weight: 25
+    parent: fundamentals
+    weight: 10
     identifier: concepts
 aliases:
   - /overview/api-components/

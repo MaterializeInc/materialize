@@ -4,8 +4,9 @@ description: "How to monitor the snapshotting progress and data lag for your sou
 menu:
   main:
     identifier: ingest-monitoring
+    name: "Monitor data ingestion"
     parent: ingest-data
-    weight: 39
+    weight: 93
 aliases:
   - /self-managed/v25.2/ingest-data/monitoring-data-ingestion/
 ---

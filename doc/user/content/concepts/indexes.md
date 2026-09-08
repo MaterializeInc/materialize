@@ -4,7 +4,7 @@ description: "Learn about indexes in Materialize."
 menu:
   main:
     parent: concepts
-    weight: 20
+    weight: 60
     identifier: 'concepts-indexes'
 aliases:
   - /get-started/key-concepts/#indexes

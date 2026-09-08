@@ -5,7 +5,8 @@ disable_list: true
 menu:
   main:
     parent: transform-data
-    weight: 45
+    name: "Update materialized views"
+    weight: 30
     identifier: updating-materialized-views
 ---
 

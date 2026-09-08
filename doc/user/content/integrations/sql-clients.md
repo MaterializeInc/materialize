@@ -7,8 +7,8 @@ aliases:
   - /integrations/psql/
 menu:
   main:
-    parent: "integrations"
-    weight: 10
+    parent: "serve-results"
+    weight: 30
     name: "SQL clients"
 ---
 

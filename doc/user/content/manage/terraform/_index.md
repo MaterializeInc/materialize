@@ -4,8 +4,8 @@ description: "Create and manage Materialize resources with Terraform"
 disable_list: true
 menu:
   main:
-    parent: manage
-    weight: 30
+    parent: developer-tools
+    weight: 40
     identifier: "manage-terraform"
     name: "Manage with Terraform"
 aliases:

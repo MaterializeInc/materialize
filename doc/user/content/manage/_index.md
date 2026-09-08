@@ -2,10 +2,6 @@
 title: "Manage Materialize"
 description: ""
 disable_list: true
-menu:
-  main:
-    identifier: "manage"
-    weight: 50
 aliases:
   - /self-managed/v25.2/manage/
   - /self-managed/v25.2/manage/operational-guidelines/

@@ -7,7 +7,7 @@ menu:
   main:
     parent: sink
     name: "Kafka and Redpanda"
-    weight: 25
+    weight: 10
 ---
 
 <!-- Ported over content from sink-kafka.md. -->

@@ -4,6 +4,7 @@ description: "Model your business as a compounding ontology of live data product
 menu:
   main:
     parent: architecture-patterns
+    name: "Live context graph"
     weight: 5
     identifier: 'architecture-patterns-live-context-graph'
 aliases:

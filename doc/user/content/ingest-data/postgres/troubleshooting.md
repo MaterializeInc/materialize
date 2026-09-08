@@ -4,7 +4,7 @@ description: "Troubleshooting guides for PostgreSQL source errors in Materialize
 menu:
   main:
     parent: "postgresql"
-    name: "Troubleshooting"
+    name: "Troubleshoot"
     identifier: "pg-troubleshooting"
     weight: 80
 ---

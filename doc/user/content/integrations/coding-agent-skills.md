@@ -4,6 +4,7 @@ description: "Add Materialize skills to coding agents like Claude Code, Codex, C
 menu:
   main:
     parent: "mcp-server"
+    name: "Install skills"
     weight: 7
 ---
 

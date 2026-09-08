@@ -5,6 +5,7 @@ disable_toc: true
 menu:
   main:
     parent: console
+    name: "Monitor"
     weight: 25
     identifier: console-monitoring
 ---

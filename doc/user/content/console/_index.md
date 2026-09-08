@@ -5,8 +5,9 @@ disable_list: true
 disable_toc: true
 menus:
   main:
-    parent: "get-started"
-    weight: 24
+    parent: "developer-tools"
+    name: "Console"
+    weight: 80
     identifier: 'console'
 aliases:
   - /self-managed/v25.2/console/

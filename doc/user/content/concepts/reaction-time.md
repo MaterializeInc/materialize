@@ -4,7 +4,8 @@ description: "Learn about indexes in Materialize."
 menu:
   main:
     parent: concepts
-    weight: 100
+    name: "Reaction time, freshness, and query latency"
+    weight: 10
     identifier: 'concepts-reaction-time'
 ---
 

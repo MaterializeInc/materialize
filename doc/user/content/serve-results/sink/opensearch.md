@@ -5,7 +5,7 @@ menu:
   main:
     parent: sink
     name: "OpenSearch"
-    weight: 30
+    weight: 41
 ---
 
 This guide shows how to send results from Materialize to OpenSearch. A

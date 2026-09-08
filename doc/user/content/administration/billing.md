@@ -3,8 +3,8 @@ title: "Usage & billing (Cloud)"
 description: "Understand the billing model of Materialize Cloud, and learn best practices for cost control."
 menu:
   main:
-    parent: "manage"
-    weight: 50
+    parent: "materialize-cloud"
+    weight: 10
 ---
 
 Materialize determines billing based on your compute and storage usage.

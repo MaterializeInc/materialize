@@ -3,7 +3,7 @@ title: "Dataflow troubleshooting"
 description: "How to troubleshoot common dataflow-level scenarios where Materialize is not working as expected."
 menu:
   main:
-    name: "Dataflow troubleshooting"
+    name: "Troubleshoot dataflows"
     identifier: dataflow-troubleshooting
     parent: transform-data
     weight: 88

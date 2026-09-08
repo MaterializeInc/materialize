@@ -5,6 +5,7 @@ mermaid: true
 menu:
   main:
     parent: updating-materialized-views
+    name: "Replace materialized views"
     weight: 10
     identifier: replace-materialized-view
 aliases:

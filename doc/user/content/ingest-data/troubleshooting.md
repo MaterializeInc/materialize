@@ -3,10 +3,10 @@ title: "Troubleshooting"
 description: "How to troubleshoot common data ingestion scenarios where Materialize is not working as expected."
 menu:
   main:
-    name: "Troubleshooting"
+    name: "Troubleshoot ingestion"
     identifier: ingest-troubleshooting
     parent: ingest-data
-    weight: 40
+    weight: 94
 aliases:
   - /ops/diagnosing-using-sql/
   - /ops/troubleshooting/

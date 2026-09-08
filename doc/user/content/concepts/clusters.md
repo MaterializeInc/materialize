@@ -4,7 +4,7 @@ description: "Learn about clusters in Materialize."
 menu:
   main:
     parent: 'concepts'
-    weight: 5
+    weight: 70
     identifier: 'concepts-clusters'
 aliases:
   - /get-started/key-concepts/#clusters

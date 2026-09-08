@@ -5,6 +5,7 @@ make_table_row_headers_searchable: true
 menu:
   main:
     parent: "mcp-server"
+    name: "MCP server for agents"
     weight: 20
     identifier: "mcp-server-agent"
 ---

@@ -3,9 +3,9 @@ title: "Connection Pooling"
 description: "How to use connection pooling with Materialize"
 menu:
   main:
-    parent: "integrations"
-    weight: 20
-    name: "Connection Pooling"
+    parent: "serve-results"
+    weight: 40
+    name: "Connection pooling"
 ---
 
 Because Materialize is wire-compatible with PostgreSQL, you can use any

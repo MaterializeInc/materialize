@@ -4,10 +4,9 @@ description: "Sinking results from Materialize to external systems."
 disable_list: true
 menu:
   main:
-    parent: serve-results
-    name: "Sink results"
+    name: "Export data"
     identifier: 'sink'
-    weight: 40
+    weight: 60
 aliases:
   - /self-managed/v25.2/serve-results/sink/
   - /self-managed/v25.2/serve-results/sink/s3/
