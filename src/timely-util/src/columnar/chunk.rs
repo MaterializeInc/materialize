@@ -341,6 +341,34 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
         ColumnChunk::Resident(Rc::new(column), 0)
     }
 
+    /// Append pieces of at most `COMMIT_BYTES`, preserving order and
+    /// generational depth. A single update may exceed the bound because it
+    /// cannot be split.
+    fn push_bounded(column: Column<(D, T, R)>, depth: u8, out: &mut VecDeque<Self>) {
+        let len = column.borrow().len();
+        let bytes = column.length_in_bytes();
+        if len <= 1 || bytes <= COMMIT_BYTES {
+            if len > 0 {
+                out.push_back(Self::Resident(Rc::new(column), depth));
+            }
+            return;
+        }
+        // Cut at the average width to 95% of the bound, so uniform rows fill
+        // their size class and leave one short remainder that `settle` can
+        // coalesce. The margin absorbs per-piece framing. A piece that still
+        // overflows, from uneven widths, is cut again.
+        let records = (len.saturating_mul(COMMIT_BYTES - COMMIT_BYTES / 20) / bytes).max(1);
+        let view = column.borrow();
+        let mut start = 0;
+        while start < len {
+            let end = len.min(start + records);
+            let mut part = <(D, T, R) as Columnar>::Container::default();
+            part.extend_from_self(view, start..end);
+            Self::push_bounded(Column::Typed(part), depth, out);
+            start = end;
+        }
+    }
+
     /// The body as an owned column. A spilled body is copied out of the pool
     /// within this call. A shared resident body is copied.
     pub fn into_column(self) -> Column<(D, T, R)> {
@@ -965,10 +993,25 @@ where
                 }
                 ColumnChunk::Resident(rc, depth) => (rc, depth),
             };
+            if rc.length_in_bytes() > COMMIT_BYTES && rc.borrow().len() > 1 {
+                let col = Rc::try_unwrap(rc).unwrap_or_else(|rc| copy_column(&rc));
+                let mut pieces = VecDeque::new();
+                Self::push_bounded(col, depth, &mut pieces);
+                for piece in pieces.into_iter().rev() {
+                    input.push_front(piece);
+                }
+                continue;
+            }
             let full = at_commit_size(&rc);
             // A sub-threshold chunk coalesces into the open carry by borrow,
             // never unwrapping a shared body.
-            if !full && let Some((mut acc, acc_depth)) = carry.take() {
+            let fits = carry.as_ref().is_some_and(|(acc, _)| {
+                acc.length_in_bytes().saturating_add(rc.length_in_bytes()) <= COMMIT_BYTES
+            });
+            if !full
+                && fits
+                && let Some((mut acc, acc_depth)) = carry.take()
+            {
                 let Column::Typed(acc_c) = &mut acc else {
                     unreachable!("carry is always Typed");
                 };
@@ -1246,6 +1289,7 @@ pub trait ChainState: differential_dataflow::trace::Builder {
 /// raw input columns through a [`ColumnChunker`] and wraps its output chunks.
 pub struct ChunkChunker<D: Columnar, T: Columnar, R: Columnar> {
     inner: ColumnChunker<(D, T, R)>,
+    ready: VecDeque<ColumnChunk<D, T, R>>,
     staged: ColumnChunk<D, T, R>,
 }
 
@@ -1259,6 +1303,7 @@ where
     fn default() -> Self {
         Self {
             inner: Default::default(),
+            ready: VecDeque::new(),
             staged: Default::default(),
         }
     }
@@ -1286,14 +1331,20 @@ where
     type Container = ColumnChunk<D, T, R>;
 
     fn extract(&mut self) -> Option<&mut Self::Container> {
-        let col = self.inner.extract()?;
-        self.staged = ColumnChunk::from_column(std::mem::take(col));
+        if self.ready.is_empty() {
+            let col = self.inner.extract()?;
+            ColumnChunk::push_bounded(std::mem::take(col), 0, &mut self.ready);
+        }
+        self.staged = self.ready.pop_front()?;
         Some(&mut self.staged)
     }
 
     fn finish(&mut self) -> Option<&mut Self::Container> {
-        let col = self.inner.finish()?;
-        self.staged = ColumnChunk::from_column(std::mem::take(col));
+        if self.ready.is_empty() {
+            let col = self.inner.finish()?;
+            ColumnChunk::push_bounded(std::mem::take(col), 0, &mut self.ready);
+        }
+        self.staged = self.ready.pop_front()?;
         Some(&mut self.staged)
     }
 }
@@ -1845,6 +1896,138 @@ mod tests {
         collected
     }
 
+    type WideUpdate = ((u64, String), u64, i64);
+    type WideChunk = ColumnChunk<(u64, String), u64, i64>;
+
+    fn wide_column(keys: impl Iterator<Item = u64>, bytes: usize) -> Column<WideUpdate> {
+        let mut column = Column::default();
+        for key in keys {
+            column.push_into(&((key, "x".repeat(bytes)), 0, 1));
+        }
+        column
+    }
+
+    fn assert_wide_byte_bound(chunks: VecDeque<WideChunk>, expected: usize, payload_bytes: usize) {
+        let mut keys = Vec::new();
+        for chunk in chunks {
+            let column = chunk.into_column();
+            assert!(
+                column.length_in_bytes() <= COMMIT_BYTES || column.borrow().len() == 1,
+                "{} bytes in a {}-record chunk",
+                column.length_in_bytes(),
+                column.borrow().len(),
+            );
+            let view = column.borrow();
+            for index in 0..view.len() {
+                let ((key, payload), time, diff) = view.get(index);
+                assert_eq!(payload.len(), payload_bytes);
+                assert!(payload.iter().all(|byte| *byte == b'x'));
+                assert_eq!((*time, *diff), (0, 1));
+                keys.push(*key);
+            }
+        }
+        assert_eq!(keys, (0..u64::cast_from(expected)).collect::<Vec<_>>());
+    }
+
+    #[mz_ore::test]
+    fn chunker_enforces_byte_bound() {
+        let mut chunker = ChunkChunker::default();
+        let mut input = wide_column((0..4000).rev(), 3000);
+        chunker.push_into(&mut input);
+        let mut chunks = VecDeque::new();
+        if let Some(chunk) = chunker.extract() {
+            chunks.push_back(std::mem::take(chunk));
+        }
+        while let Some(chunk) = chunker.finish() {
+            chunks.push_back(std::mem::take(chunk));
+        }
+        assert_wide_byte_bound(chunks, 4000, 3000);
+    }
+
+    #[mz_ore::test]
+    fn merge_settle_enforces_byte_bound() {
+        let mut left = VecDeque::from([WideChunk::from_column(wide_column(
+            (0..2000).step_by(2),
+            2100,
+        ))]);
+        let mut right = VecDeque::from([WideChunk::from_column(wide_column(
+            (1..2000).step_by(2),
+            2100,
+        ))]);
+        let mut merged = VecDeque::new();
+        while !left.is_empty() && !right.is_empty() {
+            WideChunk::merge(&mut left, &mut right, &mut merged);
+        }
+        merged.append(&mut left);
+        merged.append(&mut right);
+        let mut settled = VecDeque::new();
+        WideChunk::settle(&mut merged, true, &mut settled);
+        assert_wide_byte_bound(settled, 2000, 2100);
+    }
+
+    #[mz_ore::test]
+    fn settle_enforces_byte_bound_after_coalescing() {
+        let mut input = VecDeque::from([
+            WideChunk::from_column(wide_column(0..400, 3000)),
+            WideChunk::from_column(wide_column(400..800, 3000)),
+        ]);
+        let mut settled = VecDeque::new();
+        WideChunk::settle(&mut input, true, &mut settled);
+        assert_wide_byte_bound(settled, 800, 3000);
+    }
+
+    #[mz_ore::test]
+    fn settle_byte_bound_allows_indivisible_update() {
+        let mut input =
+            VecDeque::from([WideChunk::from_column(wide_column(0..1, 2 * COMMIT_BYTES))]);
+        let mut settled = VecDeque::new();
+        WideChunk::settle(&mut input, true, &mut settled);
+        assert_wide_byte_bound(settled, 1, 2 * COMMIT_BYTES);
+    }
+
+    /// Each side is under the bound, so any oversized output would have to
+    /// come from `merge_from` itself. One input interleaves record by record,
+    /// the other has runs long enough to gallop.
+    #[mz_ore::test]
+    fn merge_output_within_byte_bound_before_settle() {
+        let interleaved = (
+            wide_column((0..1600).step_by(2), 2100),
+            wide_column((1..1600).step_by(2), 2100),
+        );
+        let runs = (
+            wide_column((0..500).chain(1000..1100), 2100),
+            wide_column(500..1000, 2100),
+        );
+        for (left, right) in [interleaved, runs] {
+            let expected = left.borrow().len() + right.borrow().len();
+            let mut left = VecDeque::from([WideChunk::from_column(left)]);
+            let mut right = VecDeque::from([WideChunk::from_column(right)]);
+            let mut merged = VecDeque::new();
+            while !left.is_empty() && !right.is_empty() {
+                WideChunk::merge(&mut left, &mut right, &mut merged);
+            }
+            assert!(merged.len() > 1, "merge never cut its output");
+            merged.append(&mut left);
+            merged.append(&mut right);
+            assert_wide_byte_bound(merged, expected, 2100);
+        }
+    }
+
+    #[mz_ore::test]
+    fn settle_split_preserves_depth() {
+        let column = Rc::new(wide_column(0..2000, 2100));
+        let shared = Rc::clone(&column);
+        let mut input = VecDeque::from([WideChunk::Resident(column, 3)]);
+        let mut settled = VecDeque::new();
+        WideChunk::settle(&mut input, true, &mut settled);
+        assert!(settled.len() > 1, "oversized chunk was not split");
+        for chunk in &settled {
+            assert_eq!(chunk.depth(), 3, "split piece changed generation");
+        }
+        assert_eq!(shared.borrow().len(), 2000, "shared body was mutated");
+        assert_wide_byte_bound(settled, 2000, 2100);
+    }
+
     /// Advancing a large input cuts the output into several chunks near the
     /// ship threshold, and their concatenation is the reference result.
     #[mz_ore::test]
@@ -2140,7 +2323,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // too slow
     fn settle_commits_at_accumulated_depth() {
         set_spill_override(Some(test_pool()));
-        let big: Vec<Tuple> = (0..100_000u64).map(|i| ((i, 0), 0, 1i64)).collect();
+        let big: Vec<Tuple> = (0..60_000u64).map(|i| ((i, 0), 0, 1i64)).collect();
         let mut input = VecDeque::from([
             ColumnChunk::Resident(Rc::new(build_column(&big)), 1),
             ColumnChunk::Resident(Rc::new(build_column(&[((0, 0), 0, 1)])), 0),
@@ -2163,10 +2346,8 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn settle_carry_commits_at_target() {
-        // ~1.5 MiB per chunk (a row serializes to 32 bytes): under
-        // `at_commit_size`, so the carry has to coalesce, and a coalesced
-        // pair lands in the dead zone of the periodic window check.
-        let chunk_rows = u64::cast_from(1_500_000usize / 32);
+        // Two inputs fit in one slot. A third must start another chunk.
+        let chunk_rows = u64::cast_from(800_000usize / 32);
         let mut input: VecDeque<TestChunk> = (0..4u64)
             .map(|c| {
                 let data: Vec<Tuple> = (0..chunk_rows)
@@ -2183,8 +2364,8 @@ mod tests {
         for chunk in &out {
             let col = chunk.clone().into_column();
             assert!(
-                col.length_in_bytes() < 2 * COMMIT_BYTES,
-                "settled chunk of {} bytes exceeds twice the commit target",
+                col.length_in_bytes() <= COMMIT_BYTES,
+                "settled chunk of {} bytes exceeds the commit target",
                 col.length_in_bytes(),
             );
         }
