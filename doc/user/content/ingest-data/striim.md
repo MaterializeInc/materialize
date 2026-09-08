@@ -85,7 +85,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
 [resource isolation](/sql/create-cluster/#resource-isolation).
 {{< /note >}}
 
-1. In the [SQL Shell](/console/), or your preferred SQL
+1. In the [SQL Shell](/developer-tools/console/), or your preferred SQL
    client connected to Materialize, use the [`CREATE CONNECTION`](/sql/create-connection/)
    command to create connection objects with access and authentication details
    to your Kafka cluster and schema registry:

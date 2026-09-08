@@ -18,8 +18,8 @@ your applications, services, dashboards, and AI agents read.
 
 ## From SQL to live data products
 
-You use [views](/concepts/views/) and [materialized
-views](/concepts/views/#materialized-views) to define your business objects in
+You use [views](/fundamentals/concepts/views/) and [materialized
+views](/fundamentals/concepts/views/#materialized-views) to define your business objects in
 SQL. Materialize keeps the results of **indexed views** and **materialized
 views** up to date as it ingests your data.
 
@@ -48,11 +48,11 @@ Structuring your transformations as views gives you:
 {{< linkbox title="Optimize and operate" >}}
 - [Query optimization](/transform-data/optimization/)
 - [Updating materialized views](/transform-data/updating-materialized-views/)
-- [Indexes: best practices](/concepts/indexes/#best-practices)
+- [Indexes: best practices](/fundamentals/concepts/indexes/#best-practices)
 {{</ linkbox >}}
 
 {{< linkbox title="Troubleshoot" >}}
-- [Troubleshooting](/transform-data/troubleshooting/)
+- [Troubleshooting](/serve-results/troubleshooting/)
 - [Freshness troubleshooting](/transform-data/freshness-troubleshooting/)
 - [Dataflow troubleshooting](/transform-data/dataflow-troubleshooting/)
 - [FAQ: Indexes](/transform-data/faq/)

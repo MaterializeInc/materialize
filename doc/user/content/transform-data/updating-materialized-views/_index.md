@@ -16,7 +16,7 @@ As your application and workload evolves, you might need to update materialized 
 
 | Strategy | When to use | Tradeoffs |
 |----------|-------------|-----------|
-| [**Blue/green deployments**](/manage/dbt/blue-green-deployments/) | Complex changes across multiple objects, or when using dbt for deployment orchestration. | Ensures no impact to data freshness during cutover, but temporarily doubles resource usage and requires team coordination. |
+| [**Blue/green deployments**](/developer-tools/dbt/blue-green-deployments/) | Complex changes across multiple objects, or when using dbt for deployment orchestration. | Ensures no impact to data freshness during cutover, but temporarily doubles resource usage and requires team coordination. |
 | [**Replace materialized view**](replace-materialized-view/) | Simple changes to a single materialized view's query definition. | Simpler to deploy with no additional tooling, but may impact freshness on the materialized view and all downstream objects. |
 
 ## Blue/green deployments
@@ -32,7 +32,7 @@ This strategy is ideal when:
 - You need to ensure zero impact to data freshness during the cutover
 - You have the resources to temporarily run two environments in parallel
 
-For detailed instructions, see the [Blue/green deployment guide](/manage/dbt/blue-green-deployments/).
+For detailed instructions, see the [Blue/green deployment guide](/developer-tools/dbt/blue-green-deployments/).
 
 ## Replace materialized view
 

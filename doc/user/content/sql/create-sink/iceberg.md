@@ -173,7 +173,7 @@ Consider running [Iceberg compaction](https://iceberg.apache.org/docs/latest/mai
 
 ### Prerequisites: Create connections
 
-To create an Iceberg sink, you need an [Iceberg catalog connection](/serve-results/sink/iceberg/):
+To create an Iceberg sink, you need an [Iceberg catalog connection](/export-data/iceberg/):
 
 {{< tabs >}}
 {{< tab "AWS S3 Tables" >}}
@@ -234,7 +234,7 @@ mode](#append-mode).
 
 ## Related pages
 
-- [Iceberg sink guide](/serve-results/sink/iceberg/)
+- [Iceberg sink guide](/export-data/iceberg/)
 - [`SHOW SINKS`](/sql/show-sinks)
 - [`DROP SINK`](/sql/drop-sink)
 - [`CREATE CONNECTION`](/sql/create-connection)

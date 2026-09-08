@@ -21,7 +21,7 @@ For help getting started with your data or other questions about Materialize, yo
 
 ### What are the limits of a free trial?
 
-In Materialize, [clusters](/concepts/clusters/) are the pools of
+In Materialize, [clusters](/fundamentals/concepts/clusters/) are the pools of
 compute resources for running your workloads. The size and replication factor
 of each cluster determines its [credit usage](/sql/create-cluster/#credit-usage).
 
@@ -46,7 +46,7 @@ is under the rate limit of 4 credits per hour.
 
 To continue using Materialize, you can upgrade to a paid, [On Demand
 plan](https://materialize.com/pdfs/on-demand-terms.pdf) from the billing section
-of the [Materialize console](/console/). Otherwise,
+of the [Materialize console](/developer-tools/console/). Otherwise,
 Materialize will delete your resources and data at the end of the trial period.
 
 ### How do I monitor my credit consumption rate?

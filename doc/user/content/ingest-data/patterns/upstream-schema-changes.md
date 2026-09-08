@@ -509,7 +509,7 @@ and the pre-emptive mitigations are relational-specific.
 ## Considerations
 
 A replacement materialized view does not inherit
-[`RETAIN HISTORY`](/transform-data/patterns/durable-subscriptions/#history-retention-period)
+[`RETAIN HISTORY`](/serve-results/durable-subscriptions/#history-retention-period)
 from its target. Restate the option on the replacement's definition if you
 depend on it. Historical reads that span a swap boundary are not available on
 the new collection.

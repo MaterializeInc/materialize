@@ -9,7 +9,7 @@ menu:
     weight: 84
 ---
 
-[Freshness](/concepts/reaction-time/#freshness) measures the time from when a
+[Freshness](/fundamentals/concepts/reaction-time/#freshness) measures the time from when a
 change occurs in an upstream system to when it becomes visible in the results of
 a query. This guide shows how to track freshness for an object over time and how
 to summarize a whole window of freshness observations with a CCDF or an HDR
@@ -57,12 +57,12 @@ healthy pattern for a lightly loaded object.
 Materialize exposes wallclock lag history through two relations. Which one you
 query has a large impact on performance.
 
-- [`mz_internal.mz_wallclock_global_lag_recent_history`](/reference/system-catalog/mz_internal/#mz_wallclock_global_lag_recent_history)
+- [`mz_internal.mz_wallclock_global_lag_recent_history`](/sql/system-catalog/mz_internal/#mz_wallclock_global_lag_recent_history)
   is indexed and holds only the past 24 hours of data. Querying it is fast, so
   it is the right choice for frequent or interactive monitoring and for
   dashboards. Use this relation by default, as in the query above.
 
-- [`mz_internal.mz_wallclock_global_lag_history`](/reference/system-catalog/mz_internal/#mz_wallclock_global_lag_history)
+- [`mz_internal.mz_wallclock_global_lag_history`](/sql/system-catalog/mz_internal/#mz_wallclock_global_lag_history)
   covers the full retention window (at least 30 days) but is unindexed, so it
   can be slow to query. A single query can occupy `mz_catalog_server` for
   several seconds. Reach for this

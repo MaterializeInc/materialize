@@ -33,14 +33,14 @@ In this guide, you will:
 
 Before using this guide, you should be familiar with:
 
-- [Sources](/concepts/sources/) and how data flows into Materialize
-- [Views and materialized views](/concepts/views/)
-- [Indexes](/concepts/indexes/) and how they improve query performance
-- [Clusters](/concepts/clusters/) and compute resource management
+- [Sources](/fundamentals/concepts/sources/) and how data flows into Materialize
+- [Views and materialized views](/fundamentals/concepts/views/)
+- [Indexes](/fundamentals/concepts/indexes/) and how they improve query performance
+- [Clusters](/fundamentals/concepts/clusters/) and compute resource management
 
 ### Step 0. Create clusters
 
-This guide uses a [three-tier cluster architecture](/manage/operational-guidelines/#three-tier-architecture),
+This guide uses a [three-tier cluster architecture](/clusters/operational-guidelines/#three-tier-architecture),
 with separate clusters for ingestion, computation, and serving.
 
 {{< tabs >}}
@@ -367,6 +367,6 @@ name="troubleshooting-lagging-original-view" %}}
 - [Updating materialized views](/transform-data/updating-materialized-views/)
 - [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view)
 - [`ALTER MATERIALIZED VIEW`](/sql/alter-materialized-view)
-- [Views](/concepts/views/)
-- [Indexes](/concepts/indexes/)
-- [Clusters](/concepts/clusters/)
+- [Views](/fundamentals/concepts/views/)
+- [Indexes](/fundamentals/concepts/indexes/)
+- [Clusters](/fundamentals/concepts/clusters/)

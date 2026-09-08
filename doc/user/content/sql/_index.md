@@ -8,6 +8,7 @@ menu:
     parent: "sql"
     weight: 100
 aliases:
+  - /reference/
   - /sql/alter-owner/
   - /self-managed/v25.2/sql/
   - /self-managed/v25.2/sql/alter-system-set/

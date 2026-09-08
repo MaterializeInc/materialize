@@ -10,9 +10,9 @@ aliases:
 {{% text-style %}}
 
 Materialize provides always-fresh results while also providing [strong
-consistency guarantees](/reference/isolation-level/). In Materialize, both
-[indexes](/concepts/indexes/ "Indexes represents query results stored in memory
-within a cluster") and [materialized views](/concepts/views/#materialized-views)
+consistency guarantees](/serve-results/isolation-level/). In Materialize, both
+[indexes](/fundamentals/concepts/indexes/ "Indexes represents query results stored in memory
+within a cluster") and [materialized views](/fundamentals/concepts/views/#materialized-views)
 **incrementally update** results when Materialize ingests new data; i.e., work
 is performed on writes. Because work is performed on writes, reads from these
 objects return the already up-to-date results.
@@ -21,11 +21,11 @@ In this quickstart, you will continuously ingest a sample auction data set to
 build an operational use case around finding auction winners and auction
 flippers. Specifically, you will:
 
-- Create and query various [views](/concepts/views/) on sample auction data. The
+- Create and query various [views](/fundamentals/concepts/views/) on sample auction data. The
   data is continually generated at 1 second intervals to mimic a data-intensive
   workload.
 
-- Create an [index](/concepts/indexes "Indexes represents query results stored
+- Create an [index](/fundamentals/concepts/indexes "Indexes represents query results stored
   in memory within a cluster") to compute and store view results in memory. As
   new auction data arrives, the index **incrementally updates** view
   results instead of recalculating the results from scratch, making fresh
@@ -45,7 +45,7 @@ trial](https://materialize.com/register/?utm_campaign=General&utm_source=documen
 Alternatively:
 
 - You can [download the Materialize
-Emulator](/get-started/install-materialize-emulator/). However, the Materialize
+Emulator](/developer-tools/install-materialize-emulator/). However, the Materialize
 Emulator does not provide the full experience of using Materialize.
 
 - You can run against your [Self-managed
@@ -55,7 +55,7 @@ Emulator does not provide the full experience of using Materialize.
 ## Step 0. Open the SQL Shell
 
 - If you have a Materialize account, navigate to the [Materialize
-  Console](/console/) and sign in. By default, you should
+  Console](/developer-tools/console/) and sign in. By default, you should
   be in the SQL Shell. If you're already signed in, you can access the SQL Shell in the left-hand menu.
 
 - If you are using the Materialize Emulator, open the Materialize Console in
@@ -69,7 +69,7 @@ Emulator does not provide the full experience of using Materialize.
 By default, you are using the `quickstart` cluster, working in the
 `materialize.public` [namespace](/sql/namespaces/), where:
 
-- A [cluster](/concepts/clusters/) is an isolated pool of compute resources
+- A [cluster](/fundamentals/concepts/clusters/) is an isolated pool of compute resources
   (CPU, memory, and scratch disk space) for running your workloads),
 
 - `materialize` is the database name, and
@@ -97,11 +97,11 @@ See also [Naming restrictions](/sql/identifiers/#naming-restrictions).
 
 ## Step 2. Create the source
 
-[Sources](/concepts/sources/) are external systems from which Materialize reads
+[Sources](/fundamentals/concepts/sources/) are external systems from which Materialize reads
 in data. This tutorial uses Materialize's [sample `Auction` load
 generator](/sql/create-source/load-generator/#auction) to create the source.
 
-1. Create the [source](/concepts/sources "External systems from which
+1. Create the [source](/fundamentals/concepts/sources "External systems from which
    Materialize reads data.") using the [`CREATE SOURCE`](/sql/create-source/)
    command.
 
@@ -229,7 +229,7 @@ generator](/sql/create-source/load-generator/#auction) to create the source.
 
 ## Step 3. Create a view to find winning bids
 
-A [view](/concepts/views/) is a saved name for the underlying `SELECT`
+A [view](/fundamentals/concepts/views/) is a saved name for the underlying `SELECT`
 statement, providing an alias/shorthand when referencing the query. The
 underlying query is not executed during the view creation; instead, the
 underlying query is executed when the view is referenced.
@@ -240,7 +240,7 @@ auction ended. As new auction and bid data appears, the query must be rerun to
 get up-to-date results.
 
 1. Using the [`CREATE VIEW`](/sql/create-view/) command, create a
-   [**view**](/concepts/views/ "Saved name/alias for a query") to find the
+   [**view**](/fundamentals/concepts/views/ "Saved name/alias for a query") to find the
    winning (highest) bids.
 
    ```mzsql
@@ -284,7 +284,7 @@ get up-to-date results.
    grows.
 
    In Materialize, to make the queries more performant even as data
-   continues to grow, you can create [**indexes**](/concepts/indexes/) on views.
+   continues to grow, you can create [**indexes**](/fundamentals/concepts/indexes/) on views.
    Indexes provide always fresh view results in memory within a cluster by
    performing incremental updates as new data arrives. Queries can then read
    from the in-memory, already up-to-date results instead of re-running the
@@ -295,7 +295,7 @@ get up-to-date results.
 ## Step 4. Create an index to provide up-to-date results
 
 Indexes in Materialize represents query results stored in memory within a
-cluster. In Materialize, you can create [indexes](/concepts/indexes/) on views
+cluster. In Materialize, you can create [indexes](/fundamentals/concepts/indexes/) on views
 to provide always fresh, up-to-date view results in memory within a cluster.
 Queries can then read from the in-memory, already up-to-date results instead of
 re-running the underlying statement.
@@ -581,7 +581,7 @@ To clean up the quickstart environment:
 
 ## Summary
 
-In Materialize, [indexes](/concepts/indexes/) represent query results stored in
+In Materialize, [indexes](/fundamentals/concepts/indexes/) represent query results stored in
 memory within a cluster. When you create an index on a view, the index
 incrementally updates the view results (instead of recalculating the results
 from scratch) as Materialize ingests new data. These up-to-date results are then
@@ -610,18 +610,18 @@ The quickstart used an index since:
 
 Before creating an index (which represents query results stored in memory),
 consider its memory usage as well as its [compute cost
-implications](/administration/billing/#compute). For best practices when
-creating indexes, see [Index Best Practices](/concepts/indexes/#best-practices).
+implications](/materialize-cloud/billing/#compute). For best practices when
+creating indexes, see [Index Best Practices](/fundamentals/concepts/indexes/#best-practices).
 
 ### Additional information
 
-- [Clusters](/concepts/clusters)
-- [Indexes](/concepts/indexes)
-- [Sources](/concepts/sources)
-- [Views](/concepts/views/)
+- [Clusters](/fundamentals/concepts/clusters)
+- [Indexes](/fundamentals/concepts/indexes)
+- [Sources](/fundamentals/concepts/sources)
+- [Views](/fundamentals/concepts/views/)
 - [Idiomatic Materialize SQL
   chart](/transform-data/idiomatic-materialize-sql/appendix/idiomatic-sql-chart/)
-- [Usage & Billing](/administration/billing/#compute)
+- [Usage & Billing](/materialize-cloud/billing/#compute)
 - [`CREATE INDEX`](/sql/create-index/)
 - [`CREATE SCHEMA`](/sql/create-schema/)
 - [`CREATE SOURCE`](/sql/create-source/)
@@ -640,11 +640,11 @@ creating indexes, see [Index Best Practices](/concepts/indexes/#best-practices).
 - To get started ingesting your own data from an external system like Kafka,
   MySQL or PostgreSQL, check the documentation for
   [sources](/sql/create-source/), and navigate to **Data** > **Sources** > **New
-  source** in the [Materialize Console](/console/) to create your first source.
+  source** in the [Materialize Console](/developer-tools/console/) to create your first source.
 
 - To have your coding agent (such as Claude Code, Codex, or Cursor) write more
   accurate Materialize SQL, install the [Materialize agent
-  skills](/integrations/coding-agent-skills/). The skills give your agent access
+  skills](/developer-tools/mcp-server/coding-agent-skills/). The skills give your agent access
   to Materialize documentation and reference material:
 
   ```bash
@@ -652,12 +652,12 @@ creating indexes, see [Index Best Practices](/concepts/indexes/#best-practices).
   ```
 
 - To let your agent query your data and inspect your deployment, connect it to
-  Materialize's built-in [MCP servers](/integrations/mcp-server/):
+  Materialize's built-in [MCP servers](/developer-tools/mcp-server/):
 
-  - [MCP Server for agents](/integrations/mcp-server/mcp-agent/) to discover and
+  - [MCP Server for agents](/developer-tools/mcp-server/mcp-agent/) to discover and
     query your data products.
 
-  - [MCP Server for developers](/integrations/mcp-server/mcp-developer/) to
+  - [MCP Server for developers](/developer-tools/mcp-server/mcp-developer/) to
     troubleshoot and observe your deployment through the `mz_*` system catalog
     tables, and to run queries on your objects.
 

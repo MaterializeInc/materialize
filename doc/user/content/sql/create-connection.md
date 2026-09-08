@@ -81,7 +81,7 @@ connection:
 
 You can retrieve the external ID for the connection, as well as an example trust
 policy, by querying the
-[`mz_internal.mz_aws_connections`](/reference/system-catalog/mz_internal/#mz_aws_connections)
+[`mz_internal.mz_aws_connections`](/sql/system-catalog/mz_internal/#mz_aws_connections)
 table:
 
 ```mzsql
@@ -934,7 +934,7 @@ Materialize supports the following catalog type and destination combinations:
 | --- | --- | --- |
 | `'s3tablesrest'` | [AWS S3 Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html) | [AWS connection](#aws) |
 | `'rest'` | [Google Cloud BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog) {{< private-preview-inline />}} | [GCP connection](#gcp) |
-| `'rest'` | Any [Iceberg REST catalog](https://iceberg.apache.org/spec/), including [Databricks Unity Catalog](/serve-results/sink/iceberg-databricks/) | OAuth2 credentials in a secret |
+| `'rest'` | Any [Iceberg REST catalog](https://iceberg.apache.org/spec/), including [Databricks Unity Catalog](/export-data/iceberg-databricks/) | OAuth2 credentials in a secret |
 
 #### Syntax {#iceberg-catalog-syntax}
 
@@ -1018,12 +1018,12 @@ rather than falling back. Requesting it unconditionally would break connections
 that work today.
 
 Some catalogs, including [Databricks Unity
-Catalog](/serve-results/sink/iceberg-databricks/), vend
+Catalog](/export-data/iceberg-databricks/), vend
 credentials as the only
 way to reach their storage, so `ACCESS DELEGATION` is required there rather than
 optional.
 
-For more information about using Iceberg sinks, see the [Iceberg sink documentation](/serve-results/sink/iceberg/).
+For more information about using Iceberg sinks, see the [Iceberg sink documentation](/export-data/iceberg/).
 
 ## Network security connections
 
@@ -1054,7 +1054,7 @@ arn:aws:iam::664411391173:role/mz_<REGION-ID>_<CONNECTION-ID>
 After creating the connection, you must configure the AWS PrivateLink service
 to accept connections from the AWS principal Materialize will connect as. The
 principals for AWS PrivateLink connections in your region are stored in
-the [`mz_aws_privatelink_connections`](/reference/system-catalog/mz_catalog/#mz_aws_privatelink_connections)
+the [`mz_aws_privatelink_connections`](/sql/system-catalog/mz_catalog/#mz_aws_privatelink_connections)
 system table.
 
 ```mzsql
@@ -1205,9 +1205,9 @@ The privileges required to execute this statement are:
 [`ALTER CONNECTION`]: /sql/alter-connection
 [`CREATE SOURCE`]: /sql/create-source
 [`CREATE SINK`]: /sql/create-sink
-[`mz_aws_privatelink_connections`]: /reference/system-catalog/mz_catalog/#mz_aws_privatelink_connections
-[`mz_connections`]: /reference/system-catalog/mz_catalog/#mz_connections
-[`mz_ssh_tunnel_connections`]: /reference/system-catalog/mz_catalog/#mz_ssh_tunnel_connections
+[`mz_aws_privatelink_connections`]: /sql/system-catalog/mz_catalog/#mz_aws_privatelink_connections
+[`mz_connections`]: /sql/system-catalog/mz_catalog/#mz_connections
+[`mz_ssh_tunnel_connections`]: /sql/system-catalog/mz_catalog/#mz_ssh_tunnel_connections
 [Ed25519 algorithm]: https://ed25519.cr.yp.to
 [latacora-crypto]: https://latacora.micro.blog/2018/04/03/cryptographic-right-answers.html
 [trust policy]: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_terms-and-concepts.html#term_trust-policy

@@ -44,8 +44,8 @@ applications and services to Materialize.
 {{</ tip >}}
 
 As an **Organization admin**, you can create a new service account via
-the [Materialize Console](/console/) or via
-[Terraform](/manage/terraform/).
+the [Materialize Console](/developer-tools/console/) or via
+[Terraform](/developer-tools/terraform/).
 
 {{< note >}}
 
@@ -85,5 +85,5 @@ provider groups to database roles](./sync-idp-groups/).
 ## See also
 
 - [Role-based access control](/security/cloud/access-control/)
-- [Manage with dbt](/manage/dbt/)
-- [Manage with Terraform](/manage/terraform/)
+- [Manage with dbt](/developer-tools/dbt/)
+- [Manage with Terraform](/developer-tools/terraform/)

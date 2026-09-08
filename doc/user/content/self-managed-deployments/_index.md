@@ -272,7 +272,7 @@ SELECT * FROM my_view;
 
 Clusters are isolated pools of compute resources that execute workloads in Materialize. They provide resource isolation and fault tolerance for your data processing pipelines.
 
-For a comprehensive overview of clusters in Materialize, see the [Clusters concept page](/concepts/clusters/).
+For a comprehensive overview of clusters in Materialize, see the [Clusters concept page](/fundamentals/concepts/clusters/).
 
 #### Cluster architecture
 
@@ -358,5 +358,5 @@ components work together:
 - [Materialize CRD Field
   Descriptions](/self-managed-deployments/materialize-crd-field-descriptions/)
 - [Operational guidelines](/self-managed-deployments/deployment-guidelines/)
-- [Clusters concept page](/concepts/clusters/)
-- [Materialize architecture overview](/concepts/)
+- [Clusters concept page](/fundamentals/concepts/clusters/)
+- [Materialize architecture overview](/fundamentals/concepts/)

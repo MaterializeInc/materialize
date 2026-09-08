@@ -41,7 +41,7 @@ Column     | Type                        | Optional?                            
 ### Webhook URL
 
 After source creation, the unique URL that allows you to **POST** events to the
-source can be looked up in the [`mz_internal.mz_webhook_sources`](/reference/system-catalog/mz_internal/#mz_webhook_sources)
+source can be looked up in the [`mz_internal.mz_webhook_sources`](/sql/system-catalog/mz_internal/#mz_webhook_sources)
 system catalog table. The URL will have the following format:
 
 ```
@@ -50,7 +50,7 @@ https://<HOST>/api/webhook/<database>/<schema>/<src_name>
 
 A breakdown of each component is as follows:
 
-- `<HOST>`: The Materialize instance URL, which can be found on the [Materialize console](/console/).
+- `<HOST>`: The Materialize instance URL, which can be found on the [Materialize console](/developer-tools/console/).
 - `<database>`: The name of the database where the source is created (default is `materialize`).
 - `<schema>`: The schema name where the source gets created (default is `public`).
 - `<src_name>`: The name you provided for your source at the time of creation.
