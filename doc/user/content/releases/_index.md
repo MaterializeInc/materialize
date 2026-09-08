@@ -19,6 +19,13 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.40.2
+*Released to Materialize Cloud: 2026-09-07* <br>
+*Released to Materialize Self-Managed: 2026-09-08* <br>
+
+### Bug Fixes {#v26.40.2-bug-fixes}
+- Fixed `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` run while a zero-downtime upgrade was in progress leaving the upgraded environment on the view's previous definition, which either put `environmentd` into a crash loop that restarting could not clear or left the view silently computing and serving the replaced definition.
+
 ## v26.40.0
 *Released to Materialize Cloud: 2026-09-02* <br>
 *Released to Materialize Self-Managed: 2026-09-03* <br>
