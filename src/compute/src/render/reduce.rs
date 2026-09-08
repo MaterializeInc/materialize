@@ -13,10 +13,11 @@
 
 use std::collections::BTreeMap;
 
+use columnar::Columnar;
 use columnation::{Columnation, CopyRegion};
-use dec::OrderedDecimal;
 use differential_dataflow::Diff as _;
 use differential_dataflow::collection::AsCollection;
+use differential_dataflow::columnar::layout::Coltainer;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
@@ -35,7 +36,7 @@ use mz_compute_types::plan::reduce::{
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_expr::{AggregateFunc, EvalError, SafeMfpPlan};
 use mz_ore::cast::CastLossy;
-use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
+use mz_repr::adt::numeric::{self, Numeric, NumericAgg, OrderedNumericAgg};
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Datum, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnation::ColumnationChunker;
@@ -1482,12 +1483,14 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
         let error_logger = self.error_logger();
         let err_full_aggrs = full_aggrs.clone();
+        // The diffs are stored columnar so that each `Accum` occupies only its own
+        // variant's columns, rather than the footprint of the largest variant.
         let arranged = collection
             .mz_arrange::<
                 ColumnationChunker<_>,
                 RowBatcher<_, _>,
-                RowBuilder<_, _>,
-                RowSpine<_, (Vec<Accum>, Diff)>,
+                RowBuilder<_, _, Coltainer<_>>,
+                RowSpine<_, (Vec<Accum>, Diff), Coltainer<_>>,
             >(
                 "ArrangeAccumulable [val: empty]",
             );
@@ -1622,7 +1625,7 @@ fn accumulable_zero(aggr_func: &AggregateFunc) -> Accum {
             non_nulls: Diff::ZERO,
         },
         AggregateFunc::SumNumeric => Accum::Numeric {
-            accum: OrderedDecimal(NumericAgg::zero()),
+            accum: OrderedNumericAgg(NumericAgg::zero()),
             pos_infs: Diff::ZERO,
             neg_infs: Diff::ZERO,
             nans: Diff::ZERO,
@@ -1778,7 +1781,7 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
                 };
 
                 Accum::Numeric {
-                    accum: OrderedDecimal(accum),
+                    accum: OrderedNumericAgg(accum),
                     pos_infs,
                     neg_infs,
                     nans,
@@ -1786,7 +1789,7 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
                 }
             }
             Datum::Null => Accum::Numeric {
-                accum: OrderedDecimal(NumericAgg::zero()),
+                accum: OrderedNumericAgg(NumericAgg::zero()),
                 pos_infs: Diff::ZERO,
                 neg_infs: Diff::ZERO,
                 nans: Diff::ZERO,
@@ -2018,8 +2021,10 @@ type AccumCount = mz_ore::Overflowing<i128>;
     PartialOrd,
     Ord,
     Serialize,
-    Deserialize
+    Deserialize,
+    Columnar
 )]
+#[columnar(derive(PartialEq, Eq, PartialOrd, Ord))]
 enum Accum {
     /// Accumulates boolean values.
     Bool {
@@ -2052,7 +2057,7 @@ enum Accum {
     /// Accumulates arbitrary precision decimals.
     Numeric {
         /// Accumulates non-special values
-        accum: OrderedDecimal<NumericAgg>,
+        accum: OrderedNumericAgg,
         /// Counts +inf
         pos_infs: Diff,
         /// Counts -inf
@@ -2254,7 +2259,7 @@ impl Multiply<Diff> for Accum {
                 // http://speleotrove.com/decimal/dncont.html
                 assert!(!cx.status().rounded(), "Accum::Numeric multiply overflow");
                 Accum::Numeric {
-                    accum: OrderedDecimal(f),
+                    accum: OrderedNumericAgg(f),
                     pos_infs: pos_infs * factor,
                     neg_infs: neg_infs * factor,
                     nans: nans * factor,
@@ -2265,6 +2270,8 @@ impl Multiply<Diff> for Accum {
     }
 }
 
+// The batcher stages updates in columnation chunks before they reach the arrangement,
+// which stores `Accum` in its columnar form.
 impl Columnation for Accum {
     type InnerRegion = CopyRegion<Self>;
 }

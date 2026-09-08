@@ -98,6 +98,7 @@ impl<T: std::fmt::Display> std::fmt::Display for Overflowing<T> {
 #[cfg(feature = "columnar")]
 mod columnar {
     use crate::overflowing::Overflowing;
+    use columnar::bytes::indexed::DecodedStore;
     use columnar::common::PushIndexAs;
     use columnar::{
         AsBytes, Borrow, Clear, Columnar, Container, FromBytes, Index, IndexAs, Len, Push,
@@ -105,16 +106,15 @@ mod columnar {
     use serde::{Deserialize, Serialize};
     use std::ops::Range;
 
-    impl<T: Columnar + Copy + Send> Columnar for Overflowing<T>
+    impl<T: Columnar<Container: PushIndexAs<T>> + Copy + Send> Columnar for Overflowing<T>
     where
-        for<'a> &'a [T]: AsBytes<'a> + FromBytes<'a>,
         Overflowing<T>: From<T>,
     {
         #[inline(always)]
         fn into_owned(other: columnar::Ref<'_, Self>) -> Self {
             other
         }
-        type Container = Overflows<T>;
+        type Container = Overflows<T, T::Container>;
         #[inline(always)]
         fn reborrow<'b, 'a: 'b>(thing: columnar::Ref<'a, Self>) -> columnar::Ref<'b, Self>
         where
@@ -124,9 +124,11 @@ mod columnar {
         }
     }
 
-    /// Columnar container for [`Overflowing`].
+    /// Columnar container for [`Overflowing`], delegating to `T`'s own container `TC`, so
+    /// `Overflowing<i128>` uses columnar's byte-encoded `i128` store rather than requiring
+    /// `&[i128]` to be castable to bytes.
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-    pub struct Overflows<T, TC = Vec<T>>(TC, std::marker::PhantomData<T>);
+    pub struct Overflows<T, TC>(TC, std::marker::PhantomData<T>);
 
     impl<T, TC: Default> Default for Overflows<T, TC> {
         #[inline(always)]
@@ -201,6 +203,13 @@ mod columnar {
         fn from_bytes(bytes: &mut impl Iterator<Item = &'a [u8]>) -> Self {
             Self(TC::from_bytes(bytes), std::marker::PhantomData)
         }
+        #[inline(always)]
+        fn from_store(store: &DecodedStore<'a>, offset: &mut usize) -> Self {
+            Self(TC::from_store(store, offset), std::marker::PhantomData)
+        }
+        fn element_sizes(sizes: &mut Vec<usize>) -> Result<(), String> {
+            TC::element_sizes(sizes)
+        }
     }
 
     impl<T: Copy, TC: Len> Len for Overflows<T, TC> {
@@ -235,10 +244,10 @@ mod columnar {
         }
     }
 
-    impl<T: Copy, TC: Push<T>> Push<&Overflowing<T>> for Overflows<T, TC> {
+    impl<T: Copy, TC: for<'a> Push<&'a T>> Push<&Overflowing<T>> for Overflows<T, TC> {
         #[inline(always)]
         fn push(&mut self, item: &Overflowing<T>) {
-            self.0.push(item.0);
+            self.0.push(&item.0);
         }
     }
 }
@@ -767,5 +776,32 @@ mod test {
     fn test_checked_add() {
         let result = Overflowing::<i8>::MAX.checked_add(Overflowing::<i8>::ONE);
         assert_eq!(result, None);
+    }
+
+    #[cfg(feature = "columnar")]
+    #[crate::test]
+    fn test_columnar_i128_round_trip() {
+        use ::columnar::{AsBytes, Borrow, BorrowedOf, Columnar, FromBytes, Index, Len};
+
+        let values = [
+            Overflowing::<i128>::MIN,
+            Overflowing(-7),
+            Overflowing::<i128>::ZERO,
+            Overflowing::<i128>::ONE,
+            Overflowing::<i128>::MAX,
+        ];
+        let container = Overflowing::<i128>::as_columns(values.iter());
+        assert_eq!(container.len(), values.len());
+        let borrowed = container.borrow();
+        for (index, value) in values.iter().enumerate() {
+            assert_eq!(borrowed.get(index), *value);
+        }
+
+        let bytes: Vec<&[u8]> = borrowed.as_bytes().map(|(_align, bytes)| bytes).collect();
+        let decoded = BorrowedOf::<Overflowing<i128>>::from_bytes(&mut bytes.into_iter());
+        assert_eq!(decoded.len(), values.len());
+        for (index, value) in values.iter().enumerate() {
+            assert_eq!(decoded.get(index), *value);
+        }
     }
 }
