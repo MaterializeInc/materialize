@@ -19,7 +19,9 @@ from materialize.mzcompose.test_result import FailedTestExecutionError
 from materialize.workload_replay import executor
 
 
-def stats(creation: float = 100, cpu: float = 100, error: str | None = None) -> dict[str, Any]:
+def stats(
+    creation: float = 100, cpu: float = 100, error: str | None = None
+) -> dict[str, Any]:
     return {
         "object_creation": creation,
         "queries": {"errors": {error: ["SELECT 1"]} if error else {}},
@@ -82,7 +84,9 @@ def test_benchmark_paired_confirmation(
         patch.object(executor, "print_workload_stats"),
         patch.object(executor, "plot_docker_stats_compare") as plots,
     ):
-        with pytest.raises(FailedTestExecutionError) if failure else nullcontext() as exc:
+        with (
+            pytest.raises(FailedTestExecutionError) if failure else nullcontext()
+        ) as exc:
             executor.benchmark(
                 c=c,
                 file=Path("workload.json"),
@@ -108,9 +112,9 @@ def test_benchmark_paired_confirmation(
         assert c.rm_volumes.call_count == len(runs)
         plot_files = [call.kwargs["file"] for call in plots.call_args_list]
         assert len(set(plot_files)) == len(runs) // 2
-        assert [call.kwargs["image"] is None for call in materialized.call_args_list] == (
-            [False, True] * (len(runs) // 2) if compare_against else [True]
-        )
+        assert [
+            call.kwargs["image"] is None for call in materialized.call_args_list
+        ] == ([False, True] * (len(runs) // 2) if compare_against else [True])
 
 
 def test_benchmark_requires_requested_reference() -> None:
