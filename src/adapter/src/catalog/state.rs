@@ -27,6 +27,7 @@ use mz_catalog::builtin::{
     BUILTINS, Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType,
 };
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
+use mz_catalog::durable::objects::MaintainedReadRequirement;
 use mz_catalog::expr_cache::{LocalExpressions, latest_item_version};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
@@ -155,6 +156,9 @@ pub struct CatalogState {
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) source_references: imbl::OrdMap<CatalogItemId, SourceReferences>,
     pub(super) storage_metadata: Arc<StorageMetadata>,
+    #[serde(serialize_with = "serialize_maintained_read_requirements")]
+    pub(super) maintained_read_requirements: Arc<BTreeMap<GlobalId, MaintainedReadRequirement>>,
+    pub(super) catalog_read_protection_enabled: bool,
     pub(super) mock_authentication_nonce: Option<String>,
 
     // Mutable state not derived from the durable catalog. Populated
@@ -479,6 +483,8 @@ impl CatalogState {
             comments: Arc::new(CommentsMap::default()),
             source_references: Default::default(),
             storage_metadata: Arc::new(StorageMetadata::default()),
+            maintained_read_requirements: Default::default(),
+            catalog_read_protection_enabled: false,
             license_key: ValidatedLicenseKey::for_tests(),
             mock_authentication_nonce: Default::default(),
         }
@@ -2895,6 +2901,16 @@ impl CatalogState {
         &self.storage_metadata
     }
 
+    /// Returns the durable maintained read requirements, keyed by output ID.
+    pub fn maintained_read_requirements(&self) -> &BTreeMap<GlobalId, MaintainedReadRequirement> {
+        &self.maintained_read_requirements
+    }
+
+    /// Whether this environment was initialized with catalog-backed recovery protection.
+    pub fn catalog_read_protection_enabled(&self) -> bool {
+        self.catalog_read_protection_enabled
+    }
+
     /// For the Sources ids in `ids`, return their compaction windows.
     pub fn source_compaction_windows(
         &self,
@@ -3107,9 +3123,84 @@ impl Catalog {
     }
 }
 
+fn serialize_maintained_read_requirements<S: serde::Serializer>(
+    requirements: &BTreeMap<GlobalId, MaintainedReadRequirement>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let entries = requirements
+        .iter()
+        .map(|(id, requirement)| (id.to_string(), (&requirement.inputs, requirement.frontier)));
+    serializer.collect_map(entries)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    async fn maintained_read_requirements_apply_snapshot_update_drop() {
+        use mz_catalog::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
+        use mz_repr::Timestamp;
+
+        let mut state = CatalogState::empty_test();
+        let initial = MaintainedReadRequirement {
+            id: GlobalId::User(1),
+            inputs: BTreeSet::from([GlobalId::User(2), GlobalId::User(3)]),
+            frontier: Some(Timestamp::from(10)),
+        };
+        let intermediate = MaintainedReadRequirement {
+            frontier: Some(Timestamp::from(20)),
+            ..initial.clone()
+        };
+        let completed = MaintainedReadRequirement {
+            frontier: None,
+            ..initial.clone()
+        };
+        let update = |requirement, ts, diff| StateUpdate {
+            kind: StateUpdateKind::MaintainedReadRequirement(requirement),
+            ts: Timestamp::from(ts),
+            diff,
+        };
+        let _ = state
+            .apply_updates(
+                vec![update(initial.clone(), 1, StateDiff::Addition)],
+                &mut LocalExpressionCache::Closed,
+            )
+            .await;
+        assert_eq!(
+            state.maintained_read_requirements(),
+            &BTreeMap::from([(initial.id, initial.clone())])
+        );
+        let snapshot = state.clone();
+
+        let _ = state
+            .apply_updates(
+                vec![
+                    update(completed.clone(), 2, StateDiff::Addition),
+                    update(intermediate.clone(), 2, StateDiff::Retraction),
+                    update(initial.clone(), 2, StateDiff::Retraction),
+                    update(intermediate, 2, StateDiff::Addition),
+                ],
+                &mut LocalExpressionCache::Closed,
+            )
+            .await;
+        assert_eq!(
+            state.maintained_read_requirements(),
+            &BTreeMap::from([(completed.id, completed.clone())])
+        );
+        assert_eq!(
+            snapshot.maintained_read_requirements(),
+            &BTreeMap::from([(initial.id, initial)])
+        );
+
+        let _ = state
+            .apply_updates(
+                vec![update(completed, 3, StateDiff::Retraction)],
+                &mut LocalExpressionCache::Closed,
+            )
+            .await;
+        assert!(state.maintained_read_requirements().is_empty());
+    }
 
     async fn create_collection_input_item(
         catalog: &mut Catalog,

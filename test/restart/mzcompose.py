@@ -16,6 +16,7 @@ further restart scenarios.
 import copy
 import json
 import time
+from collections.abc import Callable
 from datetime import datetime
 from textwrap import dedent
 
@@ -973,6 +974,496 @@ def workflow_dataflows_without_expression_cache(c: Composition) -> None:
         c.sql("DROP CLUSTER uncached_refresh", reuse_connection=False)
 
 
+def workflow_catalog_read_protection(c: Composition) -> None:
+    """Exercise logical recovery protection and persist compaction without cached plans."""
+    c.down(destroy_volumes=True)
+
+    def query(sql: str) -> list[tuple]:
+        # Observations must not leave a transaction or a blocked peek holding history.
+        with c.sql_connection(
+            port=6877,
+            user="mz_system",
+            startup_params={"statement_timeout": "5s"},
+        ) as conn:
+            cursor = conn.execute(sql.encode())
+            return cursor.fetchall() if cursor.description is not None else []
+
+    def td(sql: str, timeout: float = 120) -> None:
+        c.testdrive(
+            service="testdrive_no_reset",
+            input=f"$ set-sql-timeout duration={timeout:.3f}s force=true\n"
+            "> SET statement_timeout = '5s';\n" + dedent(sql),
+        )
+
+    item_ids: dict[str, str] = {}
+
+    def gid(name: str) -> str:
+        [(item_id, global_id)] = query(f"""
+            SELECT o.id, g.global_id FROM mz_objects o
+            JOIN mz_internal.mz_object_global_ids g ON g.id = o.id
+            WHERE o.name = '{name}'
+        """)
+        item_ids[global_id] = item_id
+        return global_id
+
+    def encoded_id(global_id: str) -> dict[str, int]:
+        tag = {"s": "System", "u": "User"}[global_id[0]]
+        return {tag: int(global_id[1:])}
+
+    def record_sql(kind: str, global_id: str) -> str:
+        key = json.dumps(encoded_id(global_id))
+        return (
+            "SELECT data->'value' FROM mz_internal.mz_catalog_raw "
+            f"WHERE data->>'kind' = '{kind}' AND data->'key'->'id' = '{key}'::jsonb"
+        )
+
+    def record(kind: str, global_id: str) -> dict:
+        [(value,)] = query(record_sql(kind, global_id))
+        return value
+
+    def inspect(global_id: str) -> dict:
+        return query(f"INSPECT SHARD '{item_ids[global_id]}'")[0][0]
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_catalog_read_protection": "true",
+                "enable_expression_cache": "false",
+                "enable_logical_compaction_window": "true",
+                # Small batches must exercise real blob compaction, not inline writes.
+                "persist_inline_writes_single_max_bytes": "0",
+                "persist_compaction_heuristic_min_inputs": "2",
+            },
+        ),
+        Testdrive(
+            name="testdrive_no_reset",
+            no_reset=True,
+            materialize_url="postgres://mz_system@materialized:6877",
+        ),
+    ):
+        c.up("materialized", Service("testdrive_no_reset", idle=True))
+        td("""
+            > SELECT count(*) > 0 FROM mz_internal.mz_catalog_raw
+              WHERE data->>'kind' = 'CollectionCompactionBound'
+                AND data->'key'->'id' ? 'System';
+            true
+
+            > SELECT count(*) FROM mz_internal.mz_catalog_raw m
+              WHERE m.data->>'kind' = 'StorageCollectionMetadata'
+                AND NOT EXISTS (SELECT 1 FROM mz_internal.mz_catalog_raw b
+                  WHERE b.data->>'kind' = 'CollectionCompactionBound'
+                    AND b.data->'key'->'id' = m.data->'key'->'id');
+            0
+
+            > CREATE CLUSTER protected_refresh SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
+            > CREATE TABLE protected_live (a int) WITH (RETAIN HISTORY = FOR '1s');
+            > CREATE TABLE protected_eliminated (a int) WITH (RETAIN HISTORY = FOR '1s');
+            > CREATE TABLE protected_control (a int) WITH (RETAIN HISTORY = FOR '1s');
+            > INSERT INTO protected_live VALUES (1);
+            > INSERT INTO protected_eliminated VALUES (1);
+            > INSERT INTO protected_control VALUES (1);
+            > CREATE TABLE protected_catalog_probe (a int);
+        """)
+        eliminated_birth = record(
+            "CollectionCompactionBound", gid("protected_eliminated")
+        )["frontier"]
+        td("""
+            > CREATE VIEW protected_logical AS
+              (SELECT a FROM protected_eliminated UNION ALL SELECT a FROM protected_live)
+              EXCEPT ALL SELECT a FROM protected_eliminated;
+            > CREATE MATERIALIZED VIEW protected_once IN CLUSTER protected_refresh
+              WITH (REFRESH AT CREATION) AS SELECT a FROM protected_logical;
+            > CREATE MATERIALIZED VIEW protected_builtin IN CLUSTER protected_refresh
+              WITH (REFRESH AT CREATION)
+              AS SELECT name FROM mz_catalog.mz_tables WHERE name = 'protected_catalog_probe';
+        """)
+        ids = {
+            name: gid(name)
+            for name in (
+                "protected_live",
+                "protected_eliminated",
+                "protected_control",
+                "protected_once",
+                "protected_builtin",
+                "mz_tables",
+                "mz_catalog_raw",
+            )
+        }
+        bound_kind = "CollectionCompactionBound"
+        requirement_kind = "MaintainedReadRequirement"
+        once = record(requirement_kind, ids["protected_once"])
+        [(first_refresh,)] = query("""
+            SELECT next_refresh::text FROM mz_internal.mz_materialized_view_refreshes r
+            JOIN mz_materialized_views v ON v.id = r.materialized_view_id
+            WHERE v.name = 'protected_once'
+        """)
+        first_refresh = int(first_refresh)
+        assert (
+            isinstance(once["frontier"], int) and once["frontier"] <= first_refresh
+        ), once
+        td(f"""
+            > SELECT last_completed_refresh IS NULL, next_refresh = {first_refresh}::mz_timestamp
+              FROM mz_internal.mz_materialized_view_refreshes r
+              JOIN mz_materialized_views v ON v.id = r.materialized_view_id
+              WHERE v.name = 'protected_once';
+            true true
+        """)
+        expected_inputs = [
+            encoded_id(ids[name]) for name in ("protected_live", "protected_eliminated")
+        ]
+        assert sorted(once["inputs"], key=str) == sorted(expected_inputs, key=str), once
+        builtin = record(requirement_kind, ids["protected_builtin"])
+        assert builtin["inputs"] == [encoded_id(ids["mz_tables"])], builtin
+        for global_id in ids.values():
+            assert record(bound_kind, global_id)["frontier"] is not None, global_id
+
+        def verify_plan() -> None:
+            plan = query("EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW protected_once")[
+                0
+            ][0]
+            assert "protected_live" in plan and "protected_eliminated" not in plan, plan
+            print(plan)
+
+        control_sql = record_sql(bound_kind, ids["protected_control"])
+
+        def await_state(description: str, ready: Callable[[], bool]) -> None:
+            # INSPECT is not composable SQL. Native testdrive Retry waits for each
+            # publication advance, then we inspect without acquiring input read holds.
+            deadline = time.monotonic() + 120
+            while True:
+                control_bound = record(bound_kind, ids["protected_control"])["frontier"]
+                if ready():
+                    return
+                if time.monotonic() >= deadline:
+                    sample(f"timeout: {description}")
+                    raise UIError(f"timed out waiting for {description}")
+                # Persist schedules merges in response to writes. Keep producing real
+                # batches while waiting, including after a requirement has completed.
+                for _ in range(8):
+                    query("UPDATE protected_eliminated SET a = a + 1")
+                    query("UPDATE protected_control SET a = a + 1")
+                print(f"Waiting for {description}")
+                td(
+                    f"""
+                    > SELECT (v->>'frontier')::numeric > {control_bound}
+                      FROM ({control_sql}) AS r(v);
+                    true
+                    """,
+                    timeout=max(1, deadline - time.monotonic()),
+                )
+
+        def batches(state: dict) -> list[dict]:
+            return [*state["batches"], *state["hollow_batches"].values()]
+
+        def compacted_past(state: dict, timestamp: int) -> bool:
+            # A nonempty persisted batch covering the old input, with an advanced
+            # batch since, proves a merge was applied. The shard since alone doesn't.
+            return any(
+                batch["len"] > 0
+                and batch["lower"][0] <= timestamp
+                and batch["since"]
+                and batch["since"][0] > timestamp
+                for batch in batches(state)
+            )
+
+        def updates(state: dict) -> int:
+            return sum(batch["len"] for batch in batches(state))
+
+        def sample(label: str) -> dict:
+            catalog_state = inspect(ids["mz_catalog_raw"])
+            response = requests.get(
+                f"http://localhost:{c.port('materialized', 6878)}/metrics", timeout=10
+            )
+            response.raise_for_status()
+            metric_lines = [
+                line
+                for line in response.text.splitlines()
+                if line.split("{", 1)[0]
+                in (
+                    "mz_persist_shard_diff_size_bytes",
+                    "mz_persist_shard_cmd_succeeded",
+                    "mz_persist_shard_compaction_applied",
+                    "mz_persist_shard_batch_part_count",
+                    "mz_persist_shard_usage_current_state_batches_bytes",
+                )
+            ]
+
+            def metrics_for(shard_id: str) -> dict[str, float]:
+                return {
+                    line.split("{", 1)[0]: float(line.rsplit(" ", 1)[1])
+                    for line in metric_lines
+                    if f'shard="{shard_id}"' in line
+                }
+
+            counters = {
+                metric: value
+                for metric, value in metrics_for(catalog_state["shard_id"]).items()
+                if metric
+                in (
+                    "mz_persist_shard_diff_size_bytes",
+                    "mz_persist_shard_cmd_succeeded",
+                )
+            }
+            assert len(counters) == 2, counters
+            state = {
+                "label": label,
+                "monotonic_seconds": time.monotonic(),
+                "catalog_seqno": catalog_state["seqno"],
+                "catalog_counters": counters,
+                "collections": {},
+            }
+            for name, global_id in ids.items():
+                shard = inspect(global_id)
+                state["collections"][name] = {
+                    "id": global_id,
+                    "bound": record(bound_kind, global_id),
+                    "shard_id": shard["shard_id"],
+                    "since": shard["since"],
+                    "upper": shard["upper"],
+                    "environmentd_metrics": metrics_for(shard["shard_id"]),
+                    "updates": updates(shard),
+                    "persist_upper_minus_since_ms": (
+                        shard["upper"][0] - shard["since"][0]
+                        if shard["upper"] and shard["since"]
+                        else None
+                    ),
+                    "batches": [
+                        {key: batch[key] for key in ("lower", "upper", "since", "len")}
+                        for batch in batches(shard)
+                    ],
+                }
+            state["requirements"] = {
+                name: record(requirement_kind, ids[name])
+                for name in ids
+                if name in ("protected_once", "protected_builtin", "protected_ongoing")
+            }
+            byte_metric = "mz_persist_shard_usage_current_state_batches_bytes"
+            state["extra_retained_input_bytes"] = (
+                state["collections"]["protected_eliminated"]["environmentd_metrics"][
+                    byte_metric
+                ]
+                - state["collections"]["protected_control"]["environmentd_metrics"][
+                    byte_metric
+                ]
+            )
+            print(json.dumps(state, sort_keys=True))
+            return state
+
+        def verify_pending() -> bool:
+            assert record(requirement_kind, ids["protected_once"]) == once
+            assert record(requirement_kind, ids["protected_builtin"]) == builtin
+            assert query("""
+                SELECT count(*) FROM mz_cluster_replicas r
+                JOIN mz_clusters c ON c.id = r.cluster_id
+                WHERE c.name = 'protected_refresh'
+            """) == [(0,)]
+            for name in ("protected_live", "protected_eliminated"):
+                assert inspect(ids[name])["since"][0] <= first_refresh, name
+                assert record(bound_kind, ids[name])["frontier"] <= first_refresh, name
+            eliminated = inspect(ids["protected_eliminated"])
+            control = inspect(ids["protected_control"])
+            # Both tables receive the same revisions. Fewer updates on the control
+            # demonstrates consolidation of history that the eliminated input retains.
+            checks = {
+                "control_since_advanced": control["since"][0] > first_refresh,
+                "control_compacted": compacted_past(control, first_refresh),
+                "eliminated_compacted": compacted_past(eliminated, eliminated_birth),
+                "control_reclaims_more": updates(control) < updates(eliminated),
+            }
+            print(
+                json.dumps(
+                    {
+                        "probe": checks,
+                        "first_refresh": first_refresh,
+                        "eliminated_birth": eliminated_birth,
+                        "control_since": control["since"],
+                        "eliminated_since": eliminated["since"],
+                        "control_updates": updates(control),
+                        "eliminated_updates": updates(eliminated),
+                        "control_batches": [
+                            {
+                                key: batch[key]
+                                for key in ("lower", "upper", "since", "len")
+                            }
+                            for batch in batches(control)
+                        ],
+                        "eliminated_batches": [
+                            {
+                                key: batch[key]
+                                for key in ("lower", "upper", "since", "len")
+                            }
+                            for batch in batches(eliminated)
+                        ],
+                    }
+                ),
+                flush=True,
+            )
+            return all(checks.values())
+
+        verify_plan()
+        before = sample("pending-before-writes")
+        td("""
+            > UPDATE protected_live SET a = 2;
+            > UPDATE protected_eliminated SET a = 2;
+            > UPDATE protected_control SET a = 2;
+            > ALTER TABLE protected_catalog_probe RENAME TO protected_catalog_probe_renamed;
+        """)
+        await_state("control physically compacted past first refresh", verify_pending)
+        after = sample("pending-after-compaction")
+        elapsed = after["monotonic_seconds"] - before["monotonic_seconds"]
+        # These are measured catalog-shard totals, including builtin maintenance,
+        # not an attribution of every persist command to bound publication.
+        print(
+            json.dumps(
+                {
+                    "publication_sample_seconds": elapsed,
+                    "catalog_counter_deltas": {
+                        metric: value - before["catalog_counters"][metric]
+                        for metric, value in after["catalog_counters"].items()
+                    },
+                    "catalog_diff_bytes_per_second": (
+                        after["catalog_counters"]["mz_persist_shard_diff_size_bytes"]
+                        - before["catalog_counters"]["mz_persist_shard_diff_size_bytes"]
+                    )
+                    / elapsed,
+                },
+                sort_keys=True,
+            )
+        )
+
+        def rejected_while_physically_readable() -> bool:
+            permission = record(bound_kind, ids["protected_control"])["frontier"]
+            before_since = inspect(ids["protected_control"])["since"][0]
+            if before_since >= permission:
+                return False
+            historical = permission - 1
+            td(f"""
+                ! CREATE MATERIALIZED VIEW protected_rejected
+                  IN CLUSTER protected_refresh WITH (REFRESH AT {historical})
+                  AS SELECT a FROM protected_control WHERE false;
+                contains: REFRESH AT requested for a time where not all the inputs are readable
+            """)
+            after_since = inspect(ids["protected_control"])["since"][0]
+            # Persist since is monotonic. Both observations must bracket the
+            # rejection while H is physically readable, otherwise try another gap.
+            print(
+                json.dumps(
+                    {
+                        "admission_timestamp": historical,
+                        "permission": permission,
+                        "persist_since_before": before_since,
+                        "persist_since_after": after_since,
+                    }
+                )
+            )
+            return after_since <= historical
+
+        await_state(
+            "historical admission rejected during physical compaction lag",
+            rejected_while_physically_readable,
+        )
+
+        c.kill("materialized")
+        c.up("materialized")
+        verify_plan()
+        assert verify_pending()
+        sample("recovered-without-replica")
+        td("""
+            > ALTER CLUSTER protected_refresh SET (REPLICATION FACTOR 1);
+            > SELECT a FROM protected_once;
+            1
+            > SELECT a FROM protected_live;
+            2
+            > SELECT name FROM protected_builtin;
+            protected_catalog_probe
+        """)
+        for name in ("protected_once", "protected_builtin"):
+            td(f"""
+                > SELECT v->>'frontier' IS NULL
+                  FROM ({record_sql(requirement_kind, ids[name])}) AS r(v);
+                true
+            """)
+            assert inspect(ids[name])["upper"] == [], name
+
+        def history_released() -> bool:
+            eliminated = inspect(ids["protected_eliminated"])
+            return (
+                eliminated["since"][0] > first_refresh
+                and inspect(ids["protected_live"])["since"][0] > first_refresh
+                and compacted_past(eliminated, first_refresh)
+            )
+
+        await_state("completed requirement releasing input history", history_released)
+        sample("completed-without-dropping-mv")
+
+        td("""
+            > CREATE MATERIALIZED VIEW protected_ongoing IN CLUSTER protected_refresh
+              AS SELECT a FROM protected_logical;
+            > SELECT a FROM protected_ongoing;
+            2
+        """)
+        ids["protected_ongoing"] = gid("protected_ongoing")
+        ongoing = record(requirement_kind, ids["protected_ongoing"])
+        assert sorted(ongoing["inputs"], key=str) == sorted(
+            expected_inputs, key=str
+        ), ongoing
+        start = ongoing["frontier"]
+        assert isinstance(start, int), ongoing
+        td("""
+            > UPDATE protected_live SET a = 3;
+            > SELECT a FROM protected_ongoing;
+            3
+            > SELECT a FROM protected_once;
+            1
+        """)
+
+        def ongoing_advanced() -> bool:
+            eliminated = inspect(ids["protected_eliminated"])
+            requirement = record(requirement_kind, ids["protected_ongoing"])
+            upper = inspect(ids["protected_ongoing"])["upper"]
+            frontier = requirement["frontier"]
+            assert frontier is not None and upper, (requirement, upper)
+            assert eliminated["since"][0] <= frontier <= upper[0] - 1
+            return frontier > start and compacted_past(eliminated, start)
+
+        await_state(
+            "ongoing requirement advancing with durable output", ongoing_advanced
+        )
+        sample("ongoing-not-completed")
+
+        # Pending replacements can make shared-shard registration groups cyclic
+        # even though the catalog's query dependency graph is acyclic.
+        td("""
+            > CREATE MATERIALIZED VIEW protected_a IN CLUSTER protected_refresh
+              AS SELECT a FROM protected_live;
+            > CREATE MATERIALIZED VIEW protected_b IN CLUSTER protected_refresh
+              AS SELECT a FROM protected_live;
+            > CREATE REPLACEMENT MATERIALIZED VIEW protected_ar FOR protected_a
+              IN CLUSTER protected_refresh AS SELECT a FROM protected_b;
+            > CREATE REPLACEMENT MATERIALIZED VIEW protected_br FOR protected_b
+              IN CLUSTER protected_refresh AS SELECT a FROM protected_a;
+            > CREATE MATERIALIZED VIEW protected_downstream IN CLUSTER protected_refresh
+              AS SELECT a FROM protected_a JOIN protected_b USING (a);
+            > SELECT a FROM protected_downstream;
+            3
+        """)
+        c.kill("materialized")
+        c.up("materialized")
+        td("""
+            > SELECT a FROM protected_downstream;
+            3
+            > SELECT a FROM protected_ongoing;
+            3
+            > SELECT a FROM protected_once;
+            1
+            > SELECT name FROM protected_builtin;
+            protected_catalog_probe
+            > DROP MATERIALIZED VIEW protected_ar;
+            > DROP MATERIALIZED VIEW protected_br;
+        """)
+        c.down(destroy_volumes=True)
+
+
 def workflow_index_compute_dependencies(c: Composition) -> None:
     """
     Assert that materialized views and index catalog items see and use only
@@ -1402,6 +1893,13 @@ def workflow_temporary_item_cleanup(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized")
 
+    # Keep reclamation WAL entries observable until the assertions below.
+    c.sql(
+        "ALTER SYSTEM SET enable_storage_shard_finalization = false",
+        port=6877,
+        user="mz_system",
+    )
+
     # Two sessions create temporary items of the same name. Name uniqueness is
     # scoped by the owning session, so both must coexist, and mz_tables and
     # mz_views report every item regardless of owner.
@@ -1507,10 +2005,7 @@ def workflow_temporary_item_cleanup(c: Composition) -> None:
 
     # The temp table's storage mapping must have moved to the finalization
     # WAL in the same reclamation, else the metadata row and its persist
-    # shard would leak forever. Both rows are stable to assert on here: the
-    # metadata deletion is permanent, and the WAL row survives until the
-    # next committed catalog transaction, which cannot have happened because
-    # nothing has run DDL since the restart.
+    # shard would leak forever.
     metadata = c.sql_query(
         f"""SELECT count(*) FROM mz_internal.mz_catalog_raw
             WHERE data->>'kind' = 'StorageCollectionMetadata'
@@ -1531,6 +2026,11 @@ def workflow_temporary_item_cleanup(c: Composition) -> None:
     assert unfinalized == [
         (1,)
     ], f"temp table's shard was not enqueued for finalization: {temp_shard}"
+    c.sql(
+        "ALTER SYSTEM RESET enable_storage_shard_finalization",
+        port=6877,
+        user="mz_system",
+    )
 
     # The comment row dies with its item.
     comments = c.sql_query(temp_comment_count, port=6877, user="mz_system")

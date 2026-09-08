@@ -245,6 +245,10 @@ impl Default for TestHarness {
                     SHARD_METRICS.name().to_string(),
                     ShardMetricsExport::Summary.as_str().to_string(),
                 ),
+                (
+                    "enable_catalog_read_protection".to_string(),
+                    "true".to_string(),
+                ),
             ]),
             internal_console_redirect_url: None,
             metrics_registry: None,

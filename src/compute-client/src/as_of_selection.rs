@@ -928,6 +928,10 @@ mod tests {
             unimplemented!()
         }
 
+        fn compaction_frontiers(&self) -> BTreeMap<GlobalId, Antichain<Timestamp>> {
+            unimplemented!()
+        }
+
         fn check_exists(&self, _id: GlobalId) -> Result<(), StorageError> {
             unimplemented!()
         }

@@ -3257,6 +3257,8 @@ class FlipFlagsAction(Action):
         # behavior, you should add it. Feature flags which turn on/off
         # externally visible features should not be flipped.
         self.uninteresting_flags: list[str] = [
+            # Latched at fresh catalog initialization, not changed by ALTER SYSTEM.
+            "enable_catalog_read_protection",
             "persist_blob_hedged_get_budget_ratio",
             "persist_blob_hedged_get_max_concurrent",
             "persist_blob_hedged_get_warm_interval",

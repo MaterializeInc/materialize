@@ -1352,8 +1352,15 @@ impl Coordinator {
             .map(|target_id| self.catalog().get_entry(&target_id).latest_global_id());
         mv.collection_descs()
             .map(|(gid, _version, desc)| {
-                let mut collection_desc =
-                    CollectionDescription::for_other(desc, mv.initial_as_of.clone());
+                // Applied replacements retain the original shard and its history.
+                // Their SQL visibility frontier is not an instruction to initialize
+                // that shard again. Compute receives it separately as initial_as_of.
+                let since = if mv.collections.len() > 1 {
+                    None
+                } else {
+                    mv.initial_as_of.clone()
+                };
+                let mut collection_desc = CollectionDescription::for_other(desc, since);
                 collection_desc.primary = primary;
                 primary = Some(gid);
                 (gid, collection_desc)

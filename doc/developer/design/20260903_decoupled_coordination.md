@@ -260,6 +260,10 @@ Evidence includes actual compaction and an input eliminated by optimization.
 Measure publication and retained-history costs as the real path becomes available.
 This milestone can use the current single-writer arrangement.
 
+Include fresh builtin initialization and same-version recovery, including MVs
+reading system-catalog collections. Builtin schema migration belongs to milestone
+2. Milestone 1 does not establish version-upgrade support for protected environments.
+
 #### 2. Catalog-driven maintained lifecycle
 
 Cluster-side lifecycle components establish and follow maintained state from the
@@ -572,3 +576,39 @@ Applying committed permission does not require a fenced or exclusive executor.
 Separate this responsibility from authorization and read-protection accounting.
 Milestone 1 remains active. Existing controller fencing cannot simply be removed
 while advancement still depends on private hold accounting.
+
+### 2026-09-08: Production integration scope question
+
+Table initialization must respect committed birth permission independently of
+later transaction-WAL registration. Secondary MV visibility must not advance the
+shared shard's physical since. Source exports and sinks also inherit storage
+dependencies, so zero is not a generally valid initial bound.
+
+The protected-MV path reaches builtin initialization and the catalog's own shard.
+Pending question for Aljoscha: include builtin schema evolution in milestone 1,
+or leave it with milestone 2's lifecycle changes? The implementer's recommendation
+is to include system-catalog inputs rather than silently use legacy protection.
+Record production is in progress. Progress publication and the production
+compaction/restart demonstration remain unwired.
+
+### 2026-09-08: Builtin milestone scope agreed with Aljoscha
+
+Include fresh builtin initialization and same-version recovery in milestone 1.
+Defer builtin schema migration and protected-environment version-upgrade support
+to milestone 2, separately from conversion of unprotected environments. Builtin
+shard replacement reuses GlobalIds while discarding contents, so its interaction
+with protected dependent history needs an explicit lifetime/recovery treatment.
+
+### 2026-09-09: Catalog-backed MV recovery path
+
+Milestone 1 is complete for fresh environments and same-version recovery.
+Creation commits logical requirements with collection permission, including builtin
+inputs. Publication follows durable output progress and respects early creation
+holds. Finite persist downgrades retain pending delivery through rate limits and
+primary handoff. Read-only bootstrap relies on leased readability, not stale
+snapshot permission.
+
+Publication cadence is configurable. Planning-cache freshness and DDL conflict
+tracking have distinct revisions, so cadence changes do not abort open DDL.
+Next: milestone 2's catalog-driven maintained lifecycle and builtin schema
+migration. MV compute installation still uses the sequencer closure.

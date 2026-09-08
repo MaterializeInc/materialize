@@ -36,7 +36,10 @@ $ kafka-create-topic topic=test
 # and `replica_id` fields are dropped for versions where the audit-log struct
 # uses `#[serde(skip_serializing_if)]`, and source `external_type` is
 # exposed as `type`.
-> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal' - 'scheduling_policies' - 'reason', user FROM mz_audit_events ORDER BY id DESC LIMIT 3
+# Exclude consistency-checker interval changes so newest-event assertions see this fixture's DDL.
+> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal' - 'scheduling_policies' - 'reason', user FROM mz_audit_events
+  WHERE (object_type = 'system' AND details->>'name' = 'catalog_read_protection_publish_interval') IS NOT TRUE
+  ORDER BY id DESC LIMIT 3
 create source "{\"cluster_id\":\"<GID>\",\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src\",\"schema\":\"public\",\"type\":\"kafka\"}" materialize
 create cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"audit_log_kafka_src\",\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"r1\"}" materialize
 create table "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src_tbl\",\"schema\":\"public\"}" materialize
@@ -47,7 +50,9 @@ create table "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_sr
   IN CLUSTER audit_log_counter_src
   FROM LOAD GENERATOR COUNTER (UP TO 100);
 
-> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal' - 'scheduling_policies' - 'reason', user FROM mz_audit_events ORDER BY id DESC LIMIT 3
+> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal' - 'scheduling_policies' - 'reason', user FROM mz_audit_events
+  WHERE (object_type = 'system' AND details->>'name' = 'catalog_read_protection_publish_interval') IS NOT TRUE
+  ORDER BY id DESC LIMIT 3
 create source "{\"cluster_id\":\"<GID>\",\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter_src\",\"schema\":\"public\",\"type\":\"load-generator\"}" materialize
 create cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"audit_log_counter_src\",\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"r1\"}" materialize
 create cluster "{\"id\":\"<GID>\",\"name\":\"audit_log_counter_src\"}" materialize
