@@ -5,7 +5,7 @@ description: "How to add a column, or drop a column, from your source PostgreSQL
 menu:
   main:
     parent: "postgresql"
-    weight: 85
+    weight: 70
 
 ---
 

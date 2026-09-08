@@ -45,6 +45,11 @@ views`. Use `Getting started`, not `Get started`. Use sentence case for sidebar
 labels. Capitalize only proper nouns, product names, and official command,
 protocol, or service names.
 
+At every sidebar nesting level, order content by type: guides, features,
+patterns, performance, monitoring, then troubleshooting. Treat setup,
+configuration, and task-oriented how-to pages as guides. Feature pages explain
+a specific capability, such as dictionary compression.
+
 ## Testing Guidelines
 
 There is no unit-test suite for prose. Preview changed pages with Hugo, then

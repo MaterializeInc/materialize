@@ -5,7 +5,7 @@ menu:
   main:
     name: "Optimize performance"
     parent: transform-data
-    weight: 40
+    weight: 50
 aliases:
   - /ops/speed-up/
   - /ops/optimization/

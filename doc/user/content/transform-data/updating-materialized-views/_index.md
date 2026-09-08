@@ -6,7 +6,7 @@ menu:
   main:
     parent: transform-data
     name: "Update materialized views"
-    weight: 30
+    weight: 20
     identifier: updating-materialized-views
 ---
 
