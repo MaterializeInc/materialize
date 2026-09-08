@@ -7,7 +7,6 @@ menu:
     weight: 30
 aliases:
   - /manage/access-control/rbac-terraform-tutorial/
-
   - /manage/terraform/manage-rbac/
 ---
 

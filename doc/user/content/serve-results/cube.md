@@ -2,7 +2,7 @@
 title: "Cube"
 description: "How to connect a Cube deployment to Materialize"
 aliases:
-  /third-party/cube/
+  - /third-party/cube/
   - /integrations/cube/
 draft: true
 ---
