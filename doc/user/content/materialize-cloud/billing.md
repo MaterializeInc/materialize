@@ -3,6 +3,7 @@ title: "Usage & billing (Cloud)"
 description: "Understand the billing model of Materialize Cloud, and learn best practices for cost control."
 menu:
   main:
+    name: "Usage & billing"
     parent: "materialize-cloud"
     weight: 10
 aliases:

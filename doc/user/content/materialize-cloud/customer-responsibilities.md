@@ -3,6 +3,7 @@ title: "Customer responsibility model (Cloud)"
 description: "Details about the Materialize Cloud's customer responsibility model."
 menu:
   main:
+    name: "Customer responsibility model"
     parent: 'materialize-cloud'
     weight: 30
 aliases:

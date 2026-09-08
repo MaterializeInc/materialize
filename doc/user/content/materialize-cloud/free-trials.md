@@ -1,15 +1,15 @@
 ---
-title: "General FAQs"
-description: "Answers to frequently asked questions about Materialize in general"
+title: "Free Trials"
+description: "Answers to frequently asked questions about Materialize Cloud free trials."
 menu:
   main:
-    parent: "about"
-    weight: 20
+    name: "Free trials"
+    parent: "materialize-cloud"
+    weight: 40
 aliases:
   - /free-trial-faqs
+  - /faqs/
 ---
-
-## FAQ: Free trials
 
 When you [sign up for Materialize Cloud](https://materialize.com/register/), you
 get a free trial account so you can explore the product and start building! This
@@ -88,10 +88,3 @@ If you need additional resources during your trial, [chat with our team](http://
 
 If you have questions about Materialize or need support, reach out to us in our
 [Community Slack](https://materialize.com/s/chat).
-
-## FedRam/FIPS
-
-### Does Materialize support FedRAMP or FIPS 140 requirements?
-
-If your organization has FedRAMP or FIPS 140 requirements, please [contact
-us](https://materialize.com/docs/support/).

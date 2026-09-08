@@ -60,22 +60,6 @@ weight = 92
 # Transform data
 #
 
-[[menu.main]]
-identifier = "developer-tools"
-name = "Developer tools"
-weight = 70
-
-[[menu.main]]
-identifier = "clusters"
-name = "Clusters"
-weight = 80
-
-[[menu.main]]
-identifier = "materialize-cloud"
-name = "Materialize Cloud"
-weight = 110
-
-
 #
 # Reference
 #

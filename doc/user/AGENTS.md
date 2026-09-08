@@ -37,6 +37,9 @@ and update related `data/` definitions when changing generated reference
 content. Use `warn-if-unreleased` or `version-added` for features not yet
 deployed.
 
+Changing a page URL is acceptable as long as the previous URL has a permanent
+301 redirect. Add each previous URL to the page's `aliases` front matter.
+
 Use imperative sidebar labels where possible, for example `Update materialized
 views`. Use `Getting started`, not `Get started`. Use sentence case for sidebar
 labels. Capitalize only proper nouns, product names, and official command,
@@ -48,6 +51,14 @@ There is no unit-test suite for prose. Preview changed pages with Hugo, then
 run `../../ci/test/lint-docs.sh` to catch broken links, HTML errors, and
 catalog inconsistencies. Review generated diagrams and rendered examples when
 changing shortcodes, layouts, or SQL grammar.
+
+### Test syntax documentation
+
+When documentation adds or changes SQL syntax, test each example using the
+Materialize emulator. Documentation is often written ahead of a public release,
+so use a release candidate version of the emulator when the latest stable
+version does not support the syntax yet. Wherever possible, include sample
+output in the documentation and verify that it matches the emulator output.
 
 ## Commits and Pull Requests
 
