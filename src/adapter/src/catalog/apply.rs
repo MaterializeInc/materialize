@@ -392,7 +392,15 @@ impl CatalogState {
                     diff,
                 );
             }
-            StateUpdateKind::MaintainedReadRequirement(_) => {}
+            StateUpdateKind::MaintainedReadRequirement(requirement) => {
+                let id = requirement.id;
+                apply_inverted_lookup(
+                    Arc::make_mut(&mut self.maintained_read_requirements),
+                    &id,
+                    requirement,
+                    diff,
+                );
+            }
             StateUpdateKind::UnfinalizedShard(unfinalized_shard) => {
                 self.apply_unfinalized_shard_update(unfinalized_shard, diff, retractions);
             }

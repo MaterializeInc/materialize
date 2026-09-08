@@ -588,9 +588,9 @@ Issue a SQL query to get started. Need help?
 
     /// Returns a snapshot of the catalog.
     ///
-    /// Does a Coordinator round-trip. Session-bound callers should
-    /// prefer [`SessionClient::catalog_snapshot`], which serves from the
-    /// session's snapshot cache.
+    /// Does a Coordinator round-trip. Session-bound callers that only need
+    /// planning-visible state should prefer [`SessionClient::catalog_snapshot`],
+    /// which serves from the session's snapshot cache.
     pub async fn catalog_snapshot_expensive(&self) -> Arc<Catalog> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::CatalogSnapshot { tx });
@@ -1095,7 +1095,7 @@ impl SessionClient {
     }
 
     /// Fetches the catalog, served from the session-side snapshot cache when
-    /// the catalog is unchanged since the cached snapshot was taken. See
+    /// planning-visible state is unchanged since the cached snapshot was taken. See
     /// [`PeekClient::catalog_snapshot`].
     #[instrument(level = "debug")]
     pub async fn catalog_snapshot(&mut self, context: &str) -> Arc<Catalog> {
@@ -1123,7 +1123,8 @@ impl SessionClient {
     /// No authorization is performed, so access to this function must be limited to internal
     /// servers or superusers.
     pub async fn dump_catalog(&mut self) -> Result<CatalogDump, AdapterError> {
-        let catalog = self.catalog_snapshot("dump_catalog").await;
+        // Dumps include protection authority, which does not invalidate the planning cache.
+        let catalog = self.inner().catalog_snapshot_expensive().await;
         catalog.dump().map_err(AdapterError::from)
     }
 

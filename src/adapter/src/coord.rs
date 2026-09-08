@@ -68,6 +68,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fmt;
 use std::net::IpAddr;
 use std::num::NonZeroI64;
 use std::ops::Neg;
@@ -76,7 +77,6 @@ use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use std::{fmt, mem};
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
@@ -232,6 +232,7 @@ pub(crate) mod id_bundle;
 pub(crate) mod in_memory_oracle;
 pub(crate) mod peek;
 pub(crate) mod read_policy;
+mod read_protection;
 pub(crate) mod read_then_write;
 pub(crate) mod sequencer;
 pub(crate) mod statement_logging;
@@ -251,6 +252,7 @@ mod message_handler;
 mod metric_sink;
 mod privatelink_status;
 mod sql;
+mod storage_bootstrap;
 mod validity;
 
 /// The oldest leader version against which a replacement-migrated builtin materialized view may
@@ -3341,10 +3343,8 @@ impl Coordinator {
     /// This method takes care of collection creation, as well as migration of existing
     /// collections.
     ///
-    /// Creating all storage collections in a single `create_collections` call, rather than on
-    /// demand, is more efficient as it reduces the number of writes to durable storage. It also
-    /// allows subsequent bootstrap logic to fetch metadata (such as frontiers) of arbitrary
-    /// storage collections, without needing to worry about dependency order.
+    /// Registers shared-shard aliases together, with prerequisites installed first wherever
+    /// possible. Subsequent bootstrap logic can fetch metadata of arbitrary storage collections.
     ///
     /// `migrated_storage_collections` is a set of builtin storage collections that have been
     /// migrated and should be handled specially.
@@ -3563,15 +3563,19 @@ impl Coordinator {
         //
         // To avoid violating frontier invariants, we need to bump their sinces to times greater
         // than all of their upstream storage inputs. To know the since of a storage input, it has
-        // to be registered with the storage controller first. Thus we register collections in
-        // layers: Each iteration registers the collections whose dependencies are all already
-        // registered.
+        // to be registered with the storage controller first.
         let mut pending: BTreeMap<_, _> = collections.into_iter().collect();
 
-        // Precompute storage-collection dependencies for each collection.
-        let transitive_dep_gids: BTreeMap<_, _> = pending
-            .keys()
-            .map(|gid| {
+        // Only ungoverned builtins need transitive frontiers. Registration ordering uses direct
+        // catalog edges, including non-storage objects, rather than expanding user reachability.
+        let builtin_dep_gids: BTreeMap<_, _> = pending
+            .iter()
+            .filter(|(gid, collection)| {
+                gid.is_system()
+                    && collection.since.is_none()
+                    && !storage_metadata.compaction_bounds.contains_key(*gid)
+            })
+            .map(|(gid, _)| {
                 let entry = self.catalog.get_entry_by_global_id(gid);
                 let item_id = entry.id();
                 let deps = self.catalog.state().transitive_uses(item_id);
@@ -3587,32 +3591,48 @@ impl Coordinator {
             })
             .collect();
 
+        let dependencies = self
+            .catalog
+            .entries()
+            .map(|entry| (entry.id(), entry.uses()))
+            .collect();
+        let batches = storage_bootstrap::registration_batches(
+            &dependencies,
+            pending.keys().map(|gid| {
+                (
+                    *gid,
+                    self.catalog.get_entry_by_global_id(gid).id(),
+                    storage_metadata.collection_metadata[gid],
+                )
+            }),
+        );
         let mut created_gids = Vec::new();
 
-        while !pending.is_empty() {
-            // Drain collections whose dependencies have all been registered already
-            // (i.e., are not in `pending`).
-            let ready_gids: BTreeSet<_> = pending
-                .keys()
-                .filter(|gid| {
-                    let mut deps = transitive_dep_gids[gid].iter();
-                    !deps.any(|dep_gid| pending.contains_key(dep_gid))
+        for batch in batches {
+            let mut ready: Vec<_> = batch
+                .into_iter()
+                .map(|gid| {
+                    let collection = pending.remove(&gid).expect("registered exactly once");
+                    (gid, collection)
                 })
-                .copied()
-                .collect();
-            let mut ready: Vec<_> = pending
-                .extract_if(.., |gid, _| ready_gids.contains(gid))
                 .collect();
 
             // Bump sinces of builtin collections.
             for (gid, collection) in &mut ready {
+                // Governed collections recover their persisted readability. Pristine
+                // builtin MVs initialize from committed birth permission in storage.
+                if storage_metadata.compaction_bounds.contains_key(gid) {
+                    continue;
+                }
                 // Don't silently overwrite an explicitly specified `since`.
                 if !gid.is_system() || collection.since.is_some() {
                     continue;
                 }
 
                 let mut derived_since = Antichain::from_elem(Timestamp::MIN);
-                for dep_gid in &transitive_dep_gids[gid] {
+                // Builtins cannot depend on user objects or be replacement targets, so their
+                // prerequisites cannot be co-registered in a replacement-induced cycle.
+                for dep_gid in &builtin_dep_gids[gid] {
                     let (since, _) = self
                         .controller
                         .storage
@@ -3621,17 +3641,6 @@ impl Coordinator {
                     derived_since.join_assign(&since);
                 }
                 collection.since = Some(derived_since);
-            }
-
-            if ready.is_empty() {
-                soft_panic_or_log!(
-                    "cycle in storage collections: {:?}",
-                    pending.keys().collect::<Vec<_>>(),
-                );
-                // We get here only due to a bug. Rather than crash-looping, we try our best to
-                // reach a sane state by attempting to register all the remaining collections at
-                // once.
-                ready = mem::take(&mut pending).into_iter().collect();
             }
 
             created_gids.extend(ready.iter().map(|(gid, _collection)| *gid));
@@ -4206,7 +4215,22 @@ impl Coordinator {
             let linearize_reads_notified = linearize_reads_notify.notified();
             tokio::pin!(linearize_reads_notified);
 
+            let mut publication_delay = self
+                .catalog()
+                .system_config()
+                .catalog_read_protection_publish_interval();
+            let publication_timer = tokio::time::sleep(publication_delay);
+            tokio::pin!(publication_timer);
+
             loop {
+                let delay = self
+                    .catalog()
+                    .system_config()
+                    .catalog_read_protection_publish_interval();
+                if delay != publication_delay {
+                    publication_delay = delay;
+                    publication_timer.set(tokio::time::sleep(delay));
+                }
                 // Before adding a branch to this select loop, please ensure that the branch is
                 // cancellation safe and add a comment explaining why. You can refer here for more
                 // info: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
@@ -4217,6 +4241,17 @@ impl Coordinator {
                     // before receiving a new batch of commands.
                     biased;
 
+                    // Polling a pinned Sleep is cancellation-safe. Bootstrap restores execution holds
+                    // before this runs. Give publication a turn even under continuous load,
+                    // but schedule from completion so a slow commit cannot monopolize us.
+                    _ = publication_timer.as_mut(),
+                        if self.catalog().state().catalog_read_protection_enabled()
+                            && !self.controller.read_only() && !publication_delay.is_zero() => {
+                        if let Err(error) = self.publish_read_protection().await {
+                            warn!(%error, "unable to publish catalog read protection");
+                        }
+                        publication_timer.set(tokio::time::sleep(publication_delay));
+                    }
                     // `recv_many()` on `UnboundedReceiver` is cancellation safe:
                     // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
                     // Receive a batch of commands.

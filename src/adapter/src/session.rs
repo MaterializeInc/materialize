@@ -1453,14 +1453,14 @@ impl TransactionStatus {
                     }
                     TransactionOps::DDL {
                         ops: og_ops,
-                        revision: og_revision,
+                        ddl_revision: og_revision,
                         state: og_state,
                         side_effects,
                         snapshot: og_snapshot,
                     } => match add_ops {
                         TransactionOps::DDL {
                             ops: new_ops,
-                            revision: new_revision,
+                            ddl_revision: new_revision,
                             side_effects: mut net_new_side_effects,
                             state: new_state,
                             snapshot: new_snapshot,
@@ -1661,8 +1661,8 @@ pub enum TransactionOps {
                     + Sync,
             >,
         >,
-        /// Transient revision of the `Catalog` when this transaction started.
-        revision: u64,
+        /// [`crate::catalog::Catalog::ddl_revision`] when this transaction started.
+        ddl_revision: u64,
         /// Snapshot of the durable transaction state after the last dry run.
         /// Used to initialize the next dry run's transaction so it starts
         /// in sync with the accumulated `state`. `None` for the first

@@ -43,10 +43,11 @@ use mz_catalog::expr_cache::{
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CommentsMap, DefaultPrivileges, RoleAuth, StateUpdate, StateUpdateKind,
+    CatalogItem, CommentsMap, DefaultPrivileges, RoleAuth, StateUpdate, StateUpdateKind,
 };
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::ClusterId;
+use mz_expr::CollectionPlan;
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;
 use mz_ore::now::{SYSTEM_TIME, to_datetime};
@@ -171,6 +172,8 @@ impl Catalog {
             comments: Arc::new(CommentsMap::default()),
             source_references: imbl::OrdMap::new(),
             storage_metadata: Arc::new(StorageMetadata::default()),
+            maintained_read_requirements: Default::default(),
+            catalog_read_protection_enabled: false,
             temporary_namespaces: Default::default(),
             mock_authentication_nonce: Default::default(),
             config: mz_sql::catalog::CatalogConfig {
@@ -452,6 +455,19 @@ impl Catalog {
 
         let last_seen_version = get_migration_version(&txn);
 
+        // Latch the mode at environment birth. Changing startup defaults must not
+        // adopt existing collections whose required history may already be gone.
+        let protection_key = "catalog_read_protection_enabled".to_string();
+        state.catalog_read_protection_enabled = match txn.get_config(protection_key.clone()) {
+            Some(value) => value != 0,
+            None => {
+                let enabled = last_seen_version.is_none()
+                    && state.system_config().enable_catalog_read_protection();
+                txn.set_config(protection_key, Some(u64::from(enabled)))?;
+                enabled
+            }
+        };
+
         let mz_authentication_mock_nonce =
             txn.get_authentication_mock_nonce().ok_or_else(|| {
                 Error::new(ErrorKind::SettingError("authentication nonce".to_string()))
@@ -604,6 +620,7 @@ impl Catalog {
                 state,
                 expr_cache_handle,
                 transient_revision: 1,
+                ddl_revision: 1,
                 shared_transient_revision: Arc::new(AtomicU64::new(1)),
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
             };
@@ -680,6 +697,7 @@ impl Catalog {
         let mut storage = self.storage().await;
         let shard_id = storage.shard_id();
         let mut txn = storage.transaction().await?;
+        let existing_collections = txn.get_collection_metadata();
 
         // Ensure the storage controller knows about the catalog shard and associates it with the
         // `MZ_CATALOG_RAW` builtin source.
@@ -698,17 +716,54 @@ impl Catalog {
             .await
             .map_err(mz_catalog::durable::DurableCatalogError::from)?;
 
+        if state.catalog_read_protection_enabled() {
+            // The catalog's controller critical reader is established by durable
+            // catalog open and holds its since until storage registration. Thus the
+            // catalog shard, as well as freshly allocated shards, is readable here.
+            let birth = txn.upper();
+            let born: BTreeSet<_> = txn
+                .get_collection_metadata()
+                .into_keys()
+                .filter(|id| !existing_collections.contains_key(id))
+                .collect();
+            for id in &born {
+                txn.set_collection_compaction_bound(*id, Some(birth))?;
+            }
+            for (_, entry) in state.get_entries() {
+                if let CatalogItem::MaterializedView(mv) = entry.item()
+                    && born.contains(&mv.global_id_writes())
+                {
+                    let inputs = state.logical_collection_inputs(
+                        mv.resolved_ids
+                            .collections()
+                            .copied()
+                            .chain(mv.raw_expr.depends_on())
+                            .filter(|id| state.get_entry_by_global_id(id).is_relation()),
+                    );
+                    txn.set_maintained_read_requirement(
+                        mv.global_id_writes(),
+                        inputs,
+                        Some(birth),
+                    )?;
+                }
+            }
+        }
+
         let updates = txn.get_and_commit_op_updates();
-        let (builtin_updates, catalog_updates) = state
+        assert!(updates.iter().all(|update| matches!(
+            update.kind,
+            StateUpdateKind::StorageCollectionMetadata(_)
+                | StateUpdateKind::CollectionCompactionBound(_)
+                | StateUpdateKind::MaintainedReadRequirement(_)
+                | StateUpdateKind::UnfinalizedShard(_)
+        )));
+        // Bootstrap consumes the committed bounds when registering collections.
+        let (builtin_updates, _catalog_updates) = state
             .apply_updates(updates, &mut LocalExpressionCache::Closed)
             .await;
         assert!(
             builtin_updates.is_empty(),
             "storage is not allowed to generate catalog changes that would cause changes to builtin tables"
-        );
-        assert!(
-            catalog_updates.is_empty(),
-            "storage is not allowed to generate catalog changes that would change the catalog or controller state"
         );
         let commit_ts = txn.upper();
         txn.commit(commit_ts).await?;

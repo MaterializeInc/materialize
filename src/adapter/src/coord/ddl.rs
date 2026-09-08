@@ -272,7 +272,7 @@ impl Coordinator {
             ops:
                 TransactionOps::DDL {
                     ops: txn_ops,
-                    revision: txn_revision,
+                    ddl_revision: txn_revision,
                     state: txn_state,
                     snapshot: txn_snapshot,
                     side_effects: _,
@@ -290,8 +290,7 @@ impl Coordinator {
             return result;
         };
 
-        // Make sure our Catalog hasn't changed since openning the transaction.
-        if self.catalog().transient_revision() != *txn_revision {
+        if self.catalog().ddl_revision() != *txn_revision {
             self.metrics
                 .catalog_transact_seconds
                 .with_label_values(&["catalog_transact_with_ddl_transaction"])
@@ -380,7 +379,7 @@ impl Coordinator {
                 ops: combined_ops,
                 state: new_state,
                 side_effects: vec![Box::new(side_effect)],
-                revision: self.catalog().transient_revision(),
+                ddl_revision: self.catalog().ddl_revision(),
                 snapshot: Some(new_snapshot),
             });
 

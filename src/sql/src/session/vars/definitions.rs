@@ -956,6 +956,16 @@ pub static COORD_SLOW_MESSAGE_WARN_THRESHOLD: VarDefinition = VarDefinition::new
     false,
 );
 
+pub static CATALOG_READ_PROTECTION_PUBLISH_INTERVAL: VarDefinition = VarDefinition::new(
+    "catalog_read_protection_publish_interval",
+    value!(Duration; Duration::from_secs(1)),
+    "Sets the minimum delay after a catalog read protection publication completes before \
+     starting the next publication. Zero suspends publication and retains history without \
+     releasing protection. Used to measure the publication cadence and history retention \
+     tradeoff and to quiesce periodic metadata for consistency checks.",
+    false,
+);
+
 /// Controls the connect_timeout setting when connecting to PG via `mz_postgres_util`.
 pub static PG_SOURCE_CONNECT_TIMEOUT: VarDefinition = VarDefinition::new(
     "pg_source_connect_timeout",
@@ -1854,6 +1864,14 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     // Actual feature flags
+    // Sampled only when initializing a fresh catalog. Later toggles do not
+    // change the persisted mode or convert existing environments.
+    {
+        name: enable_catalog_read_protection,
+        desc: "Enable catalog-backed recovery protection when initializing a fresh environment.",
+        default: false,
+        enable_for_item_parsing: false,
+    },
     {
         name: enable_binary_date_bin,
         desc: "the binary version of date_bin function",

@@ -1293,6 +1293,7 @@ impl SystemVars {
             &SENTRY_FILTERS,
             &WEBHOOKS_SECRETS_CACHING_TTL_SECS,
             &COORD_SLOW_MESSAGE_WARN_THRESHOLD,
+            &CATALOG_READ_PROTECTION_PUBLISH_INTERVAL,
             &grpc_client::CONNECT_TIMEOUT,
             &grpc_client::HTTP2_KEEP_ALIVE_INTERVAL,
             &grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT,
@@ -2223,6 +2224,10 @@ impl SystemVars {
 
     pub fn coord_slow_message_warn_threshold(&self) -> Duration {
         *self.expect_value(&COORD_SLOW_MESSAGE_WARN_THRESHOLD)
+    }
+
+    pub fn catalog_read_protection_publish_interval(&self) -> Duration {
+        *self.expect_value(&CATALOG_READ_PROTECTION_PUBLISH_INTERVAL)
     }
 
     pub fn grpc_client_http2_keep_alive_interval(&self) -> Duration {

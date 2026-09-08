@@ -221,7 +221,7 @@ impl PeekClient {
     /// Serves from the session-side cache when the catalog's transient
     /// revision is unchanged since the cached snapshot was taken (see
     /// [`Catalog::transient_revision_is_current`]). An unchanged revision
-    /// means the cached snapshot is identical to what a fresh fetch would
+    /// means the cached snapshot is planning-equivalent to what a fresh fetch would
     /// return. Otherwise falls back to a `Command::CatalogSnapshot`
     /// round-trip and re-populates the cache.
     ///

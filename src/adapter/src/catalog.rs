@@ -145,17 +145,18 @@ pub struct Catalog {
     expr_cache_handle: Option<ExpressionCacheHandle>,
     storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::durable::DurableCatalogState>>>,
     transient_revision: u64,
+    ddl_revision: u64,
     /// The latest `transient_revision`, shared by all clones of this catalog.
     /// While `transient_revision` is this clone's own revision, frozen when
     /// the snapshot was taken, this field always tracks the latest revision
     /// across all clones. Comparing the two lets a snapshot holder detect
-    /// from off-thread whether its snapshot is still current, via
+    /// from off-thread whether its planning-visible state is still current, via
     /// [`Catalog::transient_revision_is_current`], without a Coordinator
     /// round-trip (see `PeekClient::catalog_snapshot`).
     ///
     /// The store happens in `transact`, before the transaction's effects can
     /// be observed anywhere (responses, notices, builtin table writes), so a
-    /// session that has observed any evidence of a catalog change is
+    /// session that has observed any evidence of a planning-visible change is
     /// guaranteed to see the corresponding bump.
     shared_transient_revision: Arc<AtomicU64>,
 }
@@ -185,6 +186,7 @@ impl Clone for Catalog {
             expr_cache_handle: self.expr_cache_handle.clone(),
             storage: Arc::clone(&self.storage),
             transient_revision: self.transient_revision,
+            ddl_revision: self.ddl_revision,
             shared_transient_revision: Arc::clone(&self.shared_transient_revision),
         }
     }
@@ -356,15 +358,24 @@ pub struct DebugAwsContext {
 
 impl Catalog {
     /// Returns the catalog's transient revision, which starts at 1 and is
-    /// incremented on every change. This is not persisted to disk, and will
-    /// restart on every load.
+    /// incremented on every planning-visible change, including system configuration.
+    /// Audit logs, read protection, and shard finalization bookkeeping do not affect it.
+    /// It is not persisted to disk and restarts on every load.
     pub fn transient_revision(&self) -> u64 {
         self.transient_revision
     }
 
+    /// Returns the revision used to detect conflicts with open DDL transactions.
+    /// It starts at 1 on every load and advances on the same changes as
+    /// [`Self::transient_revision`], except changes to
+    /// `catalog_read_protection_publish_interval`.
+    pub fn ddl_revision(&self) -> u64 {
+        self.ddl_revision
+    }
+
     /// Reports whether this catalog's transient revision is still the latest,
-    /// i.e., whether no catalog transaction has committed since this snapshot
-    /// was taken. Can be called on a snapshot from off-thread, without a
+    /// i.e., whether its planning-visible state is equivalent to the current
+    /// catalog's. Can be called on a snapshot from off-thread, without a
     /// Coordinator round-trip. See the field documentation on
     /// `shared_transient_revision`.
     pub fn transient_revision_is_current(&self) -> bool {
@@ -2642,6 +2653,7 @@ mod tests {
             .await
             .expect("unable to open debug catalog");
             assert_eq!(catalog.transient_revision(), 1);
+            assert_eq!(catalog.ddl_revision(), 1);
             assert!(catalog.transient_revision_is_current());
             let snapshot = catalog.clone();
             let commit_ts = catalog.current_upper().await;
@@ -2658,10 +2670,12 @@ mod tests {
                 .await
                 .expect("failed to transact");
             assert_eq!(catalog.transient_revision(), 2);
+            assert_eq!(catalog.ddl_revision(), 2);
             assert!(catalog.transient_revision_is_current());
             // The pre-transaction snapshot detects its own staleness through
             // the shared latest revision.
             assert!(!snapshot.transient_revision_is_current());
+            assert_eq!(snapshot.ddl_revision(), 1);
             catalog.expire().await;
         }
         {
@@ -2669,8 +2683,8 @@ mod tests {
                 Catalog::open_debug_catalog(persist_client, organization_id, &bootstrap_args)
                     .await
                     .expect("unable to open debug catalog");
-            // Re-opening the same catalog resets the transient_revision to 1.
             assert_eq!(catalog.transient_revision(), 1);
+            assert_eq!(catalog.ddl_revision(), 1);
             catalog.expire().await;
         }
     }

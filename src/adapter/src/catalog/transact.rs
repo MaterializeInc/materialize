@@ -40,6 +40,7 @@ use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterConfig, ClusterVariant, DataSourceDesc, DefaultPrivileges,
     ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget, SourceReferences,
+    StateUpdateKind, TableDataSource,
 };
 use mz_cluster_controller::ctx::RefreshWindowDecision;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
@@ -67,11 +68,12 @@ use mz_sql::names::{
 use mz_sql::plan::{NetworkPolicyRule, PlanError};
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use mz_sql::session::vars::OwnedVarInput;
-use mz_sql::session::vars::{Value as VarValue, VarInput};
+use mz_sql::session::vars::{self, Value as VarValue, VarInput};
 use mz_sql::{DEFAULT_SCHEMA, rbac};
 use mz_sql_parser::ast::{QualifiedReplica, Value};
 use mz_storage_client::controller::StorageTxn;
 use mz_storage_client::storage_collections::StorageCollections;
+use mz_storage_types::sources::envelope::SourceEnvelope;
 use serde::{Deserialize, Serialize};
 use tracing::{info, trace};
 use uuid::Uuid;
@@ -445,6 +447,12 @@ pub struct TransactionResult {
     pub audit_events: Vec<VersionedEvent>,
 }
 
+struct TransactInnerResult {
+    state: CatalogState,
+    planning_changed: bool,
+    ddl_changed: bool,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum TransactInnerMode {
     /// Prepare storage state and return a commit-ready transaction state.
@@ -779,16 +787,24 @@ impl Catalog {
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
         drop(storage);
-        if let Some(new_state) = new_state {
-            self.transient_revision += 1;
-            // Publish the new revision before returning. Everything that can
-            // reveal this transaction's effects (responses, notices, builtin
-            // table writes) happens after `transact` returns, so any session
-            // that has observed such evidence is guaranteed to see this bump
-            // and refresh its cached catalog snapshot.
-            self.shared_transient_revision
-                .store(self.transient_revision, atomic::Ordering::SeqCst);
-            self.state = new_state;
+        if let Some(TransactInnerResult {
+            state,
+            planning_changed,
+            ddl_changed,
+        }) = new_state
+        {
+            if planning_changed {
+                self.transient_revision += 1;
+                // Publish before any planning-visible effects (responses,
+                // notices, builtin table writes) can be observed, so sessions
+                // that observe them must refresh their cached catalog snapshot.
+                self.shared_transient_revision
+                    .store(self.transient_revision, atomic::Ordering::SeqCst);
+            }
+            if ddl_changed {
+                self.ddl_revision += 1;
+            }
+            self.state = state;
         }
 
         Ok(TransactionResult {
@@ -867,8 +883,9 @@ impl Catalog {
         // Transaction is NOT committed — drop it.
         drop(storage);
 
-        // transact_inner returns Some(state) when ops produced changes.
-        let state = new_state.unwrap_or_else(|| base_state.clone());
+        let state = new_state
+            .map(|result| result.state)
+            .unwrap_or_else(|| base_state.clone());
         Ok((state, new_snapshot))
     }
 
@@ -923,6 +940,7 @@ impl Catalog {
 
     /// Performs the transaction described by `ops` and returns the new state of the catalog, if
     /// it has changed. If `ops` don't result in a change in the state this method returns `None`.
+    /// The result indicates which catalog revisions must advance on commit.
     ///
     /// `mode` controls whether storage prepare-state side effects are allowed.
     /// In `DryRun` mode, this method may update the in-memory state returned to
@@ -941,7 +959,7 @@ impl Catalog {
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
         state: &CatalogState,
-    ) -> Result<Option<CatalogState>, AdapterError> {
+    ) -> Result<Option<TransactInnerResult>, AdapterError> {
         // We come up with new catalog state, builtin state updates, and parsed
         // catalog updates (for deriving catalog implications) in two phases:
         //
@@ -1016,19 +1034,6 @@ impl Catalog {
             updates.append(&mut op_updates);
         }
 
-        if !updates.is_empty() {
-            let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
-            let (op_builtin_table_updates, op_catalog_updates) = state
-                .to_mut()
-                .apply_updates(updates.clone(), &mut local_expr_cache)
-                .await;
-            let op_builtin_table_updates = state
-                .to_mut()
-                .resolve_builtin_table_updates(op_builtin_table_updates);
-            builtin_table_updates.extend(op_builtin_table_updates);
-            parsed_catalog_updates.extend(op_catalog_updates);
-        }
-
         match mode {
             TransactInnerMode::Commit => {
                 // `storage_collections` can be `None` in tests.
@@ -1064,7 +1069,34 @@ impl Catalog {
         // Batch extraction repeats this check for other durable callers.
         tx.validate_read_protection()?;
 
-        let updates = tx.get_and_commit_op_updates();
+        // Storage preparation can retract permission staged by an earlier op
+        // when it deletes metadata. Derive implications from the consolidated
+        // final batch, never from such intermediate permission.
+        updates.extend(tx.get_and_commit_op_updates());
+        // Classify raw updates, not parsed implications, which omit
+        // planning-visible changes.
+        let mut planning_changed = false;
+        let mut ddl_changed = false;
+        for update in &updates {
+            match &update.kind {
+                StateUpdateKind::CollectionCompactionBound(_)
+                | StateUpdateKind::MaintainedReadRequirement(_)
+                | StateUpdateKind::UnfinalizedShard(_)
+                | StateUpdateKind::AuditLog(_) => {}
+                StateUpdateKind::SystemConfiguration(config)
+                    if config.name
+                        == vars::CATALOG_READ_PROTECTION_PUBLISH_INTERVAL.name.as_str() =>
+                {
+                    // current_setting is folded to a literal during optimization,
+                    // so changing publication cadence must invalidate cached plans.
+                    planning_changed = true;
+                }
+                _ => {
+                    planning_changed = true;
+                    ddl_changed = true;
+                }
+            }
+        }
         if !updates.is_empty() {
             let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
             let (op_builtin_table_updates, op_catalog_updates) = state
@@ -1079,7 +1111,11 @@ impl Catalog {
         }
 
         match state {
-            Cow::Owned(state) => Ok(Some(state)),
+            Cow::Owned(state) => Ok(Some(TransactInnerResult {
+                state,
+                planning_changed,
+                ddl_changed,
+            })),
             Cow::Borrowed(_) => Ok(None),
         }
     }
@@ -1302,6 +1338,11 @@ impl Catalog {
                 let shard_id = state
                     .storage_metadata()
                     .get_collection_shard(new_entry.latest_global_id())?;
+                if state.catalog_read_protection_enabled() {
+                    let bound =
+                        &state.storage_metadata().compaction_bounds[&new_entry.latest_global_id()];
+                    tx.set_collection_compaction_bound(new_global_id, bound.as_option().copied())?;
+                }
 
                 // TODO(alter_table): Support adding columns to sources.
                 let CatalogItem::Table(table) = &mut new_entry.item else {
@@ -1351,6 +1392,17 @@ impl Catalog {
                     ));
                 };
 
+                if state.catalog_read_protection_enabled() {
+                    let old_writer = mv.global_id_writes();
+                    let requirement = &state.maintained_read_requirements()[&old_writer];
+                    // Retained collection aliases still serve readers, but this writer
+                    // no longer needs its inputs for recovery.
+                    tx.set_maintained_read_requirement(
+                        old_writer,
+                        requirement.inputs.clone(),
+                        None,
+                    )?;
+                }
                 mv.apply_replacement(replacement_mv.clone());
 
                 tx.remove_item(replacement_id)?;
@@ -1693,9 +1745,24 @@ impl Catalog {
                     CatalogItem::Table(table) => {
                         let gids: Vec<_> = table.global_ids().collect();
                         assert_eq!(gids.len(), 1);
+                        if state.catalog_read_protection_enabled() {
+                            let bound = match &table.data_source {
+                                TableDataSource::TableWrites { .. } => Some(oracle_write_ts),
+                                TableDataSource::DataSource { desc, .. } => {
+                                    source_initial_compaction_bound(state, desc)?
+                                }
+                            };
+                            tx.set_collection_compaction_bound(gids[0], bound)?;
+                        }
                         storage_collections_to_create.extend(gids);
                     }
                     CatalogItem::Source(source) => {
+                        if state.catalog_read_protection_enabled() {
+                            tx.set_collection_compaction_bound(
+                                source.global_id(),
+                                source_initial_compaction_bound(state, &source.data_source)?,
+                            )?;
+                        }
                         storage_collections_to_create.insert(source.global_id());
                     }
                     CatalogItem::MaterializedView(mv) => {
@@ -1704,12 +1771,38 @@ impl Catalog {
                             let target_gid = state.get_entry(&target_id).latest_global_id();
                             let shard_id =
                                 state.storage_metadata().get_collection_shard(target_gid)?;
+                            if state.catalog_read_protection_enabled() {
+                                let metadata = state.storage_metadata();
+                                let bound = &metadata.compaction_bounds[&target_gid];
+                                tx.set_collection_compaction_bound(
+                                    mv_gid,
+                                    bound.as_option().copied(),
+                                )?;
+                            }
                             storage_collections_to_register.insert(mv_gid, shard_id);
                         } else {
+                            if state.catalog_read_protection_enabled() {
+                                let initial_as_of = mv.initial_as_of.as_ref().ok_or_else(|| {
+                                    AdapterError::internal(
+                                        "create materialized view",
+                                        "missing initial storage frontier",
+                                    )
+                                })?;
+                                tx.set_collection_compaction_bound(
+                                    mv_gid,
+                                    initial_as_of.as_option().copied(),
+                                )?;
+                            }
                             storage_collections_to_create.insert(mv_gid);
                         }
                     }
                     CatalogItem::Sink(sink) => {
+                        if state.catalog_read_protection_enabled() {
+                            tx.set_collection_compaction_bound(
+                                sink.global_id(),
+                                dependency_compaction_bound(state, sink.from)?,
+                            )?;
+                        }
                         storage_collections_to_create.insert(sink.global_id());
                     }
                     CatalogItem::Log(_)
@@ -3258,6 +3351,64 @@ impl Catalog {
     }
 }
 
+/// Returns birth permission compatible with a source's storage initialization dependency.
+fn source_initial_compaction_bound(
+    state: &CatalogState,
+    desc: &DataSourceDesc,
+) -> Result<Option<mz_repr::Timestamp>, AdapterError> {
+    let dependency = match desc {
+        DataSourceDesc::IngestionExport {
+            ingestion_id,
+            data_config,
+            ..
+        } => {
+            if matches!(data_config.envelope, SourceEnvelope::CdcV2) {
+                None
+            } else {
+                Some(state.get_entry(ingestion_id).progress_id().ok_or_else(|| {
+                    AdapterError::internal(
+                        "source birth permission",
+                        "ingestion export must refer to an ingestion with a remap collection",
+                    )
+                })?)
+            }
+        }
+        DataSourceDesc::OldSyntaxIngestion {
+            progress_subsource, ..
+        } => Some(*progress_subsource),
+        DataSourceDesc::Ingestion { .. }
+        | DataSourceDesc::Introspection(_)
+        | DataSourceDesc::Progress
+        | DataSourceDesc::Webhook { .. }
+        | DataSourceDesc::Catalog => None,
+    };
+    match dependency {
+        Some(id) => dependency_compaction_bound(state, state.get_entry(&id).latest_global_id()),
+        None => Ok(Some(mz_repr::Timestamp::MIN)),
+    }
+}
+
+/// Returns the committed permission of a governed storage dependency.
+fn dependency_compaction_bound(
+    state: &CatalogState,
+    id: GlobalId,
+) -> Result<Option<mz_repr::Timestamp>, AdapterError> {
+    // Storage initializes a dependent at least as far as its dependency's since.
+    // Governance proves since <= bound without making physical readability the
+    // authority. The preliminary state includes permissions from preceding ops.
+    state
+        .storage_metadata()
+        .compaction_bounds
+        .get(&id)
+        .map(|bound| bound.as_option().copied())
+        .ok_or_else(|| {
+            AdapterError::internal(
+                "storage birth permission",
+                format!("missing compaction permission for dependency {id}"),
+            )
+        })
+}
+
 /// Resolves the session UUID that durably owns a temporary item being
 /// created. The durable owner is the session that created the item.
 ///
@@ -3583,6 +3734,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use mz_catalog::SYSTEM_CONN_ID;
+    use mz_catalog::memory::error::{Error, ErrorKind};
     use mz_catalog::memory::objects::{CatalogItem, Table, TableDataSource};
     use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
     use mz_repr::role_id::RoleId;
@@ -3593,10 +3745,285 @@ mod tests {
         ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
     };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-    use mz_sql::session::vars::{MAX_CONNECTIONS, OwnedVarInput, SystemVars};
+    use mz_sql::session::vars::{self, MAX_CONNECTIONS, OwnedVarInput, SystemVars};
 
+    use crate::AdapterError;
     use crate::catalog::{Catalog, Op};
     use crate::session::DEFAULT_DATABASE_NAME;
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_storage_birth_inherits_dependency_permission() {
+        use std::collections::BTreeMap;
+
+        use mz_proto::RustType;
+        use mz_storage_types::sources::SourceExportStatementDetails;
+        use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
+        use prost::Message;
+        use timely::progress::Antichain;
+
+        use crate::catalog::state::LocalExpressionCache;
+
+        Catalog::with_debug(|catalog| async move {
+            let database = catalog
+                .resolve_database(DEFAULT_DATABASE_NAME)
+                .expect("default database exists");
+            let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+            let schema = catalog
+                .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
+                .expect("default schema exists");
+            let qualifiers = ItemQualifiers {
+                database_spec,
+                schema_spec: schema.id.clone(),
+            };
+            let prefix = format!("{}.{}", database.name, schema.name.schema);
+            let details = hex::encode(
+                SourceExportStatementDetails::LoadGenerator {
+                    output: LoadGeneratorOutput::Default,
+                }
+                .into_proto()
+                .encode_to_vec(),
+            );
+            let oracle_write_ts = catalog.current_upper().await;
+            let permission = oracle_write_ts.step_forward();
+            let mut base = catalog.state().clone();
+            base.catalog_read_protection_enabled = true;
+            let mut state = base.clone();
+            let mut ops = Vec::new();
+            for (name, sql) in [
+                (
+                    "birth_source",
+                    format!("CREATE SOURCE {prefix}.birth_source IN CLUSTER quickstart FROM LOAD GENERATOR COUNTER"),
+                ),
+                (
+                    "birth_connection",
+                    format!("CREATE CONNECTION {prefix}.birth_connection TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT)"),
+                ),
+                (
+                    "birth_table",
+                    format!("CREATE TABLE {prefix}.birth_table FROM SOURCE {prefix}.birth_source (REFERENCE counter) WITH (DETAILS '{details}')"),
+                ),
+                (
+                    "birth_export",
+                    format!("CREATE SUBSOURCE {prefix}.birth_export (counter bigint) OF SOURCE {prefix}.birth_source WITH (EXTERNAL REFERENCE counter, DETAILS '{details}')"),
+                ),
+                (
+                    "birth_sink",
+                    format!("CREATE SINK {prefix}.birth_sink IN CLUSTER quickstart FROM {prefix}.birth_table INTO KAFKA CONNECTION {prefix}.birth_connection (TOPIC 'birth-permission') FORMAT JSON ENVELOPE DEBEZIUM"),
+                ),
+            ] {
+                let (id, global_id) = catalog
+                    .allocate_user_id_for_test()
+                    .await
+                    .expect("allocate collection identity");
+                let item = state
+                    .with_enable_for_item_parsing(|state| state.parse_item(
+                        global_id,
+                        &sql,
+                        &BTreeMap::new(),
+                        None,
+                        false,
+                        None,
+                        &mut LocalExpressionCache::Closed,
+                        None,
+                    ))
+                    .unwrap_or_else(|err| panic!("parse {name}: {err}"));
+                ops.push(Op::CreateItem {
+                    id,
+                    name: QualifiedItemName {
+                        qualifiers: qualifiers.clone(),
+                        item: name.to_string(),
+                    },
+                    item,
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                });
+                // Replay the whole batch to exercise dependencies that only exist
+                // in preliminary state, without any installed storage collections.
+                (state, _) = catalog
+                    .transact_incremental_dry_run(&base, ops.clone(), None, None, oracle_write_ts)
+                    .await
+                    .unwrap_or_else(|err| panic!("create {name}: {err}"));
+                if name == "birth_source" {
+                    assert_eq!(
+                        state.storage_metadata().compaction_bounds[&global_id],
+                        Antichain::from_elem(mz_repr::Timestamp::MIN),
+                    );
+                    ops.push(Op::SetCollectionCompactionBound {
+                        id: global_id,
+                        frontier: Some(permission),
+                    });
+                } else if name != "birth_connection" {
+                    assert_eq!(
+                        state.storage_metadata().compaction_bounds[&global_id],
+                        Antichain::from_elem(permission),
+                        "{name} must inherit dependency permission, not MIN or oracle time",
+                    );
+                }
+            }
+        })
+        .await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_ddl_replay_inherits_fresh_dependency_permission() {
+        use std::collections::BTreeMap;
+
+        use mz_persist_client::ShardId;
+        use mz_proto::RustType;
+        use mz_repr::{GlobalId, Timestamp};
+        use mz_storage_client::controller::StorageTxn;
+        use mz_storage_types::sources::SourceExportStatementDetails;
+        use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
+        use prost::Message;
+        use timely::progress::Antichain;
+
+        use crate::catalog::state::LocalExpressionCache;
+
+        // This catalog harness has no storage controller. Seed metadata and its
+        // initial permission in place of prepare_state's shard allocation.
+        async fn seed_collection(catalog: &mut Catalog, id: GlobalId) {
+            let updates = {
+                let mut storage = catalog.storage().await;
+                let mut tx = storage
+                    .transaction()
+                    .await
+                    .expect("collection setup transaction should open");
+                tx.insert_collection_metadata(BTreeMap::from([(id, ShardId::new())]))
+                    .expect("collection metadata should be inserted");
+                tx.set_collection_compaction_bound(id, Some(Timestamp::MIN))
+                    .expect("initial compaction bound should be accepted");
+                let updates = tx.get_and_commit_op_updates();
+                let commit_ts = tx.upper();
+                tx.commit(commit_ts)
+                    .await
+                    .expect("collection setup should commit");
+                updates
+            };
+            let _ = catalog
+                .state
+                .apply_updates(updates, &mut LocalExpressionCache::Closed)
+                .await;
+        }
+
+        Catalog::with_debug(|mut catalog| async move {
+            catalog.state.catalog_read_protection_enabled = true;
+            let database = catalog
+                .resolve_database(DEFAULT_DATABASE_NAME)
+                .expect("default database exists");
+            let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+            let schema = catalog
+                .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
+                .expect("default schema exists");
+            let qualifiers = ItemQualifiers {
+                database_spec,
+                schema_spec: schema.id.clone(),
+            };
+            let prefix = format!("{}.{}", database.name, schema.name.schema);
+            let details = hex::encode(
+                SourceExportStatementDetails::LoadGenerator {
+                    output: LoadGeneratorOutput::Default,
+                }
+                .into_proto()
+                .encode_to_vec(),
+            );
+            let mut source_id = None;
+            for (name, sql) in [
+                (
+                    "replay_source",
+                    format!("CREATE SOURCE {prefix}.replay_source IN CLUSTER quickstart FROM LOAD GENERATOR COUNTER"),
+                ),
+                (
+                    "replay_table",
+                    format!("CREATE TABLE {prefix}.replay_table FROM SOURCE {prefix}.replay_source (REFERENCE counter) WITH (DETAILS '{details}')"),
+                ),
+            ] {
+                let (id, global_id) = catalog
+                    .allocate_user_id_for_test()
+                    .await
+                    .expect("allocate collection identity");
+                let item = catalog
+                    .state
+                    .with_enable_for_item_parsing(|state| state.parse_item(
+                        global_id,
+                        &sql,
+                        &BTreeMap::new(),
+                        None,
+                        false,
+                        None,
+                        &mut LocalExpressionCache::Closed,
+                        None,
+                    ))
+                    .unwrap_or_else(|err| panic!("parse {name}: {err}"));
+                let op = Op::CreateItem {
+                    id,
+                    name: QualifiedItemName {
+                        qualifiers: qualifiers.clone(),
+                        item: name.to_string(),
+                    },
+                    item,
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                };
+                if let Some(source_id) = source_id {
+                    let revision = catalog.transient_revision();
+                    let oracle_write_ts = catalog.current_upper().await;
+                    let (dry_run_state, _dry_run_snapshot) = catalog
+                        .transact_incremental_dry_run(
+                            catalog.state(),
+                            vec![op.clone()],
+                            None,
+                            None,
+                            oracle_write_ts,
+                        )
+                        .await
+                        .expect("table birth dry run should succeed");
+                    assert_eq!(
+                        dry_run_state.storage_metadata().compaction_bounds[&global_id],
+                        Antichain::from_elem(Timestamp::MIN)
+                    );
+                    seed_collection(&mut catalog, global_id).await;
+                    let fresh_bound = Timestamp::new(20);
+                    let oracle_write_ts = catalog.current_upper().await;
+                    catalog
+                        .transact(
+                            None,
+                            oracle_write_ts,
+                            None,
+                            vec![Op::SetCollectionCompactionBound {
+                                id: source_id,
+                                frontier: Some(fresh_bound),
+                            }],
+                        )
+                        .await
+                        .expect("dependency permission should advance during the DDL transaction");
+                    assert_eq!(catalog.transient_revision(), revision);
+
+                    // Final DDL commit replays ops, not the dry-run state or snapshot.
+                    let oracle_write_ts = catalog.current_upper().await;
+                    catalog
+                        .transact(None, oracle_write_ts, None, vec![op])
+                        .await
+                        .expect("DDL replay should use current birth permission");
+                    assert_eq!(catalog.transient_revision(), revision + 1);
+                    assert_eq!(
+                        catalog.state().storage_metadata().compaction_bounds[&global_id],
+                        Antichain::from_elem(fresh_bound)
+                    );
+                    assert!(catalog.state().try_get_entry(&id).is_some());
+                } else {
+                    seed_collection(&mut catalog, global_id).await;
+                    let oracle_write_ts = catalog.current_upper().await;
+                    catalog
+                        .transact(None, oracle_write_ts, None, vec![op])
+                        .await
+                        .expect("source birth should commit");
+                    source_id = Some(global_id);
+                }
+            }
+            catalog.expire().await;
+        })
+        .await;
+    }
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
@@ -3620,17 +4047,22 @@ mod tests {
             // does not run storage shard allocation or controller implications.
             let updates = {
                 let mut storage = catalog.storage().await;
-                let mut tx = storage.transaction().await.unwrap();
+                let mut tx = storage
+                    .transaction()
+                    .await
+                    .expect("collection setup transaction should open");
                 tx.insert_collection_metadata(BTreeMap::from([
                     (input, ShardId::new()),
                     (output, ShardId::new()),
                 ]))
-                .unwrap();
+                .expect("input and output collection metadata should be inserted");
                 tx.set_collection_compaction_bound(input, Some(ts(10)))
-                    .unwrap();
+                    .expect("initial input compaction bound should be accepted");
                 let updates = tx.get_and_commit_op_updates();
                 let commit_ts = tx.upper();
-                tx.commit(commit_ts).await.unwrap();
+                tx.commit(commit_ts)
+                    .await
+                    .expect("collection setup should commit");
                 updates
             };
             let _ = catalog
@@ -3647,6 +4079,9 @@ mod tests {
                 id: input,
                 frontier,
             };
+            let revision = catalog.transient_revision();
+            let ddl_revision = catalog.ddl_revision();
+            let snapshot = catalog.clone();
             let before = catalog.state().storage_metadata().compaction_bounds.clone();
             let oracle_write_ts = catalog.current_upper().await;
             let result = catalog
@@ -3671,6 +4106,34 @@ mod tests {
                     .is_err()
             );
 
+            catalog
+                .transact(None, oracle_write_ts, None, vec![bound(Some(ts(15)))])
+                .await
+                .expect("bound-only publication should commit");
+            assert_eq!(catalog.transient_revision(), revision);
+            assert!(snapshot.transient_revision_is_current());
+            assert_eq!(
+                catalog.state().storage_metadata().compaction_bounds[&input],
+                Antichain::from_elem(ts(15))
+            );
+            assert_eq!(
+                snapshot.state().storage_metadata().compaction_bounds[&input],
+                Antichain::from_elem(ts(10)),
+                "planning-equivalent snapshots need not have identical protection authority"
+            );
+
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(None, oracle_write_ts, None, vec![requirement(Some(ts(19)))])
+                .await
+                .expect("requirement-only publication should commit");
+            assert_eq!(catalog.transient_revision(), revision);
+            assert!(snapshot.transient_revision_is_current());
+            let committed_requirement = &catalog.state().maintained_read_requirements()[&output];
+            assert_eq!(committed_requirement.inputs, BTreeSet::from([input]));
+            assert_eq!(committed_requirement.frontier, Some(ts(19)));
+
+            let oracle_write_ts = catalog.current_upper().await;
             let result = catalog
                 .transact(
                     None,
@@ -3679,7 +4142,8 @@ mod tests {
                     vec![bound(Some(ts(20))), requirement(Some(ts(20)))],
                 )
                 .await
-                .unwrap();
+                .expect("matching compaction bound and read requirement should commit");
+            assert_eq!(catalog.transient_revision(), revision);
             assert_eq!(
                 catalog.state().storage_metadata().compaction_bounds[&input],
                 Antichain::from_elem(ts(20))
@@ -3693,6 +4157,61 @@ mod tests {
                 )
             }));
 
+            assert_eq!(catalog.ddl_revision(), ddl_revision);
+            let interval = vars::CATALOG_READ_PROTECTION_PUBLISH_INTERVAL.name.as_str();
+            let default_interval = catalog
+                .system_config()
+                .catalog_read_protection_publish_interval();
+            assert!(!default_interval.is_zero());
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::UpdateSystemConfiguration {
+                        name: interval.into(),
+                        value: OwnedVarInput::Flat("0s".into()),
+                    }],
+                )
+                .await
+                .expect("pausing publication should commit");
+            assert_eq!(catalog.transient_revision(), revision + 1);
+            assert_eq!(catalog.ddl_revision(), ddl_revision);
+            assert!(!snapshot.transient_revision_is_current());
+            let paused_snapshot = catalog.clone();
+            assert!(paused_snapshot.transient_revision_is_current());
+            assert_eq!(paused_snapshot.ddl_revision(), ddl_revision);
+            assert!(
+                paused_snapshot
+                    .system_config()
+                    .catalog_read_protection_publish_interval()
+                    .is_zero()
+            );
+            let oracle_write_ts = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![Op::ResetSystemConfiguration {
+                        name: interval.into(),
+                    }],
+                )
+                .await
+                .expect("resuming publication should commit");
+            assert_eq!(catalog.transient_revision(), revision + 2);
+            assert_eq!(catalog.ddl_revision(), ddl_revision);
+            assert!(!paused_snapshot.transient_revision_is_current());
+            let snapshot = catalog.clone();
+            assert!(snapshot.transient_revision_is_current());
+            assert_eq!(
+                snapshot
+                    .system_config()
+                    .catalog_read_protection_publish_interval(),
+                default_interval
+            );
+
             let oracle_write_ts = catalog.current_upper().await;
             assert!(
                 catalog
@@ -3700,15 +4219,46 @@ mod tests {
                     .await
                     .is_err()
             );
+            let database_id = ResolvedDatabaseSpecifier::Id(
+                catalog
+                    .resolve_database(DEFAULT_DATABASE_NAME)
+                    .expect("default database exists")
+                    .id(),
+            );
             catalog
                 .transact(
                     None,
                     oracle_write_ts,
                     None,
-                    vec![bound(None), requirement(None)],
+                    vec![
+                        bound(None),
+                        requirement(None),
+                        Op::CreateSchema {
+                            database_id: database_id.clone(),
+                            schema_name: "protection_revision".into(),
+                            owner_id: MZ_SYSTEM_ROLE_ID,
+                        },
+                    ],
                 )
                 .await
-                .unwrap();
+                .expect("schema and protection changes should commit together");
+            assert_eq!(catalog.transient_revision(), revision + 3);
+            assert_eq!(catalog.ddl_revision(), ddl_revision + 1);
+            assert!(!snapshot.transient_revision_is_current());
+            assert!(catalog.transient_revision_is_current());
+            assert!(
+                catalog
+                    .resolve_schema_in_database(
+                        &database_id,
+                        "protection_revision",
+                        &SYSTEM_CONN_ID,
+                    )
+                    .is_ok()
+            );
+            assert_eq!(
+                catalog.state().maintained_read_requirements()[&output].frontier,
+                None
+            );
             assert_eq!(
                 catalog
                     .state()
@@ -4310,6 +4860,51 @@ mod tests {
             };
 
             let base_state = catalog.state().clone();
+
+            let mut protected_state = base_state.clone();
+            protected_state.catalog_read_protection_enabled = true;
+            let (born_state, born_snapshot) = catalog
+                .transact_incremental_dry_run(
+                    &protected_state,
+                    vec![op_t1.clone()],
+                    None,
+                    None,
+                    oracle_write_ts,
+                )
+                .await
+                .expect("table birth establishes committed permission");
+            assert_eq!(
+                born_state.storage_metadata().compaction_bounds[&global_id_t1],
+                timely::progress::Antichain::from_elem(oracle_write_ts)
+            );
+            let historical_ts = oracle_write_ts.step_back().expect("nonzero catalog upper");
+            let result = catalog
+                .transact_incremental_dry_run(
+                    &born_state,
+                    vec![
+                        op_t2.clone(),
+                        Op::SetMaintainedReadRequirement {
+                            id: global_id_t2,
+                            inputs: [global_id_t1].into_iter().collect(),
+                            frontier: Some(historical_ts),
+                        },
+                    ],
+                    None,
+                    Some(born_snapshot),
+                    oracle_write_ts,
+                )
+                .await;
+            assert!(
+                matches!(
+                    result,
+                    Err(AdapterError::Catalog(Error {
+                        kind: ErrorKind::Durable(
+                            mz_catalog::durable::DurableCatalogError::InvalidReadProtection(_)
+                        ),
+                    }))
+                ),
+                "admission must reject history preceding birth permission"
+            );
 
             let (state_after_t1, snapshot_after_t1) = catalog
                 .transact_incremental_dry_run(

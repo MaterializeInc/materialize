@@ -2272,11 +2272,10 @@ impl Coordinator {
                         ops,
                         state: _,
                         side_effects,
-                        revision,
+                        ddl_revision,
                         snapshot: _,
                     } => {
-                        // Make sure our catalog hasn't changed.
-                        if *revision != self.catalog().transient_revision() {
+                        if *ddl_revision != self.catalog().ddl_revision() {
                             return Err(AdapterError::DDLTransactionRace);
                         }
                         // Commit all of our queued ops.

@@ -19,7 +19,9 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{CatalogItemId, Datum, GlobalId, RelationVersion, Row, VersionedRelationDesc};
+use mz_repr::{
+    CatalogItemId, Datum, GlobalId, RelationVersion, Row, Timestamp, VersionedRelationDesc,
+};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
@@ -94,6 +96,32 @@ impl Staged for CreateMaterializedViewStage {
 }
 
 impl Coordinator {
+    /// Returns the committed input permission for MV admission, not a read hold.
+    pub(crate) fn materialized_view_input_permission(
+        &self,
+        ids: impl IntoIterator<Item = GlobalId>,
+    ) -> Result<Antichain<Timestamp>, AdapterError> {
+        let mut permission = Antichain::from_elem(Timestamp::MIN);
+        if self.catalog().state().catalog_read_protection_enabled() {
+            for id in ids {
+                let bound = self
+                    .catalog()
+                    .state()
+                    .storage_metadata()
+                    .compaction_bounds
+                    .get(&id)
+                    .ok_or_else(|| {
+                        AdapterError::internal(
+                            "create materialized view",
+                            format!("logical input {id} has no committed compaction bound"),
+                        )
+                    })?;
+                permission.join_assign(bound);
+            }
+        }
+        Ok(permission)
+    }
+
     /// Discovers storage inputs required to reconstruct an MV from its definition.
     pub(crate) fn materialized_view_logical_inputs(
         &self,
@@ -671,6 +699,7 @@ impl Coordinator {
             refresh_schedule.as_ref(),
             read_holds,
             &additional_read_holds,
+            &logical_inputs,
         )?;
 
         tracing::info!(
@@ -708,7 +737,7 @@ impl Coordinator {
 
         let local_mir_for_cache = local_mir_plan.expr();
 
-        let ops = vec![
+        let mut ops = vec![
             catalog::Op::DropObjects(
                 drop_ids
                     .into_iter()
@@ -740,6 +769,13 @@ impl Coordinator {
                 owner_id: *ctx.session().current_role_id(),
             },
         ];
+        if self.catalog().state().catalog_read_protection_enabled() {
+            ops.push(catalog::Op::SetMaintainedReadRequirement {
+                id: global_id,
+                inputs: logical_inputs.storage_ids,
+                frontier: dataflow_as_of.as_option().copied(),
+            });
+        }
 
         // Pre-allocate a vector of transient GlobalIds for each notice.
         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
@@ -863,6 +899,7 @@ impl Coordinator {
         refresh_schedule: Option<&RefreshSchedule>,
         read_holds: &ReadHolds,
         additional_read_holds: &ReadHolds,
+        logical_inputs: &CollectionIdBundle,
     ) -> Result<
         (
             Antichain<mz_repr::Timestamp>,
@@ -881,9 +918,14 @@ impl Coordinator {
 
         // For non-REFRESH MVs both the `dataflow_as_of` and the `storage_as_of` should be simply
         // `least_valid_read`.
-        let least_valid_read = read_holds
+        let mut least_valid_read = read_holds
             .least_valid_read()
             .join(&additional_read_holds.least_valid_read());
+        // Physical compaction may lag permission. Admission cannot rely on
+        // that extra history, even for inputs eliminated by optimization.
+        least_valid_read.join_assign(
+            &self.materialized_view_input_permission(logical_inputs.storage_ids.iter().copied())?,
+        );
         let mut dataflow_as_of = least_valid_read.clone();
         let mut storage_as_of = least_valid_read.clone();
 
@@ -941,6 +983,12 @@ impl Coordinator {
             .and_then(|r| r.try_step_forward());
         let until = Antichain::from_iter(until_ts);
 
+        if self.catalog().state().catalog_read_protection_enabled() && storage_as_of.is_empty() {
+            return Err(AdapterError::internal(
+                "create materialized view",
+                "no readable timestamp for materialized view inputs",
+            ));
+        }
         Ok((dataflow_as_of, storage_as_of, until))
     }
 

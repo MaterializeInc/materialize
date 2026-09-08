@@ -1411,7 +1411,7 @@ impl Coordinator {
                     | Statement::CreateTableFromSource(_)
                     | Statement::CreateSource(_) => {
                         let state = self.catalog().for_session(ctx.session()).state().clone();
-                        let revision = self.catalog().transient_revision();
+                        let ddl_revision = self.catalog().ddl_revision();
 
                         // Initialize our transaction with a set of empty ops, or return an error
                         // if we can't run a DDL transaction
@@ -1419,7 +1419,7 @@ impl Coordinator {
                         if let Err(err) = txn_status.add_ops(TransactionOps::DDL {
                             ops: vec![],
                             state,
-                            revision,
+                            ddl_revision,
                             side_effects: vec![],
                             snapshot: None,
                         }) {
@@ -1879,9 +1879,9 @@ impl Coordinator {
             let mut ids = self
                 .index_oracle(cluster)
                 .sufficient_collections(resolved_ids.collections().copied());
-            ids.extend(
-                &self.materialized_view_logical_inputs(resolved_ids.collections().copied())?,
-            );
+            let logical_inputs =
+                self.materialized_view_logical_inputs(resolved_ids.collections().copied())?;
+            ids.extend(&logical_inputs);
 
             // If there is any REFRESH option, then acquire read holds. (Strictly speaking, we'd
             // need this only if there is a `REFRESH AT`, not for `REFRESH EVERY`, because later
@@ -1931,7 +1931,12 @@ impl Coordinator {
                 // after its creation might see input changes that happened after the CRATE MATERIALIZED
                 // VIEW statement returned.
                 let oracle_timestamp = timestamp;
-                let least_valid_read = read_holds.least_valid_read();
+                let least_valid_read =
+                    read_holds
+                        .least_valid_read()
+                        .join(&self.materialized_view_input_permission(
+                            logical_inputs.storage_ids.iter().copied(),
+                        )?);
                 timestamp.advance_by(least_valid_read.borrow());
 
                 if oracle_timestamp != timestamp {

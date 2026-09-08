@@ -77,9 +77,9 @@ pub fn skip_consistency_checks(
 /// dumps of it, so it costs far more than a query and scales with the size of
 /// the catalog, not with how long a single query may take. It bounds a hang,
 /// so it sits far above what a healthy check costs on a loaded agent.
-async fn with_deadline<F>(state: &State, check: F) -> Result<(), anyhow::Error>
+async fn with_deadline<F, T>(state: &State, check: F) -> Result<T, anyhow::Error>
 where
-    F: Future<Output = Result<(), anyhow::Error>>,
+    F: Future<Output = Result<T, anyhow::Error>>,
 {
     let deadline = state.consistency_check_timeout;
     match tokio::time::timeout(deadline, check).await {
@@ -99,7 +99,7 @@ pub async fn run_consistency_checks(state: &State) -> Result<ControlFlow, anyhow
     let coordinator = with_deadline(state, check_coordinator(state))
         .await
         .context("coordinator");
-    let catalog_state = with_deadline(state, check_catalog_state(state))
+    let catalog_state = check_catalog_state_quiesced(state)
         .await
         .context("catalog state");
     let statement_logging_state = if state.check_statement_logging {
@@ -180,6 +180,123 @@ async fn check_coordinator(state: &State) -> Result<(), anyhow::Error> {
     match inconsistencies {
         serde_json::Value::String(x) if x.is_empty() => Ok(()),
         other => Err(anyhow!("coordinator inconsistencies! {other:?}")),
+    }
+}
+
+/// Quiesces periodic protection publication while comparing independently acquired snapshots.
+async fn check_catalog_state_quiesced(state: &State) -> Result<(), anyhow::Error> {
+    use crate::util::postgres::postgres_client;
+    use mz_postgres_util::{PostgresError, batch_execute, query_opt};
+    use tokio_postgres::error::SqlState;
+
+    if state.materialize.catalog_config.is_none() {
+        return with_deadline(state, check_catalog_state(state)).await;
+    }
+
+    let url = format!(
+        "postgres://mz_system:materialize@{}",
+        state.materialize.internal_sql_addr
+    );
+    let (client, _handle) = with_deadline(state, async {
+        postgres_client(&url, state.default_timeout).await
+    })
+    .await?;
+    let supported = with_deadline(state, async {
+        Ok(query_one(
+            &client,
+            sql!("SHOW catalog_read_protection_publish_interval"),
+            &[],
+        )
+        .await)
+    })
+    .await?;
+    match supported {
+        Err(PostgresError::Postgres(error))
+            if error.code() == Some(&SqlState::UNDEFINED_OBJECT) =>
+        {
+            return with_deadline(state, check_catalog_state(state)).await;
+        }
+        Err(error) => return Err(error.into()),
+        Ok(_) => {}
+    }
+    let read_only = with_deadline(state, async {
+        let dump: serde_json::Value = reqwest::get(format!(
+            "http://{}/api/coordinator/dump",
+            state.materialize.internal_http_addr
+        ))
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+        dump.pointer("/controller/read_only")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| anyhow!("coordinator dump is missing controller read-only mode"))
+    })
+    .await?;
+    if read_only {
+        return with_deadline(state, check_catalog_state(state)).await;
+    }
+    let original = with_deadline(state, async {
+        Ok(query_opt(
+            &client,
+            sql!(
+                "SELECT data->'value'->>'value' FROM mz_internal.mz_catalog_raw
+         WHERE data->>'kind' = 'SystemConfiguration'
+           AND data->'key'->>'name' = 'catalog_read_protection_publish_interval'"
+            ),
+            &[],
+        )
+        .await?
+        .map(|row| row.get::<_, String>(0)))
+    })
+    .await?;
+
+    // Like the schema comparison itself, this assumes no concurrent DDL or
+    // consistency checker. SET completes on the coordinator after any in-flight
+    // publication. Existing bounds continue protecting history while paused.
+    let paused = with_deadline(state, async {
+        batch_execute(
+            &client,
+            sql!("ALTER SYSTEM SET catalog_read_protection_publish_interval = '0s'"),
+        )
+        .await
+        .map_err(Into::into)
+    })
+    .await;
+    let result = match paused {
+        Ok(()) => with_deadline(state, check_catalog_state(state)).await,
+        Err(error) => Err(error),
+    };
+    // Restore outside the timed check, including on timeout or comparison failure.
+    let restored = with_deadline(state, async {
+        match original {
+            Some(value) => {
+                batch_execute(
+                    &client,
+                    sql!(
+                        "ALTER SYSTEM SET catalog_read_protection_publish_interval = {}",
+                        mz_postgres_util::Sql::literal(&value)
+                    ),
+                )
+                .await?
+            }
+            None => {
+                batch_execute(
+                    &client,
+                    sql!("ALTER SYSTEM RESET catalog_read_protection_publish_interval"),
+                )
+                .await?
+            }
+        }
+        Ok(())
+    })
+    .await;
+    match (result, restored) {
+        (result, Ok(())) => result,
+        (Ok(()), Err(error)) => Err(error.context("restoring publication interval")),
+        (Err(check), Err(restore)) => Err(anyhow!(
+            "{check:#}\nrestoring publication interval: {restore:#}"
+        )),
     }
 }
 

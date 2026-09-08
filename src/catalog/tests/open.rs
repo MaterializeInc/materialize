@@ -103,6 +103,8 @@ impl Debug for StableSnapshot<'_> {
             default_privileges,
             system_privileges,
             storage_collection_metadata,
+            collection_compaction_bounds,
+            maintained_read_requirements,
             unfinalized_shards,
             txn_wal_shard,
         } = self.0;
@@ -140,6 +142,8 @@ impl Debug for StableSnapshot<'_> {
             .field("default_privileges", default_privileges)
             .field("system_privileges", system_privileges)
             .field("storage_collection_metadata", storage_collection_metadata)
+            .field("collection_compaction_bounds", collection_compaction_bounds)
+            .field("maintained_read_requirements", maintained_read_requirements)
             .field("unfinalized_shards", unfinalized_shards)
             .field("txn_wal_shard", txn_wal_shard)
             .finish()
