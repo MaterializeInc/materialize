@@ -3104,6 +3104,7 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_column_paged_batcher_spill"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["enable_packed_accumulable_diff"] = BOOLEAN_FLAG_VALUES
         # Fractions of the *cgroup* memory limit, which under mzcompose's
         # process orchestrator is the whole container budget shared by
         # environmentd and every replica, not one replica's allowance. A
