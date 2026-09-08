@@ -65,7 +65,7 @@ independently of the creating adapter's lifetime.
 
 This places maintained read requirements and permission to discard history under
 the same durable authority. Cluster-side components have an explicit limit to
-enforce and recover, without treating a live owner's local accounting as the
+enforce and recover, without treating a process's local accounting as the
 authority to advance beyond it.
 
 The cost is ongoing catalog traffic proportional to the number of changing bounds
@@ -108,19 +108,37 @@ another's protection.
 
 Keep compaction bounds distinct from a dataflow's installation `as_of` and an
 MV's initial storage visibility boundary unless the implementation establishes
-how they fit. The representation and accounting of individual read requirements
-remain open.
+how they fit. The representation and accounting mechanisms for individual read
+requirements remain implementation choices.
 
 Propagation to persist critical since handles must respect all valid read
 requirements. Those handles are the durable backstop, not a substitute for
 multi-client accounting. Stale owners must not advance compaction or destroy
-data based on incomplete local knowledge. Abandoned client holds must be
-reclaimable without allowing that client to resume using invalid protection.
+data based on incomplete local knowledge.
 
 Recovery must establish actual readability and restore valid read requirements
 before further advancement is authorized. Reconstructed plans must use inputs
 readable at the protected timestamps, rather than assume equivalent access paths
 have equivalent history.
+
+### Client read protection
+
+Client protection is scoped to a client incarnation and the collections and
+frontiers it requires. A client's read protection remains valid across restarts
+or replacement of the components enforcing compaction. Durable client requirements
+participate in compaction accounting alongside maintained requirements.
+
+Clients may aggregate query and transaction needs locally under established
+protection. Ordinary query execution must not require a durable write for each
+hold change. Establishing protection and reclaiming it must be coordinated with
+compaction so that neither a new requirement nor a stale client can rely on
+discarded history.
+
+Abandoned client protection must be reclaimable without releasing other clients'
+requirements. Maintained requirements belong to maintained objects, not their
+creating clients. Query execution and transient dataflows remain ephemeral and
+require their own readiness and execution protection. This does not introduce
+transparent session or query failover.
 
 ### Admission and conversion
 
@@ -164,23 +182,33 @@ logical-input protection rather than making optimization decisions authoritative
 
 ### Delegated compaction advancement
 
-The catalog could define maintained requirements and retention policies while a
-fenced lifecycle owner accounts for client and maintained reads and advances
+The catalog could define maintained requirements and retention policies while
+fenced components account for client and maintained reads and advance
 compaction directly. Persist critical handles would provide the durable storage
 backstop, without publishing advancing bounds to the catalog. This avoids ongoing
 frontier-publication traffic and its dependence on catalog write availability.
 
 Delegation still requires coordination when durable read requirements are
-introduced or strengthened. Their admission must be tied to owner-held protection.
-Reclaiming abandoned precommit protection must exclude a late commit that relies
-on it. Observing an object's absence in a catalog snapshot is not sufficient.
-Recovery of valid holds and enforcement against stale owners remain necessary
-under either approach.
+introduced or strengthened. Their admission must be tied to protection held by
+those components. Reclaiming abandoned precommit protection must exclude a late
+commit that relies on it. Observing an object's absence in a catalog snapshot is
+not sufficient. Recovery of valid holds and enforcement against stale owners
+remain necessary under either approach.
 
 We choose explicit bounds for the catalog-local permission boundary. Delegation
 reduces ongoing catalog traffic but shifts coordination into maintained-DDL
 admission and cleanup. We accept the publication and retention costs of explicit
-bounds rather than this owner-backed admission and reclamation protocol.
+bounds rather than this delegated admission and reclamation protocol.
+
+### Volatile client protection
+
+The components enforcing compaction could account for client requirements only in
+memory. This avoids durable client-metadata traffic, but losing that accounting
+requires either invalidating clients' protection or reconstructing all valid
+requirements before compaction advances. An aggregate frontier alone does not say
+which clients still need it. We choose durable client protection to avoid tying
+otherwise-live clients' protection to those components' lifetimes, accepting the
+metadata and reclamation costs.
 
 ## Implementation and verification
 
@@ -238,7 +266,9 @@ Responses, cancellation, query-local dataflows, and disconnect cleanup are
 isolated between clients.
 
 Demonstrate independent clients without requiring concurrent catalog writers or
-a multi-adapter deployment. Together, these milestones complete the
+a multi-adapter deployment. Cover one client advancing or losing its protection
+while another retains an older timestamp, recovery of the components enforcing
+compaction, and an expired client returning. Together, these milestones complete the
 fresh-environment decoupling outcome, subject to the correctness and performance
 acceptance criteria above.
 
@@ -509,3 +539,16 @@ wire initial bounds and MV logical-input requirements into creation, accounting 
 registration timestamps and actual readability when reusing shards. Recovery must
 consume the requirements, and durable output progress must advance them and permit
 bound publication before this becomes the complete protected-MV path.
+
+### 2026-09-08: Durable client protection agreed with Aljoscha
+
+Choose client-incarnation-scoped durable protection that survives replacement of
+the components enforcing compaction, without durable query execution or session
+failover. Schema, grouping, and reclamation mechanics remain implementation choices.
+No separate component called a lifecycle owner is prescribed.
+
+Milestone 1 remains active. Next: complete the protected-MV production path.
+Integration cases identified in review include table commit before initialization,
+read-only bootstrap racing a drop, and intermediate bound updates removed by a
+same-transaction drop. Independent-client protection is part of milestone 3, not
+a prerequisite for the first maintained-recovery example.
