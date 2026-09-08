@@ -1575,7 +1575,13 @@ impl Coordinator {
 
         self.controller
             .storage
-            .alter_table_desc(existing_gid, new_gid, new_desc, expected_version)
+            .alter_table_desc(
+                self.catalog.state().storage_metadata(),
+                existing_gid,
+                new_gid,
+                new_desc,
+                expected_version,
+            )
             .await
             .unwrap_or_terminate("failed to alter desc of table");
 

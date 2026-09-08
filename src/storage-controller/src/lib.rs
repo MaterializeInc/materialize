@@ -1429,6 +1429,7 @@ impl StorageController for Controller {
 
     async fn alter_table_desc(
         &mut self,
+        storage_metadata: &StorageMetadata,
         existing_collection: GlobalId,
         new_collection: GlobalId,
         new_desc: RelationDesc,
@@ -1451,6 +1452,7 @@ impl StorageController for Controller {
             // Let StorageCollections know!
             storage_collections
                 .alter_table_desc(
+                    storage_metadata,
                     existing_collection,
                     new_collection,
                     new_desc.clone(),

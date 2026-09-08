@@ -446,3 +446,15 @@ Implementation finding: the [runtime index cache-miss path](../../../src/adapter
 optimizes synchronously after commit, following precommit optimization. Account
 for coordinator blocking and the postcommit failure boundary before extending
 that pattern to MVs, without making a broad cache redesign a prerequisite.
+
+### 2026-09-08: Storage-side compaction permission
+
+Storage consumes explicit bounds independently of retention policies and execution
+holds, including initialization, shared-shard versions, and drops. Recovery must
+use protected readability rather than the policy frontier. Initialization must
+not reuse a handle after a failed fencing compare refreshes its owner token.
+
+Milestone 1 remains active. There is no durable producer for these bounds yet.
+Next useful step: persist bounds and maintained requirements, enforce their
+compatibility at the catalog transaction boundary, and supply committed bounds
+to storage before relying on them for MV installation and recovery.

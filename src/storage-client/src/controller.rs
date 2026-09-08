@@ -213,6 +213,11 @@ pub struct StorageMetadata {
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub collection_metadata: BTreeMap<GlobalId, ShardId>,
     pub unfinalized_shards: BTreeSet<ShardId>,
+    /// Committed permission to compact each governed collection through this frontier.
+    /// Absence identifies collections not governed by this API, not permission to
+    /// release an existing bound. Callers must supply complete committed metadata.
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub compaction_bounds: BTreeMap<GlobalId, Antichain<Timestamp>>,
 }
 
 impl StorageMetadata {
@@ -572,6 +577,7 @@ pub trait StorageController: Debug {
     /// Runtime registration must go through the adapter's group committer.
     async fn alter_table_desc(
         &mut self,
+        storage_metadata: &StorageMetadata,
         existing_collection: GlobalId,
         new_collection: GlobalId,
         new_desc: RelationDesc,
