@@ -86,7 +86,7 @@ https://<HOST>/api/webhook/<database>/<schema>/<src_name>
 ```
 
 If you missed the notice, you can find the URLs for all webhook sources in the
-[`mz_internal.mz_webhook_sources`](/reference/system-catalog/mz_internal/#mz_webhook_sources)
+[`mz_internal.mz_webhook_sources`](/sql/system-catalog/mz_internal/#mz_webhook_sources)
 system table.
 
 ### Access and authentication
@@ -134,7 +134,7 @@ On the **Connection Settings** page:
 With the source set up in Materialize and the webhook destination configured in
 Rudderstack, you can now query the incoming data:
 
-1. [In the Materialize console](/console/), navigate to
+1. [In the Materialize console](/developer-tools/console/), navigate to
    the **SQL Shell**.
 
 1. Use SQL queries to inspect and analyze the incoming data:

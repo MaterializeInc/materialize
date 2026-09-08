@@ -6,6 +6,7 @@ aliases:
 menu:
   main:
     parent: "sm-deployments"
+    name: "Configure system parameters"
     weight: 71
 ---
 

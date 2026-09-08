@@ -9,6 +9,7 @@ aliases:
 menu:
   main:
     parent: 'security-cloud'
+    name: "Access control (role-based)"
     identifier: 'access-control'
     weight: 12
 ---

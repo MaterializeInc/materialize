@@ -4,7 +4,7 @@ description: "Troubleshooting guides for MySQL source errors in Materialize"
 menu:
   main:
     parent: "mysql"
-    name: "Troubleshooting"
+    name: "Troubleshoot"
     identifier: "mysql-troubleshooting"
     weight: 80
 ---

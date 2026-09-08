@@ -24,7 +24,7 @@ cd doc/user
 hugo --gc --environment preview --baseURL "/materialize/$BUILDKITE_PULL_REQUEST"
 
 # Build skill docs to public/markdown-docs/
-hugo --config config.toml,config.skill.toml --gc --baseURL "/materialize/$BUILDKITE_PULL_REQUEST" --disableKinds sitemap,robotsTXT,taxonomy
+hugo --config config.toml,config.skill.toml --gc --baseURL "/materialize/$BUILDKITE_PULL_REQUEST" --disableKinds 404,sitemap,robotsTXT,taxonomy
 
 cat > config.deployment.toml <<EOF
 [[deployment.targets]]

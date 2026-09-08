@@ -5,6 +5,7 @@ disable_list: true
 menu:
   main:
     parent: "releases"
+    name: "Release schedule"
     weight: 50
 aliases:
   - /releases/cloud-upgrade-schedule/

@@ -6,7 +6,7 @@ menu:
     main:
         parent: "ingest-data"
         identifier: "mysql"
-        weight: 5
+        weight: 20
 aliases:
   - /self-managed/v25.2/ingest-data/mysql/
 ---

@@ -4,8 +4,9 @@ description: "How to monitor the snapshotting progress and data lag for your sou
 menu:
   main:
     identifier: ingest-monitoring
+    name: "Monitor data ingestion"
     parent: ingest-data
-    weight: 39
+    weight: 93
 aliases:
   - /self-managed/v25.2/ingest-data/monitoring-data-ingestion/
 ---
@@ -86,7 +87,7 @@ In the Materialize Console, you can go to the source overview page to view the
 data ingestion progress (e.g., rows_received, bytes_received, ingestion rate).
 
 Alternatively, you can query the
-[`mz_source_statistics`](/reference/system-catalog/mz_internal/#mz_source_statistics)
+[`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)
 table and look for ingestion statistics that advance over time:
 
 ```mzsql

@@ -8,7 +8,7 @@ menu:
 ---
 
 The Materialize Console includes a **Query History** view, under its
-[**Monitoring**](/console/monitoring/) section, that lists a sample of the SQL
+[**Monitoring**](/developer-tools/console/monitoring/) section, that lists a sample of the SQL
 statements recently issued to your Materialize instance, along with their
 duration, status, and the cluster that ran them. Query history is available in
 self-managed deployments and is enabled by default in Materialize operator chart
@@ -17,11 +17,11 @@ and the Query History view stays empty on them.
 
 Query history is backed by *statement logging*: Materialize records a randomly
 sampled fraction of statement executions into the system catalog, most visibly
-[`mz_recent_activity_log`](/reference/system-catalog/mz_internal/#mz_recent_activity_log),
+[`mz_recent_activity_log`](/sql/system-catalog/mz_internal/#mz_recent_activity_log),
 which covers the last 24 hours. Sampling means the view is a representative
 sample of your workload rather than a complete audit log. For a complete record
 of DDL, use
-[`mz_audit_events`](/reference/system-catalog/mz_catalog/#mz_audit_events)
+[`mz_audit_events`](/sql/system-catalog/mz_catalog/#mz_audit_events)
 instead.
 
 To see query history in the Console, connect as a Materialize *superuser* or as
@@ -206,9 +206,9 @@ representative history in exchange.
 
 ## See also
 
-- [Console monitoring](/console/monitoring/)
+- [Console monitoring](/developer-tools/console/monitoring/)
 - [`mz_internal` statement logging
-  relations](/reference/system-catalog/mz_internal/#mz_recent_activity_log)
+  relations](/sql/system-catalog/mz_internal/#mz_recent_activity_log)
 - [`ALTER SYSTEM SET`](/sql/alter-system-set/)
 - [`ALTER SYSTEM RESET`](/sql/alter-system-reset/)
 - [Configuring System

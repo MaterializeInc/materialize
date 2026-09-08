@@ -43,13 +43,13 @@ operators:
 
       There are four types of `Get`.
 
-      1. `Stream` indicates that the results are not [arranged](/get-started/arrangements/#arrangements) in memory
+      1. `Stream` indicates that the results are not [arranged](/fundamentals/concepts/arrangements/#arrangements) in memory
          and will be streamed directly.
 
-      2. `Arranged` indicates that the results are [arranged](/get-started/arrangements/#arrangements) in memory.
+      2. `Arranged` indicates that the results are [arranged](/fundamentals/concepts/arrangements/#arrangements) in memory.
 
       3. `Index Lookup` indicates the results will be
-         _looked up_ in an existing [arrangement](/get-started/arrangements/#arrangements).
+         _looked up_ in an existing [arrangement](/fundamentals/concepts/arrangements/#arrangements).
 
       4. `Read` indicates that the results are unarranged,
           and will be processed as they arrive.
@@ -181,7 +181,7 @@ operators:
     uses_memory: True
     memory_details: |
       The `Join` operator itself uses memory only for `type=differential` with more than 2 inputs.
-      However, `Join` operators need [arrangements](/get-started/arrangements/#arrangements) on their inputs (shown by the `ArrangeBy` operator).
+      However, `Join` operators need [arrangements](/fundamentals/concepts/arrangements/#arrangements) on their inputs (shown by the `ArrangeBy` operator).
       These arrangements use memory proportional to the input sizes. If an input has an [appropriate index](/transform-data/optimization/#join), then the arrangement of the index will be reused.
     expansive: True
     expansive_details: |
@@ -235,7 +235,7 @@ operators:
     memory_details: |
       `SUM`, `COUNT`, and most other aggregations use a moderate amount of memory (proportional either to twice the output size or to input size + output size).
       `MIN` and `MAX` aggregates can use significantly more memory. This can be improved by including group size hints in the query, see
-      [`mz_introspection.mz_expected_group_size_advice`](/reference/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+      [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
       A hint shrinks the tower of intermediate arrangements, and shows in the optimized plan as `exp_group_size` and in the physical plan as the `buckets` list.
       The input rows stay arranged either way, so a hint cannot bring a `MIN` or `MAX` below the size of its input.
     expansive: False
@@ -252,7 +252,7 @@ operators:
 
       2. `Accumulable GroupAggregate` (e.g., `SUM`, `COUNT`) corresponds to several easy to implement aggregations that can be executed efficiently.
 
-      3. Hierarchical aggregations (e.g., `MIN`, `MAX`) require a tower of arrangements. They are printed as `Bucketed Hierarchical GroupAggregate`, or as the more efficient `Monotonic GroupAggregate` when the input never retracts data. Bucketed ones may benefit from a hint; [see `mz_introspection.mz_expected_group_size_advice`](/reference/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+      3. Hierarchical aggregations (e.g., `MIN`, `MAX`) require a tower of arrangements. They are printed as `Bucketed Hierarchical GroupAggregate`, or as the more efficient `Monotonic GroupAggregate` when the input never retracts data. Bucketed ones may benefit from a hint; [see `mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
          A `Consolidating` prefix means the operator consolidates its input first, which uses memory while the input is being consolidated, largely at hydration time.
 
       4. `Non-incremental GroupAggregate` (e.g., window functions, `list_agg`) corresponds to a single non-incremental aggregation.
@@ -268,7 +268,7 @@ operators:
     memory_details: |
       `Distinct` and `Accumulable` aggregates use a moderate amount of memory (proportional to twice the output size).
       `MIN` and `MAX` aggregates can use significantly more memory. This can be improved by including group size hints in the query, see
-      [`mz_introspection.mz_expected_group_size_advice`](/reference/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+      [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
       A hint shrinks the tower of intermediate arrangements (the `buckets` list of a `Bucketed Hierarchical GroupAggregate`); the input rows stay arranged either way, so a hint cannot bring a `MIN` or `MAX` below the size of its input.
       `Non-incremental` aggregates use memory proportional to the input + output size.
       A mix of aggregation types uses the memory of each `GroupAggregate` plus the arrangements of the join that combines them.
@@ -293,7 +293,7 @@ operators:
     memory_details: |
       `SUM`, `COUNT`, and most other aggregations use a moderate amount of memory (proportional either to twice the output size or to input size + output size).
       `MIN` and `MAX` aggregates can use significantly more memory. This can be improved by including group size hints in the query, see
-      [`mz_introspection.mz_expected_group_size_advice`](/reference/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+      [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
       A hint shrinks the tower of intermediate arrangements, and shows in the optimized plan as `exp_group_size` and in the physical plan as the `buckets` list.
       The input rows stay arranged either way, so a hint cannot bring a `MIN` or `MAX` below the size of its input.
     expansive: False
@@ -327,7 +327,7 @@ operators:
     memory_details: |
       Can use significant amount as the operator can significantly overestimate
       the group sizes. Consult
-      [`mz_introspection.mz_expected_group_size_advice`](/reference/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+      [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
       A `LIMIT INPUT GROUP SIZE` hint shows in the optimized plan as `exp_group_size`; the physical plan does not display it.
     expansive: False
     example: "`TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5`"
@@ -348,7 +348,7 @@ operators:
     memory_details: |
       `Monotonic Top1` and `Monotonic TopK` use a moderate amount of memory. `Non-monotonic TopK` uses significantly more memory as the operator can significantly overestimate
       the group sizes. Consult
-      [`mz_introspection.mz_expected_group_size_advice`](/reference/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+      [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
       A `LIMIT INPUT GROUP SIZE` hint is not displayed in this plan; the optimized plan shows it as `exp_group_size`.
     expansive: False
     example: |
@@ -419,7 +419,7 @@ operators:
   - operator: ArrangeBy
     plan_types: "optimized"
     description: |
-      Indicates a point that will become an [arrangement](/get-started/arrangements/#arrangements) in the dataflow engine (each `keys` element will be a different arrangement). Note that if an appropriate index already exists on the input or the output of the previous operator is already arranged with a key that is also requested here, then this operator will just pass on that existing arrangement instead of creating a new one.
+      Indicates a point that will become an [arrangement](/fundamentals/concepts/arrangements/#arrangements) in the dataflow engine (each `keys` element will be a different arrangement). Note that if an appropriate index already exists on the input or the output of the previous operator is already arranged with a key that is also requested here, then this operator will just pass on that existing arrangement instead of creating a new one.
     uses_memory: True
     memory_details: |
       Depends. If arrangements need to be created, they use memory proportional to the input size.
@@ -429,7 +429,7 @@ operators:
   - operator: Arrange
     plan_types: "LIR"
     description: |
-      Indicates a point that will become an [arrangement](/get-started/arrangements/#arrangements) in the dataflow engine, i.e., it will consume memory to cache results.
+      Indicates a point that will become an [arrangement](/fundamentals/concepts/arrangements/#arrangements) in the dataflow engine, i.e., it will consume memory to cache results.
     uses_memory: True
     memory_details: |
       Uses memory proportional to the input size. Note that in the LIR / physical plan, `Arrange`/`ArrangeBy` almost always means that an arrangement will actually be created. (This is in contrast to the "optimized" plan, where an `ArrangeBy` being present in the plan often does not mean that an arrangement will actually be created.)

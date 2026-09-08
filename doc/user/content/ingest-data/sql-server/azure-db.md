@@ -145,7 +145,7 @@ Select the option that works best for you.
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](/console/), or your preferred SQL
+1. In the [SQL Shell](/developer-tools/console/), or your preferred SQL
    client connected to Materialize, find the static egress IP addresses for the
    Materialize region you are running in:
 
@@ -181,7 +181,7 @@ to serve as your SSH bastion host.
 
 1. Configure the SSH bastion host to allow traffic from Materialize.
 
-    1. In the [SQL Shell](/console/), or your preferred
+    1. In the [SQL Shell](/developer-tools/console/), or your preferred
        SQL client connected to Materialize, get the static egress IP addresses for
        the Materialize region you are running in:
 
@@ -246,7 +246,7 @@ connection**, so the SQL Server connection must specify `SSL MODE 'required'`.
 
 {{< tab "Use an SSH tunnel">}}
 
-1. In the [SQL Shell](/console/), or your preferred SQL
+1. In the [SQL Shell](/developer-tools/console/), or your preferred SQL
    client connected to Materialize, use the [`CREATE CONNECTION`](/sql/create-connection/#ssh-tunnel)
    command to create an SSH tunnel connection:
 

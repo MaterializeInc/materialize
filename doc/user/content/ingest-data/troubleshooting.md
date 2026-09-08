@@ -3,10 +3,10 @@ title: "Troubleshooting"
 description: "How to troubleshoot common data ingestion scenarios where Materialize is not working as expected."
 menu:
   main:
-    name: "Troubleshooting"
+    name: "Troubleshoot ingestion"
     identifier: ingest-troubleshooting
     parent: ingest-data
-    weight: 40
+    weight: 94
 aliases:
   - /ops/diagnosing-using-sql/
   - /ops/troubleshooting/
@@ -20,7 +20,7 @@ ingestion](/ingest-data/monitoring-data-ingestion/)
 
 If you're looking for troubleshooting guidance for slow or unresponsive queries,
 check out the [`Transform data`
-troubleshooting](/transform-data/troubleshooting) guide instead.
+troubleshooting](/serve-results/troubleshooting) guide instead.
 
 {{< tip >}}
 {{< guided-tour-blurb-for-ingest-data >}}
@@ -33,7 +33,7 @@ to https://console.materialize.com/, clicking the **Sources** tab in the
 navigation bar, and clicking the affected source.
 
 Alternatively, you can get this information from the system catalog by querying
-the [`mz_source_statuses`](/reference/system-catalog/mz_internal/#mz_source_statuses)
+the [`mz_source_statuses`](/sql/system-catalog/mz_internal/#mz_source_statuses)
 table:
 
 ```mzsql
@@ -67,7 +67,7 @@ breaks out of the query).
 {{% include-headless "/headless/snapshotting-cluster-size-postgres" %}}
 
 To determine whether your source has completed ingesting the initial snapshot,
-you can query the [`mz_source_statistics`](/reference/system-catalog/mz_internal/#mz_source_statistics)
+you can query the [`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)
 system catalog table:
 
 ```mzsql
@@ -102,7 +102,7 @@ snapshotting](/ingest-data/#use-a-larger-cluster-for-upsert-source-snapshotting)
 ## Is the upstream database overloaded?
 
 Snapshotting can put significant load on the upstream database (see [Impact
-on upstream system](/concepts/snapshotting/#impact-on-upstream-system)).
+on upstream system](/fundamentals/concepts/snapshotting/#impact-on-upstream-system)).
 
 Check the upstream database when a snapshot progresses more slowly than
 expected, when applications sharing the database slow down while
@@ -121,7 +121,7 @@ databases. Look for:
 Also watch disk usage on the upstream database during a long-running
 snapshot: CDC database sources must retain their change log until Materialize
 consumes it (see [Impact on upstream
-system](/concepts/snapshotting/#impact-on-upstream-system)).
+system](/fundamentals/concepts/snapshotting/#impact-on-upstream-system)).
 
 If the database is overloaded, you can upsize the source database or cancel
 the snapshot by dropping the source, and retry:

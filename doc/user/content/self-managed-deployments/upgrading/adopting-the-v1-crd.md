@@ -4,6 +4,7 @@ description: "Adopt the v1 Materialize CRD API version for Self-Managed Material
 menu:
   main:
     parent: "upgrading"
+    name: "Adopt the v1 CRD"
     weight: 80
 ---
 
