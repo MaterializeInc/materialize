@@ -496,18 +496,11 @@ pub(super) async fn purify_source_exports(
                     .retain(|k| k.cols.iter().all(|c| !excluded_col_nums.contains(c)));
             }
 
-            // An excluded constraint is never recorded as a key, so it neither
-            // becomes a Materialize relation key nor participates in the
-            // runtime schema compatibility check. Its later upstream drop is
-            // then a non-event.
             desc.keys.retain(|k| !exclude_constraints.contains(&k.name));
 
             if exclude_all_constraints {
-                // No keys, and every column ingested as nullable, so dropping
-                // any PRIMARY KEY, UNIQUE, or NOT NULL constraint upstream is
-                // a non-event. Nullability flows from the desc into both the
-                // generated column definitions and the runtime column casts,
-                // which then skip NOT NULL enforcement.
+                // Marking columns as nullable allows dropping (and adding) the
+                // NOT NULL constraint without an outage.
                 desc.keys.clear();
                 for c in &mut desc.columns {
                     c.nullable = true;
