@@ -1278,7 +1278,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=PreflightCheckRollback, "--seed=$BUILDKITE_JOB_ID"]
-        skip: "flaky due to https://linear.app/materializeinc/issue/DB-85"
 
       - id: checks-0dt-restart-entire-mz-forced-migrations
         topics: [0dt-migration, copy-to-s3, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
