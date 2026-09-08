@@ -28,11 +28,6 @@ name = "Getting started"
 url = "/get-started/quickstart/"
 weight = 10
 
-[[menu.main]]
-identifier = "fundamentals"
-name = "Learn about Materialize"
-weight = 20
-
 #
 # Connect sources
 #
@@ -64,11 +59,6 @@ weight = 92
 #
 # Transform data
 #
-
-[[menu.main]]
-identifier = "transform-data"
-name = "Build data products"
-weight = 40
 
 [[menu.main]]
 identifier = "developer-tools"

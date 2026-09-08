@@ -4,10 +4,9 @@ description: "Learn more about Materialize"
 disable_list: true
 menu:
   main:
-    parent: fundamentals
-    name: "What is Materialize?"
-    identifier: fundamentals-overview
-    weight: 5
+    name: "Learn about Materialize"
+    identifier: fundamentals
+    weight: 20
 aliases:
   - /overview/what-is-materialize/
 ---

@@ -4,9 +4,9 @@ description: "Learn how to efficiently transform data using Materialize SQL."
 disable_list: true
 menu:
   main:
-    parent: transform-data
-    weight: 5
-    identifier: transform-overview
+    name: "Build data products"
+    weight: 40
+    identifier: transform-data
 aliases:
   - /self-managed/v25.1/transform-data/troubleshooting/
   - /self-managed/v25.2/transform-data/
