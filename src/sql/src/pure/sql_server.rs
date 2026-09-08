@@ -267,32 +267,28 @@ pub(super) async fn purify_source_exports(
             })?
         }
 
-        // Validate requested constraint names against the table's full
-        // constraint set, then prune. An excluded constraint is never recorded
-        // as a key, so it does not become a Materialize relation key.
-        let dangling_constraints: Vec<_> = exclude_constraints
+        let missing_exclude_constraints: Vec<_> = exclude_constraints
             .iter()
             .filter(|n| !table.constraints.iter().any(|c| &&c.constraint_name == n))
             .cloned()
             .collect();
-        if !dangling_constraints.is_empty() {
-            return Err(
-                SqlServerSourcePurificationError::DanglingExcludeConstraints {
-                    table: format!("{}.{}", table.schema_name, table.name),
-                    constraints: dangling_constraints,
-                }
-                .into(),
-            );
+        if !missing_exclude_constraints.is_empty() {
+            return Err(SqlServerSourcePurificationError::ConstraintsNotFound {
+                table: format!("{}.{}", table.schema_name, table.name),
+                constraints: missing_exclude_constraints,
+            }
+            .into());
         }
         table
             .constraints
             .retain(|c| !exclude_constraints.contains(&c.constraint_name));
         if exclude_all_constraints {
-            // No keys, and every column ingested as nullable. NOTE: unlike
-            // Postgres and MySQL, SQL Server detects incompatible upstream
-            // DDL via a textual scan of cdc.ddl_history rather than the
-            // descriptor, so an upstream ALTER COLUMN (including NOT NULL
-            // changes) still errors the table regardless of this option.
+            // Marking columns as nullable allows dropping (and adding) the
+            // NOT NULL constraint without an outage. NOTE: SQL Server detects
+            // incompatible upstream DDL via a textual scan of cdc.ddl_history
+            // rather than the descriptor, so an upstream ALTER COLUMN
+            // (including NOT NULL changes) still errors the table regardless
+            // of this option.
             table.constraints.clear();
             for column in &mut table.columns {
                 if let Some(column_type) = &mut column.column_type {

@@ -486,7 +486,7 @@ pub enum SqlServerSourcePurificationError {
         items: Vec<UnresolvedItemName>,
     },
     #[error("EXCLUDE CONSTRAINTS refers to constraints that do not exist on table {table}")]
-    DanglingExcludeConstraints {
+    ConstraintsNotFound {
         table: String,
         constraints: Vec<String>,
     },
@@ -525,7 +525,7 @@ impl SqlServerSourcePurificationError {
                 "the following columns are referenced but not added: {}",
                 itertools::join(items, ", ")
             )),
-            Self::DanglingExcludeConstraints {
+            Self::ConstraintsNotFound {
                 table: _,
                 constraints,
             } => Some(format!(
@@ -542,7 +542,7 @@ impl SqlServerSourcePurificationError {
             Self::RequiresExternalReferences => {
                 Some("provide a FOR TABLES (..), FOR SCHEMAS (..), or FOR ALL TABLES clause".into())
             }
-            Self::DanglingExcludeConstraints { .. } => Some(
+            Self::ConstraintsNotFound { .. } => Some(
                 "Constraint names are matched exactly, including case, against the upstream \
                  PRIMARY KEY and UNIQUE constraint names."
                     .into(),
