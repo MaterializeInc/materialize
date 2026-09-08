@@ -27,7 +27,7 @@ Thus, in a multi-replica cluster, queries to these relations need to be directed
 Note that once this command is issued, all subsequent `SELECT` queries, for introspection relations or not, will be directed to the targeted replica.
 Replica targeting can be cancelled by issuing the command `RESET cluster_replica`.
 
-For each of the below introspection relations, there exists also a variant with a `_per_worker` name suffix.
+Most of the below introspection relations also have a variant with a `_per_worker` name suffix. The exceptions are `mz_cluster_prometheus_metrics`, `mz_cluster_replica_resource_usage`, `mz_dataflow_arrangement_sizes`, `mz_expected_group_size_advice`, and `mz_mappable_objects`, which have no per-worker variant, and `mz_dataflow_global_ids` and `mz_lir_mapping`, whose per-worker variants are named `mz_compute_dataflow_global_ids_per_worker` and `mz_compute_lir_mapping_per_worker`.
 Per-worker relations expose the same data as their global counterparts, but have an extra `worker_id` column that splits the information by Timely Dataflow worker.
 
 ## `mz_active_peeks`
@@ -52,7 +52,7 @@ The `mz_arrangement_sharing` view describes how many times each [arrangement] in
 | Field          | Type       | Meaning                                                                                                                   |
 | -------------- |------------| --------                                                                                                                  |
 | `operator_id`  | [`uint8`]  | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
-| `count`        | [`bigint`] | The number of operators that share the arrangement.                                                                       |
+| `count`        | [`bigint`] | The number of live trace handles on the arrangement.                                                                       |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_arrangement_sharing_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_arrangement_sharing_raw -->
@@ -211,7 +211,7 @@ The `mz_dataflow_addresses` view describes how the [dataflow] channels and opera
 | Field        | Type            | Meaning                                                                                                                                                       |
 | ------------ |-----------------| --------                                                                                                                                                      |
 | `id`         | [`uint8`]       | The ID of the channel or operator. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels) or [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
-| `address`    | [`bigint list`] | A list of scope-local indexes indicating the path from the root to this channel or operator.                                                                  |
+| `address`    | [`uint8 list`] | A list of scope-local indexes indicating the path from the root to this channel or operator.                                                                  |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_addresses_per_worker -->
 
@@ -432,7 +432,7 @@ The `mz_records_per_dataflow_operator` view describes the number of records in e
 | `name`         | [`text`]   | The internal name of the operator.                                                           |
 | `dataflow_id`  | [`uint8`]  | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).                   |
 | `records`      | [`bigint`] | The number of records in the operator.                                                       |
-| `batches`      | [`bigint`] | The number of batches in the dataflow.                                                       |
+| `batches`      | [`bigint`] | The number of batches in the operator.                                                       |
 | `size`         | [`bigint`] | The utilized size in bytes of the arrangement.                                               |
 | `capacity`     | [`bigint`] | The capacity in bytes of the arrangement. Can be larger than the size.                       |
 | `allocations`  | [`bigint`] | The number of separate memory allocations backing the arrangement.                           |
