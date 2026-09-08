@@ -5,6 +5,10 @@
 This directory is the root of Materialize's Hugo user documentation site.
 
 - `content/` contains user-facing Markdown pages, organized by product area.
+  Directory nesting groups related files, while `menu.main` front matter defines
+  the documentation hierarchy: `identifier` names a node, `parent` places it
+  beneath another node, and `weight` orders siblings. Section landing pages
+  generally use `_index.md`.
 - `data/` contains YAML and JSON inputs used to populate reference pages and
   examples.
 - `layouts/` contains Hugo templates and shortcodes; `assets/` contains SCSS
