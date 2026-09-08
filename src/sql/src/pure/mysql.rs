@@ -409,19 +409,15 @@ pub(super) async fn purify_source_exports(
             let table = requested_export.meta.mysql_table().expect("is mysql");
             let table_ref = table.table_ref();
 
-            // Validate requested constraint names against the table's full,
-            // pre-pruning key set, so that a key whose columns are also
-            // excluded via EXCLUDE COLUMNS is still accepted. Note that
-            // MySQL's primary key index is literally named "PRIMARY".
-            let dangling_constraints: Vec<_> = exclude_constraints
+            let missing_exclude_constraints: Vec<_> = exclude_constraints
                 .iter()
                 .filter(|n| !table.keys.iter().any(|k| &&k.name == n))
                 .cloned()
                 .collect();
-            if !dangling_constraints.is_empty() {
-                return Err(MySqlSourcePurificationError::DanglingExcludeConstraints {
+            if !missing_exclude_constraints.is_empty() {
+                return Err(MySqlSourcePurificationError::ConstraintsNotFound {
                     table: format!("{}.{}", table.schema_name, table.name),
-                    constraints: dangling_constraints,
+                    constraints: missing_exclude_constraints,
                 }
                 .into());
             }
@@ -451,17 +447,12 @@ pub(super) async fn purify_source_exports(
                     _ => err.into(),
                 })?;
             let mut parsed_table = parsed_table;
-            // An excluded constraint is never recorded as a key, so it neither
-            // becomes a Materialize relation key nor participates in the
-            // runtime schema compatibility check. Its later upstream drop is
-            // then a non-event.
             parsed_table
                 .keys
                 .retain(|k| !exclude_constraints.contains(&k.name));
             if exclude_all_constraints {
-                // No keys, and every column ingested as nullable, so dropping
-                // any PRIMARY KEY, UNIQUE, or NOT NULL constraint upstream is
-                // a non-event.
+                // Marking columns as nullable allows dropping (and adding) the
+                // NOT NULL constraint without an outage.
                 parsed_table.keys.clear();
                 for c in &mut parsed_table.columns {
                     if let Some(column_type) = &mut c.column_type {
