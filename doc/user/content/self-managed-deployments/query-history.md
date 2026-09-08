@@ -30,13 +30,21 @@ role](/security/appendix/appendix-built-in-roles/#system-catalog-roles).
 
 ## Configure statement logging
 
-Two system parameters bound how much query history you collect. The Materialize
-operator Helm chart ships a value for each:
+Two system parameters bound how much query history you collect:
 
-| Parameter | Chart value | Default | Bounds |
-|-----------|-------------|---------|--------|
-| `statement_logging_max_sample_rate` | `operator.args.statementLoggingMaxSampleRate` | `0.99` | The fraction of executions considered for logging. |
-| `statement_logging_target_data_rate` | `operator.args.statementLoggingTargetDataRate` | Unset, so `environmentd`'s own 2071 | The sustained bytes per second written. Must be greater than 0. |
+| Parameter | Default | Bounds |
+|-----------|---------|--------|
+| `statement_logging_max_sample_rate` | `0.99` (set by the chart) | The fraction of executions considered for logging. |
+| `statement_logging_target_data_rate` | 2071 (`environmentd`'s own) | The sustained bytes per second written. |
+
+{{< tip >}}
+The Materialize operator Helm chart exposes each parameter as:
+
+- `operator.args.statementLoggingMaxSampleRate`, which it sets to `0.99`, and
+
+- `operator.args.statementLoggingTargetDataRate`, which it leaves unset so
+`environmentd`'s default applies.
+{{< /tip >}}
 
 Statement logging is therefore on by default, sampling nearly every statement up
 to that byte rate.
@@ -136,12 +144,21 @@ ALTER SYSTEM SET statement_logging_target_data_rate = 1035;
 ```
 
 {{< warning >}}
-Setting `statement_logging_max_sample_rate` to `0` this way turns off statement
-logging for the whole instance, and the Console's Query History view stops
-recording new statements. Unlike the Helm chart value, this takes effect
+Setting either parameter to `0` this way turns off statement logging for the
+whole instance, and the Console's Query History view stops recording new
+statements. A sample rate of `0` logs nothing, and a target data rate of `0`
+throttles every statement. Unlike the Helm chart values, these take effect
 immediately and without a rollout, so it is easy to disable query history
-without meaning to. Use `SET statement_logging_sample_rate` in a session if you
-only want to stop logging your own statements.
+without meaning to.
+
+The Helm chart rejects a target data rate of `0`, but `ALTER SYSTEM SET` does
+not, so this is the path where that mistake is possible. Setting the target data
+rate to `NULL` is the opposite hazard: it removes throttling altogether rather
+than restoring the default of 2071, leaving nothing to bound how fast query
+history grows.
+
+To stop logging only your own statements, use `SET
+statement_logging_sample_rate` in your session instead.
 {{< /warning >}}
 
 {{< note >}}
