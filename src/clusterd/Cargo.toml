@@ -49,7 +49,6 @@ custom-labels.workspace = true
 default = ["tokio-console", "mz-alloc-default"]
 jemalloc = ["mz-alloc/jemalloc"]
 tokio-console = ["mz-ore/tokio-console"]
-foundationdb = ["mz-persist-client/foundationdb"]
 
 [package.metadata.unused-deps]
 ignore = ["mz-alloc-default"]

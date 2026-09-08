@@ -22,5 +22,3 @@ LABEL build.profile=$BUILD_PROFILE
 
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends eatmydata \
     && rm -rf /var/lib/apt/lists/*
-
-COPY --from=foundationdb/foundationdb:7.3.71 /usr/lib/libfdb_c.so /usr/lib/

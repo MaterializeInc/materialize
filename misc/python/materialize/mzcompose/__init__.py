@@ -205,8 +205,7 @@ def get_variable_system_parameters(
     # the lockless CRDB_* consensus queries are only linearizable under
     # SERIALIZABLE and persist asserts on the connection's isolation level. On
     # Postgres-backed consensus the query family is linearizable under READ
-    # COMMITTED, so default it on and let it vary. FoundationDB does not use the
-    # Postgres consensus, so leaving it off there is a harmless no-op.
+    # COMMITTED, so default it on and let it vary.
     read_committed_safe = metadata_store in ("postgres-metadata", "alloydb")
     persist_pg_consensus_read_committed = VariableSystemParameter(
         "persist_pg_consensus_read_committed",
