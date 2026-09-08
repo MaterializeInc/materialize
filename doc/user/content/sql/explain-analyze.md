@@ -63,7 +63,7 @@ The privileges required to execute this statement are:
 The attribution examples in this
 section reference the `wins_by_item` index (and the underlying `winning_bids`
 view) from the [quickstart
-guide](/get-started/quickstart/#step-2-create-the-source):
+guide](/get-started/#step-2-create-the-source):
 
 ```sql
 CREATE SOURCE auction_house
