@@ -384,6 +384,15 @@ impl CatalogState {
                     retractions,
                 );
             }
+            StateUpdateKind::CollectionCompactionBound(bound) => {
+                apply_inverted_lookup(
+                    &mut Arc::make_mut(&mut self.storage_metadata).compaction_bounds,
+                    &bound.id,
+                    bound.frontier.into_iter().collect(),
+                    diff,
+                );
+            }
+            StateUpdateKind::MaintainedReadRequirement(_) => {}
             StateUpdateKind::UnfinalizedShard(unfinalized_shard) => {
                 self.apply_unfinalized_shard_update(unfinalized_shard, diff, retractions);
             }
@@ -1492,6 +1501,8 @@ impl CatalogState {
             StateUpdateKind::Database(_)
             | StateUpdateKind::Schema(_)
             | StateUpdateKind::NetworkPolicy(_)
+            | StateUpdateKind::CollectionCompactionBound(_)
+            | StateUpdateKind::MaintainedReadRequirement(_)
             | StateUpdateKind::StorageCollectionMetadata(_)
             | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
         }
@@ -2255,6 +2266,8 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             StateUpdateKind::Comment(_)
             | StateUpdateKind::SourceReferences(_)
             | StateUpdateKind::AuditLog(_)
+            | StateUpdateKind::CollectionCompactionBound(_)
+            | StateUpdateKind::MaintainedReadRequirement(_)
             | StateUpdateKind::StorageCollectionMetadata(_)
             | StateUpdateKind::UnfinalizedShard(_) => push_update(
                 update,
@@ -2489,6 +2502,8 @@ impl ApplyState {
             | SourceReferences(_)
             | Comment(_)
             | AuditLog(_)
+            | CollectionCompactionBound(_)
+            | MaintainedReadRequirement(_)
             | StorageCollectionMetadata(_)
             | UnfinalizedShard(_) => Self::Updates(vec![update]),
         }

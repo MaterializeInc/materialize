@@ -71,6 +71,9 @@ pub enum DurableCatalogError {
     /// A dry-run transaction reached a commit path.
     #[error("cannot commit a dry-run catalog transaction")]
     DryRunTransaction,
+    /// The proposed transaction violates durable read protection.
+    #[error("invalid read protection: {0}")]
+    InvalidReadProtection(String),
     /// Unable to serialize/deserialize Protobuf message.
     #[error("proto: {0}")]
     Proto(TryFromProtoError),

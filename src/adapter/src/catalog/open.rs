@@ -313,6 +313,8 @@ impl Catalog {
                     diff: diff.try_into().expect("valid diff"),
                 }),
                 StateUpdateKind::Comment(_)
+                | StateUpdateKind::CollectionCompactionBound(_)
+                | StateUpdateKind::MaintainedReadRequirement(_)
                 | StateUpdateKind::StorageCollectionMetadata(_)
                 | StateUpdateKind::SourceReferences(_)
                 | StateUpdateKind::UnfinalizedShard(_) => {

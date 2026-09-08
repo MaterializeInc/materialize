@@ -4323,6 +4323,8 @@ pub enum StateUpdateKind {
     Comment(durable::objects::Comment),
     AuditLog(durable::objects::AuditLog),
     // Storage updates.
+    CollectionCompactionBound(durable::objects::CollectionCompactionBound),
+    MaintainedReadRequirement(durable::objects::MaintainedReadRequirement),
     StorageCollectionMetadata(durable::objects::StorageCollectionMetadata),
     UnfinalizedShard(durable::objects::UnfinalizedShard),
 }

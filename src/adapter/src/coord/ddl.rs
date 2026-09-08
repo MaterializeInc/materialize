@@ -1397,6 +1397,8 @@ impl Coordinator {
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::UpdateScopedSystemParameters { .. }
+                | Op::SetCollectionCompactionBound { .. }
+                | Op::SetMaintainedReadRequirement { .. }
                 | Op::Comment { .. }
                 | Op::CheckClusterState { .. }
                 | Op::InjectAuditEvents { .. } => {}

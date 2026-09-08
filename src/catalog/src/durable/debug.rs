@@ -74,6 +74,8 @@ pub enum CollectionType {
     ReplicaSystemConfiguration,
     SystemGidMapping,
     SystemPrivileges,
+    CollectionCompactionBound,
+    MaintainedReadRequirement,
     StorageCollectionMetadata,
     UnfinalizedShard,
     TxnWalShard,
@@ -292,6 +294,22 @@ collection_impl!({
 });
 
 collection_impl!({
+    name: CollectionCompactionBoundCollection,
+    key: proto::CollectionCompactionBoundKey,
+    value: proto::CollectionCompactionBoundValue,
+    collection_type: CollectionType::CollectionCompactionBound,
+    trace_field: collection_compaction_bounds,
+    update: StateUpdateKind::CollectionCompactionBound,
+});
+collection_impl!({
+    name: MaintainedReadRequirementCollection,
+    key: proto::MaintainedReadRequirementKey,
+    value: proto::MaintainedReadRequirementValue,
+    collection_type: CollectionType::MaintainedReadRequirement,
+    trace_field: maintained_read_requirements,
+    update: StateUpdateKind::MaintainedReadRequirement,
+});
+collection_impl!({
     name: StorageCollectionMetadataCollection,
     key: proto::StorageCollectionMetadataKey,
     value: proto::StorageCollectionMetadataValue,
@@ -367,6 +385,8 @@ pub struct Trace {
     pub cluster_system_configurations: CollectionTrace<ClusterSystemConfigurationCollection>,
     pub replica_system_configurations: CollectionTrace<ReplicaSystemConfigurationCollection>,
     pub system_privileges: CollectionTrace<SystemPrivilegeCollection>,
+    pub collection_compaction_bounds: CollectionTrace<CollectionCompactionBoundCollection>,
+    pub maintained_read_requirements: CollectionTrace<MaintainedReadRequirementCollection>,
     pub storage_collection_metadata: CollectionTrace<StorageCollectionMetadataCollection>,
     pub unfinalized_shards: CollectionTrace<UnfinalizedShardsCollection>,
     pub txn_wal_shard: CollectionTrace<TxnWalShardCollection>,
@@ -396,6 +416,8 @@ impl Trace {
             cluster_system_configurations: CollectionTrace::new(),
             replica_system_configurations: CollectionTrace::new(),
             system_privileges: CollectionTrace::new(),
+            collection_compaction_bounds: CollectionTrace::new(),
+            maintained_read_requirements: CollectionTrace::new(),
             storage_collection_metadata: CollectionTrace::new(),
             unfinalized_shards: CollectionTrace::new(),
             txn_wal_shard: CollectionTrace::new(),
@@ -425,6 +447,8 @@ impl Trace {
             cluster_system_configurations,
             replica_system_configurations,
             system_privileges,
+            collection_compaction_bounds,
+            maintained_read_requirements,
             storage_collection_metadata,
             unfinalized_shards,
             txn_wal_shard,
@@ -450,6 +474,8 @@ impl Trace {
         cluster_system_configurations.sort();
         replica_system_configurations.sort();
         system_privileges.sort();
+        collection_compaction_bounds.sort();
+        maintained_read_requirements.sort();
         storage_collection_metadata.sort();
         unfinalized_shards.sort();
         txn_wal_shard.sort();

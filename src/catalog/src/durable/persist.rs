@@ -863,6 +863,12 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     StateUpdateKind::SystemPrivilege(key, value) => {
                         apply(&mut snapshot.system_privileges, key, value, diff);
                     }
+                    StateUpdateKind::CollectionCompactionBound(key, value) => {
+                        apply(&mut snapshot.collection_compaction_bounds, key, value, diff);
+                    }
+                    StateUpdateKind::MaintainedReadRequirement(key, value) => {
+                        apply(&mut snapshot.maintained_read_requirements, key, value, diff);
+                    }
                     StateUpdateKind::StorageCollectionMetadata(key, value) => {
                         apply(&mut snapshot.storage_collection_metadata, key, value, diff);
                     }
@@ -2149,6 +2155,14 @@ impl Trace {
                 StateUpdateKind::SystemPrivilege(k, v) => {
                     trace.system_privileges.values.push(((k, v), ts, diff))
                 }
+                StateUpdateKind::CollectionCompactionBound(k, v) => trace
+                    .collection_compaction_bounds
+                    .values
+                    .push(((k, v), ts, diff)),
+                StateUpdateKind::MaintainedReadRequirement(k, v) => trace
+                    .maintained_read_requirements
+                    .values
+                    .push(((k, v), ts, diff)),
                 StateUpdateKind::StorageCollectionMetadata(k, v) => trace
                     .storage_collection_metadata
                     .values

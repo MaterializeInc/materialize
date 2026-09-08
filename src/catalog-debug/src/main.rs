@@ -32,13 +32,15 @@ use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::debug::{
     AuditLogCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
-    ClusterReplicaCollection, ClusterSystemConfigurationCollection, Collection, CollectionTrace,
-    CollectionType, CommentCollection, ConfigCollection, DatabaseCollection, DebugCatalogState,
-    DefaultPrivilegeCollection, IdAllocatorCollection, ItemCollection, NetworkPolicyCollection,
-    ReplicaSystemConfigurationCollection, RoleAuthCollection, RoleCollection, SchemaCollection,
-    SettingCollection, SourceReferencesCollection, StorageCollectionMetadataCollection,
-    SystemConfigurationCollection, SystemItemMappingCollection, SystemPrivilegeCollection, Trace,
-    TxnWalShardCollection, UnfinalizedShardsCollection,
+    ClusterReplicaCollection, ClusterSystemConfigurationCollection, Collection,
+    CollectionCompactionBoundCollection, CollectionTrace, CollectionType, CommentCollection,
+    ConfigCollection, DatabaseCollection, DebugCatalogState, DefaultPrivilegeCollection,
+    IdAllocatorCollection, ItemCollection, MaintainedReadRequirementCollection,
+    NetworkPolicyCollection, ReplicaSystemConfigurationCollection, RoleAuthCollection,
+    RoleCollection, SchemaCollection, SettingCollection, SourceReferencesCollection,
+    StorageCollectionMetadataCollection, SystemConfigurationCollection,
+    SystemItemMappingCollection, SystemPrivilegeCollection, Trace, TxnWalShardCollection,
+    UnfinalizedShardsCollection,
 };
 use mz_catalog::durable::{
     BootstrapArgs, OpenableDurableCatalogState, persist_backed_catalog_state,
@@ -321,6 +323,12 @@ macro_rules! for_collection {
             CollectionType::SystemPrivileges => {
                 $fn::<SystemPrivilegeCollection>($($arg),*).await?
             }
+            CollectionType::CollectionCompactionBound => {
+                $fn::<CollectionCompactionBoundCollection>($($arg),*).await?
+            }
+            CollectionType::MaintainedReadRequirement => {
+                $fn::<MaintainedReadRequirementCollection>($($arg),*).await?
+            }
             CollectionType::StorageCollectionMetadata => {
                 $fn::<StorageCollectionMetadataCollection>($($arg),*).await?
             }
@@ -473,6 +481,8 @@ async fn dump(
         cluster_system_configurations,
         replica_system_configurations,
         system_privileges,
+        collection_compaction_bounds,
+        maintained_read_requirements,
         storage_collection_metadata,
         unfinalized_shards,
         txn_wal_shard,
@@ -561,6 +571,20 @@ async fn dump(
     dump_col(
         &mut data,
         system_privileges,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        collection_compaction_bounds,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        maintained_read_requirements,
         &ignore,
         stats_only,
         consolidate,

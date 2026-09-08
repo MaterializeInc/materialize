@@ -1162,3 +1162,248 @@ async fn test_persist_sync_snapshot_stays_bounded_under_churn() {
     Box::new(writer).expire().await;
     Box::new(reader).expire().await;
 }
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_persist_read_protection() {
+    use mz_catalog::durable::objects::{CollectionCompactionBound, MaintainedReadRequirement};
+
+    let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_default_deploy_generation();
+    let mut state = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = state.sync_to_current_updates().await.unwrap();
+    let input = GlobalId::User(1000);
+    let output = GlobalId::User(1001);
+    let ungoverned = GlobalId::User(1002);
+    let mut txn = state.transaction().await.unwrap();
+    txn.insert_collection_metadata(
+        [input, output, ungoverned]
+            .into_iter()
+            .map(|id| (id, ShardId::new()))
+            .collect(),
+    )
+    .unwrap();
+    txn.set_collection_compaction_bound(input, Some(10.into()))
+        .unwrap();
+    txn.set_maintained_read_requirement(output, BTreeSet::from([input]), Some(10.into()))
+        .unwrap();
+    txn.validate_read_protection().unwrap();
+    let expected = txn.current_snapshot();
+    let _ = txn.get_and_commit_op_updates();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+    Box::new(state).expire().await;
+
+    let mut state = builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = state.sync_to_current_updates().await.unwrap();
+    let snapshot = state.snapshot().await.unwrap();
+    assert_eq!(
+        snapshot.collection_compaction_bounds,
+        expected.collection_compaction_bounds
+    );
+    assert_eq!(
+        snapshot.maintained_read_requirements,
+        expected.maintained_read_requirements
+    );
+    let bounds: Vec<CollectionCompactionBound> = snapshot
+        .collection_compaction_bounds
+        .into_iter()
+        .map(RustType::from_proto)
+        .map_ok(|(k, v)| DurableType::from_key_value(k, v))
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        bounds,
+        vec![CollectionCompactionBound {
+            id: input,
+            frontier: Some(10.into())
+        }]
+    );
+    let requirements: Vec<MaintainedReadRequirement> = snapshot
+        .maintained_read_requirements
+        .into_iter()
+        .map(RustType::from_proto)
+        .map_ok(|(k, v)| DurableType::from_key_value(k, v))
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        requirements,
+        vec![MaintainedReadRequirement {
+            id: output,
+            inputs: BTreeSet::from([input]),
+            frontier: Some(10.into()),
+        }]
+    );
+
+    // Each rejected commit must leave the persisted protection state unchanged.
+    for scenario in 0..13 {
+        let mut txn = state.transaction().await.unwrap();
+        match scenario {
+            0 => txn
+                .set_maintained_read_requirement(
+                    ungoverned,
+                    BTreeSet::from([input]),
+                    Some(9.into()),
+                )
+                .unwrap(),
+            1 => txn
+                .set_collection_compaction_bound(input, Some(11.into()))
+                .unwrap(),
+            2 => txn
+                .set_collection_compaction_bound(input, Some(9.into()))
+                .unwrap(),
+            3 | 4 => {
+                txn.delete_collection_metadata(BTreeSet::from([input]));
+                txn.insert_collection_metadata(BTreeMap::from([(input, ShardId::new())]))
+                    .unwrap();
+                if scenario == 3 {
+                    txn.set_collection_compaction_bound(input, Some(9.into()))
+                        .unwrap();
+                }
+            }
+            5 => {
+                txn.delete_collection_metadata(BTreeSet::from([input]));
+            }
+            6 => txn.set_collection_compaction_bound(input, None).unwrap(),
+            7 => txn
+                .set_maintained_read_requirement(
+                    output,
+                    BTreeSet::from([ungoverned]),
+                    Some(10.into()),
+                )
+                .unwrap(),
+            8 => txn
+                .set_collection_compaction_bound(GlobalId::User(9999), Some(0.into()))
+                .unwrap(),
+            9 => txn
+                .set_maintained_read_requirement(GlobalId::User(9999), BTreeSet::new(), None)
+                .unwrap(),
+            10 => txn
+                .set_collection_compaction_bound(ungoverned, Some(10.into()))
+                .unwrap(),
+            11 => txn
+                .set_collection_compaction_bound(ungoverned, None)
+                .unwrap(),
+            12 => {
+                txn.delete_collection_metadata(BTreeSet::from([ungoverned]));
+                txn.insert_collection_metadata(BTreeMap::from([(ungoverned, ShardId::new())]))
+                    .unwrap();
+                txn.set_collection_compaction_bound(ungoverned, Some(10.into()))
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            matches!(
+                txn.validate_read_protection(),
+                Err(CatalogError::Durable(
+                    DurableCatalogError::InvalidReadProtection(_)
+                ))
+            ),
+            "scenario {scenario}"
+        );
+        let _ = txn.get_and_commit_op_updates();
+        let ts = txn.upper();
+        assert!(
+            matches!(
+                txn.commit(ts).await,
+                Err(CatalogError::Durable(
+                    DurableCatalogError::InvalidReadProtection(_)
+                ))
+            ),
+            "scenario {scenario}"
+        );
+        let snapshot = state.snapshot().await.unwrap();
+        assert_eq!(
+            snapshot.storage_collection_metadata,
+            expected.storage_collection_metadata
+        );
+        assert_eq!(
+            snapshot.collection_compaction_bounds,
+            expected.collection_compaction_bounds
+        );
+        assert_eq!(
+            snapshot.maintained_read_requirements,
+            expected.maintained_read_requirements
+        );
+    }
+
+    for bound_first in [true, false] {
+        let mut txn = state.transaction().await.unwrap();
+        let frontier = Some(if bound_first { 20.into() } else { 30.into() });
+        if bound_first {
+            txn.set_collection_compaction_bound(input, frontier)
+                .unwrap();
+        }
+        txn.set_maintained_read_requirement(output, BTreeSet::from([input]), frontier)
+            .unwrap();
+        if !bound_first {
+            txn.set_collection_compaction_bound(input, frontier)
+                .unwrap();
+        }
+        txn.validate_read_protection().unwrap();
+        let _ = txn.get_and_commit_op_updates();
+        let ts = txn.upper();
+        txn.commit(ts).await.unwrap();
+    }
+
+    let mut txn = state.transaction().await.unwrap();
+    txn.delete_collection_metadata(BTreeSet::from([input, output]));
+    txn.validate_read_protection().unwrap();
+    assert!(
+        txn.current_snapshot()
+            .collection_compaction_bounds
+            .is_empty()
+    );
+    assert!(
+        txn.current_snapshot()
+            .maintained_read_requirements
+            .is_empty()
+    );
+    drop(txn);
+
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_maintained_read_requirement(output, BTreeSet::from([input, ungoverned]), None)
+        .unwrap();
+    txn.set_collection_compaction_bound(input, None).unwrap();
+    txn.validate_read_protection().unwrap();
+    let _ = txn.get_and_commit_op_updates();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_collection_compaction_bound(input, Some(40.into()))
+        .unwrap();
+    assert!(matches!(
+        txn.validate_read_protection(),
+        Err(CatalogError::Durable(
+            DurableCatalogError::InvalidReadProtection(_)
+        ))
+    ));
+    drop(txn);
+
+    let mut txn = state.transaction().await.unwrap();
+    txn.delete_collection_metadata(BTreeSet::from([input]));
+    txn.validate_read_protection().unwrap();
+    assert_eq!(txn.current_snapshot().maintained_read_requirements.len(), 1);
+    txn.delete_collection_metadata(BTreeSet::from([output]));
+    txn.validate_read_protection().unwrap();
+    let _ = txn.get_and_commit_op_updates();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+    let snapshot = state.snapshot().await.unwrap();
+    assert!(snapshot.collection_compaction_bounds.is_empty());
+    assert!(snapshot.maintained_read_requirements.is_empty());
+    Box::new(state).expire().await;
+}

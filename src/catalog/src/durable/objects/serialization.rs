@@ -16,14 +16,15 @@ use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
     ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterSystemConfigurationKey,
-    ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, ConfigKey,
-    ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
-    GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
-    NetworkPolicyKey, NetworkPolicyValue, ReplicaSystemConfigurationKey,
-    ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
-    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
+    ClusterSystemConfigurationValue, ClusterValue, CollectionCompactionBoundKey,
+    CollectionCompactionBoundValue, CommentKey, CommentValue, ConfigKey, ConfigValue, DatabaseKey,
+    DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue, GidMappingKey, GidMappingValue,
+    IdAllocKey, IdAllocValue, IntrospectionSourceIndexCatalogItemId,
+    IntrospectionSourceIndexGlobalId, ItemKey, ItemValue, MaintainedReadRequirementKey,
+    MaintainedReadRequirementValue, NetworkPolicyKey, NetworkPolicyValue,
+    ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey,
+    SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue,
+    SourceReference, SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
     StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
     SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
@@ -770,6 +771,64 @@ impl RustType<proto::AuditLogKey> for AuditLogKey {
     fn from_proto(proto: proto::AuditLogKey) -> Result<Self, TryFromProtoError> {
         Ok(AuditLogKey {
             event: proto.event.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::CollectionCompactionBoundKey> for CollectionCompactionBoundKey {
+    fn into_proto(&self) -> proto::CollectionCompactionBoundKey {
+        proto::CollectionCompactionBoundKey {
+            id: self.id.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::CollectionCompactionBoundKey) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            id: proto.id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::CollectionCompactionBoundValue> for CollectionCompactionBoundValue {
+    fn into_proto(&self) -> proto::CollectionCompactionBoundValue {
+        proto::CollectionCompactionBoundValue {
+            frontier: self.frontier.map(u64::from),
+        }
+    }
+
+    fn from_proto(proto: proto::CollectionCompactionBoundValue) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            frontier: proto.frontier.map(mz_repr::Timestamp::new),
+        })
+    }
+}
+
+impl RustType<proto::MaintainedReadRequirementKey> for MaintainedReadRequirementKey {
+    fn into_proto(&self) -> proto::MaintainedReadRequirementKey {
+        proto::MaintainedReadRequirementKey {
+            id: self.id.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::MaintainedReadRequirementKey) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            id: proto.id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::MaintainedReadRequirementValue> for MaintainedReadRequirementValue {
+    fn into_proto(&self) -> proto::MaintainedReadRequirementValue {
+        proto::MaintainedReadRequirementValue {
+            inputs: self.inputs.into_proto(),
+            frontier: self.frontier.map(u64::from),
+        }
+    }
+
+    fn from_proto(proto: proto::MaintainedReadRequirementValue) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            inputs: proto.inputs.into_rust()?,
+            frontier: proto.frontier.map(mz_repr::Timestamp::new),
         })
     }
 }

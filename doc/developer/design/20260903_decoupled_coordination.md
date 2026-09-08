@@ -496,3 +496,16 @@ and shared-shard protection without another lifecycle API.
 
 Milestone 1 remains active. Next: persist requirements and bounds, check their
 compatibility in the catalog transaction, and deliver committed bounds to storage.
+
+### 2026-09-08: Durable protection and committed delivery
+
+Storage-backed bounds and maintained requirements have separate durable records.
+Final transaction state checks their compatibility and bound monotonicity, with
+recoverable adapter admission and committed delivery to storage. Governance begins
+at collection birth, not adoption of a live ungoverned collection.
+
+Milestone 1 remains active. SQL creation does not yet produce these records. Next:
+wire initial bounds and MV logical-input requirements into creation, accounting for
+registration timestamps and actual readability when reusing shards. Recovery must
+consume the requirements, and durable output progress must advance them and permit
+bound publication before this becomes the complete protected-MV path.

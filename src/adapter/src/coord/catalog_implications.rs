@@ -50,7 +50,7 @@ use mz_ore::instrument;
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::optimize::OverrideFrom;
-use mz_repr::{CatalogItemId, GlobalId, RelationVersion, RelationVersionSelector};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion, RelationVersionSelector, Timestamp};
 use mz_sql::plan::ConnectionDetails;
 use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_storage_types::connections::PostgresConnection;
@@ -59,6 +59,7 @@ use mz_storage_types::sinks::StorageSinkConnection;
 use mz_storage_types::sources::{
     GenericSourceConnection, SourceDesc, SourceExport, SourceExportDataConfig,
 };
+use timely::progress::Antichain;
 use tracing::{Instrument, info_span, warn};
 
 use crate::active_compute_sink::ActiveComputeSinkRetireReason;
@@ -110,6 +111,7 @@ impl Coordinator {
         // We re-run all `SystemVars` callbacks against the committed values, so
         // we only track that a change happened, not the individual vars.
         let mut system_config_changed = false;
+        let mut compaction_bounds = BTreeMap::new();
 
         // Whether to wake the cluster controller once the implications below are
         // applied. Decided from the committed diff, see the method.
@@ -176,6 +178,12 @@ impl Coordinator {
                     // matter here.
                     system_config_changed = true;
                 }
+                ParsedStateUpdateKind::CollectionCompactionBound(bound) => {
+                    if update.diff == StateDiff::Addition {
+                        compaction_bounds.insert(bound.id, bound.frontier.into_iter().collect());
+                    }
+                    // Collection drops release installed bounds, not record retractions.
+                }
             }
         }
 
@@ -187,6 +195,7 @@ impl Coordinator {
             introspection_source_indexes,
             replica_scoped_config_changed,
             system_config_changed,
+            compaction_bounds,
         )
         .await?;
 
@@ -237,6 +246,7 @@ impl Coordinator {
         mut introspection_source_indexes: BTreeMap<ClusterId, BTreeMap<LogVariant, GlobalId>>,
         replica_scoped_config_changed: bool,
         system_config_changed: bool,
+        compaction_bounds: BTreeMap<GlobalId, Antichain<Timestamp>>,
     ) -> Result<(), AdapterError> {
         // Re-run the `SystemVars` callbacks against the committed values.
         // Deriving this from the committed diff, rather than the input ops, is
@@ -838,6 +848,14 @@ impl Coordinator {
         // policy that might make the since advance.
         self.initialize_storage_collections(storage_policies_to_initialize)
             .await?;
+
+        // New collections already enforce their committed bounds during creation.
+        // Deliver advancements after same-batch creates, before drops release protection.
+        if !compaction_bounds.is_empty() {
+            self.controller
+                .storage_collections
+                .apply_compaction_bounds(compaction_bounds)?;
+        }
 
         // Create VPC endpoints for AWS PrivateLink connections
         if !vpc_endpoints_to_create.is_empty() {
@@ -2078,6 +2096,9 @@ impl CatalogImplication {
                 // SystemConfiguration updates are collected separately in
                 // apply_catalog_implications and not routed through absorb.
                 unreachable!("SystemConfiguration should not be passed to absorb");
+            }
+            ParsedStateUpdateKind::CollectionCompactionBound(_) => {
+                unreachable!("CollectionCompactionBound should not be passed to absorb");
             }
         }
     }

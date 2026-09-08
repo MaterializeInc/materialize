@@ -29,7 +29,7 @@ pub mod serialization;
 pub(crate) mod state_update;
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use mz_audit_log::VersionedEvent;
@@ -39,7 +39,7 @@ use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion, Timestamp};
 use mz_sql::catalog::{
     CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes,
     RoleMembership, RoleVars,
@@ -1302,6 +1302,75 @@ impl DurableType for StorageCollectionMetadata {
     }
 }
 
+/// A collection compaction bound. `frontier: None` is the empty/top frontier.
+/// A missing record leaves the collection ungoverned.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct CollectionCompactionBound {
+    pub id: GlobalId,
+    pub frontier: Option<Timestamp>,
+}
+
+impl DurableType for CollectionCompactionBound {
+    type Key = CollectionCompactionBoundKey;
+    type Value = CollectionCompactionBoundValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            CollectionCompactionBoundKey { id: self.id },
+            CollectionCompactionBoundValue {
+                frontier: self.frontier,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            id: key.id,
+            frontier: value.frontier,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        CollectionCompactionBoundKey { id: self.id }
+    }
+}
+
+/// Remaining reads of a maintained output. `frontier: None` means no remaining reads.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct MaintainedReadRequirement {
+    pub id: GlobalId,
+    /// Logical collection inputs, including reads eliminated by optimization.
+    pub inputs: BTreeSet<GlobalId>,
+    pub frontier: Option<Timestamp>,
+}
+
+impl DurableType for MaintainedReadRequirement {
+    type Key = MaintainedReadRequirementKey;
+    type Value = MaintainedReadRequirementValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            MaintainedReadRequirementKey { id: self.id },
+            MaintainedReadRequirementValue {
+                inputs: self.inputs,
+                frontier: self.frontier,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            id: key.id,
+            inputs: value.inputs,
+            frontier: value.frontier,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        MaintainedReadRequirementKey { id: self.id }
+    }
+}
+
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct UnfinalizedShard {
     pub shard: ShardId,
@@ -1359,6 +1428,10 @@ pub struct Snapshot {
     pub system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
     pub storage_collection_metadata:
         BTreeMap<proto::StorageCollectionMetadataKey, proto::StorageCollectionMetadataValue>,
+    pub collection_compaction_bounds:
+        BTreeMap<proto::CollectionCompactionBoundKey, proto::CollectionCompactionBoundValue>,
+    pub maintained_read_requirements:
+        BTreeMap<proto::MaintainedReadRequirementKey, proto::MaintainedReadRequirementValue>,
     pub unfinalized_shards: BTreeMap<proto::UnfinalizedShardKey, ()>,
     pub txn_wal_shard: BTreeMap<(), proto::TxnWalShardValue>,
 }
@@ -1626,6 +1699,27 @@ pub struct ConfigValue {
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct AuditLogKey {
     pub(crate) event: VersionedEvent,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct CollectionCompactionBoundKey {
+    pub(crate) id: GlobalId,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct CollectionCompactionBoundValue {
+    pub(crate) frontier: Option<Timestamp>,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct MaintainedReadRequirementKey {
+    pub(crate) id: GlobalId,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct MaintainedReadRequirementValue {
+    pub(crate) inputs: BTreeSet<GlobalId>,
+    pub(crate) frontier: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]

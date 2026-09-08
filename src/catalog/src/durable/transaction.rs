@@ -52,16 +52,18 @@ use crate::durable::objects::{
     AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
     ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplica, ClusterReplicaKey,
     ClusterReplicaValue, ClusterSystemConfiguration, ClusterSystemConfigurationKey,
-    ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey,
-    ConfigValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
-    DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndex, Item, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
-    ReplicaConfig, ReplicaSystemConfiguration, ReplicaSystemConfigurationKey,
-    ReplicaSystemConfigurationValue, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
-    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, SystemObjectDescription, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+    ClusterSystemConfigurationValue, ClusterValue, CollectionCompactionBoundKey,
+    CollectionCompactionBoundValue, CommentKey, CommentValue, Config, ConfigKey, ConfigValue,
+    Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
+    DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
+    IntrospectionSourceIndex, Item, ItemKey, ItemValue, MaintainedReadRequirementKey,
+    MaintainedReadRequirementValue, NetworkPolicyKey, NetworkPolicyValue, ReplicaConfig,
+    ReplicaSystemConfiguration, ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue,
+    Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
+    ServerConfigurationValue, SettingKey, SettingValue, SourceReference, SourceReferencesKey,
+    SourceReferencesValue, StorageCollectionMetadataKey, StorageCollectionMetadataValue,
+    SystemObjectDescription, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
+    TxnWalShardValue, UnfinalizedShardKey,
 };
 use crate::durable::{
     AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_CONTENT_VERSION_KEY, CatalogError,
@@ -111,6 +113,10 @@ pub struct Transaction<'a> {
     network_policies: TableTransaction<NetworkPolicyKey, NetworkPolicyValue>,
     storage_collection_metadata:
         TableTransaction<StorageCollectionMetadataKey, StorageCollectionMetadataValue>,
+    collection_compaction_bounds:
+        TableTransaction<CollectionCompactionBoundKey, CollectionCompactionBoundValue>,
+    maintained_read_requirements:
+        TableTransaction<MaintainedReadRequirementKey, MaintainedReadRequirementValue>,
     unfinalized_shards: TableTransaction<UnfinalizedShardKey, ()>,
     txn_wal_shard: TableTransaction<(), TxnWalShardValue>,
     // Don't make this a table transaction so that it's not read into the
@@ -175,6 +181,8 @@ impl<'a> Transaction<'a> {
             default_privileges,
             system_privileges,
             storage_collection_metadata,
+            collection_compaction_bounds,
+            maintained_read_requirements,
             unfinalized_shards,
             txn_wal_shard,
         }: Snapshot,
@@ -262,6 +270,8 @@ impl<'a> Transaction<'a> {
             default_privileges: TableTransaction::new(default_privileges)?,
             system_privileges: TableTransaction::new(system_privileges)?,
             storage_collection_metadata: TableTransaction::new(storage_collection_metadata)?,
+            collection_compaction_bounds: TableTransaction::new(collection_compaction_bounds)?,
+            maintained_read_requirements: TableTransaction::new(maintained_read_requirements)?,
             unfinalized_shards: TableTransaction::new(unfinalized_shards)?,
             // Uniqueness violations for this value occur at the key rather than
             // the value (the key is the unit struct `()` so this is a singleton
@@ -1201,6 +1211,8 @@ impl<'a> Transaction<'a> {
             source_references: self.source_references.current_items_proto(),
             system_privileges: self.system_privileges.current_items_proto(),
             storage_collection_metadata: self.storage_collection_metadata.current_items_proto(),
+            collection_compaction_bounds: self.collection_compaction_bounds.current_items_proto(),
+            maintained_read_requirements: self.maintained_read_requirements.current_items_proto(),
             unfinalized_shards: self.unfinalized_shards.current_items_proto(),
             txn_wal_shard: self.txn_wal_shard.current_items_proto(),
         }
@@ -2576,6 +2588,8 @@ impl<'a> Transaction<'a> {
             system_privileges,
             audit_log_updates,
             storage_collection_metadata,
+            collection_compaction_bounds,
+            maintained_read_requirements,
             unfinalized_shards,
             // Not representable as a `StateUpdate`.
             id_allocator: _,
@@ -2679,6 +2693,16 @@ impl<'a> Transaction<'a> {
                 self.op_id,
             ))
             .chain(get_collection_op_updates(
+                collection_compaction_bounds,
+                StateUpdateKind::CollectionCompactionBound,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                maintained_read_requirements,
+                StateUpdateKind::MaintainedReadRequirement,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
                 unfinalized_shards,
                 StateUpdateKind::UnfinalizedShard,
                 self.op_id,
@@ -2714,6 +2738,129 @@ impl<'a> Transaction<'a> {
         self.upper
     }
 
+    /// Stages a storage collection's compaction permission.
+    ///
+    /// A first bound must accompany collection birth. The caller must secure actual
+    /// readability at that bound, including when reusing a shard. Validation checks
+    /// committed permission and read requirements, not physical storage frontiers.
+    /// `None` denotes the empty frontier, not an ungoverned collection.
+    pub fn set_collection_compaction_bound(
+        &mut self,
+        id: GlobalId,
+        frontier: Option<mz_repr::Timestamp>,
+    ) -> Result<(), CatalogError> {
+        self.collection_compaction_bounds.set(
+            CollectionCompactionBoundKey { id },
+            Some(CollectionCompactionBoundValue { frontier }),
+            self.op_id,
+        )?;
+        Ok(())
+    }
+
+    /// Stages a maintained read requirement, checked against permission at commit.
+    ///
+    /// The caller supplies all logical inputs and may advance the required frontier
+    /// only when recovery no longer needs earlier history. `None` marks completion.
+    pub fn set_maintained_read_requirement(
+        &mut self,
+        id: GlobalId,
+        inputs: BTreeSet<GlobalId>,
+        frontier: Option<mz_repr::Timestamp>,
+    ) -> Result<(), CatalogError> {
+        self.maintained_read_requirements.set(
+            MaintainedReadRequirementKey { id },
+            Some(MaintainedReadRequirementValue { inputs, frontier }),
+            self.op_id,
+        )?;
+        Ok(())
+    }
+
+    /// Validates the final storage-backed read protection state without committing it.
+    /// Call before entering a commit path that treats errors as fatal.
+    pub fn validate_read_protection(&self) -> Result<(), CatalogError> {
+        if self.storage_collection_metadata.pending.is_empty()
+            && self.collection_compaction_bounds.pending.is_empty()
+            && self.maintained_read_requirements.pending.is_empty()
+        {
+            return Ok(());
+        }
+        let invalid =
+            |message| CatalogError::from(DurableCatalogError::InvalidReadProtection(message));
+        let storage = self.storage_collection_metadata.items();
+        let bounds = self.collection_compaction_bounds.items();
+        let requirements = self.maintained_read_requirements.items();
+
+        // Compare against the initial snapshot, not the preceding setter, so a
+        // delete/reinsert of a surviving GlobalId cannot erase its bound history.
+        for (key, initial) in &self.collection_compaction_bounds.initial {
+            if !storage.contains_key(&StorageCollectionMetadataKey { id: key.id }) {
+                continue;
+            }
+            let Some(bound) = bounds.get(key) else {
+                return Err(invalid(format!(
+                    "collection {} lost its compaction bound",
+                    key.id
+                )));
+            };
+            let monotonic = match (initial.frontier, bound.frontier) {
+                (_, None) => true,
+                (Some(initial), Some(final_frontier)) => initial <= final_frontier,
+                (None, Some(_)) => false,
+            };
+            if !monotonic {
+                return Err(invalid(format!(
+                    "collection {} compaction bound regressed",
+                    key.id
+                )));
+            }
+        }
+        for key in bounds.keys() {
+            // An already-live ungoverned collection has no durable readability
+            // guarantee and storage cannot adopt a bound without conversion.
+            if self
+                .storage_collection_metadata
+                .initial
+                .contains_key(&StorageCollectionMetadataKey { id: key.id })
+                && !self.collection_compaction_bounds.initial.contains_key(key)
+            {
+                return Err(invalid(format!(
+                    "cannot introduce a compaction bound for existing collection {}",
+                    key.id
+                )));
+            }
+            if !storage.contains_key(&StorageCollectionMetadataKey { id: key.id }) {
+                return Err(invalid(format!(
+                    "compaction bound owner {} has no storage metadata",
+                    key.id
+                )));
+            }
+        }
+        for (key, requirement) in requirements {
+            if !storage.contains_key(&StorageCollectionMetadataKey { id: key.id }) {
+                return Err(invalid(format!(
+                    "read requirement owner {} has no storage metadata",
+                    key.id
+                )));
+            }
+            let Some(required) = requirement.frontier else {
+                continue;
+            };
+            for input in &requirement.inputs {
+                let readable = bounds
+                    .get(&CollectionCompactionBoundKey { id: *input })
+                    .and_then(|bound| bound.frontier)
+                    .is_some_and(|bound| bound <= required);
+                if !readable {
+                    return Err(invalid(format!(
+                        "read requirement {} needs input {input} readable at {required}",
+                        key.id
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn ensure_committable(&self) -> Result<(), CatalogError> {
         match self.commit_capability {
             Some(_) => Ok(()),
@@ -2731,6 +2878,7 @@ impl<'a> Transaction<'a> {
     pub(crate) fn into_parts(
         self,
     ) -> Result<(TransactionBatch, &'a mut dyn DurableCatalogState), CatalogError> {
+        self.validate_read_protection()?;
         let commit_capability = self
             .commit_capability
             .ok_or(DurableCatalogError::DryRunTransaction)?;
@@ -2762,6 +2910,8 @@ impl<'a> Transaction<'a> {
             default_privileges: self.default_privileges.pending(),
             system_privileges: self.system_privileges.pending(),
             storage_collection_metadata: self.storage_collection_metadata.pending(),
+            collection_compaction_bounds: self.collection_compaction_bounds.pending(),
+            maintained_read_requirements: self.maintained_read_requirements.pending(),
             unfinalized_shards: self.unfinalized_shards.pending(),
             txn_wal_shard: self.txn_wal_shard.pending(),
             audit_log_updates,
@@ -2773,8 +2923,9 @@ impl<'a> Transaction<'a> {
 
     /// Commits the storage transaction to durable storage.
     ///
-    /// [`DurableCatalogError::DryRunTransaction`] is a pre-effect
-    /// programming error that leaves durable state unchanged. Any other error
+    /// [`DurableCatalogError::DryRunTransaction`] and
+    /// [`DurableCatalogError::InvalidReadProtection`] leave durable state unchanged.
+    /// Read protection validation fails before any commit effects. Any other error
     /// outside read-only mode indicates the catalog may be in an indeterminate
     /// state and needs to be fully re-read before proceeding. In general, such
     /// errors must be fatal to the calling process. We do not panic/halt here so
@@ -2815,6 +2966,8 @@ impl<'a> Transaction<'a> {
             default_privileges,
             system_privileges,
             storage_collection_metadata,
+            collection_compaction_bounds,
+            maintained_read_requirements,
             unfinalized_shards,
             txn_wal_shard,
             audit_log_updates,
@@ -2844,6 +2997,8 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(default_privileges);
         differential_dataflow::consolidation::consolidate_updates(system_privileges);
         differential_dataflow::consolidation::consolidate_updates(storage_collection_metadata);
+        differential_dataflow::consolidation::consolidate_updates(collection_compaction_bounds);
+        differential_dataflow::consolidation::consolidate_updates(maintained_read_requirements);
         differential_dataflow::consolidation::consolidate_updates(unfinalized_shards);
         differential_dataflow::consolidation::consolidate_updates(txn_wal_shard);
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
@@ -2856,8 +3011,9 @@ impl<'a> Transaction<'a> {
 
     /// Commits the storage transaction to durable storage.
     ///
-    /// [`DurableCatalogError::DryRunTransaction`] is a pre-effect
-    /// programming error that leaves durable state unchanged. Any other error
+    /// [`DurableCatalogError::DryRunTransaction`] and
+    /// [`DurableCatalogError::InvalidReadProtection`] leave durable state unchanged.
+    /// Read protection validation fails before any commit effects. Any other error
     /// outside read-only mode indicates the catalog may be in an indeterminate
     /// state and needs to be fully re-read before proceeding. In general, such
     /// errors must be fatal to the calling process. We do not panic/halt here so
@@ -2951,6 +3107,16 @@ impl StorageTxn for Transaction<'_> {
     }
 
     fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, ShardId)> {
+        self.collection_compaction_bounds.delete_by_keys(
+            ids.iter()
+                .map(|id| CollectionCompactionBoundKey { id: *id }),
+            self.op_id,
+        );
+        self.maintained_read_requirements.delete_by_keys(
+            ids.iter()
+                .map(|id| MaintainedReadRequirementKey { id: *id }),
+            self.op_id,
+        );
         let ks: Vec<_> = ids
             .into_iter()
             .map(|id| StorageCollectionMetadataKey { id })
@@ -3071,6 +3237,16 @@ pub struct TransactionBatch {
         proto::StorageCollectionMetadataValue,
         Diff,
     )>,
+    pub(crate) collection_compaction_bounds: Vec<(
+        proto::CollectionCompactionBoundKey,
+        proto::CollectionCompactionBoundValue,
+        Diff,
+    )>,
+    pub(crate) maintained_read_requirements: Vec<(
+        proto::MaintainedReadRequirementKey,
+        proto::MaintainedReadRequirementValue,
+        Diff,
+    )>,
     pub(crate) unfinalized_shards: Vec<(proto::UnfinalizedShardKey, (), Diff)>,
     pub(crate) txn_wal_shard: Vec<((), proto::TxnWalShardValue, Diff)>,
     pub(crate) audit_log_updates: Vec<(proto::AuditLogKey, (), Diff)>,
@@ -3105,6 +3281,8 @@ impl TransactionBatch {
             default_privileges,
             system_privileges,
             storage_collection_metadata,
+            collection_compaction_bounds,
+            maintained_read_requirements,
             unfinalized_shards,
             txn_wal_shard,
             audit_log_updates,
@@ -3132,6 +3310,8 @@ impl TransactionBatch {
             && default_privileges.is_empty()
             && system_privileges.is_empty()
             && storage_collection_metadata.is_empty()
+            && collection_compaction_bounds.is_empty()
+            && maintained_read_requirements.is_empty()
             && unfinalized_shards.is_empty()
             && txn_wal_shard.is_empty()
             && audit_log_updates.is_empty()
@@ -3207,6 +3387,8 @@ mod unique_name {
         SettingValue,
         SourceReferencesValue,
         StorageCollectionMetadataValue,
+        CollectionCompactionBoundValue,
+        MaintainedReadRequirementValue,
         SystemPrivilegesValue,
         TxnWalShardValue,
         RoleAuthValue,

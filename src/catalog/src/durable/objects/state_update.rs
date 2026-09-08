@@ -152,6 +152,8 @@ impl StateUpdate {
             replica_system_configurations,
             default_privileges,
             system_privileges,
+            collection_compaction_bounds,
+            maintained_read_requirements,
             storage_collection_metadata,
             unfinalized_shards,
             txn_wal_shard,
@@ -190,6 +192,14 @@ impl StateUpdate {
         let default_privileges = from_batch(default_privileges, StateUpdateKind::DefaultPrivilege);
         let source_references = from_batch(source_references, StateUpdateKind::SourceReferences);
         let system_privileges = from_batch(system_privileges, StateUpdateKind::SystemPrivilege);
+        let collection_compaction_bounds = from_batch(
+            collection_compaction_bounds,
+            StateUpdateKind::CollectionCompactionBound,
+        );
+        let maintained_read_requirements = from_batch(
+            maintained_read_requirements,
+            StateUpdateKind::MaintainedReadRequirement,
+        );
         let storage_collection_metadata = from_batch(
             storage_collection_metadata,
             StateUpdateKind::StorageCollectionMetadata,
@@ -218,6 +228,8 @@ impl StateUpdate {
             .chain(replica_system_configurations)
             .chain(default_privileges)
             .chain(system_privileges)
+            .chain(collection_compaction_bounds)
+            .chain(maintained_read_requirements)
             .chain(storage_collection_metadata)
             .chain(unfinalized_shards)
             .chain(txn_wal_shard)
@@ -266,6 +278,14 @@ pub enum StateUpdateKind {
     ),
     SystemObjectMapping(proto::GidMappingKey, proto::GidMappingValue),
     SystemPrivilege(proto::SystemPrivilegesKey, proto::SystemPrivilegesValue),
+    CollectionCompactionBound(
+        proto::CollectionCompactionBoundKey,
+        proto::CollectionCompactionBoundValue,
+    ),
+    MaintainedReadRequirement(
+        proto::MaintainedReadRequirementKey,
+        proto::MaintainedReadRequirementValue,
+    ),
     StorageCollectionMetadata(
         proto::StorageCollectionMetadataKey,
         proto::StorageCollectionMetadataValue,
@@ -305,6 +325,12 @@ impl StateUpdateKind {
             }
             StateUpdateKind::SystemObjectMapping(_, _) => Some(CollectionType::SystemGidMapping),
             StateUpdateKind::SystemPrivilege(_, _) => Some(CollectionType::SystemPrivileges),
+            StateUpdateKind::CollectionCompactionBound(_, _) => {
+                Some(CollectionType::CollectionCompactionBound)
+            }
+            StateUpdateKind::MaintainedReadRequirement(_, _) => {
+                Some(CollectionType::MaintainedReadRequirement)
+            }
             StateUpdateKind::StorageCollectionMetadata(_, _) => {
                 Some(CollectionType::StorageCollectionMetadata)
             }
@@ -513,6 +539,18 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     source_references,
                 ))
             }
+            StateUpdateKind::CollectionCompactionBound(key, value) => {
+                let collection_compaction_bounds = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::CollectionCompactionBound(
+                    collection_compaction_bounds,
+                ))
+            }
+            StateUpdateKind::MaintainedReadRequirement(key, value) => {
+                let maintained_read_requirements = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::MaintainedReadRequirement(
+                    maintained_read_requirements,
+                ))
+            }
             StateUpdateKind::StorageCollectionMetadata(key, value) => {
                 let storage_collection_metadata = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::StorageCollectionMetadata(
@@ -695,6 +733,16 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             StateUpdateKind::SystemPrivilege(key, value) => {
                 proto::StateUpdateKind::SystemPrivileges(proto::SystemPrivileges { key, value })
             }
+            StateUpdateKind::CollectionCompactionBound(key, value) => {
+                proto::StateUpdateKind::CollectionCompactionBound(
+                    proto::CollectionCompactionBound { key, value },
+                )
+            }
+            StateUpdateKind::MaintainedReadRequirement(key, value) => {
+                proto::StateUpdateKind::MaintainedReadRequirement(
+                    proto::MaintainedReadRequirement { key, value },
+                )
+            }
             StateUpdateKind::StorageCollectionMetadata(key, value) => {
                 proto::StateUpdateKind::StorageCollectionMetadata(
                     proto::StorageCollectionMetadata { key, value },
@@ -778,6 +826,12 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             proto::StateUpdateKind::SystemPrivileges(proto::SystemPrivileges { key, value }) => {
                 StateUpdateKind::SystemPrivilege(key, value)
             }
+            proto::StateUpdateKind::CollectionCompactionBound(
+                proto::CollectionCompactionBound { key, value },
+            ) => StateUpdateKind::CollectionCompactionBound(key, value),
+            proto::StateUpdateKind::MaintainedReadRequirement(
+                proto::MaintainedReadRequirement { key, value },
+            ) => StateUpdateKind::MaintainedReadRequirement(key, value),
             proto::StateUpdateKind::StorageCollectionMetadata(
                 proto::StorageCollectionMetadata { key, value },
             ) => StateUpdateKind::StorageCollectionMetadata(key, value),
