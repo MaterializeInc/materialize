@@ -470,3 +470,19 @@ inputs discovered during planning.
 This constrains live admission using held readability, not committed permission.
 Milestone 1 still needs a durable producer for bounds and maintained requirements,
 transaction-boundary compatibility checks, and committed delivery to storage.
+
+### 2026-09-08: Catalog integration prioritized with Aljoscha
+
+Milestone 1's next target is the catalog authority connecting admission to storage:
+maintained requirements and compaction permission are checked together in the
+catalog transaction, and committed permission reaches storage. This can take
+several commits. If blocked, identify the concrete obstacle to this integration.
+
+The decisive check must reject an incompatible maintained requirement even when
+the history remains physically readable. Creator-held readability is not durable
+protection for logical inputs eliminated from the installed plan.
+
+Account for mixed drop/create batches: [storage creation](../../../src/storage-client/src/storage_collections.rs)
+requires metadata for every still-governed collection, but [catalog implications](../../../src/adapter/src/coord/catalog_implications.rs)
+create collections before processing drops whose metadata is already removed.
+Resolve this mismatch as part of integration, preserving valid read protection.
