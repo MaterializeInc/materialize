@@ -1958,6 +1958,9 @@ pub struct View {
     pub column_names: Vec<ColumnName>,
     /// If this view is created in the temporary schema, e.g. `CREATE TEMPORARY ...`.
     pub temporary: bool,
+    /// Whether reader-supplied expressions may be evaluated below this view's
+    /// own filters. See `doc/developer/design/20260828_security_barrier_views.md`.
+    pub security_barrier: bool,
 }
 
 #[derive(Clone, Debug)]

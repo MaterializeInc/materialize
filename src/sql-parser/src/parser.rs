@@ -4172,14 +4172,31 @@ impl<'a> Parser<'a> {
         // ANSI SQL and Postgres support RECURSIVE here, but we don't.
         let name = self.parse_item_name()?;
         let columns = self.parse_parenthesized_column_list(Optional)?;
-        // Postgres supports WITH options here, but we don't.
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_view_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
         self.expect_keyword(AS)?;
         let query = self.parse_query()?;
         // Optional `WITH [ CASCADED | LOCAL ] CHECK OPTION` is widely supported here.
         Ok(ViewDefinition {
             name,
             columns,
+            with_options,
             query,
+        })
+    }
+
+    fn parse_view_option(&mut self) -> Result<ViewOption<Raw>, ParserError> {
+        self.expect_keywords(&[SECURITY, BARRIER])?;
+        let value = self.parse_optional_option_value()?;
+        Ok(ViewOption {
+            name: ViewOptionName::SecurityBarrier,
+            value,
         })
     }
 
