@@ -1867,8 +1867,6 @@ async fn purify_create_table_from_source(
         }])
     });
 
-    // Excluding constraints is only meaningful for sources whose upstream
-    // tables have constraints Materialize records as keys.
     if (!exclude_constraints.is_empty() || exclude_all_constraints)
         && !matches!(desc.connection, GenericSourceConnection::Postgres(_))
     {

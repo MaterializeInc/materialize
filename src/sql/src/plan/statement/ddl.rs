@@ -1781,9 +1781,6 @@ pub fn plan_create_table_from_source(
     let TableFromSourceOptionExtracted {
         text_columns,
         exclude_columns,
-        // Exclusion of constraints happens during purification, where the
-        // upstream table descriptor stored in `details` is pruned; nothing is
-        // left to do at planning time.
         exclude_constraints: _,
         exclude_all_constraints: _,
         retain_history,

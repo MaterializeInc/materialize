@@ -463,22 +463,19 @@ pub(super) async fn purify_source_exports(
             let text_columns = text_column_map.remove(&desc.oid);
             let exclude_columns = exclude_column_map.remove(&desc.oid);
 
-            // Validate requested constraint names against the table's full,
-            // pre-pruning constraint set, so that a constraint whose columns
-            // are also excluded via EXCLUDE COLUMNS is still accepted.
-            let dangling_constraints: Vec<_> = exclude_constraints
+            let missing_exclude_constraints: Vec<_> = exclude_constraints
                 .iter()
                 .filter(|n| !desc.keys.iter().any(|k| &&k.name == n))
                 .cloned()
                 .collect();
-            if !dangling_constraints.is_empty() {
-                return Err(PgSourcePurificationError::DanglingExcludeConstraints {
+            if !missing_exclude_constraints.is_empty() {
+                return Err(PgSourcePurificationError::ConstraintsNotFound {
                     table: PartialItemName {
                         database: None,
                         schema: Some(desc.namespace.clone()),
                         item: desc.name.clone(),
                     },
-                    constraints: dangling_constraints,
+                    constraints: missing_exclude_constraints,
                 });
             }
 

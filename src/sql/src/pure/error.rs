@@ -49,7 +49,7 @@ pub enum PgSourcePurificationError {
     #[error("EXCLUDE COLUMNS refers to table not currently being added")]
     DanglingExcludeColumns { items: Vec<PartialItemName> },
     #[error("EXCLUDE CONSTRAINTS refers to constraints that do not exist on table {table}")]
-    DanglingExcludeConstraints {
+    ConstraintsNotFound {
         table: PartialItemName,
         constraints: Vec<String>,
     },
@@ -72,7 +72,7 @@ impl PgSourcePurificationError {
                 "the following tables are referenced but not added: {}",
                 itertools::join(items, ", ")
             )),
-            Self::DanglingExcludeConstraints {
+            Self::ConstraintsNotFound {
                 table: _,
                 constraints,
             } => Some(format!(
@@ -134,7 +134,7 @@ impl PgSourcePurificationError {
                 "Remove the {} option, as no tables are being added.",
                 option
             )),
-            Self::DanglingExcludeConstraints { .. } => Some(
+            Self::ConstraintsNotFound { .. } => Some(
                 "Constraint names are matched exactly, including case, against the upstream \
                  PRIMARY KEY and UNIQUE constraint names."
                     .into(),
