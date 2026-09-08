@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/cast.rs
-revision: 3b8193d4ab
+revision: 336c0db4ba
 ---
 
 # mz-ore::cast
