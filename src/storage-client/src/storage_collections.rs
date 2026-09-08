@@ -1806,11 +1806,16 @@ impl StorageCollections for StorageCollectionsImpl {
             }
             for (id, collection) in existing.iter() {
                 if let Some(bound) = &collection.compaction_bound {
-                    if !storage_metadata.compaction_bounds.contains_key(id) {
+                    if storage_metadata.collection_metadata.contains_key(id)
+                        && !storage_metadata.compaction_bounds.contains_key(id)
+                    {
                         return Err(StorageError::InvalidUsage(format!(
                             "missing compaction bound for {id}"
                         )));
                     }
+                    // A committed drop can precede its application here. Retain its
+                    // bound, including shared-shard initialization protection, until
+                    // drop_collections_unvalidated releases it.
                     shard_bounds
                         .entry(collection.collection_metadata.data_shard)
                         .or_default()
@@ -3851,10 +3856,35 @@ mod tests {
         controller
             .apply_compaction_bounds(BTreeMap::from([(new, frontier(15))]))
             .unwrap();
-        let holds = controller.acquire_read_holds(vec![old]).unwrap();
-        metadata.collection_metadata.remove(&old);
         metadata.compaction_bounds.remove(&old);
         metadata.compaction_bounds.insert(new, frontier(15));
+        // Catalog implications apply creates before drops from the same commit.
+        let unrelated = GlobalId::User(3);
+        metadata
+            .collection_metadata
+            .insert(unrelated, ShardId::new());
+        metadata.compaction_bounds.insert(unrelated, frontier(20));
+        let creates = vec![(
+            unrelated,
+            CollectionDescription::for_other(RelationDesc::empty(), None),
+        )];
+        let result = controller
+            .create_collections_for_bootstrap(&metadata, None, creates.clone(), &BTreeSet::new())
+            .await;
+        assert!(matches!(result, Err(StorageError::InvalidUsage(_))));
+        metadata.collection_metadata.remove(&old);
+        controller
+            .create_collections_for_bootstrap(&metadata, None, creates, &BTreeSet::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            controller
+                .collection_frontiers(old)
+                .unwrap()
+                .read_capabilities,
+            frontier(5)
+        );
+        let holds = controller.acquire_read_holds(vec![old]).unwrap();
         controller.drop_collections_unvalidated(&metadata, vec![old]);
         assert_eq!(
             controller

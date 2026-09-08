@@ -486,3 +486,26 @@ Account for mixed drop/create batches: [storage creation](../../../src/storage-c
 requires metadata for every still-governed collection, but [catalog implications](../../../src/adapter/src/coord/catalog_implications.rs)
 create collections before processing drops whose metadata is already removed.
 Resolve this mismatch as part of integration, preserving valid read protection.
+
+### 2026-09-08: Mixed-batch storage protection
+
+Storage creation accepts committed removal of collection metadata while retaining
+the installed bound until the drop is applied. Still-cataloged collections must
+continue supplying bounds. This preserves create-before-drop implication ordering
+and shared-shard protection without another lifecycle API.
+
+Milestone 1 remains active. Next: persist requirements and bounds, check their
+compatibility in the catalog transaction, and deliver committed bounds to storage.
+
+### 2026-09-08: Durable protection and committed delivery
+
+Storage-backed bounds and maintained requirements have separate durable records.
+Final transaction state checks their compatibility and bound monotonicity, with
+recoverable adapter admission and committed delivery to storage. Governance begins
+at collection birth, not adoption of a live ungoverned collection.
+
+Milestone 1 remains active. SQL creation does not yet produce these records. Next:
+wire initial bounds and MV logical-input requirements into creation, accounting for
+registration timestamps and actual readability when reusing shards. Recovery must
+consume the requirements, and durable output progress must advance them and permit
+bound publication before this becomes the complete protected-MV path.

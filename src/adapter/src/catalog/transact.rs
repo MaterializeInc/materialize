@@ -70,6 +70,7 @@ use mz_sql::session::vars::OwnedVarInput;
 use mz_sql::session::vars::{Value as VarValue, VarInput};
 use mz_sql::{DEFAULT_SCHEMA, rbac};
 use mz_sql_parser::ast::{QualifiedReplica, Value};
+use mz_storage_client::controller::StorageTxn;
 use mz_storage_client::storage_collections::StorageCollections;
 use serde::{Deserialize, Serialize};
 use tracing::{info, trace};
@@ -272,6 +273,15 @@ pub enum Op {
     UpdateScopedSystemParameters {
         scoped: ScopedParameters,
         prune_scope: ScopedParametersScope,
+    },
+    SetCollectionCompactionBound {
+        id: GlobalId,
+        frontier: Option<mz_repr::Timestamp>,
+    },
+    SetMaintainedReadRequirement {
+        id: GlobalId,
+        inputs: BTreeSet<GlobalId>,
+        frontier: Option<mz_repr::Timestamp>,
     },
     /// Injects audit events into the catalog.
     ///
@@ -1037,8 +1047,22 @@ impl Catalog {
                     storage_collections.is_none(),
                     "dry-run mode must not prepare storage state"
                 );
+                // Model collection lifetimes for admission without controller
+                // effects. These shard IDs stay in the noncommittable snapshot.
+                tx.insert_collection_metadata(
+                    storage_collections_to_create
+                        .into_iter()
+                        .map(|id| (id, ShardId::new()))
+                        .collect(),
+                )?;
+                tx.insert_collection_metadata(storage_collections_to_register)?;
+                tx.delete_collection_metadata(storage_collections_to_drop);
             }
         }
+
+        // Admission failures must return before entering the fatal commit path.
+        // Batch extraction repeats this check for other durable callers.
+        tx.validate_read_protection()?;
 
         let updates = tx.get_and_commit_op_updates();
         if !updates.is_empty() {
@@ -3131,6 +3155,16 @@ impl Catalog {
                     }
                 }
             }
+            Op::SetCollectionCompactionBound { id, frontier } => {
+                tx.set_collection_compaction_bound(id, frontier)?;
+            }
+            Op::SetMaintainedReadRequirement {
+                id,
+                inputs,
+                frontier,
+            } => {
+                tx.set_maintained_read_requirement(id, inputs, frontier)?;
+            }
             Op::InjectAuditEvents { events } => {
                 for event in events {
                     let id = tx.allocate_audit_log_id()?;
@@ -3563,6 +3597,131 @@ mod tests {
 
     use crate::catalog::{Catalog, Op};
     use crate::session::DEFAULT_DATABASE_NAME;
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_read_protection_admission_and_committed_updates() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use mz_catalog::memory::objects::StateDiff;
+        use mz_persist_client::ShardId;
+        use mz_repr::{GlobalId, Timestamp};
+        use mz_storage_client::controller::StorageTxn;
+        use timely::progress::Antichain;
+
+        use crate::catalog::state::LocalExpressionCache;
+        use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdateKind;
+
+        Catalog::with_debug(|mut catalog| async move {
+            let input = GlobalId::User(100_000);
+            let output = GlobalId::User(100_001);
+            let ts = |value| Timestamp::new(value);
+            // Seed collection birth through the durable transaction. This harness
+            // does not run storage shard allocation or controller implications.
+            let updates = {
+                let mut storage = catalog.storage().await;
+                let mut tx = storage.transaction().await.unwrap();
+                tx.insert_collection_metadata(BTreeMap::from([
+                    (input, ShardId::new()),
+                    (output, ShardId::new()),
+                ]))
+                .unwrap();
+                tx.set_collection_compaction_bound(input, Some(ts(10)))
+                    .unwrap();
+                let updates = tx.get_and_commit_op_updates();
+                let commit_ts = tx.upper();
+                tx.commit(commit_ts).await.unwrap();
+                updates
+            };
+            let _ = catalog
+                .state
+                .apply_updates(updates, &mut LocalExpressionCache::Closed)
+                .await;
+
+            let requirement = |frontier| Op::SetMaintainedReadRequirement {
+                id: output,
+                inputs: BTreeSet::from([input]),
+                frontier,
+            };
+            let bound = |frontier| Op::SetCollectionCompactionBound {
+                id: input,
+                frontier,
+            };
+            let before = catalog.state().storage_metadata().compaction_bounds.clone();
+            let oracle_write_ts = catalog.current_upper().await;
+            let result = catalog
+                .transact(None, oracle_write_ts, None, vec![requirement(Some(ts(9)))])
+                .await;
+            assert!(
+                result.is_err(),
+                "admission must return an error, not terminate"
+            );
+            assert_eq!(catalog.state().storage_metadata().compaction_bounds, before);
+            let base_state = catalog.state().clone();
+            assert!(
+                catalog
+                    .transact_incremental_dry_run(
+                        &base_state,
+                        vec![requirement(Some(ts(9)))],
+                        None,
+                        None,
+                        oracle_write_ts,
+                    )
+                    .await
+                    .is_err()
+            );
+
+            let result = catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![bound(Some(ts(20))), requirement(Some(ts(20)))],
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                catalog.state().storage_metadata().compaction_bounds[&input],
+                Antichain::from_elem(ts(20))
+            );
+            assert!(result.catalog_updates.iter().any(|update| {
+                matches!(
+                    &update.kind,
+                    ParsedStateUpdateKind::CollectionCompactionBound(bound)
+                        if bound.id == input && bound.frontier == Some(ts(20))
+                            && update.diff == StateDiff::Addition
+                )
+            }));
+
+            let oracle_write_ts = catalog.current_upper().await;
+            assert!(
+                catalog
+                    .transact(None, oracle_write_ts, None, vec![bound(Some(ts(21)))])
+                    .await
+                    .is_err()
+            );
+            catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![bound(None), requirement(None)],
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                catalog
+                    .state()
+                    .storage_metadata()
+                    .compaction_bounds
+                    .get(&input),
+                Some(&Antichain::new()),
+                "completed permission remains governed"
+            );
+            catalog.expire().await;
+        })
+        .await
+    }
 
     #[mz_ore::test]
     fn test_reconfiguration_audit_details() {
@@ -4084,12 +4243,7 @@ mod tests {
         );
     }
 
-    /// Verifies that `transact_incremental_dry_run` processes only new ops
-    /// against the accumulated state, not all ops from scratch. Two paths are
-    /// compared:
-    ///   - Incremental: two separate calls, each with one op
-    ///   - All-at-once: one call with both ops
-    /// Both must produce equivalent catalog state.
+    /// Staged dry runs carry collection lifetimes and protection across statements.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
     async fn test_transact_incremental_dry_run_processes_only_new_ops() {
@@ -4145,16 +4299,22 @@ mod tests {
 
             let op_t1 = make_table_op(id_t1, global_id_t1, "t1");
             let op_t2 = make_table_op(id_t2, global_id_t2, "t2");
+            let bound = Op::SetCollectionCompactionBound {
+                id: global_id_t1,
+                frontier: Some(10.into()),
+            };
+            let requirement = Op::SetMaintainedReadRequirement {
+                id: global_id_t2,
+                inputs: [global_id_t1].into_iter().collect(),
+                frontier: Some(10.into()),
+            };
 
             let base_state = catalog.state().clone();
 
-            // --- Path A: Incremental (two separate dry-run calls) ---
-
-            // First call: only op_t1, no previous snapshot.
             let (state_after_t1, snapshot_after_t1) = catalog
                 .transact_incremental_dry_run(
                     &base_state,
-                    vec![op_t1.clone()],
+                    vec![op_t1.clone(), bound.clone()],
                     None,
                     None,
                     oracle_write_ts,
@@ -4180,11 +4340,10 @@ mod tests {
                 "t2 should NOT exist after first dry run"
             );
 
-            // Second call: only op_t2, using state/snapshot from first call.
-            let (state_incremental, _) = catalog
+            let (state_incremental, snapshot_incremental) = catalog
                 .transact_incremental_dry_run(
                     &state_after_t1,
-                    vec![op_t2.clone()],
+                    vec![op_t2.clone(), requirement.clone()],
                     None,
                     Some(snapshot_after_t1),
                     oracle_write_ts,
@@ -4202,12 +4361,10 @@ mod tests {
                 "t2 should exist in incremental result"
             );
 
-            // --- Path B: All-at-once (single dry-run call with both ops) ---
-
             let (state_all_at_once, _) = catalog
                 .transact_incremental_dry_run(
                     &base_state,
-                    vec![op_t1.clone(), op_t2.clone()],
+                    vec![op_t1.clone(), bound, op_t2.clone(), requirement],
                     None,
                     None,
                     oracle_write_ts,
@@ -4224,8 +4381,6 @@ mod tests {
                 "t2 should exist in all-at-once result"
             );
 
-            // --- Compare: both paths produce equivalent items ---
-
             let inc_t1 = state_incremental.try_get_entry(&id_t1).expect("inc t1");
             let all_t1 = state_all_at_once.try_get_entry(&id_t1).expect("all t1");
             assert_eq!(inc_t1.name(), all_t1.name());
@@ -4235,6 +4390,29 @@ mod tests {
             let all_t2 = state_all_at_once.try_get_entry(&id_t2).expect("all t2");
             assert_eq!(inc_t2.name(), all_t2.name());
             assert_eq!(inc_t2.owner_id, all_t2.owner_id);
+
+            let (dropped_state, dropped_snapshot) = catalog
+                .transact_incremental_dry_run(
+                    &state_incremental,
+                    vec![
+                        Op::DropObjects(vec![crate::catalog::DropObjectInfo::Item(id_t2)]),
+                        Op::SetCollectionCompactionBound {
+                            id: global_id_t1,
+                            frontier: Some(20.into()),
+                        },
+                    ],
+                    None,
+                    Some(snapshot_incremental),
+                    oracle_write_ts,
+                )
+                .await
+                .expect("dropping a consumer releases its requirement in the dry run");
+            assert!(dropped_state.try_get_entry(&id_t2).is_none());
+            assert!(dropped_snapshot.maintained_read_requirements.is_empty());
+            assert_eq!(
+                dropped_state.storage_metadata().compaction_bounds[&global_id_t1],
+                timely::progress::Antichain::from_elem(20.into())
+            );
 
             catalog.expire().await;
         })

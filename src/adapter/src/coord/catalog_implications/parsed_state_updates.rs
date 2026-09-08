@@ -71,6 +71,7 @@ pub enum ParsedStateUpdateKind {
     SystemConfiguration {
         durable: durable::objects::SystemConfiguration,
     },
+    CollectionCompactionBound(durable::objects::CollectionCompactionBound),
 }
 
 /// Potentially generate a [ParsedStateUpdate] that corresponds to the given
@@ -109,6 +110,9 @@ pub fn parse_state_update(
         }
         StateUpdateKind::SystemConfiguration(durable) => {
             Some(ParsedStateUpdateKind::SystemConfiguration { durable })
+        }
+        StateUpdateKind::CollectionCompactionBound(bound) => {
+            Some(ParsedStateUpdateKind::CollectionCompactionBound(bound))
         }
         _ => {
             // The controllers are currently not interested in other kinds of
