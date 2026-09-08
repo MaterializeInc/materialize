@@ -53,26 +53,141 @@ pub struct PostgresTableDesc {
 
 /// An upstream schema change that Materialize cannot follow.
 ///
-/// `Display` renders the diagnosis. `hint` carries the recovery steps and is
-/// surfaced separately: as the `HINT` of a SQL error and in the source status.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// `Display` renders the diagnosis. [`SchemaChangeError::hint`] renders the
+/// recovery steps, which are surfaced separately: as the `HINT` of a SQL error
+/// and in the source status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[error("incompatible schema change on {namespace}.{name}: {change}")]
 pub struct SchemaChangeError {
-    pub table: String,
-    pub change: String,
-    pub hint: String,
+    pub namespace: String,
+    pub name: String,
+    pub change: SchemaChange,
 }
 
-impl std::fmt::Display for SchemaChangeError {
+/// The upstream change behind a [`SchemaChangeError`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+pub enum SchemaChange {
+    #[error("table was renamed or moved upstream (it is now {namespace}.{name} with oid {oid})")]
+    TableRenamed {
+        namespace: String,
+        name: String,
+        oid: u32,
+    },
+    #[error("column {} was dropped or renamed upstream", .column.quoted())]
+    ColumnDropped { column: String },
+    #[error(
+        "column {} changed position upstream (the column or table was likely dropped and \
+         recreated)",
+        .column.quoted()
+    )]
+    ColumnMoved { column: String },
+    #[error("the type of column {} changed upstream", .column.quoted())]
+    ColumnTypeChanged { column: String },
+    #[error("the NOT NULL constraint on column {} was dropped upstream", .column.quoted())]
+    NotNullDropped { column: String },
+    #[error("column {} was altered upstream", .column.quoted())]
+    ColumnAltered { column: String },
+    #[error("{key} was dropped upstream")]
+    KeyDropped { key: KeyRef },
+    #[error("{key} was dropped and recreated upstream")]
+    KeyRecreated { key: KeyRef },
+    #[error("{key} was renamed upstream to {}", .new_name.quoted())]
+    KeyRenamed { key: KeyRef, new_name: String },
+}
+
+/// A PRIMARY KEY or UNIQUE constraint as recorded when the table was created.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyRef {
+    pub name: String,
+    pub is_primary: bool,
+    pub columns: Vec<String>,
+}
+
+impl std::fmt::Display for KeyRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let kind = if self.is_primary {
+            "PRIMARY KEY"
+        } else {
+            "UNIQUE"
+        };
         write!(
             f,
-            "incompatible schema change on {}: {}",
-            self.table, self.change
+            "{kind} constraint {} ({})",
+            self.name.quoted(),
+            self.columns.join(", ")
         )
     }
 }
 
-impl std::error::Error for SchemaChangeError {}
+impl SchemaChangeError {
+    /// The recovery steps for this change, including the statements to run.
+    pub fn hint(&self) -> String {
+        let reference = format!("{}.{}", self.namespace, self.name);
+        let recreate = |lead: &str, with_clause: Option<String>| {
+            recreate_hint(lead, &self.name, &reference, with_clause.as_deref())
+        };
+        let exclude = |name: &str| format!("EXCLUDE CONSTRAINTS ('{}')", name.replace('\'', "''"));
+        match &self.change {
+            SchemaChange::TableRenamed {
+                namespace, name, ..
+            } => recreate_hint(
+                "To keep ingesting from the upstream table as it now exists",
+                name,
+                &format!("{namespace}.{name}"),
+                None,
+            ),
+            SchemaChange::ColumnDropped { column } => format!(
+                "{}\nTo make a planned column drop a non-event, create the table with \
+                 WITH (EXCLUDE COLUMNS ({})) before the upstream drop.",
+                recreate("To keep ingesting without this column", None),
+                column.quoted(),
+            ),
+            SchemaChange::ColumnMoved { .. } | SchemaChange::ColumnAltered { .. } => {
+                recreate("To keep ingesting", None)
+            }
+            SchemaChange::ColumnTypeChanged { column } => recreate(
+                "To ingest the column as text regardless of its upstream type",
+                Some(format!("TEXT COLUMNS ({})", column.quoted())),
+            ),
+            SchemaChange::NotNullDropped { .. } => recreate(
+                "To keep ingesting without this constraint",
+                Some("EXCLUDE ALL CONSTRAINTS".into()),
+            ),
+            SchemaChange::KeyDropped { key } => format!(
+                "{}\nTo make a planned constraint drop a non-event, create the table with \
+                 WITH ({}) before the upstream drop.",
+                recreate("To keep ingesting without this constraint", None),
+                exclude(&key.name),
+            ),
+            SchemaChange::KeyRecreated { key } => recreate(
+                "To keep ingesting without this constraint",
+                Some(exclude(&key.name)),
+            ),
+            SchemaChange::KeyRenamed { new_name, .. } => recreate(
+                "To keep ingesting without this constraint",
+                Some(exclude(new_name)),
+            ),
+        }
+    }
+}
+
+fn recreate_hint(
+    lead: &str,
+    table_name: &str,
+    reference: &str,
+    with_clause: Option<&str>,
+) -> String {
+    let mut hint = format!(
+        "{lead}, recreate the table in a new versioned schema, then swap your views to the \
+         new table:\n  CREATE SCHEMA v2;\n  CREATE TABLE v2.{table_name}\n  \
+         FROM SOURCE <source> (REFERENCE {reference})"
+    );
+    if let Some(with_clause) = with_clause {
+        hint.push_str(&format!("\n  WITH ({with_clause})"));
+    }
+    hint.push(';');
+    hint
+}
 
 impl PostgresTableDesc {
     /// Determines if two `PostgresTableDesc` are compatible with one another in
@@ -98,179 +213,63 @@ impl PostgresTableDesc {
         }
 
         if self.oid != other.oid || self.namespace != other.namespace || self.name != other.name {
-            let reference = format!("{}.{}", other.namespace, other.name);
-            return Err(self.error(
-                format!(
-                    "table was renamed or moved upstream (it is now {} with oid {})",
-                    reference, other.oid
-                ),
-                recreate_hint(
-                    "To keep ingesting from the upstream table as it now exists",
-                    &other.name,
-                    &reference,
-                    None,
-                ),
-            ));
+            return Err(self.schema_change(SchemaChange::TableRenamed {
+                namespace: other.namespace.clone(),
+                name: other.name.clone(),
+                oid: other.oid,
+            }));
         }
 
         let other_cols_by_name = BTreeMap::from_iter(other.columns.iter().map(|c| (&c.name, c)));
         for column in &self.columns {
             let allow_type_change = allow_type_to_change_by_col_num.contains(&column.col_num);
-            self.check_column(
-                column,
-                other_cols_by_name.get(&column.name).copied(),
-                allow_type_change,
-            )?;
+            let other_column = other_cols_by_name.get(&column.name).copied();
+            if let Some(change) = column.diff(other_column, allow_type_change) {
+                return Err(self.schema_change(change));
+            }
         }
 
         if let Some(key) = self.keys.difference(&other.keys).next() {
-            return Err(self.key_error(key, other));
+            return Err(self.schema_change(self.key_change(key, other)));
         }
 
         Ok(())
     }
 
-    fn check_column(
-        &self,
-        column: &PostgresColumnDesc,
-        other: Option<&PostgresColumnDesc>,
-        allow_type_change: bool,
-    ) -> Result<(), SchemaChangeError> {
-        let name = column.name.quoted();
-        let Some(other) = other else {
-            return Err(self.error(
-                format!("column {name} was dropped or renamed upstream"),
-                format!(
-                    "{}\nTo make a planned column drop a non-event, create the table with \
-                     WITH (EXCLUDE COLUMNS ({name})) before the upstream drop.",
-                    self.recreate_hint("To keep ingesting without this column", None)
-                ),
-            ));
-        };
-        if column.is_compatible(other, allow_type_change) {
-            return Ok(());
-        }
-        if column.col_num != other.col_num {
-            return Err(self.error(
-                format!(
-                    "column {name} changed position upstream (the column or table was likely \
-                     dropped and recreated)"
-                ),
-                self.recreate_hint("To keep ingesting", None),
-            ));
-        }
-        if !allow_type_change
-            && (column.type_oid != other.type_oid || column.type_mod != other.type_mod)
-        {
-            return Err(self.error(
-                format!("the type of column {name} changed upstream"),
-                self.recreate_hint(
-                    "To ingest the column as text regardless of its upstream type",
-                    Some(&format!("TEXT COLUMNS ({name})")),
-                ),
-            ));
-        }
-        if !column.nullable && other.nullable {
-            return Err(self.error(
-                format!("the NOT NULL constraint on column {name} was dropped upstream"),
-                self.recreate_hint(
-                    "To keep ingesting without this constraint",
-                    Some("EXCLUDE ALL CONSTRAINTS"),
-                ),
-            ));
-        }
-        Err(self.error(
-            format!("column {name} was altered upstream"),
-            self.recreate_hint("To keep ingesting", None),
-        ))
-    }
-
-    fn key_error(&self, key: &PostgresKeyDesc, other: &PostgresTableDesc) -> SchemaChangeError {
-        let kind = if key.is_primary {
-            "PRIMARY KEY"
-        } else {
-            "UNIQUE"
-        };
-        let cols = key
-            .cols
-            .iter()
-            .map(|attnum| {
-                self.columns
-                    .iter()
-                    .find(|c| c.col_num == *attnum)
-                    .map_or_else(|| format!("attnum {}", attnum), |c| c.name.clone())
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        let constraint = format!("{kind} constraint {} ({cols})", key.name.quoted());
-        let exclude = |name: &str| format!("EXCLUDE CONSTRAINTS ('{}')", name.replace('\'', "''"));
-
-        if let Some(renamed) = other.keys.iter().find(|k| k.oid == key.oid) {
-            return self.error(
-                format!(
-                    "{constraint} was renamed upstream to {}",
-                    renamed.name.quoted()
-                ),
-                self.recreate_hint(
-                    "To keep ingesting without this constraint",
-                    Some(&exclude(&renamed.name)),
-                ),
-            );
-        }
-        if other.keys.iter().any(|k| k.name == key.name) {
-            return self.error(
-                format!("{constraint} was dropped and recreated upstream"),
-                self.recreate_hint(
-                    "To keep ingesting without this constraint",
-                    Some(&exclude(&key.name)),
-                ),
-            );
-        }
-        self.error(
-            format!("{constraint} was dropped upstream"),
-            format!(
-                "{}\nTo make a planned constraint drop a non-event, create the table with \
-                 WITH ({}) before the upstream drop.",
-                self.recreate_hint("To keep ingesting without this constraint", None),
-                exclude(&key.name),
-            ),
-        )
-    }
-
-    fn error(&self, change: String, hint: String) -> SchemaChangeError {
+    fn schema_change(&self, change: SchemaChange) -> SchemaChangeError {
         SchemaChangeError {
-            table: format!("{}.{}", self.namespace, self.name),
+            namespace: self.namespace.clone(),
+            name: self.name.clone(),
             change,
-            hint,
         }
     }
 
-    fn recreate_hint(&self, lead: &str, with_clause: Option<&str>) -> String {
-        recreate_hint(
-            lead,
-            &self.name,
-            &format!("{}.{}", self.namespace, self.name),
-            with_clause,
-        )
+    fn key_change(&self, key: &PostgresKeyDesc, other: &PostgresTableDesc) -> SchemaChange {
+        let key_ref = KeyRef {
+            name: key.name.clone(),
+            is_primary: key.is_primary,
+            columns: key
+                .cols
+                .iter()
+                .map(|attnum| {
+                    self.columns
+                        .iter()
+                        .find(|c| c.col_num == *attnum)
+                        .map_or_else(|| format!("attnum {}", attnum), |c| c.name.clone())
+                })
+                .collect(),
+        };
+        if let Some(renamed) = other.keys.iter().find(|k| k.oid == key.oid) {
+            SchemaChange::KeyRenamed {
+                key: key_ref,
+                new_name: renamed.name.clone(),
+            }
+        } else if other.keys.iter().any(|k| k.name == key.name) {
+            SchemaChange::KeyRecreated { key: key_ref }
+        } else {
+            SchemaChange::KeyDropped { key: key_ref }
+        }
     }
-}
-
-fn recreate_hint(
-    lead: &str,
-    table_name: &str,
-    reference: &str,
-    with_clause: Option<&str>,
-) -> String {
-    let mut hint = format!(
-        "{lead}, recreate the table in a new versioned schema, then swap your views to the \
-         new table:\n  CREATE SCHEMA v2;\n  CREATE TABLE v2.{table_name}\n  \
-         FROM SOURCE <source> (REFERENCE {reference})"
-    );
-    if let Some(with_clause) = with_clause {
-        hint.push_str(&format!("\n  WITH ({with_clause})"));
-    }
-    hint.push(';');
-    hint
 }
 
 impl RustType<ProtoPostgresTableDesc> for PostgresTableDesc {
@@ -346,6 +345,34 @@ impl PostgresColumnDesc {
             //   change this column's behavior.
             // - self and other are both not nullable
             && (self.nullable || self.nullable == other.nullable)
+    }
+}
+
+impl PostgresColumnDesc {
+    fn diff(
+        &self,
+        other: Option<&PostgresColumnDesc>,
+        allow_type_change: bool,
+    ) -> Option<SchemaChange> {
+        let column = self.name.clone();
+        let Some(other) = other else {
+            return Some(SchemaChange::ColumnDropped { column });
+        };
+        if self.is_compatible(other, allow_type_change) {
+            return None;
+        }
+        if self.col_num != other.col_num {
+            return Some(SchemaChange::ColumnMoved { column });
+        }
+        if !allow_type_change
+            && (self.type_oid != other.type_oid || self.type_mod != other.type_mod)
+        {
+            return Some(SchemaChange::ColumnTypeChanged { column });
+        }
+        if !self.nullable && other.nullable {
+            return Some(SchemaChange::NotNullDropped { column });
+        }
+        Some(SchemaChange::ColumnAltered { column })
     }
 }
 

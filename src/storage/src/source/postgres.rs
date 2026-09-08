@@ -375,7 +375,7 @@ pub enum DefiniteError {
 impl DefiniteError {
     fn hint(&self) -> Option<String> {
         match self {
-            DefiniteError::IncompatibleSchema(err) => Some(err.hint.clone()),
+            DefiniteError::IncompatibleSchema(err) => Some(err.hint()),
             _ => None,
         }
     }
