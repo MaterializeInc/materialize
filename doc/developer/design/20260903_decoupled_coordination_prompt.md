@@ -9,12 +9,17 @@ Remote: origin, pointing to the contributor fork, not upstream
 
 Read the design and its implementation log, then inspect the current code,
 worktree, and remote bookmark. Preserve existing work and account for progress
-from other sessions. Choose the next coherent piece toward the full outcome,
-briefly explain that choice, then implement and verify it.
+from other sessions. Use the latest handoff and current code to identify the
+active milestone in the design's Implementation and verification section. Choose
+the next coherent piece toward its observable outcome, briefly explain that
+choice, then implement and verify it. Historical proposals and next steps are
+context, not a cumulative task list.
 
 Treat the design as the agreed boundaries, not a prescribed mechanism. Prefer
 the smallest coherent solution that preserves the full capability. Incremental
 progress is fine, but do not mistake an intermediate step for completion.
+Implementation choices within the agreed boundaries do not require renewed
+design approval.
 
 Bring discoveries, consequential tradeoffs, and scope growth to me, Aljoscha.
 Pause affected work when guidance is needed rather than silently narrowing

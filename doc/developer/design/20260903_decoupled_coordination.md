@@ -17,6 +17,13 @@ Boundaries must support independent adapters becoming catalog writers and query
 clients without another ownership redesign. Enabling concurrent catalog writers
 and deploying multiple adapters are not required here.
 
+Initial implementation and validation target environments initialized under the
+new protection rules. Conversion of existing environments is deferred and is not
+a prerequisite for the [milestones](#milestones). Enabling the new ownership model
+for existing environments requires a separate conversion and rollout decision
+that preserves their promised results. Fresh environments must still survive
+restarts, replanning, and ownership handover.
+
 Query-local dataflows that do not go through the catalog, including slow-path
 SELECTs, SUBSCRIBEs, and COPY TO, remain on the fast protocol. Their creation,
 execution, responses, and cleanup are part of request-scoped execution, not
@@ -126,8 +133,8 @@ cannot support them, even when optimization removes that input.
 Existing objects retain their promised results. Their conversion to logical-input
 protection becomes active only once their remaining recovery requirements are
 protected across all logical inputs. Conversion must not skip pending results by
-moving the recovery timestamp forward. The conversion mechanism and rollout policy
-for objects that cannot yet satisfy this condition remain open.
+moving the recovery timestamp forward. Conversion is deferred under the
+[initial scope](#outcome-and-scope).
 
 ### Visibility and execution
 
@@ -195,11 +202,52 @@ compaction and recovery. Add targeted tests or experiments where existing
 coverage leaves uncertainty. Measure catalog traffic and retained-history cost
 as well as query performance. Record what ran, failures, and remaining gaps.
 
+### Milestones
+
+These are outcome checkpoints, not a rigid implementation sequence or one-commit
+tasks. Work can cross their boundaries when necessary. The implementation log
+records the active milestone and progress toward it.
+
+#### 1. Catalog-backed recovery protection
+
+Maintained requirements and compaction permission are coordinated through the
+catalog. Use an MV as the first complete example: logical-input protection is
+established before installation depends on it, survives uncached recovery,
+preserves a pending first refresh, and advances with durable output progress
+rather than retaining creation-time history forever.
+
+Evidence includes actual compaction and an input eliminated by optimization.
+Measure publication and retained-history costs as the real path becomes available.
+This milestone can use the current single-writer arrangement.
+
+#### 2. Catalog-driven maintained lifecycle
+
+Cluster-side lifecycle components establish and follow maintained state from the
+catalog without sequencer installation closures or the originating adapter.
+Creation, changes, deletion, and compaction work across recovery. Losing the
+adapter does not interrupt maintained work.
+
+Demonstrate a production subscriber applying committed changes without
+creator-local plans, including same-batch dependencies.
+
+#### 3. Independent query execution
+
+Query clients use the fast protocol without acquiring ownership of maintained
+lifecycle. Catalog application and query readiness remain correctly ordered.
+Responses, cancellation, query-local dataflows, and disconnect cleanup are
+isolated between clients.
+
+Demonstrate independent clients without requiring concurrent catalog writers or
+a multi-adapter deployment. Together, these milestones complete the
+fresh-environment decoupling outcome, subject to the correctness and performance
+acceptance criteria above.
+
 ### Starting points
 
 - [Catalog implications](../../../src/adapter/src/coord/catalog_implications.rs)
-  derive effects from committed changes. Index and MV creation also have
-  sequencer-side installation paths to account for.
+  derive effects from committed changes, including sink creation, index
+  installation, and MV storage registration. MV and metric-sink compute
+  installation remain sequencer-side.
 - [Compute protocol](../../../src/compute-client/src/protocol/command.rs) mixes
   lifecycle and query commands. [Transport](../../../src/service/src/transport.rs)
   replaces the active client on a new connection.
@@ -380,3 +428,21 @@ with no runtime protection or admission change.
 Next useful step: derive maintained requirements from their query definitions
 and enforce admission together with bound advancement at the durable transaction
 boundary. Conversion policy remains open.
+
+### 2026-09-08: Fresh-environment milestones agreed with Aljoscha
+
+Focus initial implementation on fresh environments and defer existing-environment
+conversion and rollout. Preserve the rejected alternatives as decision context.
+Milestone 1 is active. Sink/index implications, MV storage registration, reusable
+reconstruction, and logical-input discovery are implemented. Admission and
+catalog-backed protection remain unwired, and independent lifecycle following
+and query clients remain unimplemented.
+
+Next useful step: connect maintained requirements, admission, and bound enforcement
+toward the first protected MV creation and recovery example. Conversion is not a
+blocker for this work.
+
+Implementation finding: the [runtime index cache-miss path](../../../src/adapter/src/coord/catalog_implications.rs)
+optimizes synchronously after commit, following precommit optimization. Account
+for coordinator blocking and the postcommit failure boundary before extending
+that pattern to MVs, without making a broad cache redesign a prerequisite.
