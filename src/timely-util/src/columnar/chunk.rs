@@ -44,7 +44,7 @@ use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
 
 use columnar::bytes::indexed;
 use columnar::{Borrow, BorrowedOf, Columnar, Container as _, FromBytes, Index, Len, Push as _};
@@ -52,7 +52,9 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::chunk::Chunk;
 use mz_ore::cast::CastFrom;
-use mz_ore::pool::{ChunkHandle, ChunkHints, ExtentCodec, IDENTITY_CODEC, Pool};
+use mz_ore::pool::{
+    ChunkHandle, ChunkHints, ExtentCodec, IDENTITY_CODEC, Pool, ZSTD_LEVELS, zstd_codec,
+};
 use smallvec::SmallVec;
 use timely::Accountable;
 use timely::PartialOrder;
@@ -82,6 +84,16 @@ thread_local! {
     /// running tests on the process-global state.
     #[cfg(test)]
     static COMPRESS_MIN_DEPTH_OVERRIDE: Cell<Option<u8>> = const { Cell::new(None) };
+
+    /// A thread-scoped codec override, with the same purpose as the depth
+    /// floor override.
+    #[cfg(test)]
+    static COMPRESS_CODEC_OVERRIDE: Cell<Option<CompressCodec>> = const { Cell::new(None) };
+
+    /// A thread-scoped zstd level override, with the same purpose as the
+    /// depth floor override.
+    #[cfg(test)]
+    static COMPRESS_ZSTD_LEVEL_OVERRIDE: Cell<Option<i32>> = const { Cell::new(None) };
 
     /// Reusable staging for call-scoped reads of spilled bodies.
     static READ_SCRATCH: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
@@ -161,15 +173,143 @@ fn compress_min_depth() -> u8 {
     COMPRESS_MIN_DEPTH.load(Ordering::Relaxed)
 }
 
+/// The compressing codec choices for spilled bodies at or past the
+/// compression depth floor. See [`set_compress_codec`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressCodec {
+    /// One lz4 block per body ([`LZ4_CODEC`]): the cheapest encode.
+    Lz4,
+    /// One zstd frame per body at the level [`set_compress_zstd_level`]
+    /// chose: denser than lz4 for more encode CPU on the eviction path.
+    Zstd,
+}
+
+impl CompressCodec {
+    const fn as_u8(self) -> u8 {
+        match self {
+            CompressCodec::Lz4 => 0,
+            CompressCodec::Zstd => 1,
+        }
+    }
+
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => CompressCodec::Zstd,
+            _ => CompressCodec::Lz4,
+        }
+    }
+
+    fn extent_codec(self, zstd_level: i32) -> &'static dyn ExtentCodec {
+        match self {
+            CompressCodec::Lz4 => &LZ4_CODEC,
+            CompressCodec::Zstd => zstd_codec(zstd_level),
+        }
+    }
+}
+
+impl std::str::FromStr for CompressCodec {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "lz4" => Ok(CompressCodec::Lz4),
+            "zstd" => Ok(CompressCodec::Zstd),
+            other => Err(format!(
+                "unknown chunk codec {other:?}; expected lz4 or zstd"
+            )),
+        }
+    }
+}
+
+const DEFAULT_COMPRESS_CODEC: CompressCodec = CompressCodec::Lz4;
+
+/// The codec spilled bodies at or past the depth floor store under. See
+/// [`set_compress_codec`].
+static COMPRESS_CODEC: AtomicU8 = AtomicU8::new(DEFAULT_COMPRESS_CODEC.as_u8());
+
+/// Set the codec spilled bodies at or past the compression depth floor
+/// store under.
+///
+/// Consulted at every commit, so bodies spilled from then on use the new
+/// codec. A body keeps the codec it was inserted under for its lifetime,
+/// since the pool decodes through the codec recorded at insert, so a change
+/// never migrates or invalidates bodies already spilled. They turn over as
+/// merges rewrite them.
+pub fn set_compress_codec(codec: CompressCodec) {
+    COMPRESS_CODEC.store(codec.as_u8(), Ordering::Relaxed);
+}
+
+/// Set or unset a thread-scoped codec override, taking precedence over
+/// [`set_compress_codec`]. Tests run concurrently and must not race on the
+/// process-global codec.
+#[cfg(test)]
+pub fn set_compress_codec_override(codec: Option<CompressCodec>) {
+    COMPRESS_CODEC_OVERRIDE.with(|cell| cell.set(codec));
+}
+
+/// The compressing codec in effect for this thread's commits.
+fn compress_codec() -> CompressCodec {
+    #[cfg(test)]
+    if let Some(codec) = COMPRESS_CODEC_OVERRIDE.with(|cell| cell.get()) {
+        return codec;
+    }
+    CompressCodec::from_u8(COMPRESS_CODEC.load(Ordering::Relaxed))
+}
+
+/// Level 1 because encode runs on the eviction path, inline on the evicting
+/// worker when spill threads are off, so encode throughput matters more than
+/// the ratio higher levels buy.
+const DEFAULT_COMPRESS_ZSTD_LEVEL: i32 = 1;
+
+/// The zstd level bodies spilled under [`CompressCodec::Zstd`] compress at.
+/// See [`set_compress_zstd_level`].
+static COMPRESS_ZSTD_LEVEL: AtomicI32 = AtomicI32::new(DEFAULT_COMPRESS_ZSTD_LEVEL);
+
+/// Set the zstd level bodies spilled under [`CompressCodec::Zstd`] compress
+/// at, within [`ZSTD_LEVELS`]. An out-of-range level is rejected and leaves
+/// the level unchanged.
+///
+/// Consulted at every commit. Decode does not depend on the level, so
+/// bodies spilled at earlier levels stay readable.
+pub fn set_compress_zstd_level(level: i32) -> Result<(), String> {
+    if !ZSTD_LEVELS.contains(&level) {
+        return Err(format!(
+            "zstd level {level} outside the supported range {}..={}",
+            ZSTD_LEVELS.start(),
+            ZSTD_LEVELS.end()
+        ));
+    }
+    COMPRESS_ZSTD_LEVEL.store(level, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Set or unset a thread-scoped zstd level override, taking precedence over
+/// [`set_compress_zstd_level`]. Tests run concurrently and must not race on
+/// the process-global level.
+#[cfg(test)]
+pub fn set_compress_zstd_level_override(level: Option<i32>) {
+    COMPRESS_ZSTD_LEVEL_OVERRIDE.with(|cell| cell.set(level));
+}
+
+/// The zstd level in effect for this thread's commits.
+fn compress_zstd_level() -> i32 {
+    #[cfg(test)]
+    if let Some(level) = COMPRESS_ZSTD_LEVEL_OVERRIDE.with(|cell| cell.get()) {
+        return level;
+    }
+    COMPRESS_ZSTD_LEVEL.load(Ordering::Relaxed)
+}
+
 /// The codec a body at `depth` stores under, identity below the compression
-/// floor and lz4 at and past it, paired with whether that codec compresses.
-/// One read of the floor, so the pair cannot disagree with itself when the
-/// floor moves under a concurrent commit.
+/// floor and the configured compressing codec at and past it, paired with
+/// whether that codec compresses. One read of the floor, so the pair cannot
+/// disagree with itself when the floor moves under a concurrent commit.
 fn codec_for_depth(depth: u8) -> (&'static dyn ExtentCodec, bool) {
     if depth < compress_min_depth() {
         (&IDENTITY_CODEC, false)
     } else {
-        (&LZ4_CODEC, true)
+        let codec = compress_codec().extent_codec(compress_zstd_level());
+        (codec, true)
     }
 }
 
@@ -2007,6 +2147,53 @@ mod tests {
         assert_eq!(codec_name(0), "IdentityCodec");
         assert_eq!(codec_name(1), "Lz4Codec");
         set_compress_min_depth_override(None);
+    }
+
+    /// The codec and level flags pick what bodies at or past the floor store
+    /// under, the floor still exempts shallower generations, and bodies
+    /// round-trip through zstd at every depth.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: foreign function calls (zstd)
+    fn spill_codec_flag_selects_zstd() {
+        set_spill_override(Some(test_pool()));
+        set_compress_min_depth_override(Some(1));
+        set_compress_codec_override(Some(CompressCodec::Zstd));
+        set_compress_zstd_level_override(Some(3));
+        let (codec, compressed) = codec_for_depth(0);
+        assert_eq!(format!("{:?}", codec), "IdentityCodec");
+        assert!(!compressed);
+        let (codec, compressed) = codec_for_depth(1);
+        assert_eq!(format!("{:?}", codec), "ZstdCodec { level: 3 }");
+        assert!(compressed);
+
+        let data: Vec<Tuple> = (0..20_000u64).map(|i| ((i, 0), 0, 1i64)).collect();
+        let data = consolidate(data);
+        let column = build_column(&data);
+        for depth in [0u8, 1, 3] {
+            let chunk = TestChunk::commit(column.clone(), depth);
+            assert!(chunk.is_spilled(), "depth {depth} must spill");
+            assert_eq!(collect_column(&chunk.into_column()), data);
+        }
+        set_spill_override(None);
+        set_compress_min_depth_override(None);
+        set_compress_codec_override(None);
+        set_compress_zstd_level_override(None);
+    }
+
+    #[mz_ore::test]
+    fn compress_codec_parses() {
+        assert_eq!("lz4".parse(), Ok(CompressCodec::Lz4));
+        assert_eq!("zstd".parse(), Ok(CompressCodec::Zstd));
+        assert!("gzip".parse::<CompressCodec>().is_err());
+    }
+
+    /// Rejected levels never reach the process-global, so this test cannot
+    /// race others on it.
+    #[mz_ore::test]
+    fn compress_zstd_level_rejects_out_of_range() {
+        assert!(set_compress_zstd_level(0).is_err());
+        assert!(set_compress_zstd_level(20).is_err());
+        assert!(set_compress_zstd_level(-1).is_err());
     }
 
     /// A chunk a merge carries forward untouched ages a generation, and a

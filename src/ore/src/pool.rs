@@ -26,7 +26,7 @@
 //! chunk's state lock, so no reference into pool memory escapes the pool and
 //! a read leaves residency untouched. The backing is the swap-backed extent
 //! store of the design's Layer 1: a slot in a pool-owned anonymous-memory
-//! extent arena holding the chunk's lz4-compressed bytes.
+//! extent arena holding the chunk's compressed bytes.
 //!
 //! Memory descends a ladder of tiers, each with its own ceiling and each
 //! cheaper to vacate than the one above:
@@ -60,8 +60,9 @@
 mod extent;
 mod region;
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
@@ -130,14 +131,121 @@ impl ExtentCodec for IdentityCodec {
     }
 }
 
+/// The zstd [`ExtentCodec`]: a little-endian `u32` body-length prefix
+/// followed by one zstd frame.
+///
+/// Each thread that encodes or decodes keeps one zstd compression context
+/// and one decompression context for the life of the thread. A fresh
+/// context costs a workspace allocation and table setup, which on the
+/// eviction path would be paid once per spilled chunk, so the contexts are
+/// retained instead and the compression workspace settles at the size the
+/// level and the largest body seen require. One context per thread serves
+/// every `ZstdCodec` level, so the level is applied per call.
+#[derive(Debug, Clone, Copy)]
+pub struct ZstdCodec {
+    level: i32,
+}
+
+impl ZstdCodec {
+    /// A codec compressing at zstd `level`; `0` selects zstd's own default.
+    pub const fn new(level: i32) -> Self {
+        ZstdCodec { level }
+    }
+}
+
+/// The levels [`zstd_codec`] serves: zstd's standard levels. Levels 20 and
+/// above are zstd's ultra levels, whose windows exceed every chunk class.
+pub const ZSTD_LEVELS: RangeInclusive<i32> = 1..=19;
+
+const ZSTD_LEVEL_COUNT: usize = 19;
+
+/// One codec per level of [`ZSTD_LEVELS`], so a level chosen at runtime
+/// still reaches [`Pool::insert_with`] as a `'static` codec.
+static ZSTD_CODECS: [ZstdCodec; ZSTD_LEVEL_COUNT] = {
+    let mut table = [ZstdCodec::new(0); ZSTD_LEVEL_COUNT];
+    let mut level = *ZSTD_LEVELS.start();
+    let mut i = 0;
+    while i < ZSTD_LEVEL_COUNT {
+        table[i] = ZstdCodec::new(level);
+        level += 1;
+        i += 1;
+    }
+    assert!(
+        level - 1 == *ZSTD_LEVELS.end(),
+        "table covers exactly ZSTD_LEVELS"
+    );
+    table
+};
+
+/// The [`ZstdCodec`] for `level`, clamped into [`ZSTD_LEVELS`]. Callers that
+/// want to reject out-of-range levels check the range before calling.
+pub fn zstd_codec(level: i32) -> &'static ZstdCodec {
+    let clamped = level.clamp(*ZSTD_LEVELS.start(), *ZSTD_LEVELS.end());
+    let index = usize::try_from(clamped - *ZSTD_LEVELS.start()).expect("clamped into the table");
+    &ZSTD_CODECS[index]
+}
+
+thread_local! {
+    static ZSTD_COMPRESSOR: RefCell<Option<zstd::bulk::Compressor<'static>>> =
+        const { RefCell::new(None) };
+    static ZSTD_DECOMPRESSOR: RefCell<Option<zstd::bulk::Decompressor<'static>>> =
+        const { RefCell::new(None) };
+}
+
+impl ExtentCodec for ZstdCodec {
+    fn encode(&self, body: &[u8], out: &mut Vec<u8>) {
+        let bound = zstd::zstd_safe::compress_bound(body.len());
+        out.resize(4 + bound, 0);
+        let len = u32::try_from(body.len()).expect("chunk bodies are bounded by the size classes");
+        out[..4].copy_from_slice(&len.to_le_bytes());
+        let compressed = ZSTD_COMPRESSOR.with(|cell| {
+            let mut slot = cell.borrow_mut();
+            let compressor = slot.get_or_insert_with(|| {
+                zstd::bulk::Compressor::new(self.level).expect("zstd compression context")
+            });
+            compressor
+                .set_compression_level(self.level)
+                .expect("zstd accepts every level, clamping out-of-range ones");
+            compressor
+                .compress_to_buffer(body, &mut out[4..])
+                .expect("output sized to the compression bound")
+        });
+        out.truncate(4 + compressed);
+    }
+
+    fn decode(&self, stored: &[u8], body: &mut [u8]) {
+        let prefix: [u8; 4] = stored[..4].try_into().expect("prefix length");
+        let len = usize::try_from(u32::from_le_bytes(prefix)).expect("length fits usize");
+        assert_eq!(
+            len,
+            body.len(),
+            "destination must match the encoded body length"
+        );
+        let written = ZSTD_DECOMPRESSOR.with(|cell| {
+            let mut slot = cell.borrow_mut();
+            let decompressor = slot.get_or_insert_with(|| {
+                zstd::bulk::Decompressor::new().expect("zstd decompression context")
+            });
+            decompressor
+                .decompress_to_buffer(&stored[4..], body)
+                .expect("stored bytes hold a valid zstd frame")
+        });
+        assert_eq!(written, body.len(), "decoded length mismatch");
+    }
+}
+
 /// The largest stored form [`ExtentCodec::encode`] may produce for a
-/// `body_len`-byte body: an incompressible-input expansion matching lz4's
-/// worst case plus a four-byte length prefix. The extent store's size-class
-/// ladder is provisioned to this bound, so a codec that exceeds it can
-/// strand payloads with no class to hold them (they degrade to unpageable
-/// heap fallbacks).
+/// `body_len`-byte body: a four-byte length prefix plus the larger of lz4's
+/// and zstd's incompressible-input expansions. lz4 expands by at most
+/// `body_len / 255 + 16`. zstd's `ZSTD_COMPRESSBOUND` expands by
+/// `body_len / 256` plus block framing of up to 64 bytes that only exceeds
+/// lz4's slack below 128 KiB. The extent store's size-class ladder is
+/// provisioned to this bound, so a codec that exceeds it can strand payloads
+/// with no class to hold them (they degrade to unpageable heap fallbacks).
 pub fn max_stored_len(body_len: usize) -> usize {
-    4 + body_len + body_len / 255 + 16
+    let lz4 = body_len / 255 + 16;
+    let zstd = body_len / 256 + (128usize << 10).saturating_sub(body_len) / 2048;
+    4 + body_len + lz4.max(zstd)
 }
 
 /// Advisory placement hints for a chunk, supplied at insert and immutable
@@ -3638,6 +3746,73 @@ mod tests {
         let mut range = Vec::new();
         h.read_range_into(8..24, &mut range);
         assert_eq!(range, want[8..24], "range reads copy the range directly");
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: foreign function calls (zstd)
+    fn zstd_codec_round_trips() {
+        let pool = test_pool(usize::MAX);
+        let want = payload(SMALL, 602);
+        let h = pool.insert_with(SMALL, ChunkHints::default(), zstd_codec(1), |dst| {
+            dst.copy_from_slice(&want);
+        });
+        assert_eq!(read(&h), want);
+        pool.evict(&h);
+        assert_eq!(read(&h), want, "round-trips through the extent");
+        pool.evict(&h);
+        let mut range = Vec::new();
+        h.read_range_into(8..24, &mut range);
+        assert_eq!(range, want[8..24]);
+    }
+
+    /// The stored form is the body length followed by one frame, shrinks on
+    /// compressible input, stays within the extent-store bound, and one
+    /// thread's retained contexts serve codecs at different levels.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: foreign function calls (zstd)
+    fn zstd_codec_framing() {
+        let body: Vec<u8> = (0..100_000u32).flat_map(|i| i.to_le_bytes()).collect();
+        for codec in [zstd_codec(1), zstd_codec(19)] {
+            let mut stored = Vec::new();
+            codec.encode(&body, &mut stored);
+            let prefix: [u8; 4] = stored[..4].try_into().expect("prefix");
+            assert_eq!(u32::from_le_bytes(prefix), 400_000);
+            assert!(stored.len() < body.len(), "compressible input shrinks");
+            assert!(stored.len() <= max_stored_len(body.len()));
+            let mut round = vec![0u8; body.len()];
+            codec.decode(&stored, &mut round);
+            assert_eq!(round, body);
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: foreign function calls (zstd)
+    #[should_panic(expected = "destination must match")]
+    fn zstd_codec_decode_length_mismatch_panics() {
+        let mut stored = Vec::new();
+        zstd_codec(1).encode(&[7u8; 64], &mut stored);
+        let mut short = vec![0u8; 32];
+        zstd_codec(1).decode(&stored, &mut short);
+    }
+
+    #[mz_ore::test]
+    fn zstd_codec_table_clamps() {
+        assert_eq!(format!("{:?}", zstd_codec(-5)), "ZstdCodec { level: 1 }");
+        assert_eq!(format!("{:?}", zstd_codec(3)), "ZstdCodec { level: 3 }");
+        assert_eq!(format!("{:?}", zstd_codec(100)), "ZstdCodec { level: 19 }");
+    }
+
+    /// The extent-store bound covers zstd's documented worst case, including
+    /// the small-body range where zstd's block framing exceeds lz4's slack.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: foreign function calls (zstd)
+    fn max_stored_len_covers_zstd_bound() {
+        for body_len in (0..=(160 << 10)).chain(SIZE_CLASSES) {
+            assert!(
+                4 + zstd::zstd_safe::compress_bound(body_len) <= max_stored_len(body_len),
+                "zstd bound exceeds max_stored_len at {body_len}"
+            );
+        }
     }
 
     #[mz_ore::test]

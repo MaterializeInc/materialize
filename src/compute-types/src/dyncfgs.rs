@@ -129,8 +129,37 @@ pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
 pub const COLUMN_CHUNK_COMPRESS_MIN_DEPTH: Config<u32> = Config::new(
     "column_chunk_compress_min_depth",
     1,
-    "The youngest chunk generation whose spilled bodies are lz4-compressed in the buffer \
-     pool; younger generations store uncompressed. 0 compresses every spilled body.",
+    "The youngest chunk generation whose spilled bodies are compressed in the buffer pool \
+     (codec per `column_chunk_codec`); younger generations store uncompressed. 0 compresses \
+     every spilled body.",
+    ParameterScope::Replica,
+);
+
+/// The codec spilled chunk bodies at or past [`COLUMN_CHUNK_COMPRESS_MIN_DEPTH`]
+/// compress with. `lz4` is one lz4 block per body. `zstd` is one zstd frame
+/// per body at zstd's fastest standard level, which stores denser than lz4
+/// for more encode CPU on the eviction path (spill threads, or the evicting
+/// worker when `column_paged_batcher_spill_worker_count` is 0). A body keeps
+/// the codec it spilled under, so a change applies to bodies spilled from
+/// then on and never migrates or invalidates existing extents. Unrecognized
+/// values are logged and leave the codec unchanged.
+pub const COLUMN_CHUNK_CODEC: Config<&'static str> = Config::new(
+    "column_chunk_codec",
+    "lz4",
+    "The codec compressing spilled chunk bodies in the buffer pool: `lz4` or `zstd`.",
+    ParameterScope::Replica,
+);
+
+/// The zstd level for `column_chunk_codec = zstd`, within zstd's standard
+/// levels 1 through 19. Higher levels store denser for more encode CPU,
+/// which lands on spill threads, or on the evicting worker when
+/// `column_paged_batcher_spill_worker_count` is 0. Out-of-range values are
+/// logged and leave the level unchanged. Decode does not depend on the
+/// level, so bodies spilled at earlier levels stay readable.
+pub const COLUMN_CHUNK_ZSTD_LEVEL: Config<u32> = Config::new(
+    "column_chunk_zstd_level",
+    1,
+    "The zstd level for spilled chunk bodies when `column_chunk_codec = zstd`, 1 through 19.",
     ParameterScope::Replica,
 );
 
@@ -852,4 +881,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COLUMN_PAGED_BATCHER_EAGER_BACKING)
         .add(&COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION)
         .add(&COLUMN_CHUNK_COMPRESS_MIN_DEPTH)
+        .add(&COLUMN_CHUNK_CODEC)
+        .add(&COLUMN_CHUNK_ZSTD_LEVEL)
 }
