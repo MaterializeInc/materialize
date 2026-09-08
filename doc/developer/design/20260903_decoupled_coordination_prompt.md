@@ -15,6 +15,11 @@ the next coherent piece toward its observable outcome, briefly explain that
 choice, then implement and verify it. Historical proposals and next steps are
 context, not a cumulative task list.
 
+Prefer connecting existing pieces through the active milestone's production path
+over adding further standalone APIs. Preparatory work is appropriate when it
+unblocks that path. Let integration evidence refine intermediate interfaces
+rather than adding machinery to preserve them.
+
 Treat the design as the agreed boundaries, not a prescribed mechanism. Prefer
 the smallest coherent solution that preserves the full capability. Incremental
 progress is fine, but do not mistake an intermediate step for completion.
