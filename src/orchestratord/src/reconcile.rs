@@ -21,8 +21,8 @@
 //! the only level at which "there was nothing to do" is distinguishable from
 //! "the desired state was reached", since the reconciler interface reports both
 //! as success. A reconciler that tracks a lifecycle of its own reports it with
-//! [`publish`], which is the same event machinery pointed at transitions rather
-//! than failures.
+//! [`Publisher::publish`], which is the same event machinery pointed at
+//! transitions rather than failures.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -310,27 +310,21 @@ where
         resource: &Ctx::Resource,
         error: &Ctx::Error,
     ) {
-        let event = Event {
-            type_: EventType::Warning,
-            reason: RECONCILIATION_FAILED.into(),
-            action: entry_point.action().into(),
-            // The cause chain, not just the outermost message: an error like
-            // "invalid environment id in license key" is only actionable
-            // alongside what it was that failed to parse.
-            note: Some(truncate_note(&error.to_string_with_causes())),
-            secondary: None,
-        };
-        if let Err(e) = self
-            .recorder
-            .publish(&event, &resource.object_ref(&Default::default()))
-            .await
-        {
-            warn!(
-                error = %e,
-                controller = self.controller,
-                "failed to publish reconciliation failure event",
-            );
-        }
+        self.publisher
+            .publish(
+                resource,
+                Event {
+                    type_: EventType::Warning,
+                    reason: RECONCILIATION_FAILED.into(),
+                    action: entry_point.action().into(),
+                    // The cause chain, not just the outermost message: an error
+                    // like "invalid environment id in license key" is only
+                    // actionable alongside what it was that failed to parse.
+                    note: Some(error.to_string_with_causes()),
+                    secondary: None,
+                },
+            )
+            .await;
     }
 
     /// Records what one reconciliation pass did, and reports a failure on the
@@ -405,44 +399,6 @@ where
     // `k8s_controller`'s error type, which that crate does not export, so no
     // context outside the crate can override it. Every context, wrapped or
     // not, gets the crate's default backoff.
-}
-
-/// Publishes `event` as a Kubernetes event on `resource`, trimming its note to
-/// what the API server accepts.
-///
-/// Failing to publish is only logged. An event reports something that already
-/// happened, so failing to file it must not change what the caller goes on to
-/// do; a missing `events.k8s.io` permission costs visibility, not
-/// reconciliation.
-///
-/// NOTE: `recorder` collapses repeats of the same `(type, action, reason,
-/// regarding)` within six minutes into one event carrying a count, and a repeat
-/// keeps the note the first one had. That is what stops a reconciliation
-/// retrying on a backoff from filing an event per attempt. A caller reporting
-/// transitions rather than retries pays for it in the other direction: two
-/// transitions that share a reason inside that window report the earlier one's
-/// note. The reason and the count stay correct, so what a dashboard groups on
-/// survives; only the human-readable detail goes stale.
-pub async fn publish<K>(recorder: &Recorder, resource: &K, mut event: Event)
-where
-    K: Resource,
-    K::DynamicType: Default,
-{
-    if let Some(note) = event.note.take() {
-        event.note = Some(truncate_note(&note));
-    }
-    let reason = event.reason.clone();
-    if let Err(e) = recorder
-        .publish(&event, &resource.object_ref(&Default::default()))
-        .await
-    {
-        warn!(
-            error = %e,
-            reason = %reason,
-            kind = %K::kind(&Default::default()),
-            "failed to publish event",
-        );
-    }
 }
 
 /// Publishes Kubernetes events on the resources a controller reconciles.
