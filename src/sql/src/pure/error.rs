@@ -363,7 +363,7 @@ pub enum MySqlSourcePurificationError {
         items: Vec<UnresolvedItemName>,
     },
     #[error("EXCLUDE CONSTRAINTS refers to constraints that do not exist on table {table}")]
-    DanglingExcludeConstraints {
+    ConstraintsNotFound {
         table: String,
         constraints: Vec<String>,
     },
@@ -406,7 +406,7 @@ impl MySqlSourcePurificationError {
                 "the following columns are referenced but not added: {}",
                 itertools::join(items, ", ")
             )),
-            Self::DanglingExcludeConstraints {
+            Self::ConstraintsNotFound {
                 table: _,
                 constraints,
             } => Some(format!(
@@ -444,7 +444,7 @@ impl MySqlSourcePurificationError {
             Self::InvalidTableReference(_) => Some(
                 "Specify tables names as SCHEMA_NAME.TABLE_NAME in a FOR TABLES (..) clause".into(),
             ),
-            Self::DanglingExcludeConstraints { .. } => Some(
+            Self::ConstraintsNotFound { .. } => Some(
                 "Constraint names are matched exactly, including case, against the upstream \
                  unique index names. The primary key's index is named PRIMARY."
                     .into(),
