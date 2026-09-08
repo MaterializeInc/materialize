@@ -247,6 +247,10 @@ pub trait StorageCollections: Debug + Sync {
     ///
     /// `migrated_storage_collections` is a set of migrated storage collections to be excluded
     /// from the txn-wal sub-system.
+    ///
+    /// Committed bounds must permit both the recovered since and requested initial
+    /// since. All governed aliases of a shard being created must be present in
+    /// this batch or already registered.
     async fn create_collections_for_bootstrap(
         &self,
         storage_metadata: &StorageMetadata,
@@ -256,8 +260,10 @@ pub trait StorageCollections: Debug + Sync {
     ) -> Result<(), StorageError>;
 
     /// Updates the [`RelationDesc`] for the specified table.
+    /// A governed table requires committed bounds for both versions in `storage_metadata`.
     async fn alter_table_desc(
         &self,
+        storage_metadata: &StorageMetadata,
         existing_collection: GlobalId,
         new_collection: GlobalId,
         new_desc: RelationDesc,
@@ -266,6 +272,8 @@ pub trait StorageCollections: Debug + Sync {
 
     /// Drops the read capability for the sources and allows their resources to
     /// be reclaimed.
+    /// The caller must have committed the drop. This releases compaction permission
+    /// but retains outstanding execution read holds.
     ///
     /// TODO(jkosh44): This method does not validate the provided identifiers.
     /// Currently when the controller starts/restarts it has no durable state.
@@ -295,6 +303,14 @@ pub trait StorageCollections: Debug + Sync {
     /// Identifiers not present in `policies` retain their existing read
     /// policies.
     fn set_read_policies(&self, policies: Vec<(GlobalId, ReadPolicy)>);
+
+    /// Applies committed, monotonic compaction permissions to already-governed collections.
+    /// Validates the whole batch before applying it. Omitted IDs retain their bounds.
+    /// The caller must commit these permissions durably before calling this method.
+    fn apply_compaction_bounds(
+        &self,
+        bounds: BTreeMap<GlobalId, Antichain<Timestamp>>,
+    ) -> Result<(), StorageError>;
 
     /// Acquires and returns the earliest possible read holds for the specified
     /// collections.
@@ -814,12 +830,11 @@ impl StorageCollectionsImpl {
         self_collections: &mut BTreeMap<GlobalId, CollectionState>,
         id: GlobalId,
     ) -> Result<(), StorageError> {
-        let (deps, collection_implied_capability) = match self_collections.get(&id) {
-            Some(CollectionState {
-                storage_dependencies: deps,
-                implied_capability,
-                ..
-            }) => (deps.clone(), implied_capability),
+        let (deps, collection_since) = match self_collections.get(&id) {
+            Some(collection) => (
+                collection.storage_dependencies.clone(),
+                collection.read_capabilities.frontier().to_owned(),
+            ),
             _ => return Ok(()),
         };
 
@@ -830,21 +845,16 @@ impl StorageCollectionsImpl {
 
             mz_ore::soft_assert_or_log!(
                 PartialOrder::less_equal(
-                    &dep_collection.implied_capability,
-                    collection_implied_capability
+                    &dep_collection.read_capabilities.frontier().to_owned(),
+                    &collection_since
                 ),
                 "dependency since ({dep}@{:?}) cannot be in advance of dependent's since ({id}@{:?})",
-                dep_collection.implied_capability,
-                collection_implied_capability,
+                dep_collection.read_capabilities.frontier(),
+                collection_since,
             );
         }
 
-        self.install_read_capabilities_inner(
-            self_collections,
-            id,
-            &deps,
-            collection_implied_capability.clone(),
-        )?;
+        self.install_read_capabilities_inner(self_collections, id, &deps, collection_since)?;
 
         Ok(())
     }
@@ -1769,6 +1779,59 @@ impl StorageCollections for StorageCollectionsImpl {
             }
         }
 
+        // Every alias constrains the shared shard, including aliases whose handles
+        // have not opened yet. Validate requested initialization before any downgrade.
+        let mut shard_bounds: BTreeMap<ShardId, Antichain<Timestamp>> = BTreeMap::new();
+        for (id, bound) in &storage_metadata.compaction_bounds {
+            let shard = storage_metadata.get_collection_shard(*id)?;
+            shard_bounds
+                .entry(shard)
+                .or_default()
+                .extend(bound.iter().copied());
+        }
+        {
+            let existing = self.collections.lock().expect("lock poisoned");
+            let creating: BTreeSet<_> = collections.iter().map(|(id, _)| *id).collect();
+            let creating_shards: BTreeSet<_> = creating
+                .iter()
+                .map(|id| storage_metadata.get_collection_shard(*id))
+                .collect::<Result<_, _>>()?;
+            for id in storage_metadata.compaction_bounds.keys() {
+                if creating_shards.contains(&storage_metadata.get_collection_shard(*id)?)
+                    && !creating.contains(id)
+                    && !existing.contains_key(id)
+                {
+                    return Err(StorageError::IdentifierMissing(*id));
+                }
+            }
+            for (id, collection) in existing.iter() {
+                if let Some(bound) = &collection.compaction_bound {
+                    if !storage_metadata.compaction_bounds.contains_key(id) {
+                        return Err(StorageError::InvalidUsage(format!(
+                            "missing compaction bound for {id}"
+                        )));
+                    }
+                    shard_bounds
+                        .entry(collection.collection_metadata.data_shard)
+                        .or_default()
+                        .extend(bound.iter().copied());
+                }
+            }
+        }
+        for (id, description) in &collections {
+            let shard = storage_metadata.get_collection_shard(*id)?;
+            if let Some(bound) = shard_bounds.get(&shard) {
+                if description
+                    .since
+                    .as_ref()
+                    .is_some_and(|since| !PartialOrder::less_equal(since, bound))
+                {
+                    return Err(StorageError::ReadBeforeSince(*id));
+                }
+            }
+        }
+        let shard_bounds = &shard_bounds;
+
         // We first enrich each collection description with some additional
         // metadata...
         let enriched_with_metadata = collections
@@ -1836,6 +1899,12 @@ impl StorageCollections for StorageCollectionsImpl {
                         )
                         .await;
 
+                    if let Some(bound) = shard_bounds.get(&metadata.data_shard) {
+                        if !PartialOrder::less_equal(since_handle.since(), bound) {
+                            return Err(StorageError::ReadBeforeSince(id));
+                        }
+                    }
+
                     // Present tables as springing into existence at the register_ts
                     // by advancing the since. Otherwise, we could end up in a
                     // situation where a table with a long compaction window appears
@@ -1860,13 +1929,21 @@ impl StorageCollections for StorageCollectionsImpl {
                                 && !migrated_storage_collections.contains(&id)
                             {
                                 debug!("advancing {} to initial since of {:?}", id, register_ts);
+                                let initial_since = Antichain::from_elem(register_ts);
+                                if shard_bounds.get(&metadata.data_shard).is_some_and(|bound| {
+                                    !PartialOrder::less_equal(&initial_since, bound)
+                                }) {
+                                    return Err(StorageError::ReadBeforeSince(id));
+                                }
                                 let token = since_handle.opaque();
+                                // NOTE: A failed compare refreshes the handle's cached
+                                // token. It must not be reused as the other owner.
                                 let _ = since_handle
-                                    .compare_and_downgrade_since(
-                                        &token,
-                                        (&token, &Antichain::from_elem(register_ts)),
-                                    )
-                                    .await;
+                                    .compare_and_downgrade_since(&token, (&token, &initial_since))
+                                    .await
+                                    .unwrap_or_else(|epoch| {
+                                        mz_ore::halt!("fenced by envd @ {epoch:?}");
+                                    });
                             }
                         }
                     }
@@ -1930,7 +2007,10 @@ impl StorageCollections for StorageCollectionsImpl {
                     let dependency_collection = self_collections
                         .get(dep)
                         .ok_or(StorageError::IdentifierMissing(*dep))?;
-                    let dependency_since = dependency_collection.implied_capability.clone();
+                    let dependency_since = dependency_collection
+                        .read_capabilities
+                        .frontier()
+                        .to_owned();
 
                     // If an item has a dependency, its initial since must be
                     // advanced as far as its dependency, i.e. a dependency's
@@ -2037,6 +2117,15 @@ impl StorageCollections for StorageCollectionsImpl {
                 storage_dependencies,
                 metadata.clone(),
             );
+            if let Some(bound) = storage_metadata.compaction_bounds.get(&id) {
+                if !PartialOrder::less_equal(&collection_state.implied_capability, bound) {
+                    return Err(StorageError::ReadBeforeSince(id));
+                }
+                collection_state
+                    .read_capabilities
+                    .update_iter(bound.iter().map(|t| (*t, 1)));
+                collection_state.compaction_bound = Some(bound.clone());
+            }
 
             // Install the collection state in the appropriate spot.
             match &description.data_source {
@@ -2095,16 +2184,49 @@ impl StorageCollections for StorageCollectionsImpl {
 
     async fn alter_table_desc(
         &self,
+        storage_metadata: &StorageMetadata,
         existing_collection: GlobalId,
         new_collection: GlobalId,
         new_desc: RelationDesc,
         expected_version: RelationVersion,
     ) -> Result<(), StorageError> {
+        // Keep execution permission stable across schema evolution and handle opening.
+        // Otherwise the background task could compact past the new version's bound.
+        let _hold = self
+            .acquire_read_holds(vec![existing_collection])
+            .map_err(|_| StorageError::IdentifierMissing(existing_collection))?;
+        let new_bound = storage_metadata.compaction_bounds.get(&new_collection);
         let data_shard = {
             let self_collections = self.collections.lock().expect("lock poisoned");
             let existing = self_collections
                 .get(&existing_collection)
                 .ok_or_else(|| StorageError::IdentifierMissing(existing_collection))?;
+
+            if existing.compaction_bound.is_some()
+                && (!storage_metadata
+                    .compaction_bounds
+                    .contains_key(&existing_collection)
+                    || new_bound.is_none())
+            {
+                return Err(StorageError::InvalidUsage(format!(
+                    "missing compaction bound for {new_collection}"
+                )));
+            }
+            if let Some(bound) = new_bound {
+                if !PartialOrder::less_equal(
+                    &existing.read_capabilities.frontier().to_owned(),
+                    bound,
+                ) {
+                    return Err(StorageError::ReadBeforeSince(new_collection));
+                }
+            }
+            if storage_metadata.get_collection_shard(new_collection)?
+                != existing.collection_metadata.data_shard
+            {
+                return Err(StorageError::InvalidUsage(format!(
+                    "shard mismatch for {new_collection}"
+                )));
+            }
 
             existing.collection_metadata.data_shard
         };
@@ -2222,7 +2344,7 @@ impl StorageCollections for StorageCollectionsImpl {
                 data_shard,
                 txns_shard: Some(self.txns_read.txns_id().clone()),
             };
-            let collection_state = CollectionState::new(
+            let mut collection_state = CollectionState::new(
                 None,
                 existing.time_dependence.clone(),
                 existing.ingestion_remap_collection_id.clone(),
@@ -2231,6 +2353,12 @@ impl StorageCollections for StorageCollectionsImpl {
                 Vec::new(),
                 collection_meta,
             );
+            if let Some(bound) = new_bound {
+                collection_state
+                    .read_capabilities
+                    .update_iter(bound.iter().map(|t| (*t, 1)));
+                collection_state.compaction_bound = Some(bound.clone());
+            }
 
             // Add a record of the new collection.
             self_collections.insert(new_collection, collection_state);
@@ -2282,6 +2410,7 @@ impl StorageCollections for StorageCollectionsImpl {
         // frontier of the source to `[]` (the empty Antichain), will propagate
         // to the storage dependencies.
         let mut finalized_policies = Vec::new();
+        let mut bound_releases = BTreeMap::new();
 
         for id in identifiers {
             // Make sure it's still there, might already have been deleted.
@@ -2313,9 +2442,20 @@ impl StorageCollections for StorageCollectionsImpl {
             }
 
             finalized_policies.push((id, ReadPolicy::ValidFrom(Antichain::new())));
+            let collection = self_collections.get_mut(&id).expect("checked above");
+            if let Some(bound) = collection.compaction_bound.take() {
+                let mut changes = ChangeBatch::new();
+                changes.extend(bound.iter().map(|t| (*t, -1)));
+                bound_releases.insert(id, changes);
+            }
         }
 
         self.set_read_policies_inner(&mut self_collections, finalized_policies);
+        Self::update_read_capabilities_inner(
+            &self.cmd_tx,
+            &mut self_collections,
+            &mut bound_releases,
+        );
 
         drop(self_collections);
 
@@ -2352,6 +2492,42 @@ impl StorageCollections for StorageCollectionsImpl {
 
             trace!(?user_capabilities, "after! set_read_policies");
         }
+    }
+
+    fn apply_compaction_bounds(
+        &self,
+        bounds: BTreeMap<GlobalId, Antichain<Timestamp>>,
+    ) -> Result<(), StorageError> {
+        let mut collections = self.collections.lock().expect("lock poisoned");
+        for (id, bound) in &bounds {
+            let collection = collections
+                .get(id)
+                .ok_or(StorageError::IdentifierMissing(*id))?;
+            let old = collection.compaction_bound.as_ref().ok_or_else(|| {
+                StorageError::InvalidUsage(format!(
+                    "collection {id} has no committed compaction bound"
+                ))
+            })?;
+            if !PartialOrder::less_equal(old, bound) {
+                return Err(StorageError::InvalidUsage(format!(
+                    "compaction bound regression for {id}"
+                )));
+            }
+        }
+        let mut updates = BTreeMap::new();
+        for (id, bound) in bounds {
+            let collection = collections.get_mut(&id).expect("validated above");
+            let old = collection
+                .compaction_bound
+                .replace(bound.clone())
+                .expect("validated above");
+            let mut changes = ChangeBatch::new();
+            changes.extend(old.iter().map(|t| (*t, -1)));
+            changes.extend(bound.iter().map(|t| (*t, 1)));
+            updates.insert(id, changes);
+        }
+        Self::update_read_capabilities_inner(&self.cmd_tx, &mut collections, &mut updates);
+        Ok(())
     }
 
     fn acquire_read_holds(
@@ -2605,9 +2781,8 @@ struct CollectionState {
 
     /// Accumulation of read capabilities for the collection.
     ///
-    /// This accumulation will always contain `self.implied_capability`, but may
-    /// also contain capabilities held by others who have read dependencies on
-    /// this collection.
+    /// This accumulation contains `self.implied_capability`, any committed
+    /// compaction bound, and capabilities held by readers of this collection.
     pub read_capabilities: MutableAntichain<Timestamp>,
 
     /// The implicit capability associated with collection creation.  This
@@ -2617,6 +2792,9 @@ struct CollectionState {
 
     /// The policy to use to downgrade `self.implied_capability`.
     pub read_policy: ReadPolicy,
+
+    /// Independent permission capability, released only by an authorized drop.
+    pub compaction_bound: Option<Antichain<Timestamp>>,
 
     /// Storage identifiers on which this collection depends.
     pub storage_dependencies: Vec<GlobalId>,
@@ -2647,6 +2825,7 @@ impl CollectionState {
             ingestion_remap_collection_id,
             read_capabilities,
             implied_capability: since.clone(),
+            compaction_bound: None,
             read_policy: ReadPolicy::NoPolicy {
                 initial_since: since,
             },
@@ -3288,6 +3467,485 @@ mod tests {
     use mz_secrets::InMemorySecretsController;
 
     use super::*;
+
+    struct TestTxn(ShardId);
+
+    #[async_trait]
+    impl StorageTxn for TestTxn {
+        fn get_collection_metadata(&self) -> BTreeMap<GlobalId, ShardId> {
+            BTreeMap::new()
+        }
+        fn insert_collection_metadata(
+            &mut self,
+            _: BTreeMap<GlobalId, ShardId>,
+        ) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+        fn delete_collection_metadata(
+            &mut self,
+            _: BTreeSet<GlobalId>,
+        ) -> Vec<(GlobalId, ShardId)> {
+            unimplemented!()
+        }
+        fn get_unfinalized_shards(&self) -> BTreeSet<ShardId> {
+            BTreeSet::new()
+        }
+        fn insert_unfinalized_shards(&mut self, _: BTreeSet<ShardId>) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+        fn remove_unfinalized_shards(&mut self, _: BTreeSet<ShardId>) {
+            unimplemented!()
+        }
+        fn get_txn_wal_shard(&self) -> Option<ShardId> {
+            Some(self.0)
+        }
+        fn write_txn_wal_shard(&mut self, _: ShardId) -> Result<(), StorageError> {
+            unimplemented!()
+        }
+    }
+
+    async fn bound_test_controller() -> (StorageCollectionsImpl, PersistClient) {
+        let location = PersistLocation {
+            blob_uri: SensitiveUrl::from_str("mem://").unwrap(),
+            consensus_uri: SensitiveUrl::from_str("mem://").unwrap(),
+        };
+        let registry = MetricsRegistry::new();
+        let mut config = PersistConfig::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+        // Exercise actual since downgrades without waiting for persist's rate limit.
+        config.critical_downgrade_interval = Duration::ZERO;
+        let cache = Arc::new(PersistClientCache::new(config, &registry, |_, _| {
+            PubSubClientConnection::noop()
+        }));
+        let persist = cache.open(location.clone()).await.unwrap();
+        let controller = StorageCollectionsImpl::new(
+            location,
+            cache,
+            &registry,
+            SYSTEM_TIME.clone(),
+            Arc::new(TxnMetrics::new(&registry)),
+            NonZeroI64::new(1).unwrap(),
+            false,
+            ConnectionContext::for_tests(Arc::new(InMemorySecretsController::new())),
+            &TestTxn(ShardId::new()),
+        )
+        .await;
+        (controller, persist)
+    }
+
+    fn frontier(ts: u64) -> Antichain<Timestamp> {
+        Antichain::from_elem(ts.into())
+    }
+
+    async fn await_frontier(
+        controller: &StorageCollectionsImpl,
+        id: GlobalId,
+        expected: Antichain<Timestamp>,
+    ) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if controller
+                    .collection_frontiers(id)
+                    .unwrap()
+                    .read_capabilities
+                    == expected
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("read frontier did not converge");
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_committed_compaction_bound_caps_progress() {
+        let (controller, persist) = bound_test_controller().await;
+        let id = GlobalId::User(1);
+        let shard = ShardId::new();
+        let metadata = StorageMetadata {
+            collection_metadata: BTreeMap::from([(id, shard)]),
+            compaction_bounds: BTreeMap::from([(id, frontier(5))]),
+            ..Default::default()
+        };
+        controller
+            .create_collections_for_bootstrap(
+                &metadata,
+                None,
+                vec![(
+                    id,
+                    CollectionDescription::for_other(RelationDesc::empty(), None),
+                )],
+                &BTreeSet::new(),
+            )
+            .await
+            .unwrap();
+        let holds = controller.acquire_read_holds(vec![id]).unwrap();
+        controller.set_read_policies(vec![(id, ReadPolicy::step_back())]);
+        let mut writer = persist
+            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .unwrap();
+        let updates: Vec<((SourceData, ()), Timestamp, StorageDiff)> = Vec::new();
+        writer
+            .compare_and_append(&updates, frontier(0), frontier(20))
+            .await
+            .unwrap()
+            .unwrap();
+        drop(holds);
+        await_frontier(&controller, id, frontier(5)).await;
+        await_persist_since(&persist, shard, frontier(5)).await;
+        let holds = controller.acquire_read_holds(vec![id]).unwrap();
+        controller.set_read_policies(vec![(id, ReadPolicy::ValidFrom(frontier(30)))]);
+        controller
+            .apply_compaction_bounds(BTreeMap::from([(id, frontier(10))]))
+            .unwrap();
+        assert_eq!(
+            controller
+                .collection_frontiers(id)
+                .unwrap()
+                .read_capabilities,
+            frontier(5)
+        );
+        drop(holds);
+        await_frontier(&controller, id, frontier(10)).await;
+        await_persist_since(&persist, shard, frontier(10)).await;
+        assert_err!(controller.apply_compaction_bounds(BTreeMap::from([(id, frontier(9))])));
+        assert_err!(controller.apply_compaction_bounds(BTreeMap::from([
+            (id, frontier(15)),
+            (GlobalId::User(2), frontier(15))
+        ])));
+        assert_eq!(
+            controller
+                .collection_frontiers(id)
+                .unwrap()
+                .read_capabilities,
+            frontier(10)
+        );
+        controller
+            .apply_compaction_bounds(BTreeMap::from([(id, Antichain::new())]))
+            .unwrap();
+        await_frontier(&controller, id, frontier(30)).await;
+        await_persist_since(&persist, shard, frontier(30)).await;
+        writer.expire().await;
+    }
+
+    async fn await_persist_since(
+        persist: &PersistClient,
+        shard: ShardId,
+        expected: Antichain<Timestamp>,
+    ) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let since = persist
+                    .open_critical_since::<SourceData, (), Timestamp, StorageDiff>(
+                        shard,
+                        PersistClient::CONTROLLER_CRITICAL_SINCE,
+                        Opaque::encode(&PersistEpoch::default()),
+                        Diagnostics::for_tests(),
+                    )
+                    .await
+                    .unwrap();
+                assert!(
+                    PartialOrder::less_equal(since.since(), &expected),
+                    "persist compacted beyond permission"
+                );
+                if since.since() == &expected {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("persist since did not converge");
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_committed_compaction_bound_recovery_validation() {
+        for (description, register_ts, recovered_since) in [
+            (
+                CollectionDescription::for_other(RelationDesc::empty(), Some(frontier(6))),
+                None,
+                None,
+            ),
+            (
+                CollectionDescription::for_table(RelationDesc::empty()),
+                Some(6.into()),
+                None,
+            ),
+            (
+                CollectionDescription::for_other(RelationDesc::empty(), None),
+                None,
+                Some(frontier(6)),
+            ),
+        ] {
+            let (controller, persist) = bound_test_controller().await;
+            let id = GlobalId::User(1);
+            let shard = ShardId::new();
+            let metadata = StorageMetadata {
+                collection_metadata: BTreeMap::from([(id, shard)]),
+                compaction_bounds: BTreeMap::from([(id, frontier(5))]),
+                ..Default::default()
+            };
+            if let Some(recovered_since) = recovered_since {
+                let mut since = persist
+                    .open_critical_since::<SourceData, (), Timestamp, StorageDiff>(
+                        shard,
+                        PersistClient::CONTROLLER_CRITICAL_SINCE,
+                        Opaque::encode(&PersistEpoch::default()),
+                        Diagnostics::for_tests(),
+                    )
+                    .await
+                    .unwrap();
+                let token = since.opaque().clone();
+                since
+                    .compare_and_downgrade_since(&token, (&token, &recovered_since))
+                    .await
+                    .unwrap();
+            }
+            let result = controller
+                .create_collections_for_bootstrap(
+                    &metadata,
+                    register_ts,
+                    vec![(id, description)],
+                    &BTreeSet::new(),
+                )
+                .await;
+            assert!(matches!(result, Err(StorageError::ReadBeforeSince(found)) if found == id));
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_committed_compaction_bound_recovers_table_history() {
+        let (controller, persist) = bound_test_controller().await;
+        let id = GlobalId::User(1);
+        let alias = GlobalId::User(2);
+        let shard = ShardId::new();
+        let mut metadata = StorageMetadata {
+            collection_metadata: BTreeMap::from([(id, shard)]),
+            compaction_bounds: BTreeMap::from([(id, frontier(5))]),
+            ..Default::default()
+        };
+        let mut since = persist
+            .open_critical_since::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Opaque::encode(&PersistEpoch::default()),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .unwrap();
+        let token = since.opaque().clone();
+        since
+            .compare_and_downgrade_since(&token, (&token, &frontier(3)))
+            .await
+            .unwrap();
+        controller
+            .create_collections_for_bootstrap(
+                &metadata,
+                Some(100.into()),
+                vec![(id, CollectionDescription::for_table(RelationDesc::empty()))],
+                &BTreeSet::new(),
+            )
+            .await
+            .unwrap();
+        controller.set_read_policies(vec![(id, ReadPolicy::ValidFrom(frontier(20)))]);
+        await_frontier(&controller, id, frontier(5)).await;
+        await_persist_since(&persist, shard, frontier(5)).await;
+
+        metadata.collection_metadata.insert(alias, shard);
+        metadata.compaction_bounds.insert(alias, frontier(5));
+        let mut description = CollectionDescription::for_table(RelationDesc::empty());
+        description.primary = Some(id);
+        controller
+            .create_collections_for_bootstrap(
+                &metadata,
+                Some(100.into()),
+                vec![(alias, description)],
+                &BTreeSet::new(),
+            )
+            .await
+            .unwrap();
+        controller.set_read_policies(vec![(alias, ReadPolicy::ValidFrom(frontier(20)))]);
+        controller
+            .apply_compaction_bounds(BTreeMap::from([(id, frontier(10))]))
+            .unwrap();
+        assert_eq!(
+            controller
+                .collection_frontiers(id)
+                .unwrap()
+                .read_capabilities,
+            frontier(5)
+        );
+        controller
+            .apply_compaction_bounds(BTreeMap::from([(alias, frontier(10))]))
+            .unwrap();
+        await_frontier(&controller, id, frontier(10)).await;
+        await_persist_since(&persist, shard, frontier(10)).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_committed_compaction_bound_versions_and_drop() {
+        let (controller, persist) = bound_test_controller().await;
+        let old = GlobalId::User(1);
+        let new = GlobalId::User(2);
+        let shard = ShardId::new();
+        persist
+            .register_schema::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                &RelationDesc::empty(),
+                &UnitSchema,
+                Diagnostics::for_tests(),
+            )
+            .await
+            .unwrap()
+            .expect("initial schema");
+        let mut metadata = StorageMetadata {
+            collection_metadata: BTreeMap::from([(old, shard)]),
+            compaction_bounds: BTreeMap::from([(old, frontier(5))]),
+            ..Default::default()
+        };
+        controller
+            .create_collections_for_bootstrap(
+                &metadata,
+                Some(0.into()),
+                vec![(old, CollectionDescription::for_table(RelationDesc::empty()))],
+                &BTreeSet::new(),
+            )
+            .await
+            .unwrap();
+        metadata.collection_metadata.insert(new, shard);
+        assert_err!(
+            controller
+                .alter_table_desc(
+                    &metadata,
+                    old,
+                    new,
+                    RelationDesc::empty(),
+                    RelationVersion::root()
+                )
+                .await
+        );
+        metadata.compaction_bounds.insert(new, frontier(10));
+        controller
+            .alter_table_desc(
+                &metadata,
+                old,
+                new,
+                RelationDesc::empty(),
+                RelationVersion::root(),
+            )
+            .await
+            .unwrap();
+        controller.set_read_policies(vec![
+            (old, ReadPolicy::ValidFrom(frontier(30))),
+            (new, ReadPolicy::ValidFrom(frontier(30))),
+        ]);
+        await_frontier(&controller, new, frontier(5)).await;
+        await_persist_since(&persist, shard, frontier(5)).await;
+        controller
+            .apply_compaction_bounds(BTreeMap::from([(new, frontier(15))]))
+            .unwrap();
+        let holds = controller.acquire_read_holds(vec![old]).unwrap();
+        metadata.collection_metadata.remove(&old);
+        metadata.compaction_bounds.remove(&old);
+        metadata.compaction_bounds.insert(new, frontier(15));
+        controller.drop_collections_unvalidated(&metadata, vec![old]);
+        assert_eq!(
+            controller
+                .collection_frontiers(new)
+                .unwrap()
+                .read_capabilities,
+            frontier(5)
+        );
+        drop(holds);
+        await_frontier(&controller, new, frontier(15)).await;
+        await_persist_since(&persist, shard, frontier(15)).await;
+        let holds = controller.acquire_read_holds(vec![new]).unwrap();
+        metadata.collection_metadata.remove(&new);
+        metadata.compaction_bounds.remove(&new);
+        controller.drop_collections_unvalidated(&metadata, vec![new]);
+        assert_eq!(
+            controller
+                .collection_frontiers(new)
+                .unwrap()
+                .read_capabilities,
+            frontier(15)
+        );
+        drop(holds);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while controller.collection_frontiers(new).is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        await_persist_since(&persist, shard, Antichain::new()).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_committed_compaction_bound_bootstrap_aliases() {
+        let (controller, _) = bound_test_controller().await;
+        let old = GlobalId::User(1);
+        let primary = GlobalId::User(2);
+        let shard = ShardId::new();
+        let metadata = StorageMetadata {
+            collection_metadata: BTreeMap::from([(old, shard), (primary, shard)]),
+            compaction_bounds: BTreeMap::from([(old, frontier(5)), (primary, frontier(10))]),
+            ..Default::default()
+        };
+        let mut old_desc = CollectionDescription::for_table(RelationDesc::empty());
+        old_desc.primary = Some(primary);
+        let mut primary_desc = CollectionDescription::for_table(RelationDesc::empty());
+        primary_desc.since = Some(frontier(6));
+        let result = controller
+            .create_collections_for_bootstrap(
+                &metadata,
+                Some(0.into()),
+                vec![(old, old_desc.clone()), (primary, primary_desc.clone())],
+                &BTreeSet::new(),
+            )
+            .await;
+        assert!(matches!(result, Err(StorageError::ReadBeforeSince(id)) if id == primary));
+        primary_desc.since = Some(frontier(5));
+        let (controller, _) = bound_test_controller().await;
+        let result = controller
+            .create_collections_for_bootstrap(
+                &metadata,
+                Some(0.into()),
+                vec![(primary, primary_desc.clone())],
+                &BTreeSet::new(),
+            )
+            .await;
+        assert!(matches!(result, Err(StorageError::IdentifierMissing(id)) if id == old));
+        let (controller, persist) = bound_test_controller().await;
+        controller
+            .create_collections_for_bootstrap(
+                &metadata,
+                Some(0.into()),
+                vec![(old, old_desc), (primary, primary_desc)],
+                &BTreeSet::new(),
+            )
+            .await
+            .unwrap();
+        controller.set_read_policies(vec![
+            (old, ReadPolicy::ValidFrom(frontier(30))),
+            (primary, ReadPolicy::ValidFrom(frontier(30))),
+        ]);
+        assert_eq!(
+            controller
+                .collection_frontiers(primary)
+                .unwrap()
+                .read_capabilities,
+            frontier(5)
+        );
+        await_persist_since(&persist, shard, frontier(5)).await;
+    }
 
     #[mz_ore::test]
     fn test_partition_finalizable_shards() {

@@ -1011,6 +1011,7 @@ mod tests {
 
         async fn alter_table_desc(
             &self,
+            _storage_metadata: &StorageMetadata,
             _existing_collection: GlobalId,
             _new_collection: GlobalId,
             _new_desc: RelationDesc,
@@ -1028,6 +1029,13 @@ mod tests {
         }
 
         fn set_read_policies(&self, _policies: Vec<(GlobalId, ReadPolicy)>) {
+            unimplemented!()
+        }
+
+        fn apply_compaction_bounds(
+            &self,
+            _bounds: BTreeMap<GlobalId, Antichain<Timestamp>>,
+        ) -> Result<(), StorageError> {
             unimplemented!()
         }
 
