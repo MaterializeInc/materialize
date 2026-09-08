@@ -249,50 +249,76 @@ contains:still depended upon by metric sink "s"
 > CREATE INDEX arr_idx ON arr_t (k)
 
 # Each size family publishes one gauge series per dataflow, tagged with a
-# representative exported object's global id, or `unattributable` for a dataflow
-# that exports nothing. Values churn, so assert shape rather than magnitude.
+# representative exported object's catalog id, or `unattributable` for a dataflow
+# that exports no catalog object. Values churn, so assert shape rather than magnitude.
 > SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
-  WHERE metric_name = 'mz_metric_sink_arrangement_size_bytes'
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes'
     AND metric_type = 'gauge' AND labels -> 'id' IS NOT NULL
 true
 
 > SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
-  WHERE metric_name = 'mz_metric_sink_arrangement_records'
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_records'
     AND metric_type = 'gauge' AND labels -> 'id' IS NOT NULL
 true
 
 > SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
-  WHERE metric_name = 'mz_metric_sink_arrangement_batches'
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_batches'
     AND metric_type = 'gauge' AND labels -> 'id' IS NOT NULL
 true
 
-# The attributable path: the index above is keyed by its object's global id.
+# The attributable path, on the index's own catalog id rather than any `u%` label:
+# an index is a dataflow export, so its arrangement bytes carry its id.
+$ set-from-sql var=arr-idx-id
+SELECT id FROM mz_catalog.mz_indexes WHERE name = 'arr_idx'
+
 > SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
-  WHERE metric_name = 'mz_metric_sink_arrangement_size_bytes'
-    AND labels -> 'id' LIKE 'u%'
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes'
+    AND labels -> 'id' = '${arr-idx-id}'
 true
 
-# The sentinel path: the replica's own introspection-subscribe dataflows export no
-# catalog object, so their arrangements bucket under `unattributable` instead of
-# dropping. These run on every replica, so the bucket is always present.
+# A materialized view is only an export of its dataflow: what the dataflow *builds* is a
+# transient internal view, so an id read off the build list would label these bytes with a
+# `t<N>` that resolves to no catalog object. The reduce gives the view an arrangement to
+# measure.
+> CREATE MATERIALIZED VIEW arr_mv AS SELECT k, count(*) AS n FROM arr_t GROUP BY k
+
+$ set-from-sql var=arr-mv-id
+SELECT id FROM mz_catalog.mz_materialized_views WHERE name = 'arr_mv'
+
 > SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
-  WHERE metric_name = 'mz_metric_sink_arrangement_size_bytes'
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes'
+    AND labels -> 'id' = '${arr-mv-id}'
+true
+
+# The sentinel path: the replica's own introspection subscribes and metric sinks export
+# only transient ids, which are folded into the sentinel rather than labelled, so their
+# arrangements still count. These run on every replica, so the bucket is always present.
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes'
     AND labels -> 'id' = 'unattributable'
 true
 
-# Series count equals the sink's own operator -> dataflow -> id mapping over the raw
-# heap-size log, the global id when the dataflow exports one and the sentinel when it
-# does not. Also confirms the per-worker rows collapsed.
+# No series carries a transient id. Those are re-minted on every re-render, so labelling
+# them would grow the sink's series set without bound.
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes'
+    AND labels -> 'id' LIKE 't%'
+0
+
+# Series count equals the sink's own operator -> dataflow -> export id mapping over the
+# raw heap-size log, the export id when the dataflow exports a catalog object and the
+# sentinel when it does not. Also confirms the per-worker rows collapsed.
 > SELECT
     (SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
-       WHERE metric_name = 'mz_metric_sink_arrangement_size_bytes')
+       WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes')
     =
-    (SELECT count(DISTINCT COALESCE(gid.global_id, 'unattributable'))
+    (SELECT count(DISTINCT COALESCE(ex.export_id, 'unattributable'))
        FROM mz_introspection.mz_arrangement_heap_size_raw r
-       JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
-       LEFT JOIN (SELECT id, min(global_id) AS global_id
-               FROM mz_introspection.mz_dataflow_global_ids GROUP BY id) gid
-         ON gid.id = dod.dataflow_id)
+       LEFT JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
+       LEFT JOIN (SELECT dataflow_id, min(export_id) AS export_id
+               FROM mz_introspection.mz_compute_exports
+               WHERE export_id NOT LIKE 't%' GROUP BY dataflow_id) ex
+         ON ex.dataflow_id = dod.dataflow_id)
 true
 
 # Both curated sinks report healthy companion gauges: frontier advancing, no errors.
@@ -319,7 +345,7 @@ true
 # The errors sink's HAVING drops zero-error exports, so a healthy cluster
 # publishes no error series.
 > SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
-  WHERE metric_name = 'mz_metric_sink_dataflow_error_count'
+  WHERE metric_name = 'mz_metric_sink_curated_dataflow_error_count'
 0
 
 # A divide-by-zero materialized view errors in its dataflow, so the raw error
@@ -331,7 +357,7 @@ true
 > CREATE MATERIALIZED VIEW err_mv IN CLUSTER quickstart AS SELECT 1 / x AS v FROM err_t
 
 > SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
-  WHERE metric_name = 'mz_metric_sink_dataflow_error_count'
+  WHERE metric_name = 'mz_metric_sink_curated_dataflow_error_count'
     AND metric_type = 'gauge' AND labels -> 'id' IS NOT NULL
 true
 
@@ -339,10 +365,12 @@ true
 > DROP MATERIALIZED VIEW err_mv
 
 > SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
-  WHERE metric_name = 'mz_metric_sink_dataflow_error_count'
+  WHERE metric_name = 'mz_metric_sink_curated_dataflow_error_count'
 0
 
 > DROP INDEX arr_idx
+
+> DROP MATERIALIZED VIEW arr_mv
 
 > DROP TABLE arr_t
 
@@ -437,11 +465,11 @@ true
 > SET cluster_replica = r1
 
 > SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
-  WHERE metric_name = 'mz_metric_sink_arrangement_size_bytes' AND labels -> 'id' IS NOT NULL
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes' AND labels -> 'id' IS NOT NULL
 true
 
 > SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
-  WHERE metric_name = 'mz_metric_sink_dataflow_error_count' AND labels -> 'id' IS NOT NULL
+  WHERE metric_name = 'mz_metric_sink_curated_dataflow_error_count' AND labels -> 'id' IS NOT NULL
 true
 
 > SELECT value > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
@@ -456,24 +484,25 @@ true
 # a multi-worker config it is the assertion that the per-worker raw log collapsed.
 > SELECT
     (SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
-       WHERE metric_name = 'mz_metric_sink_arrangement_size_bytes')
+       WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes')
     =
-    (SELECT count(DISTINCT COALESCE(gid.global_id, 'unattributable'))
+    (SELECT count(DISTINCT COALESCE(ex.export_id, 'unattributable'))
        FROM mz_introspection.mz_arrangement_heap_size_raw r
-       JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
-       LEFT JOIN (SELECT id, min(global_id) AS global_id
-               FROM mz_introspection.mz_dataflow_global_ids GROUP BY id) gid
-         ON gid.id = dod.dataflow_id)
+       LEFT JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
+       LEFT JOIN (SELECT dataflow_id, min(export_id) AS export_id
+               FROM mz_introspection.mz_compute_exports
+               WHERE export_id NOT LIKE 't%' GROUP BY dataflow_id) ex
+         ON ex.dataflow_id = dod.dataflow_id)
 true
 
 > SET cluster_replica = r2
 
 > SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
-  WHERE metric_name = 'mz_metric_sink_arrangement_size_bytes' AND labels -> 'id' IS NOT NULL
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes' AND labels -> 'id' IS NOT NULL
 true
 
 > SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
-  WHERE metric_name = 'mz_metric_sink_dataflow_error_count' AND labels -> 'id' IS NOT NULL
+  WHERE metric_name = 'mz_metric_sink_curated_dataflow_error_count' AND labels -> 'id' IS NOT NULL
 true
 
 > SELECT value > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
@@ -489,11 +518,11 @@ true
 > SET cluster_replica = r1
 
 > SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
-  WHERE metric_name = 'mz_metric_sink_arrangement_size_bytes' AND labels -> 'id' IS NOT NULL
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes' AND labels -> 'id' IS NOT NULL
 true
 
 > SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
-  WHERE metric_name = 'mz_metric_sink_dataflow_error_count' AND labels -> 'id' IS NOT NULL
+  WHERE metric_name = 'mz_metric_sink_curated_dataflow_error_count' AND labels -> 'id' IS NOT NULL
 true
 
 > SELECT value > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
@@ -507,11 +536,11 @@ true
 > SET cluster_replica = r2
 
 > SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
-  WHERE metric_name = 'mz_metric_sink_arrangement_size_bytes' AND labels -> 'id' IS NOT NULL
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes' AND labels -> 'id' IS NOT NULL
 true
 
 > SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
-  WHERE metric_name = 'mz_metric_sink_dataflow_error_count' AND labels -> 'id' IS NOT NULL
+  WHERE metric_name = 'mz_metric_sink_curated_dataflow_error_count' AND labels -> 'id' IS NOT NULL
 true
 
 > SELECT value > 0 FROM mz_introspection.mz_cluster_prometheus_metrics

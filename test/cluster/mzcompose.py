@@ -326,15 +326,6 @@ def workflow_test_github_4443(c: Composition) -> None:
             user="mz_system",
         )
 
-        # Curated metric sinks install a dataflow on every replica, which would
-        # inflate the dataflow counts asserted below. Disable them before the
-        # cluster is created so its replica carries only this test's dataflows.
-        c.sql(
-            "ALTER SYSTEM SET enable_metric_sink = false;",
-            port=6877,
-            user="mz_system",
-        )
-
         # Set up a cluster with an indexed table and an unindexed one.
         c.sql("""
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
@@ -369,19 +360,34 @@ def workflow_test_github_4443(c: Composition) -> None:
             replica_command_count,
             replica_dataflow_count,
         ) = find_command_history_metrics(c)
+
+        # Curated metric sinks install one dataflow per definition on every replica,
+        # so they add to the aggregate history dataflow counts above. That metric
+        # carries no per-dataflow label to filter on, so subtract the live count of
+        # curated sink dataflows rather than hardcoding it, keeping the bounds
+        # correct as the CURATED set grows. Read the count off cluster1's own
+        # replica, the one whose history the metrics above describe.
+        with c.sql_cursor() as cursor:
+            cursor.execute(b"SET cluster = cluster1")
+            cursor.execute(
+                b"SELECT count(*) FROM mz_introspection.mz_dataflows"
+                b" WHERE name LIKE '%metric-sink-%'"
+            )
+            metric_sink_dataflows = int(cursor.fetchall()[0][0])
+
         assert controller_command_count > 0, "controller history cannot be empty"
         assert (
             controller_dataflow_count > 0
         ), "at least one dataflow expected in controller history"
         assert (
-            controller_dataflow_count < 6
+            controller_dataflow_count - metric_sink_dataflows < 6
         ), "more dataflows than expected in controller history"
         assert replica_command_count > 0, "replica history cannot be empty"
         assert (
             replica_dataflow_count > 0
         ), "at least one dataflow expected in replica history"
         assert (
-            replica_dataflow_count < 6
+            replica_dataflow_count - metric_sink_dataflows < 6
         ), "more dataflows than expected in replica history"
 
         # execute 400 fast- and slow-path peeks
@@ -427,7 +433,7 @@ def workflow_test_github_4443(c: Composition) -> None:
             controller_dataflow_count > 0
         ), f"at least one dataflow expected in controller history, got {controller_dataflow_count}"
         assert (
-            controller_dataflow_count < 6
+            controller_dataflow_count - metric_sink_dataflows < 6
         ), f"more dataflows than expected in controller history, got {controller_dataflow_count}"
         assert (
             replica_command_count < 100
@@ -436,7 +442,7 @@ def workflow_test_github_4443(c: Composition) -> None:
             replica_dataflow_count > 0
         ), f"at least one dataflow expected in replica history, got {replica_dataflow_count}"
         assert (
-            replica_dataflow_count < 6
+            replica_dataflow_count - metric_sink_dataflows < 6
         ), f"more dataflows than expected in replica history, got {replica_dataflow_count}"
 
 

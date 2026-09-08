@@ -4258,16 +4258,14 @@ generate_extracted_config!(CreateMetricSinkOption, (Prefix, String));
 /// rot as new platform collectors are added.
 const METRIC_SINK_PREFIX_MARKER: &str = "mz_metric_sink_";
 
-/// Rejects a prefix that could not start a Prometheus metric name, or that escapes the reserved
-/// `mz_metric_sink_` lane (see `METRIC_SINK_PREFIX_MARKER`).
-///
-/// The sink prepends this to every name it publishes, so `prefix + name` must stay a legal
-/// family name (`[a-zA-Z_:][a-zA-Z0-9_:]*`, the same grammar the runtime checks each row's
-/// `metric_name` against). The prefix must therefore be at least one character long.
-///
-/// Enforced for a user's `CREATE METRIC SINK` at plan time, and for a coordinator-installed curated
-/// sink at install time. Both paths depend on the guarantees this gives the row shaping: the
-/// reserved leading character is what lets a bare `metric_name` start with a digit or be empty.
+/// The prefix reserved for the curated sinks (`mz_adapter::coord::metric_sink::CURATED`);
+/// [`validate_user_metric_sink_prefix`] keeps user prefixes clear of it.
+pub const METRIC_SINK_CURATED_PREFIX_MARKER: &str = "mz_metric_sink_curated_";
+
+/// Rejects a prefix that is not a legal start of a Prometheus metric name, or that escapes the
+/// reserved `mz_metric_sink_` lane (`METRIC_SINK_PREFIX_MARKER`). The reserved leading character
+/// is what lets a row's bare `metric_name` start with a digit or be empty. User sinks use
+/// [`validate_user_metric_sink_prefix`], which adds the curated reservation.
 pub fn validate_metric_sink_prefix(prefix: &str) -> Result<(), PlanError> {
     if prefix.is_empty() {
         return Err(sql_err!("metric sink prefix must not be empty"));
@@ -4290,6 +4288,28 @@ pub fn validate_metric_sink_prefix(prefix: &str) -> Result<(), PlanError> {
             "metric sink prefix {:?} must start with {:?}",
             prefix,
             METRIC_SINK_PREFIX_MARKER
+        ));
+    }
+    Ok(())
+}
+
+/// [`validate_metric_sink_prefix`] plus the reservation that keeps user sinks clear of the curated
+/// families ([`METRIC_SINK_CURATED_PREFIX_MARKER`]).
+///
+/// The check runs both ways so it is total: a prefix that starts with the curated prefix is
+/// rejected, and so is one the curated prefix starts with (a bare `mz_metric_sink_` plus a
+/// `curated_...` row would otherwise publish a curated family, which Prometheus merges silently).
+/// It is static rather than a catalog scan like `Coordinator::ensure_metric_sink_prefix_is_free`,
+/// because curated sinks are not catalog items.
+pub fn validate_user_metric_sink_prefix(prefix: &str) -> Result<(), PlanError> {
+    validate_metric_sink_prefix(prefix)?;
+    if prefix.starts_with(METRIC_SINK_CURATED_PREFIX_MARKER)
+        || METRIC_SINK_CURATED_PREFIX_MARKER.starts_with(prefix)
+    {
+        return Err(sql_err!(
+            "metric sink prefix {:?} overlaps {:?}, which is reserved for the built-in metric sinks",
+            prefix,
+            METRIC_SINK_CURATED_PREFIX_MARKER
         ));
     }
     Ok(())
@@ -4344,7 +4364,7 @@ pub fn plan_create_metric_sink(
     let Some(prefix) = prefix else {
         sql_bail!("CREATE METRIC SINK requires a PREFIX option");
     };
-    validate_metric_sink_prefix(&prefix)?;
+    validate_user_metric_sink_prefix(&prefix)?;
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
     let full_name = scx.catalog.resolve_full_name(&name);
     let partial_name = PartialItemName::from(full_name.clone());
@@ -8597,5 +8617,30 @@ fn ensure_cluster_is_not_managed(
         })
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        METRIC_SINK_CURATED_PREFIX_MARKER, METRIC_SINK_PREFIX_MARKER,
+        validate_user_metric_sink_prefix,
+    };
+
+    #[mz_ore::test]
+    fn user_metric_sink_prefix_cannot_reach_the_curated_prefix() {
+        // Starts with the curated prefix.
+        assert!(validate_user_metric_sink_prefix(METRIC_SINK_CURATED_PREFIX_MARKER).is_err());
+        assert!(validate_user_metric_sink_prefix("mz_metric_sink_curated_x").is_err());
+        // A proper prefix of the curated prefix, which a `curated_...` row would complete.
+        assert!(validate_user_metric_sink_prefix(METRIC_SINK_PREFIX_MARKER).is_err());
+        assert!(validate_user_metric_sink_prefix("mz_metric_sink_cur").is_err());
+        // Still outside the reserved lane entirely.
+        assert!(validate_user_metric_sink_prefix("myapp_").is_err());
+        // A prefix that diverges from the curated prefix is fine, including one that merely contains
+        // the marker further along.
+        assert!(validate_user_metric_sink_prefix("mz_metric_sink_myapp_").is_ok());
+        assert!(validate_user_metric_sink_prefix("mz_metric_sink_curatex_").is_ok());
+        assert!(validate_user_metric_sink_prefix("mz_metric_sink_my_curated_").is_ok());
     }
 }
