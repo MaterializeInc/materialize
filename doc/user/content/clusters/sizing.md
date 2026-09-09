@@ -92,7 +92,7 @@ ORDER BY h.started_at DESC;
 
 As the name suggests, `peak_memory` measures peak memory usage during the hydration event.
 
-Compare `peak_memory` against the replica sizes in 
+Compare `peak_memory` against the replica sizes in
 [`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes), and use this to
 determine the ideal cluster size.
 
