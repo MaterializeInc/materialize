@@ -23,45 +23,42 @@ priorities, not additional design requirements.
 
 Milestone 1 remains active. Source/sink authorization and maintained compute
 permission are connected. What remains is removing machinery that grew beyond
-the design, recovery liveness, and performance evidence. Items 1 and 2 remove
-code and should go first.
+the design, recovery liveness, and performance evidence. Item 1 removes code and
+goes first.
 
-Items 1 and 2 are paused for the first-installation authority and infeasible
-reconstruction decisions described in the latest handoff. A hard upper bound
-does not by itself guarantee a readable installation timestamp.
-
-1. Permission as an as_of constraint: the design now settles that committed
-   permission is a hard upper constraint on installation `as_of`, applied in
-   as-of selection. Remove the read-only wait loop in index authorization and
-   the per-second re-delivery of all index bounds. Read-only bootstrap then
-   installs within permission on every cluster without waiting on the writer,
-   which also resolves the blocked-cluster prewarming question. Keep concurrent
-   drops during bootstrap correct.
-2. Index bound birth records: an index bound record at birth always says MIN and
-   carries no information. Let an index's bound appear at first publication, and
-   remove the lifecycle threading through item, system-mapping, introspection,
-   and cluster mutation paths together with the whole-catalog `index_ids` scans
-   in validation. Fold as-of authorization into ordinary publication so CREATE
-   INDEX is one durable commit and `ship_new_dataflow` no longer commits from
-   inside an implication batch. Keep monotonicity and no-regression.
-3. Test-only production surface: `freeze`/`freeze_at`, `FrozenReadonly`,
+1. Index permission as published since: the design's Index reconstruction
+   decision now settles both halves of the paused question. A fresh index has no
+   bound record until first publication, so the MIN birth records and their
+   lifecycle threading through item, system-mapping, introspection, and cluster
+   mutation paths go, together with the whole-catalog `index_ids` scans in
+   validation. Installation selects the least readable frontier, capped by
+   permission where permission is at or above readability, and otherwise replaces
+   the index at readability with the bound following through publication. Remove
+   the read-only wait loop and the per-second re-delivery of all index bounds.
+   CREATE INDEX becomes one durable commit and `ship_new_dataflow` no longer
+   commits from inside an implication batch. Keep monotonicity and no-regression
+   for published bounds, and keep concurrent drops during bootstrap correct.
+2. Consistency checker: agreed to move the durable-to-memory reconstruction
+   behind the existing diagnostic check in environmentd, where a memory snapshot
+   and its durable upper are available together. Reconstruction is an ordinary
+   read-only open synced to that upper and then discarded. Run it off the
+   coordinator thread so a check does not stall DDL, and reuse the existing
+   snapshot path rather than adding a command variant. Then remove
    `Command::CatalogDumpSnapshot`, `dump_upper`, the `mz-catalog-upper` header,
-   and `publish_interval = 0` as a pause switch exist for the testdrive
-   consistency checker and test workflows. Decide once, with Aljoscha, what the
-   checker actually needs, then remove the rest. Do not add further diagnostic
-   surface to production traits or the coordinator command enum.
-4. Publication scaling: per-tick work and transaction validation must scale with
+   `freeze`/`freeze_at`, `FrozenReadonly`, and the `publish_interval = 0` pause
+   semantics if no test still needs them.
+3. Publication scaling: per-tick work and transaction validation must scale with
    changed records, not with all collections or items. Then finish representative
    measurements using the existing workflow, including DDL latency, subscriber
    lag, and retained history, and record the numbers in the PR. Distinguish
    publication overhead from workload and observer costs. Do not make a general
    catalog redesign a prerequisite.
-5. Add a targeted test for final sink execution as-of selection using aggregate
+4. Add a targeted test for final sink execution as-of selection using aggregate
    readability rather than policy permission, including ungoverned collections.
-6. History: the 09-09 commits, including `wip: Integrate maintained recovery
+5. History: the 09-09 commits, including `wip: Integrate maintained recovery
    protection`, are not yet one coherent story. Squash them before milestone 2
    work begins.
-7. Ownership transition: prioritize a production maintained-lifecycle subscriber
+6. Ownership transition: prioritize a production maintained-lifecycle subscriber
    over more standalone APIs. The bound-only `CatalogSubscriber` is not that
    outcome and should either grow into it or take a narrower name. Address
    creator-local plans, prepare_state's reliance on locally installed collections,

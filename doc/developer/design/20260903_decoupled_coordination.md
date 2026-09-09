@@ -144,7 +144,9 @@ have equivalent history.
 Client protection is scoped to a client incarnation and the collections and
 frontiers it requires. A client's read protection remains valid across restarts
 or replacement of the components enforcing compaction. Durable client requirements
-participate in compaction accounting alongside maintained requirements.
+participate in compaction accounting alongside maintained requirements. A durable
+requirement on an index protects the index's inputs at that frontier, since
+arrangements do not survive compute restart and must be reconstructible.
 
 Clients may aggregate query and transaction needs locally under established
 protection. Ordinary query execution must not require a durable write for each
@@ -193,10 +195,14 @@ with input compaction permission.
 
 ### Index reconstruction
 
-A saved index compaction bound is not a historical reconstruction guarantee.
-Recovery selects installation frontiers from actual readability and all valid read
-requirements, within committed permission. Reconciliation that discards existing
-history requires committed permission, even when performed as part of reconstruction.
+An index's compaction bound is its published since, not a historical reconstruction
+guarantee. A fresh index has no bound until first publication. Recovery installs at
+the least readable frontier, capped by committed permission where permission is at
+or above readability. Where permission is below readability, no durable requirement
+depends on the gap, because durable protection of an index protects its inputs. The
+index is replaced at readability and its bound follows through publication.
+Installation never waits for a catalog write. Live readers of an existing trace
+remain protected by execution holds.
 
 ### Read-only prewarming
 
