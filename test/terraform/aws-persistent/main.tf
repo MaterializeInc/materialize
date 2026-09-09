@@ -56,8 +56,13 @@ module "vpc_cni" {
   oidc_provider_arn = module.eks.oidc_provider_arn
   oidc_issuer_url   = module.eks.cluster_oidc_issuer_url
 
-  enable_network_policy    = true
-  enable_policy_event_logs = true
+  # Enforcement stays off, as it effectively was before EKS module v21: the
+  # operator module's allow-environmentd-egress policy permits only 6876, but
+  # orchestratord probes the leader API on the internal HTTP port 6878 when
+  # authenticator_kind is None, so with enforcement on the environment is never
+  # promoted and balancerd is never created.
+  enable_network_policy    = false
+  enable_policy_event_logs = false
 
   kubeconfig_data = local.kubeconfig_data
 
