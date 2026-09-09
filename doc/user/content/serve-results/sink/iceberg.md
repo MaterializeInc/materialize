@@ -20,10 +20,14 @@ changes in Materialize, the corresponding Iceberg tables are automatically
 kept up to date. You can sink data from a materialized view, a source, or a
 table.
 
+## Create an Iceberg sink
+
 Follow the guide for the platform hosting your Iceberg tables:
 
 - [AWS S3 Tables](/serve-results/sink/iceberg-aws/)
 - [GCP BigLake](/serve-results/sink/iceberg-gcp/) {{< private-preview-inline />}}
+
+## Consume an Iceberg sink
 
 A sink created with `MODE APPEND` writes a changelog rather than current state,
 so consuming it means reconstructing current state from the `_mz_diff` column:

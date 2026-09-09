@@ -233,6 +233,9 @@ Each table your sink writes to should appear with `iceberg_table_type` set to
 
 {{% include-headless "/headless/iceberg-sinks/append-mode-current-state" %}}
 
+The examples assume that the sink writes a relation with columns `id` (the
+unique key), `name`, `qty`, `price`, and `updated_at`.
+
 In Snowflake, quote the column and table names as lowercase. Snowflake resolves
 unquoted identifiers as uppercase, which will not match the identifiers
 Materialize created.
@@ -240,8 +243,8 @@ Materialize created.
 {{< tabs >}}
 {{< tab "Consolidate by diff">}}
 
-Group by every column, and keep the groups whose `_mz_diff` values sum to a
-positive number:
+Group by every column except `_mz_diff` and `_mz_timestamp`, and keep the groups
+whose `_mz_diff` values sum to a positive number:
 
 ```sql
 SELECT "id", "name", "qty"
@@ -250,9 +253,10 @@ SELECT "id", "name", "qty"
 HAVING SUM("_mz_diff") > 0;
 ```
 
-Every column of the table must appear in the `GROUP BY` clause, including the
-columns you do not select. Grouping on a subset would merge rows that differ in
-the omitted columns and produce incorrect results.
+Every column of the table except `_mz_diff` and `_mz_timestamp` must appear in
+the `GROUP BY` clause, including the columns you do not select. Grouping on a
+subset merges rows that differ in the omitted columns and produces
+incorrect results.
 
 {{< /tab >}}
 

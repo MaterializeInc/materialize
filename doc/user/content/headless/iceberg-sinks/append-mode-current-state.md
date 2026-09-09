@@ -3,16 +3,17 @@ headless: true
 ---
 
 In append mode, the Iceberg table is a changelog rather than a snapshot of
-current state. Every change is written as a data row: `_mz_diff` is `+1` for an
-insertion and `-1` for a deletion, and an update appears as both rows, sharing
-one `_mz_timestamp`.
+current state, with two metadata columns added by the sink: `_mz_diff` and
+`_mz_timestamp`. Every change is written as a data row: `_mz_diff` is `+1` for
+an insertion and `-1` for a deletion, and an update appears as both rows,
+sharing one `_mz_timestamp`.
 
 A query engine reading the table can reconstruct current state in one of two
 ways:
 
 | Approach | How it works | When to use it |
 | --- | --- | --- |
-| Consolidate by diff | Group by every column, and keep the groups whose `_mz_diff` values sum to a positive number. | The sinked relation has no unique key, or you want a query that does not depend on one. |
+| Consolidate by diff | Group by every column of the Iceberg table except `_mz_diff` and `_mz_timestamp`, and keep the groups whose `_mz_diff` values sum to a positive number. | The sinked relation has no unique key, or you want a query that does not depend on one. |
 | Latest version per key | Rank the rows within each key by `_mz_timestamp` descending, breaking ties on `_mz_diff` descending, then keep the top-ranked row where `_mz_diff` is `+1`. | The sinked relation has a unique key. Avoids grouping by every column, so it does not grow harder to write as the relation gets wider. |
 
 Both approaches return the same result. Two details matter for correctness:
@@ -25,5 +26,6 @@ Both approaches return the same result. Two details matter for correctness:
   `+1` after ranking is what removes deleted keys from the result.
 
 Identifier quoting rules differ between query engines. Materialize creates
-Iceberg identifiers in lowercase, so an engine that resolves unquoted
-identifiers as uppercase requires them to be quoted.
+Iceberg identifiers in lowercase unless they were quoted when created, so
+engines that resolve unquoted identifiers as uppercase require those
+identifiers to be quoted.
