@@ -107,3 +107,29 @@ ALTER TABLE t1 DROP COLUMN f2;
 > select * from t1;
 1 "test"
 1 "test"
+
+# A key over an excluded column is dropped with the column, so the table can
+# be created and the upstream index can later be dropped without stalling it.
+$ mysql-execute name=mysql
+USE public;
+CREATE TABLE t2 (f1 INTEGER PRIMARY KEY, f2 INTEGER NOT NULL, f3 VARCHAR(64), UNIQUE KEY uq_f2 (f2), UNIQUE KEY uq_f1_f2 (f1, f2));
+INSERT INTO t2 VALUES (1, 10, 'a');
+
+> CREATE TABLE t2 FROM SOURCE da (REFERENCE public.t2) WITH (EXCLUDE COLUMNS (f2));
+
+> SELECT * FROM t2;
+1 a
+
+> CREATE DEFAULT INDEX ON t2;
+> SELECT key FROM (SHOW INDEXES ON t2);
+{f1}
+
+$ mysql-execute name=mysql
+USE public;
+ALTER TABLE t2 DROP INDEX uq_f2;
+ALTER TABLE t2 DROP INDEX uq_f1_f2;
+INSERT INTO t2 VALUES (2, 20, 'b');
+
+> SELECT * FROM t2;
+1 a
+2 b

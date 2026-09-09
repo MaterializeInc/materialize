@@ -181,11 +181,23 @@ impl MySqlTableSchema {
             })?;
         }
 
+        // A key over an excluded column cannot be re-verified against upstream
+        // once that column is gone, and planning would reject a constraint on
+        // a column the table does not have.
+        let keys = match &exclude_columns {
+            Some(excluded) => self
+                .keys
+                .into_iter()
+                .filter(|k| k.columns.iter().all(|c| !excluded.contains(&c.as_str())))
+                .collect(),
+            None => self.keys,
+        };
+
         Ok(MySqlTableDesc {
             schema_name: self.schema_name,
             name: self.name,
             columns,
-            keys: self.keys,
+            keys,
         })
     }
 }
