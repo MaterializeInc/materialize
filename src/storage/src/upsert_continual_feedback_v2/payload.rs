@@ -11,11 +11,12 @@
 //!
 //! Source commands keep rows inline until offset consolidation chooses winners.
 //! The source batcher then writes those rows to the shared payload store. Persist
-//! feedback uses exact byte interning so insertions and retractions of the same
-//! row have the same metadata identity even when they arrive in different batches.
+//! feedback stores fingerprints alongside independent row locators. Logical
+//! consolidation compares payload bytes when matching fingerprints need resolution.
 //!
 //! Handles do not own rows. Manifests carry that ownership alongside metadata.
-//! Draining probes feedback in bounded key windows and decodes only emitted rows.
+//! Draining probes feedback in key windows, resolves logical equality, and decodes
+//! surviving rows for output.
 //! See [`super::upsert_inner`] for the frontier and eligibility protocol.
 
 use std::collections::{BTreeMap, VecDeque};
@@ -35,13 +36,14 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::columnar::Column;
-use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::payload::{
     PayloadChunk, PayloadChunker, PayloadLayout, PayloadStaging,
 };
 use mz_timely_util::columnar::unload::UnloadBatch;
-use mz_timely_util::out_of_core::{Manifest, PayloadInterner, ReadLease, RowHandle, Store};
-use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto};
+use mz_timely_util::out_of_core::{
+    Manifest, PayloadComparator, PayloadRef, ReadLease, RowHandle, Store,
+};
+use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Stream, StreamVec};
@@ -56,7 +58,7 @@ use super::{
 use crate::upsert::{UpsertKey, UpsertValue};
 
 const BLOCK_BYTES: usize = 2 << 20;
-// A drain retains two decoded blocks, and feedback interning retains one.
+// A drain retains two decoded blocks.
 // Eight blocks leave room to acquire the next read without exhausting admission.
 const READ_BUDGET_BYTES: usize = 8 * BLOCK_BYTES;
 const READ_CONCURRENCY: usize = 2;
@@ -89,15 +91,44 @@ fn visit(value: columnar::Ref<'_, Value>, rows: &mut Vec<RowHandle>) {
 /// Feedback stores the payload handle alongside the key, with an additive diff.
 pub(super) struct FeedbackLayout;
 impl PayloadLayout for FeedbackLayout {
-    type Data = (UpsertKey, Value);
+    type Data = (UpsertKey, (u64, Value));
     type Diff = Diff;
+    const COMPARE_PAYLOADS: bool = true;
+
+    fn compare<'a>(
+        (ka, (ha, a)): columnar::Ref<'a, Self::Data>,
+        (kb, (hb, b)): columnar::Ref<'a, Self::Data>,
+        owners: &[&Manifest],
+        cache: &mut PayloadComparator,
+    ) -> std::cmp::Ordering {
+        ka.cmp(kb).then_with(|| ha.cmp(hb)).then_with(|| {
+            cache
+                .compare(payload_ref(a), payload_ref(b), owners)
+                .expect("feedback payloads remain owned")
+        })
+    }
+
     fn visit(
-        (_, value): columnar::Ref<'_, Self::Data>,
+        (_, (_, value)): columnar::Ref<'_, Self::Data>,
         _: columnar::Ref<'_, Diff>,
         rows: &mut Vec<RowHandle>,
     ) {
         visit(value, rows);
     }
+}
+
+fn payload_ref(value: columnar::Ref<'_, Value>) -> PayloadRef<'_> {
+    match value {
+        ValueReference::External(row) => PayloadRef::External(RowHandle::into_owned(row)),
+        ValueReference::Inline(row) => PayloadRef::Inline(row.data()),
+    }
+}
+
+fn fingerprint(row: &Row) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    row.data().hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Source commands carry their payload in the maximum-offset difference.
@@ -334,7 +365,7 @@ where
     }
 }
 
-/// Look up consolidated feedback for sorted keys without decoding their payloads.
+/// Look up logical feedback values for sorted keys, resolving equal fingerprints.
 ///
 /// The caller must probe only keys eligible at the current persist frontier.
 /// At that frontier, each key has at most one value with multiplicity one.
@@ -346,8 +377,7 @@ where
     T: Timestamp + Lattice + Columnar + Default,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
 {
-    let mut hits: BTreeMap<(UpsertKey, Value), Diff> = BTreeMap::new();
-    let mut staging = PayloadStaging::<((UpsertKey, Value), T, Diff)>::default();
+    let mut staging = PayloadStaging::<((UpsertKey, (u64, Value)), T, Diff)>::default();
     if !keys.is_empty() {
         let probes = UpsertKey::as_columns(keys);
         for batch in batches {
@@ -355,31 +385,41 @@ where
                 .extract_into_async(probes.borrow(), &mut staging)
                 .await;
         }
-        let rows = staging.updates.borrow();
-        for index in 0..rows.len() {
-            let ((key, value), _, diff) = rows.get(index);
-            *hits
-                .entry((*key, Value::into_owned(value)))
-                .or_insert(Diff::ZERO) += Diff::into_owned(diff);
-        }
     }
-    let owners = Manifest::retain(
-        hits.keys().filter_map(|(_, value)| match value {
-            Value::External(row) => Some(*row),
-            Value::Inline(_) => None,
-        }),
-        staging.owners.iter().map(|owner| &**owner),
-    )
-    .expect("probe results retain payload ownership");
-    let owners = Rc::new(owners);
+    let owners: Vec<_> = staging.owners.iter().map(|owner| &**owner).collect();
+    let mut hits = Column::default();
+    let rows = staging.updates.borrow();
+    for index in 0..rows.len() {
+        let ((key, (hash, value)), _, diff) = rows.get(index);
+        hits.push_into(&(
+            (*key, (*hash, Value::into_owned(value))),
+            T::default(),
+            Diff::into_owned(diff),
+        ));
+    }
+    // Eligible feedback is read as a collection at its completed frontier.
+    // Distinct physical copies must cancel across trace batches as well as within them.
+    let hits = FeedbackChunk::<T>::consolidate(hits, &owners);
     let mut previous_values = BTreeMap::new();
-    for ((key, value), diff) in hits {
+    let rows = hits.borrow();
+    for index in 0..rows.len() {
+        let ((key, (_, value)), _, diff) = rows.get(index);
         if diff.is_positive() {
             assert_eq!(diff, Diff::ONE, "feedback value multiplicity");
-            let previous = previous_values.insert(key, value);
+            let previous = previous_values.insert(*key, Value::into_owned(value));
             assert!(previous.is_none(), "multiple feedback values for one key");
         }
     }
+    let owners = Rc::new(
+        Manifest::retain(
+            previous_values.values().filter_map(|value| match value {
+                Value::External(row) => Some(*row),
+                Value::Inline(_) => None,
+            }),
+            owners,
+        )
+        .expect("probe results retain payload ownership"),
+    );
     (previous_values, owners)
 }
 
@@ -432,7 +472,7 @@ impl ValueDecoder {
     }
 }
 
-/// Intern feedback rows before arranging them, retaining their input capabilities.
+/// Pack sorted feedback rows into independent payload blocks.
 pub(super) fn encode_feedback<'scope, T>(
     input: Stream<'scope, T, Column<((UpsertKey, Row), T, Diff)>>,
     store: Store,
@@ -451,36 +491,45 @@ where
     let mut input = builder.new_input_for(input, Pipeline, &output);
     let button = builder.build(move |caps| async move {
         drop(caps);
-        let mut interner = PayloadInterner::new(store.clone());
-        let mut chunker: ColumnChunker<((UpsertKey, Value), T, Diff)> = Default::default();
         while let Some(event) = input.next().await {
             if let AsyncEvent::Data(cap, column) = event {
                 let view = column.borrow();
-                let rows: Vec<_> = (0..view.len())
-                    .map(|i| <((UpsertKey, Row), T, Diff)>::into_owned(view.get(i)))
+                let mut rows: Vec<_> = (0..view.len())
+                    .map(|i| {
+                        let ((key, row), time, diff) =
+                            <((UpsertKey, Row), T, Diff)>::into_owned(view.get(i));
+                        ((key, (fingerprint(&row), row)), time, diff)
+                    })
                     .collect();
-                let bytes: Vec<_> = rows
-                    .iter()
-                    .filter(|((_, row), _, _)| store.can_store(row.byte_len()))
-                    .map(|((_, row), _, _)| row.data().to_vec())
-                    .collect();
-                let (handles, owner) = interner
-                    .intern(&bytes)
-                    .await
-                    .expect("feedback payloads fit store");
-                let mut handles = handles.into_iter();
-                let mut metadata: Column<((UpsertKey, Value), T, Diff)> = Default::default();
-                for ((key, row), time, diff) in rows {
-                    let value = if !store.can_store(row.byte_len()) {
-                        Value::Inline(row)
+                // Sort while bytes are already resident, and pack in the same
+                // order to preserve locality for later exact comparisons.
+                rows.sort_by(|((ka, (ha, a)), ta, _), ((kb, (hb, b)), tb, _)| {
+                    (ka, ha, a.data(), ta).cmp(&(kb, hb, b.data(), tb))
+                });
+                rows.dedup_by(|next, previous| {
+                    if next.0 == previous.0 && next.1 == previous.1 {
+                        previous.2 += next.2;
+                        true
                     } else {
-                        Value::External(handles.next().expect("one handle per external row"))
+                        false
+                    }
+                });
+                let mut builder = store.builder();
+                let mut metadata = Column::default();
+                for ((key, (hash, row)), time, diff) in rows {
+                    if diff == Diff::ZERO {
+                        continue;
+                    }
+                    let value = if store.can_store(row.byte_len()) {
+                        Value::External(builder.push(row.data()).expect("feedback row fits block"))
+                    } else {
+                        Value::Inline(row)
                     };
-                    metadata.push_into(&((key, value), time, diff));
+                    metadata.push_into(&((key, (hash, value)), time, diff));
                 }
-                chunker.push_into(&mut metadata);
-                while let Some(column) = chunker.extract() {
-                    output.give(&cap, PayloadChunk::new(std::mem::take(column), &[&owner]));
+                let owner = builder.finish();
+                if !metadata.is_empty() {
+                    output.give(&cap, PayloadChunk::new(metadata, &[&owner]));
                 }
                 tokio::task::yield_now().await;
             }

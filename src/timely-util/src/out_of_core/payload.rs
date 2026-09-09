@@ -15,8 +15,8 @@
 //! decoded bytes and their admission reservation until the consumer releases it.
 //!
 //! The pool governs resident storage. This module separately budgets decoded
-//! copies returned by reads. Builder scratch, manifests, and the interner's
-//! equality index are not charged to that decoded-byte budget.
+//! copies returned by reads. Builder scratch, manifests, and synchronous comparison
+//! buffers are not charged to that decoded-byte budget.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -387,201 +387,137 @@ impl ReadLease {
     }
 }
 
-/// Operator-local exact payload identities, with weak ownership of stored blocks.
-///
-/// Fingerprints select candidates only. Reuse requires byte equality. Dead entries
-/// are swept incrementally, and the index itself remains resident.
-pub struct PayloadInterner {
-    store: Store,
-    entries: BTreeMap<(u64, RowHandle), std::sync::Weak<Block>>,
-    sweep_after: Option<(u64, RowHandle)>,
+/// A payload borrowed inline or addressed through an owning manifest.
+#[derive(Clone, Copy)]
+pub enum PayloadRef<'a> {
+    /// Bytes already available to the caller.
+    Inline(&'a [u8]),
+    /// Bytes resolved through the manifests supplied to the comparison.
+    External(RowHandle),
 }
 
-impl PayloadInterner {
-    /// Create an independent identity domain over a shared payload store.
-    pub fn new(store: Store) -> Self {
-        Self {
-            store,
-            entries: BTreeMap::new(),
-            sweep_after: None,
-        }
-    }
+/// Exact byte comparisons for synchronous trace maintenance.
+///
+/// Retains at most two decoded blocks. These call-scoped buffers are outside
+/// asynchronous read admission. A cache miss blocks the caller on the pool read.
+/// TODO: Drive comparisons through resumable merge work and shared read admission.
+#[derive(Default)]
+pub struct PayloadComparator {
+    left: ComparisonBlock,
+    right: ComparisonBlock,
+}
 
-    /// Store a batch, reusing the identity of any live, byte-identical payload.
-    pub async fn intern(
+impl PayloadComparator {
+    /// Compare payload contents, resolving external rows through `owners`.
+    pub fn compare(
         &mut self,
-        rows: &[Vec<u8>],
-    ) -> Result<(Vec<RowHandle>, Manifest), StoreError> {
-        use std::hash::{Hash, Hasher};
-        self.intern_hashed(rows, |row| {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            row.hash(&mut hasher);
-            hasher.finish()
-        })
-        .await
+        left: PayloadRef<'_>,
+        right: PayloadRef<'_>,
+        owners: &[&Manifest],
+    ) -> Result<std::cmp::Ordering, StoreError> {
+        if let (PayloadRef::External(a), PayloadRef::External(b)) = (left, right) {
+            if a == b {
+                return Ok(std::cmp::Ordering::Equal);
+            }
+        }
+        Ok(self
+            .left
+            .resolve(left, owners)?
+            .cmp(self.right.resolve(right, owners)?))
     }
+}
 
-    fn sweep_dead_entries(&mut self, budget: usize) {
-        use std::ops::Bound::{Excluded, Unbounded};
-        let keys: Vec<_> = self
-            .entries
-            .range((self.sweep_after.map_or(Unbounded, Excluded), Unbounded))
-            .take(budget)
-            .map(|(key, _)| *key)
-            .collect();
-        self.sweep_after = if keys.last() == self.entries.last_key_value().map(|(key, _)| key) {
-            None
-        } else {
-            keys.last().copied()
+#[derive(Default)]
+struct ComparisonBlock {
+    block: Option<u64>,
+    words: Vec<u64>,
+}
+
+impl ComparisonBlock {
+    fn resolve<'a>(
+        &'a mut self,
+        value: PayloadRef<'a>,
+        owners: &[&Manifest],
+    ) -> Result<&'a [u8], StoreError> {
+        let row = match value {
+            PayloadRef::Inline(bytes) => return Ok(bytes),
+            PayloadRef::External(row) => row,
         };
-        for key in keys {
-            if self.entries[&key].strong_count() == 0 {
-                self.entries.remove(&key);
-            }
+        if self.block != Some(row.block) {
+            let owner = owners
+                .iter()
+                .find_map(|owner| owner.blocks.get(&row.block))
+                .ok_or(StoreError::UnownedRow)?;
+            owner.handle.read_into(&mut self.words);
+            self.block = Some(row.block);
         }
-    }
-
-    async fn intern_hashed(
-        &mut self,
-        rows: &[Vec<u8>],
-        hash: impl Fn(&[u8]) -> u64,
-    ) -> Result<(Vec<RowHandle>, Manifest), StoreError> {
-        // Sweep work grows with arrivals so wide batches cannot outrun reclamation.
-        self.sweep_dead_entries(rows.len().saturating_mul(4).max(1024));
-        let mut builder = self.store.builder();
-        let mut result = Vec::with_capacity(rows.len());
-        let mut owners = Manifest::default();
-        let mut fresh: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
-        let mut cached: Option<ReadLease> = None;
-        for (index, bytes) in rows.iter().enumerate() {
-            let fingerprint = hash(bytes);
-            if let Some(prior) = fresh
-                .get(&fingerprint)
-                .and_then(|indices| indices.iter().find(|i| rows[**i] == *bytes))
-            {
-                result.push(result[*prior]);
-                continue;
-            }
-            let mut found = None;
-            let lower = (
-                fingerprint,
-                RowHandle {
-                    block: 0,
-                    offset: 0,
-                },
-            );
-            let upper = (
-                fingerprint,
-                RowHandle {
-                    block: u64::MAX,
-                    offset: u32::MAX,
-                },
-            );
-            for ((_, row), owner) in self.entries.range(lower..=upper) {
-                let Some(owner) = owner.upgrade() else {
-                    continue;
-                };
-                if cached.as_ref().is_none_or(|lease| lease.get(*row).is_err()) {
-                    // Release the previous reservation before awaiting another block.
-                    drop(cached.take());
-                    let manifest = Manifest {
-                        blocks: BTreeMap::from([(row.block, Arc::clone(&owner))]),
-                    };
-                    cached = Some(self.store.prepare_read([(&manifest, *row)])?.read().await);
-                }
-                if cached.as_ref().expect("loaded candidate").get(*row)? == bytes {
-                    owners.blocks.insert(row.block, owner);
-                    found = Some(*row);
-                    break;
-                }
-            }
-            if let Some(row) = found {
-                result.push(row);
-            } else {
-                result.push(builder.push(bytes)?);
-                fresh.entry(fingerprint).or_default().push(index);
-            }
-        }
-        let fresh_owners = builder.finish();
-        for (hash, indices) in fresh {
-            for index in indices {
-                let row = result[index];
-                let owner = fresh_owners
-                    .blocks
-                    .get(&row.block)
-                    .expect("published payload");
-                self.entries.insert((hash, row), Arc::downgrade(owner));
-            }
-        }
-        owners.blocks.extend(fresh_owners.blocks);
-        Ok((result, owners))
+        let offset = usize::cast_from(row.offset);
+        let len = usize::try_from(*self.words.get(offset).ok_or(StoreError::UnownedRow)?)
+            .map_err(|_| StoreError::UnownedRow)?;
+        bytemuck::cast_slice::<u64, u8>(&self.words[offset + 1..])
+            .get(..len)
+            .ok_or(StoreError::UnownedRow)
     }
 }
 
 #[cfg(test)]
-mod interner_tests {
+mod comparison_tests {
     use super::*;
 
-    #[mz_ore::test(tokio::test)]
-    async fn exact_identity_handles_collisions_and_weak_ownership() {
-        let pool = mz_ore::pool::Pool::new().unwrap();
+    #[mz_ore::test]
+    fn comparison_cache_stays_bounded_across_distinct_blocks() {
+        let pool = Pool::new().unwrap();
         pool.set_budget(0);
-        pool.set_rss_target(1 << 20);
         let store = Store::new(pool.clone(), 128, 256, 1, &mz_ore::pool::IDENTITY_CODEC).unwrap();
-        let mut interner = PayloadInterner::new(store.clone());
-        let bytes = vec![b"first".to_vec(), b"second".to_vec(), b"first".to_vec()];
-        let (ids, owner) = interner.intern_hashed(&bytes, |_| 0).await.unwrap();
-        assert_eq!(ids[0], ids[2]);
-        assert_ne!(ids[0], ids[1]);
-        let (again, next_owner) = interner
-            .intern_hashed(&[bytes[1].clone(), bytes[0].clone()], |_| 0)
-            .await
-            .unwrap();
-        assert_eq!(again, vec![ids[1], ids[0]]);
+        let mut builder = store.builder();
+        let rows: Vec<_> = (0..200u8)
+            .map(|i| builder.push(&[i; 96]).unwrap())
+            .collect();
+        let owner = builder.finish();
+        let mut cache = PayloadComparator::default();
+        for pair in rows.windows(2) {
+            assert_eq!(
+                cache
+                    .compare(
+                        PayloadRef::External(pair[0]),
+                        PayloadRef::External(pair[1]),
+                        &[&owner]
+                    )
+                    .unwrap(),
+                std::cmp::Ordering::Less
+            );
+            assert!(cache.left.words.capacity() <= 16);
+            assert!(cache.right.words.capacity() <= 16);
+        }
+        let mut builder = store.builder();
+        let copy = builder.push(&[0; 96]).unwrap();
+        let copy_owner = builder.finish();
+        assert_eq!(
+            cache
+                .compare(
+                    PayloadRef::External(rows[0]),
+                    PayloadRef::External(copy),
+                    &[&owner, &copy_owner]
+                )
+                .unwrap(),
+            std::cmp::Ordering::Equal
+        );
+        assert_eq!(
+            cache
+                .compare(
+                    PayloadRef::Inline(&[0; 96]),
+                    PayloadRef::External(copy),
+                    &[&copy_owner]
+                )
+                .unwrap(),
+            std::cmp::Ordering::Equal
+        );
         drop(owner);
-        let lease = store
-            .prepare_read([(&next_owner, again[0]), (&next_owner, again[1])])
-            .unwrap()
-            .read()
-            .await;
-        assert_eq!(lease.get(again[0]).unwrap(), b"second");
-        assert_eq!(lease.get(again[1]).unwrap(), b"first");
-        drop(lease);
-        drop(next_owner);
+        drop(copy_owner);
         assert_eq!(
             pool.stats().live_chunks,
             0,
-            "the equality index must not own blocks"
+            "comparison cache must not own payload blocks"
         );
-        let (replacement, owner) = interner.intern_hashed(&bytes, |_| 0).await.unwrap();
-        assert_ne!(replacement[0], ids[0]);
-        assert_eq!(replacement[0], replacement[2]);
-        drop(owner);
-        assert_eq!(store.stats().charged_bytes, 0);
-    }
-    #[mz_ore::test(tokio::test)]
-    async fn equality_index_reclaims_dead_entries_during_large_batches() {
-        let pool = mz_ore::pool::Pool::new().unwrap();
-        let store = Store::new(pool.clone(), 128, 256, 1, &mz_ore::pool::IDENTITY_CODEC).unwrap();
-        let mut interner = PayloadInterner::new(store);
-        for epoch in 0..12u64 {
-            let rows: Vec<_> = (0..2048)
-                .map(|i| (epoch * 2048 + i).to_le_bytes().to_vec())
-                .collect();
-            let (_, owner) = interner
-                .intern_hashed(&rows, |row| u64::from_le_bytes(row.try_into().unwrap()))
-                .await
-                .unwrap();
-            assert!(
-                interner.entries.len() <= 4096,
-                "dead identities must not accumulate with each batch"
-            );
-            drop(owner);
-        }
-        for _ in 0..4 {
-            interner.intern(&[]).await.unwrap();
-        }
-        assert!(interner.entries.is_empty());
-        assert_eq!(pool.stats().live_chunks, 0);
     }
 }

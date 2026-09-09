@@ -52,6 +52,7 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 allocation-counter = { workspace = true, optional = true }
 
 [dev-dependencies]
+mz-ore = { path = "../ore", default-features = false, features = ["panic"] }
 criterion.workspace = true
 itertools.workspace = true
 proptest.workspace = true

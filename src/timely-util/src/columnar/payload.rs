@@ -10,9 +10,9 @@
 //! Columnar metadata chunks with independently owned pool-backed payloads.
 //!
 //! [`PayloadLayout`] locates handles inside operator-defined data and differences.
-//! [`PayloadChunk`] delegates ordering, consolidation, and spilling to
-//! [`ColumnChunk`], then retains the blocks referenced by the resulting metadata.
-//! Rewrites can read metadata but never need to decode the external payloads.
+//! Layouts can resolve payloads to define logical ordering and consolidation.
+//! Metadata-only layouts use the native [`ColumnChunk`] merge. Both paths retain
+//! the blocks referenced by surviving updates and spill metadata through the pool.
 //!
 //! [`PayloadStaging`] carries ownership alongside copied probe results so callers
 //! can release a trace batch before reading its rows. Locators are physical
@@ -31,7 +31,9 @@ use timely::progress::frontier::{Antichain, AntichainRef};
 
 use crate::columnar::Column;
 use crate::columnar::chunk::ColumnChunk;
-use crate::out_of_core::{Manifest, RowHandle};
+use crate::out_of_core::{Manifest, PayloadComparator, RowHandle};
+
+mod logical;
 
 /// Identifies every external payload referenced by a metadata update.
 pub trait PayloadLayout: 'static {
@@ -39,6 +41,26 @@ pub trait PayloadLayout: 'static {
     type Data: Columnar;
     /// Columnar difference used for consolidation.
     type Diff: Columnar;
+    /// Enable the custom comparison during trace maintenance. When false,
+    /// the native columnar merge and advancement paths apply.
+    const COMPARE_PAYLOADS: bool = false;
+
+    /// Compare logical data, independently of its physical payload locations.
+    ///
+    /// Must define a total order with equality matching consolidation semantics.
+    /// The order must keep probe keys ascending. All chunk producers must use it.
+    fn compare<'a>(
+        left: columnar::Ref<'a, Self::Data>,
+        right: columnar::Ref<'a, Self::Data>,
+        _owners: &[&Manifest],
+        _cache: &mut PayloadComparator,
+    ) -> std::cmp::Ordering
+    where
+        for<'b> columnar::Ref<'b, Self::Data>: Ord,
+    {
+        left.cmp(&right)
+    }
+
     /// Append every external locator referenced by this update, including those
     /// carried in the difference. Duplicates are allowed. Omitting a locator can
     /// retire its block while the update still refers to it.
@@ -96,7 +118,7 @@ where
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     P::Diff: Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, P::Diff>>,
 {
-    /// Attach ownership to sorted, consolidated metadata.
+    /// Attach ownership to metadata sorted and consolidated by [`PayloadLayout::compare`].
     ///
     /// Panics if `owners` does not cover every locator reported by the layout.
     pub fn new(metadata: Column<(P::Data, T, P::Diff)>, owners: &[&Manifest]) -> Self {
@@ -159,6 +181,10 @@ where
     }
 
     fn merge(left: &mut VecDeque<Self>, right: &mut VecDeque<Self>, output: &mut VecDeque<Self>) {
+        if P::COMPARE_PAYLOADS {
+            Self::merge_logical(left, right, output);
+            return;
+        }
         let a = left.pop_front().expect("nonempty merge input");
         let b = right.pop_front().expect("nonempty merge input");
         let owners = vec![a.manifest, b.manifest];
@@ -204,6 +230,10 @@ where
         done: bool,
         output: &mut VecDeque<Self>,
     ) {
+        if P::COMPARE_PAYLOADS {
+            Self::advance_logical(input, frontier, done, output);
+            return;
+        }
         let mut owners = Vec::new();
         let mut columns = Self::detach_metadata(input, &mut owners);
         let mut out = VecDeque::new();
@@ -335,7 +365,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::out_of_core::{PayloadInterner, Store};
+    use crate::out_of_core::Store;
     use timely::container::PushInto;
 
     struct Layout;
@@ -352,8 +382,12 @@ mod tests {
         let pool = mz_ore::pool::Pool::new().unwrap();
         pool.set_budget(0);
         let store = Store::new(pool.clone(), 128, 256, 1, &mz_ore::pool::IDENTITY_CODEC).unwrap();
-        let mut interner = PayloadInterner::new(store.clone());
-        let (ids, owner) = interner.intern(&[vec![1; 96], vec![2; 96]]).await.unwrap();
+        let mut builder = store.builder();
+        let ids = [
+            builder.push(&[1; 96]).unwrap(),
+            builder.push(&[2; 96]).unwrap(),
+        ];
+        let owner = builder.finish();
         let make = |updates: &[((u64, RowHandle), u64, i64)]| {
             let mut column = Column::default();
             for update in updates {

@@ -380,7 +380,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
 
     /// Append byte-bounded pieces, preserving order and generational depth.
     /// A single update may exceed the bound because it cannot be split.
-    fn push_bounded(column: Column<(D, T, R)>, depth: u8, out: &mut VecDeque<Self>) {
+    pub(crate) fn push_bounded(column: Column<(D, T, R)>, depth: u8, out: &mut VecDeque<Self>) {
         let len = column.borrow().len();
         if len <= 1 || column.length_in_bytes() <= COMMIT_BYTES {
             if len > 0 {
@@ -441,7 +441,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
     }
 
     /// The generational depth, from resident state only.
-    fn depth(&self) -> u8 {
+    pub(crate) fn depth(&self) -> u8 {
         match self {
             ColumnChunk::Resident(_, depth) | ColumnChunk::Spilled(_, depth) => *depth,
         }
@@ -532,7 +532,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
     /// consumed. A shared body is skipped because re-spilling this reference
     /// cannot change what the other holder stores, and the compaction merger
     /// that shares bodies rewrites its clones immediately.
-    fn survive_merge(self) -> Self
+    pub(crate) fn survive_merge(self) -> Self
     where
         T: Timestamp,
     {

@@ -26,8 +26,8 @@ mod payload;
 pub use batch::{Batch, Record};
 pub use operators::{JoinCursor, JoinMatch, JoinStep, LatestCursor, SelectionStep};
 pub use payload::{
-    Manifest, PayloadBuilder, PayloadInterner, ReadLease, ReadRequest, RowHandle, Store,
-    StoreError, StoreStats,
+    Manifest, PayloadBuilder, PayloadComparator, PayloadRef, ReadLease, ReadRequest, RowHandle,
+    Store, StoreError, StoreStats,
 };
 
 #[cfg(test)]
