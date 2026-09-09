@@ -99,14 +99,15 @@ use mz_adapter_types::dyncfgs::{
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{
-    BUILTINS, BUILTINS_STATIC, MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY, MZ_STORAGE_USAGE_BY_SHARD,
+    BUILTINS, BUILTINS_STATIC, MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY, MZ_OBJECT_HYDRATION_HISTORY,
+    MZ_REPLICA_HYDRATION_HISTORY, MZ_STORAGE_USAGE_BY_SHARD,
 };
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
 use mz_catalog::durable::OpenableDurableCatalogState;
-use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions};
+use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions, latest_item_version};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, ClusterVariantManaged, Connection,
-    DataSourceDesc, ReconfigurationTarget, Table, TableDataSource,
+    CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, Connection, DataSourceDesc,
+    ReconfigurationTarget, Table, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
@@ -117,7 +118,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::LirRelationExpr;
 use mz_controller::clusters::{
-    ClusterConfig, ClusterEvent, ClusterStatus, ProcessId, ReplicaLocation,
+    ClusterConfig, ClusterEvent, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaLocation,
 };
 use mz_controller::{ControllerConfig, Readiness};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
@@ -130,7 +131,7 @@ use mz_ore::channel::trigger::Trigger;
 use mz_ore::future::TimeoutError;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_ore::task::{JoinHandle, spawn};
+use mz_ore::task::{AbortOnDropHandle, JoinHandle, spawn};
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::url::SensitiveUrl;
@@ -145,16 +146,18 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, SqlRelationType, Timestamp};
+use mz_repr::{
+    CatalogItemId, Diff, GlobalId, RelationDesc, RelationVersion, SqlRelationType, Timestamp,
+};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{CatalogCluster, EnvironmentId};
-use mz_sql::names::{QualifiedItemName, ResolvedIds, SchemaSpecifier};
+use mz_sql::names::{QualifiedItemName, ResolvedIds};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{
     self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, HirRelationExpr,
-    NetworkPolicyRule, OnTimeoutAction, Params, QueryWhen,
+    NetworkPolicyRule, Params, QueryWhen,
 };
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{MAX_CREDIT_CONSUMPTION_RATE, SystemVars, Var};
@@ -189,8 +192,9 @@ use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{
-    ClusterEvalContext, ReplicaEvalContext, ScopedParameters, ScopedParametersScope,
-    SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig,
+    ClusterEvalContext, ClusterScopeContext, ReplicaEvalContext, ReplicaScopeContext,
+    ScopedParameters, ScopedParametersScope, SynchronizedParameters, SystemParameterFrontend,
+    SystemParameterSyncConfig,
 };
 use crate::coord::appends::{
     BuiltinTableAppendCompletion, BuiltinTableAppendNotify, DeferredOp, GroupCommitPermit,
@@ -199,6 +203,7 @@ use crate::coord::appends::{
 use crate::coord::caught_up::CaughtUpCheckContext;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
+use crate::coord::metric_sink::{CuratedMetricSink, InstalledMetricSink, PlannedMetricSink};
 use crate::coord::peek::PendingPeek;
 use crate::coord::statement_logging::StatementLogging;
 use crate::coord::timeline::{TimelineContext, TimelineState};
@@ -237,10 +242,12 @@ mod caught_up;
 mod command_handler;
 mod ddl;
 pub(crate) mod group_sync;
+mod hydration_history;
 mod indexes;
 mod info_metrics;
 mod introspection;
 mod message_handler;
+mod metric_sink;
 mod privatelink_status;
 mod sql;
 mod validity;
@@ -398,6 +405,8 @@ pub enum Message {
     ArrangementSizesSnapshot,
     ArrangementSizesWrite(Vec<ArrangementSizeRecord>),
     ArrangementSizesPrune(Vec<BuiltinTableUpdate>),
+    HydrationHistorySchedule,
+    HydrationHistoryRun,
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
@@ -444,6 +453,10 @@ pub enum Message {
     IntrospectionSubscribeStageReady {
         span: Span,
         stage: IntrospectionSubscribeStage,
+    },
+    MetricSinkStageReady {
+        span: Span,
+        stage: MetricSinkStage,
     },
     SecretStageReady {
         ctx: ExecuteContext,
@@ -553,6 +566,8 @@ impl Message {
             Message::ArrangementSizesSnapshot => "arrangement_sizes_snapshot",
             Message::ArrangementSizesWrite(_) => "arrangement_sizes_write",
             Message::ArrangementSizesPrune(_) => "arrangement_sizes_prune",
+            Message::HydrationHistorySchedule => "hydration_history_schedule",
+            Message::HydrationHistoryRun => "hydration_history_run",
             Message::RetireExecute { .. } => "retire_execute",
             Message::ExecuteSingleStatementTransaction { .. } => {
                 "execute_single_statement_transaction"
@@ -569,6 +584,7 @@ impl Message {
             Message::IntrospectionSubscribeStageReady { .. } => {
                 "introspection_subscribe_stage_ready"
             }
+            Message::MetricSinkStageReady { .. } => "metric_sink_stage_ready",
             Message::SecretStageReady { .. } => "secret_stage_ready",
             Message::ClusterStageReady { .. } => "cluster_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
@@ -923,8 +939,6 @@ pub struct ExplainTimestampFinish {
 #[derive(Debug)]
 pub enum ClusterStage {
     Alter(AlterCluster),
-    WaitForHydrated(AlterClusterWaitForHydrated),
-    Finalize(AlterClusterFinalize),
     /// The foreground wait-shim over a controller-driven background
     /// reconfiguration: poll the durable `reconfiguration` record until it
     /// clears, then report success or timeout depending on whether the realized
@@ -936,24 +950,6 @@ pub enum ClusterStage {
 pub struct AlterCluster {
     validity: PlanValidity,
     plan: plan::AlterClusterPlan,
-}
-
-#[derive(Debug)]
-pub struct AlterClusterWaitForHydrated {
-    validity: PlanValidity,
-    plan: plan::AlterClusterPlan,
-    new_config: ClusterVariantManaged,
-    workload_class: Option<String>,
-    timeout_time: Instant,
-    on_timeout: OnTimeoutAction,
-}
-
-#[derive(Debug)]
-pub struct AlterClusterFinalize {
-    validity: PlanValidity,
-    plan: plan::AlterClusterPlan,
-    new_config: ClusterVariantManaged,
-    workload_class: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1176,6 +1172,36 @@ pub struct IntrospectionSubscribeFinish {
 }
 
 #[derive(Debug)]
+pub enum MetricSinkStage {
+    Optimize(MetricSinkOptimize),
+    Finish(MetricSinkFinish),
+}
+
+#[derive(Debug)]
+pub struct MetricSinkOptimize {
+    validity: PlanValidity,
+    definition: &'static CuratedMetricSink,
+    /// The transient id of the sink's compute export. Recorded in
+    /// [`Coordinator::metric_sinks`] once the finish stage ships the dataflow.
+    sink_id: GlobalId,
+    /// The planned `source_sql`, and the shape it produces.
+    expr: HirRelationExpr,
+    desc: RelationDesc,
+    cluster_id: ComputeInstanceId,
+    replica_id: ReplicaId,
+}
+
+#[derive(Debug)]
+pub struct MetricSinkFinish {
+    validity: PlanValidity,
+    definition: &'static CuratedMetricSink,
+    sink_id: GlobalId,
+    global_lir_plan: optimize::metric_sink::GlobalLirPlan,
+    cluster_id: ComputeInstanceId,
+    replica_id: ReplicaId,
+}
+
+#[derive(Debug)]
 pub enum SecretStage {
     CreateEnsure(CreateSecretEnsure),
     CreateFinish(CreateSecretFinish),
@@ -1359,10 +1385,6 @@ pub struct ConnMeta {
     /// Lock for the Coordinator's deferred statements that is dropped on transaction clear.
     #[serde(skip)]
     deferred_lock: Option<OwnedMutexGuard<()>>,
-
-    /// Cluster reconfigurations that will need to be
-    /// cleaned up when the current transaction is cleared
-    pending_cluster_alters: BTreeSet<ClusterId>,
 
     /// Channel on which to send notices to a session.
     #[serde(skip)]
@@ -2107,6 +2129,18 @@ pub struct Coordinator {
     connection_cancel_watches: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
     /// Active introspection subscribes.
     introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
+    /// The last replica visited by the sequential hydration-history sweep.
+    hydration_history_replica_cursor: Option<ReplicaId>,
+    /// Hydration-history sweep owned by the coordinator while one is in flight.
+    hydration_history_sweep: Option<AbortOnDropHandle<()>>,
+    /// The curated metric sinks installed on each replica.
+    ///
+    /// Keyed replica-first so a replica's installs form one contiguous range: teardown on replica
+    /// drop is the only lookup that is not by exact key.
+    metric_sinks: BTreeMap<(ReplicaId, &'static str), InstalledMetricSink>,
+    /// Curated metric-sink plans, cached per definition so each is planned once rather than once
+    /// per replica. See [`Coordinator::plan_metric_sink`].
+    metric_sink_plans: BTreeMap<&'static str, PlannedMetricSink>,
 
     /// Locks that grant access to a specific object, populated lazily as objects are written to.
     write_locks: BTreeMap<CatalogItemId, Arc<tokio::sync::Mutex<()>>>,
@@ -2294,30 +2328,87 @@ impl Coordinator {
         }
     }
 
-    /// Evaluates the scoped overrides for freshly-created objects from explicit
-    /// eval contexts and returns an [`Op::UpdateScopedSystemParameters`] to fold
-    /// into the same transaction that creates them.
+    /// Evaluates scoped overrides for objects created by `ops` and returns an
+    /// [`Op::UpdateScopedSystemParameters`] to fold into the same transaction.
     ///
-    /// The objects are not yet in the catalog, so the contexts are built from
-    /// plan data and pre-allocated ids. Folding the op into the create
-    /// transaction makes its committed diff drive the replica-scoped controller
-    /// push, as a catalog implication, before `create_replica`. A new replica's
-    /// first configuration then carries its overrides rather than the env-wide
-    /// values. Render-frozen flags (e.g. the column-paged batcher, chosen at
-    /// arrangement-build time) make a later push too late, which is why this
-    /// happens in the create transaction rather than the next sync tick.
+    /// The objects are not yet in the catalog, so this derives their contexts
+    /// from concrete create ops and pre-allocated ids. Centralizing the fold
+    /// here makes create-time configuration an invariant of coordinator-applied
+    /// catalog ops, independent of which component produced them. The committed
+    /// diff drives the replica-scoped controller push before `create_replica`.
+    /// Render-frozen flags make a later push too late.
     ///
-    /// Returns `None` when the shared frontend is not yet installed (e.g. before
-    /// LaunchDarkly connects), or when no override applies. The new objects then
-    /// resolve to the environment-wide value, and the periodic sync loop remains
-    /// the authoritative full-state reconciler.
+    /// Returns `None` when no scoped object is created or the shared frontend is
+    /// not yet installed. An installed frontend produces an op even when no
+    /// override applies, so a final DDL-transaction evaluation can clear a value
+    /// staged by an earlier statement. The periodic sync loop remains the
+    /// authoritative full-state reconciler.
     ///
     /// [`Op::UpdateScopedSystemParameters`]: crate::catalog::Op::UpdateScopedSystemParameters
-    fn scoped_overrides_create_op(
-        &self,
-        clusters: &[ClusterEvalContext],
-        replicas: &[ReplicaEvalContext],
-    ) -> Option<crate::catalog::Op> {
+    fn scoped_overrides_create_op(&self, ops: &[crate::catalog::Op]) -> Option<crate::catalog::Op> {
+        let mut created_clusters = BTreeMap::new();
+        let mut clusters = Vec::new();
+        for op in ops {
+            let crate::catalog::Op::CreateCluster { id, name, .. } = op else {
+                continue;
+            };
+            let cluster = ClusterScopeContext {
+                id: id.to_string(),
+                name: name.clone(),
+                is_builtin: id.is_system(),
+            };
+            created_clusters.insert(*id, cluster.clone());
+            clusters.push(ClusterEvalContext {
+                cluster_id: *id,
+                cluster,
+            });
+        }
+
+        let mut replicas = Vec::new();
+        for op in ops {
+            let crate::catalog::Op::CreateClusterReplica {
+                cluster_id,
+                replica_id,
+                name,
+                config,
+                ..
+            } = op
+            else {
+                continue;
+            };
+            let ReplicaLocation::Managed(location) = &config.location else {
+                continue;
+            };
+            let Some(cluster) = created_clusters.get(cluster_id).cloned().or_else(|| {
+                self.catalog()
+                    .try_get_cluster(*cluster_id)
+                    .map(|cluster| ClusterScopeContext {
+                        id: cluster_id.to_string(),
+                        name: cluster.name.clone(),
+                        is_builtin: cluster_id.is_system(),
+                    })
+            }) else {
+                continue;
+            };
+            replicas.push(ReplicaEvalContext {
+                cluster_id: *cluster_id,
+                replica_id: *replica_id,
+                replica: ReplicaScopeContext {
+                    id: replica_id.to_string(),
+                    name: name.clone(),
+                    is_builtin: cluster_id.is_system(),
+                    size: location.size.clone(),
+                    size_family: location.allocation.family().to_string(),
+                    cluster_id: cluster_id.to_string(),
+                    cluster_name: cluster.name.clone(),
+                },
+                cluster,
+            });
+        }
+
+        if clusters.is_empty() && replicas.is_empty() {
+            return None;
+        }
         let frontend = self.scoped_frontend.clone()?;
         let catalog = self.catalog();
         let system_config = catalog.system_config();
@@ -2339,19 +2430,15 @@ impl Coordinator {
         let mut evaluated = ScopedParameters::default();
         if !cluster_param_names.is_empty() && !clusters.is_empty() {
             evaluated.cluster =
-                frontend.pull_cluster_overrides(&params, &cluster_param_names, clusters);
+                frontend.pull_cluster_overrides(&params, &cluster_param_names, &clusters);
         }
         if !replica_param_names.is_empty() && !replicas.is_empty() {
             evaluated.replica =
-                frontend.pull_replica_overrides(&params, &replica_param_names, replicas);
+                frontend.pull_replica_overrides(&params, &replica_param_names, &replicas);
         }
-        if evaluated.is_empty() {
-            return None;
-        }
-
-        // Prune only within the objects being created. They have no prior rows,
-        // so nothing is removed, and this op never touches another object whose
-        // override a concurrent reconcile may be writing.
+        // Prune only within the objects this transaction creates. A later
+        // statement in a DDL transaction can replace an earlier folded value,
+        // but this never touches an unrelated object's override.
         let prune_scope = ScopedParametersScope {
             clusters: clusters.iter().map(|cluster| cluster.cluster_id).collect(),
             replicas: replicas.iter().map(|replica| replica.replica_id).collect(),
@@ -3102,6 +3189,9 @@ impl Coordinator {
         // Initialize unified introspection.
         self.bootstrap_introspection_subscribes().await;
 
+        // Install the curated metric sinks on every replica.
+        self.bootstrap_metric_sinks().await;
+
         info!(
             "startup: coordinator init: bootstrap: migrate builtin tables in read-only mode complete in {:?}",
             final_steps_start.elapsed()
@@ -3169,29 +3259,21 @@ impl Coordinator {
         debug!("coordinator init: resetting system tables");
         let read_ts = self.get_local_read_ts().await;
 
-        // Filter out tables whose contents must survive restarts:
-        // 'mz_storage_usage_by_shard' for billing, and
-        // 'mz_object_arrangement_size_history', which accumulates history that
-        // is pruned by its own retention period instead.
-        let mz_storage_usage_by_shard_schema: SchemaSpecifier = self
-            .catalog()
-            .resolve_system_schema(MZ_STORAGE_USAGE_BY_SHARD.schema)
-            .into();
-        let arrangement_size_history_schema: SchemaSpecifier = self
-            .catalog()
-            .resolve_system_schema(MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY.schema)
-            .into();
-        let is_retained_across_restarts = |meta: &TableMetadata| -> bool {
-            (meta.name.item == MZ_STORAGE_USAGE_BY_SHARD.name
-                && meta.name.qualifiers.schema_spec == mz_storage_usage_by_shard_schema)
-                || (meta.name.item == MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY.name
-                    && meta.name.qualifiers.schema_spec == arrangement_size_history_schema)
-        };
+        let retained_across_restarts = BTreeSet::from([
+            self.catalog()
+                .resolve_builtin_table(&MZ_STORAGE_USAGE_BY_SHARD),
+            self.catalog()
+                .resolve_builtin_table(&MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY),
+            self.catalog()
+                .resolve_builtin_table(&MZ_OBJECT_HYDRATION_HISTORY),
+            self.catalog()
+                .resolve_builtin_table(&MZ_REPLICA_HYDRATION_HISTORY),
+        ]);
 
         let mut retraction_tasks = Vec::new();
         let system_tables: Vec<_> = table_metas
             .iter()
-            .filter(|meta| meta.id.is_system() && !is_retained_across_restarts(meta))
+            .filter(|meta| meta.id.is_system() && !retained_across_restarts.contains(&meta.id))
             .collect();
 
         for system_table in system_tables {
@@ -3752,6 +3834,7 @@ impl Coordinator {
                                         physical_plan: physical_plan.clone(),
                                         dataflow_metainfos: metainfo.clone(),
                                         optimizer_features: optimizer_config.features.clone(),
+                                        item_version: RelationVersion::root(),
                                     },
                                 );
                                 (optimized_plan, physical_plan, metainfo)
@@ -3850,6 +3933,7 @@ impl Coordinator {
                                     physical_plan: physical_plan.clone(),
                                     dataflow_metainfos: metainfo.clone(),
                                     optimizer_features: optimizer_config.features.clone(),
+                                    item_version: latest_item_version(&mv.collections),
                                 },
                             );
                             (optimized_plan, physical_plan, metainfo)
@@ -3909,9 +3993,12 @@ impl Coordinator {
 
                                 // MIR ⇒ MIR optimization (global)
                                 let metric_sink_plan = optimize::metric_sink::MetricSink::new(
-                                    entry.name().clone(),
-                                    metric_sink.from,
+                                    self.catalog()
+                                        .resolve_full_name(entry.name(), None)
+                                        .to_string(),
+                                    optimize::metric_sink::MetricSinkFrom::Id(metric_sink.from),
                                     metric_sink.prefix.clone(),
+                                    None,
                                 );
                                 let global_mir_plan = optimizer.optimize(metric_sink_plan)?;
                                 let optimized_plan = global_mir_plan.df_desc().clone();
@@ -3941,6 +4028,7 @@ impl Coordinator {
                                     physical_plan: physical_plan.clone(),
                                     dataflow_metainfos: metainfo.clone(),
                                     optimizer_features: optimizer_config.features.clone(),
+                                    item_version: RelationVersion::root(),
                                 },
                             );
                             (optimized_plan, physical_plan, metainfo)
@@ -4105,6 +4193,7 @@ impl Coordinator {
 
             self.schedule_storage_usage_collection().await;
             self.schedule_arrangement_sizes_collection().await;
+            self.schedule_hydration_history_collection();
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
             self.spawn_catalog_info_metrics_task();
@@ -4336,6 +4425,14 @@ impl Coordinator {
                     }
                 }
             }
+
+            // The sweep can own timestamp-oracle senders through its background
+            // client. Release them before the coordinator runtime starts shutting
+            // down the oracle workers.
+            if let Some(sweep) = self.hydration_history_sweep.take() {
+                sweep.abort_and_wait().await;
+            }
+
             // Try and cleanup as a best effort. There may be some async tasks out there holding a
             // reference that prevents us from cleaning up.
             if let Some(catalog) = Arc::into_inner(self.catalog) {
@@ -4787,18 +4884,31 @@ impl Coordinator {
             .user_cluster_replicas()
             .filter(|replica| Some(replica.cluster_id) != exclude_cluster)
             .filter_map(|replica| match &replica.config.location {
-                ReplicaLocation::Managed(location) => Some(location.size_for_billing()),
+                ReplicaLocation::Managed(location) => Some(self.replica_credits_per_hour(location)),
                 ReplicaLocation::Unmanaged(_) => None,
             })
-            .map(|size| {
-                self.catalog()
-                    .cluster_replica_sizes()
-                    .0
-                    .get(size)
-                    .expect("location size is validated against the cluster replica sizes")
-                    .credits_per_hour
-            })
             .sum()
+    }
+
+    /// The credit rate of a managed replica, read from the size map by its billing size.
+    ///
+    /// An unknown billing size counts as free. DDL validates `SIZE` and `BILLED AS` against
+    /// the map at replica creation, but the map is external configuration and can lose a
+    /// size later. That case is a soft panic rather than a hard one, so that in production
+    /// such a replica can still be dropped from SQL.
+    fn replica_credits_per_hour(&self, location: &ManagedReplicaLocation) -> Numeric {
+        let size = location.size_for_billing();
+        match self.catalog().cluster_replica_sizes().0.get(size) {
+            Some(allocation) => allocation.credits_per_hour,
+            None => {
+                soft_panic_or_log!(
+                    "replica of size {:?} bills as unknown replica size {:?}, counting it as free",
+                    location.size,
+                    size,
+                );
+                Numeric::zero()
+            }
+        }
     }
 }
 
@@ -5338,6 +5448,10 @@ pub fn serve(
                     active_copies: BTreeMap::new(),
                     connection_cancel_watches: BTreeMap::new(),
                     introspection_subscribes: BTreeMap::new(),
+                    hydration_history_replica_cursor: None,
+                    hydration_history_sweep: None,
+                    metric_sinks: BTreeMap::new(),
+                    metric_sink_plans: BTreeMap::new(),
                     write_locks: BTreeMap::new(),
                     deferred_write_ops: BTreeMap::new(),
                     pending_writes: Vec::new(),

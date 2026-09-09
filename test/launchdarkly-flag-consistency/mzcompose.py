@@ -208,8 +208,13 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     compute_correction_v2_chain_proportionality
     compute_correction_v2_chunk_size
     compute_flat_map_fuel
+    compute_index_peek_activation_budget
+    compute_index_peek_inline_budget
+    compute_index_peek_permit_fraction
+    compute_index_peek_yield_granularity
     compute_logical_backpressure_max_retained_capabilities
     compute_mv_sink_advance_persist_frontiers
+    compute_peek_row_iteration_limit
     compute_peek_response_stash_batch_max_runs
     compute_peek_response_stash_read_batch_size_bytes
     compute_peek_response_stash_read_memory_budget_bytes
@@ -235,12 +240,16 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_0dt_deployment_panic_after_timeout
     enable_adapter_frontend_occ_read_then_write
     enable_alter_table_add_column
+    enable_any_all_null_array_semantics
     enable_auto_scaling_strategy
     enable_background_alter_cluster
     enable_statement_arrival_logging
     enable_binary_date_bin
     enable_coalesce_case_transform
+    enable_columnar_merge_batcher
     enable_compute_half_join2
+    enable_compute_index_peek_offload
+    enable_compute_peek_row_iteration_limit
     enable_compute_render_fueled_as_specific_collection
     enable_date_bin_hopping
     enable_default_connection_validation
@@ -288,6 +297,8 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_will_distinct_propagation
     enable_with_ordinality_legacy_fallback
     grpc_client_connect_timeout
+    hydration_history_collection_interval
+    hydration_history_retention_period
     kafka_buffered_event_resize_threshold_elements
     kafka_default_aws_privatelink_endpoint_identification_algorithm
     kafka_poll_max_wait
@@ -474,6 +485,7 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
     enable_repr_typecheck
     enable_unified_cluster_arrangment
     enable_yugabyte_connection
+    enable_zero_downtime_cluster_reconfiguration
     kafka_default_metadata_fetch_interval
     mysql_offset_known_interval
     persist_enable_arrow_lgalloc_noncc_sizes
@@ -510,7 +522,6 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "enable_lgalloc",
     "enable_timely_zero_copy_lgalloc",
     "enable_upsert_paged_spill",
-    "enable_zero_downtime_cluster_reconfiguration",
     "kafka_client_id_enrichment_rules",
     "kafka_progress_record_fetch_timeout",
     "kafka_socket_timeout",
@@ -566,6 +577,7 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     enable_new_outer_join_lowering
     enable_notices_for_index_too_wide_for_literal_constraints
     enable_refresh_every_mvs
+    enable_upsert_chunked_stash
     enable_upsert_paged_spill
     enable_variadic_left_join_lowering
     grpc_client_http2_keep_alive_timeout

@@ -22,6 +22,10 @@
 # the default timeout is too tight here.
 $ set-sql-timeout duration=60s
 
+# The churn cluster below takes its size from this default, so multi-size
+# testdrive configs can vary it like the rest of the suite.
+$ set-arg-default default-replica-size=scale=1,workers=1
+
 # `mz_cluster_prometheus_metrics` is a per-replica log source, so every read of it
 # below has to name a replica. The sink runs on each replica of its cluster and
 # each replica owns its own registry, so targeting one replica is also what keeps
@@ -224,3 +228,61 @@ contains:still depended upon by metric sink "s"
 0
 
 > DROP TABLE lt CASCADE
+
+# Replica churn drives the coordinator's curated metric-sink install and
+# teardown (`install_metric_sinks` / `drop_metric_sinks`). The curated list is
+# empty, so there is no curated series to assert on: what is under test is that
+# both hooks run over an empty list without erroring, and that a replica added
+# and removed under a live sink leaves that sink publishing on the replica that
+# remains.
+#
+# On its own cluster, so the churn does not disturb the replica serving the rest
+# of this file. `quickstart` is a managed cluster anyway, which rejects
+# `CREATE CLUSTER REPLICA`, so replication factor is the way to add and remove a
+# replica.
+> CREATE CLUSTER churn_c (SIZE '${arg.default-replica-size}')
+
+> CREATE TABLE churn_t (k text NOT NULL, val double)
+
+> INSERT INTO churn_t VALUES ('a', 1)
+
+> CREATE VIEW churn_v AS
+  SELECT 'value'::text AS metric_name,
+         'gauge'::text AS metric_type,
+         map_build(LIST[ROW('k', k)])::map[text=>text] AS labels,
+         val AS value,
+         'a metric emitted across replica churn'::text AS help
+  FROM churn_t
+
+> CREATE METRIC SINK s_churn IN CLUSTER churn_c FROM churn_v WITH (PREFIX = 'mz_metric_sink_churn_')
+
+# Read `churn_c`'s registry, not `quickstart`'s: the relation is per-replica
+# introspection, served by the session's active cluster.
+> SET cluster = churn_c
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_churn_value'
+1
+
+> ALTER CLUSTER churn_c SET (REPLICATION FACTOR 2)
+
+# `cluster_replica = r1` (set at the top of the file) targets churn_c's r1 for
+# every read here, so the churn is observable rather than hidden behind
+# `UntargetedLogRead`: r1 survives both factor changes, and adding a second replica
+# leaves its own registry, and the sink on it, untouched.
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_churn_value'
+1
+
+> ALTER CLUSTER churn_c SET (REPLICATION FACTOR 1)
+
+# And after the second replica is torn down, r1 is still publishing.
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_churn_value'
+1
+
+> RESET cluster
+
+> DROP CLUSTER churn_c CASCADE
+
+> DROP TABLE churn_t CASCADE

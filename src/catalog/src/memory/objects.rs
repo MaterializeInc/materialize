@@ -2033,6 +2033,33 @@ impl CatalogItem {
         uses
     }
 
+    /// Returns direct dependencies to traverse when finding this item's query leaves.
+    ///
+    /// Functions and views return all of their uses. Materialized views do the
+    /// same except for the replacement target, which is lifecycle metadata. All
+    /// other items are query leaves or cannot be selected from.
+    pub fn query_dependencies(&self) -> BTreeSet<CatalogItemId> {
+        match self {
+            CatalogItem::Func(_) | CatalogItem::View(_) => self.uses(),
+            CatalogItem::MaterializedView(mv) => {
+                let mut dependencies = self.uses();
+                if let Some(target) = mv.replacement_target {
+                    dependencies.remove(&target);
+                }
+                dependencies
+            }
+            CatalogItem::Index(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::Table(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => BTreeSet::new(),
+        }
+    }
+
     /// Returns the connection ID that this item belongs to, if this item is
     /// temporary.
     pub fn conn_id(&self) -> Option<&ConnectionId> {

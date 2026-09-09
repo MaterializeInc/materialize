@@ -394,64 +394,7 @@ WHERE
         }),
     }
 });
-pub static MZ_OBJECT_DEPENDENCIES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_object_dependencies",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_OBJECT_DEPENDENCIES_OID,
-    desc: RelationDesc::builder()
-        .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_column(
-            "referenced_object_id",
-            SqlScalarType::String.nullable(false),
-        )
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "object_id",
-            "The ID of the dependent object. Corresponds to `mz_objects.id`.",
-        ),
-        (
-            "referenced_object_id",
-            "The ID of the referenced object. Corresponds to `mz_objects.id`.",
-        ),
-    ]),
-    is_retained_metrics_object: true,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "object_dependency",
-        description: "A dependency edge: one object depends on another",
-        links: &const {
-            [
-                OntologyLink {
-                    name: "depends_on",
-                    target: "object",
-                    properties: LinkProperties::DependsOn {
-                        source_column: "object_id",
-                        target_column: "id",
-                        source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
-                        requires_mapping: None,
-                    },
-                },
-                OntologyLink {
-                    name: "dependency_is",
-                    target: "object",
-                    properties: LinkProperties::DependsOn {
-                        source_column: "referenced_object_id",
-                        target_column: "id",
-                        source_id_type: Some(mz_repr::SemanticType::CatalogItemId),
-                        requires_mapping: None,
-                    },
-                },
-            ]
-        },
-        column_semantic_types: &const {
-            [
-                ("object_id", SemanticType::CatalogItemId),
-                ("referenced_object_id", SemanticType::CatalogItemId),
-            ]
-        },
-    }),
-});
+
 pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
     name: "mz_compute_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
@@ -705,6 +648,10 @@ pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("typinput", SqlScalarType::Oid.nullable(false))
         .with_column("typreceive", SqlScalarType::Oid.nullable(false))
+        // NOTE: `pg_type_all_databases` still needs `COALESCE` on this column,
+        // because its `LEFT JOIN` against this table yields NULLs for types with
+        // no PostgreSQL metadata.
+        .with_column("typsend", SqlScalarType::Oid.nullable(false))
         .finish(),
     column_comments: BTreeMap::new(),
     is_retained_metrics_object: false,
@@ -1314,7 +1261,7 @@ pub static MZ_SOURCE_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| 
         ),
         (
             "status",
-            "The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `failed`, or `dropped`.",
+            "The status of the source: one of `starting`, `running`, `paused`, `stalled`, or `dropped`.",
         ),
         (
             "error",
@@ -2165,7 +2112,7 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
         ),
         (
             "status",
-            "The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `failed`, or `dropped`.",
+            "The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.",
         ),
         (
             "error",
@@ -2364,7 +2311,7 @@ pub static MZ_SINK_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| Bu
         ),
         (
             "status",
-            "The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.",
+            "The status of the sink: one of `starting`, `running`, `paused`, `stalled`, or `dropped`.",
         ),
         (
             "error",
@@ -2447,7 +2394,7 @@ pub static MZ_SINK_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVie
         ),
         (
             "status",
-            "The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.",
+            "The status of the sink: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.",
         ),
         (
             "error",
@@ -4753,6 +4700,7 @@ pub static PG_TYPE_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| {
             .with_column("typcollation", SqlScalarType::Oid.nullable(false))
             .with_column("typdefault", SqlScalarType::String.nullable(true))
             .with_column("database_name", SqlScalarType::String.nullable(true))
+            .with_column("typsend", SqlScalarType::RegProc.nullable(false))
             .finish(),
         column_comments: BTreeMap::new(),
         sql: "
@@ -4821,7 +4769,8 @@ SELECT
     -- MZ doesn't support COLLATE so typcollation is filled with 0
     0::pg_catalog.oid AS typcollation,
     NULL::pg_catalog.text AS typdefault,
-    d.name as database_name
+    d.name as database_name,
+    COALESCE(mz_internal.mz_type_pg_metadata.typsend, 0)::pg_catalog.regproc AS typsend
 FROM
     mz_catalog.mz_types
     LEFT JOIN mz_internal.mz_type_pg_metadata ON mz_catalog.mz_types.id = mz_internal.mz_type_pg_metadata.id
@@ -4973,9 +4922,10 @@ ON mz_internal.pg_attrdef_all_databases (oid, adrelid, adnum, adbin, adsrc)",
 
 pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: LazyLock<BuiltinSource> =
     LazyLock::new(|| BuiltinSource {
-        // TODO(database-issues#8173): Rename this source to `mz_compute_error_counts_raw`. Currently this causes a
-        // naming conflict because the resolver stumbles over the source with the same name in
-        // `mz_introspection` due to the automatic schema translation.
+        // TODO(database-issues#8173): Rename this source to `mz_compute_error_counts_raw`.
+        // Currently this causes a naming conflict because the resolver stumbles over the
+        // source with the same name in `mz_introspection` due to the automatic schema
+        // translation.
         name: "mz_compute_error_counts_raw_unified",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED_OID,
@@ -5141,6 +5091,214 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_TS_IND: LazyLock<BuiltinIndex> =
     ON mz_internal.mz_object_arrangement_size_history (collection_timestamp)",
         is_retained_metrics_object: true,
     });
+
+/// Completed hydration episodes, one row per object, replica, and installation.
+///
+/// Exempt from the bootstrap reset and from forced shard replacement, since the
+/// contents cannot be rebuilt from anything else. Schema evolution keeps them and
+/// applies normally. Clearing them for a schema change is still allowed, see the
+/// tripwire in `validate_migration_steps`.
+pub static MZ_OBJECT_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_object_hydration_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_OBJECT_HYDRATION_HISTORY_OID,
+    desc: RelationDesc::builder()
+        .with_column("object_id", SqlScalarType::String.nullable(false))
+        .with_column("cluster_id", SqlScalarType::String.nullable(false))
+        .with_column("replica_id", SqlScalarType::String.nullable(false))
+        .with_column(
+            "installed_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column(
+            "started_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column(
+            "hydrated_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column("status", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "object_id",
+            "The ID of the object's dataflow, as reported by the replica. Join `mz_internal.mz_object_global_ids` to reach the index or materialized view while that mapping exists. Dropping the dataflow retracts the mapping, so historical IDs may no longer resolve.",
+        ),
+        ("cluster_id", "The ID of the object's cluster."),
+        (
+            "replica_id",
+            "The ID of the cluster replica. May name a replica that no longer exists.",
+        ),
+        (
+            "installed_at",
+            "When the object's dataflow was installed on the replica.",
+        ),
+        (
+            "started_at",
+            "When hydration work began, or `NULL` if the replica reported none. A replica that observed no start reports the installation time instead, so a zero interval between the two does not mean the dataflow started immediately.",
+        ),
+        ("hydrated_at", "When hydration finished."),
+        (
+            "status",
+            "The terminal status. Currently always `hydrated`.",
+        ),
+    ]),
+    // Not a retained-metrics object: that would pin a 30 day compaction window,
+    // and our history lives in the rows, which the retention sweep retracts on
+    // its own schedule. Nothing reads this table at an old timestamp.
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "object_hydration_event",
+        description: "Completed hydration of an index or materialized view on a replica",
+        // NOTE: These references outlive what they point at. A row deliberately
+        // survives the object and the replica it describes, so resolving one
+        // against the catalog can come up empty.
+        links: &const {
+            [
+                OntologyLink {
+                    name: "hydration_of_dataflow",
+                    target: "object_global_id",
+                    properties: LinkProperties::fk_typed(
+                        "object_id",
+                        "global_id",
+                        Cardinality::ManyToOne,
+                        mz_repr::SemanticType::GlobalId,
+                    ),
+                },
+                OntologyLink {
+                    name: "hydrated_on_cluster",
+                    target: "cluster",
+                    properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
+                },
+                OntologyLink {
+                    name: "hydrated_on_replica",
+                    target: "replica",
+                    properties: LinkProperties::fk_typed(
+                        "replica_id",
+                        "id",
+                        Cardinality::ManyToOne,
+                        mz_repr::SemanticType::ReplicaId,
+                    ),
+                },
+            ]
+        },
+        column_semantic_types: &[
+            ("object_id", SemanticType::GlobalId),
+            ("cluster_id", SemanticType::ClusterId),
+            ("replica_id", SemanticType::ReplicaId),
+        ],
+    }),
+});
+
+/// Successful hydration episodes for cluster replicas.
+///
+/// Exempt from the bootstrap reset and from forced shard replacement, since the
+/// contents cannot be rebuilt from anything else. Schema evolution keeps them and
+/// applies normally. Clearing them for a schema change is still allowed, see the
+/// tripwire in `validate_migration_steps`.
+pub static MZ_REPLICA_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_replica_hydration_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_REPLICA_HYDRATION_HISTORY_OID,
+    desc: RelationDesc::builder()
+        .with_column("replica_id", SqlScalarType::String.nullable(false))
+        .with_column("cluster_id", SqlScalarType::String.nullable(false))
+        .with_column(
+            "started_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column(
+            "finished_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column("object_count", SqlScalarType::UInt64.nullable(false))
+        .with_column("peak_memory_bytes", SqlScalarType::UInt64.nullable(true))
+        .with_column("peak_disk_bytes", SqlScalarType::UInt64.nullable(true))
+        .with_column("status", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "replica_id",
+            "The ID of the cluster replica. May name a replica that no longer exists.",
+        ),
+        ("cluster_id", "The ID of the replica's cluster."),
+        (
+            "started_at",
+            "The earliest maintained compute dataflow installation in the hydration episode.",
+        ),
+        (
+            "finished_at",
+            "The latest maintained compute dataflow hydration in the hydration episode.",
+        ),
+        (
+            "object_count",
+            "The number of maintained compute dataflows in the hydration episode.",
+        ),
+        (
+            "peak_memory_bytes",
+            "The largest process-lifetime cgroup memory high-water mark reported by any process when the collector recorded the episode. `NULL` if the platform reports no cgroup memory peak.",
+        ),
+        (
+            "peak_disk_bytes",
+            "The largest process-lifetime scratch-filesystem or swap high-water mark reported by any process when the collector recorded the episode. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available.",
+        ),
+        (
+            "status",
+            "The hydration episode's status. Currently always `hydrated`.",
+        ),
+    ]),
+    // Not a retained-metrics object: that would pin a 30 day compaction window,
+    // and our history lives in the rows, which the retention sweep retracts on
+    // its own schedule. Nothing reads this table at an old timestamp.
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "replica_hydration_episode",
+        description: "Successful hydration episode on a cluster replica",
+        links: &const {
+            [
+                OntologyLink {
+                    name: "hydrated_on_cluster",
+                    target: "cluster",
+                    properties: LinkProperties::ForeignKey {
+                        source_column: "cluster_id",
+                        target_column: "id",
+                        cardinality: Cardinality::ManyToOne,
+                        source_id_type: None,
+                        requires_mapping: None,
+                        nullable: false,
+                        note: Some(
+                            "Hydration samples can outlive their cluster, so this reference may not resolve.",
+                        ),
+                        extra_key_columns: None,
+                    },
+                },
+                OntologyLink {
+                    name: "hydrated_on_replica",
+                    target: "replica",
+                    properties: LinkProperties::ForeignKey {
+                        source_column: "replica_id",
+                        target_column: "id",
+                        cardinality: Cardinality::ManyToOne,
+                        source_id_type: Some(mz_repr::SemanticType::ReplicaId),
+                        requires_mapping: None,
+                        nullable: false,
+                        note: Some(
+                            "Hydration samples can outlive their replica, so this reference may not resolve.",
+                        ),
+                        extra_key_columns: None,
+                    },
+                },
+            ]
+        },
+        column_semantic_types: &[
+            ("replica_id", SemanticType::ReplicaId),
+            ("cluster_id", SemanticType::ClusterId),
+        ],
+    }),
+});
 
 pub static MZ_COMPUTE_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_compute_hydration_statuses",
@@ -7786,12 +7944,11 @@ fn console_cluster_utilization_overview_desc() -> RelationDesc {
 /// `console/src/api/materialize/cluster/replicaUtilizationHistory.ts`).
 ///
 /// * `bin`: the `date_bin` bucket width, e.g. `1 MINUTE`.
-/// * `retention`: how much history the view retains, e.g. `3 HOURS`, enforced
-///   with a temporal `mz_now()` filter so the maintained arrangement stays
-///   bounded.
-/// * `group_size`: the expected number of metric samples per (replica, bucket),
-///   used for the `DISTINCT ON INPUT GROUP SIZE` top-k hint. Replica metrics are
-///   scraped roughly once per minute, so this is the bucket width in minutes.
+/// * `retention`: how much history the view retains, e.g. `3 HOURS`, enforced with a temporal
+///   `mz_now()` filter so the maintained arrangement stays bounded.
+/// * `group_size`: the expected number of metric samples per (replica, bucket), used for the
+///   `DISTINCT ON INPUT GROUP SIZE` top-k hint. Replica metrics are scraped roughly once per
+///   minute, so this is the bucket width in minutes.
 fn console_cluster_utilization_overview_sql(bin: &str, retention: &str, group_size: u32) -> String {
     format!(
         r#"WITH replica_history AS (
@@ -8145,12 +8302,11 @@ pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_24H: LazyLock<BuiltinView> =
  * cluster_name: The name of the cluster.
  * The approach taken is as follows. First, find all extant clusters and add them
  * to the result set. Per cluster, we do the following:
- * 1. Find the most recent create or rename event. This moment represents when the
- *    cluster took on its final logical identity.
- * 2. Look for a cluster that had the same name (or the same name with `_dbt_deploy`
- *    appended) that was dropped within one minute of that moment. That cluster is
- *    almost certainly the logical predecessor of the current cluster. Add the cluster
- *    to the result set.
+ * 1. Find the most recent create or rename event. This moment represents when the cluster took
+ *    on its final logical identity.
+ * 2. Look for a cluster that had the same name (or the same name with `_dbt_deploy` appended)
+ *    that was dropped within one minute of that moment. That cluster is almost certainly the
+ *    logical predecessor of the current cluster. Add the cluster to the result set.
  * 3. Repeat the procedure until a cluster with no logical predecessor is discovered.
  * Limiting the search for a dropped cluster to a window of one minute is a heuristic,
  * but one that's likely to be pretty good one. If a name is reused after more
@@ -8514,8 +8670,9 @@ ON mz_internal.mz_sink_status_history (sink_id)",
 // underlying relation.
 //
 // We append WITH_HISTORY because we want to build a separate view + index that doesn't
-// retain history. This is because retaining its history causes MZ_SOURCE_STATISTICS_WITH_HISTORY_IND
-// to hold all records/updates, which causes CPU and latency of querying it to spike.
+// retain history. This is because retaining its history causes
+// MZ_SOURCE_STATISTICS_WITH_HISTORY_IND to hold all records/updates, which causes CPU and latency
+// of querying it to spike.
 pub static MZ_SOURCE_STATISTICS_WITH_HISTORY: LazyLock<BuiltinView> =
     LazyLock::new(|| BuiltinView {
         name: "mz_source_statistics_with_history",

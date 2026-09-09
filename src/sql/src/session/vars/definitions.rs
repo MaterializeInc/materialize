@@ -2254,12 +2254,6 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_zero_downtime_cluster_reconfiguration,
-        desc: "Enable zero-downtime reconfiguration for alter cluster",
-        default: false,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_network_policies,
         desc: "ENABLE NETWORK POLICIES",
         default: true,
@@ -2268,6 +2262,13 @@ feature_flags!(
     {
         name: enable_create_table_from_source,
         desc: "Whether to allow CREATE TABLE .. FROM SOURCE syntax.",
+        default: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_exclude_constraints_option,
+        desc: "Whether to allow the EXCLUDE CONSTRAINTS / EXCLUDE ALL CONSTRAINTS options \
+               in CREATE TABLE .. FROM SOURCE.",
         default: true,
         enable_for_item_parsing: true,
     },
@@ -2377,6 +2378,16 @@ feature_flags!(
     {
         name: enable_will_distinct_propagation,
         desc: "Allow the WillDistinct transform to propagate a pending distinct through Map, Filter, FlatMap, Threshold, Negate, non-negative Project, and TopK with limit 1 and offset 0.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        // An escape hatch: the `CASE` guard defeats the batched lowering that shares one
+        // `unnest` across several `ANY`/`ALL` operands, so a query with multiple `ANY`/`ALL`
+        // over a non-constant array plans into more arrangements than before. Turning the flag
+        // off restores the old plans at the cost of the wrong answer for a NULL array.
+        name: enable_any_all_null_array_semantics,
+        desc: "PostgreSQL-compatible NULL semantics for `ANY`/`ALL` over a NULL array or list.",
         default: true,
         enable_for_item_parsing: false,
     },

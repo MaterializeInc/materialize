@@ -194,10 +194,9 @@ pub enum WriteResult {
 /// Delivers an internal write result, including on task shutdown.
 ///
 /// The `Drop` impl is load-bearing. The session task waiting on the other end
-/// `expect`s a reply, so a `oneshot::Sender` that is dropped silently would
-/// panic that session on coordinator shutdown or on a dead group-committer
-/// task. Reporting [`WriteResult::Indeterminate`] instead lets the session
-/// report an error.
+/// needs a definitive response so that it can release its OCC permit and
+/// subscribe. Reporting [`WriteResult::Indeterminate`] lets it unwind when the
+/// coordinator or group committer shuts down.
 #[derive(Debug)]
 pub struct InternalWriteResponder {
     tx: Option<oneshot::Sender<WriteResult>>,
@@ -1718,6 +1717,13 @@ mod tests {
 
     use super::*;
     use crate::catalog::Catalog;
+
+    #[mz_ore::test(tokio::test)]
+    async fn internal_write_responder_reports_indeterminate_on_drop() {
+        let (tx, rx) = oneshot::channel();
+        drop(InternalWriteResponder::new(tx));
+        assert!(matches!(rx.await, Ok(WriteResult::Indeterminate)));
+    }
 
     #[derive(Debug, Default)]
     struct MemTimestampOracle {

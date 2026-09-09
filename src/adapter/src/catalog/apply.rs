@@ -1807,6 +1807,7 @@ impl CatalogState {
                             global_id,
                             uncached_expr,
                             optimizer_features,
+                            RelationVersion::root(),
                         );
                     }
                     // Add item to catalog.

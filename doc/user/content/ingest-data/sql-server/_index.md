@@ -6,7 +6,7 @@ menu:
   main:
     parent: 'ingest-data'
     identifier: 'sql-server'
-    weight: 15
+    weight: 30
 ---
 
 ## Change Data Capture (CDC)

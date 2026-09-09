@@ -27,6 +27,7 @@ use mz_environmentd::test_util;
 use mz_ore::assert_contains;
 use mz_ore::error::ErrorExt;
 use mz_ore::retry::Retry;
+use prometheus::proto::{Histogram, MetricFamily};
 use tokio_postgres::error::SqlState;
 
 /// A harness with frontend OCC read-then-write enabled and nothing else.
@@ -48,6 +49,23 @@ fn server_error_message(err: &postgres::Error) -> String {
         Some(db_error) => db_error.message().to_string(),
         None => err.to_string(),
     }
+}
+
+fn session_occ_retry_histogram(metrics: &[MetricFamily]) -> &Histogram {
+    metrics
+        .iter()
+        .find(|family| family.name() == "mz_occ_read_then_write_retry_count")
+        .expect("mz_occ_read_then_write_retry_count metric should be registered")
+        .get_metric()
+        .iter()
+        .find(|metric| {
+            metric
+                .get_label()
+                .iter()
+                .any(|label| label.name() == "caller" && label.value() == "session")
+        })
+        .expect("session OCC retry histogram should be registered")
+        .get_histogram()
 }
 
 // `mz_query_total` feeds product telemetry, and DML the session task sequences
@@ -440,13 +458,7 @@ fn test_concurrent_updates_retry() {
     // contention essentially guarantees at least one observation lands above
     // the 0-retry bucket, so we assert that too.
     let metrics = server.metrics_registry().gather();
-    let retry_metric = metrics
-        .iter()
-        .find(|m| m.name() == "mz_occ_read_then_write_retry_count")
-        .expect("mz_occ_read_then_write_retry_count metric should be registered");
-    let metric = retry_metric.get_metric();
-    assert_eq!(metric.len(), 1, "expected a single histogram series");
-    let histogram = metric[0].get_histogram();
+    let histogram = session_occ_retry_histogram(&metrics);
 
     let total_updates = u64::try_from(NUM_WORKERS * UPDATES_PER_WORKER).unwrap();
     assert!(
@@ -574,13 +586,7 @@ fn test_concurrent_delete_does_not_over_delete() {
     // rows at once, at least one attempt must have found its read timestamp
     // passed and retried against fresh state.
     let metrics = server.metrics_registry().gather();
-    let retry_metric = metrics
-        .iter()
-        .find(|m| m.name() == "mz_occ_read_then_write_retry_count")
-        .expect("mz_occ_read_then_write_retry_count metric should be registered");
-    let metric = retry_metric.get_metric();
-    assert_eq!(metric.len(), 1, "expected a single histogram series");
-    let histogram = metric[0].get_histogram();
+    let histogram = session_occ_retry_histogram(&metrics);
     let zero_retry_bucket = histogram
         .get_bucket()
         .iter()
@@ -2069,15 +2075,7 @@ fn test_replica_expiration_spares_folded_selections() {
     // reach the histogram if the frontend sequenced them, and the coordinator's
     // lock path does not read subscribe frontiers at all.
     let metrics = server.metrics_registry().gather();
-    let observations = metrics
-        .iter()
-        .find(|m| m.name() == "mz_occ_read_then_write_retry_count")
-        .expect("mz_occ_read_then_write_retry_count metric should be registered")
-        .get_metric()
-        .first()
-        .expect("a single histogram series")
-        .get_histogram()
-        .get_sample_count();
+    let observations = session_occ_retry_histogram(&metrics).get_sample_count();
     assert!(
         observations >= 2,
         "the OCC path sequenced {observations} statements, so the INSERT and the \

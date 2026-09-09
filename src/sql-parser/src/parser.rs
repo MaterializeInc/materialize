@@ -2974,6 +2974,7 @@ impl<'a> Parser<'a> {
                 ENDPOINT,
                 GCP,
                 HOST,
+                OAUTH2,
                 PASSWORD,
                 PORT,
                 PUBLIC,
@@ -2993,10 +2994,14 @@ impl<'a> Parser<'a> {
                 USERNAME,
                 WAREHOUSE,
             ])? {
-                ACCESS => {
-                    self.expect_keywords(&[KEY, ID])?;
-                    ConnectionOptionName::AccessKeyId
-                }
+                ACCESS => match self.expect_one_of_keywords(&[KEY, DELEGATION])? {
+                    KEY => {
+                        self.expect_keyword(ID)?;
+                        ConnectionOptionName::AccessKeyId
+                    }
+                    DELEGATION => ConnectionOptionName::AccessDelegation,
+                    _ => unreachable!(),
+                },
                 ASSUME => {
                     self.expect_keyword(ROLE)?;
                     match self.expect_one_of_keywords(&[ARN, SESSION])? {
@@ -3031,6 +3036,10 @@ impl<'a> Parser<'a> {
                     ConnectionOptionName::GcpConnection
                 }
                 HOST => ConnectionOptionName::Host,
+                OAUTH2 => {
+                    self.expect_keywords(&[SERVER, URL])?;
+                    ConnectionOptionName::Oauth2ServerUrl
+                }
                 PASSWORD => ConnectionOptionName::Password,
                 PORT => ConnectionOptionName::Port,
                 PUBLIC => {
@@ -5350,7 +5359,7 @@ impl<'a> Parser<'a> {
         let option = match self
             .expect_one_of_keywords(&[TEXT, EXCLUDE, IGNORE, DETAILS, PARTITION, RETAIN])?
         {
-            ref keyword @ (TEXT | EXCLUDE) => {
+            TEXT => {
                 self.expect_keyword(COLUMNS)?;
 
                 let _ = self.consume_token(&Token::Eq);
@@ -5364,14 +5373,58 @@ impl<'a> Parser<'a> {
                     });
 
                 TableFromSourceOption {
-                    name: match *keyword {
-                        TEXT => TableFromSourceOptionName::TextColumns,
-                        EXCLUDE => TableFromSourceOptionName::ExcludeColumns,
-                        _ => unreachable!(),
-                    },
+                    name: TableFromSourceOptionName::TextColumns,
                     value,
                 }
             }
+            EXCLUDE => match self.expect_one_of_keywords(&[COLUMNS, CONSTRAINTS, ALL])? {
+                COLUMNS => {
+                    let _ = self.consume_token(&Token::Eq);
+
+                    let value =
+                        self.parse_option_sequence(Parser::parse_identifier)?
+                            .map(|inner| {
+                                WithOptionValue::Sequence(
+                                    inner.into_iter().map(WithOptionValue::Ident).collect_vec(),
+                                )
+                            });
+
+                    TableFromSourceOption {
+                        name: TableFromSourceOptionName::ExcludeColumns,
+                        value,
+                    }
+                }
+                CONSTRAINTS => {
+                    let _ = self.consume_token(&Token::Eq);
+
+                    // Constraint names are raw upstream identifiers whose case
+                    // must be preserved exactly, so they are string literals
+                    // rather than SQL identifiers.
+                    let value = self
+                        .parse_option_sequence(Parser::parse_literal_string)?
+                        .map(|inner| {
+                            WithOptionValue::Sequence(
+                                inner
+                                    .into_iter()
+                                    .map(|s| WithOptionValue::Value(Value::String(s)))
+                                    .collect_vec(),
+                            )
+                        });
+
+                    TableFromSourceOption {
+                        name: TableFromSourceOptionName::ExcludeConstraints,
+                        value,
+                    }
+                }
+                ALL => {
+                    self.expect_keyword(CONSTRAINTS)?;
+                    TableFromSourceOption {
+                        name: TableFromSourceOptionName::ExcludeAllConstraints,
+                        value: None,
+                    }
+                }
+                _ => unreachable!(),
+            },
             DETAILS => TableFromSourceOption {
                 name: TableFromSourceOptionName::Details,
                 value: self.parse_optional_option_value()?,
@@ -9469,6 +9522,7 @@ impl<'a> Parser<'a> {
             match self.parse_one_of_keywords(&[TEXT, JSON, DOT]) {
                 Some(TEXT) => Some(ExplainFormat::Text),
                 Some(JSON) => Some(ExplainFormat::Json),
+                Some(DOT) => Some(ExplainFormat::Dot),
                 None => return Err(ParserError::new(self.index, "expected a format")),
                 _ => unreachable!(),
             }
@@ -9529,7 +9583,7 @@ impl<'a> Parser<'a> {
             let err = parser_err!(
                 self,
                 self.peek_prev_pos(),
-                format!("WITH HOLD is unsupported for cursors")
+                "WITH HOLD is unsupported for cursors"
             )
             .map_parser_err(StatementKind::Declare);
             self.expect_keyword(HOLD)
@@ -10245,7 +10299,7 @@ impl<'a> Parser<'a> {
             return parser_err!(
                 self,
                 self.peek_prev_pos(),
-                format!("For object type MATERIALIZED VIEWS, you must specify 'TABLES'")
+                "For object type MATERIALIZED VIEWS, you must specify 'TABLES'"
             );
         }
 
@@ -10288,7 +10342,7 @@ impl<'a> Parser<'a> {
             return parser_err!(
                 self,
                 self.peek_prev_pos(),
-                format!("For object type MATERIALIZED VIEWS, you must specify 'TABLES'")
+                "For object type MATERIALIZED VIEWS, you must specify 'TABLES'"
             );
         }
 

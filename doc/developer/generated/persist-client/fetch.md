@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/fetch.rs
-revision: 5a4a36c4fd
+revision: 6ebd534824
 ---
 
 # persist-client::fetch
@@ -13,3 +13,4 @@ A semaphore-based permit system (`FETCH_SEMAPHORE_PERMIT_ADJUSTMENT`) bounds the
 `fetch_batch_part_blob` adds context (the blob key) to any error returned by `Blob::get`, so that retry log entries produced by `retry_external` identify which blob and therefore which shard is stuck when a GET stalls indefinitely.
 `BatchFetcher` exposes a `missing_blob_diagnostics` method that delegates to the same free function via its internal `SchemaCache` applier.
 `BatchFetcher` implements `Clone` manually (avoiding bounds on `K`, `V`, `D` since every field is an `Arc` or independently `Clone`); clones share the `schema_cache`, so cached schema fetches are reused across clones, enabling concurrent `fetch_leased_part` calls each on their own clone.
+`LeasedBatchPart` carries a `bounds_truncated` field derived from the containing batch's run metadata (true if any run has `RunMeta::bounds_truncated()`). `try_optimize_ignored_data_fetch` checks this flag before substituting the part's write-time `diffs_sum` for a real fetch: a truncated part's blob may physically contain updates outside the registered desc that a real fetch would filter out, so substituting `diffs_sum` would fabricate data and the optimization is skipped.

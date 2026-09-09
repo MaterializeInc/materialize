@@ -1769,3 +1769,22 @@ SELECT textrecv()
 
 query error cannot call function with arguments of type internal
 SELECT textrecv('abc')
+
+# `mz_internal.parse_catalog_item_references` extracts the catalog item
+# references from a stored `create_sql` string.
+
+query T
+SELECT mz_internal.parse_catalog_item_references('CREATE VIEW "materialize"."public"."v" AS SELECT "pg_catalog"."abs"("a"::[s20 AS "pg_catalog"."int4"]) FROM [u1 AS "materialize"."public"."t"]')
+----
+{"ids":["s20","u1"],"named_funcs":[{"name":"abs","schema":"pg_catalog"}],"named_relations":[],"named_types":[]}
+
+# Name-based relation references never appear in stored SQL, which prints
+# relations as id references. Reporting them keeps a statement that violates
+# that from silently losing its dependency edges.
+query T
+SELECT mz_internal.parse_catalog_item_references('CREATE VIEW "materialize"."public"."v" AS SELECT * FROM "mz_catalog"."mz_tables"')
+----
+{"ids":[],"named_funcs":[],"named_relations":[{"name":"mz_tables","schema":"mz_catalog"}],"named_types":[]}
+
+query error invalid catalog JSON: failed to parse create_sql
+SELECT mz_internal.parse_catalog_item_references('NOT SQL')

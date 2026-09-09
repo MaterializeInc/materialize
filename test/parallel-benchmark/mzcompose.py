@@ -529,10 +529,22 @@ def run_once(
                 periodic_dists={pd[0]: int(pd[1]) for pd in args.periodic_dist or []},
             )
             scenario = scenario_class(c, conn_infos)
-            scenario.setup(c, conn_infos)
+            # Bound before the try, because the finally reports against it and a
+            # setup() that raises would otherwise leave it unbound, replacing
+            # the failure with an UnboundLocalError.
             start_time = time.time()
             Path(MZ_ROOT / "plots").mkdir(parents=True, exist_ok=True)
             try:
+                # Inside the try because setup() is what starts the worker
+                # threads and builds the connection pool. A failure partway
+                # through leaves those threads parked on an empty job queue,
+                # and only teardown()'s sentinels release them.
+                scenario.setup(c, conn_infos)
+                # After setup(), because this is the denominator of the reported
+                # qps. Starting the thread pool and opening the connections is
+                # harness time, and a scenario with a qps guarantee has less
+                # slack than that costs.
+                start_time = time.time()
                 if not args.benchmarking_env:
                     # Don't let the garbage collector interfere with our measurements
                     gc.disable()

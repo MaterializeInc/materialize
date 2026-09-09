@@ -58,7 +58,8 @@ pub struct ObservedReplica {
     pub internal: bool,
     /// Carries a `BILLED AS` override.
     pub billed_as: bool,
-    /// The `-pending` target of an in-flight graceful reconfiguration.
+    /// Durably marked `pending`. Vestigial: no path creates one anymore, but a
+    /// crash on an older version could have left one behind.
     pub pending: bool,
 }
 
@@ -67,11 +68,11 @@ impl ObservedReplica {
     ///
     /// INTERNAL / BILLED AS replicas are manually managed: a user can attach
     /// one to any managed cluster, outside the replication-factor domain. A
-    /// pending replica is owned by the reconfiguration sequencer path until
-    /// finalize (retiring it would defeat the zero-downtime resize creating
-    /// it). The controller must neither count such a replica toward a desired
-    /// shape nor drop it as excess, but their names still block the name
-    /// generator, since every replica observed here occupies a name.
+    /// durably `pending` replica is stranded state from an older version, reaped
+    /// by the catalog-open migration rather than here. The controller must
+    /// neither count such a replica toward a desired shape nor drop it as
+    /// excess, but their names still block the name generator, since every
+    /// replica observed here occupies a name.
     pub fn owned_shape(&self) -> Option<&ReplicaShape> {
         if self.internal || self.billed_as || self.pending {
             return None;
@@ -389,9 +390,10 @@ pub enum ApplyOutcome {
     /// batch is rejected; the controller recomputes next tick.
     Rejected,
     /// The batch was rejected because it exceeded the environment's resource
-    /// budget. Nothing was transacted. Unlike a guard rejection, retrying the
-    /// same batch cannot succeed on its own: the controller decides what to
-    /// shed to make room.
+    /// budget. No requested cluster mutation was transacted. The controller
+    /// sheds an active graceful reconfiguration when possible. Otherwise it
+    /// retries on later ticks, when desired state or available capacity may
+    /// have changed.
     ResourceExhausted,
 }
 

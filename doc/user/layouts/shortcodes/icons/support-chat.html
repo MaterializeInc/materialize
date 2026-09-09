@@ -1,0 +1,4 @@
+{{- /* Resolve the src like render-image.html does, so the image works under
+     any baseURL (production /docs, PR previews, self-managed versions). */ -}}
+{{- $parentPath := partial "relative-link.html" . -}}
+<img src="{{ $parentPath }}{{ "/images/messenger-widget.png" | relURL }}" alt="Materialize support chat icon" style="height: 1.4em; vertical-align: text-bottom;">

@@ -1,0 +1,34 @@
+{{- /*
+  Returns the URL of a page's Markdown rendition, the file the `skill` output
+  format writes into <baseURL>/markdown-docs/ on the second Hugo pass (see
+  ci/deploy_website/website.sh).
+
+  Arguments (dict):
+    page      (required) the Page to link to
+    absolute  (optional) prefix the URL with scheme://host
+
+  baseURL is a bare path in the production and preview builds ("/docs",
+  "/materialize/$PR"), so .Permalink cannot yield an absolute URL. When baseURL
+  carries no host of its own, fall back to params.canonicalHost, except under
+  `hugo --environment preview`, where the artifacts serve from
+  preview.materialize.com.
+
+  Usage:
+    {{ partial "markdown-url.html" (dict "page" .) }}
+    {{ partial "markdown-url.html" (dict "page" $p "absolute" true) }}
+*/ -}}
+{{- $basePath := (urls.Parse site.BaseURL).Path -}}
+{{- if not (strings.HasSuffix $basePath "/") -}}{{- $basePath = printf "%s/" $basePath -}}{{- end -}}
+{{- $pagePath := .page.RelPermalink | strings.TrimPrefix $basePath -}}
+{{- $url := printf "%smarkdown-docs/%sindex.md" $basePath $pagePath -}}
+{{- if .absolute -}}
+  {{- $parsed := urls.Parse site.BaseURL -}}
+  {{- $origin := site.Params.canonicalHost -}}
+  {{- if $parsed.Host -}}
+    {{- $origin = printf "%s://%s" $parsed.Scheme $parsed.Host -}}
+  {{- else if eq hugo.Environment "preview" -}}
+    {{- $origin = "https://preview.materialize.com" -}}
+  {{- end -}}
+  {{- $url = printf "%s%s" $origin $url -}}
+{{- end -}}
+{{- return $url -}}

@@ -262,6 +262,44 @@ class Action:
         share = max(1, MAX_ROWS // exe.db.num_threads)
         return self.rng.randint(1, min(available, share))
 
+    def view_predicate(self, exe: Executor, table: Table) -> str | None:
+        """A predicate over a view, adding a second input to a read-then-write's
+        selection.
+
+        The selection's frontier is the minimum over its inputs, and an UPDATE
+        or DELETE reads its target too, so the table holds it near the wall
+        clock while a REFRESH view is free to sit far ahead. Neither may reach
+        the write timestamp, which comes from the timeline's oracle.
+        `InsertSelectAction` covers the view-only case. None when no view offers
+        a comparable column. Views reaching a source are excluded: the adapter
+        refuses such a selection outright, which would make this vacuous."""
+        views = [
+            view
+            for view in exe.db.views
+            if view.read_then_write_input
+            and (not view.temp or view in exe.temp_objects)
+        ]
+        self.rng.shuffle(views)
+        for view in views:
+            pairs = [
+                (table_column, view_column)
+                for table_column in table.columns
+                for view_column in view.columns
+                # A map has no equality operator, so it cannot drive an IN.
+                if table_column.data_type == view_column.data_type
+                and table_column.data_type != TextTextMap
+            ]
+            if not pairs:
+                continue
+            table_column, view_column = self.rng.choice(pairs)
+            # The alias keeps the inner reference off the outer target, the
+            # LIMIT bounds an expensive view body.
+            return (
+                f"{table_column.name(True)} IN (SELECT rtw_src.{view_column.name(True)}"
+                f" FROM {view} AS rtw_src LIMIT 100)"
+            )
+        return None
+
     def create_system_connection(
         self, exe: Executor, num_attempts: int = 10
     ) -> Connection:
@@ -1171,9 +1209,17 @@ class InsertSelectAction(Action):
         if not tables:
             return False
         table = self.rng.choice(tables)
-        # Reading the insert target itself makes the target a read dependency
-        # too, the most contended shape a read-then-write can have.
-        source = table if self.rng.choice([True, False]) else self.rng.choice(tables)
+        # Reading the insert target itself is the most contended shape a
+        # read-then-write can have. A view is the opposite: the target is
+        # written but not read, so a REFRESH view alone pins the selection's
+        # frontier, see `Action.view_predicate`.
+        sources = tables + [
+            view
+            for view in exe.db.views
+            if view.read_then_write_input
+            and (not view.temp or view in exe.temp_objects)
+        ]
+        source = table if self.rng.choice([True, False]) else self.rng.choice(sources)
 
         column_names = ", ".join(column.name(True) for column in table.columns)
         # The cast is an identity cast: `expression` returns the requested type
@@ -1464,7 +1510,12 @@ class UpdateAction(Action):
             f"{c.name(True)} = {expression(c.data_type, table.columns, self.rng, kind=ExprKind.WRITE)}"
             for c in set_columns
         )
-        query = f"UPDATE {table} SET {set_clause} WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
+        predicate = expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)
+        if self.rng.random() < 0.2:
+            view_predicate = self.view_predicate(exe, table)
+            if view_predicate:
+                predicate = f"({predicate}) AND {view_predicate}"
+        query = f"UPDATE {table} SET {set_clause} WHERE {predicate}"
         if self.rng.choice([True, False]):
             self.stmt_id += 1
             self.exe_prepared(query, f"update{self.stmt_id}", exe)
@@ -1516,7 +1567,8 @@ class DeleteAction(Action):
             "canceling statement due to statement timeout",
             OCC_CONTENTION_EXHAUSTED_ERROR,
         ] + super().errors_to_ignore(exe)
-        if exe.db.scenario == Scenario.Rename:
+        # The predicate can name a view, which DDL drops concurrently.
+        if exe.db.complexity == Complexity.DDL or exe.db.scenario == Scenario.Rename:
             errors += ["does not exist"]
         return errors
 
@@ -1553,7 +1605,14 @@ class DeleteAction(Action):
             query += f" USING {using_table}"
             query += f" WHERE {expression(Boolean, all_columns, self.rng, kind=ExprKind.WRITE)}"
         elif self.rng.random() < 0.95:
-            query += f" WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
+            predicate = expression(
+                Boolean, table.columns, self.rng, kind=ExprKind.WRITE
+            )
+            if self.rng.random() < 0.2:
+                view_predicate = self.view_predicate(exe, table)
+                if view_predicate:
+                    predicate = f"({predicate}) AND {view_predicate}"
+            query += f" WHERE {predicate}"
         if self.rng.choice([True, False]):
             self.stmt_id += 1
             self.exe_prepared(query, f"delete{self.stmt_id}", exe)
@@ -1694,18 +1753,17 @@ class DropIndexAction(Action):
             if index not in exe.db.indexes:
                 return False
 
-            query = f"DROP INDEX {index}"
-            try:
-                exe.execute(query, http=Http.RANDOM)
-            except QueryError:
-                # The indexed object or its schema may have been dropped
-                # concurrently, taking the index with it. Untrack the index
-                # either way so stale entries don't fill up the set and choke
-                # off CreateIndexAction. Use discard, not remove: a concurrent
-                # CASCADE drop's untrack_objects_in_schemas may have already
-                # removed it, and remove would raise KeyError.
-                exe.db.indexes.discard(index)
-                raise
+            # The indexed object or its schema may have dropped
+            # concurrently, taking the index with it. Thus whether
+            # we drop it successfully or find it doesn't exist, we
+            # untrack its entry as to not fill up the set and choke
+            # off CreateIndexAction. An RBAC error however (in case
+            # a non-owner tries this drop) will raise an error and
+            # we'll retry the DropIndexAction.
+            exe.execute(f"DROP INDEX IF EXISTS {index}", http=Http.RANDOM)
+            # Use discard, not remove: a concurrent
+            # CASCADE drop's untrack_objects_in_schemas may have already
+            # removed it, and remove would raise KeyError.
             exe.db.indexes.discard(index)
             return True
 
@@ -2950,6 +3008,16 @@ class FlipFlagsAction(Action):
             "'1h'",
             "'7d'",
         ]
+        self.flags_with_values["hydration_history_collection_interval"] = [
+            "'0s'",
+            "'1s'",
+            "'1min'",
+        ]
+        self.flags_with_values["hydration_history_retention_period"] = [
+            "'1min'",
+            "'1h'",
+            "'30d'",
+        ]
         # Keep these generous: a tight timeout would abort the oracle's own
         # queries (they are retried, but it adds noise). "0s" leaves it unset.
         self.flags_with_values["pg_timestamp_oracle_statement_timeout"] = [
@@ -2995,10 +3063,55 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_compute_peek_response_stash"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["enable_compute_peek_row_iteration_limit"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        self.flags_with_values["compute_peek_row_iteration_limit"] = ["1000000000"]
+        self.flags_with_values["enable_compute_index_peek_offload"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        # The production default, a value that offloads all but the shortest
+        # peeks, and one that keeps every peek inline.
+        self.flags_with_values["compute_index_peek_inline_budget"] = [
+            "1024",
+            "1",
+            "1000000000",
+        ]
+        # The production default, a value that lets one activation serve a
+        # single position across all peeks, and one that lifts the aggregate
+        # so every pending peek spends its full inline budget in one pass.
+        self.flags_with_values["compute_index_peek_activation_budget"] = [
+            "8192",
+            "1",
+            "1000000000",
+        ]
+        # The production default, a value that checks for cancellation after
+        # every position, and one that checks once per walk of any arrangement
+        # this workload builds.
+        self.flags_with_values["compute_index_peek_yield_granularity"] = [
+            "10000",
+            "1",
+            "100000",
+        ]
+        # One permit per worker (the default), a bound that serializes every
+        # offloaded walk, and one that never queues. A fraction of the process's
+        # worker count, floored at one permit, so any tiny fraction serializes.
+        self.flags_with_values["compute_index_peek_permit_fraction"] = [
+            "1.0",
+            "0.0001",
+            "1000.0",
+        ]
         self.flags_with_values["compute_peek_response_stash_threshold_bytes"] = [
             "0",  # "force enabled"
             "1048576",  # 1 MiB, an in-between value
             "314572800",  # 300 MiB, the production value
+        ]
+        # The default, a value that cuts every batch at the threshold, and one
+        # that puts any answer this workload stashes into a single batch.
+        self.flags_with_values["compute_peek_response_stash_batch_bytes"] = [
+            "1048576",
+            "0",
+            "1073741824",
         ]
         self.flags_with_values["compute_subscribe_snapshot_optimization"] = (
             BOOLEAN_FLAG_VALUES
@@ -3022,8 +3135,12 @@ class FlipFlagsAction(Action):
         )
         self.flags_with_values["enable_upsert_v2"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_coalesce_case_transform"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_any_all_null_array_semantics"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_compute_sync_mv_sink"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_column_paged_batcher"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_columnar_merge_batcher"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_column_paged_batcher_spill"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -3061,6 +3178,7 @@ class FlipFlagsAction(Action):
             "0.02",
         ]
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_upsert_chunked_stash"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["column_chunk_compress_min_depth"] = [
             "0",  # compress every spilled body
             "1",  # the default: fresh chunks store uncompressed
@@ -3315,8 +3433,7 @@ class FlipFlagsAction(Action):
             "mz_metrics_lgalloc_map_refresh_interval",
             "mz_metrics_lgalloc_refresh_interval",
             "mz_metrics_rusage_refresh_interval",
-            "compute_peek_stash_num_batches",
-            "compute_peek_stash_batch_size",
+            "mz_metrics_usage_refresh_interval",
             "compute_peek_response_stash_batch_max_runs",
             "compute_peek_response_stash_read_batch_size_bytes",
             "compute_peek_response_stash_read_memory_budget_bytes",
@@ -6132,6 +6249,9 @@ class ExplainFilterPushdownAction(Action):
                 'is not allowed from the "mz_catalog_server" cluster',
                 # Scanning persist part stats can outrun statement_timeout.
                 "canceling statement due to statement timeout",
+                # Under real-time recency the EXPLAIN waits for the source
+                # like a SELECT does, and can hit the RTR timeout (SS-303).
+                "timed out before ingesting the source's visible frontier when real-time-recency query issued",
             ]
         )
         if exe.db.complexity == Complexity.DDL:

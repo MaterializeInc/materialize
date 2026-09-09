@@ -6,7 +6,7 @@ menu:
     main:
         parent: "ingest-data"
         identifier: "mysql"
-        weight: 5
+        weight: 20
 aliases:
   - /self-managed/v25.2/ingest-data/mysql/
 ---
@@ -32,6 +32,11 @@ gives you the following benefits:
   supported in MySQL**, so you can use Materialize as a
   read-replica to build views on top of your MySQL data that are efficiently
   maintained and always up-to-date.
+
+When a source is created, Materialize parallelizes the initial snapshot
+across the cluster's workers and can split the read of large tables that meet
+certain requirements. See [Snapshot
+parallelism](/ingest-data/mysql/snapshot-parallelism/).
 
 ## Supported versions and services
 

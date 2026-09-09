@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/lib.rs
-revision: f2082d0163
+revision: 780c9c1add
 ---
 
 # mz-ore
@@ -16,6 +16,7 @@ Modules are included here when they are broadly useful but too small to warrant 
 |--------|---------|
 | `bits` | Bit-manipulation helpers |
 | `cast` | Checked, lossless numeric casts via the `CastFrom`/`CastInto`/`TryCastFrom` traits |
+| `cgroup` | Linux cgroup detection utilities: `detect_memory_limit`, `CgroupV2` handle for reading v2 interface files. Must stay free of non-`std` dependencies so it compiles in feature-reduced builds (e.g. wasm32). |
 | `collections` | Extensions to std collections; `HashMap`/`HashSet` re-exports using a deterministic hasher; `AssociativeExt` trait |
 | `env` | Environment variable helpers |
 | `error` | `ErrorExt` trait (display with causes) and `ShouldTerminateProcess` |

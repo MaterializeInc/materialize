@@ -111,6 +111,7 @@ Confluent
 Connection
 Connections
 Constraint
+Constraints
 Copy
 Correlated
 Count
@@ -145,6 +146,7 @@ Decoding
 Decorrelated
 Default
 Defaults
+Delegation
 Delete
 Delimited
 Delimiter
@@ -336,6 +338,7 @@ Notices
 Null
 Nullif
 Nulls
+Oauth2
 Objects
 Of
 Offset

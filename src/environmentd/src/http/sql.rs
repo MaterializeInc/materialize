@@ -675,7 +675,7 @@ impl SqlResult {
             let mut sql_rows = match peek_response {
                 PeekResponseUnary::Rows(rows) => rows,
                 PeekResponseUnary::Error(e) => {
-                    return Ok(SqlResult::err(client, Error::Unstructured(anyhow!(e))));
+                    return Ok(SqlResult::err(client, e));
                 }
                 PeekResponseUnary::DependencyDropped(dep) => {
                     return Ok(SqlResult::err(client, dep.to_concurrent_dependency_drop()));
@@ -1116,12 +1116,11 @@ impl ResultSender for WebSocket {
                                 }
                             }
                         }
-                        Some(PeekResponseUnary::Error(error)) => {
+                        Some(PeekResponseUnary::Error(err)) => {
+                            let error = err.to_string();
                             break (
                                 true,
-                                vec![WebSocketResponse::Error(
-                                    Error::Unstructured(anyhow!(error.clone())).into(),
-                                )],
+                                vec![WebSocketResponse::Error(err.into())],
                                 Some((StatementEndedExecutionReason::Errored { error }, ctx_extra)),
                             );
                         }
@@ -1307,9 +1306,7 @@ async fn stream_ws_peek_rows(
                 return Ok(ws_peek_result(
                     client,
                     true,
-                    vec![WebSocketResponse::Error(
-                        Error::Unstructured(anyhow!(error)).into(),
-                    )],
+                    vec![WebSocketResponse::Error(error.into())],
                 ));
             }
             Some(PeekResponseUnary::DependencyDropped(dep)) => {

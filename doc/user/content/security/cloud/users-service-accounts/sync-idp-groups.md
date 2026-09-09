@@ -70,7 +70,7 @@ Materialize has two separate permission layers, and a group can affect both:
 
 ## Step 1. Create a SCIM connection
 
-* [Log in to the Materialize Console](/console/).
+* [Log in to the Materialize Console](/developer-tools/console/).
 
 * Navigate to **Account** > **Account Settings** > **Provisioning**.
 
@@ -156,7 +156,7 @@ corresponding database role and will work with group mapping.
 ## Step 4. Verify
 
 Have a user in a synced group connect to Materialize (e.g., via the [SQL
-Shell](/console/sql-shell/) or `psql`). On their first login via SSO,
+Shell](/developer-tools/console/sql-shell/) or `psql`). On their first login via SSO,
 Materialize auto-provisions the user's own database role (named from their
 identity claim). Group sync then grants them membership in the database roles
 matching their groups. The user's own role is auto-created. The group roles
@@ -174,7 +174,7 @@ JOIN mz_roles g ON rm.grantor = g.id;
 ```
 
 All grants and revokes performed by group sync are also recorded in
-[`mz_audit_events`](/reference/system-catalog/mz_catalog/#mz_audit_events).
+[`mz_audit_events`](/sql/system-catalog/mz_catalog/#mz_audit_events).
 
 ## How sync works
 
@@ -218,7 +218,7 @@ All grants and revokes performed by group sync are also recorded in
 ## Manage with Terraform
 
 Instead of the Console, you can manage SCIM connections and groups with the
-[Materialize Terraform provider](/manage/terraform/):
+[Materialize Terraform provider](/developer-tools/terraform/):
 
 | Resource | Description |
 |----------|-------------|
@@ -232,4 +232,4 @@ Instead of the Console, you can manage SCIM connections and groups with the
 - [Access control (RBAC)](/security/cloud/access-control/)
 - [Configure single sign-on (SSO)](/security/cloud/users-service-accounts/sso/)
 - [Invite users](/security/cloud/users-service-accounts/invite-users/)
-- [Manage with Terraform](/manage/terraform/)
+- [Manage with Terraform](/developer-tools/terraform/)

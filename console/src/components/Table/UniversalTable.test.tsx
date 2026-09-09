@@ -120,6 +120,95 @@ const PaginatedTable = ({
   );
 };
 
+/** Seeds a page index the caller chooses, as a URL-restored page would. */
+const TableAtPage = ({
+  data = testData,
+  pageSize = 2,
+  pageIndex,
+  manualPagination = false,
+}: {
+  data?: TestCluster[];
+  pageSize?: number;
+  pageIndex: number;
+  manualPagination?: boolean;
+}) => {
+  const table = useUniversalTable({
+    data,
+    columns,
+    pageSize,
+    manualPagination,
+    initialState: { pagination: { pageIndex, pageSize } },
+  });
+  return (
+    <div>
+      <UniversalTable table={table} data-testid="test-table" />
+      <TablePagination table={table} itemLabel="clusters" />
+      <div data-testid="page-index">
+        {table.getState().pagination.pageIndex}
+      </div>
+    </div>
+  );
+};
+
+/**
+ * Rows arrive after the first commit, the way a query's data does. The starting
+ * page has to survive that first render, when the table has nothing in it yet.
+ */
+const LateDataTable = ({
+  pageSize = 2,
+  pageIndex,
+}: {
+  pageSize?: number;
+  pageIndex: number;
+}) => {
+  const [data, setData] = React.useState<TestCluster[]>([]);
+  React.useEffect(() => {
+    setData(testData);
+  }, []);
+  const table = useUniversalTable({
+    data,
+    columns,
+    pageSize,
+    initialState: { pagination: { pageIndex, pageSize } },
+  });
+  return (
+    <div>
+      <UniversalTable table={table} data-testid="test-table" />
+      <TablePagination table={table} itemLabel="clusters" />
+      <div data-testid="page-index">
+        {table.getState().pagination.pageIndex}
+      </div>
+    </div>
+  );
+};
+
+/** Panel with draft state of its own, so its lifetime is observable. */
+const DraftFilterPanel = () => {
+  const [draft, setDraft] = React.useState("");
+  return (
+    <input
+      aria-label="draft"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+    />
+  );
+};
+
+const filterableColumns = [
+  columnHelper.accessor("name", {
+    header: "Name",
+    meta: { renderFilter: () => <DraftFilterPanel /> },
+  }),
+];
+
+const FilterableTable = () => {
+  const table = useUniversalTable({
+    data: testData,
+    columns: filterableColumns,
+  });
+  return <UniversalTable table={table} data-testid="test-table" />;
+};
+
 const footerColumns = [
   columnHelper.accessor("name", { header: "Name", footer: "Total" }),
   columnHelper.accessor("replicas", {
@@ -432,6 +521,92 @@ describe("UniversalTable", () => {
         ).toBeInTheDocument();
       });
       expect(screen.getByText("page 1 of 2")).toBeInTheDocument();
+    });
+
+    // A page index outlives the rows it was valid for whenever it comes from
+    // outside the table: a bookmarked URL, a link shared into a smaller
+    // environment. Slicing from it would render a header with no rows, and
+    // `TablePagination` hides itself at one page, so nothing would be left to
+    // page back with.
+    it("clamps a starting page past the last page", async () => {
+      await renderComponent(<TableAtPage pageIndex={9} pageSize={2} />);
+
+      expect(screen.getByTestId("page-index")).toHaveTextContent("2");
+      expect(screen.getByText("page 3 of 3")).toBeInTheDocument();
+      expect(screen.getAllByRole("row")).toHaveLength(2); // 1 header + 1 data
+    });
+
+    it("clamps to the only page when everything fits on it", async () => {
+      await renderComponent(<TableAtPage pageIndex={4} pageSize={10} />);
+
+      expect(screen.getByTestId("page-index")).toHaveTextContent("0");
+      expect(screen.getAllByRole("row")).toHaveLength(6); // 1 header + 5 data
+    });
+
+    it("leaves a valid starting page alone", async () => {
+      await renderComponent(<TableAtPage pageIndex={1} pageSize={2} />);
+
+      expect(screen.getByTestId("page-index")).toHaveTextContent("1");
+      expect(screen.getByText("page 2 of 3")).toBeInTheDocument();
+    });
+
+    it("keeps the starting page when the rows arrive after the first render", async () => {
+      await renderComponent(<LateDataTable pageIndex={2} pageSize={2} />);
+
+      // 5 rows over 3 pages, so page 3 is valid once the data lands. Clamping
+      // against the empty first render would have dropped the user to page 1
+      // before the rows that justify page 3 existed.
+      await waitFor(() =>
+        expect(screen.getByTestId("page-index")).toHaveTextContent("2"),
+      );
+      expect(screen.getByText("page 3 of 3")).toBeInTheDocument();
+    });
+
+    it("leaves the page alone when the table has no rows", async () => {
+      await renderComponent(
+        <TableAtPage data={[]} pageIndex={2} pageSize={2} />,
+      );
+
+      // No rows means no page count to judge the index against. A table with
+      // nothing in it shows nothing on any page, so holding the index costs
+      // nothing and keeps it for when rows appear.
+      expect(screen.getByTestId("page-index")).toHaveTextContent("2");
+    });
+
+    it("leaves the page alone under manual pagination", async () => {
+      // The page count belongs to the caller there, and TanStack reports -1
+      // for "not known yet", which must not read as "no pages".
+      await renderComponent(
+        <TableAtPage pageIndex={3} pageSize={2} manualPagination />,
+      );
+
+      expect(screen.getByTestId("page-index")).toHaveTextContent("3");
+    });
+  });
+
+  describe("Column filter panel", () => {
+    const openFilter = (user: ReturnType<typeof userEvent.setup>) =>
+      user.click(screen.getByRole("button", { name: "Filter name" }));
+
+    it("starts a panel fresh on each open", async () => {
+      const user = userEvent.setup();
+      await renderComponent(<FilterableTable />);
+
+      await openFilter(user);
+      await user.type(await screen.findByLabelText("draft"), "abandoned");
+      await openFilter(user);
+
+      // A panel that survived its popover would still be holding an edit the
+      // user typed and walked away from, which then contradicts the filter
+      // actually in force.
+      await openFilter(user);
+      expect(await screen.findByLabelText("draft")).toHaveValue("");
+    });
+
+    it("keeps the panel out of reach while closed", async () => {
+      await renderComponent(<FilterableTable />);
+
+      expect(screen.queryByLabelText("draft")).not.toBeInTheDocument();
     });
   });
 

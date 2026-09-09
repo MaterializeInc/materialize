@@ -23,6 +23,7 @@ mod types;
 mod value;
 
 pub mod oid;
+pub mod regproc;
 
 pub use types::{
     ANYCOMPATIBLELIST, ANYCOMPATIBLEMAP, LIST, MAP, Type, TypeConversionError, TypeFromOidError,

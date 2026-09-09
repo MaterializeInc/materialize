@@ -30,10 +30,10 @@ import { SetNodeExpanded, Tree, TreeNode } from "~/components/Tree";
 import { DraggableEvent, useDrag } from "~/hooks/useDrag";
 import { useSyncObjectToSearchParams } from "~/hooks/useSyncObjectToSearchParams";
 import { InfoIcon } from "~/icons";
-import { useAllObjects } from "~/store/allObjects";
+import { useAllObjectsLive } from "~/store/allObjectsCollection";
 import { MaterializeTheme } from "~/theme";
 
-import { useAllNamespaces } from "./allNamespaces";
+import { useAllNamespacesLive } from "./allNamespacesCollection";
 import { Filters } from "./Filters";
 import { objectIcon } from "./icons";
 import {
@@ -132,12 +132,12 @@ export const ObjectExplorer = () => {
     data: schemas,
     snapshotComplete: schemaSnapshotComplete,
     isError: isSchemaError,
-  } = useAllNamespaces();
+  } = useAllNamespacesLive();
   const {
     data: objects,
     snapshotComplete: objectSnapshotComplete,
     isError: isObjectError,
-  } = useAllObjects();
+  } = useAllObjectsLive();
   const location = useLocation();
   const { colors } = useTheme<MaterializeTheme>();
   const params = useParams<ObjectExplorerParams>();

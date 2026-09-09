@@ -30,6 +30,7 @@ pub mod bits;
 #[cfg(feature = "bytes")]
 pub mod bytes;
 pub mod cast;
+pub mod cgroup;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
 #[cfg(feature = "async")]
 pub mod channel;

@@ -39,6 +39,7 @@ use mz_catalog::durable::{
 };
 use mz_catalog::expr_cache::{
     ExpressionCacheConfig, ExpressionCacheHandle, GlobalExpressions, LocalExpressions,
+    latest_item_version,
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
@@ -52,7 +53,7 @@ use mz_ore::now::{SYSTEM_TIME, to_datetime};
 use mz_ore::{instrument, soft_assert_no_log};
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::is_unstable_schema;
-use mz_repr::{CatalogItemId, Diff, GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion, Timestamp};
 use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogItemType, RoleMembership, RoleVars};
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::CommentObjectId;
@@ -386,16 +387,17 @@ impl Catalog {
                 ?enable_expr_cache_dyncfg,
                 "using expression cache for startup"
             );
-            let current_ids = txn
+            let current_items = txn
                 .get_items()
                 .flat_map(|item| {
-                    let gid = item.global_id.clone();
-                    let gids: Vec<_> = item.extra_versions.values().cloned().collect();
-                    std::iter::once(gid).chain(gids)
+                    let item_version = latest_item_version(&item.extra_versions);
+                    std::iter::once(item.global_id)
+                        .chain(item.extra_versions.into_values())
+                        .map(move |gid| (gid, item_version))
                 })
                 .chain(
                     txn.get_system_object_mappings()
-                        .map(|som| som.unique_identifier.global_id),
+                        .map(|som| (som.unique_identifier.global_id, RelationVersion::root())),
                 )
                 .collect();
             let dyncfgs = config.persist_client.dyncfgs().clone();
@@ -415,7 +417,7 @@ impl Catalog {
                     .get_expression_cache_shard()
                     .expect("expression cache shard should exist for opened catalogs"),
                 persist: config.persist_client,
-                current_ids,
+                current_items,
                 remove_prior_versions: !config.read_only,
                 compact_shard: config.read_only,
                 dyncfgs,
@@ -1447,8 +1449,14 @@ fn remove_invalid_config_param_role_defaults_migration(
     Ok(())
 }
 
-/// Cluster Replicas may be created ephemerally during an alter statement, these replicas
-/// are marked as pending and should be cleaned up on catalog open.
+/// Drops replicas left durably marked `pending`.
+///
+/// No runtime path creates one anymore. An upgrade can still come from a version
+/// whose staged reconfiguration machine crashed between the pending-create commit
+/// and the finalize, and those replicas are excluded from the cluster
+/// controller's ownership test, so this catalog-open sweep is their only
+/// remaining cleaner. It goes away together with the durable `pending` field,
+/// once no supported upgrade source can still write one.
 fn remove_pending_cluster_replicas_migration(
     tx: &mut Transaction,
     boot_ts: mz_repr::Timestamp,

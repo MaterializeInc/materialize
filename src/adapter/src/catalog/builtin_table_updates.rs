@@ -18,10 +18,10 @@ use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
     MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
     MZ_HISTORY_RETENTION_STRATEGIES, MZ_INDEX_COLUMNS, MZ_LICENSE_KEYS, MZ_LIST_TYPES,
-    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_OBJECT_DEPENDENCIES,
-    MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH,
-    MZ_SESSIONS, MZ_SOURCE_REFERENCES, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
-    MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_WEBHOOKS_SOURCES,
+    MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS,
+    MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SOURCE_REFERENCES,
+    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TYPE_PG_METADATA, MZ_TYPES,
+    MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::durable::SourceReferences;
 use mz_catalog::memory::error::Error;
@@ -51,6 +51,7 @@ use mz_sql::names::SchemaSpecifier;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::client::TableData;
 use smallvec::smallvec;
+use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::active_compute_sink::ActiveSubscribe;
@@ -100,19 +101,6 @@ impl CatalogState {
     ) -> BuiltinTableUpdate<CatalogItemId> {
         let id = self.resolve_builtin_table(id);
         BuiltinTableUpdate { id, data }
-    }
-
-    pub fn pack_depends_update(
-        &self,
-        depender: CatalogItemId,
-        dependee: CatalogItemId,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let row = Row::pack_slice(&[
-            Datum::String(&depender.to_string()),
-            Datum::String(&dependee.to_string()),
-        ]);
-        BuiltinTableUpdate::row(&*MZ_OBJECT_DEPENDENCIES, row, diff)
     }
 
     pub(super) fn pack_role_auth_update(
@@ -204,14 +192,6 @@ impl CatalogState {
             // mz_catalog_raw, so connections need no special packing here.
             CatalogItem::Connection(_) => vec![],
         };
-
-        if !entry.item().is_temporary() {
-            // Populate or clean up the `mz_object_dependencies` table.
-            // TODO(jkosh44) Unclear if this table wants to include all uses or only references.
-            for dependee in entry.item().references().items() {
-                updates.push(self.pack_depends_update(id, *dependee, diff))
-            }
-        }
 
         // Always report the latest for an objects columns.
         if let Some(desc) = entry.relation_desc_latest() {
@@ -574,6 +554,7 @@ impl CatalogState {
                     Datum::String(&id.to_string()),
                     Datum::UInt32(pg_metadata.typinput_oid),
                     Datum::UInt32(pg_metadata.typreceive_oid),
+                    Datum::UInt32(pg_metadata.typsend_oid),
                 ]),
                 diff,
             ));
@@ -811,12 +792,13 @@ impl CatalogState {
         &self,
         id: GlobalId,
         subscribe: &ActiveSubscribe,
+        session_uuid: Uuid,
         diff: Diff,
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
         let mut row = Row::default();
         let mut packer = row.packer();
         packer.push(Datum::String(&id.to_string()));
-        packer.push(Datum::Uuid(subscribe.session_uuid));
+        packer.push(Datum::Uuid(session_uuid));
         packer.push(Datum::String(&subscribe.cluster_id.to_string()));
 
         let start_dt = mz_ore::now::to_datetime(subscribe.start_time);

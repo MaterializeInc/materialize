@@ -28,6 +28,9 @@ When run without a subcommand (`mz-deploy apply`):
 Each step is idempotent — running `apply` multiple times converges
 to the same state.
 
+`apply` does not manage sinks. Because sinks go on top of your
+materialized views, they are managed by `stage` and `promote` instead.
+
 When run with a subcommand (`mz-deploy apply clusters`), only that
 type is applied.
 

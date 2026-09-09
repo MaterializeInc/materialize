@@ -21,7 +21,7 @@ import time
 from collections.abc import Callable
 from copy import copy
 from datetime import datetime, timedelta
-from statistics import median, quantiles
+from statistics import quantiles
 from textwrap import dedent
 from threading import Event, Thread
 
@@ -38,7 +38,7 @@ from psycopg.errors import (
 )
 
 from materialize import buildkite, ui
-from materialize.mzcompose import sanitizer_enabled
+from materialize.mzcompose import cluster_replica_size_map, sanitizer_enabled
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -1293,6 +1293,77 @@ def workflow_test_notice_drop_restart(c: Composition) -> None:
         assert (
             notice_count() == 0
         ), "expected the notice to be retracted after DROP SCHEMA ... CASCADE"
+
+
+def workflow_test_billed_as_size_removed(c: Composition) -> None:
+    """
+    A replica whose BILLED AS size later disappears from the replica size
+    map must still be droppable, and other cluster DDL must keep working
+    (SQL-658). The size map is process configuration, so the removal is a
+    restart with a smaller map. Soft assertions are off for the restarted
+    process: the tolerant credit lookup soft-panics on the stale size by
+    design, and the production behavior is what is under test.
+    """
+    c.up("materialized")
+
+    c.sql(
+        """
+        CREATE CLUSTER billed_as_test SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
+        CREATE CLUSTER REPLICA billed_as_test.unbilled
+            SIZE 'scale=1,workers=1', INTERNAL, BILLED AS 'scale=2,workers=4';
+        """,
+        port=6877,
+        user="mz_system",
+    )
+
+    sizes = cluster_replica_size_map()
+    del sizes["scale=2,workers=4"]
+    with c.override(
+        Materialized(
+            propagate_crashes=False,
+            external_metadata_store=True,
+            additional_system_parameter_defaults={
+                "unsafe_enable_unsafe_functions": "true",
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
+            },
+            support_external_clusterd=True,
+            cluster_replica_size=sizes,
+            soft_assertions=False,
+        )
+    ):
+        c.kill("materialized")
+        c.up("materialized")
+
+        rows = c.sql_query("""
+            SELECT r.name, r.size
+            FROM mz_cluster_replicas r
+            JOIN mz_clusters cl ON r.cluster_id = cl.id
+            WHERE cl.name = 'billed_as_test'
+            """)
+        assert len(rows) == 1 and tuple(rows[0]) == (
+            "unbilled",
+            "scale=1,workers=1",
+        ), rows
+
+        # Every cluster DDL sums the credit rate of all existing replicas,
+        # including the one with the stale billing size.
+        c.sql(
+            """
+            CREATE CLUSTER billed_as_other SIZE 'scale=1,workers=1';
+            DROP CLUSTER REPLICA billed_as_test.unbilled;
+            CREATE CLUSTER REPLICA billed_as_test.unbilled2 SIZE 'scale=1,workers=1', INTERNAL;
+            DROP CLUSTER billed_as_other;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        rows = c.sql_query("""
+            SELECT r.name
+            FROM mz_cluster_replicas r
+            JOIN mz_clusters cl ON r.cluster_id = cl.id
+            WHERE cl.name = 'billed_as_test'
+            """)
+        assert [tuple(r) for r in rows] == [("unbilled2",)], rows
 
 
 def workflow_test_upsert(c: Composition) -> None:
@@ -4877,18 +4948,24 @@ def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
     disarm = f"SET failpoints = '{failpoint}=off'"
 
     def occ_writes() -> tuple[int, int]:
-        """Read-then-writes the OCC path sequenced, and how many of their write
-        attempts lost the race for their write timestamp."""
+        """Session read-then-writes sequenced through OCC, and how many of their
+        write attempts lost the race for their write timestamp."""
         metric = "mz_occ_read_then_write_retry_count"
         metrics = c.exec(
             "materialized", "curl", "localhost:6878/metrics", capture=True
         ).stdout
-        values = {
-            line.split()[0]: int(float(line.split()[1]))
-            for line in metrics.splitlines()
-            if line.startswith((f"{metric}_count ", f"{metric}_sum "))
-        }
-        return values[f"{metric}_count"], values[f"{metric}_sum"]
+        values = {}
+        for suffix in ["count", "sum"]:
+            prefix = f'{metric}_{suffix}{{caller="session"}} '
+            values[suffix] = next(
+                (
+                    int(float(line.split()[1]))
+                    for line in metrics.splitlines()
+                    if line.startswith(prefix)
+                ),
+                0,
+            )
+        return values["count"], values["sum"]
 
     def guard_rows(cur: Cursor, key: int) -> int:
         """Rows of `guard` for `key`, which is what the UPDATE's selection reads."""
@@ -5117,7 +5194,9 @@ def workflow_test_occ_sealed_input_write_stands_alone(c: Composition) -> None:
             "materialized", "curl", "localhost:6878/metrics", capture=True
         ).stdout
         assert any(
-            line.startswith("mz_occ_read_then_write_retry_count_count ")
+            line.startswith(
+                'mz_occ_read_then_write_retry_count_count{caller="session"} '
+            )
             and float(line.split()[1]) > 0
             for line in metrics.splitlines()
         ), "no read-then-write went through the OCC path"
@@ -5125,6 +5204,89 @@ def workflow_test_occ_sealed_input_write_stands_alone(c: Composition) -> None:
         write = "INSERT INTO dst SELECT a FROM sealed"
         rows = rows_surviving(write)
         assert rows == 3, f"{write} succeeded, then lost {3 - rows} of its 3 rows"
+
+
+def workflow_test_optimizer_panics_are_errors(c: Composition) -> None:
+    """A panic during optimization fails the statement and leaves environmentd
+    running, on every sequencing path and at every optimization stage the
+    path reaches.
+
+    Each path is meant to run the optimizer through `catch_unwind_optimize`,
+    which turns a panic into an internal error. A path that calls the
+    optimizer directly lets the panic reach the panic hook, which aborts the
+    process; the OCC read-then-write path did that (SQL-686). The
+    `optimize_mir_local`, `optimize_dataflow` and `finalize_dataflow`
+    failpoints sit at the start of the three stages, so a path with two
+    wrapped calls gets both of them exercised.
+    """
+    LOCAL = "optimize_mir_local"
+    GLOBAL = "optimize_dataflow"
+    LIR = "finalize_dataflow"
+    # Statements are expected to fail, so nothing they would create exists
+    # for the next round.
+    cases = [
+        ("SELECT * FROM t", [LOCAL, GLOBAL, LIR]),
+        ("SUBSCRIBE (SELECT * FROM t)", [LOCAL, GLOBAL, LIR]),
+        ("CREATE VIEW v2 AS SELECT * FROM t", [LOCAL]),
+        ("CREATE MATERIALIZED VIEW mv AS SELECT * FROM t", [LOCAL, GLOBAL, LIR]),
+        ("CREATE INDEX i ON t (a)", [GLOBAL, LIR]),
+        ("DELETE FROM t WHERE a IN (SELECT a FROM v)", [LOCAL, GLOBAL, LIR]),
+    ]
+
+    def check(frontend_peek: bool) -> None:
+        c.sql(
+            f"ALTER SYSTEM SET enable_frontend_peek_sequencing = {frontend_peek}",
+            port=6877,
+            user="mz_system",
+        )
+        # The peek flag is read when a connection is set up, so use a fresh one.
+        with c.sql_cursor() as cur:
+            # A SUBSCRIBE that unexpectedly succeeds would otherwise wait for
+            # rows forever.
+            cur.execute("SET statement_timeout = '30s'")
+            for statement, failpoints in cases:
+                for failpoint in failpoints:
+                    cur.execute(
+                        f"SET failpoints = '{failpoint}=panic(forced optimizer panic)'".encode()
+                    )
+                    try:
+                        cur.execute(statement.encode())
+                    except DatabaseError as e:
+                        assert "unexpected panic during query optimization" in str(e), (
+                            statement,
+                            failpoint,
+                            e,
+                        )
+                    else:
+                        raise AssertionError(
+                            f"{statement!r} succeeded with {failpoint} set to panic"
+                        )
+                    finally:
+                        cur.execute(f"SET failpoints = '{failpoint}=off'".encode())
+            # The statements failed on their own; the process they ran in did not.
+            cur.execute("SELECT count(*) FROM t")
+            assert cur.fetchall() == [(1,)]
+
+    # Read at startup, so the read-then-write path needs a restart to switch.
+    for occ in (False, True):
+        with c.override(
+            Materialized(
+                additional_system_parameter_defaults={
+                    "enable_adapter_frontend_occ_read_then_write": str(occ).lower()
+                },
+            )
+        ):
+            c.up("materialized")
+            c.sql(dedent("""
+                DROP TABLE IF EXISTS t CASCADE;
+                CREATE TABLE t (a int);
+                INSERT INTO t VALUES (1);
+                CREATE VIEW v AS SELECT a FROM t;
+                """))
+            for frontend_peek in (False, True):
+                check(frontend_peek)
+            c.kill("materialized")
+            c.rm("materialized")
 
 
 def workflow_test_refresh_mv_warmup(
@@ -6318,7 +6480,6 @@ def workflow_test_zero_downtime_reconfigure(
             key${kafka-ingest.iteration}:value${kafka-ingest.iteration}
 
             $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
             CREATE CLUSTER cluster1 ( SIZE = 'scale=1,workers=1');
             GRANT ALL ON CLUSTER cluster1 TO materialize;
 
@@ -6367,12 +6528,12 @@ def workflow_test_zero_downtime_reconfigure(
         # replica set and background ALTER on, this writes a durable
         # reconfiguration record and returns immediately; the controller brings up
         # a fresh target replica alongside r1, re-hydrates it, then cuts the
-        # realized size over and drops r1. `WAIT FOR` resolves to ON TIMEOUT
-        # COMMIT, so the reconfiguration commits even if its deadline passes during
-        # the restart below.
+        # realized size over and drops r1. Explicit ON TIMEOUT COMMIT ensures the
+        # reconfiguration commits even if its deadline passes during the restart
+        # below.
         c.sql(
             """
-            ALTER CLUSTER cluster1 SET (SIZE = 'scale=1,workers=2') WITH (WAIT FOR '10s')
+            ALTER CLUSTER cluster1 SET (SIZE = 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '10s', ON TIMEOUT 'COMMIT'))
             """,
             port=6877,
             user="mz_system",
@@ -6435,13 +6596,6 @@ def workflow_test_zero_downtime_reconfigure(
             > SELECT count(*) FROM kafka_tbl
             1000
             """))
-        c.sql(
-            """
-            ALTER SYSTEM RESET enable_zero_downtime_cluster_reconfiguration;
-            """,
-            port=6877,
-            user="mz_system",
-        )
 
 
 def workflow_test_pending_replica_audit_events(
@@ -6457,11 +6611,10 @@ def workflow_test_pending_replica_audit_events(
     """
     c.up("materialized")
 
-    # Enable the WAIT surface and drive the controller tick down so the (empty)
-    # cluster's reconfiguration converges quickly.
+    # Drive the controller tick down so the (empty) cluster's reconfiguration
+    # converges quickly.
     c.sql(
         """
-        ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
         ALTER SYSTEM SET cluster_controller_tick_interval = '5ms';
         CREATE CLUSTER test_audit (SIZE = 'scale=1,workers=1');
         GRANT ALL ON CLUSTER test_audit TO materialize;
@@ -6474,8 +6627,8 @@ def workflow_test_pending_replica_audit_events(
     # the replica set and background ALTER on, this writes a durable
     # reconfiguration record and returns immediately; the controller brings up a
     # fresh target replica, cuts the size over, and drops the old one. `WAIT FOR`
-    # resolves to ON TIMEOUT COMMIT with a long deadline, so the in-flight
-    # reconfiguration commits once the (empty) target hydrates.
+    # uses the safe rollback action with a long deadline, and the in-flight
+    # reconfiguration finalizes once the (empty) target hydrates.
     c.sql(
         """
         ALTER CLUSTER test_audit SET (SIZE = 'scale=1,workers=2') WITH (WAIT FOR '300s')
@@ -6556,7 +6709,6 @@ def workflow_test_pending_replica_audit_events(
     c.sql(
         """
         DROP CLUSTER test_audit CASCADE;
-        ALTER SYSTEM RESET enable_zero_downtime_cluster_reconfiguration;
         """,
         port=6877,
         user="mz_system",
@@ -8188,6 +8340,86 @@ def workflow_test_prometheus_metrics(c: Composition) -> None:
                 """))
 
 
+def workflow_test_resource_usage(c: Composition) -> None:
+    """Test that mz_cluster_replica_resource_usage reports observations per replica process."""
+
+    c.up("materialized")
+
+    # Sample fast, so the test does not have to wait out the default interval.
+    c.sql(
+        "ALTER SYSTEM SET mz_metrics_usage_refresh_interval = '1s';",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql("CREATE CLUSTER cluster1 SIZE 'scale=2,workers=2';")
+
+    def observations() -> dict[tuple[int, str, str], int]:
+        with c.sql_cursor() as cursor:
+            cursor.execute(b"SET cluster = cluster1")
+            # `process_id` and `value` are `uint8`, which psycopg has no adapter for and hands
+            # back as strings. Cast so the comparisons below are numeric, not lexicographic.
+            cursor.execute(b"""
+                SELECT process_id::int8, source, metric, value::int8
+                FROM mz_introspection.mz_cluster_replica_resource_usage
+                """)
+            return {(r[0], r[1], r[2]): r[3] for r in cursor.fetchall()}
+
+    # Both processes must report, and every process must report the same set of metrics: the two
+    # run the same binary in the same environment, so a metric readable on one and not the other
+    # means a reader failed rather than that the source is unavailable.
+    for _ in range(60):
+        before = observations()
+        processes = {process_id for process_id, _, _ in before}
+        per_process = {
+            process_id: {(s, m) for p, s, m in before if p == process_id}
+            for process_id in processes
+        }
+        if processes == {0, 1} and len(set(map(frozenset, per_process.values()))) == 1:
+            break
+        time.sleep(1)
+    else:
+        assert False, f"resource usage not reported for both processes: {before}"
+
+    # `rusage` and `proc_status` are available on any Linux replica, so their absence is a bug
+    # rather than an unsupported configuration. cgroup metrics are deliberately not asserted:
+    # `memory.peak` and `memory.swap.peak` depend on the kernel version.
+    metrics = {(source, metric) for _, source, metric in before}
+    for required in [("rusage", "max_rss"), ("proc_status", "vm_rss")]:
+        assert required in metrics, f"{required} missing from {sorted(metrics)}"
+
+    # Every reported value must be a plain number. Nothing is allowed to surface as a sentinel.
+    for key, value in before.items():
+        assert value >= 0, f"{key} reported {value}"
+
+    # Do some work to push usage up. Peaks must not go backwards, whether or not this particular
+    # workload moves them.
+    c.sql("""
+        SET cluster = cluster1;
+        CREATE TABLE t (a int);
+        INSERT INTO t SELECT generate_series(1, 500000);
+        CREATE MATERIALIZED VIEW mv AS SELECT count(*) FROM t;
+        """)
+    with c.sql_cursor() as cursor:
+        cursor.execute(b"SET cluster = cluster1")
+        cursor.execute(b"SELECT * FROM mv")
+        cursor.fetchall()
+
+    # Give the sampler a few intervals to observe the new usage.
+    time.sleep(5)
+
+    after = observations()
+
+    # Peaks are monotonic, whether the kernel maintains them or the sampler folds them. Current
+    # values are free to fall, so they are deliberately not checked here.
+    peaks = [key for key in before if key[2].endswith("peak") or key[2] == "max_rss"]
+    assert peaks, f"no peak metrics reported: {sorted(before)}"
+    for key in peaks:
+        assert key in after, f"{key} stopped being reported"
+        assert (
+            after[key] >= before[key]
+        ), f"{key} peak fell from {before[key]} to {after[key]}"
+
+
 def workflow_test_metrics_null_label(c: Composition) -> None:
     """SQL-198: `/metrics/mz_usage` must not abort environmentd when a
     Prometheus label column is SQL NULL. An unorchestrated cluster replica has
@@ -8227,145 +8459,79 @@ def workflow_test_metrics_null_label(c: Composition) -> None:
 def workflow_test_controller_oracle_stall(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
-    """Scheduled-cluster count must not determine unrelated reconciliation latency."""
-    parser.add_argument("--latency-ms", type=int, default=500)
-    parser.add_argument("--scheduled-clusters", type=int, default=8)
+    """SQL-569: the cluster controller's timestamp-oracle reads must not grow
+    with the number of `ON REFRESH` clusters.
+
+    The controller gathers refresh-window inputs per scheduled cluster and then
+    performs one shared oracle read for the whole reconciliation-phase batch, so
+    a tick costs a bounded number of oracle round trips no matter how many
+    clusters are scheduled. This counts the oracle's own `read_ts` operations
+    over an idle window, first with `N` scheduled clusters and then with `2N`,
+    and requires the count not to scale with the cluster count.
+
+    The measurement counts operations rather than timing an unrelated cluster's
+    reconciliation under injected oracle latency. Reconciliation latency is the
+    per-tick oracle cost multiplied by however many controller ticks that
+    convergence happens to span, and no test controls the second factor, so a
+    latency measurement carries noise the size of the effect.
+    """
+    parser.add_argument("--scheduled-clusters", type=int, default=4)
+    parser.add_argument("--observation-seconds", type=float, default=10.0)
+    parser.add_argument("--tick-interval-ms", type=int, default=100)
     args = parser.parse_args()
-    if args.latency_ms < 100:
-        parser.error("--latency-ms must be at least 100")
-    if args.scheduled_clusters < 8:
-        parser.error("--scheduled-clusters must be at least 8")
-    oracle_port = 26258
+    if args.scheduled_clusters < 1:
+        parser.error("--scheduled-clusters must be at least 1")
+    if args.observation_seconds < 1:
+        parser.error("--observation-seconds must be at least 1")
 
-    def set_latency(toxi: str, latency_ms: int) -> None:
-        requests.delete(f"{toxi}/proxies/oracle/toxics/lat")
-        if latency_ms > 0:
-            response = requests.post(
-                f"{toxi}/proxies/oracle/toxics",
-                json={
-                    "name": "lat",
-                    "type": "latency",
-                    "attributes": {"latency": latency_ms, "jitter": 0},
-                },
-            )
-            assert response.status_code == 200, response.text
+    c.up("materialized")
+    c.sql(
+        "ALTER SYSTEM SET cluster_controller_tick_interval = "
+        f"'{args.tick_interval_ms}ms'",
+        port=6877,
+        user="mz_system",
+    )
+    mz = c.sql_cursor()
 
-    with c.override(
-        Materialized(
-            external_metadata_store=True,
-            options=[
-                f"--timestamp-oracle-url=postgres://root@toxiproxy:{oracle_port}"
-                "?options=--search_path=tsoracle",
-            ],
+    def oracle_read_ops() -> int:
+        """The oracle's `read_ts` operation count.
+
+        One operation is one round trip to the oracle's backing store. The
+        batching oracle coalesces only concurrent callers, and a controller that
+        awaited one read per scheduled cluster would await them serially, so the
+        per-cluster reads a batch replaces are individually counted here.
+        """
+        metric = 'mz_ts_oracle_started_count{op="read_ts"}'
+        result = c.exec(
+            "materialized",
+            "curl",
+            "-sf",
+            "http://localhost:6878/metrics",
+            capture=True,
         )
-    ):
-        c.up("toxiproxy")
-        toxi = f"http://localhost:{c.default_port('toxiproxy')}"
-        requests.delete(f"{toxi}/proxies/oracle")
-        response = requests.post(
-            f"{toxi}/proxies",
-            json={
-                "name": "oracle",
-                "listen": f"0.0.0.0:{oracle_port}",
-                "upstream": "postgres-metadata:26257",
-                "enabled": True,
-            },
-        )
-        assert response.status_code == 201, response.text
-        c.up("materialized")
+        assert (
+            result.returncode == 0
+        ), f"metrics endpoint failed (rc={result.returncode})"
+        for line in result.stdout.splitlines():
+            if line.startswith(metric):
+                return int(float(line.split()[-1]))
+        raise AssertionError(f"{metric} is not reported")
 
-        c.sql(
-            "ALTER SYSTEM SET cluster_controller_tick_interval = '100ms'",
-            port=6877,
-            user="mz_system",
-        )
-        mz = c.sql_cursor()
-        mz.execute("SET transaction_isolation = 'serializable'")
+    def reads_per_second() -> float:
+        """Oracle reads per second over an otherwise idle observation window.
 
-        def converge_ms(replication_factor: int) -> float:
-            start = time.monotonic()
-            mz.execute(
-                sql.SQL("ALTER CLUSTER cc_probe SET (REPLICATION FACTOR {})").format(
-                    sql.Literal(replication_factor)
-                )
-            )
-            while True:
-                mz.execute(
-                    "SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c "
-                    "ON r.cluster_id = c.id WHERE c.name = 'cc_probe'"
-                )
-                if mz.fetchall()[0][0] == replication_factor:
-                    return (time.monotonic() - start) * 1000
-                assert (
-                    time.monotonic() - start < 120
-                ), f"cc_probe never reached rf {replication_factor}"
-                time.sleep(0.05)
+        The window must stay free of SQL, which would contribute reads of its
+        own, so the counter is scraped over HTTP rather than queried.
+        """
+        before = oracle_read_ops()
+        before_at = time.monotonic()
+        time.sleep(args.observation_seconds)
+        after = oracle_read_ops()
+        after_at = time.monotonic()
+        return (after - before) / (after_at - before_at)
 
-        def convergence_samples() -> list[float]:
-            samples = []
-            replication_factor = 1
-            for _ in range(3):
-                samples.append(converge_ms(replication_factor))
-                replication_factor = 1 - replication_factor
-            return samples
-
-        def await_scheduled_replicas() -> None:
-            start = time.monotonic()
-            while True:
-                mz.execute(
-                    "SELECT count(DISTINCT c.id), count(*) "
-                    "FROM mz_clusters c JOIN mz_cluster_replicas r "
-                    "ON r.cluster_id = c.id "
-                    "WHERE c.name LIKE 'cc\\_sched%' ESCAPE '\\'"
-                )
-                cluster_count, replica_count = mz.fetchall()[0]
-                if (
-                    cluster_count == args.scheduled_clusters
-                    and replica_count == args.scheduled_clusters
-                ):
-                    return
-                if time.monotonic() - start >= 120:
-                    mz.execute(
-                        "SELECT c.name, count(r.id) "
-                        "FROM mz_clusters c LEFT JOIN mz_cluster_replicas r "
-                        "ON r.cluster_id = c.id "
-                        "WHERE c.name LIKE 'cc\\_sched%' ESCAPE '\\' "
-                        "GROUP BY c.name ORDER BY c.name"
-                    )
-                    replica_counts = mz.fetchall()
-                    raise AssertionError(
-                        "scheduled cluster replica counts after 120s: "
-                        f"{replica_counts}. Expected exactly "
-                        f"{args.scheduled_clusters} cc_sched clusters with "
-                        "exactly one replica each"
-                    )
-                time.sleep(0.05)
-
-        set_latency(toxi, 0)
-        mz.execute(
-            "CREATE CLUSTER cc_probe "
-            "(SIZE 'scale=1,workers=1', REPLICATION FACTOR 0)"
-        )
-
-        no_latency_samples = convergence_samples()
-        no_latency_ms = median(no_latency_samples)
-        converge_ms(0)
-
-        set_latency(toxi, args.latency_ms)
-        control_samples = convergence_samples()
-        control_ms = median(control_samples)
-        set_latency(toxi, 0)
-        latency_increase_ms = control_ms - no_latency_ms
-        minimum_increase_ms = args.latency_ms / 2
-        assert latency_increase_ms >= minimum_increase_ms, (
-            f"injecting {args.latency_ms}ms oracle latency increased the control "
-            f"measurement by only {latency_increase_ms:.0f}ms, expected at least "
-            f"{minimum_increase_ms:.0f}ms. The oracle may be bypassing toxiproxy"
-        )
-
-        converge_ms(0)
-        mz.execute("CREATE TABLE cc_sched_t (x int)")
-        for i in range(args.scheduled_clusters):
+    def create_scheduled_clusters(first: int, count: int) -> None:
+        for i in range(first, first + count):
             cluster_name = sql.Identifier(f"cc_sched{i}")
             mz.execute(
                 sql.SQL(
@@ -8382,24 +8548,74 @@ def workflow_test_controller_oracle_stall(
                 ).format(sql.Identifier(f"cc_sched{i}_mv"), cluster_name)
             )
 
-        await_scheduled_replicas()
-        set_latency(toxi, args.latency_ms)
-        stalled_samples = convergence_samples()
-        stalled_ms = median(stalled_samples)
-        set_latency(toxi, 0)
+    def await_scheduled_replicas(expected: int) -> None:
+        start = time.monotonic()
+        while True:
+            mz.execute(
+                "SELECT count(DISTINCT c.id), count(*) "
+                "FROM mz_clusters c JOIN mz_cluster_replicas r "
+                "ON r.cluster_id = c.id "
+                "WHERE c.name LIKE 'cc\\_sched%' ESCAPE '\\'"
+            )
+            cluster_count, replica_count = mz.fetchall()[0]
+            if cluster_count == expected and replica_count == expected:
+                return
+            if time.monotonic() - start >= 120:
+                mz.execute(
+                    "SELECT c.name, count(r.id) "
+                    "FROM mz_clusters c LEFT JOIN mz_cluster_replicas r "
+                    "ON r.cluster_id = c.id "
+                    "WHERE c.name LIKE 'cc\\_sched%' ESCAPE '\\' "
+                    "GROUP BY c.name ORDER BY c.name"
+                )
+                replica_counts = mz.fetchall()
+                raise AssertionError(
+                    "scheduled cluster replica counts after 120s: "
+                    f"{replica_counts}. Expected exactly {expected} cc_sched "
+                    "clusters with exactly one replica each"
+                )
+            time.sleep(0.05)
 
-    excess_ms = stalled_ms - control_ms
-    ceiling_ms = 4 * args.latency_ms
-    print(f"cc_probe 0 -> 1 replica at {args.latency_ms}ms oracle latency:")
-    print(f"  no injected latency : {no_latency_ms:.0f}ms")
-    print(f"  0 scheduled clusters : {control_ms:.0f}ms")
-    print(f"  {args.scheduled_clusters} scheduled clusters : {stalled_ms:.0f}ms")
-    print(
-        f"  excess : {excess_ms:.0f}ms (ceiling {ceiling_ms}ms, "
-        "expected bounded oracle round-trips per controller phase)"
+    mz.execute("CREATE TABLE cc_sched_t (x int)")
+
+    # The controller reads the oracle only for a refresh-window batch, so with no
+    # scheduled cluster this window carries whatever else in the system reads the
+    # oracle while idle. It is the baseline both measurements subtract.
+    idle_rps = reads_per_second()
+
+    create_scheduled_clusters(0, args.scheduled_clusters)
+    await_scheduled_replicas(args.scheduled_clusters)
+    single_rps = reads_per_second()
+
+    create_scheduled_clusters(args.scheduled_clusters, args.scheduled_clusters)
+    await_scheduled_replicas(2 * args.scheduled_clusters)
+    double_rps = reads_per_second()
+
+    single_excess = single_rps - idle_rps
+    double_excess = double_rps - idle_rps
+    print("oracle read_ts operations per second while idle:")
+    print(f"  0 scheduled clusters : {idle_rps:.1f}")
+    print(f"  {args.scheduled_clusters} scheduled clusters : {single_rps:.1f}")
+    print(f"  {2 * args.scheduled_clusters} scheduled clusters : {double_rps:.1f}")
+
+    # A tick reads the oracle once per refresh-window batch, so a reconciling
+    # scheduled cluster contributes on the order of one read per tick. The floor
+    # sits far below that because it only has to establish that the batch path
+    # runs at all: the tick interval is a floor on the cadence, not a promise,
+    # and a busy machine ticks slower than the configured interval.
+    minimum_excess = 0.25 * 1000 / args.tick_interval_ms
+    assert single_excess >= minimum_excess, (
+        f"{args.scheduled_clusters} scheduled clusters added only "
+        f"{single_excess:.1f} oracle reads per second over the idle baseline, "
+        f"expected at least {minimum_excess:.1f}. The controller may not be "
+        "reconciling them, which would leave this test measuring nothing"
     )
-    assert excess_ms < ceiling_ms, (
-        f"{args.scheduled_clusters} unrelated ON REFRESH clusters delayed the "
-        f"probe cluster's reconciliation by {excess_ms:.0f}ms "
-        f"(ceiling {ceiling_ms}ms)"
+    growth = double_excess / single_excess
+    ceiling = 1.5
+    print(f"  growth from doubling the cluster count : {growth:.2f}x")
+    assert growth < ceiling, (
+        f"doubling the scheduled cluster count from {args.scheduled_clusters} to "
+        f"{2 * args.scheduled_clusters} multiplied the controller's oracle reads "
+        f"by {growth:.2f}x (ceiling {ceiling}x), so the reads did not stay "
+        "bounded per reconciliation phase"
     )

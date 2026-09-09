@@ -209,7 +209,6 @@ pub(crate) struct MetadataMap(BTreeMap<String, Bytes>);
 ///
 /// It is an error to reuse key names, or to change the type associated with a particular name.
 /// It is polite to choose short names, since they get serialized alongside every struct.
-#[allow(unused)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub(crate) struct MetadataKey<V, P = V> {
     name: &'static str,
@@ -217,7 +216,6 @@ pub(crate) struct MetadataKey<V, P = V> {
 }
 
 impl<V, P> MetadataKey<V, P> {
-    #[allow(unused)]
     pub(crate) const fn new(name: &'static str) -> Self {
         MetadataKey {
             name,
@@ -242,7 +240,6 @@ impl MetadataMap {
     }
 
     /// Serialize and insert a new key into the map, replacing any existing value for the key.
-    #[allow(unused)]
     pub fn set<V: RustType<P>, P: prost::Message>(&mut self, key: MetadataKey<V, P>, value: V) {
         self.0.insert(
             String::from(key.name),
@@ -251,7 +248,6 @@ impl MetadataMap {
     }
 
     /// Deserialize a key from the map, if it is present.
-    #[allow(unused)]
     pub fn get<V: RustType<P>, P: prost::Message + Default>(
         &self,
         key: MetadataKey<V, P>,

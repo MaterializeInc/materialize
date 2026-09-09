@@ -3,9 +3,9 @@ title: "Optimization"
 description: "Recommendations for query optimization in Materialize."
 menu:
   main:
-    name: "Query optimization"
+    name: "Optimize performance"
     parent: transform-data
-    weight: 30
+    weight: 50
 aliases:
   - /ops/speed-up/
   - /ops/optimization/
@@ -92,7 +92,7 @@ databases, Materialize can use an index to serve query results even if the query
 does not specify a `WHERE` condition on the index keys. Serving queries from
 an index is fast since the results are already up-to-date and in memory.
 
-Materialize can use [indexes](/concepts/indexes/) to further optimize query
+Materialize can use [indexes](/fundamentals/concepts/indexes/) to further optimize query
 performance in Materialize. Improvements can be significant, reducing some query
 times down to single-digit milliseconds.
 
@@ -108,7 +108,7 @@ as your expected access patterns. Use the following as a guide:
 Unlike some other databases, Materialize can use an index to serve query results
 even if the query does not specify a `WHERE` condition on the index keys. For
 some queries, Materialize can perform [**point
-lookups**](/concepts/indexes/#point-lookups) on the index (as opposed to an
+lookups**](/fundamentals/concepts/indexes/#point-lookups) on the index (as opposed to an
 index scan) if the query's `WHERE` clause:
 
 - Specifies equality (`=` or `IN`) condition on **all** the indexed fields. The
@@ -123,7 +123,7 @@ lookups.
 #### Create an index to support point lookups
 
 To [create an index](/sql/create-index/) to support [**point
-lookups**](/concepts/indexes/#point-lookups):
+lookups**](/fundamentals/concepts/indexes/#point-lookups):
 
 ```mzsql
 CREATE INDEX ON obj_name (<keys>);
@@ -448,7 +448,7 @@ The following are the possible index usage types:
 
 ### Limitations
 
-{{% include-headless "/headless/index-ordering" %}}
+{{% include-from-yaml data="index_details" name="index-not-optimized" %}}
 
 ## Query hints
 
@@ -629,10 +629,10 @@ WHERE mz_now() <= floor(extract(epoch FROM event_ts)) * 1000 + 86400000
   costly to maintain and rewrite each one.
 
 [query hints]: /sql/select/#query-hints
-[arrangements]: /get-started/arrangements/#arrangements
+[arrangements]: /fundamentals/concepts/arrangements/#arrangements
 [`MIN`]: /sql/functions/#min
 [`MAX`]: /sql/functions/#max
 [Top K]: /transform-data/patterns/top-k
-[`mz_introspection.mz_expected_group_size_advice`]: /reference/system-catalog/mz_introspection/#mz_expected_group_size_advice
-[dataflows]: /get-started/arrangements/#dataflows
+[`mz_introspection.mz_expected_group_size_advice`]: /sql/system-catalog/mz_introspection/#mz_expected_group_size_advice
+[dataflows]: /fundamentals/concepts/arrangements/#dataflows
 [`SELECT` syntax]: /sql/select/#syntax

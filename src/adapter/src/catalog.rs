@@ -62,7 +62,9 @@ use mz_repr::explain::ExprHumanizer;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersionSelector, SqlScalarType};
+use mz_repr::{
+    CatalogItemId, Diff, GlobalId, RelationVersion, RelationVersionSelector, SqlScalarType,
+};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
@@ -1560,7 +1562,8 @@ impl Catalog {
     }
 
     /// Cache global and, optionally, local expressions for the given
-    /// `GlobalId`.
+    /// `GlobalId` of an item being created, whose only version is therefore
+    /// the root [`RelationVersion`].
     ///
     /// Takes the plans and metainfo directly as parameters (rather than
     /// fishing them out of catalog state), so this can be called **before**
@@ -1593,6 +1596,7 @@ impl Catalog {
                 LocalExpressions {
                     local_mir,
                     optimizer_features: optimizer_features.clone(),
+                    item_version: RelationVersion::root(),
                 },
             ));
         }
@@ -1603,6 +1607,7 @@ impl Catalog {
                 physical_plan,
                 dataflow_metainfos,
                 optimizer_features,
+                item_version: RelationVersion::root(),
             },
         )];
         self.update_expression_cache(local_exprs, global_exprs, Default::default())
@@ -2836,6 +2841,77 @@ mod tests {
         .await;
     }
 
+    /// Resolving a statement and resolving its normalized `create_sql` must
+    /// yield the same `ResolvedIds`.
+    ///
+    /// The in-memory catalog records the ids from the first resolution, while
+    /// a catalog reload re-derives them from the stored `create_sql`. Any
+    /// disagreement makes the reloaded catalog differ from the in-memory one.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // slow
+    async fn test_resolved_ids_survive_create_sql_round_trip() {
+        use mz_ore::collections::CollectionExt;
+        Catalog::with_debug(|catalog| async move {
+            let conn_catalog = catalog.for_system_session();
+            let scx = &mut StatementContext::new(None, &conn_catalog);
+
+            let resolve_and_normalize = |scx: &mut StatementContext, sql: &str| {
+                let parsed = mz_sql_parser::parser::parse_statements(sql)
+                    .expect("parses")
+                    .into_element()
+                    .ast;
+                let (stmt, ids) = names::resolve(scx.catalog, parsed).expect("resolves");
+                let normalized =
+                    mz_sql::normalize::create_statement(scx, stmt).expect("normalizes");
+                (ids, normalized)
+            };
+
+            const ARRAY_SUFFIX: &str = "create table public.t (a pg_catalog.int4[])";
+            const ARRAY_TYPE: &str = "create table public.t (a pg_catalog._int4)";
+            const ELEMENT_TYPE: &str = "create table public.t (a pg_catalog.int4)";
+
+            let mut ids_by_spelling: BTreeMap<&str, Vec<CatalogItemId>> = BTreeMap::new();
+            for sql in [
+                ARRAY_SUFFIX,
+                ARRAY_TYPE,
+                ELEMENT_TYPE,
+                "create table public.t (a pg_catalog.int4 list)",
+                "create view public.v as select null::pg_catalog.text[]",
+            ] {
+                let (ids, normalized) = resolve_and_normalize(scx, sql);
+                let (round_tripped_ids, _) = resolve_and_normalize(scx, &normalized);
+                assert_eq!(
+                    ids.items().collect::<Vec<_>>(),
+                    round_tripped_ids.items().collect::<Vec<_>>(),
+                    "resolving {normalized:?} produced different ids than {sql:?}",
+                );
+                ids_by_spelling.insert(sql, ids.items().copied().collect());
+            }
+
+            // `int4[]` and `_int4` name the same type, so both spellings must
+            // record the same ids. `int4[]` is only ever stored as `_int4`,
+            // so this is what keeps the reloaded catalog identical to the
+            // in-memory one.
+            assert_eq!(
+                ids_by_spelling[ARRAY_SUFFIX], ids_by_spelling[ARRAY_TYPE],
+                "{ARRAY_SUFFIX:?} and {ARRAY_TYPE:?} must resolve to the same ids",
+            );
+
+            // Neither spelling records the element type: an array reference
+            // names the array type alone.
+            let element_ids = &ids_by_spelling[ELEMENT_TYPE];
+            assert!(
+                ids_by_spelling[ARRAY_SUFFIX]
+                    .iter()
+                    .all(|id| !element_ids.contains(id)),
+                "{ARRAY_SUFFIX:?} recorded an element type id from {ELEMENT_TYPE:?}",
+            );
+
+            catalog.expire().await;
+        })
+        .await;
+    }
+
     // Test that if a large catalog item is somehow committed, then we can still load the catalog.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // slow
@@ -3059,6 +3135,7 @@ mod tests {
                 array: u32,
                 input: u32,
                 receive: u32,
+                send: u32,
             }
 
             struct PgOper {
@@ -3098,7 +3175,7 @@ mod tests {
             let pg_type: BTreeMap<_, _> = query(
                 &client,
                 sql!(
-                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive FROM pg_type"
+                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive, typsend::oid as typsend FROM pg_type"
                 ),
                 &[],
             )
@@ -3114,6 +3191,7 @@ mod tests {
                         array: row.get("typarray"),
                         input: row.get("typinput"),
                         receive: row.get("typreceive"),
+                        send: row.get("typsend"),
                     };
                     (oid, pg_type)
                 })
@@ -3205,10 +3283,15 @@ mod tests {
                             ty.oid, pg_ty.name, ty.name,
                         );
 
-                        let (typinput_oid, typreceive_oid) = match &ty.details.pg_metadata {
-                            None => (0, 0),
-                            Some(pgmeta) => (pgmeta.typinput_oid, pgmeta.typreceive_oid),
-                        };
+                        let (typinput_oid, typreceive_oid, typsend_oid) =
+                            match &ty.details.pg_metadata {
+                                None => (0, 0, 0),
+                                Some(pgmeta) => (
+                                    pgmeta.typinput_oid,
+                                    pgmeta.typreceive_oid,
+                                    pgmeta.typsend_oid,
+                                ),
+                            };
                         assert_eq!(
                             typinput_oid, pg_ty.input,
                             "type {} has typinput OID {:?} in mz but {:?} in pg",
@@ -3218,6 +3301,15 @@ mod tests {
                             typreceive_oid, pg_ty.receive,
                             "type {} has typreceive OID {:?} in mz but {:?} in pg",
                             ty.name, typreceive_oid, pg_ty.receive,
+                        );
+                        // Unlike typinput and typreceive below, typsend is not also
+                        // checked against `func_oids`. Nothing resolves a typsend OID
+                        // to a name, so the corresponding `*send` functions are
+                        // deliberately not registered as builtins.
+                        assert_eq!(
+                            typsend_oid, pg_ty.send,
+                            "type {} has typsend OID {:?} in mz but {:?} in pg",
+                            ty.name, typsend_oid, pg_ty.send,
                         );
                         if typinput_oid != 0 {
                             assert!(

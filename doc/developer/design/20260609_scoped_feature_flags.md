@@ -417,9 +417,9 @@ paths read as symmetric ("resolution at existing boundaries") but are not.
 
 A cluster or replica created between sync ticks must resolve its scoped overrides synchronously at creation, not on the next tick.
 This is a correctness requirement, not a latency nicety: render-frozen flags — optimizer features baked into immutable dataflows, and any replica-local flag consumed only at dataflow-render time — turn the tick-latency window into a window in which the object renders permanently under the wrong values.
-It is feasible at no cost on the DDL path because `launchdarkly_server_sdk::Client::variation` is a synchronous, local evaluation against the SDK's streamed flag cache, with no network call, so an arbitrary new-object context evaluates correctly inline.
+It is feasible at no cost on the DDL path because the targeting client evaluates synchronously against its streamed flag cache, with no network call, so an arbitrary new-object context evaluates correctly inline.
 The frontend is shared with the coordinator.
-Both the new cluster's cluster-coherent and the new replicas' replica-local overrides are evaluated from the pre-allocated ids and *folded into the create transaction itself* (`scoped_overrides_create_op` appends an `Op::UpdateScopedSystemParameters` to the create ops in `src/adapter/src/coord/sequencer/inner/cluster.rs`).
+Both the new cluster's cluster-coherent and the new replicas' replica-local overrides are evaluated from the pre-allocated ids and *folded into the create transaction itself*. The coordinator transaction boundaries in `src/adapter/src/coord/ddl.rs` call `scoped_overrides_create_op`, which derives evaluation contexts from concrete `CreateCluster` and `CreateClusterReplica` ops and appends an `Op::UpdateScopedSystemParameters`.
 Folding into the create transaction, rather than resolving after it, means the committed diff drives both boundaries:
 
 * The replica-local overrides reach the compute controller's per-replica dyncfg layer through the catalog implication derived from that diff, *before* `create_replica`, so the replica's first configuration already carries them.
@@ -427,7 +427,7 @@ Folding into the create transaction, rather than resolving after it, means the c
 
 Because the overrides are committed in the create transaction, they are persisted synchronously: a just-created object's overrides survive an `environmentd` restart with no re-hydration gap.
 The periodic sync loop remains the authoritative full-state writer (`reconcile_scoped_system_parameters`), and the create-time fold and the loop are the only writers, both serialized on the coordinator loop and both persisting through the same `Op::UpdateScopedSystemParameters`.
-Both paths no-op when the gate is off or before the frontend is installed (the cold-cache environment-wide fallback).
+The create path no-ops when no scoped object is created or before the frontend is installed. With an installed frontend it writes an empty scoped update when no override applies, so the final evaluation in a DDL transaction can clear a value staged by an earlier statement.
 
 Precedence for replica-local flags, lowest to highest:
 `Global < ReplicaSizeFamily < Replica(id)` (a specific replica pin beats a size

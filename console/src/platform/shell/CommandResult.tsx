@@ -115,15 +115,21 @@ const CommandResult = ({
     ? `Returned in ${formatCommandDuration(timeTaken)}`
     : null;
 
-  // If the error comes from a query cancellation, we don't want to display it as
-  // an error
+  // A cancelled query and a dropped connection both surface as errors so that
+  // they get an explanation in the command block, but neither is a failure the
+  // server reported. Drop the "Error:" prefix for both.
   const errorOutputPropOverrides =
-    error && error.code === ErrorCode.QUERY_CANCELED
+    error &&
+    (error.code === ErrorCode.QUERY_CANCELED ||
+      error.code === ErrorCode.CONNECTION_FAILURE)
       ? {
           errorMessageOverride: capitalizeSentence(error.message, false),
         }
       : {};
 
+  // NOTE: this deliberately does not include CONNECTION_FAILURE. An
+  // interrupted command never receives an end timestamp, so `timeTakenStr` is
+  // null and the element these props apply to is not rendered at all.
   const codePropOverrides =
     error?.code === ErrorCode.QUERY_CANCELED
       ? {

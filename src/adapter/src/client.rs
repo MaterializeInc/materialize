@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
@@ -63,6 +62,7 @@ use crate::command::{
     SASLChallengeResponse, SASLVerifyProofResponse, SuperuserAttribute,
 };
 use crate::config::{ScopedParameters, ScopedParametersScope, SystemParameterFrontend};
+use crate::coord::read_then_write::DependencyPolicy;
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::frontend_read_then_write::{
@@ -72,7 +72,7 @@ use crate::frontend_read_then_write::{
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
 use crate::optimize::{self, Optimize, OptimizerError};
-use crate::peek_client::{ExecutionLogging, TakeOver};
+use crate::peek_client::{CoordinatorClient, ExecutionLogging, TakeOver};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
     TransactionStatus,
@@ -313,7 +313,7 @@ impl Client {
         } = response;
 
         let peek_client = PeekClient::new(
-            self.clone(),
+            CoordinatorClient::Session(self.clone()),
             &catalog,
             storage_collections,
             transient_id_gen,
@@ -1542,7 +1542,7 @@ impl SessionClient {
                     });
             tokio::pin!(register);
             tokio::select! {
-                rx = &mut register => rx,
+                rx = &mut register => rx?,
                 _ = &mut cancel_future => {
                     inner_client.try_send(Command::PrivilegedCancelRequest {
                         conn_id: conn_id.clone(),
@@ -1973,7 +1973,7 @@ impl SessionClient {
                         "calls to mz_now in write statements",
                     ));
                 }
-                validate_selection_dependencies(&catalog, &depends_on)?;
+                validate_selection_dependencies(&catalog, &depends_on, DependencyPolicy::UserDml)?;
                 return Err(prohibited_in_transaction(&stmt));
             }
         }
@@ -2186,25 +2186,12 @@ impl RecordFirstRowStream {
         let session = client.session.as_ref().expect("session invariant");
         let isolation_level = *session.vars().transaction_isolation();
         let name_hint = ApplicationNameHint::from_str(session.application_name());
-        let instance = match instance_id {
-            Some(i) => Cow::Owned(i.to_string()),
-            None => Cow::Borrowed("none"),
-        };
-        let strategy = match strategy {
-            Some(s) => s.name(),
-            None => "none",
-        };
 
         client
             .inner()
             .metrics()
-            .time_to_first_row_seconds
-            .with_label_values(&[
-                instance.as_ref(),
-                isolation_level.as_variant_str(),
-                strategy,
-                name_hint.as_str(),
-            ])
+            .by_cluster
+            .time_to_first_row_seconds(instance_id, isolation_level, strategy, name_hint)
     }
 
     /// If you want to match [`RecordFirstRowStream`]'s logic but don't need

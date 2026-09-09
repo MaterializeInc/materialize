@@ -81,7 +81,7 @@ connection:
 
 You can retrieve the external ID for the connection, as well as an example trust
 policy, by querying the
-[`mz_internal.mz_aws_connections`](/reference/system-catalog/mz_internal/#mz_aws_connections)
+[`mz_internal.mz_aws_connections`](/sql/system-catalog/mz_internal/#mz_aws_connections)
 table:
 
 ```mzsql
@@ -928,12 +928,13 @@ CREATE CONNECTION sqlserver_connection TO SQL SERVER (
 An Iceberg catalog connection establishes a link to an [Apache Iceberg](https://iceberg.apache.org/)
 catalog. You can use Iceberg catalog connections to create [Iceberg sinks](/sql/create-sink/iceberg).
 
-Materialize supports two catalog types:
+Materialize supports the following catalog type and destination combinations:
 
 | Catalog type | Destination | Authentication |
 | --- | --- | --- |
 | `'s3tablesrest'` | [AWS S3 Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html) | [AWS connection](#aws) |
 | `'rest'` | [Google Cloud BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog) {{< private-preview-inline />}} | [GCP connection](#gcp) |
+| `'rest'` | Any [Iceberg REST catalog](https://iceberg.apache.org/spec/), including [Databricks Unity Catalog](/export-data/iceberg-databricks/) | OAuth2 credentials in a secret |
 
 #### Syntax {#iceberg-catalog-syntax}
 
@@ -948,6 +949,13 @@ Materialize supports two catalog types:
 {{< private-preview />}}
 
 {{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog-biglake" %}}
+
+{{< /tab >}}
+{{< tab "Iceberg REST catalog" >}}
+
+{{< public-preview />}}
+
+{{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog-rest" %}}
 
 {{< /tab >}}
 {{< /tabs >}}
@@ -969,9 +977,53 @@ example="example-iceberg-catalog-connection" %}}
 example="example-iceberg-catalog-gcp-connection" %}}
 
 {{< /tab >}}
+{{< tab "Iceberg REST catalog" >}}
+
+{{< public-preview />}}
+
+{{% include-example file="examples/create_connection"
+example="example-iceberg-catalog-databricks-connection" %}}
+
+{{< /tab >}}
 {{< /tabs >}}
 
-For more information about using Iceberg sinks, see the [Iceberg sink documentation](/serve-results/sink/iceberg/).
+#### Storage access delegation {#iceberg-catalog-access-delegation}
+
+Some Iceberg catalogs manage the object storage behind their tables and mint
+temporary, table-scoped credentials for it on request, rather than expecting
+clients to hold credentials of their own. The Iceberg specification calls this
+credential vending.
+
+The `ACCESS DELEGATION` option asks the catalog to vend credentials:
+
+| | |
+| --- | --- |
+| **Value** | `'vended-credentials'`. This is the only accepted value. |
+| **Default** | Unset, meaning Materialize does not request delegation. |
+| **Valid with** | `CATALOG TYPE = 'rest'` using `CREDENTIAL`. Not supported for `CATALOG TYPE = 's3tablesrest'`, which authenticates to storage through an [AWS connection](#aws), or for REST catalogs using `GCP CONNECTION`. |
+
+Exactly one source of storage credentials is used, determined by how the
+connection is configured. There is no fallback between them:
+
+| Connection | Storage credentials used |
+| --- | --- |
+| `CATALOG TYPE = 'rest'` with `CREDENTIAL` and `ACCESS DELEGATION` | Only the table-scoped credentials the catalog vends, refreshed as they expire. Any storage credentials the catalog returns in its configuration are ignored. |
+| `CATALOG TYPE = 'rest'` with `CREDENTIAL` and no `ACCESS DELEGATION` | Only the storage credentials the catalog returns in its configuration. |
+| `CATALOG TYPE = 'rest'` with `GCP CONNECTION` | Only the GCP connection's service account. |
+| `CATALOG TYPE = 's3tablesrest'` | Only the AWS connection's credentials, for both the catalog and its storage. |
+
+Delegation is opt-in rather than always requested, because a catalog that gates
+it behind privileges the principal does not hold rejects the whole request
+rather than falling back. Requesting it unconditionally would break connections
+that work today.
+
+Some catalogs, including [Databricks Unity
+Catalog](/export-data/iceberg-databricks/), vend
+credentials as the only
+way to reach their storage, so `ACCESS DELEGATION` is required there rather than
+optional.
+
+For more information about using Iceberg sinks, see the [Iceberg sink documentation](/export-data/iceberg/).
 
 ## Network security connections
 
@@ -1002,7 +1054,7 @@ arn:aws:iam::664411391173:role/mz_<REGION-ID>_<CONNECTION-ID>
 After creating the connection, you must configure the AWS PrivateLink service
 to accept connections from the AWS principal Materialize will connect as. The
 principals for AWS PrivateLink connections in your region are stored in
-the [`mz_aws_privatelink_connections`](/reference/system-catalog/mz_catalog/#mz_aws_privatelink_connections)
+the [`mz_aws_privatelink_connections`](/sql/system-catalog/mz_catalog/#mz_aws_privatelink_connections)
 system table.
 
 ```mzsql
@@ -1153,9 +1205,9 @@ The privileges required to execute this statement are:
 [`ALTER CONNECTION`]: /sql/alter-connection
 [`CREATE SOURCE`]: /sql/create-source
 [`CREATE SINK`]: /sql/create-sink
-[`mz_aws_privatelink_connections`]: /reference/system-catalog/mz_catalog/#mz_aws_privatelink_connections
-[`mz_connections`]: /reference/system-catalog/mz_catalog/#mz_connections
-[`mz_ssh_tunnel_connections`]: /reference/system-catalog/mz_catalog/#mz_ssh_tunnel_connections
+[`mz_aws_privatelink_connections`]: /sql/system-catalog/mz_catalog/#mz_aws_privatelink_connections
+[`mz_connections`]: /sql/system-catalog/mz_catalog/#mz_connections
+[`mz_ssh_tunnel_connections`]: /sql/system-catalog/mz_catalog/#mz_ssh_tunnel_connections
 [Ed25519 algorithm]: https://ed25519.cr.yp.to
 [latacora-crypto]: https://latacora.micro.blog/2018/04/03/cryptographic-right-answers.html
 [trust policy]: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_terms-and-concepts.html#term_trust-policy

@@ -694,6 +694,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/quote_ident.slt",
         "test/sqllogictest/quoting.slt",
         "test/sqllogictest/range.slt",
+        "test/sqllogictest/rbac_create_table_from_source.slt",
         "test/sqllogictest/rbac_enabled.slt",
         "test/sqllogictest/record.slt",
         "test/sqllogictest/recursion_limit.slt",

@@ -16,7 +16,6 @@ use dec::TryFromDecimalError;
 use itertools::Itertools;
 use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
 use mz_compute_client::controller::error as compute_error;
-use mz_compute_client::controller::error::InstanceMissing;
 
 use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::ClusterId;
@@ -37,7 +36,7 @@ use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
 use mz_storage_types::connections::ConnectionValidationError;
 use mz_storage_types::controller::StorageError;
-use mz_storage_types::errors::CollectionMissing;
+use mz_storage_types::errors::{CollectionMissing, DataflowError};
 use smallvec::SmallVec;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
@@ -70,6 +69,8 @@ pub enum AdapterError {
     DuplicateCursor(String),
     /// An error while evaluating an expression.
     Eval(EvalError),
+    /// An error produced while executing a dataflow.
+    Dataflow(Box<DataflowError>),
     /// An error occurred while planning the statement.
     Explain(ExplainError),
     /// The ID allocator exhausted all valid IDs.
@@ -106,9 +107,9 @@ pub enum AdapterError {
     },
     /// The selection value for a table mutation operation refers to an invalid object.
     InvalidTableMutationSelection {
-        /// The full name of the problematic object (e.g. a source or source-export table).
+        /// The full name of the problematic object, such as a source or source-backed table.
         object_name: String,
-        /// Human-readable type of the object (e.g. "source", "source-export table").
+        /// Human-readable type of the object, such as "source-backed table".
         object_type: String,
     },
     /// A read-then-write statement's read set has more transitive dependencies
@@ -201,6 +202,11 @@ pub enum AdapterError {
         buffered_bytes: usize,
         /// The `subscribe_max_buffered_bytes` budget that was exceeded.
         max_buffered_bytes: usize,
+    },
+    /// A query exceeded the configured compute peek row iteration limit.
+    PeekRowIterationLimitExceeded {
+        /// The configured per-worker limit.
+        limit: usize,
     },
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
@@ -305,7 +311,12 @@ pub enum AdapterError {
     /// read-only mode.
     ReadOnly,
     AlterClusterTimeout,
-    AlterClusterWhilePendingReplicas,
+    /// Another `ALTER CLUSTER` replaced the target this statement was waiting
+    /// for before it became realized.
+    AlterClusterSuperseded,
+    /// The cluster controller could not provision a reconfiguration target
+    /// within the environment's resource limits.
+    AlterClusterResourceExhausted,
     /// Attempt to convert a cluster to unmanaged while a graceful
     /// reconfiguration is in progress.
     AlterClusterUnmanagedWhileReconfiguring,
@@ -525,6 +536,15 @@ fn eval_error_code(err: &EvalError) -> SqlState {
     }
 }
 
+fn dataflow_error_code(error: &DataflowError) -> SqlState {
+    match error {
+        DataflowError::EvalError(error) => eval_error_code(error),
+        DataflowError::DecodeError(_)
+        | DataflowError::SourceError(_)
+        | DataflowError::EnvelopeError(_) => SqlState::INTERNAL_ERROR,
+    }
+}
+
 impl AdapterError {
     pub fn into_response(self, severity: Severity) -> ErrorResponse {
         ErrorResponse {
@@ -552,6 +572,10 @@ impl AdapterError {
             }
             AdapterError::Catalog(c) => c.detail(),
             AdapterError::Eval(e) => e.detail(),
+            AdapterError::Dataflow(e) => match &**e {
+                DataflowError::EvalError(e) => e.detail(),
+                _ => None,
+            },
             AdapterError::RelationOutsideTimeDomain { relations, names } => Some(format!(
                 "The following relations in the query are outside the transaction's time domain:\n{}\n{}",
                 relations
@@ -581,8 +605,7 @@ impl AdapterError {
                 object_type,
             } => Some(format!(
                 "{object_type} '{}' may not be used in this operation; \
-                     the selection may refer to views and materialized views, but transitive \
-                     dependencies must not include sources or source-export tables",
+                     every relation leaf in the selection must be a writable user table",
                 object_name.quoted()
             )),
             AdapterError::ReadThenWriteDependencyLimitExceeded {
@@ -591,6 +614,11 @@ impl AdapterError {
                 "The read set transitively depends on more than {max_rw_dependencies} \
                      objects. Reduce the number of dependencies, or raise the \
                      read_then_write_max_dependencies system parameter."
+            )),
+            AdapterError::PeekRowIterationLimitExceeded { limit } => Some(format!(
+                "The query attempted to examine more than {limit} rows on a single compute \
+                 worker. This limit prevents long-running SELECT queries from delaying other \
+                 work on the cluster."
             )),
             AdapterError::SafeModeViolation(_) => Some(
                 "The Materialize server you are connected to is running in \
@@ -770,6 +798,11 @@ impl AdapterError {
                 without buffering, or raise the subscribe_max_buffered_bytes system variable."
                     .to_string(),
             ),
+            AdapterError::Dataflow(e) => match &**e {
+                DataflowError::EvalError(e) => e.hint(),
+                DataflowError::SourceError(e) => e.hint.as_ref().map(|hint| hint.to_string()),
+                _ => None,
+            },
             AdapterError::AlterClusterUnmanagedWhileReconfiguring => Some(
                 "Cancel the reconfiguration by altering the cluster back to its current \
                 configuration, or wait for it to settle, then convert."
@@ -833,6 +866,13 @@ impl AdapterError {
                  statement_timeout = '120s'`."
                     .into(),
             ),
+            AdapterError::PeekRowIterationLimitExceeded { .. } => Some(
+                "Reduce the number of rows the query must examine, for example by querying an \
+                 indexed, more selective result. Queries with `LIMIT` and no `ORDER BY` can also \
+                 stop early. To permit this query, increase \
+                 `compute_peek_row_iteration_limit`."
+                    .into(),
+            ),
             AdapterError::PlanError(e) => e.hint(),
             AdapterError::UnallowedOnCluster { cluster, .. } => {
                 (cluster != MZ_CATALOG_SERVER_CLUSTER.name).then(||
@@ -850,6 +890,14 @@ impl AdapterError {
             ),
             AdapterError::AlterClusterTimeout => Some(
                 "Consider increasing the timeout duration in the alter cluster statement.".into(),
+            ),
+            AdapterError::AlterClusterSuperseded => Some(
+                "Retry the ALTER CLUSTER statement if its target is still desired.".into(),
+            ),
+            AdapterError::AlterClusterResourceExhausted => Some(
+                "Reduce the target resource use, or inspect \
+                 mz_internal.mz_cluster_reconfigurations for the retained outcome."
+                    .into(),
             ),
             AdapterError::DDLTransactionRace => Some(
                 "Currently, DDL transactions fail when any other DDL happens concurrently, \
@@ -908,6 +956,7 @@ impl AdapterError {
             // exhaustively so the catch-all `INTERNAL_ERROR` no longer applies
             // to errors that are really the user's fault. See SQL-326.
             AdapterError::Eval(e) => eval_error_code(e),
+            AdapterError::Dataflow(e) => dataflow_error_code(e),
             AdapterError::Explain(_) => SqlState::INTERNAL_ERROR,
             AdapterError::IdExhaustionError => SqlState::INTERNAL_ERROR,
             AdapterError::Internal(_) => SqlState::INTERNAL_ERROR,
@@ -975,6 +1024,7 @@ impl AdapterError {
             AdapterError::ResourceExhaustion { .. } => SqlState::INSUFFICIENT_RESOURCES,
             AdapterError::ResultSize(_) => SqlState::OUT_OF_MEMORY,
             AdapterError::SubscribeFellBehind { .. } => SqlState::OUT_OF_MEMORY,
+            AdapterError::PeekRowIterationLimitExceeded { .. } => SqlState::PROGRAM_LIMIT_EXCEEDED,
             AdapterError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
             AdapterError::SubscribeOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::Optimizer(e) => match e {
@@ -1049,7 +1099,8 @@ impl AdapterError {
             // transactions.
             AdapterError::ReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::AlterClusterTimeout => SqlState::QUERY_CANCELED,
-            AdapterError::AlterClusterWhilePendingReplicas => SqlState::OBJECT_IN_USE,
+            AdapterError::AlterClusterSuperseded => SqlState::QUERY_CANCELED,
+            AdapterError::AlterClusterResourceExhausted => SqlState::INSUFFICIENT_RESOURCES,
             AdapterError::AlterClusterUnmanagedWhileReconfiguring => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterUnmanagedWhileBursting => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterReplicationFactorWhileReconfiguring => {
@@ -1088,13 +1139,6 @@ impl AdapterError {
     // is appropriate, so we want to make the conversion target explicit at the call site.
     // For example, maybe we get an `InstanceMissing` if the user specifies a non-existing cluster,
     // in which case `ConcurrentDependencyDrop` would not be appropriate.
-
-    pub fn concurrent_dependency_drop_from_instance_missing(e: InstanceMissing) -> Self {
-        AdapterError::ConcurrentDependencyDrop {
-            dependency_kind: "cluster",
-            dependency_id: e.0.to_string(),
-        }
-    }
 
     pub fn concurrent_dependency_drop_from_collection_missing(e: CollectionMissing) -> Self {
         AdapterError::ConcurrentDependencyDrop {
@@ -1249,6 +1293,7 @@ impl fmt::Display for AdapterError {
                 write!(f, "cursor {} already exists", name.quoted())
             }
             AdapterError::Eval(e) => e.fmt(f),
+            AdapterError::Dataflow(e) => e.fmt(f),
             AdapterError::Explain(e) => e.fmt(f),
             AdapterError::IdExhaustionError => f.write_str("ID allocator exhausted all valid IDs"),
             AdapterError::Internal(e) => write!(f, "internal error: {}", e),
@@ -1278,7 +1323,7 @@ impl fmt::Display for AdapterError {
             AdapterError::InvalidTableMutationSelection { .. } => {
                 write!(
                     f,
-                    "invalid selection: operation may only (transitively) refer to non-source, non-system tables"
+                    "invalid selection: every relation leaf must be a writable user table"
                 )
             }
             AdapterError::ReadThenWriteDependencyLimitExceeded {
@@ -1287,6 +1332,12 @@ impl fmt::Display for AdapterError {
                 write!(
                     f,
                     "selection has too many transitive dependencies to validate (limit {max_rw_dependencies})"
+                )
+            }
+            AdapterError::PeekRowIterationLimitExceeded { limit } => {
+                write!(
+                    f,
+                    "query exceeded the configured row iteration limit of {limit} rows"
                 )
             }
             AdapterError::ReplaceMaterializedViewSealed { name } => {
@@ -1516,6 +1567,18 @@ impl fmt::Display for AdapterError {
             AdapterError::AlterClusterTimeout => {
                 write!(f, "canceling statement, provided timeout lapsed")
             }
+            AdapterError::AlterClusterSuperseded => {
+                write!(
+                    f,
+                    "cluster reconfiguration was superseded by another ALTER CLUSTER"
+                )
+            }
+            AdapterError::AlterClusterResourceExhausted => {
+                write!(
+                    f,
+                    "cluster reconfiguration could not provision its target within the available resource limits"
+                )
+            }
             AdapterError::AuthenticationError(e) => {
                 write!(f, "authentication error {e}")
             }
@@ -1528,9 +1591,6 @@ impl fmt::Display for AdapterError {
                     )?;
                 }
                 Ok(())
-            }
-            AdapterError::AlterClusterWhilePendingReplicas => {
-                write!(f, "cannot alter clusters with pending updates")
             }
             AdapterError::AlterClusterUnmanagedWhileReconfiguring => {
                 write!(
@@ -1633,6 +1693,23 @@ impl From<mz_catalog::durable::DurableCatalogError> for AdapterError {
 impl From<EvalError> for AdapterError {
     fn from(e: EvalError) -> AdapterError {
         AdapterError::Eval(e)
+    }
+}
+
+impl From<mz_compute_client::protocol::response::PeekError> for AdapterError {
+    fn from(error: mz_compute_client::protocol::response::PeekError) -> Self {
+        use mz_compute_client::protocol::response::PeekError;
+
+        match error {
+            PeekError::Dataflow(error) => AdapterError::Dataflow(error),
+            PeekError::Unstructured(error) => AdapterError::Unstructured(anyhow::Error::msg(error)),
+            PeekError::RowIterationLimitExceeded { limit } => {
+                AdapterError::PeekRowIterationLimitExceeded { limit }
+            }
+            error @ PeekError::ResultExceedsMaxSize { .. } => {
+                AdapterError::ResultSize(error.to_string())
+            }
+        }
     }
 }
 
@@ -1770,3 +1847,64 @@ impl From<ConnectionValidationError> for AdapterError {
 }
 
 impl Error for AdapterError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn alter_cluster_resource_exhausted_is_specific() {
+        let error = AdapterError::AlterClusterResourceExhausted;
+        assert_eq!(error.code(), SqlState::INSUFFICIENT_RESOURCES);
+        assert_eq!(
+            error.hint().as_deref(),
+            Some(
+                "Reduce the target resource use, or inspect \
+                 mz_internal.mz_cluster_reconfigurations for the retained outcome."
+            )
+        );
+        assert_eq!(
+            error.to_string(),
+            "cluster reconfiguration could not provision its target within the available resource limits"
+        );
+    }
+
+    #[mz_ore::test]
+    fn peek_row_iteration_limit_error_is_user_facing() {
+        let response = AdapterError::PeekRowIterationLimitExceeded { limit: 1000 }
+            .into_response(Severity::Error);
+
+        assert_eq!(response.code, SqlState::PROGRAM_LIMIT_EXCEEDED);
+        assert_eq!(
+            response.message,
+            "query exceeded the configured row iteration limit of 1000 rows"
+        );
+        assert_eq!(
+            response.detail.as_deref(),
+            Some(
+                "The query attempted to examine more than 1000 rows on a single compute worker. \
+                 This limit prevents long-running SELECT queries from delaying other work on the \
+                 cluster."
+            )
+        );
+        assert!(
+            response
+                .hint
+                .as_deref()
+                .is_some_and(|hint| hint.contains("compute_peek_row_iteration_limit"))
+        );
+    }
+
+    #[mz_ore::test]
+    fn structured_dataflow_error_preserves_message_and_code() {
+        use mz_compute_client::protocol::response::PeekError;
+
+        let dataflow_error = DataflowError::from(EvalError::DivisionByZero);
+        let expected_message = dataflow_error.to_string();
+        let response =
+            AdapterError::from(PeekError::from(dataflow_error)).into_response(Severity::Error);
+
+        assert_eq!(response.code, SqlState::DIVISION_BY_ZERO);
+        assert_eq!(response.message, expected_message);
+    }
+}

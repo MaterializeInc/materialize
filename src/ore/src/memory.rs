@@ -15,14 +15,6 @@
 
 //! Physical memory introspection.
 
-// Only this probe uses the cgroup helpers, so the module lives here rather
-// than at the crate root. The file carries more surface than the probe
-// needs, hence the dead-code allowance.
-#[cfg(target_os = "linux")]
-#[path = "cgroup.rs"]
-#[allow(dead_code)]
-mod cgroup;
-
 /// Returns the physical memory available to this process in bytes: the
 /// host's RAM, clamped by the cgroup memory limit when one is set. Both
 /// cgroup v1 and v2 are honored, resolved through `/proc/self/mountinfo`
@@ -81,7 +73,7 @@ fn host_memory_bytes() -> Option<usize> {
 /// The RAM limit of the cgroup governing this process, if any.
 #[cfg(target_os = "linux")]
 fn cgroup_memory_max() -> Option<usize> {
-    cgroup::detect_memory_limit()?.max
+    crate::cgroup::detect_memory_limit()?.max
 }
 
 #[cfg(not(target_os = "linux"))]

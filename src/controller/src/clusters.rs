@@ -312,10 +312,11 @@ impl ReplicaLocation {
         }
     }
 
-    /// A pending replica is created as part of an alter cluster of an managed
-    /// cluster. the configuration of a pending replica will not match that of
-    /// the clusters until the alter has been finalized promoting the pending
-    /// replicas and setting this value to false.
+    /// Whether the replica is durably marked `pending`.
+    ///
+    /// Vestigial: no path creates one anymore. A crash on a version that still
+    /// staged reconfigurations through overlap replicas could have left one
+    /// behind, and the catalog-open migration reaps those.
     pub fn pending(&self) -> bool {
         match self {
             ReplicaLocation::Managed(ManagedReplicaLocation { pending, .. }) => *pending,
@@ -374,7 +375,7 @@ pub struct ManagedReplicaLocation {
     /// concretization, not read back from a durable record.
     #[serde(skip)]
     pub availability_zones: Vec<String>,
-    /// Whether the replica is pending reconfiguration
+    /// See [`ReplicaLocation::pending`].
     pub pending: bool,
 }
 

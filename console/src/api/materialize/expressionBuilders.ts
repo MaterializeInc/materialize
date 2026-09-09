@@ -248,3 +248,35 @@ export function buildClusterReplicaHeapMetricsTable() {
 export type ClusterReplicaHeapMetrics = InferResult<
   ReturnType<typeof buildClusterReplicaHeapMetricsTable>
 >[0];
+
+/**
+ * Builds a subquery over `mz_hydration_statuses` restricted to the objects the
+ * console reports on, one row per (object, replica).
+ *
+ * Subsources and progress collections are excluded. The UI hides them, and each
+ * source carries a progress collection and often several subsources, so they
+ * multiply the row count several times over. Subsources have hydration rows of
+ * their own because they run on their parent's cluster, which is why the
+ * exclusion has to happen here rather than wherever a caller joins to
+ * `mz_sources`.
+ *
+ * Callers add their own aggregation. The Maintained Objects feed groups by
+ * `object_id` to count replicas per object; the cluster list groups by
+ * `replica_id` to count objects per replica.
+ */
+export function buildHydrationStatusesTable() {
+  return queryBuilder
+    .selectFrom("mz_hydration_statuses as hs")
+    .leftJoin("mz_sources as s", "s.id", "hs.object_id")
+    .where((eb) =>
+      eb.or([
+        eb("s.type", "is", null),
+        eb("s.type", "not in", ["subsource", "progress"]),
+      ]),
+    )
+    .select(["hs.object_id", "hs.replica_id", "hs.hydrated"]);
+}
+
+export type HydrationStatus = InferResult<
+  ReturnType<typeof buildHydrationStatusesTable>
+>[0];

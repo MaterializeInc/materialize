@@ -828,6 +828,20 @@ steps:
         sanitizer: skip
         ci_glue_exempt: true
 
+      - id: console-vercel-preview-impersonation
+        label: ":vercel: Console Vercel preview (impersonation)"
+        command: bin/ci-builder run stable ci/test/console/vercel-preview-impersonation.sh
+        inputs:
+          - console/**
+        depends_on: []
+        timeout_in_minutes: 15
+        if: "build.pull_request.id != null"
+        agents:
+          queue: linux-x86_64
+        coverage: skip
+        sanitizer: skip
+        ci_glue_exempt: true
+
       - id: dataflow-visualizer
         label: Dataflow visualizer
         depends_on: build-x86_64

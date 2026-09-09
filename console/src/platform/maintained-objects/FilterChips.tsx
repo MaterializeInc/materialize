@@ -14,7 +14,7 @@ import React from "react";
 import { MaintainedObjectType } from "~/api/materialize/maintained-objects/constants";
 import { fromSeconds } from "~/utils/format";
 
-import { HYDRATION_LABELS, HydrationBucket } from "./filters";
+import { STATUS_FILTER_LABELS } from "./filters";
 import { MaintainedObjectListItem } from "./queries";
 
 interface Chip {
@@ -80,12 +80,12 @@ const CHIP_SOURCES: ChipSource[] = [
     },
   },
   {
-    columnId: "hydration",
+    columnId: "status",
     build: (column) =>
-      multiSelectChips<HydrationBucket>(
+      multiSelectChips<string>(
         column,
-        "Hydration",
-        (b) => HYDRATION_LABELS[b],
+        "Status",
+        (b) => STATUS_FILTER_LABELS[b],
       ),
   },
 ];

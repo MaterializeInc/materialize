@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/linear.rs
-revision: e926ec3a86
+revision: 4e012ea88d
 ---
 
 # mz-expr::linear

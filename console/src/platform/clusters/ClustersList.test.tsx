@@ -10,9 +10,11 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
+import { useLocation } from "react-router-dom";
 
 import { Cluster, Replica } from "~/api/materialize/cluster/clusterList";
 import { ReplicaUtilization } from "~/api/materialize/cluster/replicaUtilization";
+import { uiPreviewOptInStorageKey } from "~/hooks/useUiPreview";
 import { getStore } from "~/jotai";
 import { allClusters } from "~/store/allClusters";
 import { mockSubscribeState } from "~/test/mockSubscribe";
@@ -23,10 +25,12 @@ import {
 } from "~/utils/dateFormat";
 
 import ClustersListPage from "./ClustersList";
+import { ReplicaHydrationCounts } from "./queries";
 
-// Replica sub-rows are gated on this flag. The global useFlags mock in
-// vitest.setup.ts returns no flags at all, so without this override getSubRows
-// never produces a replica row and none of these tests reach the code.
+// The per-replica table is a UI preview: its flag must be on AND the user
+// opted in (seeded into localStorage below). The global useFlags mock in
+// vitest.setup.ts returns no flags at all, so without this override the list
+// renders the one-row-per-cluster table and none of these tests reach the code.
 vi.mock("~/hooks/useFlags", () => ({
   useFlags: () => ({ "usage-metrics-in-cluster-list-CNS121": true }),
 }));
@@ -54,6 +58,11 @@ vi.mock("~/api/materialize/cluster/useLatestOfflineReplica", async () => {
 
 beforeEach(() => {
   offlineReplicas.clear();
+  replicaHydration.clear();
+  localStorage.setItem(
+    uiPreviewOptInStorageKey("clusterListUsageMetrics"),
+    "true",
+  );
 });
 
 // A row's actions menu renders only for clusters the user owns, and `useOwners`
@@ -62,6 +71,7 @@ beforeEach(() => {
 // Utilization arrives from its own polled query, so the fixtures register it
 // here and the table reads it back through the mocked hook.
 const replicaUtilization = new Map<string, ReplicaUtilization>();
+const replicaHydration = new Map<string, ReplicaHydrationCounts>();
 
 vi.mock("./queries", async () => {
   const actual = await vi.importActual("./queries");
@@ -69,6 +79,7 @@ vi.mock("./queries", async () => {
     ...actual,
     useOwners: () => ({ isOwner: () => true }),
     useReplicaUtilization: () => ({ data: replicaUtilization }),
+    useReplicaHydration: () => ({ data: replicaHydration }),
   };
 });
 
@@ -91,8 +102,13 @@ const buildReplica = ({
   memoryPercent = 0.4,
   diskPercent = 0.25,
   heapPercent = 0.45,
+  hydration = { hydratedObjects: 4, totalObjects: 4 },
   ...overrides
-}: Partial<Replica> & Partial<Omit<ReplicaUtilization, "replicaId">> = {}) => {
+}: Partial<Replica> &
+  Partial<Omit<ReplicaUtilization, "replicaId">> & {
+    /** Null for a replica the hydration query reports nothing for. */
+    hydration?: ReplicaHydrationCounts | null;
+  } = {}) => {
   const replica: Replica = {
     id: "u10",
     name: "r1",
@@ -116,6 +132,9 @@ const buildReplica = ({
     diskPercent,
     heapPercent,
   });
+  if (hydration) {
+    replicaHydration.set(replica.id, hydration);
+  }
   return replica;
 };
 
@@ -154,47 +173,92 @@ const buildCluster = ({
   ...overrides,
 });
 
-const renderClustersList = async (clusters: Cluster[]) => {
+/**
+ * A URL turning the replica count filter off, so a test can see the rows the
+ * default minimum of one replica hides, or read the chips of the filter it is
+ * actually about. An absent parameter means the default, so saying "no
+ * minimum" takes an explicit `0`.
+ */
+const REPLICAS_UNFILTERED = "/?replicas=0";
+
+const renderClustersList = async (clusters: Cluster[], url = "/") => {
   getStore().set(allClusters, mockSubscribeState({ data: clusters }));
   const rendered = renderComponent(
     <RenderWithPathname>
       <ClustersListPage />
     </RenderWithPathname>,
+    { initialRouterEntries: [url] },
   );
   await screen.findByRole("table");
   return rendered;
 };
 
-/** The caret that expands `clusterName`, or null when the cluster has none. */
-const caretFor = (clusterName: string) =>
-  screen.queryByRole("button", { name: `Show replicas of ${clusterName}` });
-
-/** Rows start expanded, so clicking the caret collapses rather than expands. */
-const toggleCluster = async (
-  user: ReturnType<typeof userEvent.setup>,
-  clusterName: string,
-) => {
-  const caret = caretFor(clusterName);
-  if (!caret) throw new Error(`no expand caret found for "${clusterName}"`);
-  await user.click(caret);
+/**
+ * Renders the router's query string, so what the table writes to the URL is
+ * assertable. Only the URL tests mount this: the rendered text would otherwise
+ * be one more place `getByText` could match a cluster or replica name.
+ */
+const RenderWithSearch = ({ children }: { children: React.ReactNode }) => {
+  const { search } = useLocation();
+  return (
+    <>
+      {children}
+      <div data-testid="search">{search}</div>
+    </>
+  );
 };
+
+/**
+ * Renders the list at `url`, so a bookmarked query string can be replayed.
+ * Settles on the table, or on the empty state when the URL's filters match
+ * nothing and there is no table to wait for.
+ */
+const renderAt = async (clusters: Cluster[], url = "/") => {
+  getStore().set(allClusters, mockSubscribeState({ data: clusters }));
+  const rendered = renderComponent(
+    <RenderWithSearch>
+      <ClustersListPage />
+    </RenderWithSearch>,
+    { initialRouterEntries: [url] },
+  );
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("table") ?? screen.queryByText(NO_MATCHES_MESSAGE),
+    ).not.toBeNull(),
+  );
+  return rendered;
+};
+
+const currentSearch = () =>
+  new URLSearchParams(screen.getByTestId("search").textContent ?? "");
 
 /**
  * Position of each visible column, so assertions name what they read instead of
  * hard-coding an index that shifts whenever a column is added.
  */
 const COLUMN = {
-  /** Grouped tables lead with a caret column, empty on replica rows. */
-  caret: 0,
-  name: 1,
+  cluster: 0,
+  replica: 1,
   size: 2,
   cpu: 3,
   memory: 4,
   disk: 5,
   heap: 6,
-  lastStatusChange: 7,
-  actions: 8,
+  hydration: 7,
+  lastStatusChange: 8,
+  actions: 9,
 } as const;
+
+// `queryAllByRole`, not `getAllByRole`: when the search or a filter excludes
+// every replica the table is replaced by a message, so there are no rows at all
+// rather than a header row on its own.
+const bodyRows = () =>
+  screen
+    .queryAllByRole("row")
+    // The header row is a row too, and has no data cells.
+    .slice(1);
+
+const NO_MATCHES_MESSAGE = "No replicas match the current search and filters";
 
 const rowFor = (rowLabel: string) => {
   const row = screen.getByText(rowLabel).closest("tr");
@@ -208,16 +272,12 @@ const cellsForRow = (rowLabel: string) =>
     .getAllByRole("cell")
     .map((cell) => cell.textContent);
 
-/**
- * Name-column text of every body row, in render order, so cluster rows and the
- * replicas nested under them appear in one flat list.
- */
-const rowOrder = () =>
-  screen
-    .getAllByRole("row")
-    // The header row is a row too, and has no data cells.
-    .slice(1)
-    .map((row) => within(row).getAllByRole("cell")[COLUMN.name].textContent);
+/** Text of `column` in every body row, in render order. */
+const columnOrder = (column: number) =>
+  bodyRows().map((row) => within(row).getAllByRole("cell")[column].textContent);
+
+/** Replica-column text of every body row, in render order. */
+const rowOrder = () => columnOrder(COLUMN.replica);
 
 /** Applies `sort`, then reads the resulting row order. */
 const rowOrderAfter = async (
@@ -228,38 +288,161 @@ const rowOrderAfter = async (
   return rowOrder();
 };
 
+/**
+ * Column id per heading. `UniversalTable` names a header's filter trigger from
+ * the column id, so a test reaching for one has to know both.
+ */
+const FILTER_COLUMN_IDS: Record<string, string> = {
+  Replica: "replica",
+  CPU: "cpuPercent",
+  Memory: "memoryPercent",
+  Disk: "diskPercent",
+  Heap: "heapPercent",
+  Hydration: "hydration",
+};
+
+/** The filter trigger in the header of the column headed `label`. */
+const filterTrigger = (label: string) =>
+  screen.getByRole("button", { name: `Filter ${FILTER_COLUMN_IDS[label]}` });
+
+/**
+ * The same trigger, or null. A filter that matches nothing replaces the table
+ * with a message, taking the headers and their triggers with it.
+ */
+const queryFilterTrigger = (label: string) =>
+  screen.queryByRole("button", { name: `Filter ${FILTER_COLUMN_IDS[label]}` });
+
+/** Opens a column's filter panel, returning its Apply button once visible. */
+const openFilter = async (
+  user: ReturnType<typeof userEvent.setup>,
+  label: string,
+) => {
+  await user.click(filterTrigger(label));
+  return screen.findByRole("button", { name: "Apply" });
+};
+
+/**
+ * Sets `percent` as `label`'s threshold and applies it, leaving the panel
+ * closed.
+ *
+ * Applying does not close the panel, matching the Maintained Objects filters,
+ * so this closes it: an open panel covers the table an assertion is about, and
+ * only the open panel's Apply and Clear are reachable by role.
+ */
+const applyFilter = async (
+  user: ReturnType<typeof userEvent.setup>,
+  label: string,
+  percent: string,
+) => {
+  const apply = await openFilter(user, label);
+  await user.clear(screen.getByLabelText(`${label} threshold percentage`));
+  // `type` rejects an empty string, and an empty threshold is a real case: it
+  // is how the panel says "no filter".
+  if (percent !== "") {
+    await user.type(
+      screen.getByLabelText(`${label} threshold percentage`),
+      percent,
+    );
+  }
+  await user.click(apply);
+  // Nothing to close when the filter emptied the table: the header the panel
+  // hung off is gone along with it.
+  const trigger = queryFilterTrigger(label);
+  if (trigger) await user.click(trigger);
+};
+
+/** Clears `label`'s filter from its panel, leaving the panel closed. */
+const clearFilter = async (
+  user: ReturnType<typeof userEvent.setup>,
+  label: string,
+) => {
+  await user.click(filterTrigger(label));
+  await user.click(await screen.findByRole("button", { name: "Clear" }));
+  await user.click(filterTrigger(label));
+};
+
+/**
+ * The values `label`'s panel shows, with the panel left open.
+ *
+ * The trigger is an icon, so what a column is filtered by is only readable
+ * inside its panel.
+ */
+const panelValues = async (
+  user: ReturnType<typeof userEvent.setup>,
+  label: string,
+) => {
+  await openFilter(user, label);
+  return {
+    percent: screen.getByLabelText(`${label} threshold percentage`),
+  };
+};
+
+/**
+ * Toggles each of `statuses` in the Hydration panel, then closes it.
+ *
+ * The panel applies on every click, so unlike the utilization panels there is
+ * no Apply to press. Closing matters for the same reason it does there: an open
+ * panel covers the table the assertions read.
+ */
+const toggleHydration = async (
+  user: ReturnType<typeof userEvent.setup>,
+  ...statuses: string[]
+) => {
+  await user.click(filterTrigger("Hydration"));
+  for (const status of statuses) {
+    await user.click(await screen.findByRole("checkbox", { name: status }));
+  }
+  // Nothing to close when the selection emptied the table: the header the
+  // panel hung off went with it.
+  const trigger = queryFilterTrigger("Hydration");
+  if (trigger) await user.click(trigger);
+};
+
+/** The filter chips on screen, by the condition each states. */
+const chipLabels = () =>
+  screen
+    .queryAllByRole("button", { name: /^Remove / })
+    .map((button) => button.getAttribute("aria-label")?.replace("Remove ", ""));
+
+describe("ClustersList preview gating", () => {
+  it("renders the classic table when the flag is on but the user hasn't opted in", async () => {
+    localStorage.removeItem(
+      uiPreviewOptInStorageKey("clusterListUsageMetrics"),
+    );
+    await renderClustersList([buildCluster()]);
+
+    // The classic table summarizes replicas per cluster; the per-replica
+    // usage table is the one with utilization columns.
+    expect(
+      screen.getByRole("columnheader", { name: "Replicas" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("columnheader", { name: "CPU" }),
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe("ClustersList replica rows", () => {
-  it("renders replica rows without requiring a click", async () => {
+  it("renders one row per replica, naming the cluster on each", async () => {
     await renderClustersList([buildCluster()]);
 
-    expect(screen.getByText("compute")).toBeInTheDocument();
-    expect(screen.getByText("r1")).toBeInTheDocument();
-    expect(caretFor("compute")).toHaveAttribute("aria-expanded", "true");
+    expect(rowOrder()).toEqual(["r1", "r2"]);
+    expect(columnOrder(COLUMN.cluster)).toEqual(["compute", "compute"]);
   });
 
-  it("collapses a cluster's replicas when its caret is clicked", async () => {
-    const user = userEvent.setup();
+  it("renders a replica's cluster, name, size, utilization and last status change", async () => {
     await renderClustersList([buildCluster()]);
 
-    await toggleCluster(user, "compute");
-
-    expect(screen.queryByText("r1")).not.toBeInTheDocument();
-    expect(caretFor("compute")).toHaveAttribute("aria-expanded", "false");
-  });
-
-  it("renders a replica's name, size, utilization and last status change", async () => {
-    await renderClustersList([buildCluster()]);
-
-    // The caret column is empty on a replica row, and actions are
-    // cluster-scoped, so that cell stays blank too.
+    // The actions cell holds an icon-only menu button, so it reads as empty.
     expect(cellsForRow("r1")).toEqual([
-      "",
+      "compute",
       "r1",
       "50cc",
       "12.5%",
       "40.0%",
       "25.0%",
       "45.0%",
+      "Hydrated",
       formatted(STATUS_UPDATED_AT),
       "",
     ]);
@@ -270,6 +453,39 @@ describe("ClustersList replica rows", () => {
 
     expect(cellsForRow("r1")[COLUMN.size]).toBe("50cc");
     expect(cellsForRow("r2")[COLUMN.size]).toBe("100cc");
+  });
+
+  it("interleaves nothing: each cluster's replicas carry its name", async () => {
+    await renderClustersList([
+      buildCluster({
+        id: "u1",
+        name: "compute",
+        replicas: [buildReplica({ id: "u10", name: "alpha" })],
+      }),
+      buildCluster({
+        id: "u2",
+        name: "ingest",
+        replicas: [buildReplica({ id: "u20", name: "beta" })],
+      }),
+    ]);
+
+    expect(cellsForRow("alpha")[COLUMN.cluster]).toBe("compute");
+    expect(cellsForRow("beta")[COLUMN.cluster]).toBe("ingest");
+  });
+
+  it("keeps a cluster with no replicas in the list", async () => {
+    await renderClustersList(
+      [buildCluster({ replicas: [] })],
+      REPLICAS_UNFILTERED,
+    );
+
+    // Dropping the row would hide the cluster from the clusters list entirely.
+    const cells = cellsForRow("compute");
+    expect(cells[COLUMN.cluster]).toBe("compute");
+    expect(cells[COLUMN.replica]).toBe("-");
+    expect(cells[COLUMN.size]).toBe("-");
+    expect(cells[COLUMN.cpu]).toBe("-");
+    expect(cells[COLUMN.lastStatusChange]).toBe("-");
   });
 
   it("renders the most recent status when a replica has several processes", async () => {
@@ -312,8 +528,8 @@ describe("ClustersList replica rows", () => {
     expect(cellsForRow("r1")[COLUMN.lastStatusChange]).toBe(formatted(newest));
   });
 
-  // The three utilization columns are built by one shared factory, so each
-  // rendering rule is asserted against all of them rather than CPU alone.
+  // The utilization columns are built by one shared factory, so each rendering
+  // rule is asserted against all of them rather than CPU alone.
   describe.each([
     ["CPU", COLUMN.cpu, (value: number | null) => ({ cpuPercent: value })],
     [
@@ -322,6 +538,7 @@ describe("ClustersList replica rows", () => {
       (value: number | null) => ({ memoryPercent: value }),
     ],
     ["Disk", COLUMN.disk, (value: number | null) => ({ diskPercent: value })],
+    ["Heap", COLUMN.heap, (value: number | null) => ({ heapPercent: value })],
   ])("the %s column", (_label, column, withValue) => {
     it("renders zero as a percentage rather than blank", async () => {
       await renderClustersList([
@@ -343,12 +560,6 @@ describe("ClustersList replica rows", () => {
       ]);
 
       expect(cellsForRow("r1")[column]).toBe("-");
-    });
-
-    it("is empty on cluster rows", async () => {
-      await renderClustersList([buildCluster()]);
-
-      expect(cellsForRow("compute")[column]).toBe("");
     });
   });
 
@@ -380,14 +591,11 @@ describe("ClustersList replica rows", () => {
     });
     await renderClustersList([buildCluster()]);
 
-    const warning = () =>
-      screen.queryAllByRole("img", { name: "Ran out of memory" });
-    expect(warning()).toHaveLength(1);
-
-    const r1Row = screen.getByText("r1").closest("tr");
-    if (!r1Row) throw new Error("no row for r1");
     expect(
-      within(r1Row).getByRole("img", { name: "Ran out of memory" }),
+      screen.queryAllByRole("img", { name: "Ran out of memory" }),
+    ).toHaveLength(1);
+    expect(
+      within(rowFor("r1")).getByRole("img", { name: "Ran out of memory" }),
     ).toBeInTheDocument();
   });
 
@@ -403,86 +611,88 @@ describe("ClustersList replica rows", () => {
     ).not.toBeInTheDocument();
   });
 
-  // The heading styling hangs off this class rather than off `[data-group-row]`,
-  // which only marks rows that can expand. jsdom does not apply emotion's
-  // stylesheet, so these assert which rows carry the class, not how it looks.
-  describe("cluster row class", () => {
-    it("marks cluster rows and not replica rows", async () => {
-      await renderClustersList([buildCluster()]);
-
-      expect(rowFor("compute")).toHaveClass("cluster-row");
-      expect(rowFor("r1")).not.toHaveClass("cluster-row");
-      expect(rowFor("r2")).not.toHaveClass("cluster-row");
-    });
-
-    it("marks a cluster with no replicas, which is not a group row", async () => {
-      await renderClustersList([buildCluster({ replicas: [] })]);
-
-      // No caret, so `[data-group-row]` is absent. The class still applies.
-      expect(caretFor("compute")).not.toBeInTheDocument();
-      expect(rowFor("compute")).not.toHaveAttribute("data-group-row");
-      expect(rowFor("compute")).toHaveClass("cluster-row");
-    });
-
-    it("keeps Chakra's generated class alongside it", async () => {
-      await renderClustersList([buildCluster()]);
-
-      // `&.cluster-row td` compiles to a compound of both classes, so losing
-      // either one silently drops the styling.
-      const classes = rowFor("compute").className.split(/\s+/);
-      expect(classes).toContain("cluster-row");
-      expect(classes.some((name) => name.startsWith("css-"))).toBe(true);
-    });
-  });
-
-  it("does not make a cluster without replicas expandable", async () => {
-    await renderClustersList([buildCluster({ replicas: [] })]);
-
-    expect(caretFor("compute")).not.toBeInTheDocument();
-  });
-
-  it("shows a single replica's row without a click", async () => {
-    await renderClustersList([buildCluster({ replicas: [buildReplica()] })]);
-
-    expect(caretFor("compute")).toHaveAttribute("aria-expanded", "true");
-    expect(cellsForRow("r1")[COLUMN.size]).toBe("50cc");
-  });
-
-  it("shows nothing but the name on a cluster row", async () => {
+  it("does not nest rows under an expandable cluster row", async () => {
     await renderClustersList([buildCluster()]);
 
-    // A cluster row is a heading: its replicas carry the data. Only the name
-    // and the actions menu belong to it.
-    const cells = cellsForRow("compute");
-    expect(cells[COLUMN.name]).toContain("compute");
-    expect(cells[COLUMN.size]).toBe("");
-    expect(cells[COLUMN.cpu]).toBe("");
-    expect(cells[COLUMN.memory]).toBe("");
-    expect(cells[COLUMN.disk]).toBe("");
-    expect(cells[COLUMN.lastStatusChange]).toBe("");
+    // A flat table has no caret column, so nothing can be collapsed away.
+    expect(
+      screen.queryByRole("button", { name: /^Show replicas of/ }),
+    ).not.toBeInTheDocument();
+    expect(bodyRows()).toHaveLength(2);
   });
 });
 
 const clickHeader = (user: ReturnType<typeof userEvent.setup>, name: RegExp) =>
   user.click(screen.getByRole("columnheader", { name }));
+
 /**
- * Every sorting fixture below names its clusters in alphabetical order and then
- * arranges their replica values so that neither the ascending nor the descending
- * result matches that order.
+ * Every sorting fixture below names its replicas so that neither the ascending
+ * nor the descending result matches the order the rows arrive in.
  *
  * This matters because `orderedClusters` hands the table its clusters sorted by
- * name, and TanStack breaks ties by row index. A cluster accessor that returns a
- * constant therefore reproduces alphabetical order exactly, so a fixture whose
- * expected order happens to be alphabetical passes even when the aggregate is
- * missing entirely. Three clusters are the minimum that can defeat this in both
- * directions.
+ * name, and TanStack breaks ties by row index. A fixture whose expected order
+ * happens to match arrival order therefore passes even when the column sorts on
+ * nothing at all.
  */
+
+describe("ClustersList Cluster sorting", () => {
+  const clickClusterHeader = (user: ReturnType<typeof userEvent.setup>) =>
+    clickHeader(user, /^Cluster/);
+
+  const twoClusters = () => [
+    buildCluster({
+      id: "u1",
+      name: "alpha",
+      replicas: [buildReplica({ id: "u10", name: "a-1" })],
+    }),
+    buildCluster({
+      id: "u2",
+      name: "bravo",
+      replicas: [buildReplica({ id: "u20", name: "b-1" })],
+    }),
+  ];
+
+  it("sorts by cluster name, ascending by default", async () => {
+    await renderClustersList(twoClusters());
+
+    expect(columnOrder(COLUMN.cluster)).toEqual(["alpha", "bravo"]);
+  });
+
+  it("reverses the clusters when the header is clicked", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await clickClusterHeader(user);
+
+    expect(columnOrder(COLUMN.cluster)).toEqual(["bravo", "alpha"]);
+  });
+
+  it("keeps a cluster's replicas together", async () => {
+    await renderClustersList([
+      buildCluster({
+        id: "u1",
+        name: "alpha",
+        replicas: [
+          buildReplica({ id: "u10", name: "a-1" }),
+          buildReplica({ id: "u11", name: "a-2" }),
+        ],
+      }),
+      buildCluster({
+        id: "u2",
+        name: "bravo",
+        replicas: [buildReplica({ id: "u20", name: "b-1" })],
+      }),
+    ]);
+
+    expect(rowOrder()).toEqual(["a-1", "a-2", "b-1"]);
+  });
+});
 
 describe("ClustersList CPU sorting", () => {
   const clickCpuHeader = (user: ReturnType<typeof userEvent.setup>) =>
     clickHeader(user, /^CPU/);
 
-  // Each per-replica column pins its own first sort direction, and CPU's is
+  // Each utilization column pins its own first sort direction, and CPU's is
   // descending.
   const sortByCpuDescending = clickCpuHeader;
 
@@ -494,9 +704,8 @@ describe("ClustersList CPU sorting", () => {
   };
 
   /**
-   * Ranked by peak the order is bravo (31), alpha (50), charlie (90). Ranked by
-   * floor or by mean it is alpha, bravo, charlie, which is also the alphabetical
-   * order, so a min-based, mean-based, or missing aggregate all fail visibly.
+   * Two clusters whose replicas interleave by CPU, so a sort that ranked
+   * clusters first and replicas within them could not produce the flat order.
    */
   const interleavedClusters = () => [
     buildCluster({
@@ -512,66 +721,36 @@ describe("ClustersList CPU sorting", () => {
       name: "bravo",
       replicas: [
         buildReplica({ id: "u20", name: "b-30", cpuPercent: 0.3 }),
-        buildReplica({ id: "u21", name: "b-31", cpuPercent: 0.31 }),
-      ],
-    }),
-    buildCluster({
-      id: "u3",
-      name: "charlie",
-      replicas: [
-        buildReplica({ id: "u30", name: "c-89", cpuPercent: 0.89 }),
-        buildReplica({ id: "u31", name: "c-90", cpuPercent: 0.9 }),
+        buildReplica({ id: "u21", name: "b-90", cpuPercent: 0.9 }),
       ],
     }),
   ];
 
-  it("orders clusters by their busiest replica", async () => {
+  it("orders every replica by CPU, across clusters", async () => {
     const user = userEvent.setup();
     await renderClustersList(interleavedClusters());
 
     expect(await rowOrderAfter(sortByCpuDescending, user)).toEqual([
-      "charlie",
-      "c-90",
-      "c-89",
-      "alpha",
+      "b-90",
       "a-50",
-      "a-0",
-      "bravo",
-      "b-31",
       "b-30",
+      "a-0",
     ]);
   });
 
-  it("reverses clusters and their replicas together when sorted ascending", async () => {
+  it("reverses the replicas when sorted ascending", async () => {
     const user = userEvent.setup();
     await renderClustersList(interleavedClusters());
 
     expect(await rowOrderAfter(sortByCpuAscending, user)).toEqual([
-      "bravo",
-      "b-30",
-      "b-31",
-      "alpha",
       "a-0",
+      "b-30",
       "a-50",
-      "charlie",
-      "c-89",
-      "c-90",
+      "b-90",
     ]);
   });
 
-  it("keeps each cluster's replicas contiguous beneath it", async () => {
-    const user = userEvent.setup();
-    await renderClustersList(interleavedClusters());
-
-    const order = await rowOrderAfter(sortByCpuAscending, user);
-
-    // Sorted flat, the replicas would run 0, 30, 31, 50, 89, 90, splitting
-    // alpha's pair around bravo's.
-    const alphaAt = order.indexOf("alpha");
-    expect(order.slice(alphaAt, alphaAt + 3)).toEqual(["alpha", "a-0", "a-50"]);
-  });
-
-  it("compares cluster maxima numerically rather than as text", async () => {
+  it("compares readings numerically rather than as text", async () => {
     const user = userEvent.setup();
     await renderClustersList([
       buildCluster({
@@ -589,60 +768,53 @@ describe("ClustersList CPU sorting", () => {
     ]);
 
     // Text collation reads these as (12, 48) and (12, 5) and would rank 12.48
-    // above 12.5, leaving alpha first.
+    // above 12.5, leaving a-1 first.
     expect(await rowOrderAfter(sortByCpuDescending, user)).toEqual([
-      "bravo",
       "b-1",
-      "alpha",
       "a-1",
     ]);
   });
 
-  // Nulls trail the sampled clusters ascending and lead them descending, which
+  // Nulls trail the sampled replicas ascending and lead them descending, which
   // is how `nullsLast` behaves for every column in this table.
-  it("sorts a cluster whose replicas report no CPU after the sampled ones", async () => {
+  it("sorts an unsampled replica after the sampled ones", async () => {
     const user = userEvent.setup();
     await renderClustersList([
       buildCluster({
         id: "u1",
-        name: "alpha-unsampled",
-        replicas: [
-          buildReplica({ id: "u10", name: "a-1", cpuPercent: null }),
-          buildReplica({ id: "u11", name: "a-2", cpuPercent: null }),
-        ],
+        name: "alpha",
+        replicas: [buildReplica({ id: "u10", name: "a-1", cpuPercent: null })],
       }),
       buildCluster({
         id: "u2",
-        name: "bravo-sampled",
+        name: "bravo",
         replicas: [buildReplica({ id: "u20", name: "b-1", cpuPercent: 0.03 })],
       }),
     ]);
 
     expect(await rowOrderAfter(sortByCpuAscending, user)).toEqual([
-      "bravo-sampled",
       "b-1",
-      "alpha-unsampled",
       "a-1",
-      "a-2",
     ]);
   });
 
-  it("sorts a cluster with no replicas at all after the sampled ones", async () => {
+  it("sorts a cluster with no replicas after the sampled ones", async () => {
     const user = userEvent.setup();
-    await renderClustersList([
-      buildCluster({ id: "u1", name: "alpha-empty", replicas: [] }),
-      buildCluster({
-        id: "u2",
-        name: "bravo-sampled",
-        replicas: [buildReplica({ id: "u20", name: "b-1", cpuPercent: 0.03 })],
-      }),
-    ]);
+    await renderClustersList(
+      [
+        buildCluster({ id: "u1", name: "alpha-empty", replicas: [] }),
+        buildCluster({
+          id: "u2",
+          name: "bravo-sampled",
+          replicas: [
+            buildReplica({ id: "u20", name: "b-1", cpuPercent: 0.03 }),
+          ],
+        }),
+      ],
+      REPLICAS_UNFILTERED,
+    );
 
-    expect(await rowOrderAfter(sortByCpuAscending, user)).toEqual([
-      "bravo-sampled",
-      "b-1",
-      "alpha-empty",
-    ]);
+    expect(await rowOrderAfter(sortByCpuAscending, user)).toEqual(["b-1", "-"]);
   });
 });
 
@@ -659,11 +831,6 @@ describe("ClustersList Size sorting", () => {
     await clickSizeHeader(user);
   };
 
-  /**
-   * Ranked by largest replica the order is bravo (200cc), alpha (400cc), charlie
-   * (1600cc). Ranked by smallest it is alphabetical, so a min-based or missing
-   * aggregate fails visibly.
-   */
   const interleavedClusters = () => [
     buildCluster({
       id: "u1",
@@ -678,50 +845,20 @@ describe("ClustersList Size sorting", () => {
       name: "bravo",
       replicas: [
         buildReplica({ id: "u20", name: "b-100", size: "100cc" }),
-        buildReplica({ id: "u21", name: "b-200", size: "200cc" }),
-      ],
-    }),
-    buildCluster({
-      id: "u3",
-      name: "charlie",
-      replicas: [
-        buildReplica({ id: "u30", name: "c-800", size: "800cc" }),
-        buildReplica({ id: "u31", name: "c-1600", size: "1600cc" }),
+        buildReplica({ id: "u21", name: "b-800", size: "800cc" }),
       ],
     }),
   ];
 
-  it("orders clusters by their largest replica", async () => {
+  it("orders every replica by size, across clusters", async () => {
     const user = userEvent.setup();
     await renderClustersList(interleavedClusters());
 
     expect(await rowOrderAfter(sortBySizeDescending, user)).toEqual([
-      "charlie",
-      "c-1600",
-      "c-800",
-      "alpha",
+      "b-800",
       "a-400",
-      "a-25",
-      "bravo",
-      "b-200",
       "b-100",
-    ]);
-  });
-
-  it("reverses clusters and their replicas together when sorted ascending", async () => {
-    const user = userEvent.setup();
-    await renderClustersList(interleavedClusters());
-
-    expect(await rowOrderAfter(sortBySizeAscending, user)).toEqual([
-      "bravo",
-      "b-100",
-      "b-200",
-      "alpha",
       "a-25",
-      "a-400",
-      "charlie",
-      "c-800",
-      "c-1600",
     ]);
   });
 
@@ -741,34 +878,30 @@ describe("ClustersList Size sorting", () => {
     ]);
 
     // Character by character "100cc" precedes "50cc", which ascending would put
-    // alpha first.
+    // a-1 first.
     expect(await rowOrderAfter(sortBySizeAscending, user)).toEqual([
-      "bravo",
       "b-1",
-      "alpha",
       "a-1",
     ]);
   });
 
-  it("sorts a cluster whose replicas report no size after the sized ones", async () => {
+  it("sorts a replica with no size after the sized ones", async () => {
     const user = userEvent.setup();
     await renderClustersList([
       buildCluster({
         id: "u1",
-        name: "alpha-unsized",
+        name: "alpha",
         replicas: [buildReplica({ id: "u10", name: "a-1", size: null })],
       }),
       buildCluster({
         id: "u2",
-        name: "bravo-sized",
+        name: "bravo",
         replicas: [buildReplica({ id: "u20", name: "b-1", size: "50cc" })],
       }),
     ]);
 
     expect(await rowOrderAfter(sortBySizeAscending, user)).toEqual([
-      "bravo-sized",
       "b-1",
-      "alpha-unsized",
       "a-1",
     ]);
   });
@@ -803,11 +936,6 @@ describe("ClustersList Last status change sorting", () => {
       ],
     });
 
-  /**
-   * Ranked by newest replica the order is bravo (Mar 11), alpha (Mar 20),
-   * charlie (Mar 28). Ranked by oldest it is alphabetical, so a min-based or
-   * missing aggregate fails visibly.
-   */
   const interleavedClusters = () => [
     buildCluster({
       id: "u1",
@@ -822,54 +950,36 @@ describe("ClustersList Last status change sorting", () => {
       name: "bravo",
       replicas: [
         replicaAt("u20", "b-10", "2024-03-10T08:00:00.000Z"),
-        replicaAt("u21", "b-11", "2024-03-11T08:00:00.000Z"),
-      ],
-    }),
-    buildCluster({
-      id: "u3",
-      name: "charlie",
-      replicas: [
-        replicaAt("u30", "c-25", "2024-03-25T08:00:00.000Z"),
-        replicaAt("u31", "c-28", "2024-03-28T08:00:00.000Z"),
+        replicaAt("u21", "b-28", "2024-03-28T08:00:00.000Z"),
       ],
     }),
   ];
 
-  it("orders clusters by their most recently changed replica", async () => {
+  it("orders every replica by its last status change, across clusters", async () => {
     const user = userEvent.setup();
     await renderClustersList(interleavedClusters());
 
     expect(await rowOrderAfter(sortByStatusAscending, user)).toEqual([
-      "bravo",
-      "b-10",
-      "b-11",
-      "alpha",
       "a-01",
+      "b-10",
       "a-20",
-      "charlie",
-      "c-25",
-      "c-28",
+      "b-28",
     ]);
   });
 
-  it("reverses clusters and their replicas together when sorted descending", async () => {
+  it("reverses the replicas when sorted descending", async () => {
     const user = userEvent.setup();
     await renderClustersList(interleavedClusters());
 
     expect(await rowOrderAfter(sortByStatusDescending, user)).toEqual([
-      "charlie",
-      "c-28",
-      "c-25",
-      "alpha",
+      "b-28",
       "a-20",
-      "a-01",
-      "bravo",
-      "b-11",
       "b-10",
+      "a-01",
     ]);
   });
 
-  it("ranks a cluster by its replicas, not by its own latestStatusUpdate", async () => {
+  it("ranks a replica by its own status, not its cluster's latestStatusUpdate", async () => {
     const user = userEvent.setup();
     await renderClustersList([
       buildCluster({
@@ -881,24 +991,21 @@ describe("ClustersList Last status change sorting", () => {
       buildCluster({
         id: "u2",
         name: "stale-history",
-        // The status history reaches far past anything its replicas report, which
-        // is what a dropped replica leaves behind.
+        // The status history reaches far past anything its replicas report,
+        // which is what a dropped replica leaves behind.
         latestStatusUpdate: "2099-01-01T00:00:00.000Z",
         replicas: [replicaAt("u20", "h-1", "2024-03-01T08:00:00.000Z")],
       }),
     ]);
 
-    // Ranking on latestStatusUpdate would leave live first, which is also the
-    // alphabetical order.
+    // Ranking on latestStatusUpdate would leave l-1 first.
     expect(await rowOrderAfter(sortByStatusAscending, user)).toEqual([
-      "stale-history",
       "h-1",
-      "live",
       "l-1",
     ]);
   });
 
-  it("sorts a cluster whose replicas have no statuses after the rest", async () => {
+  it("sorts a replica with no statuses after the rest", async () => {
     const user = userEvent.setup();
     await renderClustersList([
       buildCluster({
@@ -914,19 +1021,13 @@ describe("ClustersList Last status change sorting", () => {
     ]);
 
     expect(await rowOrderAfter(sortByStatusAscending, user)).toEqual([
-      "bravo-reporting",
       "b-1",
-      "alpha-silent",
       "a-1",
     ]);
   });
 });
 
 describe("ClustersList search", () => {
-  /**
-   * `compute` holds the only 100cc replica, so its aggregate Size matches
-   * "100cc" even though that cell renders blank on a cluster row.
-   */
   const twoClusters = () => [
     buildCluster({
       id: "u1",
@@ -953,59 +1054,48 @@ describe("ClustersList search", () => {
     await waitFor(() => expect(rowOrder()).toEqual(expected));
   };
 
-  it("shows a matching replica under its cluster, without its siblings", async () => {
+  it("matches a replica by name", async () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    await expectRowsMatching(user, "alpha", ["compute", "alpha"]);
+    await expectRowsMatching(user, "alpha", ["alpha"]);
   });
 
-  it("shows every replica of a cluster whose name matches", async () => {
+  it("keeps every replica of a cluster whose name matches", async () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    // The cluster is the hit here, so its replicas come along rather than
-    // leaving a heading with nothing under it.
-    await expectRowsMatching(user, "compute", ["compute", "alpha", "beta"]);
+    await expectRowsMatching(user, "compute", ["alpha", "beta"]);
   });
 
   it("leaves other clusters out when one cluster matches", async () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    await expectRowsMatching(user, "ingest", ["ingest", "gamma"]);
+    await expectRowsMatching(user, "ingest", ["gamma"]);
   });
 
   it("matches replicas on columns other than the name", async () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    await expectRowsMatching(user, "100cc", ["compute", "beta"]);
+    await expectRowsMatching(user, "100cc", ["beta"]);
   });
 
-  it("does not expand a cluster matched only by an aggregate of its replicas", async () => {
-    const user = userEvent.setup();
-    await renderClustersList(twoClusters());
-
-    // "100cc" is compute's aggregate Size as well as beta's own, but that cell
-    // is blank on the cluster row, so treating it as a cluster hit would surface
-    // alpha for a term found nowhere the user can see.
-    await expectRowsMatching(user, "100cc", ["compute", "beta"]);
-  });
-
-  it("shows no rows when nothing matches", async () => {
+  it("replaces the table with a message when nothing matches", async () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
     await expectRowsMatching(user, "nonesuch", []);
+
+    expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 });
 
 describe("ClustersList keyboard navigation", () => {
-  // A cluster with replicas puts an expand caret ahead of its name, which would
-  // shift every tab stop in the row. These tests are about the name and the
-  // actions menu, so they leave the caret out.
-  const unexpandableCluster = () => buildCluster({ replicas: [] });
+  const singleReplicaCluster = () =>
+    buildCluster({ replicas: [buildReplica()] });
 
   const clusterNameLink = () =>
     screen.getByRole("link", {
@@ -1014,15 +1104,46 @@ describe("ClustersList keyboard navigation", () => {
 
   it("tabs from the page controls to the cluster name, then its actions", async () => {
     const user = userEvent.setup();
-    await renderClustersList([unexpandableCluster()]);
+    await renderClustersList([singleReplicaCluster()]);
 
-    // The header's system-objects switch and the table's search box precede the
-    // rows in document order.
+    // The header's preview pill (showing the way back, since these tests opt
+    // in) and its collapse button, the system-objects switch, and the table's
+    // toolbar precede the rows in document order.
+    await user.tab();
+    expect(
+      screen.getByRole("button", { name: /Switch to classic UI/ }),
+    ).toHaveFocus();
+
+    await user.tab();
+    expect(
+      screen.getByRole("button", { name: "Collapse preview" }),
+    ).toHaveFocus();
+
     await user.tab();
     expect(screen.getByLabelText("Show system clusters")).toHaveFocus();
 
     await user.tab();
     expect(screen.getByLabelText("Search clusters...")).toHaveFocus();
+
+    // The replica count filter is on by default, so its chip sits between the
+    // toolbar and the headers.
+    await user.tab();
+    expect(
+      screen.getByRole("button", { name: "Remove Replicas ≥ 1" }),
+    ).toHaveFocus();
+
+    // One control per filterable column, in the order the table shows them.
+    for (const label of [
+      "Replica",
+      "CPU",
+      "Memory",
+      "Disk",
+      "Heap",
+      "Hydration",
+    ]) {
+      await user.tab();
+      expect(filterTrigger(label)).toHaveFocus();
+    }
 
     await user.tab();
     expect(clusterNameLink()).toHaveFocus();
@@ -1033,7 +1154,7 @@ describe("ClustersList keyboard navigation", () => {
 
   it("opens the cluster detail view on Enter", async () => {
     const user = userEvent.setup();
-    await renderClustersList([unexpandableCluster()]);
+    await renderClustersList([singleReplicaCluster()]);
 
     clusterNameLink().focus();
     await user.keyboard("{Enter}");
@@ -1044,7 +1165,7 @@ describe("ClustersList keyboard navigation", () => {
 
   it("opens the actions menu on Enter", async () => {
     const user = userEvent.setup();
-    await renderClustersList([unexpandableCluster()]);
+    await renderClustersList([singleReplicaCluster()]);
 
     const actionsButton = screen.getByRole("button", { name: "More actions" });
     actionsButton.focus();
@@ -1057,5 +1178,1399 @@ describe("ClustersList keyboard navigation", () => {
     expect(
       screen.getByRole("menuitem", { name: "Drop cluster" }),
     ).toBeVisible();
+  });
+
+  it("offers the cluster's actions on each of its replica rows", async () => {
+    await renderClustersList([buildCluster()]);
+
+    // The menu acts on the cluster, so both replica rows carry one.
+    expect(
+      screen.getAllByRole("button", { name: "More actions" }),
+    ).toHaveLength(2);
+  });
+});
+
+describe("ClustersList row identity", () => {
+  /**
+   * A replica appearing or going away shifts the position of every row after
+   * it. Rows are keyed by their id and each one owns state that outlives a
+   * re-render: the open/closed actions menu, and the Alter and Drop dialogs it
+   * opens. Positional ids would leave that state behind on the index while the
+   * cluster under it changed, so a dialog opened for one cluster could submit
+   * against another.
+   *
+   * `alpha` holds the replica that goes away, and the row whose state is under
+   * test sits between two clusters so a shift lands a different cluster on its
+   * index rather than dropping it off the end.
+   */
+  const threeClusters = (alphaReplicas: Replica[]) => [
+    buildCluster({ id: "u1", name: "alpha", replicas: alphaReplicas }),
+    buildCluster({
+      id: "u2",
+      name: "bravo",
+      replicas: [buildReplica({ id: "u20", name: "b-1" })],
+    }),
+    buildCluster({
+      id: "u3",
+      name: "charlie",
+      replicas: [buildReplica({ id: "u30", name: "c-1" })],
+    }),
+  ];
+
+  const alphaPair = () => [
+    buildReplica({ id: "u10", name: "a-1" }),
+    buildReplica({ id: "u11", name: "a-2" }),
+  ];
+
+  /** Pushes a new subscribe snapshot, as the websocket does. */
+  const pushClusters = (clusters: Cluster[]) =>
+    getStore().set(allClusters, mockSubscribeState({ data: clusters }));
+
+  /** The row holding the one open actions menu. */
+  const rowWithOpenMenu = () => {
+    const button = screen.getByRole("button", {
+      name: "More actions",
+      expanded: true,
+    });
+    const row = button.closest("tr");
+    if (!row) throw new Error("open menu is not inside a row");
+    return row;
+  };
+
+  it("keeps an open actions menu with the cluster it was opened for", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(threeClusters(alphaPair()));
+
+    await user.click(within(rowFor("b-1")).getByRole("button"));
+    expect(
+      within(rowWithOpenMenu()).getAllByRole("cell")[COLUMN.cluster],
+    ).toHaveTextContent("bravo");
+
+    // alpha loses a replica, so bravo's row moves up into the index charlie's
+    // row now vacates.
+    pushClusters(threeClusters([buildReplica({ id: "u10", name: "a-1" })]));
+    await waitFor(() => expect(rowOrder()).toEqual(["a-1", "b-1", "c-1"]));
+
+    expect(
+      within(rowWithOpenMenu()).getAllByRole("cell")[COLUMN.cluster],
+    ).toHaveTextContent("bravo");
+  });
+
+  it("keeps an open Drop dialog on the cluster it was opened for", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(threeClusters(alphaPair()));
+
+    await user.click(within(rowFor("b-1")).getByRole("button"));
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Drop cluster" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/^Drop bravo$/)).toBeInTheDocument();
+
+    pushClusters(threeClusters([buildReplica({ id: "u10", name: "a-1" })]));
+    // An open modal hides the rest of the app from the accessibility tree, so
+    // the rows are unreachable by role while it is up. Counting them in the DOM
+    // is what confirms the shift landed before the dialog is inspected.
+    await waitFor(() =>
+      expect(document.querySelectorAll("tbody tr")).toHaveLength(3),
+    );
+
+    // The dialog reads its subject from the row it belongs to, so a row that
+    // took on another cluster would retitle the dialog under the user and drop
+    // a cluster they never picked.
+    const shifted = screen.getByRole("dialog");
+    expect(within(shifted).getByText(/^Drop bravo$/)).toBeInTheDocument();
+    expect(within(shifted).queryByText(/charlie/)).not.toBeInTheDocument();
+  });
+});
+
+describe("ClustersList CPU filter", () => {
+  /**
+   * Three replicas spread across two clusters, so a threshold has to cut
+   * through both rather than keeping or dropping whole clusters.
+   */
+  const twoClusters = () => [
+    buildCluster({
+      id: "u1",
+      name: "compute",
+      replicas: [
+        buildReplica({ id: "u10", name: "idle", cpuPercent: 0.05 }),
+        buildReplica({ id: "u11", name: "busy", cpuPercent: 0.9 }),
+      ],
+    }),
+    buildCluster({
+      id: "u2",
+      name: "ingest",
+      replicas: [
+        buildReplica({ id: "u20", name: "middling", cpuPercent: 0.5 }),
+      ],
+    }),
+  ];
+
+  const cpuTrigger = () => filterTrigger("CPU");
+
+  const openCpuFilter = (user: ReturnType<typeof userEvent.setup>) =>
+    openFilter(user, "CPU");
+
+  const applyCpuFilter = (
+    user: ReturnType<typeof userEvent.setup>,
+    percent: string,
+  ) => applyFilter(user, "CPU", percent);
+
+  it("renders a control labelled by its column", async () => {
+    await renderClustersList(twoClusters());
+
+    expect(cpuTrigger()).toBeInTheDocument();
+  });
+
+  it("keeps only the replicas above the threshold", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await applyCpuFilter(user, "40");
+
+    expect(rowOrder()).toEqual(["busy", "middling"]);
+  });
+
+  it("compares the reading, not its rounded display value", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([
+      buildCluster({
+        replicas: [
+          // Renders as "80.0%", but sits below a threshold of 80.
+          buildReplica({ id: "u10", name: "just-under", cpuPercent: 0.7996 }),
+          buildReplica({ id: "u11", name: "just-over", cpuPercent: 0.8004 }),
+        ],
+      }),
+    ]);
+
+    await applyCpuFilter(user, "80");
+
+    expect(rowOrder()).toEqual(["just-over"]);
+  });
+
+  it("drops a replica with no CPU sample", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([
+      buildCluster({
+        replicas: [
+          buildReplica({ id: "u10", name: "sampled", cpuPercent: 0.9 }),
+          buildReplica({ id: "u11", name: "unsampled", cpuPercent: null }),
+        ],
+      }),
+    ]);
+
+    // An unsampled replica has not been seen to reach any threshold, so a
+    // filtered list leaves it out.
+    await applyCpuFilter(user, "50");
+
+    expect(rowOrder()).toEqual(["sampled"]);
+  });
+
+  it("drops a cluster with no replicas", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([
+      buildCluster({ id: "u1", name: "empty", replicas: [] }),
+      buildCluster({
+        id: "u2",
+        name: "ingest",
+        replicas: [buildReplica({ id: "u20", name: "busy", cpuPercent: 0.9 })],
+      }),
+    ]);
+
+    await applyCpuFilter(user, "50");
+
+    expect(rowOrder()).toEqual(["busy"]);
+  });
+
+  it("keeps the applied threshold in its panel", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await applyCpuFilter(user, "40");
+    const { percent } = await panelValues(user, "CPU");
+
+    expect(percent).toHaveValue("40");
+  });
+
+  it("leaves the table alone until Apply is clicked", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await openCpuFilter(user);
+    await user.clear(screen.getByLabelText("CPU threshold percentage"));
+    await user.type(screen.getByLabelText("CPU threshold percentage"), "40");
+
+    // A half-typed threshold would otherwise reorder the table on every
+    // keystroke.
+    expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
+  });
+
+  it("stays recoverable when the filter empties the table", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await applyCpuFilter(user, "99");
+
+    // The message replaces the table, headers and filter panels included, so
+    // the chip is what is left to recover with.
+    expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove CPU ≥ 99%" }));
+
+    expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
+  });
+
+  it("restores every row when the filter is cleared", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await applyCpuFilter(user, "40");
+    await clearFilter(user, "CPU");
+
+    expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
+    const { percent } = await panelValues(user, "CPU");
+    expect(percent).toHaveValue("");
+  });
+
+  it("reopens on the threshold in force after an abandoned edit", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await applyCpuFilter(user, "40");
+
+    // Blank the threshold, then close without applying.
+    await openFilter(user, "CPU");
+    await user.clear(screen.getByLabelText("CPU threshold percentage"));
+    await user.click(filterTrigger("CPU"));
+
+    // The column is still filtering on 40, so the panel has to say so rather
+    // than carry an edit the user walked away from.
+    const { percent } = await panelValues(user, "CPU");
+    expect(percent).toHaveValue("40");
+    expect(rowOrder()).toEqual(["busy", "middling"]);
+  });
+
+  it("clears a typed threshold that was never applied", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await openCpuFilter(user);
+    await user.type(screen.getByLabelText("CPU threshold percentage"), "50");
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+
+    // No filter was ever applied, so Clear has no applied value to change.
+    // It still has to empty the panel it is sitting in.
+    expect(screen.getByLabelText("CPU threshold percentage")).toHaveValue("");
+  });
+
+  it("treats applying an empty threshold as no filter", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await applyCpuFilter(user, "40");
+    expect(rowOrder()).toEqual(["busy", "middling"]);
+
+    // Matching the freshness filter: an empty or zero threshold is not a
+    // filter, so applying one lifts it rather than being rejected.
+    await applyCpuFilter(user, "");
+
+    expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
+  });
+
+  it("narrows the search results rather than replacing them", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    // Searched first, then filtered: closing the panel hands focus back to its
+    // trigger on the next frame, which would swallow keystrokes typed into the
+    // search box in the same tick.
+    await user.type(screen.getByLabelText("Search clusters..."), "compute");
+    await waitFor(() => expect(rowOrder()).toEqual(["idle", "busy"]));
+
+    await applyCpuFilter(user, "40");
+
+    // Both constraints hold: only compute's busy replica clears each.
+    expect(rowOrder()).toEqual(["busy"]);
+  });
+});
+
+describe("ClustersList utilization filters", () => {
+  /**
+   * One control per utilization column, each paired with the reading it filters
+   * on. The label is the table heading verbatim, which is what ties a control
+   * to its column for the user.
+   */
+  const CONTROLS = [
+    ["CPU", (value: number) => ({ cpuPercent: value })],
+    ["Memory", (value: number) => ({ memoryPercent: value })],
+    ["Disk", (value: number) => ({ diskPercent: value })],
+    ["Heap", (value: number) => ({ heapPercent: value })],
+  ] as const;
+
+  it("gives every utilization column a filter named by its heading", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([buildCluster()]);
+
+    for (const [label] of CONTROLS) {
+      expect(
+        screen.getByRole("columnheader", { name: new RegExp(`^${label}`) }),
+      ).toBeInTheDocument();
+
+      // The panel names its input from the heading, so a renamed column cannot
+      // leave its filter labelled with the old name.
+      const { percent } = await panelValues(user, label);
+      expect(percent).toBeInTheDocument();
+      await user.click(filterTrigger(label));
+    }
+  });
+
+  describe.each(CONTROLS)("the %s control", (label, withValue) => {
+    /**
+     * Two replicas differing only in the reading under test. Every other
+     * reading keeps `buildReplica`'s default, so a control wired to the wrong
+     * column sees one value on both rows and cannot produce this split.
+     */
+    const pair = () =>
+      buildCluster({
+        replicas: [
+          buildReplica({ id: "u10", name: "high", ...withValue(0.9) }),
+          buildReplica({ id: "u11", name: "low", ...withValue(0.05) }),
+        ],
+      });
+
+    it("filters on its own column's reading", async () => {
+      const user = userEvent.setup();
+      await renderClustersList([pair()]);
+
+      await applyFilter(user, label, "50");
+
+      expect(rowOrder()).toEqual(["high"]);
+    });
+
+    it("holds the condition in its own panel and no other", async () => {
+      const user = userEvent.setup();
+      await renderClustersList([pair()]);
+
+      await applyFilter(user, label, "50");
+
+      const own = await panelValues(user, label);
+      expect(own.percent).toHaveValue("50");
+      await user.click(filterTrigger(label));
+
+      for (const [other] of CONTROLS.filter(([name]) => name !== label)) {
+        const { percent } = await panelValues(user, other);
+        expect(percent).toHaveValue("");
+        await user.click(filterTrigger(other));
+      }
+    });
+
+    it("is cleared without disturbing the other columns", async () => {
+      const user = userEvent.setup();
+      await renderClustersList([pair()]);
+
+      await applyFilter(user, label, "50");
+      await clearFilter(user, label);
+
+      expect(rowOrder()).toEqual(["high", "low"]);
+    });
+  });
+
+  it("applies every filter at once", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([
+      buildCluster({
+        replicas: [
+          buildReplica({
+            id: "u10",
+            name: "hot-both",
+            cpuPercent: 0.9,
+            memoryPercent: 0.9,
+          }),
+          buildReplica({
+            id: "u11",
+            name: "hot-cpu-only",
+            cpuPercent: 0.9,
+            memoryPercent: 0.1,
+          }),
+          buildReplica({
+            id: "u12",
+            name: "hot-memory-only",
+            cpuPercent: 0.1,
+            memoryPercent: 0.9,
+          }),
+        ],
+      }),
+    ]);
+
+    await applyFilter(user, "CPU", "50");
+    await applyFilter(user, "Memory", "50");
+
+    // Filters narrow each other rather than replacing one another.
+    expect(rowOrder()).toEqual(["hot-both"]);
+  });
+});
+
+describe("ClustersList filter URL state", () => {
+  const twoClusters = () => [
+    buildCluster({
+      id: "u1",
+      name: "compute",
+      replicas: [
+        buildReplica({
+          id: "u10",
+          name: "idle",
+          cpuPercent: 0.05,
+          memoryPercent: 0.05,
+        }),
+        buildReplica({
+          id: "u11",
+          name: "busy",
+          cpuPercent: 0.9,
+          memoryPercent: 0.9,
+        }),
+      ],
+    }),
+    buildCluster({
+      id: "u2",
+      name: "ingest",
+      replicas: [
+        buildReplica({
+          id: "u20",
+          name: "middling",
+          cpuPercent: 0.5,
+          memoryPercent: 0.5,
+        }),
+      ],
+    }),
+  ];
+
+  it("writes an applied filter to the URL", async () => {
+    const user = userEvent.setup();
+    await renderAt(twoClusters());
+
+    await applyFilter(user, "CPU", "40");
+
+    await waitFor(() => expect(currentSearch().get("cpu")).toBe("40"));
+  });
+
+  it("writes a threshold a reader can make sense of", async () => {
+    const user = userEvent.setup();
+    await renderAt(twoClusters());
+
+    await applyFilter(user, "CPU", "40");
+
+    // Nothing percent-encoded: the parameter is the threshold itself.
+    await waitFor(() => expect(currentSearch().get("cpu")).toBe("40"));
+    expect(screen.getByTestId("search").textContent).not.toContain("%");
+  });
+
+  it("writes one parameter per filtered column", async () => {
+    const user = userEvent.setup();
+    await renderAt(twoClusters());
+
+    await applyFilter(user, "CPU", "40");
+    await applyFilter(user, "Memory", "80");
+
+    await waitFor(() => {
+      const params = currentSearch();
+      expect(params.get("cpu")).toBe("40");
+      expect(params.get("memory")).toBe("80");
+    });
+  });
+
+  it("drops a cleared filter from the URL", async () => {
+    const user = userEvent.setup();
+    await renderAt(twoClusters());
+
+    await applyFilter(user, "CPU", "40");
+    await waitFor(() => expect(currentSearch().get("cpu")).toBe("40"));
+
+    await user.click(filterTrigger("CPU"));
+    await user.click(await screen.findByRole("button", { name: "Clear" }));
+
+    await waitFor(() => expect(currentSearch().has("cpu")).toBe(false));
+  });
+
+  it("restores a bookmarked filter, in the rows and in the panel", async () => {
+    const user = userEvent.setup();
+    await renderAt(twoClusters(), "/?cpu=40");
+
+    expect(rowOrder()).toEqual(["busy", "middling"]);
+
+    const { percent } = await panelValues(user, "CPU");
+    expect(percent).toHaveValue("40");
+  });
+
+  it("restores a bookmarked filter for every column at once", async () => {
+    const user = userEvent.setup();
+    await renderAt(twoClusters(), "/?cpu=40&memory=80");
+
+    // middling reaches CPU 40 but not Memory 80; busy reaches both.
+    expect(rowOrder()).toEqual(["busy"]);
+
+    const cpu = await panelValues(user, "CPU");
+    expect(cpu.percent).toHaveValue("40");
+    await user.click(filterTrigger("CPU"));
+
+    const memory = await panelValues(user, "Memory");
+    expect(memory.percent).toHaveValue("80");
+  });
+
+  it("opens the panel on a bookmarked filter's own values", async () => {
+    const user = userEvent.setup();
+    await renderAt(twoClusters(), "/?cpu=40");
+
+    const { percent } = await panelValues(user, "CPU");
+
+    expect(percent).toHaveValue("40");
+  });
+
+  it("restores a bookmarked search term in the search box", async () => {
+    await renderAt(twoClusters(), "/?q=ingest");
+
+    // The box has to show the term it is filtering by, or the table looks
+    // broken rather than filtered.
+    expect(screen.getByLabelText("Search clusters...")).toHaveValue("ingest");
+    expect(rowOrder()).toEqual(["middling"]);
+  });
+
+  it("keeps a bookmarked sort", async () => {
+    await renderAt(twoClusters(), "/?sort=cpuPercent&dir=desc");
+
+    expect(rowOrder()).toEqual(["busy", "middling", "idle"]);
+  });
+
+  describe.each([
+    ["a stale comparison prefix", "/?cpu=gt.40"],
+    ["a non-numeric threshold", "/?cpu=abc"],
+    ["a negative threshold", "/?cpu=-10"],
+    ["a threshold of zero", "/?cpu=0"],
+    ["an empty value", "/?cpu="],
+  ])("given %s", (_label, url) => {
+    it("ignores it and leaves the table unfiltered", async () => {
+      const user = userEvent.setup();
+      await renderAt(twoClusters(), url);
+
+      // A hand-edited or stale link must not strand the user behind a filter
+      // the panel cannot show or clear.
+      expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
+      const { percent } = await panelValues(user, "CPU");
+      expect(percent).toHaveValue("");
+    });
+  });
+
+  it("clamps a bookmarked page that is past the last page", async () => {
+    await renderAt(twoClusters(), "/?page=2");
+
+    // Three replicas fit on one page, so page 2 does not exist. Slicing from
+    // the stored index would render a header with no rows, and TablePagination
+    // hides itself at one page, leaving nothing to click back with.
+    expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
+  });
+
+  /**
+   * 21 replicas: two pages at a page size of 20. By default only the last one
+   * clears a 50% threshold; `cpuPercent` gives every replica the same reading.
+   */
+  const twoPagesOfReplicas = (count = 21, cpuPercent?: number) => [
+    buildCluster({
+      id: "u1",
+      name: "compute",
+      replicas: Array.from({ length: count }, (_, i) =>
+        buildReplica({
+          id: `u${100 + i}`,
+          name: `r-${i}`,
+          cpuPercent: cpuPercent ?? (i === 20 ? 0.9 : 0.1),
+        }),
+      ),
+    }),
+  ];
+
+  it("clamps the page when the rows shrink underneath it", async () => {
+    const user = userEvent.setup();
+    await renderAt(twoPagesOfReplicas());
+
+    await user.click(screen.getByRole("button", { name: "Next page" }));
+    expect(rowOrder()).toEqual(["r-20"]);
+
+    // A subscribe update, not a filter change, so nothing resets the page:
+    // `useUniversalTable` turns off TanStack's automatic reset so a background
+    // refresh cannot yank the user back to page 1.
+    getStore().set(
+      allClusters,
+      mockSubscribeState({ data: twoPagesOfReplicas(3) }),
+    );
+
+    await waitFor(() => expect(rowOrder()).toEqual(["r-0", "r-1", "r-2"]));
+  });
+
+  it("keeps a bookmarked page while the filter matches nothing yet", async () => {
+    // No replica reaches 95%, so the bookmarked filter starts out matching
+    // none of them.
+    await renderAt(twoPagesOfReplicas(), "/?cpu=95&page=2");
+
+    expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
+    // Nothing matches, so there is no page count to judge page 2 against.
+    // Dropping it here would lose the page before the rows that justify it are
+    // there to be counted, which is what utilization arriving late looks like.
+    await waitFor(() => expect(currentSearch().get("page")).toBe("2"));
+
+    // The readings now clear the threshold, which is what utilization arriving
+    // after the first render looks like. The bookmarked page is still there to
+    // be honoured.
+    getStore().set(
+      allClusters,
+      mockSubscribeState({ data: twoPagesOfReplicas(21, 0.95) }),
+    );
+
+    await waitFor(() => expect(rowOrder()).toEqual(["r-20"]));
+  });
+
+  it("resets the page when a filter shrinks the row count", async () => {
+    const user = userEvent.setup();
+    // 21 replicas: two pages at a page size of 20.
+    await renderAt([
+      buildCluster({
+        id: "u1",
+        name: "compute",
+        replicas: Array.from({ length: 21 }, (_, i) =>
+          buildReplica({
+            id: `u${100 + i}`,
+            name: `r-${i}`,
+            // Only the last replica clears a 50% threshold.
+            cpuPercent: i === 20 ? 0.9 : 0.1,
+          }),
+        ),
+      }),
+    ]);
+
+    await user.click(screen.getByRole("button", { name: "Next page" }));
+    expect(rowOrder()).toEqual(["r-20"]);
+
+    await applyFilter(user, "CPU", "50");
+
+    expect(rowOrder()).toEqual(["r-20"]);
+  });
+
+  it("accepts a fractional threshold", async () => {
+    const user = userEvent.setup();
+    await renderAt(twoClusters(), "/?cpu=7.5");
+
+    expect(rowOrder()).toEqual(["busy", "middling"]);
+    const { percent } = await panelValues(user, "CPU");
+    expect(percent).toHaveValue("7.5");
+  });
+
+  describe("a hydration selection", () => {
+    it("is written to the URL, one parameter per status", async () => {
+      const user = userEvent.setup();
+      await renderAt(twoClusters());
+
+      await toggleHydration(user, "Hydrated", "Hydrating");
+
+      await waitFor(() =>
+        expect(currentSearch().getAll("hydration[]")).toEqual([
+          "hydrated",
+          "hydrating",
+        ]),
+      );
+    });
+
+    it("is dropped from the URL when the last status is unchecked", async () => {
+      const user = userEvent.setup();
+      await renderAt(twoClusters());
+
+      await toggleHydration(user, "Hydrated");
+      await waitFor(() =>
+        expect(currentSearch().getAll("hydration[]")).toEqual(["hydrated"]),
+      );
+
+      await toggleHydration(user, "Hydrated");
+      await waitFor(() =>
+        expect(currentSearch().getAll("hydration[]")).toEqual([]),
+      );
+    });
+
+    it("is restored from a bookmark, in the rows and in the panel", async () => {
+      const user = userEvent.setup();
+      // Every replica in the fixture is fully hydrated, so a bookmark asking
+      // for anything else leaves nothing on screen.
+      await renderAt(twoClusters(), "/?hydration[]=not_hydrated");
+
+      expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
+
+      await user.click(
+        screen.getByRole("button", { name: "Remove Hydration: Not Hydrated" }),
+      );
+      // The empty state replaced the table, so clearing the filter mounts a
+      // fresh one rather than adding rows to the table already on screen.
+      await screen.findByRole("table");
+      expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
+    });
+
+    it("restores every status a bookmark names", async () => {
+      await renderAt(
+        twoClusters(),
+        "/?hydration[]=hydrated&hydration[]=hydrating&replicas=0",
+      );
+
+      expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
+      expect(chipLabels()).toEqual([
+        "Hydration: Hydrated",
+        "Hydration: Hydrating",
+      ]);
+    });
+
+    describe("when the URL names a status that does not exist", () => {
+      it("ignores it and leaves the table unfiltered", async () => {
+        await renderAt(twoClusters(), "/?hydration[]=lukewarm&replicas=0");
+
+        expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
+        expect(chipLabels()).toEqual([]);
+      });
+    });
+  });
+});
+
+describe("ClustersList filter chips", () => {
+  /**
+   * `hot-cpu` clears a high CPU threshold and a low Memory one at once, so two
+   * filters can be in force with rows still on screen.
+   */
+  const twoClusters = () => [
+    buildCluster({
+      id: "u1",
+      name: "compute",
+      replicas: [
+        buildReplica({
+          id: "u10",
+          name: "idle",
+          cpuPercent: 0.05,
+          memoryPercent: 0.05,
+        }),
+        buildReplica({
+          id: "u11",
+          name: "busy",
+          cpuPercent: 0.9,
+          memoryPercent: 0.9,
+        }),
+        buildReplica({
+          id: "u12",
+          name: "hot-cpu",
+          cpuPercent: 0.9,
+          memoryPercent: 0.1,
+        }),
+      ],
+    }),
+  ];
+
+  /*
+   * These render with the replica count filter off. Its chip is otherwise on
+   * screen from the first paint and would lead every expectation below, which
+   * is the subject of the replica count filter's own tests.
+   */
+  const chips = () =>
+    screen
+      .queryAllByRole("button", { name: /^Remove / })
+      .map((button) =>
+        button.getAttribute("aria-label")?.replace("Remove ", ""),
+      );
+
+  it("shows no chip until a filter is applied", async () => {
+    await renderClustersList(twoClusters(), REPLICAS_UNFILTERED);
+
+    expect(chips()).toEqual([]);
+  });
+
+  it("states the applied condition on a chip", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters(), REPLICAS_UNFILTERED);
+
+    await applyFilter(user, "CPU", "40");
+
+    // The header trigger only signals that a filter is on, by colour, so the
+    // chip is where the condition is legible.
+    expect(chips()).toEqual(["CPU ≥ 40%"]);
+  });
+
+  it("carries one chip per filtered column, in column order", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters(), REPLICAS_UNFILTERED);
+
+    await applyFilter(user, "Memory", "80");
+    await applyFilter(user, "CPU", "40");
+
+    // CPU precedes Memory in the table, so its chip leads regardless of which
+    // filter was applied first.
+    expect(chips()).toEqual(["CPU ≥ 40%", "Memory ≥ 80%"]);
+  });
+
+  it("clears the filter when its chip is removed", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters(), REPLICAS_UNFILTERED);
+
+    await applyFilter(user, "CPU", "40");
+    expect(rowOrder()).toEqual(["busy", "hot-cpu"]);
+
+    await user.click(screen.getByRole("button", { name: "Remove CPU ≥ 40%" }));
+
+    expect(rowOrder()).toEqual(["idle", "busy", "hot-cpu"]);
+    expect(chips()).toEqual([]);
+  });
+
+  it("removes one column's filter and leaves the rest", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters(), REPLICAS_UNFILTERED);
+
+    await applyFilter(user, "CPU", "40");
+    await applyFilter(user, "Memory", "80");
+
+    await user.click(screen.getByRole("button", { name: "Remove CPU ≥ 40%" }));
+
+    expect(chips()).toEqual(["Memory ≥ 80%"]);
+  });
+
+  it("empties the panel of a filter removed by its chip", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters(), REPLICAS_UNFILTERED);
+
+    await applyFilter(user, "CPU", "40");
+    await user.click(screen.getByRole("button", { name: "Remove CPU ≥ 40%" }));
+
+    // The panel stays mounted between opens, so it has to follow the filter
+    // rather than hold the value the chip just removed.
+    const { percent } = await panelValues(user, "CPU");
+    expect(percent).toHaveValue("");
+  });
+
+  it("offers a chip for a filter restored from the URL", async () => {
+    getStore().set(allClusters, mockSubscribeState({ data: twoClusters() }));
+    renderComponent(<ClustersListPage />, {
+      initialRouterEntries: ["/?cpu=40&replicas=0"],
+    });
+    await screen.findByRole("table");
+
+    expect(chips()).toEqual(["CPU ≥ 40%"]);
+  });
+
+  it("keeps its chip when the filter empties the table", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters(), REPLICAS_UNFILTERED);
+
+    await applyFilter(user, "CPU", "99");
+
+    // The table is gone, headers and filter panels with it, so the chip is the
+    // only way back.
+    expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(chips()).toEqual(["CPU ≥ 99%"]);
+
+    await user.click(screen.getByRole("button", { name: "Remove CPU ≥ 99%" }));
+
+    expect(rowOrder()).toEqual(["idle", "busy", "hot-cpu"]);
+  });
+});
+
+describe("ClustersList replica count filter", () => {
+  /**
+   * One cluster running two replicas, one running a single replica, and one
+   * running none, so a minimum of 0, 1, and 2 each cut the list differently.
+   *
+   * The default sort is by cluster name, which puts `empty`'s replica-less row
+   * first in every unfiltered assertion below.
+   */
+  const clustersByReplicaCount = () => [
+    buildCluster({
+      id: "u1",
+      name: "pair",
+      replicas: [
+        buildReplica({ id: "u10", name: "pair-1" }),
+        buildReplica({ id: "u11", name: "pair-2" }),
+      ],
+    }),
+    buildCluster({
+      id: "u2",
+      name: "single",
+      replicas: [buildReplica({ id: "u20", name: "single-1" })],
+    }),
+    buildCluster({ id: "u3", name: "empty", replicas: [] }),
+  ];
+
+  /** Sets `minimum` in the Replica panel and applies it, closing the panel. */
+  const applyMinimum = async (
+    user: ReturnType<typeof userEvent.setup>,
+    minimum: string,
+  ) => {
+    const apply = await openFilter(user, "Replica");
+    await user.clear(screen.getByLabelText("Minimum replica count"));
+    // `type` rejects an empty string, and an empty box is a real case: it is
+    // how the panel says "no minimum".
+    if (minimum !== "") {
+      await user.type(screen.getByLabelText("Minimum replica count"), minimum);
+    }
+    await user.click(apply);
+    const trigger = queryFilterTrigger("Replica");
+    if (trigger) await user.click(trigger);
+  };
+
+  it("hides the clusters running no replicas on a first visit", async () => {
+    await renderClustersList(clustersByReplicaCount());
+
+    expect(rowOrder()).toEqual(["pair-1", "pair-2", "single-1"]);
+  });
+
+  it("names the default minimum on a chip", async () => {
+    await renderClustersList(clustersByReplicaCount());
+
+    // Rows are missing from the first paint, so the reason has to be on screen
+    // rather than only inside a panel the reader has no cause to open.
+    expect(chipLabels()).toEqual(["Replicas ≥ 1"]);
+  });
+
+  it("shows every row at a minimum of 0", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(clustersByReplicaCount());
+
+    await applyMinimum(user, "0");
+
+    expect(rowOrder()).toEqual(["-", "pair-1", "pair-2", "single-1"]);
+    expect(chipLabels()).toEqual([]);
+  });
+
+  it("shows every row when the panel's Clear is pressed", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(clustersByReplicaCount());
+
+    await clearFilter(user, "Replica");
+
+    expect(rowOrder()).toEqual(["-", "pair-1", "pair-2", "single-1"]);
+    expect(chipLabels()).toEqual([]);
+  });
+
+  it("treats an emptied box as no minimum", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(clustersByReplicaCount());
+
+    await applyMinimum(user, "");
+
+    // Emptying the box and pressing Apply is a separate gesture from Clear and
+    // has to reach the same place: nothing in the box is no minimum.
+    expect(rowOrder()).toEqual(["-", "pair-1", "pair-2", "single-1"]);
+    expect(chipLabels()).toEqual([]);
+  });
+
+  it("counts the row's cluster's replicas, not the row itself", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(clustersByReplicaCount());
+
+    await applyMinimum(user, "2");
+
+    // Every row carrying a replica counts as one on its own, so a minimum of
+    // two matching anything at all means the count is the cluster's.
+    expect(rowOrder()).toEqual(["pair-1", "pair-2"]);
+    expect(chipLabels()).toEqual(["Replicas ≥ 2"]);
+  });
+
+  it("restores the replica-less clusters when the chip is removed", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(clustersByReplicaCount());
+
+    await user.click(
+      screen.getByRole("button", { name: "Remove Replicas ≥ 1" }),
+    );
+
+    expect(rowOrder()).toEqual(["-", "pair-1", "pair-2", "single-1"]);
+  });
+
+  it("empties the panel of a minimum removed by its chip", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(clustersByReplicaCount());
+
+    await user.click(
+      screen.getByRole("button", { name: "Remove Replicas ≥ 1" }),
+    );
+    await openFilter(user, "Replica");
+
+    expect(screen.getByLabelText("Minimum replica count")).toHaveValue("");
+  });
+
+  it("narrows the search results rather than replacing them", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(clustersByReplicaCount());
+
+    await applyMinimum(user, "2");
+    await user.type(screen.getByLabelText("Search clusters..."), "single");
+
+    // "single" names a cluster the minimum excludes, so the two conditions
+    // together leave nothing.
+    await waitFor(() =>
+      expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument(),
+    );
+  });
+
+  it("stays recoverable when the minimum empties the table", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(clustersByReplicaCount());
+
+    await applyMinimum(user, "3");
+
+    // The message replaces the table and takes the headers, and so the panel,
+    // with it. The chip is the only way back.
+    expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
+    expect(chipLabels()).toEqual(["Replicas ≥ 3"]);
+
+    await user.click(
+      screen.getByRole("button", { name: "Remove Replicas ≥ 3" }),
+    );
+
+    expect(rowOrder()).toEqual(["-", "pair-1", "pair-2", "single-1"]);
+  });
+
+  it("meets the empty state when no cluster has a replica", async () => {
+    const user = userEvent.setup();
+    await renderAt([
+      buildCluster({ id: "u1", name: "empty-one", replicas: [] }),
+      buildCluster({ id: "u2", name: "empty-two", replicas: [] }),
+    ]);
+
+    // A first visit filters by the default, so an account whose clusters all
+    // sit idle reaches this without having touched a filter. The page has to
+    // say why it is empty and offer the way back, or it reads as broken.
+    expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
+    expect(chipLabels()).toEqual(["Replicas ≥ 1"]);
+
+    await user.click(
+      screen.getByRole("button", { name: "Remove Replicas ≥ 1" }),
+    );
+
+    // The empty state replaced the table, so removing the chip mounts a fresh
+    // one rather than adding rows to a table already on screen.
+    await screen.findByRole("table");
+    expect(columnOrder(COLUMN.cluster)).toEqual(["empty-one", "empty-two"]);
+  });
+
+  describe("URL state", () => {
+    it("leaves the default minimum out of the URL", async () => {
+      await renderAt(clustersByReplicaCount());
+
+      // A plain visit filters by the default, so writing it would put a
+      // parameter in the bar of every reader who never touched the filter.
+      await waitFor(() => expect(currentSearch().has("replicas")).toBe(false));
+    });
+
+    it("writes an applied minimum to the URL", async () => {
+      const user = userEvent.setup();
+      await renderAt(clustersByReplicaCount());
+
+      await applyMinimum(user, "2");
+
+      await waitFor(() => expect(currentSearch().get("replicas")).toBe("2"));
+    });
+
+    it("records a removed minimum as 0", async () => {
+      const user = userEvent.setup();
+      await renderAt(clustersByReplicaCount());
+
+      await user.click(
+        screen.getByRole("button", { name: "Remove Replicas ≥ 1" }),
+      );
+
+      // An absent parameter is the default, so a reader who asked for every
+      // cluster has to be given a URL that says so, or a reload would hide the
+      // rows again.
+      await waitFor(() => expect(currentSearch().get("replicas")).toBe("0"));
+    });
+
+    it("restores a bookmarked minimum, in the rows and in the panel", async () => {
+      const user = userEvent.setup();
+      await renderAt(clustersByReplicaCount(), "/?replicas=2");
+
+      expect(rowOrder()).toEqual(["pair-1", "pair-2"]);
+
+      await openFilter(user, "Replica");
+      expect(screen.getByLabelText("Minimum replica count")).toHaveValue("2");
+    });
+
+    it("leaves the table unfiltered for an explicit 0", async () => {
+      await renderAt(clustersByReplicaCount(), REPLICAS_UNFILTERED);
+
+      expect(rowOrder()).toEqual(["-", "pair-1", "pair-2", "single-1"]);
+      expect(chipLabels()).toEqual([]);
+    });
+
+    it("falls back to the default when the parameter is malformed", async () => {
+      // A hand-edited or stale link must not install a minimum the panel
+      // cannot show, and the default is the state the panel opens on.
+      await renderAt(clustersByReplicaCount(), "/?replicas=two");
+
+      expect(rowOrder()).toEqual(["pair-1", "pair-2", "single-1"]);
+      expect(chipLabels()).toEqual(["Replicas ≥ 1"]);
+    });
+  });
+});
+
+describe("ClustersList hydration", () => {
+  /**
+   * One cluster covering every hydration state, including a replica the query
+   * reports no counted objects for. Named so that neither the ascending nor the
+   * descending sort matches the order the rows arrive in.
+   */
+  const mixedHydration = () => [
+    buildCluster({
+      id: "u1",
+      name: "compute",
+      replicas: [
+        buildReplica({
+          id: "u10",
+          name: "ready",
+          hydration: { hydratedObjects: 4, totalObjects: 4 },
+        }),
+        buildReplica({
+          id: "u11",
+          name: "partway",
+          hydration: { hydratedObjects: 1, totalObjects: 4 },
+        }),
+        buildReplica({
+          id: "u12",
+          name: "cold",
+          hydration: { hydratedObjects: 0, totalObjects: 4 },
+        }),
+        buildReplica({ id: "u13", name: "quiet", hydration: null }),
+      ],
+    }),
+  ];
+
+  const hydrationFor = (rowLabel: string) =>
+    cellsForRow(rowLabel)[COLUMN.hydration];
+
+  it("reports a replica whose every object is hydrated", async () => {
+    await renderClustersList(mixedHydration());
+
+    expect(hydrationFor("ready")).toBe("Hydrated");
+  });
+
+  it("reports a partly hydrated replica as still hydrating", async () => {
+    await renderClustersList(mixedHydration());
+
+    expect(hydrationFor("partway")).toBe("Hydrating");
+  });
+
+  it("reports a replica with nothing hydrated", async () => {
+    await renderClustersList(mixedHydration());
+
+    expect(hydrationFor("cold")).toBe("Not Hydrated");
+  });
+
+  it("renders a dash when no object on the replica is counted", async () => {
+    // Not the same as nothing being hydrated. The counts leave out sinks and
+    // system objects, so a replica running only those reports nothing at all,
+    // and a red pill would name a problem that is not there.
+    await renderClustersList(mixedHydration());
+
+    expect(hydrationFor("quiet")).toBe("-");
+  });
+
+  it("renders a dash for a cluster with no replicas", async () => {
+    await renderClustersList(
+      [buildCluster({ id: "u1", name: "empty", replicas: [] })],
+      REPLICAS_UNFILTERED,
+    );
+
+    expect(hydrationFor("empty")).toBe("-");
+  });
+
+  describe("sorting", () => {
+    const sortByHydration = (user: ReturnType<typeof userEvent.setup>) =>
+      clickHeader(user, /^Hydration/);
+
+    it("orders replicas by how far hydration has progressed", async () => {
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      await sortByHydration(user);
+
+      expect(rowOrder()).toEqual(["cold", "partway", "ready", "quiet"]);
+    });
+
+    it("separates replicas the pill groups together", async () => {
+      // Both read "Hydrating", so a sort on the pill alone would tie them and
+      // leave them in arrival order.
+      const user = userEvent.setup();
+      await renderClustersList([
+        buildCluster({
+          id: "u1",
+          name: "compute",
+          replicas: [
+            buildReplica({
+              id: "u10",
+              name: "nearly",
+              hydration: { hydratedObjects: 9, totalObjects: 10 },
+            }),
+            buildReplica({
+              id: "u11",
+              name: "barely",
+              hydration: { hydratedObjects: 1, totalObjects: 10 },
+            }),
+          ],
+        }),
+      ]);
+
+      await sortByHydration(user);
+
+      expect(rowOrder()).toEqual(["barely", "nearly"]);
+    });
+  });
+
+  describe("filter", () => {
+    it("offers a checkbox per status", async () => {
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      await user.click(filterTrigger("Hydration"));
+
+      for (const status of ["Hydrated", "Hydrating", "Not Hydrated"]) {
+        expect(
+          await screen.findByRole("checkbox", { name: status }),
+        ).toBeInTheDocument();
+      }
+    });
+
+    it("keeps only the replicas in the selected status", async () => {
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      await toggleHydration(user, "Hydrating");
+
+      expect(rowOrder()).toEqual(["partway"]);
+    });
+
+    it("keeps the replicas in any of several selected statuses", async () => {
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      await toggleHydration(user, "Hydrating", "Not Hydrated");
+
+      expect(rowOrder()).toEqual(["partway", "cold"]);
+    });
+
+    it("drops a replica no status describes", async () => {
+      // A replica with no counted objects is in no bucket, so selecting every
+      // bucket still leaves it out.
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      await toggleHydration(user, "Hydrated", "Hydrating", "Not Hydrated");
+
+      expect(rowOrder()).toEqual(["ready", "partway", "cold"]);
+    });
+
+    it("restores every row when the last status is unchecked", async () => {
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      await toggleHydration(user, "Hydrating");
+      expect(rowOrder()).toEqual(["partway"]);
+
+      await toggleHydration(user, "Hydrating");
+      expect(rowOrder()).toEqual(["ready", "partway", "cold", "quiet"]);
+    });
+
+    it("holds the selection in its panel", async () => {
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      await toggleHydration(user, "Hydrating");
+      await user.click(filterTrigger("Hydration"));
+
+      expect(
+        await screen.findByRole("checkbox", { name: "Hydrating" }),
+      ).toBeChecked();
+      expect(
+        screen.getByRole("checkbox", { name: "Hydrated" }),
+      ).not.toBeChecked();
+    });
+
+    it("states each selected status on its own chip", async () => {
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration(), REPLICAS_UNFILTERED);
+
+      await toggleHydration(user, "Hydrating", "Not Hydrated");
+
+      expect(chipLabels()).toEqual([
+        "Hydration: Hydrating",
+        "Hydration: Not Hydrated",
+      ]);
+    });
+
+    it("drops one status from its chip and keeps the rest", async () => {
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration(), REPLICAS_UNFILTERED);
+
+      await toggleHydration(user, "Hydrating", "Not Hydrated");
+      await user.click(
+        screen.getByRole("button", { name: "Remove Hydration: Not Hydrated" }),
+      );
+
+      expect(rowOrder()).toEqual(["partway"]);
+      expect(chipLabels()).toEqual(["Hydration: Hydrating"]);
+    });
+
+    it("stays recoverable when the selection empties the table", async () => {
+      const user = userEvent.setup();
+      await renderClustersList(
+        [
+          buildCluster({
+            id: "u1",
+            name: "compute",
+            replicas: [
+              buildReplica({
+                id: "u10",
+                name: "ready",
+                hydration: { hydratedObjects: 4, totalObjects: 4 },
+              }),
+            ],
+          }),
+        ],
+        REPLICAS_UNFILTERED,
+      );
+
+      await toggleHydration(user, "Not Hydrated");
+
+      expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
+      // The message replaces the table and takes the headers, and so the
+      // panel, with it. The chip is the only way back.
+      expect(chipLabels()).toEqual(["Hydration: Not Hydrated"]);
+    });
+
+    it("narrows the search results rather than replacing them", async () => {
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      await user.type(screen.getByLabelText("Search clusters..."), "partway");
+      await waitFor(() => expect(rowOrder()).toEqual(["partway"]));
+
+      await toggleHydration(user, "Hydrating");
+
+      expect(rowOrder()).toEqual(["partway"]);
+    });
+
+    it("is the only way to narrow by status: the search ignores the column", async () => {
+      // The accessor holds a bucket id, so a searchable hydration column would
+      // match "not_hydrated" while the "Not Hydrated" on screen missed, and
+      // would only do so when the first row in the payload reports hydration.
+      const user = userEvent.setup();
+      await renderClustersList(mixedHydration());
+
+      for (const term of ["hydrating", "not_hydrated", "Not Hydrated"]) {
+        await user.clear(screen.getByLabelText("Search clusters..."));
+        await user.type(screen.getByLabelText("Search clusters..."), term);
+
+        // waitFor absorbs the search box's debounce.
+        await waitFor(() =>
+          expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument(),
+        );
+      }
+    });
   });
 });

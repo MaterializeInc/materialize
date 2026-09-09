@@ -10,7 +10,11 @@
 import { Box, HStack, Text, useTheme, VStack } from "@chakra-ui/react";
 import React from "react";
 
-import { ConnectorStatusInfo, snapshotting } from "~/platform/connectors/utils";
+import {
+  ConnectorStatusInfo,
+  snapshotEstimateNote,
+  snapshotting,
+} from "~/platform/connectors/utils";
 import { MaterializeTheme } from "~/theme";
 import { pluralize } from "~/util";
 
@@ -36,23 +40,6 @@ const mapSourceTypeToProgressUnit = (type: string, count: number) => {
   }
 };
 
-// The known count for database sources comes from table statistics (Postgres
-// `reltuples` and equivalents), which are estimates that drift until an ANALYZE.
-// Kafka derives it from offset watermarks, which overcount compacted or
-// transactional topics, so the note stays type-specific rather than claiming
-// table statistics everywhere.
-const mapSourceTypeToEstimateNote = (type: string) => {
-  switch (type) {
-    case "postgres":
-    case "mysql":
-    case "sql-server":
-      return "Snapshot progress and row counts are estimates, based on table statistics.";
-    case "kafka":
-      return "Snapshot progress and message counts are estimates.";
-    default:
-      return "Snapshot progress and record counts are estimates.";
-  }
-};
 export const SnapshotProgress = ({
   snapshotRecordsKnown,
   snapshotRecordsStaged,
@@ -112,7 +99,7 @@ export const SnapshotProgress = ({
           </Text>
         </HStack>
         <Text textStyle="text-small" color={colors.foreground.secondary}>
-          {mapSourceTypeToEstimateNote(source.type)}
+          {snapshotEstimateNote(source.type)}
         </Text>
       </VStack>
     </VStack>

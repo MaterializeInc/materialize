@@ -444,11 +444,13 @@ impl HttpServer {
                 )
                 .route(
                     "/internal-console/{*path}",
-                    routing::get(console::handle_internal_console),
+                    routing::get(console::handle_internal_console)
+                        .post(console::handle_internal_console),
                 )
                 .route(
                     "/internal-console/",
-                    routing::get(console::handle_internal_console),
+                    routing::get(console::handle_internal_console)
+                        .post(console::handle_internal_console),
                 )
                 // Cluster HTTP proxy routes.
                 .route("/clusters", routing::get(cluster::handle_clusters))

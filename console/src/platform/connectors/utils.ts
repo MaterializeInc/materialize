@@ -41,6 +41,28 @@ export const snapshotting = (connector: ConnectorStatusInfo) => {
 };
 
 /**
+ * Explains why a snapshot's record count is approximate, per source type.
+ *
+ * Postgres and MySQL read the count from table statistics (`reltuples` and
+ * equivalents), which drift until an ANALYZE. Kafka derives it from offset
+ * watermarks, which overcount compacted or transactional topics. Either way the
+ * staged/known ratio can plateau below 100% after the snapshot is done, so
+ * `snapshot_committed` decides completion and this note explains the number.
+ */
+export const snapshotEstimateNote = (type: string | null) => {
+  switch (type) {
+    case "postgres":
+    case "mysql":
+    case "sql-server":
+      return "Snapshot progress and row counts are estimates, based on table statistics.";
+    case "kafka":
+      return "Snapshot progress and message counts are estimates.";
+    default:
+      return "Snapshot progress and record counts are estimates.";
+  }
+};
+
+/**
  * Derives a simple `healthy` | `unhealthy` status from the underlying connector status.
  */
 export function connectorHealthStatus(status: ConnectorStatus): HealthStatus {

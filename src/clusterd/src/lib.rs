@@ -268,7 +268,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     emit_boot_diagnostics!(&BUILD_INFO);
 
     mz_alloc::register_metrics_into(&metrics_registry).await;
-    mz_metrics::register_metrics_into(&metrics_registry, mz_dyncfgs::all_dyncfgs()).await;
+    mz_metrics::register_metrics_into(
+        &metrics_registry,
+        mz_dyncfgs::all_dyncfgs(),
+        args.scratch_directory.clone(),
+    )
+    .await;
 
     if let Some(heap_limit) = args.heap_limit {
         mz_compute::memory_limiter::start_limiter(heap_limit, &metrics_registry);

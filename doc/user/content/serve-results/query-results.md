@@ -35,7 +35,7 @@ transform with scalar functions, and re-order data that is maintained by an
 index.
 
 Queries that can't simply read out from an index will create an ephemeral dataflow to compute
-the results. These dataflows are bound to the active [cluster](/concepts/clusters/),
+the results. These dataflows are bound to the active [cluster](/fundamentals/concepts/clusters/),
  which you can change using:
 
 ```mzsql
@@ -49,13 +49,13 @@ For more information, see [`SELECT`](/sql/select/) reference page.  See
 also the following client library guides:
 
 {{< multicolumn-list columns="2" >}}
-- [Go](/integrations/client-libraries/golang/#query)</li>
-- [Java](/integrations/client-libraries/java-jdbc/#query)</li>
-- [Node.js](/integrations/client-libraries/node-js/#query)</li>
-- [PHP](/integrations/client-libraries/php/#query)</li>
-- [Python](/integrations/client-libraries/python/#query)</li>
-- [Ruby](/integrations/client-libraries/ruby/#query)</li>
-- [Rust](/integrations/client-libraries/rust/#query)</li>
+- [Go](/serve-results/client-libraries/golang/#query)</li>
+- [Java](/serve-results/client-libraries/java-jdbc/#query)</li>
+- [Node.js](/serve-results/client-libraries/node-js/#query)</li>
+- [PHP](/serve-results/client-libraries/php/#query)</li>
+- [Python](/serve-results/client-libraries/python/#query)</li>
+- [Ruby](/serve-results/client-libraries/ruby/#query)</li>
+- [Rust](/serve-results/client-libraries/rust/#query)</li>
 {{</ multicolumn-list >}}
 
 ## SUBSCRIBE
@@ -88,11 +88,11 @@ For more information, see [`SUBSCRIBE`](/sql/subscribe/) reference page.  See
 also the following client library guides:
 
 {{< multicolumn-list columns="2" >}}
-- [Go](/integrations/client-libraries/golang/#stream)</li>
-- [Java](/integrations/client-libraries/java-jdbc/#stream)</li>
-- [Node.js](/integrations/client-libraries/node-js/#stream)</li>
-- [PHP](/integrations/client-libraries/php/#stream)</li>
-- [Python](/integrations/client-libraries/python/#stream)</li>
-- [Ruby](/integrations/client-libraries/ruby/#stream)</li>
-- [Rust](/integrations/client-libraries/rust/#stream)</li>
+- [Go](/serve-results/client-libraries/golang/#stream)</li>
+- [Java](/serve-results/client-libraries/java-jdbc/#stream)</li>
+- [Node.js](/serve-results/client-libraries/node-js/#stream)</li>
+- [PHP](/serve-results/client-libraries/php/#stream)</li>
+- [Python](/serve-results/client-libraries/python/#stream)</li>
+- [Ruby](/serve-results/client-libraries/ruby/#stream)</li>
+- [Rust](/serve-results/client-libraries/rust/#stream)</li>
 {{</ multicolumn-list >}}

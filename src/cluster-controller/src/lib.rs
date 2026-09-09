@@ -206,14 +206,15 @@ impl ClusterController {
     /// The strategy to shed is chosen by presence, ranked by expendability, not
     /// by which create failed: validation is aggregate, and the strategy worth
     /// giving up may be one whose replicas already materialized rather than one
-    /// in the failed batch. The graceful reconfiguration is the most expendable:
-    /// a discretionary user change that fails cleanly (audited, and the wait-shim
-    /// reports a timeout) and can be retried, while aborting it leaves the
-    /// cluster running at its realized shape. The baseline is never shed, it is
-    /// the committed floor.
+    /// in the failed batch. A graceful reconfiguration is a discretionary user
+    /// change that fails cleanly. The failure is audited, the wait-shim reports
+    /// insufficient resources, and the cluster keeps running at its realized
+    /// shape. The baseline is never shed because it is the committed floor. A
+    /// hydration burst remains armed because no durable state records that the
+    /// unchanged policy should suppress it.
     ///
-    /// We shed one strategy per exhausted apply. If that was not enough, the
-    /// next tick recomputes and sheds the next one.
+    /// Without an active graceful reconfiguration there is nothing to shed. The
+    /// next tick retries the desired replica set.
     fn shed_decision(state: &ClusterState) -> Option<Decision> {
         let record = state.reconfiguration.as_ref()?;
         if !record.is_in_progress() {

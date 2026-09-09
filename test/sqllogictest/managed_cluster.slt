@@ -309,13 +309,15 @@ CREATE CLUSTER foo SIZE invalid_size, REPLICATION FACTOR 0
 statement error creating cluster replica would violate max_replicas_per_cluster limit \(desired: 9999999, limit: 5, current: 0\)
 CREATE CLUSTER foo SIZE 'scale=1,workers=1', replication factor 9999999;
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
-----
-COMPLETE 0
-
 statement ok
 CREATE CLUSTER foo (SIZE 'scale=1,workers=1')
+
+# Every WAIT spelling, zero timeout included, writes a reconfiguration record
+# the controller converges on. The realized config advances only at the
+# controller's cut-over, and this suite pins background ALTER CLUSTER on, so the
+# statements below return before that and there is nothing deterministic to read
+# back here. Exercised for acceptance; the realized-config transition and the
+# record's lifecycle are covered in test/testdrive/cluster-controller.td.
 
 statement ok
 ALTER CLUSTER foo set (SIZE 'scale=1,workers=2') WITH (WAIT FOR '0s')
@@ -324,7 +326,7 @@ statement ok
 ALTER CLUSTER foo set (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT') )
 
 statement ok
-ALTER CLUSTER foo set (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '10ms', ON TIMEOUT 'ROLLBACK') )
+ALTER CLUSTER foo set (SIZE 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '10ms', ON TIMEOUT 'ROLLBACK') )
 
 statement ok
 DROP CLUSTER foo
@@ -362,7 +364,9 @@ statement error WAIT can only be used together with a SIZE, AVAILABILITY ZONES, 
 ALTER CLUSTER foo SET (REPLICATION FACTOR 2) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
 
 # A `WAIT` clause paired with a real shape change is still accepted, including
-# alongside a non-shape option in the same statement.
+# alongside a non-shape option in the same statement. Nothing is in flight for
+# this cluster, so the replication factor is free to ride along into the
+# record's target.
 statement ok
 ALTER CLUSTER foo SET (SIZE 'scale=1,workers=2', REPLICATION FACTOR 2) WITH (WAIT FOR '0s')
 
@@ -381,8 +385,11 @@ ALTER CLUSTER foo SET (MANAGED = false) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON
 statement ok
 DROP CLUSTER foo
 
-# Regression: zero-downtime finalization (PR #28836) reads workload_class from
-# the catalog instead of the planned config, silently dropping the change.
+# A `WORKLOAD CLASS` change riding along with a shape change reaches the durable
+# config rather than being silently dropped by the reshape. The reshape defers
+# only the replica config shape to the reconfiguration record and applies
+# non-shape fields to the realized config in the same transaction, so the
+# readback needs no retry even though the size transition lands later.
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER wc_test SIZE 'scale=1,workers=1'

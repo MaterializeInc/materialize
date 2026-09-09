@@ -57,12 +57,15 @@ mod spines {
     pub type RowRowBatcher<T, R> = KeyValBatcher<Row, Row, T, R>;
     pub type RowRowBuilder<T, R> = ArcBuilder<crate::dictionary::builders::RowRowBuilder<T, R>>;
 
-    /// `RowRowBuilder` variant that consumes [`Column`] chunks. Pairs with
-    /// [`Col2ValPagedBatcher`] for the spillable arrange path. Installs a
-    /// dictionary codec at seal time, gathering statistics from the sealed
-    /// `Column` chain, so paged arrangements compress on the same footing as the
-    /// columnation-fed [`RowRowBuilder`].
+    /// `RowRowBuilder` variant that consumes [`Column`] chunks. Pairs with any
+    /// batcher whose chains are `Column`s, spillable
+    /// ([`Col2ValPagedBatcher`]) or resident ([`Col2ValColBatcher`]) alike, so
+    /// the `Paged` in the name records where it started rather than a
+    /// restriction. Installs a dictionary codec at seal time, gathering
+    /// statistics from the sealed `Column` chain, so columnar arrangements
+    /// compress on the same footing as the columnation-fed [`RowRowBuilder`].
     ///
+    /// [`Col2ValColBatcher`]: mz_timely_util::columnar::Col2ValColBatcher
     /// [`Col2ValPagedBatcher`]: mz_timely_util::columnar::Col2ValPagedBatcher
     /// [`Column`]: mz_timely_util::columnar::Column
     pub type RowRowColPagedBuilder<T, R> =
@@ -1198,8 +1201,9 @@ mod dictionary {
             }
         }
 
-        /// Paged counterpart of [`RowRowBuilder`] that consumes [`Column`]
-        /// chunks instead of columnation stacks. Mirrors `RowRowBuilder::seal`:
+        /// Counterpart of [`RowRowBuilder`] that consumes [`Column`] chunks
+        /// instead of columnation stacks, whether or not the batcher that
+        /// produced them pages. Mirrors `RowRowBuilder::seal`:
         /// it gathers key and value statistics from the sealed chain and
         /// installs codecs directly, then drops the per-container stats gatherer.
         pub struct RowRowColPagedBuilder<
@@ -1994,8 +1998,8 @@ mod row_codec {
         /// All byte values >= this are safe to use as dictionary tags without
         /// observing the data, since no datum's first byte can have this value.
         ///
-        /// `mz_repr`'s `Row` `Tag` enum currently has 94 variants (discriminants
-        /// 0..=93), so the truly tight bound is 94. We deliberately pick a larger,
+        /// `mz_repr`'s `Row` `Tag` enum currently has 84 variants (discriminants
+        /// 0..=83), so the truly tight bound is 84. We deliberately pick a larger,
         /// round-ish constant to leave headroom for new tags without having to also
         /// bump the safe set, and the `test_safe_tag_base` test pins the real
         /// invariant: every datum the row format produces must encode with a first

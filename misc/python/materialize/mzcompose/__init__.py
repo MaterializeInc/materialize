@@ -102,6 +102,7 @@ def get_minimal_system_parameters(
         "enable_create_table_from_source": "true",
         "enable_eager_delta_joins": "true",
         "enable_envelope_debezium_in_subscribe": "true",
+        "enable_exclude_constraints_option": "true",
         "enable_expressions_in_limit_syntax": "true",
         "enable_fixed_correlated_cte_lowering": "true",
         "enable_introspection_subscribes": "true",
@@ -139,6 +140,16 @@ def get_minimal_system_parameters(
         # End of list (ordered by name)
     }
 
+    if version >= MzVersion.parse_mz("v26.40.0-dev"):
+        # Exercise the row-limit check without constraining normal test queries.
+        config["compute_peek_row_iteration_limit"] = "1000000000"
+        config["enable_compute_peek_row_iteration_limit"] = "true"
+
+        # Exercise the peek offload path in tests while it defaults off in
+        # production. The budgets stay at their code defaults so tests make the
+        # same placement decisions production makes.
+        config["enable_compute_index_peek_offload"] = "true"
+
     if version < MzVersion.parse_mz("v0.163.0-dev"):
         config["enable_compute_active_dataflow_cancelation"] = "true"
 
@@ -146,6 +157,9 @@ def get_minimal_system_parameters(
         config["enable_columnar_lgalloc"] = "false"
     if version < MzVersion.parse_mz("v26.25.0-dev"):
         config["enable_multi_replica_sources"] = "true"
+
+    if version >= MzVersion.parse_mz("v26.40.0-dev"):
+        config["hydration_history_collection_interval"] = "60s"
 
     if sanitizer_enabled():
         config["with_0dt_deployment_max_wait"] = "18000s"
@@ -158,6 +172,14 @@ def get_minimal_system_parameters(
         config["enable_cluster_controller"] = (
             "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
         )
+
+    # The `WITH (WAIT ...)` graceful-reconfiguration surface. Always accepted
+    # from v26.41 on. Older binaries still gate it behind this feature flag, so
+    # pin it on for them: the tests that use the surface no longer enable it
+    # themselves, and in a mixed-version run some of their phases execute
+    # against the old binary.
+    if version < MzVersion.parse_mz("v26.41.0-dev"):
+        config["enable_zero_downtime_cluster_reconfiguration"] = "true"
 
     return config
 
@@ -183,8 +205,7 @@ def get_variable_system_parameters(
     # the lockless CRDB_* consensus queries are only linearizable under
     # SERIALIZABLE and persist asserts on the connection's isolation level. On
     # Postgres-backed consensus the query family is linearizable under READ
-    # COMMITTED, so default it on and let it vary. FoundationDB does not use the
-    # Postgres consensus, so leaving it off there is a harmless no-op.
+    # COMMITTED, so default it on and let it vary.
     read_committed_safe = metadata_store in ("postgres-metadata", "alloydb")
     persist_pg_consensus_read_committed = VariableSystemParameter(
         "persist_pg_consensus_read_committed",
@@ -258,6 +279,11 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "compute_apply_column_demands", "true", ["true", "false"]
         ),
+        # On by default so CI exercises the columnar merge batcher, which is
+        # off in production while it earns trust.
+        VariableSystemParameter(
+            "enable_columnar_merge_batcher", "true", ["true", "false"]
+        ),
         VariableSystemParameter(
             "compute_peek_response_stash_threshold_bytes",
             # 1 MiB, an in-between value
@@ -322,6 +348,19 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "enable_union_cancellation_after_relation_cse",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_upsert_paged_spill",
+            "true",
+            ["true", "false"],
+        ),
+        # On by default so CI exercises the chunked stash flavor, which is
+        # off in production while it earns trust. Only meaningful when
+        # enable_upsert_v2 is true.
+        VariableSystemParameter(
+            "enable_upsert_chunked_stash",
             "true",
             ["true", "false"],
         ),
@@ -490,6 +529,17 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "arrangement_size_history_retention_period", "7d", ["1min", "1h", "7d"]
         ),
+        *(
+            [
+                VariableSystemParameter(
+                    "hydration_history_retention_period",
+                    "30d",
+                    ["1min", "1h", "30d"],
+                )
+            ]
+            if version >= MzVersion.parse_mz("v26.40.0-dev")
+            else []
+        ),
         VariableSystemParameter(
             "persist_validate_part_bounds_on_read", "false", ["true", "false"]
         ),
@@ -624,7 +674,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "column_paged_batcher_spill_worker_count",
     "column_paged_batcher_eager_backing",
     "column_paged_batcher_pool_rss_target_fraction",
-    "enable_upsert_paged_spill",
     "enable_lgalloc_eager_reclamation",
     "lgalloc_background_interval",
     "lgalloc_file_growth_dampener",
@@ -781,11 +830,17 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "mz_metrics_lgalloc_map_refresh_interval",
     "mz_metrics_lgalloc_refresh_interval",
     "mz_metrics_rusage_refresh_interval",
+    "mz_metrics_usage_refresh_interval",
     "compute_peek_response_stash_batch_max_runs",
+    # The offload's budgets, left at their code defaults so tests exercise the
+    # placement decisions production makes. parallel-workload varies them.
+    "compute_index_peek_inline_budget",
+    "compute_index_peek_activation_budget",
+    "compute_index_peek_yield_granularity",
+    "compute_index_peek_permit_fraction",
+    "compute_peek_response_stash_batch_bytes",
     "compute_peek_response_stash_read_batch_size_bytes",
     "compute_peek_response_stash_read_memory_budget_bytes",
-    "compute_peek_stash_num_batches",
-    "compute_peek_stash_batch_size",
     "storage_statistics_retention_duration",
     "enable_paused_cluster_readhold_downgrade",
     "kafka_retry_backoff",

@@ -6,7 +6,7 @@ menu:
     main:
         parent: "mysql"
         identifier: "mysql-source-versioning"
-        weight: 85
+        weight: 60
 ---
 
 {{< public-preview />}}

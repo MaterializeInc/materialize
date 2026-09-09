@@ -120,3 +120,10 @@ Certificate Authority (CA) rather than self-signed certificates.
 ## Node pool resizing
 
 {{% include-headless "/headless/self-managed-deployments/resize-node-pool" %}}
+
+## Node pool upgrades
+
+GKE upgrades node pools automatically, and this cannot be disabled. Configure
+the operator's node upgrade rollout trigger so Materialize moves its pods to
+the replacement nodes gracefully instead of being evicted. See [GKE node pool
+upgrades](/self-managed-deployments/deployment-guidelines/gke-node-pool-upgrades/).

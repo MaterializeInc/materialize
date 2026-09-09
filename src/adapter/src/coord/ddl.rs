@@ -51,7 +51,7 @@ use serde_json::json;
 use tracing::{Instrument, Level, event, info_span, warn};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
-use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult};
+use crate::catalog::{DropObjectInfo, Op, TransactionResult};
 use crate::coord::Coordinator;
 use crate::coord::appends::{BuiltinTableAppendCompletion, BuiltinTableAppendNotify};
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
@@ -254,7 +254,7 @@ impl Coordinator {
     pub(crate) async fn catalog_transact_with_ddl_transaction<F>(
         &mut self,
         ctx: &mut ExecuteContext,
-        ops: Vec<catalog::Op>,
+        mut ops: Vec<catalog::Op>,
         side_effect: F,
     ) -> Result<(), AdapterError>
     where
@@ -321,6 +321,21 @@ impl Coordinator {
         let prep_start = Instant::now();
         let mut combined_ops = txn_ops_clone;
         combined_ops.extend(ops.iter().cloned());
+        let creates_scoped_object = ops.iter().any(|op| {
+            matches!(
+                op,
+                catalog::Op::CreateCluster { .. } | catalog::Op::CreateClusterReplica { .. }
+            )
+        });
+        if creates_scoped_object {
+            // Include accumulated creates when deriving contexts. A replica can
+            // be created in a later DDL statement than its still-uncommitted
+            // cluster, which is absent from the coordinator's live catalog.
+            if let Some(scoped_op) = self.scoped_overrides_create_op(&combined_ops) {
+                ops.push(scoped_op.clone());
+                combined_ops.push(scoped_op);
+            }
+        }
         let conn_id = ctx.session().conn_id().clone();
         let validate_res = self.validate_resource_limits(&combined_ops, &conn_id);
         phase_seconds
@@ -384,10 +399,14 @@ impl Coordinator {
     pub(crate) async fn catalog_transact_inner(
         &mut self,
         conn_id: Option<&ConnectionId>,
-        ops: Vec<catalog::Op>,
+        mut ops: Vec<catalog::Op>,
     ) -> Result<(BuiltinTableAppendNotify, Vec<ParsedStateUpdate>), AdapterError> {
         if self.controller.read_only() {
             return Err(AdapterError::ReadOnly);
+        }
+
+        if let Some(scoped_op) = self.scoped_overrides_create_op(&ops) {
+            ops.push(scoped_op);
         }
 
         event!(Level::TRACE, ops = format!("{:?}", ops));
@@ -719,6 +738,7 @@ impl Coordinator {
 
     pub(crate) fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
         self.drop_introspection_subscribes(replica_id);
+        self.drop_metric_sinks(replica_id);
 
         self.controller
             .drop_replica(cluster_id, replica_id)
@@ -870,43 +890,6 @@ impl Coordinator {
         }))
     }
 
-    /// Drops all pending replicas for a set of clusters
-    /// that are undergoing reconfiguration.
-    pub async fn drop_reconfiguration_replicas(
-        &mut self,
-        cluster_ids: BTreeSet<ClusterId>,
-    ) -> Result<(), AdapterError> {
-        let pending_cluster_ops: Vec<Op> = cluster_ids
-            .iter()
-            .map(|c| {
-                self.catalog()
-                    .get_cluster(c.clone())
-                    .replicas()
-                    .filter_map(|r| match r.config.location {
-                        ReplicaLocation::Managed(ref l) if l.pending => {
-                            Some(DropObjectInfo::ClusterReplica((
-                                c.clone(),
-                                r.replica_id,
-                                ReplicaCreateDropReason::Manual,
-                            )))
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<DropObjectInfo>>()
-            })
-            .filter_map(|pending_replica_drop_ops_by_cluster| {
-                match pending_replica_drop_ops_by_cluster.len() {
-                    0 => None,
-                    _ => Some(Op::DropObjects(pending_replica_drop_ops_by_cluster)),
-                }
-            })
-            .collect();
-        if !pending_cluster_ops.is_empty() {
-            self.catalog_transact(None, pending_cluster_ops).await?;
-        }
-        Ok(())
-    }
-
     /// Cancels all active compute sinks for the identified connection.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn cancel_compute_sinks_for_conn(
@@ -915,15 +898,6 @@ impl Coordinator {
     ) -> BuiltinTableAppendCompletion {
         self.retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Canceled)
             .await
-    }
-
-    /// Cancels all active cluster reconfigurations sinks for the identified connection.
-    #[mz_ore::instrument(level = "debug")]
-    pub(crate) async fn cancel_cluster_reconfigurations_for_conn(
-        &mut self,
-        conn_id: &ConnectionId,
-    ) {
-        self.retire_cluster_reconfigurations_for_conn(conn_id).await
     }
 
     /// Retires all active compute sinks for the identified connection with the
@@ -943,30 +917,6 @@ impl Coordinator {
             .map(|sink_id| (*sink_id, reason.clone()))
             .collect();
         self.retire_compute_sinks(drop_sinks).await
-    }
-
-    /// Cleans pending cluster reconfiguraiotns for the identified connection
-    #[mz_ore::instrument(level = "debug")]
-    pub(crate) async fn retire_cluster_reconfigurations_for_conn(
-        &mut self,
-        conn_id: &ConnectionId,
-    ) {
-        let reconfiguring_clusters = self
-            .active_conns
-            .get(conn_id)
-            .expect("must exist for active session")
-            .pending_cluster_alters
-            .clone();
-        // try to drop reconfig replicas
-        self.drop_reconfiguration_replicas(reconfiguring_clusters)
-            .await
-            .unwrap_or_terminate("cannot fail to drop reconfiguration replicas");
-
-        self.active_conns
-            .get_mut(conn_id)
-            .expect("must exist for active session")
-            .pending_cluster_alters
-            .clear();
     }
 
     pub(crate) fn drop_storage_sinks(&mut self, sink_gids: Vec<GlobalId>) {
@@ -1276,15 +1226,7 @@ impl Coordinator {
                     if cluster_id.is_user() {
                         *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) += 1;
                         if let ReplicaLocation::Managed(location) = &config.location {
-                            let replica_allocation = self
-                                .catalog()
-                                .cluster_replica_sizes()
-                                .0
-                                .get(location.size_for_billing())
-                                .expect(
-                                    "location size is validated against the cluster replica sizes",
-                                );
-                            new_credit_consumption_rate += replica_allocation.credits_per_hour
+                            new_credit_consumption_rate += self.replica_credits_per_hour(location);
                         }
                     }
                 }
@@ -1347,16 +1289,8 @@ impl Coordinator {
                                     if let ReplicaLocation::Managed(location) =
                                         &cluster.config.location
                                     {
-                                        let replica_allocation = self
-                                            .catalog()
-                                            .cluster_replica_sizes()
-                                            .0
-                                            .get(location.size_for_billing())
-                                            .expect(
-                                                "location size is validated against the cluster replica sizes",
-                                            );
                                         new_credit_consumption_rate -=
-                                            replica_allocation.credits_per_hour
+                                            self.replica_credits_per_hour(location);
                                     }
                                 }
                             }
@@ -1458,7 +1392,6 @@ impl Coordinator {
                 | Op::UpdateOwner { .. }
                 | Op::RevokeRole { .. }
                 | Op::UpdateClusterConfig { .. }
-                | Op::UpdateClusterReplicaConfig { .. }
                 | Op::UpdateSourceReferences { .. }
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }

@@ -14,6 +14,11 @@
 // limitations under the License.
 
 //! Linux cgroup detection utilities.
+//!
+//! NOTE: this module must stay free of non-`std` dependencies. It is compiled unconditionally,
+//! including into feature-reduced builds such as the wasm32 one, where `mz_ore`'s optional
+//! dependencies are absent. Reaching for `tracing` here breaks that build. Callers that want the
+//! resolved cgroup reported should log [`CgroupV2::path`] themselves.
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -170,6 +175,69 @@ pub fn detect_memory_limit() -> Option<MemoryLimit> {
         return read_v2_memory_limit(&cgroups, &v2_mounts);
     }
     read_v1_memory_limit(&cgroups, &v1_mounts)
+}
+
+/// The directory holding this process's cgroup v2 interface files.
+///
+/// Resolving the directory walks `/proc/self/mountinfo` and `/proc/self/cgroup`, so callers that
+/// read repeatedly should [`CgroupV2::detect`] once and keep the handle.
+#[derive(Clone, Debug)]
+pub struct CgroupV2 {
+    dir: PathBuf,
+}
+
+impl CgroupV2 {
+    /// Resolve this process's cgroup v2 directory, if it has one with the memory controller
+    /// enabled.
+    ///
+    /// Returns `None` on a v1-only hierarchy, a mixed hierarchy, and on non-Linux platforms.
+    pub fn detect() -> Option<Self> {
+        let (v2_mounts, _v1_mounts) = parse_proc_self_mountinfo()?;
+        let cgroups = parse_proc_self_cgroup()?;
+
+        // cgroups v2 supports only a single cgroup per process.
+        let mount = v2_mounts.first()?;
+        if mount.root != cgroups.first()?.root {
+            // Mixed v1/v2 hierarchies are not supported.
+            return None;
+        }
+
+        let dir = &mount.mount_point;
+        let controllers = std::fs::read_to_string(dir.join("cgroup.controllers")).ok()?;
+        if !controllers.trim().split(' ').any(|c| c == "memory") {
+            return None;
+        }
+
+        Some(Self { dir: dir.clone() })
+    }
+
+    /// The resolved directory.
+    ///
+    /// Readings taken from the wrong cgroup look plausible rather than absent, so callers are
+    /// expected to report this once so that a misresolution is diagnosable without container
+    /// access. This crate does not log it itself, since `tracing` is an optional dependency here.
+    pub fn path(&self) -> &Path {
+        &self.dir
+    }
+
+    /// Read an interface file holding a single integer, in bytes or as a count.
+    ///
+    /// Returns `None` when the file is absent, which is how a kernel too old to provide it
+    /// presents, and when it holds a non-integer. `memory.max` and friends read as `None` when
+    /// unlimited, since they then hold the literal `max`.
+    pub fn read_u64(&self, file: &str) -> Option<u64> {
+        let contents = std::fs::read_to_string(self.dir.join(file)).ok()?;
+        contents.trim().parse().ok()
+    }
+
+    /// Read a `key value` interface file, returning the value for `key`.
+    pub fn read_keyed_u64(&self, file: &str, key: &str) -> Option<u64> {
+        let contents = std::fs::read_to_string(self.dir.join(file)).ok()?;
+        contents.lines().find_map(|line| {
+            let (name, value) = line.split_once(' ')?;
+            (name == key).then(|| value.trim().parse().ok())?
+        })
+    }
 }
 
 #[cfg(test)]

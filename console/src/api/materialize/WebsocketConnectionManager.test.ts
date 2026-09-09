@@ -12,9 +12,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getStore } from "~/jotai";
 import {
+  currentRegionIdAtom,
   EnvironmentsWithHealth,
   environmentsWithHealth,
 } from "~/store/environments";
+import { defaultRegionId } from "~/test/utils";
 
 import {
   Connectable,
@@ -231,6 +233,169 @@ describe("WebsocketConnectionManager", () => {
       mockTarget.simulateOpen();
       manager.reconnect();
       expect(mockTarget.reconnect).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("region switch", () => {
+    const twoRegions = () =>
+      new Map([
+        [defaultRegionId, createHealthyEnvironment("addr-a:6876")],
+        ["aws/eu-west-1", createHealthyEnvironment("addr-b:6876")],
+      ]) as unknown as EnvironmentsWithHealth;
+
+    afterEach(() => {
+      getStore().set(currentRegionIdAtom, defaultRegionId);
+    });
+
+    it("reconnects at the new address when the region switches while connected", () => {
+      const store = getStore();
+      store.set(environmentsWithHealth, twoRegions());
+
+      manager = new WebsocketConnectionManager(
+        mockTarget,
+        store,
+        reconnectionStateAtom,
+      );
+      mockTarget.simulateOpen();
+      vi.mocked(mockTarget.reconnect).mockClear();
+
+      store.set(currentRegionIdAtom, "aws/eu-west-1");
+
+      expect(mockTarget.reconnect).toHaveBeenCalledTimes(1);
+      expect(mockTarget.reconnect).toHaveBeenCalledWith(
+        "addr-b:6876",
+        undefined,
+      );
+    });
+
+    it("reconnects after a round trip through an unhealthy region", () => {
+      const store = getStore();
+      const crashed = {
+        ...createHealthyEnvironment("addr-b:6876"),
+        status: { health: "crashed" as const, version: "0.0.0", errors: [] },
+      };
+      store.set(
+        environmentsWithHealth,
+        new Map<string, unknown>([
+          [defaultRegionId, createHealthyEnvironment("addr-a:6876")],
+          ["aws/eu-west-1", crashed],
+        ]) as unknown as EnvironmentsWithHealth,
+      );
+
+      manager = new WebsocketConnectionManager(
+        mockTarget,
+        store,
+        reconnectionStateAtom,
+      );
+      mockTarget.simulateOpen();
+      vi.mocked(mockTarget.reconnect).mockClear();
+
+      // Pausing on the unhealthy region tears the old region's socket down.
+      store.set(currentRegionIdAtom, "aws/eu-west-1");
+      expect(mockTarget.disconnect).toHaveBeenCalled();
+      expect(mockTarget.reconnect).not.toHaveBeenCalled();
+
+      // Returning to the healthy region reconnects rather than assuming the
+      // old socket still serves it.
+      store.set(currentRegionIdAtom, defaultRegionId);
+      expect(mockTarget.reconnect).toHaveBeenCalledWith(
+        "addr-a:6876",
+        undefined,
+      );
+    });
+
+    it("keeps the socket through a same-region health blip", () => {
+      const store = getStore();
+      store.set(environmentsWithHealth, twoRegions());
+      manager = new WebsocketConnectionManager(
+        mockTarget,
+        store,
+        reconnectionStateAtom,
+      );
+      mockTarget.simulateOpen();
+      vi.mocked(mockTarget.reconnect).mockClear();
+      vi.mocked(mockTarget.disconnect).mockClear();
+
+      // The current region's health check fails: the socket is left alone,
+      // so consumers like the Shell see no silent teardown.
+      store.set(
+        environmentsWithHealth,
+        new Map<string, unknown>([
+          [
+            defaultRegionId,
+            {
+              ...createHealthyEnvironment("addr-a:6876"),
+              status: {
+                health: "crashed" as const,
+                version: "0.0.0",
+                errors: [],
+              },
+            },
+          ],
+          ["aws/eu-west-1", createHealthyEnvironment("addr-b:6876")],
+        ]) as unknown as EnvironmentsWithHealth,
+      );
+      expect(mockTarget.disconnect).not.toHaveBeenCalled();
+
+      // Health recovers: the socket is still connected, so no churn either.
+      store.set(environmentsWithHealth, twoRegions());
+      expect(mockTarget.reconnect).not.toHaveBeenCalled();
+    });
+
+    it("reconnects after a round trip through a disabled region", () => {
+      const store = getStore();
+      store.set(
+        environmentsWithHealth,
+        new Map<string, unknown>([
+          [defaultRegionId, createHealthyEnvironment("addr-a:6876")],
+          ["aws/eu-west-1", { state: "disabled" as const }],
+        ]) as unknown as EnvironmentsWithHealth,
+      );
+      manager = new WebsocketConnectionManager(
+        mockTarget,
+        store,
+        reconnectionStateAtom,
+      );
+      mockTarget.simulateOpen();
+      vi.mocked(mockTarget.reconnect).mockClear();
+
+      // A disabled region never updates the address, so the teardown must key
+      // on the region, not the address.
+      store.set(currentRegionIdAtom, "aws/eu-west-1");
+      expect(mockTarget.disconnect).toHaveBeenCalled();
+
+      store.set(currentRegionIdAtom, defaultRegionId);
+      expect(mockTarget.reconnect).toHaveBeenCalledWith(
+        "addr-a:6876",
+        undefined,
+      );
+    });
+
+    it("reconnects after a region switch that lands mid-handshake", () => {
+      const store = getStore();
+      store.set(environmentsWithHealth, twoRegions());
+
+      // Constructor starts a connect to region A; handshake still in flight.
+      manager = new WebsocketConnectionManager(
+        mockTarget,
+        store,
+        reconnectionStateAtom,
+      );
+      expect(mockTarget.reconnect).toHaveBeenCalledWith(
+        "addr-a:6876",
+        undefined,
+      );
+      vi.mocked(mockTarget.reconnect).mockClear();
+
+      // Switch regions before the handshake completes: deferred, not dropped.
+      store.set(currentRegionIdAtom, "aws/eu-west-1");
+      expect(mockTarget.reconnect).not.toHaveBeenCalled();
+
+      mockTarget.simulateOpen();
+      expect(mockTarget.reconnect).toHaveBeenCalledWith(
+        "addr-b:6876",
+        undefined,
+      );
     });
   });
 

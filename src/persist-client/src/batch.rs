@@ -1366,12 +1366,20 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     }
 }
 
+/// Validates that `batch` may be appended under the desc `truncate`.
+///
+/// Returns whether `truncate` cuts into `batch`'s own desc, i.e. whether the
+/// batch's parts may hold updates outside the desc they are registered under.
+/// Readers filter such updates out against the registered desc, but write-time
+/// part statistics still count them, so callers must record the bit (see
+/// `RunMeta::bounds_truncated`) to keep stats-based accounting from trusting
+/// the statistics.
 pub(crate) fn validate_truncate_batch<T: Timestamp>(
     batch: &HollowBatch<T>,
     truncate: &Description<T>,
     any_batch_rewrite: bool,
     validate_part_bounds_on_write: bool,
-) -> Result<(), InvalidUsage<T>> {
+) -> Result<bool, InvalidUsage<T>> {
     // If rewrite_ts is used, we don't allow truncation, to keep things simpler
     // to reason about.
     if any_batch_rewrite {
@@ -1400,8 +1408,17 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
         }
     }
 
+    // The rewrite checks above prove that no part holds data outside
+    // `truncate`: the upper matches exactly and every part's effective lower
+    // bound (its rewrite ts) is at or above `truncate.lower()`. The batch's
+    // own desc being wider does not mean anything is filtered on read, so
+    // comparing against it would spuriously mark every rewritten batch.
+    let bounds_truncated = !any_batch_rewrite
+        && (!PartialOrder::less_equal(truncate.lower(), batch.desc.lower())
+            || !PartialOrder::less_equal(batch.desc.upper(), truncate.upper()));
+
     if !validate_part_bounds_on_write {
-        return Ok(());
+        return Ok(bounds_truncated);
     }
 
     let batch = &batch.desc;
@@ -1416,7 +1433,7 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
         });
     }
 
-    Ok(())
+    Ok(bounds_truncated)
 }
 
 #[derive(Debug)]
@@ -1795,5 +1812,51 @@ mod tests {
         };
         // Verifies that the structured key lower is stored and decoded.
         assert!(part.structured_key_lower().is_some());
+    }
+
+    #[mz_ore::test]
+    fn validate_truncate_batch_bounds() {
+        use crate::internal::state::tests::hollow;
+
+        let desc = |lower: u64, upper: u64| {
+            Description::new(
+                Antichain::from_elem(lower),
+                Antichain::from_elem(upper),
+                Antichain::from_elem(0),
+            )
+        };
+
+        // Appending under the batch's own desc is not a truncation.
+        let batch = hollow(0, 5, &["k"], 1);
+        assert_eq!(
+            validate_truncate_batch(&batch, &desc(0, 5), false, true).expect("valid"),
+            false
+        );
+
+        // A narrower append desc may leave part data outside the registered
+        // bounds, on either side.
+        assert_eq!(
+            validate_truncate_batch(&batch, &desc(1, 5), false, true).expect("valid"),
+            true
+        );
+        assert_eq!(
+            validate_truncate_batch(&batch, &desc(0, 4), false, true).expect("valid"),
+            true
+        );
+
+        // A ts-rewritten batch keeps its write-time lower, but the rewrite
+        // validation proves that no part holds data outside the append desc,
+        // so it must not count as a truncation.
+        let mut rewritten = hollow(0, 5, &["k"], 1);
+        for part in rewritten.parts.iter_mut() {
+            let RunPart::Single(BatchPart::Hollow(part)) = part else {
+                panic!("expected hollow part");
+            };
+            part.ts_rewrite = Some(Antichain::from_elem(3));
+        }
+        assert_eq!(
+            validate_truncate_batch(&rewritten, &desc(2, 5), true, true).expect("valid"),
+            false
+        );
     }
 }

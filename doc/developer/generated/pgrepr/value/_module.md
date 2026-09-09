@@ -1,6 +1,6 @@
 ---
 source: src/pgrepr/src/value.rs
-revision: 5f6a88b341
+revision: c317ceee3c
 ---
 
 # mz-pgrepr::value
@@ -8,6 +8,7 @@ revision: 5f6a88b341
 Defines the `Value` enum — the central PostgreSQL datum type — together with its serialization to and from both the PostgreSQL text and binary wire formats, and bidirectional conversion to and from `mz_repr::Datum`.
 
 `Value` mirrors every PostgreSQL type supported by Materialize, including Materialize-specific extensions (unsigned integers, `MzTimestamp`, lists, maps, ranges, and ACL items).
+`Value::RegProc(u32)` is a distinct variant from `Value::Oid(u32)`: text encoding resolves the OID to the function's name via `regproc::name()`, matching PostgreSQL's `regprocout` (OID 0 encodes as `"-"`; an unrecognized OID encodes as its decimal representation; an overloaded name is schema-qualified). Binary encoding is identical to an `oid` (`i.to_sql(&PgType::OID, buf)`), matching PostgreSQL's `regprocsend`. `SqlScalarType::RegClass` and `SqlScalarType::RegType` collapse into `Value::Oid` rather than `Value::RegProc` because those types can name user-created objects that no static table can know; resolution for them lives in the SQL cast to `text`. Text decoding of `Type::RegProc` goes through `parse_regproc`, which accepts the literal `"-"` (OID 0), a resolvable function name (via `regproc::oid`), a decimal OID string, and rejects ambiguous names with `"more than one function named ..."` and missing names with `"function ... does not exist"`.
 The main entry points are `Value::from_datum` (converting an `mz_repr::Datum` to a `Value`), `Value::into_datum` (the reverse), `Value::encode` (writing to the wire), and `Value::decode` (reading from the wire). `Value::encode` and `Value::encode_text` both accept a `TextEncodeSettings` argument that carries session parameters affecting text output (currently `extra_float_digits`). When decoding a `Numeric` value, the internal `rescale_numeric` helper rescales the decoded value to the `max_scale` declared by the target `Type::Numeric` constraints, if any, so that text, CSV, and binary decoding all produce consistently scaled results.
 
 `TextEncodeSettings` is a small `Copy` struct that packages session parameters governing text output. `TextEncodeSettings::STABLE` (with `extra_float_digits: 1`) is used by all callers that encode outside a session context (dataflow layer, statement logging, sqllogictest). When `extra_float_digits` is positive, floats use the shortest round-trippable representation via `strconv::format_float32`/`format_float64`; when zero or negative, the private `format_float_limited` helper mimics C's `%.*g` format (clamping significant digits to at least 1, stripping trailing zeros, using scientific notation for exponents outside `[-4, ndig)`).

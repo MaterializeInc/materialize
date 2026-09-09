@@ -33,14 +33,7 @@
      until all deployment clusters' objects are fully hydrated.
 #}
 
-{% set current_target_name = target.name %}
-{% set deployment = var('deployment') %}
-{% set target_config = deployment[current_target_name] %}
-
--- Check if the target-specific configuration exists
-{% if not target_config %}
-    {{ exceptions.raise_compiler_error("No deployment configuration found for target " ~ current_target_name) }}
-{% endif %}
+{% set target_config = internal_get_deployment_config() %}
 
 {% set clusters = target_config.get('clusters', []) %}
 

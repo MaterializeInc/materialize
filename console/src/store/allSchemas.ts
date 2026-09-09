@@ -15,7 +15,10 @@ import {
   buildAllSchemaListQuery,
   SchemaWithOptionalDatabase,
 } from "~/api/materialize/schemaList";
-import { SubscribeState } from "~/api/materialize/SubscribeManager";
+import {
+  SubscribeRow,
+  SubscribeState,
+} from "~/api/materialize/SubscribeManager";
 import {
   buildSubscribeQuery,
   useGlobalUpsertSubscribe,
@@ -27,17 +30,17 @@ export const allSchemas = atom<SubscribeState<SchemaWithOptionalDatabase>>({
   snapshotComplete: false,
 });
 
-export function useSubscribeToAllSchemas() {
-  const subscribe = React.useMemo(() => {
-    return buildSubscribeQuery(buildAllSchemaListQuery(), { upsertKey: "id" });
-  }, []);
+const ALL_SCHEMAS_SUBSCRIBE_OPTIONS = {
+  atom: allSchemas,
+  subscribe: buildSubscribeQuery(buildAllSchemaListQuery(), {
+    upsertKey: "id",
+  }),
+  select: (row: SubscribeRow<SchemaWithOptionalDatabase>) => row.data,
+  upsertKey: (row: SubscribeRow<SchemaWithOptionalDatabase>) => row.data.id,
+};
 
-  return useGlobalUpsertSubscribe({
-    atom: allSchemas,
-    subscribe,
-    select: (row) => row.data,
-    upsertKey: (row) => row.data.id,
-  });
+export function useSubscribeToAllSchemas() {
+  useGlobalUpsertSubscribe(ALL_SCHEMAS_SUBSCRIBE_OPTIONS);
 }
 
 export function useAllSchemas(options?: { includeSystemSchemas?: boolean }) {

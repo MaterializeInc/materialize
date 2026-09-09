@@ -13,34 +13,25 @@ import React from "react";
 import { Route, Routes } from "react-router-dom";
 
 import { DatabaseObject } from "~/api/materialize/objects";
-import { AllNamespaceItem } from "~/api/materialize/schemaList";
-import { getStore } from "~/jotai";
-import { allNamespaceItems } from "~/platform/object-explorer/allNamespaces";
-import { allObjects } from "~/store/allObjects";
-import { mockSubscribeState } from "~/test/mockSubscribe";
+import { allObjectsCollection } from "~/store/allObjectsCollection";
 import { createProviderWrapper } from "~/test/utils";
 
+import { allNamespacesCollection } from "./allNamespacesCollection";
 import { ObjectExplorerRoutes } from "./ObjectExplorerRoutes";
 
-// Mock the WebSocket subscription
-vi.mock("~/platform/object-explorer/allNamespaces", async () => {
-  const actual = await vi.importActual(
-    "~/platform/object-explorer/allNamespaces",
-  );
-  return {
-    ...actual,
-    useSubscribeToAllNamespaces: vi.fn(() => {
-      return {
-        isLoading: false,
-        isError: false,
-        data: [],
-        error: undefined,
-        snapshotComplete: true,
-      };
-    }),
-
-    allNamespaceItems: actual.allNamespaceItems,
-  };
+// Stub the collection activator hooks so the test opens no real SUBSCRIBE
+// (WebSocket). The tree is fed by seeding the collections directly in beforeEach.
+vi.mock("~/store/allObjectsCollection", async () => {
+  const actual = await vi.importActual<
+    typeof import("~/store/allObjectsCollection")
+  >("~/store/allObjectsCollection");
+  return { ...actual, useSubscribeToAllObjectsCollection: vi.fn() };
+});
+vi.mock("./allNamespacesCollection", async () => {
+  const actual = await vi.importActual<
+    typeof import("./allNamespacesCollection")
+  >("./allNamespacesCollection");
+  return { ...actual, useSubscribeToAllNamespacesCollection: vi.fn() };
 });
 
 // Standard database with schema
@@ -141,28 +132,21 @@ function getLink(name: string) {
 describe("ObjectExplorer", () => {
   beforeEach(() => {
     history.pushState(undefined, "", "/objects");
-    const store = getStore();
-    store.set(
-      allObjects,
-      mockSubscribeState({
-        data: [ordersTable, itemsTable, kafkaSource],
-        snapshotComplete: true,
-        error: undefined,
-      }),
-    );
-    store.set(
-      allNamespaceItems,
-      mockSubscribeState<AllNamespaceItem>({
-        data: [
-          materializeDbPublicSchema,
-          emptyDatabaseNoSchema,
-          dbWithSchema,
-          schemaWithNoDB,
-        ],
-        snapshotComplete: true,
-        error: undefined,
-      }),
-    );
+    allObjectsCollection.applySnapshot({
+      data: [ordersTable, itemsTable, kafkaSource],
+      snapshotComplete: true,
+      error: undefined,
+    });
+    allNamespacesCollection.applySnapshot({
+      data: [
+        materializeDbPublicSchema,
+        emptyDatabaseNoSchema,
+        dbWithSchema,
+        schemaWithNoDB,
+      ],
+      snapshotComplete: true,
+      error: undefined,
+    });
   });
 
   it("Renders a tree with all nodes collapsed initially", async () => {

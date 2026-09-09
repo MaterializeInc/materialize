@@ -49,7 +49,6 @@ use mz_sql::pure::{
     materialized_view_option_contains_temporal, purify_create_materialized_view_options,
 };
 use mz_sql::rbac;
-use mz_sql::rbac::CREATE_ITEM_USAGE;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
     EndTransactionAction, NETWORK_POLICY, OwnedVarInput, STATEMENT_LOGGING_SAMPLE_RATE,
@@ -638,44 +637,25 @@ impl Coordinator {
                     as_of,
                     arity,
                     sink_id,
-                    conn_id,
-                    session_uuid,
+                    owner,
                     start_time,
                     read_holds,
                     tx,
                 } => {
                     self.handle_create_internal_subscribe(
-                        *df_desc,
-                        cluster_id,
-                        replica_id,
-                        depends_on,
-                        as_of,
-                        arity,
-                        sink_id,
-                        conn_id,
-                        session_uuid,
-                        start_time,
-                        read_holds,
-                        tx,
+                        *df_desc, cluster_id, replica_id, depends_on, as_of, arity, sink_id, owner,
+                        start_time, read_holds, tx,
                     )
                     .await;
                 }
                 Command::AttemptWrite {
-                    conn_id,
+                    attempt,
                     target_id,
                     target_global_id,
                     diffs,
-                    write_ts,
                     tx,
                 } => {
-                    self.handle_attempt_write(
-                        conn_id,
-                        target_id,
-                        target_global_id,
-                        diffs,
-                        write_ts,
-                        tx,
-                    );
+                    self.handle_attempt_write(attempt, target_id, target_global_id, diffs, tx);
                 }
                 Command::DropInternalSubscribe { sink_id } => {
                     self.drop_internal_subscribe(sink_id).await;
@@ -902,7 +882,6 @@ impl Coordinator {
                     secret_key,
                     notice_tx,
                     drop_sinks: BTreeSet::new(),
-                    pending_cluster_alters: BTreeSet::new(),
                     connected_at: self.now(),
                     user,
                     application_name,
@@ -1612,14 +1591,16 @@ impl Coordinator {
                 task::spawn(|| format!("purify:{conn_id}"), async move {
                     let conn_catalog = catalog.for_session(ctx.session());
 
-                    // Checks if the session is authorized to purify a statement. Usually
-                    // authorization is checked after planning, however purification happens before
-                    // planning, which may require the use of some connections and secrets.
-                    if let Err(e) = rbac::check_usage(
+                    let statement_source = mz_sql::pure::statement_source(&conn_catalog, &stmt);
+
+                    // Authorization is usually checked after planning, but purification
+                    // happens before planning and may use connections and secrets, so it
+                    // gets its own check.
+                    if let Err(e) = rbac::check_purification(
                         &conn_catalog,
                         ctx.session(),
+                        statement_source,
                         &resolved_ids,
-                        &CREATE_ITEM_USAGE,
                     ) {
                         return ctx.retire(Err(e.into()));
                     }
@@ -1632,7 +1613,14 @@ impl Coordinator {
                     )
                     .await;
                     let result = result.map_err(|e| e.into());
-                    let dependency_ids = resolved_ids.items().copied().collect();
+                    // `ALTER SOURCE` carries its target as an unresolved name, so name
+                    // resolution never records it and `resolved_ids` does not cover it.
+                    // Without it a source dropped while purification ran off-thread
+                    // passes the validity check below and then panics the coordinator
+                    // on the missing catalog entry ("catalog out of sync") during
+                    // planning.
+                    let mut dependency_ids: BTreeSet<_> = resolved_ids.items().copied().collect();
+                    dependency_ids.extend(statement_source.map(|source| source.id()));
                     let plan_validity = PlanValidity::new(
                         &catalog,
                         dependency_ids,
@@ -1836,6 +1824,10 @@ impl Coordinator {
     }
 
     /// Whether the statement must be purified off of the Coordinator thread.
+    ///
+    /// Every statement listed here is authorized by [`rbac::check_purification`]
+    /// before purification runs, against the source that
+    /// [`mz_sql::pure::statement_source`] resolves for it.
     fn must_spawn_purification<A: AstInfo>(stmt: &Statement<A>) -> bool {
         // `CREATE` and `ALTER` `SOURCE` and `SINK` statements must be purified off the main
         // coordinator thread.
@@ -2073,8 +2065,6 @@ impl Coordinator {
         // SQL cancellation has no success response to delay. Each subscribe
         // still waits for its own retraction before it observes retirement.
         drop(retire_notify);
-        self.cancel_cluster_reconfigurations_for_conn(&conn_id)
-            .await;
         self.cancel_pending_copy(&conn_id);
         if let Some((tx, _rx)) = self.connection_cancel_watches.get_mut(&conn_id) {
             let _ = tx.send(true);

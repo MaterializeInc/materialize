@@ -101,6 +101,14 @@ labels  map
 value  double␠precision
 help  text
 
+query TT
+SELECT name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_cluster_replica_resource_usage' ORDER BY position
+----
+process_id  uint8
+source  text
+metric  text
+value  uint8
+
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflows' ORDER BY position
 ----
@@ -271,6 +279,7 @@ mz_arrangement_sharing_raw
 mz_arrangement_sizes
 mz_arrangement_sizes_per_worker
 mz_cluster_prometheus_metrics
+mz_cluster_replica_resource_usage
 mz_compute_dataflow_global_ids_per_worker
 mz_compute_error_counts
 mz_compute_error_counts_per_worker

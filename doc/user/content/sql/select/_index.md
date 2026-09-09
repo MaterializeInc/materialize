@@ -61,7 +61,7 @@ Materialize also quickly returns results for queries that only filter, project, 
 and re-order data that is maintained by an index.
 
 Queries that can't simply read out from an index will create an ephemeral dataflow to compute
-the results. These dataflows are bound to the active [cluster](/concepts/clusters/),
+the results. These dataflows are bound to the active [cluster](/fundamentals/concepts/clusters/),
  which you can change using:
 
 ```mzsql
@@ -115,7 +115,7 @@ columns. If an unqualified name refers to both an input and output column,
 
 Because Materialize is wire-compatible with PostgreSQL, you can use any
 PostgreSQL connection pooler with Materialize. For example in using PgBouncer,
-see [Connection Pooling](/integrations/connection-pooling).
+see [Connection Pooling](/serve-results/connection-pooling).
 
 ## Examples
 

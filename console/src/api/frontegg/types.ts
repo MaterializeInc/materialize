@@ -13,6 +13,8 @@ export interface UserApiToken {
   createdAt: string;
   description: string;
   metadata: Record<string, string>;
+  /** Frontegg omits this for tokens created without an expiration. */
+  expires?: string;
 }
 
 export interface NewUserApiToken extends UserApiToken {
@@ -27,6 +29,8 @@ export interface TenantApiToken {
   metadata: Record<string, string>;
   user: string;
   roleIds: string[];
+  /** Frontegg omits this for tokens created without an expiration. */
+  expires?: string;
 }
 
 export interface NewTenantApiToken extends TenantApiToken {

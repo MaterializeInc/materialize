@@ -17,10 +17,11 @@ set -euo pipefail
 
 git clean -ffdX ci/www/public
 try hugo --gc --baseURL https://ci.materialize.com/docs --source doc/user --destination ../../ci/www/public/docs
-try hugo --gc --baseURL https://ci.materialize.com/docs --source doc/user --config config.toml,config.skill.toml --disableKinds sitemap,robotsTXT,taxonomy --destination ../../ci/www/public/docs/markdown-docs
+try hugo --gc --baseURL https://ci.materialize.com/docs --source doc/user --config config.toml,config.skill.toml --disableKinds 404,sitemap,robotsTXT,taxonomy --destination ../../ci/www/public/docs/markdown-docs
 echo "<!doctype html>" > ci/www/public/index.html
 try htmltest -s ci/www/public -c doc/user/.htmltest.yml
 try ci/test/lint-docs-catalog.sh
 try ci/test/lint-metrics-catalog.sh
+try ci/test/lint-skill-metrics.sh
 
 try_status_report

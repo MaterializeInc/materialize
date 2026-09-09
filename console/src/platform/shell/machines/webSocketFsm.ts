@@ -12,11 +12,13 @@ import { assign, createMachine, StateMachine } from "@xstate/fsm";
 import {
   Column,
   Error,
+  ErrorCode,
   ExtendedRequestItem,
   Notice,
 } from "~/api/materialize/types";
 import { assert } from "~/util";
 
+import { COMMAND_INTERRUPTED_MESSAGE } from "../constants";
 import {
   CommandOutput,
   CommandResult,
@@ -115,6 +117,19 @@ function getLatestCommandResult(latestCommandOutput?: CommandOutput) {
   return latestCommandResult;
 }
 
+/**
+ * The error a command carries when the connection dropped before it finished.
+ *
+ * Materialize never sends 08006 itself, so this code unambiguously marks an
+ * error the client synthesized rather than one the server reported.
+ */
+export function createInterruptedCommandError(): Error {
+  return {
+    message: COMMAND_INTERRUPTED_MESSAGE,
+    code: ErrorCode.CONNECTION_FAILURE,
+  };
+}
+
 const markCommandAsInterrupted = assign<
   WebSocketFsmContext,
   ConnectionClosedEvent
@@ -122,6 +137,9 @@ const markCommandAsInterrupted = assign<
   latestCommandOutput: ({ latestCommandOutput }) => {
     if (latestCommandOutput) {
       latestCommandOutput.interrupted = true;
+      if (!latestCommandOutput.error) {
+        latestCommandOutput.error = createInterruptedCommandError();
+      }
     }
     return latestCommandOutput;
   },

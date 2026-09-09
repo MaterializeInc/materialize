@@ -57,16 +57,6 @@ COPY --from=apt-deps /usr/lib/*/liblzma.so.5* /usr/lib/
 # current one from the apt stage instead.
 COPY --from=apt-deps /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-# FoundationDB client library, dynamically linked by environmentd and clusterd.
-# NOTE: this tag is coupled to two other pins and all three must move
-# together: the same COPY in `debian-base` (both prod bases must ship an
-# identical libfdb_c.so, since environmentd and clusterd share one FoundationDB
-# cluster during a rolling upgrade) and the
-# `foundationdb` crate's `fdb-7_3` API feature in the root Cargo.toml. A
-# dependabot bump here that is not matched in the other two is a bug, not a
-# routine update.
-COPY --from=foundationdb/foundationdb:7.3.71 /usr/lib/libfdb_c.so /usr/lib/
-
 # Replace the base image's glibc example nsswitch.conf, whose `compat`
 # backend segfaults the statically-linked `ssh` (see comments in the file).
 COPY nsswitch.conf /etc/nsswitch.conf

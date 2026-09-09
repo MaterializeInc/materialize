@@ -64,6 +64,8 @@ const ColumnFilterTrigger = <TData,>({
   const isActive = header.column.getFilterValue() !== undefined;
   return (
     <Popover
+      isLazy
+      lazyBehavior="unmount"
       gutter={2}
       modifiers={viewportOverflowModifier}
       variant="dropdown"
@@ -97,9 +99,7 @@ const ColumnFilterTrigger = <TData,>({
         motionProps={{ animate: false }}
         onClick={(e) => e.stopPropagation()}
       >
-        <Box width="280px">
-          {renderFilter(header.column, header.getContext().table)}
-        </Box>
+        <Box>{renderFilter(header.column, header.getContext().table)}</Box>
       </PopoverContent>
     </Popover>
   );

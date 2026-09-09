@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/appends.rs
-revision: 30e4b1d241
+revision: a1bcaebfe6
 ---
 
 # adapter::coord::appends
@@ -9,6 +9,7 @@ Implements all append operations executed by the coordinator: group-commit of us
 `group_commit_initiate` coalesces pending table write requests into a single timestamped batch; `write_and_append_builtin_table_updates` drives updates to system catalog tables.
 `BuiltinTableAppendNotify` is a pinned future that resolves when a builtin-table write completes. `BuiltinTableAppendCompletion` is a completion handle wrapping a `BuiltinTableAppendNotify`; callers obtain one to use as a response barrier and convert it to a notify via `into_notify`. `GroupCommitWriteLocks` manages the locking primitives used to serialise group commits.
 `group_commit` always performs the append call even when there are no user writes, relying on the storage layer to periodically advance the upper of all tables; it does not iterate catalog entries to inject empty advancement entries per table.
+`InternalWriteResponder`'s `Drop` impl sends `WriteResult::Indeterminate` so that any waiter (session task or background sweep) receives a definitive response on coordinator or group-committer shutdown, rather than hanging.
 `UserWriteResponder` is an enum with two variants: `Session(PendingTxn)` wraps the per-session `PendingTxn` for coordinator-sequenced writes, and `Internal` carries a `WriteTarget` (item id plus the `GlobalId` generation current at planning time) and an `InternalWriteResponder` for frontend-sequenced blind writes. The write timestamp for `Session` writes is picked by the oracle during group commit; the write lock is either handed off from the submitting session (`write_locks: Some(..)`) or acquired during group commit (`write_locks: None`).
 `TableWriteCmd` has a `TimestampedWrite` variant (in addition to `GroupCommit`, `Register`, and `Forget`) that carries a caller-chosen timestamp; the group committer accepts or refuses it based on oracle eligibility and reports the outcome via `WriteResult`. `WriteResult` is an enum whose variants are `Success { timestamp }`, `TimestampPassed { target_timestamp, next_eligible_timestamp }`, `TimestampTooFarAhead { target_timestamp, limit }`, `Canceled`, `ReadOnly`, `TargetChanged`, and `Indeterminate`. `InternalWriteResponder` wraps the `oneshot::Sender<WriteResult>`; its `Drop` impl sends `WriteResult::Indeterminate` so the waiting session task never hangs on coordinator shutdown. `WriteTarget` pairs a `CatalogItemId` with the `GlobalId` generation current at planning time; the group committer refuses the write if the table's latest generation has moved on.
 `GroupCommitter` serializes runtime txns-shard writes off the coordinator loop via `TableWriteCmd` variants. `DeferredOp` represents an operation awaiting a resource; `DeferredOp::Plan` wraps a `DeferredPlan` that must uniquely hold write locks (e.g. UPDATE), while `DeferredOp::Write` wraps a `DeferredWrite` for blind inserts that can be optimistically retried. `GroupCommitRequest` accumulates appends, responses, statement-logging IDs, notifies, write locks, and permits for a single commit batch.

@@ -185,6 +185,12 @@ impl Coordinator {
             Message::ArrangementSizesPrune(expired) => {
                 self.arrangement_sizes_prune(expired).boxed_local().await;
             }
+            Message::HydrationHistorySchedule => {
+                self.schedule_hydration_history_collection();
+            }
+            Message::HydrationHistoryRun => {
+                self.run_hydration_history_collection();
+            }
             Message::RetireExecute {
                 otel_ctx,
                 data,
@@ -223,6 +229,9 @@ impl Coordinator {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
             }
             Message::IntrospectionSubscribeStageReady { span, stage } => {
+                self.sequence_staged((), span, stage).boxed_local().await;
+            }
+            Message::MetricSinkStageReady { span, stage } => {
                 self.sequence_staged((), span, stage).boxed_local().await;
             }
             Message::ExplainTimestampStageReady { ctx, span, stage } => {

@@ -7,7 +7,7 @@ menu:
   main:
     parent: 'ingest-data'
     identifier: 'mongodb'
-    weight: 17
+    weight: 50
 ---
 
 Using Change Data Capture (CDC), you can track and propagate changes from

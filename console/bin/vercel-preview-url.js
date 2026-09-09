@@ -25,7 +25,7 @@ function toKebabCase(input) {
     .replace(/^-+|-+$/g, ""); // Remove leading and trailing hyphens
 }
 
-function getPreviewUrl(identifier) {
+function getPreviewUrl(identifier, domain) {
   const sanitized = toKebabCase(identifier);
   let subdomain = `console-git-${sanitized}`;
   if (subdomain.length > MAX_SUBDOMAIN_LENGTH) {
@@ -36,9 +36,12 @@ function getPreviewUrl(identifier) {
       .substring(0, MAX_SUBDOMAIN_LENGTH)
       .replace(/-+$/g, "");
   }
-  const url = `${subdomain}.preview.console.materialize.com`;
+  const url = `${subdomain}.${domain}`;
   return url;
 }
 
-const previewUrl = getPreviewUrl(argv[2]);
+const previewUrl = getPreviewUrl(
+  argv[2],
+  argv[3] ?? "preview.console.materialize.com",
+);
 stdout.write(previewUrl + "\n");

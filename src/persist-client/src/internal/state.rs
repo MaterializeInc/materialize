@@ -57,7 +57,7 @@ use uuid::Uuid;
 use crate::critical::{CriticalReaderId, Opaque};
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{
-    LazyInlineBatchPart, LazyPartStats, LazyProto, MetadataMap, parse_id,
+    LazyInlineBatchPart, LazyPartStats, LazyProto, MetadataKey, MetadataMap, parse_id,
 };
 use crate::internal::gc::GcReq;
 use crate::internal::machine::retry_external;
@@ -823,6 +823,30 @@ pub struct RunMeta {
     /// Additional unstructured metadata.
     #[serde(skip_serializing_if = "MetadataMap::is_empty")]
     pub(crate) meta: MetadataMap,
+}
+
+/// Metadata key for [RunMeta::bounds_truncated].
+const RUN_META_BOUNDS_TRUNCATED: MetadataKey<bool> = MetadataKey::new("truncated");
+
+impl RunMeta {
+    /// Whether this run's parts may hold updates outside the registered desc
+    /// of the batch that contains them.
+    ///
+    /// Set when a batch is appended under a desc narrower than the one it was
+    /// written with (truncation). Readers filter such updates out against the
+    /// registered desc, but per-part statistics like `diffs_sum` are computed
+    /// at write time over everything physically in the part, so accounting
+    /// that compares those statistics against data seen through a read must
+    /// skip runs with this bit set.
+    pub(crate) fn bounds_truncated(&self) -> bool {
+        self.meta.get(RUN_META_BOUNDS_TRUNCATED).unwrap_or(false)
+    }
+
+    /// Marks this run as possibly holding updates outside its batch's
+    /// registered desc. See [Self::bounds_truncated].
+    pub(crate) fn set_bounds_truncated(&mut self) {
+        self.meta.set(RUN_META_BOUNDS_TRUNCATED, true);
+    }
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
@@ -1665,13 +1689,6 @@ where
             .schemas
             .last_key_value()
             .expect("all shards have a schema");
-        if *current_id != expected {
-            return Break(NoOpStateTransition(CaESchema::ExpectedMismatch {
-                schema_id: *current_id,
-                key: K::decode_schema(&current.key),
-                val: V::decode_schema(&current.val),
-            }));
-        }
 
         let current_key = K::decode_schema(&current.key);
         let current_key_dt = EncodedSchemas::decode_data_type(&current.key_data_type);
@@ -1681,13 +1698,29 @@ where
         let key_dt = data_type(key_schema);
         let val_dt = data_type(val_schema);
 
-        // If the schema is exactly the same as the current one, no-op.
+        // If the schema is exactly the same as the current one, no-op. NOTE:
+        // this check has to come before the `expected` one, otherwise the
+        // command is not idempotent: `apply_unbatched_idempotent_cmd` retries
+        // indeterminate errors, so a CaS that committed but lost its response
+        // gets re-run against state that already carries its own evolution.
+        //
+        // Returning Ok when `*current_id != expected` is safe: register_schema
+        // never mints two ids for the same content, so a content match is the
+        // current schema and a stale `expected` just lags the committed retry.
         if current_key == *key_schema
             && current_key_dt == key_dt
             && current_val == *val_schema
             && current_val_dt == val_dt
         {
             return Break(NoOpStateTransition(CaESchema::Ok(*current_id)));
+        }
+
+        if *current_id != expected {
+            return Break(NoOpStateTransition(CaESchema::ExpectedMismatch {
+                schema_id: *current_id,
+                key: current_key,
+                val: current_val,
+            }));
         }
 
         let key_fn = backward_compatible(&current_key_dt, &key_dt);

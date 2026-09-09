@@ -33,7 +33,7 @@ SASL authentication requires users to log in with a password.
 
 When SASL authentication is enabled:
 - **PostgreSQL connections** (e.g., `psql`, client libraries, [connection
-  poolers](/integrations/connection-pooling/)) use SCRAM-SHA-256 authentication.
+  poolers](/serve-results/connection-pooling/)) use SCRAM-SHA-256 authentication.
 - **HTTP/Web Console connections** use standard password authentication.
 
 This hybrid approach provides maximum security for SQL connections while

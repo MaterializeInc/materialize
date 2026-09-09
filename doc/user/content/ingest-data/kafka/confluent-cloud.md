@@ -81,7 +81,7 @@ Otherwise, you can find more information about how to do that [here](https://doc
 1. Copy the URL under **Bootstrap server**. This will be your `<broker-url>`
    going forward.
 
-1. Connect to Materialize using the [SQL Shell](/console/), or your preferred
+1. Connect to Materialize using the [SQL Shell](/developer-tools/console/), or your preferred
    SQL client.
 
 1. Create the connection. The exact steps depend on your networking
@@ -114,7 +114,7 @@ public internet.
 your cluster's **Networking** settings and set up a PrivateLink endpoint.
 Record the **VPC Endpoint Service Name** and the **DNS domain**.
 
-1. In the Materialize [SQL shell](/console/), create a
+1. In the Materialize [SQL shell](/developer-tools/console/), create a
 [PrivateLink connection](/ingest-data/network-security/privatelink/)using
 the service name from the previous step. Be sure to specify **all
 availability zones** of your Confluent Cloud cluster.

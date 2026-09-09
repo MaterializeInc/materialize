@@ -93,7 +93,7 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
         // So registration collides only on a genuine logic error, where the soft-panic is
         // the intended backstop.
         let drop_handle = (worker_id == active_worker_id).then(|| {
-            let collector = SinkCollector::new(sink_id, Arc::clone(&state));
+            let collector = SinkCollector::new(&self.label, Arc::clone(&state));
             compute_state
                 .metrics_registry
                 .register_collector_with_dropper(collector)
@@ -680,9 +680,9 @@ struct SinkCollector {
 }
 
 impl SinkCollector {
-    fn new(sink_id: GlobalId, state: Arc<Mutex<SinkState>>) -> Self {
+    fn new(label: &str, state: Arc<Mutex<SinkState>>) -> Self {
         let gauge = |name: &str, help: &str| {
-            Gauge::with_opts(Opts::new(name, help).const_label("sink", sink_id.to_string()))
+            Gauge::with_opts(Opts::new(name, help).const_label("sink", label))
                 .expect("static metric sink companion gauge options are valid")
         };
         SinkCollector {
@@ -1156,5 +1156,30 @@ mod tests {
         assert_eq!(st.errors, 0);
         st.publish_if_healthy();
         assert_eq!(st.published[&key_m()].0, 9.0);
+    }
+
+    /// Every companion gauge carries the label the collector was built with. A curated sink passes
+    /// its stable name here, so its health series stay identifiable across boots even though the
+    /// sink's `GlobalId` is transient.
+    #[mz_ore::test]
+    fn collector_labels_gauges_with_sink_label() {
+        let state = Arc::new(Mutex::new(SinkState::default()));
+        let collector = SinkCollector::new("mz_curated_example", state);
+
+        let families = collector.collect();
+        // The point is that every emitted family carries the label, so guard only that there is
+        // something to check. Pinning the exact count churns on every added gauge without telling
+        // the next reader whether they broke labelling or just added a family.
+        assert!(!families.is_empty());
+        for family in &families {
+            for metric in family.get_metric() {
+                let sink = metric
+                    .get_label()
+                    .iter()
+                    .find(|l| l.name() == "sink")
+                    .expect("sink label present");
+                assert_eq!(sink.value(), "mz_curated_example");
+            }
+        }
     }
 }

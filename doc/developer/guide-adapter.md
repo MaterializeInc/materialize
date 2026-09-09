@@ -66,6 +66,26 @@ logic to them. Extend the implications framework instead.
   Representing a new kind may require extending `ParsedStateUpdate` /
   `ParsedStateUpdateKind` first.
 
+### Background reconcilers own convergence resource failures
+
+When a catalog mutation writes desired state that a background reconciler
+materializes, the sequencer must not predict the reconciler's transient resource
+footprint. The prediction would have to reproduce every strategy that contributes
+to desired state, along with their sharing and shedding rules. It will diverge as
+those strategies evolve.
+
+The sequencer should validate properties intrinsic to the requested state, such
+as valid replica sizes, availability zones, and role permissions. The catalog
+transaction enforces resource limits against concrete creates. If a reconciler
+cannot apply those creates, it owns the response and the durable or logged
+observability for that outcome.
+
+Catalog accounting and downstream side-effect ordering must agree. If one
+transaction nets replacement drops against creates, its implications must queue
+those drops before the creates. An orchestrator can retry a failed create
+indefinitely. Queuing the drop behind it would deadlock a replacement against
+the same physical quota that catalog accounting correctly considered available.
+
 ## Correctness Invariants
 
 ### Timestamp selection must respect real-time bounds
@@ -179,6 +199,21 @@ same one strict serializable already pays).
 The current implementation rejects bounded-staleness queries whose timeline
 is not `EpochMilliseconds`, in `determine_timestamp_for_inner`. The freshness
 math is currently scoped to that timeline.
+
+### System-session replanning does not grant authority
+
+Some DDL paths reconstruct and mutate a stored definition by replanning it with
+a system session. The initial authorization check only sees dependencies in the
+submitted statement, so it cannot authorize retained dependencies discovered
+during replanning. Before reading secrets, performing external I/O, or
+persisting the result, authorize the final dependency set against the invoking
+session. Check the final set rather than the union of old and new dependencies,
+so a caller can remove a dependency they are no longer authorized to use.
+
+This rule applies when reconstructing or mutating a definition. Executing a
+fixed connection does not authorize its dependencies separately. For example,
+standalone `VALIDATE CONNECTION` is delegated by `USAGE` on the connection and
+its containing schema, without requiring `USAGE` on referenced secrets.
 
 ### The catalog is the source of truth for state that gets rebuilt from it
 

@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/catalog.rs
-revision: 39dcae2fba
+revision: c317ceee3c
 ---
 
 # mz-sql::catalog
@@ -12,3 +12,4 @@ Supporting types such as `CatalogItem`, `CatalogItemType` (variants: `Table`, `S
 `ObjectType` covers the full set of catalog object kinds visible in SQL; `CatalogConfig` carries session-level configuration including `connection_context`, optional `helm_chart_version`, and `aws_account_id` (the AWS account ID the environment runs under, folded to a literal by `mz_aws_account_id()` and `None` on non-cloud/local environments).
 Also defines `AutoProvisionSource` (enum tracking whether a role was auto-provisioned by OIDC, Frontegg, or None), `RoleAttributes` and `RoleAttributesRaw` (which include an `auto_provision_source` field), and `PasswordAction`.
 `CatalogType::Record::to_relation_desc` allocates a shared `TypeResolutionBudget` (via `query::TypeResolutionBudget::for_root`) before iterating over record fields, and resolves each field's type through `budget.resolve_child` instead of a standalone `scalar_type_from_catalog` call. This ensures all fields of a record type share one resolution budget, preventing a wide record whose fields are individually within the bound from materializing an unbounded type tree.
+`CatalogTypePgMetadata` carries a `typsend_oid` field: the OID of the `typsend` function in PostgreSQL, alongside the existing `typinput_oid` and `typreceive_oid` fields.

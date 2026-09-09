@@ -254,30 +254,74 @@ class ReuseConnQuery(Action):
         return f"{self.query} (reuse connection)"
 
 
-class PooledQuery(Action):
-    def __init__(self, query: str, conn_info: PgConnInfo):
-        self.query = query
+class PooledConn:
+    """A connection from the pool, together with the session setup it was built
+    with.
+
+    The setup travels with the connection because `PooledQuery` reopens one that
+    failed. Reopening without it would leave that connection on the server
+    defaults for the rest of the run, which changes what the affected queries
+    measure without changing anything visible in the output.
+    """
+
+    def __init__(self, conn_info: PgConnInfo, setup: list[str]):
         self.conn_info = conn_info
+        self.setup = setup
+        self.conn = self._connect()
+
+    def _connect(self) -> psycopg.Connection:
+        conn = self.conn_info.connect()
+        try:
+            conn.autocommit = True
+            for statement in self.setup:
+                with conn.cursor() as cur:
+                    cur.execute(statement.encode())
+        except Exception:
+            # A half-built connection is not usable and nothing else holds a
+            # reference to it, so close it rather than leaking the session.
+            conn.close()
+            raise
+        return conn
+
+    def reconnect(self) -> None:
+        # Built before the old one is discarded, so a failure here leaves this
+        # slot holding a working connection rather than a closed one. The
+        # caller returns the slot to the pool however this ends.
+        conn = self._connect()
+        self.conn.close()
+        self.conn = conn
+
+    def close(self) -> None:
+        self.conn.close()
+
+
+class PooledQuery(Action):
+    """Runs `query` on a connection from the scenario's pool.
+
+    Takes no `PgConnInfo`: the pool is built from the scenario's connection
+    info, and reconnecting a failed slot is the pool's own business.
+    """
+
+    def __init__(self, query: str):
+        self.query = query
 
     def _run(self, conns: queue.Queue):
-        conn = conns.get()
+        pooled = conns.get()
         try:
             try:
-                with conn.cursor() as cur:
+                with pooled.conn.cursor() as cur:
                     execute_query(cur, self.query)
             except psycopg.OperationalError as e:
                 print(f"Connection failed on query '{self.query}', reconnecting: {e}")
-                conn.close()
-                conn = self.conn_info.connect()
-                conn.autocommit = True
-                with conn.cursor() as cur:
+                pooled.reconnect()
+                with pooled.conn.cursor() as cur:
                     execute_query(cur, self.query)
         finally:
             # Always return a slot to the pool, even if the retry also failed.
             # Otherwise repeated failures drain the pool and pooled actions
             # block forever on conns.get().
             conns.task_done()
-            conns.put(conn)
+            conns.put(pooled)
 
     def __str__(self) -> str:
         return f"{self.query} (pooled)"
@@ -462,6 +506,7 @@ class Scenario:
     phases: list[Phase]
     thread_pool_size: int
     conn_pool_size: int
+    conn_pool_setup: list[str]
     guarantees: dict[str, dict[str, float]]
     regression_thresholds: dict[str, dict[str, float]]
     jobs: queue.Queue
@@ -481,12 +526,14 @@ class Scenario:
         phases: list[Phase],
         thread_pool_size: int = 5000,
         conn_pool_size: int = 0,
+        conn_pool_setup: list[str] = [],
         guarantees: dict[str, dict[str, float]] = {},
         regression_thresholds: dict[str, dict[str, float]] = {},
     ):
         self.phases = phases
         self.thread_pool_size = thread_pool_size
         self.conn_pool_size = conn_pool_size
+        self.conn_pool_setup = conn_pool_setup
         self.guarantees = guarantees
         self.regression_thresholds = regression_thresholds
         self.jobs = queue.Queue()
@@ -500,11 +547,17 @@ class Scenario:
         ]
         for thread in self.thread_pool:
             thread.start()
-        # Start threads and have them wait for work from a queue
+        # Start threads and have them wait for work from a queue. The session
+        # setup runs once per connection here rather than in `PooledQuery._run`,
+        # where it would put a round trip inside every measured duration.
         for i in range(self.conn_pool_size):
-            conn = conn_info.connect()
-            conn.autocommit = True
-            self.conns.put(conn)
+            self.conns.put(PooledConn(conn_info, self.conn_pool_setup))
+        # A pool that came up short silently narrows the concurrency every
+        # pooled action gets, which shows up as latency rather than as an
+        # error, so state the count rather than discovering it in the numbers.
+        assert (
+            self.conns.qsize() == self.conn_pool_size
+        ), f"pool has {self.conns.qsize()} of {self.conn_pool_size} connections"
 
     def run(
         self,
@@ -516,8 +569,8 @@ class Scenario:
 
     def teardown(self) -> None:
         while not self.conns.empty():
-            conn = self.conns.get()
-            conn.close()
+            pooled = self.conns.get()
+            pooled.close()
             self.conns.task_done()
         for i in range(len(self.thread_pool)):
             # Indicate to every thread to stop working

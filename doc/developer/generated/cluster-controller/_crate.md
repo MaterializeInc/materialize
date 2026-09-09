@@ -1,6 +1,6 @@
 ---
 source: src/cluster-controller/src/lib.rs
-revision: 767b86caef
+revision: 0129eb73e6
 ---
 
 # mz-cluster-controller
@@ -21,7 +21,7 @@ Key types defined in `lib.rs`:
 * `merge_state_writes` — disjoint-union join of per-strategy `StateWrite`s under a conflict alarm via `soft_panic_or_log!`.
 * `reconcile_replicas` — pure multiset diff kernel that closes the replica gap. The desired count per shape is the `max` over strategies (not the sum), so a replica satisfies every strategy that wants one of its shape. Only controller-owned replicas (those passing `ObservedReplica::owned_shape`) participate in the diff.
 * `ReplicaNameGen` — generates deterministic fresh replica names past the highest observed `rNN` index.
-* `shed_decision` — emits an `UpdateClusterState` that marks the graceful reconfiguration as `ResourceExhausted` when a phase-2 apply is rejected for exceeding the resource budget.
+* `shed_decision` — when a phase-2 apply is rejected for exceeding the resource budget, sheds the active graceful reconfiguration if one is in progress (audited as `ResourceExhausted`). Without an active reconfiguration there is nothing to shed; the next tick retries the desired replica set.
 * `config_signals` — latches `ConfigSignals` from the controller's `ConfigSet` once per tick, so every strategy evaluates against a consistent environment-wide config.
 
 Key dependencies: `mz-adapter-types` (witness types and dyncfgs), `mz-compute-types` (replica logging config), `mz-controller-types` (cluster/replica IDs), `mz-repr` (timestamps), `mz-dyncfg`, `mz-ore`.
