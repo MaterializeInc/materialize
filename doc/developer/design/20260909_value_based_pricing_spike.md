@@ -287,14 +287,40 @@ CREATE CLUSTER c (
     ON MEMORY (
       MIN SIZE = '100cc',
       MAX SIZE = '3200cc',
-      SCALE UP ABOVE = 0.75,      -- peak heap utilization
-      SCALE DOWN BELOW = 0.40,
+      SCALE UP UTILIZATION = 0.75,    -- of peak heap over the window below
+      SCALE DOWN UTILIZATION = 0.40,
       SCALE UP AFTER = '2m',
       SCALE DOWN AFTER = '30m'
     )
   )
 );
 ```
+
+The parser already has the right shape for this. `AUTO SCALING STRATEGY` is
+parsed as "a comma-separated set of sub-policies, each named by a leading
+keyword" (`parse_cluster_option_auto_scaling_strategy`), with a hard-coded
+`expect_keywords(&[ON, HYDRATION])` where a dispatch on the keyword after `ON`
+belongs. Of the words above, `Memory`, `Scale`, `Up`, `After`, `Max`, `Size` and
+`Duration` are already in `src/sql-lexer/src/keywords.txt`; only `Down`, `Min`
+and `Utilization` are new, and the phrasing above was chosen to keep that list
+short. New keywords have to clear `src/sql-parser/tests/keyword_audit.rs`.
+
+Gating needs two new knobs, and cannot reuse the existing ones.
+`enable_auto_scaling_strategy` is already `default: true`, so putting `ON MEMORY`
+behind it would ship the sub-policy ungated. So:
+
+* A **new** `feature_flags!` entry for `ON MEMORY` acceptance, with
+  `enable_for_item_parsing: true` like its siblings. That property is not
+  optional: stored `CREATE CLUSTER` statements are re-parsed at catalog
+  rehydration, where dyncfgs are not consulted, so a dyncfg gate could leave a
+  stored statement unparseable once the flag went off.
+* A **break-glass dyncfg** for the strategy itself, mirroring
+  `enable_hydration_burst`, so the strategy can be stopped environment-wide
+  without touching graceful reconfiguration, `ON REFRESH`, or burst.
+
+Both should default off in production and on in the test/CI configuration
+(via `system_parameter_default`), so sqllogictest and testdrive exercise the
+path before it earns trust.
 
 The asymmetry is the design, not a tuning detail. Scaling up is cheap and safe:
 the target hydrates alongside a serving replica set, and the failure mode is a
