@@ -1657,6 +1657,12 @@ impl crate::Transform for Typecheck {
                     typecheck_ctx.insert(Id::Global(id), got);
                 }
             }
+            (Err(TypeError::Recursion { error }), _) => {
+                // Running out of recursion budget says nothing about the
+                // plan's consistency, so fail the way every other transform
+                // does instead of reporting an inconsistency.
+                return Err(error.into());
+            }
             (Err(err), _) => {
                 let (expected, binding) = match expected {
                     Some(expected) => {
@@ -2154,5 +2160,50 @@ mod tests {
         assert!(!datum.is_instance_of(&typ));
         let diff = datum_difference_with_column_type(&datum, &typ);
         assert_err!(diff);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // slow
+    fn recursion_limit_is_a_transform_error() {
+        use mz_expr::LocalId;
+        use mz_ore::cast::CastFrom;
+        use mz_repr::optimize::OptimizerFeatures;
+
+        use crate::dataflow::DataflowMetainfo;
+        use crate::{Transform, TransformCtx, TransformError};
+
+        let typ = ReprRelationType::new(vec![ReprColumnType {
+            scalar_type: ReprScalarType::Int32,
+            nullable: false,
+        }]);
+        let id = |i: usize| LocalId::new(u64::cast_from(i));
+        // `Let`s nested through their bodies, more of them than the recursion
+        // guard allows.
+        let depth = RECURSION_LIMIT + 1;
+        let mut relation = MirRelationExpr::local_get(id(depth), typ.clone());
+        for i in (1..=depth).rev() {
+            relation = MirRelationExpr::Let {
+                id: id(i),
+                value: Box::new(MirRelationExpr::local_get(id(i - 1), typ.clone())),
+                body: Box::new(relation),
+            };
+        }
+        relation = MirRelationExpr::Let {
+            id: id(0),
+            value: Box::new(MirRelationExpr::constant(vec![], typ)),
+            body: Box::new(relation),
+        };
+
+        let features = OptimizerFeatures::default();
+        let typecheck_ctx = empty_typechecking_context();
+        let typecheck = Typecheck::new(Arc::clone(&typecheck_ctx));
+        let mut df_meta = DataflowMetainfo::default();
+        let mut ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None, None);
+
+        let err = typecheck.transform(&mut relation, &mut ctx).unwrap_err();
+        assert!(
+            matches!(&err, TransformError::Internal(msg) if msg.contains("exceeded recursion limit")),
+            "{err:?}"
+        );
     }
 }
