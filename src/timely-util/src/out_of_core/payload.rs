@@ -415,10 +415,34 @@ impl PayloadComparator {
         right: PayloadRef<'_>,
         owners: &[&Manifest],
     ) -> Result<std::cmp::Ordering, StoreError> {
-        if let (PayloadRef::External(a), PayloadRef::External(b)) = (left, right) {
-            if a == b {
-                return Ok(std::cmp::Ordering::Equal);
+        match (left, right) {
+            (PayloadRef::External(a), PayloadRef::External(b)) => {
+                if a == b {
+                    return Ok(std::cmp::Ordering::Equal);
+                }
+                // Adjacent values can alternate between input blocks after a
+                // merge. Cache identity follows the block, not the argument side.
+                if self.right.block == Some(a.block)
+                    || (self.left.block == Some(b.block) && self.left.block != Some(a.block))
+                {
+                    std::mem::swap(&mut self.left, &mut self.right);
+                }
+                if a.block == b.block {
+                    self.left.resolve(left, owners)?;
+                    return Ok(self.left.get(a)?.cmp(self.left.get(b)?));
+                }
             }
+            (PayloadRef::External(row), PayloadRef::Inline(_)) => {
+                if self.right.block == Some(row.block) {
+                    std::mem::swap(&mut self.left, &mut self.right);
+                }
+            }
+            (PayloadRef::Inline(_), PayloadRef::External(row)) => {
+                if self.left.block == Some(row.block) {
+                    std::mem::swap(&mut self.left, &mut self.right);
+                }
+            }
+            (PayloadRef::Inline(_), PayloadRef::Inline(_)) => {}
         }
         Ok(self
             .left
@@ -451,6 +475,10 @@ impl ComparisonBlock {
             owner.handle.read_into(&mut self.words);
             self.block = Some(row.block);
         }
+        self.get(row)
+    }
+
+    fn get(&self, row: RowHandle) -> Result<&[u8], StoreError> {
         let offset = usize::cast_from(row.offset);
         let len = usize::try_from(*self.words.get(offset).ok_or(StoreError::UnownedRow)?)
             .map_err(|_| StoreError::UnownedRow)?;
@@ -463,6 +491,79 @@ impl ComparisonBlock {
 #[cfg(test)]
 mod comparison_tests {
     use super::*;
+
+    #[derive(Debug)]
+    struct CountingCodec;
+    static COMPARISON_DECODES: AtomicU64 = AtomicU64::new(0);
+    static COMPARISON_CODEC: CountingCodec = CountingCodec;
+
+    impl ExtentCodec for CountingCodec {
+        fn encode(&self, body: &[u8], out: &mut Vec<u8>) {
+            mz_ore::pool::IDENTITY_CODEC.encode(body, out);
+        }
+
+        fn decode(&self, stored: &[u8], body: &mut [u8]) {
+            COMPARISON_DECODES.fetch_add(1, Ordering::Relaxed);
+            mz_ore::pool::IDENTITY_CODEC.decode(stored, body);
+        }
+    }
+
+    #[mz_ore::test]
+    fn comparison_cache_reuses_blocks_across_argument_positions() {
+        let pool = Pool::new().unwrap();
+        pool.set_budget(0);
+        let store = Store::new(pool.clone(), 128, 256, 1, &COMPARISON_CODEC).unwrap();
+        let mut builder = store.builder();
+        let a = builder.push(&[0; 48]).unwrap();
+        let a_next = builder.push(&[1; 48]).unwrap();
+        let b = builder.push(&[2; 48]).unwrap();
+        let b_next = builder.push(&[3; 48]).unwrap();
+        let c = builder.push(&[4; 48]).unwrap();
+        let owner = builder.finish();
+        assert_eq!(a.block, a_next.block);
+        assert_ne!(a.block, b.block);
+        assert_ne!(b.block, c.block);
+        COMPARISON_DECODES.store(0, Ordering::Relaxed);
+        let mut cache = PayloadComparator::default();
+        for (left, right) in [(a, b), (b, a), (a, a_next), (b, b_next)] {
+            let expected = left.cmp(&right);
+            assert_eq!(
+                cache
+                    .compare(
+                        PayloadRef::External(left),
+                        PayloadRef::External(right),
+                        &[&owner]
+                    )
+                    .unwrap(),
+                expected,
+            );
+        }
+        for (left, right) in [
+            (PayloadRef::Inline(&[0; 48]), PayloadRef::External(a)),
+            (PayloadRef::External(b), PayloadRef::Inline(&[2; 48])),
+        ] {
+            assert_eq!(
+                cache.compare(left, right, &[&owner]).unwrap(),
+                std::cmp::Ordering::Equal
+            );
+        }
+        assert_eq!(
+            COMPARISON_DECODES.load(Ordering::Relaxed),
+            2,
+            "two cached blocks must survive argument swaps and same-block comparisons"
+        );
+        assert_eq!(
+            cache
+                .compare(PayloadRef::External(c), PayloadRef::External(b), &[&owner])
+                .unwrap(),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            COMPARISON_DECODES.load(Ordering::Relaxed),
+            3,
+            "a miss must preserve the other argument's cached block"
+        );
+    }
 
     #[mz_ore::test]
     fn comparison_cache_stays_bounded_across_distinct_blocks() {

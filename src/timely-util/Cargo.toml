@@ -29,6 +29,10 @@ harness = false
 name = "column_pager"
 harness = false
 
+[[bench]]
+name = "payload_consolidation"
+harness = false
+
 [dependencies]
 ahash.workspace = true
 bytemuck.workspace = true
