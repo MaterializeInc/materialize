@@ -65,11 +65,6 @@ const hydrationChips = <TData,>(table: Table<TData>): Chip[] => {
   }));
 };
 
-/**
- * The replica count minimum in force. Removing the chip drops the minimum
- * entirely, which is the only way back to the clusters with no replicas once
- * the default minimum has hidden them.
- */
 const replicaCountChips = <TData,>(table: Table<TData>): Chip[] => {
   const column = table.getColumn(REPLICA_COLUMN_ID);
   const minimum = column?.getFilterValue() as number | undefined;
