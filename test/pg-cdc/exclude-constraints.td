@@ -215,7 +215,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE stall_tbl DROP CONSTRAINT stall_uq;
 
 ! SELECT * FROM stall_tbl;
-contains:incompatible schema change on public.stall_tbl: UNIQUE constraint "stall_uq" (wallet) was dropped upstream
+regex:incompatible schema change on public\.stall_tbl \(oid \d+\): UNIQUE constraint "stall_uq" \(wallet\) was dropped upstream
 hint:WITH (EXCLUDE CONSTRAINTS ('stall_uq')) before the upstream drop
 
 # Recovery: a replacement table snapshots the current upstream schema, which no
