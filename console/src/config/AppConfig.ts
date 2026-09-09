@@ -28,6 +28,7 @@ import {
   getEnvironmentdWebsocketScheme,
   getFronteggUrl,
 } from "./apiUrls";
+import { type ConsoleAppearance } from "./appearance";
 import { buildConstants } from "./buildConstants";
 import { getCloudRegions } from "./cloudRegions";
 import { getConsoleEnvironment } from "./consoleEnvironment";
@@ -95,6 +96,10 @@ interface IBaseAppConfig {
   environmentdWebsocketScheme: WebsocketScheme;
   // Whether query retries in react-query are enabled
   reactQueryRetriesEnabled: boolean;
+  // How this instance's console distinguishes itself from the consoles of
+  // other instances. Never set in cloud mode, which serves one console for all
+  // of an organization's regions.
+  appearance: ConsoleAppearance | undefined;
 }
 
 export class CloudAppConfig implements IBaseAppConfig {
@@ -200,6 +205,8 @@ export class CloudAppConfig implements IBaseAppConfig {
   // Whether the current environment requires user registration outside of the Console. This occurs in production
   // when the Console's 'sign up' button links to the Marketing site.
   requiresExternalRegistration = this.#consoleEnvironment === "production";
+
+  appearance = undefined;
 }
 
 export class SelfManagedAppConfig implements IBaseAppConfig {
@@ -208,6 +215,8 @@ export class SelfManagedAppConfig implements IBaseAppConfig {
   authMode: SelfManagedAuthMode = appConfigJson.auth.mode;
 
   balancerdDnsNames: string[] | undefined = appConfigJson.balancerdDnsNames;
+
+  appearance: ConsoleAppearance | undefined = appConfigJson.appearance;
 
   environmentdScheme = getEnvironmentdScheme({
     buildConstants,
