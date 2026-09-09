@@ -21,28 +21,26 @@ import React from "react";
 
 import { MaterializeTheme } from "~/theme";
 
-export interface UtilizationFilterPanelProps<TData> {
-  /** The column to filter, whose `filterFn` must be `utilizationFilterFn`. */
+export interface ReplicaCountFilterPanelProps<TData> {
+  /** The column to filter, whose `filterFn` must be `replicaCountFilterFn`. */
   column: Column<TData, unknown>;
-  /** Column heading, shown inside the panel to name what is being filtered. */
-  label: string;
 }
 
 /**
- * Filters one utilization column by a lowest percentage, for the popover
+ * Filters by how many replicas a row's cluster has, for the popover
  * `UniversalTable` anchors on a column header.
  *
- * Every utilization column reads the same way, a fraction of the replica's
- * allocation, so one panel serves all of them.
+ * A minimum of 0 is a real choice rather than an empty one, so it is applied as
+ * an absent filter: clearing the panel and applying 0 both leave every row
+ * visible.
  */
-export const UtilizationFilterPanel = <TData,>({
+export const ReplicaCountFilterPanel = <TData,>({
   column,
-  label,
-}: UtilizationFilterPanelProps<TData>) => {
+}: ReplicaCountFilterPanelProps<TData>) => {
   const { colors } = useTheme<MaterializeTheme>();
   const filterValue = column.getFilterValue() as number | undefined;
 
-  const [percent, setPercent] = React.useState(
+  const [count, setCount] = React.useState(
     filterValue ? String(filterValue) : "",
   );
 
@@ -50,22 +48,20 @@ export const UtilizationFilterPanel = <TData,>({
   // panel shows. This covers the filter changing while the panel is already
   // open, which is what removing the column's chip does.
   React.useEffect(() => {
-    setPercent(filterValue ? String(filterValue) : "");
+    setCount(filterValue ? String(filterValue) : "");
   }, [filterValue]);
 
   const apply = () => {
-    const parsed = parseFloat(percent);
-    // NOTE: no upper bound. `heap_percent` reports RAM plus swap against the
-    // heap limit and can legitimately exceed 100%.
+    const parsed = parseInt(count, 10);
     column.setFilterValue(parsed > 0 ? parsed : undefined);
   };
 
   const clearFilter = () => {
     // Reset the draft as well as the filter. With nothing applied, clearing
     // leaves the applied value as it was, `undefined`, so the sync effect has
-    // no change to react to and a threshold typed but never applied would stay
-    // on screen.
-    setPercent("");
+    // no change to react to and a minimum typed but never applied would stay on
+    // screen.
+    setCount("");
     column.setFilterValue(undefined);
   };
 
@@ -73,27 +69,24 @@ export const UtilizationFilterPanel = <TData,>({
     <VStack alignItems="stretch" spacing={0}>
       <HStack spacing={2} px={4} py={3}>
         <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
-          {label} ≥
+          Replica Count ≥
         </Text>
         <NumberInput
           size="sm"
           maxW="20"
-          min={1}
-          value={percent}
+          min={0}
+          value={count}
           focusBorderColor={colors.accent.brightPurple}
-          onChange={(next) => setPercent(next)}
+          onChange={(next) => setCount(next)}
         >
           <NumberInputField
             placeholder="0"
-            aria-label={`${label} threshold percentage`}
+            aria-label="Minimum replica count"
             onKeyDown={(e) => {
               if (e.key === "Enter") apply();
             }}
           />
         </NumberInput>
-        <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
-          %
-        </Text>
       </HStack>
       <HStack
         borderTopWidth="1px"
@@ -106,7 +99,7 @@ export const UtilizationFilterPanel = <TData,>({
           size="sm"
           variant="secondary"
           transition="none"
-          isDisabled={filterValue === undefined && percent === ""}
+          isDisabled={filterValue === undefined && count === ""}
           onClick={clearFilter}
         >
           Clear
