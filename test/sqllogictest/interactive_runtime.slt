@@ -157,3 +157,34 @@ DROP TABLE t CASCADE
 
 statement ok
 DROP CLUSTER ir CASCADE
+
+# Introspection served across the runtime boundary. The logging dataflow arranges one shared,
+# permanently empty error collection and publishes it under every log index's id, so the
+# publication points alias one trace. A reader waits on both halves of an index, and an errs half
+# left at the minimum frontier never satisfies the read, so these queries hang rather than fail.
+statement ok
+CREATE CLUSTER ir REPLICAS (r1 (SIZE 'scale=1,workers=2'))
+
+statement ok
+SET cluster = ir
+
+query B
+SELECT count(*) >= 0 FROM mz_introspection.mz_dataflows
+----
+true
+
+query B
+SELECT count(*) >= 0 FROM mz_introspection.mz_scheduling_elapsed_raw
+----
+true
+
+query B
+SELECT count(*) >= 0 FROM mz_introspection.mz_dataflow_arrangement_sizes
+----
+true
+
+statement ok
+RESET cluster
+
+statement ok
+DROP CLUSTER ir CASCADE
