@@ -721,6 +721,31 @@ class AWS(State):
         except (subprocess.CalledProcessError, json.JSONDecodeError):
             return []
 
+    def _eks_cluster_name(self) -> str:
+        """EKS cluster name from Terraform state, empty if none is left in it.
+
+        Read from the resources rather than from `terraform output`: a destroy
+        removes the root outputs before the resources they reference, so once a
+        destroy has failed the state has no outputs left while the cluster is
+        still there. `terraform output -raw` then exits 0 and writes a "No
+        outputs found" warning to stdout, which only a validated match tells
+        apart from a real name.
+        """
+        try:
+            state = json.loads(
+                spawn.capture(["terraform", "state", "pull"], cwd=self.path)
+            )
+        except (subprocess.CalledProcessError, json.JSONDecodeError):
+            return ""
+        for resource in state.get("resources", []):
+            if resource.get("type") != "aws_eks_cluster":
+                continue
+            for instance in resource.get("instances", []):
+                name = instance.get("attributes", {}).get("name", "")
+                if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", name):
+                    return name
+        return ""
+
     def unblock_destroy(self) -> None:
         # A node group whose creation failed keeps its cluster undeletable
         # ("ResourceInUseException: Cluster has nodegroups attached"), and
@@ -728,14 +753,10 @@ class AWS(State):
         # fails, so every attempt hits the same wall. The cluster, its VPC and
         # its KMS key then leak, and since each test root uses a fixed name
         # prefix, the leak fails every later run on "already exists".
-        try:
-            cluster = spawn.capture(
-                ["terraform", "output", "-raw", "eks_cluster_name"], cwd=self.path
-            ).strip()
-        except subprocess.CalledProcessError:
-            cluster = ""
+        cluster = self._eks_cluster_name()
         if not cluster:
-            # Nothing left in state to clean up after.
+            # Distinguish this from a hook that ran and found nothing to do.
+            print("No EKS cluster in Terraform state, nothing to unblock")
             return
 
         for node_group in self._list_node_groups(cluster):
