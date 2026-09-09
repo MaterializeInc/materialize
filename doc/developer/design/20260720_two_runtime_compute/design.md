@@ -883,8 +883,21 @@ would remove the peer's slot from the registry.
 
 A stalled rendering runtime stalls compaction on every shared arrangement. That is the price
 of I1c and it is the intended behaviour, but it is new: before the split a slow reader could
-not hold maintenance back. It wants a metric on the gap between the two runtimes' applied
-frontiers, so the coupling is observable before it becomes a memory incident.
+not hold maintenance back.
+
+Two per-worker gauges make the coupling observable before it becomes a memory incident.
+`mz_compute_shared_arrangement_hold_gap_ms` is the largest difference, over the arrangements a
+worker publishes, between the logical compaction frontier the controller asked for and the one
+the holds let the trace apply. `mz_compute_shared_arrangement_held_count` is how many are held
+at all. Both are reported from the maintenance runtime alone, since only it is held back and
+both runtimes resolve the same process-wide registry, so the `interactive` series stays at zero
+and a `sum` or a `max` over the label stays correct.
+
+Zero is the healthy reading rather than a broken metric: both runtimes receive the same
+`AllowCompaction`, so an interactive runtime that drains promptly leaves the two frontiers
+equal. On an 8-worker replica under continuous churn the gauges read zero with no reader, and
+peaked at one compaction round with 31 arrangements held while 509 interactive joins ran over
+the published index. The lag did not grow with time under that load.
 
 #### Rejected alternatives
 
@@ -1117,6 +1130,17 @@ compacts behind it. For a single-time read the distinction is unobservable. For 
 long-lived importer it is what lets the imported index's `since` advance for the
 importer's whole life, so it is in place before any such importer exists rather than
 retrofitted for one.
+
+The prize is small and fixed, which is worth knowing before such an importer is built. The
+concrete long-lived import today is the coordinator's four permanent introspection subscribes.
+They are installed per replica, `catalog_serving.rs` refuses to auto-route anything with a
+per-replica introspection dependency so they land on the busy replica, and the routing
+predicate keeps them on maintenance. On an idle 8-worker replica they cost 4.9% of one core,
+measured as process CPU with them on against off and confirmed independently by their own
+`mz_scheduling_elapsed_per_worker`, and about 57 KiB of arrangement. During hydration of a
+20M-row index they cost nothing measurable: the index dataflow's own scheduling stayed within
+0.6% whether they were present or not. So moving them buys back a fixed fraction of a core per
+replica and no hydration time.
 
 Separately, and not a compaction problem: the import queue is unbounded with no
 backpressure, deliberately, so that maintenance progress is never coupled to a slow reader.
@@ -1377,24 +1401,38 @@ decision rather than a patch.
   separate introspection channel, rather than turning its local logging back on.
 * **Per-runtime memory attribution.** Arrangement-size introspection does not yet
   attribute memory per runtime, a specific case of the blind spot above.
-* **Publishing an index doubled its reported arrangement size under the sink-based
-  publisher.** With that publisher on, a published index reported twice the heap size,
-  capacity, and allocations of the same index with the feature off, while its record and
-  batch counts were unchanged (measured on a 16-worker replica: a one-record index
+* **Publishing an index costs nothing in reported arrangement size.** The sink-based
+  publisher doubled it: with that publisher on, a published index reported twice the heap
+  size, capacity, and allocations of the same index with the feature off, while its record
+  and batch counts were unchanged (measured on a 16-worker replica: a one-record index
   reported 8740 bytes and 132 allocations against 4370 and 66). It was not the `Rc` to
   `Arc` migration, since an unpublished materialized-view arrangement is byte-identical
   either way, and not a reader, since it was present before anything imported the index.
-  It did not reproduce on staging, where E6 measured the reported size and the resident
-  set coming slightly *down* with the flag on. The sink is gone: the trace wrapper adds no
-  operator and holds the chain the spine already holds, and `introspection-sources.td`
-  asserts the one-record bound of 16 KiB with the flag on. The sink's cause was not
-  established before it was removed, so whether a doubling survives is what that
-  assertion now watches.
-  `test/testdrive/introspection-sources.td` carries the raised bound and a pointer to
-  this entry. The `ManyIndexesIdle` feature benchmark, 200 published one-key indexes
-  against a single-runtime image on one build, put clusterd's resident memory within
-  2% in two of three nightly runs and 16% above in the third, so at that scale the
-  doubling is at most partly resident.
+  The trace wrapper adds no operator and holds the chain the spine already holds, and the
+  doubling is gone with the sink. Measured on one process and one binary, alternating the
+  replica-scoped dyncfg and taking a fresh 16-worker cluster per point, a published index
+  reports the same size and the same allocation count as an unpublished one at 1, 1000,
+  100000, and 1000000 records, so what the sink cost is neither a constant nor a slope now.
+  `enable_compute_interactive_runtime` is read when a replica is provisioned, so
+  `ALTER SYSTEM SET` plus a new cluster A/Bs it inside one build, which is what every earlier
+  comparison lacked, including the staging run where E6 measured the reported size and the
+  resident set coming slightly *down* with the flag on. `introspection-sources.td` asserts the
+  one-record bound of 16 KiB with the flag on, and that assertion is what watches for a
+  regression. `jemalloc_allocated` cannot resolve this: its deltas run 15 to 27 MiB against a
+  200 MiB baseline with no consistent sign. The `ManyIndexesIdle` feature benchmark, 200
+  published one-key indexes against a single-runtime image on one build, put clusterd's
+  resident memory within 2% in two of three nightly runs and 16% above in the third.
+* **An interactive reader more than doubles maintenance's arrangement-maintenance
+  CPU.** Back-to-back one-shot joins over a published index leave the index's batch
+  count, heap size, and capacity byte-identical to a quiet arm, so the merge schedule
+  is untouched and nothing extra is retained. What changes is the work:
+  `mz_arrangement_maintenance_seconds_total` under `role="maintenance"` ran 0.160
+  CPU-seconds per second while 509 joins were in flight, against 0.080 and 0.057 in
+  the quiet arms either side, and the interactive runtime's own arrangement
+  maintenance stayed three orders of magnitude below that. Every
+  `set_physical_compaction` and `exert` on a `SharedSpine` runs `apply_holds` and then
+  `publish_chain`, and each read mints and releases a handle that moves
+  `remote_physical`, which is the obvious suspect but is not confirmed.
 * **Storage introspection is patched into maintenance introspection.** A
   pre-existing coupling, where storage's introspection is merged into the compute
   runtime's introspection, is inherited unchanged by the split. It complicates
