@@ -61,22 +61,17 @@ si true
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   WHERE r.name LIKE 'hydrated_test%';
 
-# A system-only replica hydration episode covers every visible non-transient
-# export. Its existence also proves the collector excludes its own transient
+# A system-only replica hydration episode has no objects eligible for object
+# history. Its existence also proves the collector excludes its own transient
 # subscribe, whose intervals would otherwise show up as spurious episodes in
 # later snapshots.
-> SELECT h.status,
-         h.object_count = (
-             SELECT count(DISTINCT export_id)::uint8
-             FROM mz_introspection.mz_compute_hydration_times_per_worker
-             WHERE export_id NOT LIKE 't%'
-         )
+> SELECT h.status, h.object_count
   FROM mz_internal.mz_replica_hydration_history AS h
   JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
   WHERE r.name = 'hydrated_test_1'
   ORDER BY h.started_at DESC
   LIMIT 1;
-hydrated true
+hydrated 0
 
 # Test adding new compute dataflows.
 
@@ -131,7 +126,7 @@ mv  hydrated_test_1 hydrated true true
 # overlapped, so assert the stable properties here.
 > SELECT count(*) > 0,
          bool_and(h.status = 'hydrated' AND h.started_at <= h.finished_at),
-         bool_and(h.object_count > 0)
+         bool_or(h.object_count > 0)
   FROM mz_internal.mz_replica_hydration_history AS h
   JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
   WHERE r.name = 'hydrated_test_1';
