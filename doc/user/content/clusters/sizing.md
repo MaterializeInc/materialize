@@ -1,6 +1,6 @@
 ---
-title: "Optimize cluster sizes for hydration"
-description: "Optimize your cluster size by observing the resources it requires to hydrate."
+title: "Size clusters for hydration"
+description: "Measure the resources your cluster requires to hydrate, and optimize your cluster size accordingly"
 menu:
   main:
     parent: "clusters"
@@ -28,9 +28,9 @@ replica that runs out of memory while hydrating restarts and tries again rather
 than running slower.
 {{< /note >}}
 
-## Start large, then size down
+## Determine the right size by starting large, and then size down
 
-This guide assumes you are running Materialize v26.42 or later. v26.42 included
+This guide assumes you are running Materialize v26.42 or later. v26.42 added
 improvements to allow you to track peak resource usage during hydration.
 
 ### 1. Create the cluster at a generous size
@@ -63,13 +63,10 @@ An empty result means every object on the cluster is hydrated. A row with a
 
 <a name="read-what-the-last-hydration-needed"></a>
 
-### 3. Read what the last hydration needed
+### 3. Read what the last hydration required
 
-Materialize records completed hydration episodes durably, so the numbers survive
-the replica restart or resize that produced them.
-[`mz_internal.mz_replica_hydration_history`](/sql/system-catalog/mz_internal/#mz_replica_hydration_history)
-holds one row per replica-wide episode, with the resource high-water marks
-observed for it:
+Materialize records completed hydration episodes. [`mz_internal.mz_replica_hydration_history`](/sql/system-catalog/mz_internal/#mz_replica_hydration_history)
+holds one row per replica-wide hydration episode:
 
 ```mzsql
 SELECT
@@ -93,9 +90,11 @@ ORDER BY h.started_at DESC;
 (1 row)
 ```
 
-Compare `peak_memory` against the memory the candidate size provides, which
-[`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
-reports per process, and leave headroom for the inputs to grow.
+As the name suggests, `peak_memory` measures peak memory usage during the hydration event.
+
+Compare `peak_memory` against the replica sizes in 
+[`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes), and use this to
+determine the ideal cluster size.
 
 To find which object dominated the episode, read the per-object table,
 [`mz_internal.mz_object_hydration_history`](/sql/system-catalog/mz_internal/#mz_object_hydration_history).
@@ -136,7 +135,7 @@ hydration peak stops dictating the size of everything else.
 
 ### 4. Size down
 
-Once you have found the appropriate size, you can downsize by altering the
+Once you have identified the appropriate size, you can downsize by altering the
 cluster:
 
 ```mzsql
@@ -173,11 +172,10 @@ ORDER BY sh.occurred_at DESC
 LIMIT 10;
 ```
 
-Repeated `offline` rows with an out-of-memory `reason`, and no new episode in
-hydration history, mean the size cannot rebuild the state. Go back to the size
-that hydrated, and take a smaller step, or reduce the peak itself with one of
-the [hydration
-strategies](/fundamentals/concepts/hydration/#hydration-strategies).
+If you see repeated `offline` rows with an out-of-memory `reason`, that means
+the new size is too small. Size up, or consider using one of our [hydration
+strategies](/fundamentals/concepts/hydration/#hydration-strategies) to reduce
+the memory required for hydration.
 
 ## How should I interpret the hydration metrics?
 
