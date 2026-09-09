@@ -253,6 +253,8 @@ fn with_scratch<Out>(f: impl FnOnce(&mut Vec<u64>) -> Out) -> Out {
 /// of the columnar merge machinery.
 const COMMIT_BYTES: usize = 2 << 20;
 
+pub mod merge;
+
 /// Bodies smaller than this stay resident: the pool's smallest size class is
 /// 64 KiB, so spilling below it trades no meaningful memory for slot waste.
 ///
@@ -300,6 +302,8 @@ fn rr<'b, 'a: 'b, C: Columnar>(item: columnar::Ref<'a, C>) -> columnar::Ref<'b, 
 /// [`UnloadChunk::locate`] consults), and the time bounds `extract` consults
 /// to pass frontier-disjoint chunks through without loading them.
 pub struct SpilledBody<D: Columnar, T> {
+    /// Decoded size, available without fetching the body.
+    bytes: usize,
     /// Number of updates in the body.
     records: usize,
     /// The first and last data items, as a two-element container. One
@@ -506,6 +510,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
         );
         ColumnChunk::Spilled(
             Rc::new(SpilledBody {
+                bytes: len_bytes,
                 records,
                 fences,
                 time_lower,
