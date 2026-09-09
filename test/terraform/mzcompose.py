@@ -755,11 +755,16 @@ class AWS(State):
             )
 
         # Deletion is asynchronous and the cluster stays undeletable until it
-        # finishes, so wait rather than letting the next attempt fail again.
-        deadline = time.time() + 600
+        # finishes, so give it a moment before the next attempt. Only best
+        # effort, and deliberately far shorter than the deletion can take: the
+        # next `terraform destroy` waits on a node group already in DELETING
+        # properly, while cleanup as a whole has ~30 minutes of step budget
+        # left, so overrunning here risks the timeout leaking the very cluster
+        # this is trying to free.
+        deadline = time.time() + 300
         while node_groups := self._list_node_groups(cluster):
             if time.time() > deadline:
-                print(f"EKS node groups still attached after 10m: {node_groups}")
+                print(f"EKS node groups still deleting, leaving them: {node_groups}")
                 break
             time.sleep(15)
 
