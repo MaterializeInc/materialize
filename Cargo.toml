@@ -650,6 +650,12 @@ postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
 
+# Upstream chrono-tz is unmaintained and stops at tzdata 2025b. The fork's
+# `mz_changes` branch carries current IANA data only, no code changes. To bump
+# tzdata, update the fork, then follow the bump ceremony documented in
+# src/environmentd/tests/testdata/timezones/regenerate.sh.
+chrono-tz = { git = "https://github.com/MaterializeInc/chrono-tz.git", rev = "5999cdd1b971694f834ec3467d11ef9147fc297c" }
+
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
 
