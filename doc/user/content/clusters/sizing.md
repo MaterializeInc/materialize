@@ -90,11 +90,15 @@ ORDER BY h.started_at DESC;
 (1 row)
 ```
 
-As the name suggests, `peak_memory` measures peak memory usage during the hydration event.
+`peak_memory` is the highest memory any process on the replica reached, from
+process start through the moment the episode was recorded. For sizing that is
+the useful direction: it bounds the hydration peak rather than under-reporting
+it.
 
 Compare `peak_memory` against the replica sizes in
 [`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes), and use this to
-determine the ideal cluster size.
+determine the ideal cluster size. Both figures are per process, so on a
+multi-process size do not multiply by `processes`.
 
 To find which object dominated the episode, read the per-object table,
 [`mz_internal.mz_object_hydration_history`](/sql/system-catalog/mz_internal/#mz_object_hydration_history).
