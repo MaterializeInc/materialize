@@ -145,7 +145,12 @@ The precedent for a value-based dimension also already exists:
 coordinator interval and pruned against a retention period. The compute-side
 metering record should be built to that same shape, and
 `mz_internal.mz_object_arrangement_size_history` (per-object, per-replica bytes,
-with a `hydration_complete` flag) is already there for per-object showback.
+with a `hydration_complete` flag) is already there for per-object showback,
+with two caveats: its collection is currently **off by default**
+(`arrangement_size_history_collection_interval` defaults to zero), so the
+showback follow-on depends on enabling it first and has no historical data to
+look back on; and sizes are rounded to the nearest 10 MiB with objects under
+5 MiB omitted entirely, which bounds how finely cost can be attributed.
 
 ### What is missing on the metering side
 
