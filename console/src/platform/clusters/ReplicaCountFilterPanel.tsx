@@ -10,11 +10,8 @@
 import {
   Button,
   HStack,
-  NumberDecrementStepper,
-  NumberIncrementStepper,
   NumberInput,
   NumberInputField,
-  NumberInputStepper,
   Text,
   useTheme,
   VStack,
@@ -89,10 +86,6 @@ export const ReplicaCountFilterPanel = <TData,>({
               if (e.key === "Enter") apply();
             }}
           />
-          <NumberInputStepper>
-            <NumberIncrementStepper aria-label="Increase minimum replica count" />
-            <NumberDecrementStepper aria-label="Decrease minimum replica count" />
-          </NumberInputStepper>
         </NumberInput>
       </HStack>
       <HStack
