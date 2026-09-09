@@ -2,11 +2,41 @@
 // SPDX-License-Identifier: MIT
 // See LICENSE in this directory.
 
-//! Sorted chunk operations, resumable merge pipelines, and batch assembly.
+//! Sorted, consolidated runs of updates, and operators over sequences of them.
 //!
-//! The storage backend implements [`Chunk`]. [`ChunkMerger`] drives batch formation,
-//! while [`ChunkBatchMerger`] merges published batches and advances their timestamps.
-//! Both retain their current pipeline phase across a pending storage operation.
+//! A [`Chunk`] is a consolidated, sorted run of `(data, time, diff)` updates.
+//! A sequence of chunks is also expected to be consolidated and sorted.
+//!
+//! The [`Chunk`] trait exposes whole-chunk operations, so that the implementor can internally divert to their best implementations, with amortized overhead.
+//! Each operation is invoked as if "streaming", providing input and output queues.
+//! An implementor is expected to drain as much as possible of the inputs, and any chunk written to the output is "committed" and likely to be shipped onward.
+//!
+//! # Wiring a `Chunk` into an arrangement
+//!
+//! Implementing [`Chunk`] for a type `C` is the only bespoke code needed; three aliases then expand into a full trace:
+//!
+//! * [`ChunkBatcher<Chu, C>`](ChunkBatcher): the merge batcher.
+//! * [`ChunkBuilder<C>`](ChunkBuilder): the batch builder.
+//! * [`ChunkSpine<C>`](ChunkSpine): the trace, a spine of `Rc`-shared batches.
+//!
+//! These aliases use [`ChunkBatch`], [`ChunkMerger`], [`ChunkBatchMerger`], and [`ChunkBatchBuilder`] for batch formation and trace maintenance.
+//!
+//! In this vendored module, the enclosing Materialize adapter supplies the trace
+//! interfaces. Differential's arrangement wiring, reference chunk backend, and
+//! cursor implementations are not included here.
+//!
+//! # Bounded footprint
+//!
+//! There is a `TARGET` associated constant that signals the intended chunk size.
+//! The constant should be chosen large enough to amortize overheads, but small enough that per-chunk work does not "stall" the system when invoked.
+//! The implementor is trusted to make a reasonable choice here.
+//!
+//! The [`Chunk::settle`] method "settles" sequences of chunks, and is called as chunks are no longer expected to be needed in the near future.
+//! The implementor should ensure the chunks are "graded", in that the sequence of chunks are all at most `TARGET` in size, any two in order sum to strictly more than `TARGET`.
+//! This is also an opportunity to compress data, or spill to disk or cloud storage.
+//!
+//! Producers settle their committed output as they go, keeping the active, unsettled chunk set small.
+//! Implementors must keep [`len`](Chunk::len) cheap even when a chunk's body is paged out.
 
 use std::collections::VecDeque;
 

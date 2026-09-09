@@ -506,7 +506,6 @@ impl<B: SpineBatch + Clone + 'static> Spine<B> {
     }
 
     /// Completes the trace with a final empty batch.
-    /// Append an update-free span completing the trace.
     pub fn close(&mut self) {
         if !self.upper.borrow().is_empty() {
             self.insert(Span::empty(self.upper.clone(), Antichain::new()));

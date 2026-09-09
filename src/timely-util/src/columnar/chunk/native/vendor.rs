@@ -7,7 +7,8 @@
 //! Source: `TimelyDataflow/differential-dataflow`, upstream base
 //! `626c80ce`, with the local async changes at `339f01522823171f2a8c710967502f3e1d09360b`.
 //! The source files are `trace/implementations/spine_fueled.rs`,
-//! `trace/chunk/mod.rs`, and `batcher/{mod.rs,merge/mod.rs}`.
+//! `trace/chunk/mod.rs`, and `batcher/{mod.rs,merge/mod.rs}`. The `Span` type
+//! comes from `trace/mod.rs`.
 //!
 //! This copy uses MZ's existing Differential and Timely dependencies for timestamps,
 //! lattices, descriptions, and logging. The enclosing adapter implements DD's trace
