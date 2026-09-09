@@ -7837,6 +7837,7 @@ dependencies = [
  "mz-proto",
  "mz-repr",
  "mz-ssh-util",
+ "postgres-protocol",
  "proptest",
  "proptest-derive",
  "prost",
