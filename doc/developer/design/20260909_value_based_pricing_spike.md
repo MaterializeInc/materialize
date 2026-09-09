@@ -527,6 +527,14 @@ revenue impact of the change at `floor_fraction = 0`, and the *distribution* of
 that ratio across accounts is the risk: a fleet-wide 0.5 is a pricing decision,
 but a handful of accounts above 1.0 is a churn conversation.
 
+The query above plans and runs against the builtin catalog under
+sqllogictest, so its column names, function overloads and types are checked
+rather than assumed. It returns nothing there, because the harness has no
+metrics rows. Note one overload trap it was written around: Materialize has
+`round(numeric, integer)` but no `round(double precision, integer)`, and every
+`/` overload takes two operands of the same type, so the intermediate values
+are kept `numeric` throughout.
+
 **(b) The strategy, against the existing fake ctx.**
 `src/cluster-controller/src/tests.rs` is 3723 lines of tests driving the
 reconciler through a fake `ClusterControllerCtx`. `MemoryScalingStrategy` is a
