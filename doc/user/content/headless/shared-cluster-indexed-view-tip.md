@@ -2,7 +2,7 @@
 headless: true
 ---
 {{< tip >}}
-Except for when used with a [sink](/serve-results/sink/),
+Except for when used with a [sink](/export-data/),
 [subscribe](/sql/subscribe/), or [temporal
 filters](/transform-data/patterns/temporal-filters/), avoid creating
 materialized views on a shared cluster used for both compute/transform

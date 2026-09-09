@@ -184,7 +184,6 @@ tokio-console = [
     "mz-ore/tokio-console",
     "mz-orchestrator-tracing/tokio-console",
 ]
-foundationdb = ["mz-adapter/foundationdb", "mz-persist-client/foundationdb"]
 
 [package.metadata.unused-deps]
 # sysctl is only used on macOS.

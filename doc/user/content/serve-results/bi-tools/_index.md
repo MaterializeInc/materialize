@@ -6,7 +6,7 @@ menu:
   main:
     parent: serve-results
     identifier: 'bi-tools'
-    weight: 10
+    weight: 70
 ---
 
 Materialize uses the PostgreSQL wire protocol, which allows it to integrate out-of-the-box with various BI/data collaboration tools that support PostgreSQL.

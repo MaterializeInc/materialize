@@ -5,6 +5,7 @@ disable_list: true
 menu:
   main:
     parent: "sm-deployments"
+    name: "Upgrade"
     weight: 30
     identifier: "upgrading"
 ---

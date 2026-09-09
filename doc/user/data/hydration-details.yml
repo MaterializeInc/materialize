@@ -70,7 +70,7 @@
   content: >-
     - **When**: On replica (re)start or cluster resize. These sources do not hydrate on creation;
     instead, on creation, their indexes are built as part of
-    [snapshotting](/concepts/snapshotting/).
+    [snapshotting](/fundamentals/concepts/snapshotting/).
 
     - **What**: Rebuilds the table's or subsource's internal upsert index from
     storage.

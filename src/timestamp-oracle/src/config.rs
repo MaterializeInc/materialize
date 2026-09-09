@@ -9,9 +9,9 @@
 
 //! Unified configuration for timestamp oracles.
 //!
-//! This module provides a [`TimestampOracleConfig`] enum that can hold
-//! configuration for either a Postgres-backed or FoundationDB-backed
-//! timestamp oracle, allowing the choice of backend to be made at startup time.
+//! This module provides a [`TimestampOracleConfig`] enum that holds the
+//! configuration for a timestamp oracle backend, allowing the choice of
+//! backend to be made at startup time.
 
 use std::sync::Arc;
 
@@ -21,8 +21,6 @@ use mz_ore::url::SensitiveUrl;
 use mz_repr::Timestamp;
 
 use crate::TimestampOracle;
-#[cfg(feature = "foundationdb")]
-use crate::foundationdb_oracle::{FdbTimestampOracle, FdbTimestampOracleConfig};
 use crate::metrics::Metrics;
 use crate::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig, TimestampOracleParameters,
@@ -36,9 +34,6 @@ use crate::postgres_oracle::{
 pub enum TimestampOracleConfig {
     /// Use a Postgres/CockroachDB-backed timestamp oracle.
     Postgres(PostgresTimestampOracleConfig),
-    /// Use a FoundationDB-backed timestamp oracle.
-    #[cfg(feature = "foundationdb")]
-    Fdb(FdbTimestampOracleConfig),
 }
 
 impl TimestampOracleConfig {
@@ -46,7 +41,6 @@ impl TimestampOracleConfig {
     ///
     /// The backend is determined by the URL scheme:
     /// - `postgres://` or `postgresql://` -> Postgres-backed oracle
-    /// - `foundationdb://` -> FoundationDB-backed oracle
     ///
     /// Returns an error if the URL scheme is not recognized.
     pub fn from_url(
@@ -56,16 +50,10 @@ impl TimestampOracleConfig {
         let scheme = url.scheme();
         match scheme {
             "postgres" | "postgresql" => Ok(Self::new_postgres(url, metrics_registry)),
-            #[cfg(feature = "foundationdb")]
-            "foundationdb" => Ok(Self::new_fdb(url.clone(), metrics_registry)),
-            #[cfg(not(feature = "foundationdb"))]
-            "foundationdb" => {
-                anyhow::bail!("FoundationDB timestamp oracle is not supported on this platform")
-            }
             _ => {
                 anyhow::bail!(
                     "unsupported timestamp oracle URL scheme: '{}'. \
-                     Supported schemes: postgres, postgresql, foundationdb",
+                     Supported schemes: postgres, postgresql",
                     scheme
                 )
             }
@@ -77,18 +65,10 @@ impl TimestampOracleConfig {
         TimestampOracleConfig::Postgres(PostgresTimestampOracleConfig::new(url, metrics_registry))
     }
 
-    /// Create a new FoundationDB-backed timestamp oracle configuration.
-    #[cfg(feature = "foundationdb")]
-    pub fn new_fdb(url: SensitiveUrl, metrics_registry: &MetricsRegistry) -> Self {
-        TimestampOracleConfig::Fdb(FdbTimestampOracleConfig::new(url, metrics_registry))
-    }
-
     /// Returns the metrics for this configuration.
     pub fn metrics(&self) -> Arc<Metrics> {
         match self {
             TimestampOracleConfig::Postgres(config) => Arc::clone(config.metrics()),
-            #[cfg(feature = "foundationdb")]
-            TimestampOracleConfig::Fdb(config) => Arc::clone(config.metrics()),
         }
     }
 
@@ -106,24 +86,11 @@ impl TimestampOracleConfig {
                     config.clone(),
                     timeline,
                     initially,
-                    now_fn.clone(),
+                    now_fn,
                     read_only,
                 )
                 .await,
             ),
-            #[cfg(feature = "foundationdb")]
-            TimestampOracleConfig::Fdb(config) => {
-                let fdb_oracle = FdbTimestampOracle::open(
-                    config.clone(),
-                    timeline,
-                    initially,
-                    now_fn,
-                    read_only,
-                )
-                .await
-                .expect("failed to open FdbTimestampOracle");
-                Arc::new(fdb_oracle)
-            }
         }
     }
 
@@ -134,10 +101,6 @@ impl TimestampOracleConfig {
         match self {
             TimestampOracleConfig::Postgres(config) => {
                 PostgresTimestampOracle::<NowFn>::get_all_timelines(config.clone()).await
-            }
-            #[cfg(feature = "foundationdb")]
-            TimestampOracleConfig::Fdb(config) => {
-                FdbTimestampOracle::<NowFn>::get_all_timelines(config.clone()).await
             }
         }
     }

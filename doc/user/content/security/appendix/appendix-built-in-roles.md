@@ -4,6 +4,7 @@ description: "List of predefined built-in roles in Materialize."
 menu:
   main:
     parent: security-appendix
+    name: "Appendix: built-in roles"
     weight: 15
 aliases:
   - /manage/access-control/appendix-built-in-roles/
@@ -27,5 +28,5 @@ belonging to a particular builtin role, which superusers may
 
 | Name                  | Description                                                                                                                                                                                                                                                                                                                                                                                                   |
 |-----------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `mz_monitor`          | Grants access to objects that reveal actions taken by other users, in particular, SQL statements they have issued. Includes [`mz_recent_activity_log`](/reference/system-catalog/mz_internal#mz_recent_activity_log) and [`mz_notices`](/reference/system-catalog/mz_internal#mz_notices).                                                                                                                                    |
-| `mz_monitor_redacted` | Grants access to objects that reveal less sensitive information about actions taken by other users, for example, SQL statements they have issued with constant values redacted. Includes `mz_recent_activity_log_redacted`, [`mz_notices_redacted`](/reference/system-catalog/mz_internal#mz_notices_redacted), and [`mz_statement_lifecycle_history`](/reference/system-catalog/mz_internal#mz_statement_lifecycle_history). |
+| `mz_monitor`          | Grants access to objects that reveal actions taken by other users, in particular, SQL statements they have issued. Includes [`mz_recent_activity_log`](/sql/system-catalog/mz_internal#mz_recent_activity_log) and [`mz_notices`](/sql/system-catalog/mz_internal#mz_notices).                                                                                                                                    |
+| `mz_monitor_redacted` | Grants access to objects that reveal less sensitive information about actions taken by other users, for example, SQL statements they have issued with constant values redacted. Includes `mz_recent_activity_log_redacted`, [`mz_notices_redacted`](/sql/system-catalog/mz_internal#mz_notices_redacted), and [`mz_statement_lifecycle_history`](/sql/system-catalog/mz_internal#mz_statement_lifecycle_history). |

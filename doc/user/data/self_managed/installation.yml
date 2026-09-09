@@ -96,7 +96,7 @@
     - `enable_observability`: Flag that determines whether to deploy the
       monitoring stack (Grafana, metrics, and logs) alongside Materialize.
       Defaults to `false` in the `simple` example. See
-      [Grafana](/manage/monitor/self-managed/grafana/).
+      [Grafana](/observability/self-managed/grafana/).
 
     {{< note >}}
     Refer to your organization's security practices to set these values accordingly.

@@ -10,7 +10,7 @@ menu:
 
 Use `CREATE VIEW` to define a view, which simply provides an alias for the
 embedded `SELECT` statement. The results of a view can be incrementally
-maintained **in memory** within a [cluster](/concepts/clusters/) by creating an
+maintained **in memory** within a [cluster](/fundamentals/concepts/clusters/) by creating an
 [index](../create-index). This allows you to serve queries without the overhead
 of materializing the view.
 

@@ -8,6 +8,7 @@ aliases:
 menu:
   main:
     parent: "sm-deployments"
+    name: "Troubleshoot"
     weight: 90
 ---
 

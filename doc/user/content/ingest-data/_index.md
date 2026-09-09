@@ -6,7 +6,7 @@ menu:
   main:
     identifier: "ingest-data"
     name: "Ingest data"
-    weight: 11
+    weight: 30
 aliases:
   - /self-managed/v25.1/ingest-data/
   - /self-managed/v25.2/ingest-data/kafka/amazon-msk/
@@ -21,8 +21,8 @@ You can ingest data into Materialize from various external systems:
 ## Sources and clusters
 
 Materialize ingests data from external systems using
-[sources](/concepts/sources/). For the sources, you need to associate a
-[cluster](/concepts/clusters/) to provide the compute resources needed to ingest
+[sources](/fundamentals/concepts/sources/). For the sources, you need to associate a
+[cluster](/fundamentals/concepts/clusters/) to provide the compute resources needed to ingest
 data.
 
 {{% tip %}}
@@ -68,7 +68,7 @@ we recommend:
 
 While snapshotting is taking place, you can monitor the progress of the
 operation in the **overview page** for the source in the [Materialize
-Console](/console/data/#sample-source-overview). Alternatively, you can manually
+Console](/developer-tools/console/data/#sample-source-overview). Alternatively, you can manually
 keep track of using information from the system catalog. See [Monitoring the
 snapshotting
 progress](/ingest-data/monitoring-data-ingestion/#monitoring-the-snapshotting-progress)
@@ -100,8 +100,8 @@ Although Materialize is continually ingesting changes from the upstream system,
 depending on the volume of the upstream changes, Materialize may lag behind the
 upstream system. If the lag is significant, queries may block until Materialize
 has caught up sufficiently with the upstream system when using the default
-[isolation level](/reference/isolation-level/) of [strict
-serializability](/reference/isolation-level/#strict-serializable).
+[isolation level](/serve-results/isolation-level/) of [strict
+serializability](/serve-results/isolation-level/#strict-serializable).
 
 In the Materialize Console, you can see a source's data freshness from the
 **Data Explorer** screen. Alternatively, you can run a query to monitor the lag.
@@ -114,7 +114,7 @@ See [Monitoring hydration/data freshness status](/ingest-data/monitoring-data-in
 When a cluster is restarted (such as after resizing), certain objects on that
 cluster  (such as Kafka upsert sources, indexes, materialized views, and sinks)
 undergo hydration. For the full list of events that trigger hydration and the
-affected objects, see [Hydration](/concepts/hydration/).
+affected objects, see [Hydration](/fundamentals/concepts/hydration/).
 
 {{% tip %}}
 
