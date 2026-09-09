@@ -113,7 +113,8 @@ use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_row_spine::DatumSeq;
 use mz_row_spine::{ValRowColPagedBuilder, ValRowSpine};
 use mz_storage_types::dyncfgs::{
-    ENABLE_UPSERT_ASYNC_READS, ENABLE_UPSERT_CHUNKED_STASH, ENABLE_UPSERT_PAYLOAD_STASH,
+    ENABLE_UPSERT_ASYNC_MERGES, ENABLE_UPSERT_ASYNC_READS, ENABLE_UPSERT_CHUNKED_STASH,
+    ENABLE_UPSERT_PAYLOAD_STASH,
 };
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_timely_util::builder_async::{
@@ -160,6 +161,8 @@ pub enum UpsertStashFlavor {
     /// Chunk merge batcher stash, chunk-spine feedback arrangement,
     /// bulk-probe drain. Spills through the process buffer pool.
     Chunked { async_reads: bool },
+    /// Async source batching and feedback trace compaction.
+    Resumable { async_reads: bool },
 }
 
 impl UpsertStashFlavor {
@@ -169,6 +172,11 @@ impl UpsertStashFlavor {
     pub fn from_config(config: &ConfigSet) -> Self {
         if ENABLE_UPSERT_PAYLOAD_STASH.get(config) {
             Self::Payload
+        } else if ENABLE_UPSERT_CHUNKED_STASH.get(config) && ENABLE_UPSERT_ASYNC_MERGES.get(config)
+        {
+            Self::Resumable {
+                async_reads: ENABLE_UPSERT_ASYNC_READS.get(config),
+            }
         } else if ENABLE_UPSERT_CHUNKED_STASH.get(config) {
             Self::Chunked {
                 async_reads: ENABLE_UPSERT_ASYNC_READS.get(config),
@@ -486,6 +494,26 @@ where
             )
         }
 
+        UpsertStashFlavor::Resumable { async_reads } => {
+            let (persist_arranged, token) = mz_timely_util::columnar::chunk::asynchronous::arrange(
+                encoded,
+                merge_read_budget(),
+                "Persist resumable feedback",
+            );
+            let mut persist_token = persist_token.unwrap_or_default();
+            persist_token.push(token);
+            build_upsert_operator::<ResumableArm, _, _>(
+                input,
+                resume_upper,
+                persist_arranged,
+                Some(persist_token),
+                upsert_metrics,
+                source_config,
+                async_reads,
+                None,
+            )
+        }
+
         UpsertStashFlavor::Chunked { async_reads } => {
             // Chains and sealed batches alike are `FeedbackChunk`s whose
             // bodies spill to the buffer pool, behind the same process spill
@@ -758,7 +786,7 @@ where
             // Flush buffered events through the chunker into the batcher. This
             // triggers the chunker + geometric chain merging, which consolidates
             // entries for the same (key, time) via the UpsertDiff Semigroup.
-            A::flush(&mut push_buffer, &mut chunker, &mut batcher);
+            A::flush(&mut push_buffer, &mut chunker, &mut batcher).await;
 
             // Step 2: Read persist frontier.
             // The persist probe tells us which output times have been
@@ -841,9 +869,9 @@ where
                 // Step 1 already consolidated `push_buffer` through the chunker
                 // (which readies a complete chunk per `push_into`), so the
                 // chunker holds nothing pending here and we can seal directly.
-                let (sealed, _description) = batcher.seal(input_upper.clone());
+                let sealed = A::seal(&mut batcher, input_upper.clone()).await;
                 // Frontier of data remaining in the batcher (ts >= input_upper).
-                let remaining_frontier = batcher.frontier().to_owned();
+                let remaining_frontier = A::frontier(&mut batcher);
 
                 let mut ineligible = Vec::new();
                 // The drain emits eligible output directly through
@@ -884,7 +912,7 @@ where
                 // remaining data: either entries still in the batcher (above
                 // input_upper) or ineligible entries being pushed back.
                 let min_ineligible_ts = ineligible.iter().map(|(_, ts, _)| ts).min().cloned();
-                A::flush(&mut ineligible, &mut chunker, &mut batcher);
+                A::flush(&mut ineligible, &mut chunker, &mut batcher).await;
 
                 // `Option::min` alone would be wrong here, `None` sorts low.
                 // Chain the candidates and take the min over present ones.
@@ -945,20 +973,29 @@ where
     type Spine: TraceReader<Time = T> + 'static;
     /// The source-stash batcher. `'static` because the operator future owns
     /// it.
-    type Batcher: Batcher<Time = T> + 'static;
+    type Batcher: 'static;
+    type Sealed;
+
+    /// Seal complete input, allowing the worker to yield during merges.
+    async fn seal(batcher: &mut Self::Batcher, upper: Antichain<T>) -> Self::Sealed;
+    /// Times remaining after the most recent seal.
+    fn frontier(batcher: &mut Self::Batcher) -> Antichain<T>;
 
     /// A new stash batcher for one source dataflow.
     fn new_batcher(store: Option<mz_timely_util::out_of_core::Store>) -> Self::Batcher;
 
     /// Push one sorted, consolidated `Column` chunk into the batcher, in the
     /// batcher's chunk representation.
-    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O, Self::Value>>);
+    async fn push_chunk(
+        batcher: &mut Self::Batcher,
+        chunk: Column<UpsertUpdate<T, O, Self::Value>>,
+    );
 
     /// Consolidate `updates` through `chunker` into `Column` chunks and push
     /// them into `batcher`, emptying `updates` (keeping its capacity). The
     /// chunker readies a fully-consolidated chunk per `push_into`, so the
     /// `extract` loop drains everything it produced.
-    fn flush(
+    async fn flush(
         updates: &mut Vec<UpsertUpdate<T, O, Self::Value>>,
         chunker: &mut UpsertChunker<T, O, Self::Value>,
         batcher: &mut Self::Batcher,
@@ -975,7 +1012,7 @@ where
         }
         chunker.push_into(&mut raw);
         while let Some(chunk) = chunker.extract() {
-            Self::push_chunk(batcher, std::mem::take(chunk));
+            Self::push_chunk(batcher, std::mem::take(chunk)).await;
         }
         Self::end_flush(batcher);
     }
@@ -983,7 +1020,7 @@ where
     /// Classify one sealed stash against `persist_upper` and emit eligible
     /// output; see [`DrainStats`].
     async fn drain(
-        sealed: Vec<<Self::Batcher as Batcher>::Output>,
+        sealed: Self::Sealed,
         ineligible: &mut Vec<UpsertUpdate<T, O, Self::Value>>,
         output_handle: &UpsertOutputHandle<T>,
         output_cap: &Capability<T>,
@@ -1025,13 +1062,93 @@ where
 
     type Spine = FeedbackSpine<T>;
     type Batcher = UpsertChunkBatcher<T, O>;
+    type Sealed = Vec<UpsertChunk<T, O>>;
+    async fn seal(batcher: &mut Self::Batcher, upper: Antichain<T>) -> Self::Sealed {
+        batcher.seal(upper).0
+    }
+    fn frontier(batcher: &mut Self::Batcher) -> Antichain<T> {
+        batcher.frontier().to_owned()
+    }
 
     fn new_batcher(_store: Option<mz_timely_util::out_of_core::Store>) -> Self::Batcher {
         Batcher::new(None, 0)
     }
 
-    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
+    async fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
         batcher.push_into(ColumnChunk::from_column(chunk));
+    }
+
+    async fn drain(
+        sealed: Vec<UpsertChunk<T, O>>,
+        ineligible: &mut Vec<UpsertUpdate<T, O>>,
+        output_handle: &UpsertOutputHandle<T>,
+        output_cap: &Capability<T>,
+        persist_upper: &Antichain<T>,
+        trace: &mut TraceAgent<Self::Spine>,
+        worker_id: usize,
+        source_id: GlobalId,
+        async_reads: bool,
+        _batcher: &mut Self::Batcher,
+    ) -> DrainStats {
+        drain_sealed_input_chunked(
+            sealed.into_iter(),
+            ineligible,
+            output_handle,
+            output_cap,
+            persist_upper,
+            trace,
+            worker_id,
+            source_id,
+            async_reads,
+        )
+        .await
+    }
+}
+
+/// Production arm for resumable columnar batching and compaction.
+struct ResumableArm;
+
+fn merge_read_budget() -> mz_timely_util::columnar::chunk::merge::ReadBudget {
+    // Shared across source and feedback operators on every worker in this process.
+    // This bounds decoded merge inputs only, independently of pool residency.
+    static BUDGET: std::sync::OnceLock<mz_timely_util::columnar::chunk::merge::ReadBudget> =
+        std::sync::OnceLock::new();
+    BUDGET
+        .get_or_init(|| mz_timely_util::columnar::chunk::merge::ReadBudget::new(256 << 20))
+        .clone()
+}
+
+impl<T, O> UpsertStashArm<T, O> for ResumableArm
+where
+    T: Timestamp + TotalOrder + Lattice + Sync,
+    T: columnation::Columnation + columnar::Columnar + Default,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    O: columnar::Columnar + Default + Ord + Clone + Send + Sync + 'static,
+    for<'a> columnar::Ref<'a, O>: Ord + Copy,
+{
+    type Value = Row;
+
+    fn encode(value: Option<Row>, _batcher: &mut Self::Batcher) -> Option<Row> {
+        value
+    }
+
+    type Spine = mz_timely_util::columnar::chunk::asynchronous::Spine<(UpsertKey, Row), T, Diff>;
+    type Batcher =
+        mz_timely_util::columnar::chunk::asynchronous::Batcher<UpsertKey, T, UpsertDiff<O, Row>>;
+    type Sealed = Vec<UpsertChunk<T, O>>;
+    async fn seal(batcher: &mut Self::Batcher, upper: Antichain<T>) -> Self::Sealed {
+        batcher.seal(upper).await.0
+    }
+    fn frontier(batcher: &mut Self::Batcher) -> Antichain<T> {
+        batcher.frontier().to_owned()
+    }
+
+    fn new_batcher(_store: Option<mz_timely_util::out_of_core::Store>) -> Self::Batcher {
+        Self::Batcher::new(merge_read_budget())
+    }
+
+    async fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
+        batcher.push(ColumnChunk::from_column(chunk)).await;
     }
 
     async fn drain(
@@ -1082,6 +1199,13 @@ where
 
     type Spine = ValRowSpine<UpsertKey, T, Diff>;
     type Batcher = UpsertPagedBatcher<T, O>;
+    type Sealed = Vec<Column<UpsertUpdate<T, O>>>;
+    async fn seal(batcher: &mut Self::Batcher, upper: Antichain<T>) -> Self::Sealed {
+        batcher.seal(upper).0
+    }
+    fn frontier(batcher: &mut Self::Batcher) -> Antichain<T> {
+        batcher.frontier().to_owned()
+    }
 
     fn new_batcher(_store: Option<mz_timely_util::out_of_core::Store>) -> Self::Batcher {
         let mut batcher: UpsertPagedBatcher<T, O> = Batcher::new(None, 0);
@@ -1089,7 +1213,7 @@ where
         batcher
     }
 
-    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
+    async fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
         batcher.push_into(chunk);
     }
 
@@ -1193,7 +1317,7 @@ async fn drain_sealed_input_chunked<T, O>(
     output_handle: &UpsertOutputHandle<T>,
     output_cap: &Capability<T>,
     persist_upper: &Antichain<T>,
-    trace: &mut TraceAgent<FeedbackSpine<T>>,
+    trace: &mut impl TraceReader<Time = T, Batch = <FeedbackSpine<T> as TraceReader>::Batch>,
     worker_id: usize,
     source_id: GlobalId,
     async_reads: bool,
@@ -2194,6 +2318,37 @@ mod test {
         differential_dataflow::consolidation::consolidate_updates(&mut emitted);
         (frontier, emitted)
     }
+    #[mz_ore::test]
+    fn resumable_state_matches_feedback_across_resume_and_restash() {
+        let pool = mz_ore::pool::Pool::new().unwrap();
+        pool.set_budget(0);
+        pool.set_spill_threads(0);
+        mz_timely_util::columnar::chunk::with_spill_override(pool.clone(), || {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let _enter = runtime.enter();
+            for width in [32, 1900, 3 << 20] {
+                let baseline = run_payload_feedback_scenario(
+                    UpsertStashFlavor::Chunked { async_reads: false },
+                    width,
+                );
+                let reads = pool.stats().async_reads;
+                assert_eq!(
+                    baseline,
+                    run_payload_feedback_scenario(
+                        UpsertStashFlavor::Resumable { async_reads: false },
+                        width
+                    )
+                );
+                if width >= 1900 {
+                    assert!(
+                        pool.stats().async_reads > reads,
+                        "merge reads must be offloaded with drain offload disabled"
+                    );
+                }
+            }
+        });
+    }
+
     #[mz_ore::test]
     fn payload_state_matches_columnar_feedback_across_resume_and_restash() {
         let pool = mz_ore::pool::Pool::new().unwrap();

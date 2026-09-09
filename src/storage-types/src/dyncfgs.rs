@@ -452,6 +452,16 @@ pub const ENABLE_UPSERT_ASYNC_READS: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Yield during source-stash merges and feedback compaction reads.
+/// Applies to newly constructed chunked upsert-v2 dataflows without payload separation.
+/// Independent of drain/probe read offload in `ENABLE_UPSERT_ASYNC_READS`.
+pub const ENABLE_UPSERT_ASYNC_MERGES: Config<bool> = Config::new(
+    "enable_upsert_async_merges",
+    false,
+    "Use resumable source and feedback merges in chunked upsert-v2. Takes effect on new dataflows. Decoded merge inputs share a 256 MiB process budget.",
+    ParameterScope::Replica,
+);
+
 /// Separate upsert-v2 payload blocks from columnar merge metadata.
 /// Read once per dataflow. Uses the process pool and asynchronous payload reads.
 pub const ENABLE_UPSERT_PAYLOAD_STASH: Config<bool> = Config::new(
@@ -586,6 +596,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_UPSERT_PAGED_SPILL)
         .add(&ENABLE_UPSERT_CHUNKED_STASH)
         .add(&ENABLE_UPSERT_ASYNC_READS)
+        .add(&ENABLE_UPSERT_ASYNC_MERGES)
         .add(&ENABLE_UPSERT_PAYLOAD_STASH)
         .add(&WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL)
         .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)

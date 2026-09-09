@@ -205,6 +205,13 @@ where
     type Value = Value;
     type Spine = FeedbackSpine<T>;
     type Batcher = SourceBatcher<SourceChunk<T, O>>;
+    type Sealed = Vec<SourceChunk<T, O>>;
+    async fn seal(batcher: &mut Self::Batcher, upper: Antichain<T>) -> Self::Sealed {
+        batcher.seal(upper).0
+    }
+    fn frontier(batcher: &mut Self::Batcher) -> Antichain<T> {
+        batcher.frontier().to_owned()
+    }
 
     fn new_batcher(store: Option<Store>) -> Self::Batcher {
         let store = store.expect("payload arm shares its store with feedback");
@@ -223,7 +230,7 @@ where
         batcher.restash_owners.clear();
     }
 
-    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O, Value>>) {
+    async fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O, Value>>) {
         // Publish only the initial chunker's winners, packed in metadata order.
         let mut builder = batcher.store.builder();
         let mut metadata = Column::default();
