@@ -454,3 +454,20 @@ catalog version under ongoing publication. Moving that comparison into the exist
 diagnostic check is a proposal, not an agreed decision. It removes the external
 prefix certificate but adds server-side reconstruction cost. Next: settle these
 two boundaries, then resume index simplification and changed-record publication.
+
+### 2026-09-09: Index permission and checker boundary agreed with Aljoscha
+
+An index's bound is its published since. A fresh index has no bound until first
+publication, so first installation has no cap. When a saved bound is below actual
+readability, nothing durable depends on the gap, because a durable requirement on
+an index protects its inputs. The index is replaced at readability and its bound
+follows through publication. Installation never waits for a catalog write. This
+resolves both halves of the previous entry's question without a pre-install commit.
+
+The consistency checker's durable-to-memory reconstruction moves behind the
+existing environmentd diagnostic check, off the coordinator thread, using an
+ordinary read-only open synced to the snapshot's upper. The dedicated command,
+header, and frozen catalog mode are removed once no test needs them.
+
+Milestone 1 remains active. Next: resume index simplification under these rules,
+then the checker move and changed-record publication.
