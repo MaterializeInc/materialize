@@ -5021,6 +5021,7 @@ dependencies = [
  "opendal",
  "reqsign-aws-v4",
  "reqsign-core",
+ "reqsign-google",
  "serde",
  "typetag",
  "url",
