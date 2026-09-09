@@ -101,7 +101,7 @@ impl MySqlTableDesc {
         }
 
         if self.schema_name != other.schema_name || self.name != other.name {
-            return Err(self.schema_change(SchemaChange::TableRenamed {
+            return Err(self.build_schema_change_error(SchemaChange::TableRenamed {
                 schema_name: other.schema_name.clone(),
                 name: other.name.clone(),
             }));
@@ -134,7 +134,7 @@ impl MySqlTableDesc {
                 // We could not find a column in the incoming row that matches this
                 // descriptor column. This is an error as the column is not ignored
                 // (ignored columns have already been skipped).
-                self.schema_change(SchemaChange::ColumnDropped {
+                self.build_schema_change_error(SchemaChange::ColumnDropped {
                     column: self_column.name.clone(),
                 })
             };
@@ -146,26 +146,8 @@ impl MySqlTableDesc {
                 .columns
                 .get(wire_idx)
                 .ok_or_else(dropped_column_error)?;
-            if !self_column.is_compatible(other_column) {
-                if self_column.name != other_column.name {
-                    return Err(dropped_column_error());
-                }
-                let nullability_only_change =
-                    match (&self_column.column_type, &other_column.column_type) {
-                        (Some(self_type), Some(other_type)) => {
-                            self_column.name == other_column.name
-                                && !self_type.nullable
-                                && other_type.nullable
-                                && self_type.scalar_type == other_type.scalar_type
-                                && self_column.meta.is_compatible(&other_column.meta)
-                        }
-                        _ => false,
-                    };
-                let column = self_column.name.clone();
-                if nullability_only_change {
-                    return Err(self.schema_change(SchemaChange::NotNullDropped { column }));
-                }
-                return Err(self.schema_change(SchemaChange::ColumnTypeChanged { column }));
+            if let Some(change) = self_column.get_incompatible_schema_change(other_column) {
+                return Err(self.build_schema_change_error(change));
             }
         }
         // Our keys are all still present in exactly the same shape.
@@ -183,13 +165,13 @@ impl MySqlTableDesc {
             } else {
                 SchemaChange::KeyDropped { key: key.clone() }
             };
-            return Err(self.schema_change(change));
+            return Err(self.build_schema_change_error(change));
         }
 
         Ok(())
     }
 
-    pub fn schema_change(&self, change: SchemaChange) -> SchemaChangeError {
+    pub fn build_schema_change_error(&self, change: SchemaChange) -> SchemaChangeError {
         SchemaChangeError {
             schema_name: self.schema_name.clone(),
             name: self.name.clone(),
@@ -326,6 +308,32 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
                 })
                 .transpose()?,
         })
+    }
+}
+
+impl MySqlColumnDesc {
+    fn get_incompatible_schema_change(&self, other: &MySqlColumnDesc) -> Option<SchemaChange> {
+        if self.is_compatible(other) {
+            return None;
+        }
+        let column = self.name.clone();
+        if self.name != other.name {
+            return Some(SchemaChange::ColumnDropped { column });
+        }
+        let nullability_only_change = match (&self.column_type, &other.column_type) {
+            (Some(self_type), Some(other_type)) => {
+                !self_type.nullable
+                    && other_type.nullable
+                    && self_type.scalar_type == other_type.scalar_type
+                    && self.meta.is_compatible(&other.meta)
+            }
+            _ => false,
+        };
+        if nullability_only_change {
+            Some(SchemaChange::NotNullDropped { column })
+        } else {
+            Some(SchemaChange::ColumnTypeChanged { column })
+        }
     }
 }
 
