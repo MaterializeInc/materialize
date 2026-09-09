@@ -100,12 +100,15 @@ Save and grab the SAML metadata URL (or download the metadata XML).
 Assign users (or groups) to the app so they can authenticate through it.
 
 {{< note >}}
-**Okta:** Group Attribute Statements live under the SAML app's **Sign
-On** tab, inside the collapsed **Show legacy configuration** panel, not
-in the newer expression-based Attribute Statements section at the top.
-The new expression UI does not expose `Groups.startsWith` or
-`Arrays.flatten` on trial / integrator tenants, so use the legacy Group
-Attribute Statements section for `groups`.
+**Okta:** set the `groups` claim in the **Group Attribute Statements**
+table, not the **Add expression** dialog at the top of the Attribute
+Statements section. The Group Attribute Statements table lives under the
+SAML app's **Sign On** tab, inside the collapsed **Show legacy
+configuration** panel. Set Name `groups`, Name format `Unspecified`, and a
+Filter such as `Starts with` and your role-name prefix. The newer
+expression UI does not expose group functions like `Groups.startsWith` or
+`Arrays.flatten` on trial / integrator tenants, which is why the legacy
+table is the reliable path.
 {{</ note >}}
 
 ### Step 2. Get the Polis admin API key
