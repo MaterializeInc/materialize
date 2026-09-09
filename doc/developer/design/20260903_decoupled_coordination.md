@@ -251,10 +251,16 @@ records the active milestone and progress toward it.
 #### 1. Catalog-backed recovery protection
 
 Maintained requirements and compaction permission are coordinated through the
-catalog. Use an MV as the first complete example: logical-input protection is
-established before installation depends on it, survives uncached recovery,
-preserves a pending first refresh, and advances with durable output progress
-rather than retaining creation-time history forever.
+catalog across maintained storage and compute object types. Use an MV as the
+first complete example: logical-input protection is established before installation
+depends on it, survives uncached recovery, preserves a pending first refresh, and
+advances with durable output progress rather than retaining creation-time history
+forever.
+
+Derive requirements from existing catalog definitions and durable progress where
+possible. Separate records per object type are not prescribed. Preserve existing
+recovery semantics without introducing creation-time history guarantees for indexes
+or metric sinks.
 
 Evidence includes actual compaction and an input eliminated by optimization.
 Measure publication and retained-history costs as the real path becomes available.
@@ -612,3 +618,16 @@ Publication cadence is configurable. Planning-cache freshness and DDL conflict
 tracking have distinct revisions, so cadence changes do not abort open DDL.
 Next: milestone 2's catalog-driven maintained lifecycle and builtin schema
 migration. MV compute installation still uses the sequencer closure.
+
+### 2026-09-09: Maintained-protection coverage agreed with Aljoscha
+
+Milestone 1 remains active. The protected-MV path is an implementation checkpoint,
+not completion across maintained object types. Source/sink recovery protection
+still depends on installed controller accounting, and compute compaction has no
+catalog permission cap. Current recovery ordering protects the single-owner path,
+but does not establish complete catalog-local authorization.
+
+Retain the explicit-bounds decision and its accepted catalog traffic cost rather
+than reopen delegated admission and reclamation. Next: complete source/sink
+requirements at the catalog authorization boundary and maintained compute permission.
+Milestone 2 remains the independent lifecycle subscriber and builtin migration.
