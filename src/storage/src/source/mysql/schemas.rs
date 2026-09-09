@@ -75,20 +75,14 @@ where
                                     }
                                 }
                             }
-                            Err(err) => {
-                                let change = match err {
-                                    MySqlError::UnsupportedDataTypes { columns } => {
-                                        SchemaChange::UnsupportedColumnTypes { columns }
-                                    }
-                                    err => SchemaChange::DescriptionFailed(err.to_string()),
-                                };
-                                Some((
-                                    output,
-                                    DefiniteError::IncompatibleSchema(
-                                        output.desc.build_schema_change_error(change),
+                            Err(err) => Some((
+                                output,
+                                DefiniteError::IncompatibleSchema(
+                                    output.desc.build_schema_change_error(
+                                        SchemaChange::DescriptionFailed(err.to_string()),
                                     ),
-                                ))
-                            }
+                                ),
+                            )),
                         }
                     }
                 })
