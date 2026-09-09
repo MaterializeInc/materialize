@@ -7,6 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Pool-backed row storage, block ownership, and decoded-read admission.
+//!
+//! Builders publish immutable blocks and non-owning row handles. Manifests keep
+//! referenced blocks alive independently of metadata batches. A prepared read
+//! takes ownership before it can suspend, and its returned lease retains both
+//! decoded bytes and their admission reservation until the consumer releases it.
+//!
+//! The pool governs resident storage. This module separately budgets decoded
+//! copies returned by reads. Builder scratch, manifests, and the interner's
+//! equality index are not charged to that decoded-byte budget.
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
@@ -170,6 +181,11 @@ impl Store {
         })
     }
 
+    /// Whether a row and its length prefix fit in one payload block.
+    pub fn can_store(&self, row_bytes: usize) -> bool {
+        row_bytes <= (self.block_words - 1) * 8
+    }
+
     /// Start a builder with at most one block of word staging.
     pub fn builder(&self) -> PayloadBuilder {
         PayloadBuilder {
@@ -238,10 +254,10 @@ impl PayloadBuilder {
     ///
     /// An oversized row is rejected without modifying the builder.
     pub fn push(&mut self, row: &[u8]) -> Result<RowHandle, StoreError> {
-        let words = 1 + row.len().div_ceil(8);
-        if words > self.store.block_words {
+        if !self.store.can_store(row.len()) {
             return Err(StoreError::RowTooLarge);
         }
+        let words = 1 + row.len().div_ceil(8);
         if self.words.len() + words > self.store.block_words {
             self.flush();
         }
@@ -405,18 +421,12 @@ impl PayloadInterner {
         .await
     }
 
-    async fn intern_hashed(
-        &mut self,
-        rows: &[Vec<u8>],
-        hash: impl Fn(&[u8]) -> u64,
-    ) -> Result<(Vec<RowHandle>, Manifest), StoreError> {
+    fn sweep_dead_entries(&mut self, budget: usize) {
         use std::ops::Bound::{Excluded, Unbounded};
-        // Sweep work grows with arrivals so wide batches cannot outrun reclamation.
-        let sweep_budget = rows.len().saturating_mul(4).max(1024);
         let keys: Vec<_> = self
             .entries
             .range((self.sweep_after.map_or(Unbounded, Excluded), Unbounded))
-            .take(sweep_budget)
+            .take(budget)
             .map(|(key, _)| *key)
             .collect();
         self.sweep_after = if keys.last() == self.entries.last_key_value().map(|(key, _)| key) {
@@ -429,6 +439,15 @@ impl PayloadInterner {
                 self.entries.remove(&key);
             }
         }
+    }
+
+    async fn intern_hashed(
+        &mut self,
+        rows: &[Vec<u8>],
+        hash: impl Fn(&[u8]) -> u64,
+    ) -> Result<(Vec<RowHandle>, Manifest), StoreError> {
+        // Sweep work grows with arrivals so wide batches cannot outrun reclamation.
+        self.sweep_dead_entries(rows.len().saturating_mul(4).max(1024));
         let mut builder = self.store.builder();
         let mut result = Vec::with_capacity(rows.len());
         let mut owners = Manifest::default();

@@ -7,6 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Resumable selection and equijoin over finite, resident metadata batches.
+//!
+//! These cursors inspect keys and produce row handles without reading payloads.
+//! Callers own frontier management, batch scheduling, and payload materialization.
+
 use std::cmp::Ordering;
 use std::ops::Range;
 

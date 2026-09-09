@@ -119,6 +119,22 @@ pub fn set_spill_override(pool: Option<Pool>) {
     SPILL_OVERRIDE.with(|cell| *cell.borrow_mut() = pool);
 }
 
+/// Run a synchronous scope using `pool` for chunk spilling on this thread.
+///
+/// Restores the previous override on return or panic. Other threads do not
+/// inherit it, and returning a future does not extend the override's lifetime.
+pub fn with_spill_override<R>(pool: Pool, f: impl FnOnce() -> R) -> R {
+    struct RestoreOverride(Option<Pool>);
+    impl Drop for RestoreOverride {
+        fn drop(&mut self) {
+            set_spill_override(self.0.take());
+        }
+    }
+    let previous = SPILL_OVERRIDE.with(|cell| cell.replace(Some(pool)));
+    let _restore = RestoreOverride(previous);
+    f()
+}
+
 static DIRECT_COMPRESSED_OUTPUT: AtomicBool = AtomicBool::new(false);
 
 /// Compress eligible spilled bodies directly into extents, bypassing resident slots.
@@ -196,8 +212,11 @@ fn codec_for_depth(depth: u8) -> (&'static dyn ExtentCodec, bool) {
     }
 }
 
-/// The pool committed chunks spill to, if any.
-fn spill_pool() -> Option<Pool> {
+/// Return this thread's spill override, or the active pool when spilling is enabled.
+///
+/// This does not initialize the process pool. See [`set_compute_spill_enabled`]
+/// for the shared gate and [`set_spill_override`] for scoped test configuration.
+pub fn spill_pool() -> Option<Pool> {
     if let Some(pool) = SPILL_OVERRIDE.with(|cell| cell.borrow().clone()) {
         return Some(pool);
     }
@@ -1328,6 +1347,36 @@ mod tests {
     use crate::columnar::unload::UnloadBatch;
 
     use super::*;
+
+    #[mz_ore::test]
+    fn scoped_spill_override_restores_outer_pool_after_panic() {
+        let outer = Pool::new().unwrap();
+        let inner = Pool::new().unwrap();
+        let insert = || {
+            spill_pool()
+                .unwrap()
+                .insert_with(1, ChunkHints::default(), &IDENTITY_CODEC, |words| {
+                    words[0] = 1;
+                })
+        };
+        assert!(SPILL_OVERRIDE.with(|cell| cell.borrow().is_none()));
+        with_spill_override(outer.clone(), || {
+            drop(insert());
+            assert_eq!(outer.stats().inserts, 1);
+            let result = mz_ore::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                with_spill_override(inner.clone(), || {
+                    drop(insert());
+                    assert_eq!(inner.stats().inserts, 1);
+                    panic!("exercise scoped cleanup");
+                });
+            }));
+            assert!(result.is_err());
+            drop(insert());
+            assert_eq!(outer.stats().inserts, 2);
+            assert_eq!(inner.stats().inserts, 1);
+        });
+        assert!(SPILL_OVERRIDE.with(|cell| cell.borrow().is_none()));
+    }
 
     type Tuple = ((u64, u64), u64, i64);
     type TestChunk = ColumnChunk<(u64, u64), u64, i64>;

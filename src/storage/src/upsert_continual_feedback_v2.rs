@@ -63,7 +63,7 @@
 //!
 //! ## Stash flavors
 //!
-//! [`UpsertStashFlavor`], resolved from `enable_upsert_chunked_stash` at
+//! [`UpsertStashFlavor`], resolved from the replica configuration at
 //! operator construction, selects between three instantiations of the same
 //! loop:
 //!
@@ -459,18 +459,17 @@ where
     );
     match flavor {
         UpsertStashFlavor::Payload => {
-            let store = payload::store();
+            let pool = mz_timely_util::columnar::chunk::spill_pool()
+                .or_else(mz_timely_util::pool_config::global_pool)
+                .expect("payload upsert requires a buffer pool");
+            let store = payload::store(pool);
             let (encoded, token) = payload::encode_feedback(encoded, store.clone());
             let persist_arranged = arrange_core::<
                 _,
                 _,
                 payload::FeedbackChunker<T>,
-                ChunkBatcher<
-                    mz_timely_util::columnar::payload::PayloadChunk<payload::FeedbackLayout, T>,
-                >,
-                ChunkBuilder<
-                    mz_timely_util::columnar::payload::PayloadChunk<payload::FeedbackLayout, T>,
-                >,
+                ChunkBatcher<payload::FeedbackChunk<T>>,
+                ChunkBuilder<payload::FeedbackChunk<T>>,
                 payload::FeedbackSpine<T>,
             >(encoded, Pipeline, "Persist payload feedback");
             let mut persist_token = persist_token.unwrap_or_default();
@@ -933,9 +932,12 @@ where
     O: columnar::Columnar + Default + Ord + Clone + Send + Sync + 'static,
     for<'a> columnar::Ref<'a, O>: Ord + Copy,
 {
+    /// Representation of a value in source metadata.
     type Value: columnar::Columnar + Default + Clone;
 
+    /// Prepare a source value for offset consolidation.
     fn encode(value: Option<Row>, batcher: &mut Self::Batcher) -> Option<Self::Value>;
+    /// Release temporary owners after all buffered updates have entered chunks.
     fn end_flush(_batcher: &mut Self::Batcher) {}
 
     /// The feedback arrangement's spine. `'static` because the operator
@@ -2197,31 +2199,35 @@ mod test {
         let pool = mz_ore::pool::Pool::new().unwrap();
         pool.set_budget(0);
         pool.set_rss_target(1 << 20);
-        let _pool = payload::test_pool(pool.clone());
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let _enter = runtime.enter();
-        let baseline = run_payload_feedback_scenario(UpsertStashFlavor::Paged, 32);
-        assert_eq!(
-            baseline,
-            run_payload_feedback_scenario(UpsertStashFlavor::Chunked { async_reads: true }, 32)
-        );
-        assert_eq!(
-            baseline,
-            run_payload_feedback_scenario(UpsertStashFlavor::Payload, 32)
-        );
-        assert_eq!(
-            run_payload_feedback_scenario(UpsertStashFlavor::Chunked { async_reads: true }, 1900),
-            run_payload_feedback_scenario(UpsertStashFlavor::Payload, 1900)
-        );
-        assert_eq!(
-            run_payload_feedback_scenario(UpsertStashFlavor::Paged, 3 << 20),
-            run_payload_feedback_scenario(UpsertStashFlavor::Payload, 3 << 20)
-        );
-        assert_eq!(
-            pool.stats().live_chunks,
-            0,
-            "shutdown must release metadata and payload blocks"
-        );
+        mz_timely_util::columnar::chunk::with_spill_override(pool.clone(), || {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let _enter = runtime.enter();
+            let baseline = run_payload_feedback_scenario(UpsertStashFlavor::Paged, 32);
+            assert_eq!(
+                baseline,
+                run_payload_feedback_scenario(UpsertStashFlavor::Chunked { async_reads: true }, 32)
+            );
+            assert_eq!(
+                baseline,
+                run_payload_feedback_scenario(UpsertStashFlavor::Payload, 32)
+            );
+            assert_eq!(
+                run_payload_feedback_scenario(
+                    UpsertStashFlavor::Chunked { async_reads: true },
+                    1900
+                ),
+                run_payload_feedback_scenario(UpsertStashFlavor::Payload, 1900)
+            );
+            assert_eq!(
+                run_payload_feedback_scenario(UpsertStashFlavor::Paged, 3 << 20),
+                run_payload_feedback_scenario(UpsertStashFlavor::Payload, 3 << 20)
+            );
+            assert_eq!(
+                pool.stats().live_chunks,
+                0,
+                "shutdown must release metadata and payload blocks"
+            );
+        });
     }
 
     fn run_payload_feedback_scenario(

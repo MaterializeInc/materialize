@@ -8,6 +8,15 @@
 // by the Apache License, Version 2.0.
 
 //! Columnar metadata chunks with independently owned pool-backed payloads.
+//!
+//! [`PayloadLayout`] locates handles inside operator-defined data and differences.
+//! [`PayloadChunk`] delegates ordering, consolidation, and spilling to
+//! [`ColumnChunk`], then retains the blocks referenced by the resulting metadata.
+//! Rewrites can read metadata but never need to decode the external payloads.
+//!
+//! [`PayloadStaging`] carries ownership alongside copied probe results so callers
+//! can release a trace batch before reading its rows. Locators are physical
+//! addresses, so the operator must supply its own logical equality policy.
 
 use std::collections::VecDeque;
 use std::marker::PhantomData;
@@ -30,7 +39,9 @@ pub trait PayloadLayout: 'static {
     type Data: Columnar;
     /// Columnar difference used for consolidation.
     type Diff: Columnar;
-    /// Append all payload locators referenced by this update.
+    /// Append every external locator referenced by this update, including those
+    /// carried in the difference. Duplicates are allowed. Omitting a locator can
+    /// retire its block while the update still refers to it.
     fn visit(
         data: columnar::Ref<'_, Self::Data>,
         diff: columnar::Ref<'_, Self::Diff>,
@@ -39,10 +50,6 @@ pub trait PayloadLayout: 'static {
 }
 
 /// A metadata chunk whose manifest keeps every referenced payload block alive.
-///
-/// Metadata follows `ColumnChunk` spilling and compaction. Rewrites retain only
-/// referenced blocks, and never decode payloads. Identity and equality belong to
-/// the caller's metadata layout, independently of physical payload placement.
 pub struct PayloadChunk<P: PayloadLayout, T: Columnar> {
     metadata: ColumnChunk<P::Data, T, P::Diff>,
     manifest: Rc<Manifest>,
@@ -90,6 +97,8 @@ where
     P::Diff: Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, P::Diff>>,
 {
     /// Attach ownership to sorted, consolidated metadata.
+    ///
+    /// Panics if `owners` does not cover every locator reported by the layout.
     pub fn new(metadata: Column<(P::Data, T, P::Diff)>, owners: &[&Manifest]) -> Self {
         Self::attach(ColumnChunk::from_column(metadata), owners)
     }
@@ -112,7 +121,7 @@ where
         }
     }
 
-    fn unwrap(
+    fn detach_metadata(
         input: &mut VecDeque<Self>,
         owners: &mut Vec<Rc<Manifest>>,
     ) -> VecDeque<ColumnChunk<P::Data, T, P::Diff>> {
@@ -125,7 +134,7 @@ where
             .collect()
     }
 
-    fn wrap(
+    fn attach_metadata(
         input: VecDeque<ColumnChunk<P::Data, T, P::Diff>>,
         owners: &[Rc<Manifest>],
         output: &mut VecDeque<Self>,
@@ -158,16 +167,16 @@ where
         let mut out = VecDeque::new();
         ColumnChunk::merge(&mut a, &mut b, &mut out);
         let mut remaining = VecDeque::new();
-        Self::wrap(a, &owners, &mut remaining);
+        Self::attach_metadata(a, &owners, &mut remaining);
         for chunk in remaining.into_iter().rev() {
             left.push_front(chunk);
         }
         let mut remaining = VecDeque::new();
-        Self::wrap(b, &owners, &mut remaining);
+        Self::attach_metadata(b, &owners, &mut remaining);
         for chunk in remaining.into_iter().rev() {
             right.push_front(chunk);
         }
-        Self::wrap(out, &owners, output);
+        Self::attach_metadata(out, &owners, output);
     }
 
     fn extract(
@@ -185,8 +194,8 @@ where
         let (mut kept, mut shipped) = (VecDeque::new(), VecDeque::new());
         ColumnChunk::extract(&mut columns, frontier, residual, &mut kept, &mut shipped);
         assert!(columns.is_empty());
-        Self::wrap(kept, &owners, keep);
-        Self::wrap(shipped, &owners, ship);
+        Self::attach_metadata(kept, &owners, keep);
+        Self::attach_metadata(shipped, &owners, ship);
     }
 
     fn advance(
@@ -196,20 +205,20 @@ where
         output: &mut VecDeque<Self>,
     ) {
         let mut owners = Vec::new();
-        let mut columns = Self::unwrap(input, &mut owners);
+        let mut columns = Self::detach_metadata(input, &mut owners);
         let mut out = VecDeque::new();
         ColumnChunk::advance(&mut columns, frontier, done, &mut out);
-        Self::wrap(columns, &owners, input);
-        Self::wrap(out, &owners, output);
+        Self::attach_metadata(columns, &owners, input);
+        Self::attach_metadata(out, &owners, output);
     }
 
     fn settle(input: &mut VecDeque<Self>, done: bool, output: &mut VecDeque<Self>) {
         let mut owners = Vec::new();
-        let mut columns = Self::unwrap(input, &mut owners);
+        let mut columns = Self::detach_metadata(input, &mut owners);
         let mut out = VecDeque::new();
         ColumnChunk::settle(&mut columns, done, &mut out);
-        Self::wrap(columns, &owners, input);
-        Self::wrap(out, &owners, output);
+        Self::attach_metadata(columns, &owners, input);
+        Self::attach_metadata(out, &owners, output);
     }
 }
 
@@ -257,6 +266,69 @@ impl<P: PayloadLayout, T: Columnar> timely::container::ContainerBuilder for Payl
     }
     fn finish(&mut self) -> Option<&mut Self::Container> {
         self.extract()
+    }
+}
+
+/// Copied metadata and the owners needed to keep its external payloads valid.
+pub struct PayloadStaging<U: Columnar> {
+    /// Matching updates, retaining their stored times and differences.
+    pub updates: U::Container,
+    /// Chunk manifests that own the locators in `updates`.
+    pub owners: Vec<Rc<Manifest>>,
+}
+impl<U: Columnar> Default for PayloadStaging<U> {
+    fn default() -> Self {
+        Self {
+            updates: Default::default(),
+            owners: Vec::new(),
+        }
+    }
+}
+
+impl<P, K, V, T> crate::columnar::unload::UnloadChunk for PayloadChunk<P, T>
+where
+    P: PayloadLayout<Data = (K, V)>,
+    K: Columnar,
+    V: Columnar,
+    for<'a> columnar::Ref<'a, K>: Copy + Ord,
+    for<'a> columnar::Ref<'a, V>: Copy + Ord,
+    T: Columnar + Default + Timestamp + Lattice,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    P::Diff: Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, P::Diff>>,
+{
+    type Staging = PayloadStaging<((K, V), T, P::Diff)>;
+    type Probes<'a> =
+        <ColumnChunk<(K, V), T, P::Diff> as crate::columnar::unload::UnloadChunk>::Probes<'a>;
+    fn probe_count(probes: Self::Probes<'_>) -> usize {
+        ColumnChunk::<(K, V), T, P::Diff>::probe_count(probes)
+    }
+    fn locate(&self, probes: Self::Probes<'_>, index: usize) -> std::cmp::Ordering {
+        self.metadata.locate(probes, index)
+    }
+    fn extract_into(
+        &self,
+        probes: Self::Probes<'_>,
+        index: &mut usize,
+        staging: &mut Self::Staging,
+    ) {
+        self.metadata
+            .extract_into(probes, index, &mut staging.updates);
+        staging.owners.push(Rc::clone(&self.manifest));
+    }
+    async fn extract_into_async(
+        &self,
+        probes: Self::Probes<'_>,
+        index: &mut usize,
+        staging: &mut Self::Staging,
+    ) {
+        self.metadata
+            .extract_into_async(probes, index, &mut staging.updates)
+            .await;
+        staging.owners.push(Rc::clone(&self.manifest));
+    }
+    fn fetch_into(&self, staging: &mut Self::Staging) {
+        self.metadata.fetch_into(&mut staging.updates);
+        staging.owners.push(Rc::clone(&self.manifest));
     }
 }
 
@@ -325,68 +397,5 @@ mod tests {
         drop(lease);
         drop(chunk);
         assert_eq!(pool.stats().live_chunks, 0);
-    }
-}
-
-/// Copied metadata and the owners needed to keep its external payloads valid.
-pub struct PayloadStaging<U: Columnar> {
-    /// Matching updates, retaining their stored times and differences.
-    pub updates: U::Container,
-    /// Chunk manifests that own the locators in `updates`.
-    pub owners: Vec<Rc<Manifest>>,
-}
-impl<U: Columnar> Default for PayloadStaging<U> {
-    fn default() -> Self {
-        Self {
-            updates: Default::default(),
-            owners: Vec::new(),
-        }
-    }
-}
-
-impl<P, K, V, T> crate::columnar::unload::UnloadChunk for PayloadChunk<P, T>
-where
-    P: PayloadLayout<Data = (K, V)>,
-    K: Columnar,
-    V: Columnar,
-    for<'a> columnar::Ref<'a, K>: Copy + Ord,
-    for<'a> columnar::Ref<'a, V>: Copy + Ord,
-    T: Columnar + Default + Timestamp + Lattice,
-    for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    P::Diff: Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, P::Diff>>,
-{
-    type Staging = PayloadStaging<((K, V), T, P::Diff)>;
-    type Probes<'a> =
-        <ColumnChunk<(K, V), T, P::Diff> as crate::columnar::unload::UnloadChunk>::Probes<'a>;
-    fn probe_count(probes: Self::Probes<'_>) -> usize {
-        ColumnChunk::<(K, V), T, P::Diff>::probe_count(probes)
-    }
-    fn locate(&self, probes: Self::Probes<'_>, index: usize) -> std::cmp::Ordering {
-        self.metadata.locate(probes, index)
-    }
-    fn extract_into(
-        &self,
-        probes: Self::Probes<'_>,
-        index: &mut usize,
-        staging: &mut Self::Staging,
-    ) {
-        self.metadata
-            .extract_into(probes, index, &mut staging.updates);
-        staging.owners.push(Rc::clone(&self.manifest));
-    }
-    async fn extract_into_async(
-        &self,
-        probes: Self::Probes<'_>,
-        index: &mut usize,
-        staging: &mut Self::Staging,
-    ) {
-        self.metadata
-            .extract_into_async(probes, index, &mut staging.updates)
-            .await;
-        staging.owners.push(Rc::clone(&self.manifest));
-    }
-    fn fetch_into(&self, staging: &mut Self::Staging) {
-        self.metadata.fetch_into(&mut staging.updates);
-        staging.owners.push(Rc::clone(&self.manifest));
     }
 }

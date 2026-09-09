@@ -7,6 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Resident metadata batches that own references to independently stored rows.
+//!
+//! Sorting and selection operate on keys and metadata. The resulting manifest
+//! retains payload blocks before input ownership can be released.
+
 use super::{Manifest, RowHandle, StoreError};
 
 /// Operator-defined index fields with an optional payload locator.
