@@ -15,6 +15,33 @@ the next coherent piece toward its observable outcome, briefly explain that
 choice, then implement and verify it. Historical proposals and next steps are
 context, not a cumulative task list.
 
+Current steering
+
+Check which of these review findings remain unresolved, then choose one coherent
+change. Remove resolved steering from this prompt. These are implementation
+priorities, not new design requirements or a reason to reopen agreed decisions.
+
+- Publication scaling: publish_read_protection emits one catalog op per record,
+  while Transaction::get_op_updates scans accumulated pending updates after each
+  op. This creates quadratic work on the coordinator loop. Address that path and
+  measure publication cost at representative collection counts, including DDL
+  latency and retained history. Do not infer scalability from the small recovery
+  demonstration or make a general catalog redesign a prerequisite.
+- Consistency-check coupling: check_catalog_state_quiesced changes the publication
+  interval, and ddl_revision introduces a production conflict exception for that
+  setting. Revisit whether the checker is forcing unnecessary production semantics.
+  Preserve full catalog comparison, including protection records, without adding
+  further special cases to make the harness pass.
+- Ownership transition: finish the protected-MV milestone's production validation,
+  then prioritize a real catalog subscriber over more standalone APIs. In that
+  transition, address prepare_state's reliance on locally installed collections
+  and make the writer-side responsibility for complete maintained requirements
+  explicit. An MV's requirement is a separate sequencer op today. These are
+  transitional dependencies, not evidence that the current single-owner path fails.
+
+Keep the draft PR description accurate about what is implemented and what remains,
+with validation status in the PR rather than the design log.
+
 Prefer connecting existing pieces through the active milestone's production path
 over adding further standalone APIs. Preparatory work is appropriate when it
 unblocks that path. Let integration evidence refine intermediate interfaces
