@@ -1,6 +1,6 @@
-# Value-Based Pricing: GiB-Hours and Memory-Driven Cluster Scaling
+# Value-based pricing: GiB-hours and memory-driven cluster scaling
 
-- Associated: (TBD)
+* Associated: (TBD)
 
 > [!NOTE]
 > This is a **spike**. It records what the existing code already gives us, what
@@ -9,7 +9,7 @@
 > committed design. Sections marked *finding* are statements about code or data
 > in the tree today, not proposals.
 
-## The Problem
+## The problem
 
 Billing today is a step function over provisioned capacity:
 `credits_per_hour(size) x replica-hours`, integrated from
@@ -402,7 +402,7 @@ it without touching the shared record, and is the narrower change. An
 `initiator` field on `ReconfigurationRecord` would be cleaner but widens the
 witness for every writer.
 
-## Success Criteria
+## Success criteria
 
 * A recorded, per-replica, per-hour, durable measure of consumed GiB-hours that
   finance can reconcile against today's provisioned-hours bill before any
@@ -420,7 +420,7 @@ witness for every writer.
 * An oversized cluster's bill falls without any user action.
 * No new mechanism for replica swapping: scaling reuses graceful reconfiguration.
 
-## Out of Scope
+## Out of scope
 
 * Cross-family scaling.
 * `ON MEMORY` combined with `SCHEDULE = ('on-refresh', ...)`, matching the
@@ -454,7 +454,7 @@ Doing (3) before (2) is the dangerous order: value-based pricing without
 autoscaling shifts variance onto the customer's invoice without giving them a
 mechanism to control it.
 
-## Minimal Viable Prototype
+## Minimal viable prototype
 
 Two pieces, both cheap, and the first needs no code at all.
 
