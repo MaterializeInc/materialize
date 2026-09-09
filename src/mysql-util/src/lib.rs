@@ -12,8 +12,6 @@
 mod tunnel;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
-
 use aws_rds::RdsTokenError;
 pub use tunnel::{
     Config, DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT,
@@ -55,7 +53,7 @@ pub use partition::{PartitionParams, partition_table};
 
 mod aws_rds;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct UnsupportedDataType {
     pub column_type: String,
     pub qualified_table_name: String,

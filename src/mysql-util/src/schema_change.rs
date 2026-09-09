@@ -9,12 +9,10 @@
 
 //! Upstream schema changes that Materialize cannot follow.
 
-use itertools::Itertools;
 use mz_ore::str::StrExt;
 use postgres_protocol::escape;
 use serde::{Deserialize, Serialize};
 
-use crate::UnsupportedDataType;
 use crate::desc::MySqlKeyDesc;
 
 /// An upstream schema change that Materialize cannot follow.
@@ -45,11 +43,6 @@ pub enum SchemaChange {
     KeyDropped { key: MySqlKeyDesc },
     #[error("{key} was altered upstream")]
     KeyAltered { key: MySqlKeyDesc },
-    #[error(
-        "columns have types that Materialize cannot ingest: {}",
-        .columns.iter().join(", ")
-    )]
-    UnsupportedColumnTypes { columns: Vec<UnsupportedDataType> },
     #[error("{0}")]
     DescriptionFailed(String),
 }
@@ -84,7 +77,6 @@ impl SchemaChangeError {
             SchemaChange::TableRenamed { .. }
             | SchemaChange::ColumnDropped { .. }
             | SchemaChange::ColumnTypeChanged { .. }
-            | SchemaChange::UnsupportedColumnTypes { .. }
             | SchemaChange::DescriptionFailed(_) => None,
         }
     }
