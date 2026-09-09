@@ -14037,17 +14037,12 @@ EXPLAIN SELECT * FROM "mz_introspection"."mz_compute_error_counts";
 Explained Query:
   →With
     cte l0 =
-      →Differential Join %1:mz_compute_exports_per_worker[#0{export_id}] » %0:mz_compute_dependencies[#0{object_id}]
-        →Arrange (#0{object_id})
+      →Differential Join %0:mz_compute_dependencies[#0{object_id}, 0] » %1:mz_compute_exports_per_worker[#0, #1]
+        →Arrange (#0{object_id}, 0)
           →Fused with Parent Map/Filter/Project
             Project: #1, #0
             →Arranged mz_internal.mz_compute_dependencies
-        →Arrange (#0{export_id})
-          →Fused with Child Map/Filter/Project
-            Project: #0, #2
-            Filter: (#1{worker_id} = 0)
-              →Arranged mz_introspection.mz_compute_exports_per_worker
-                Key: (#0, #1)
+        →Arranged mz_introspection.mz_compute_exports_per_worker
     cte l1 =
       →Distinct GroupAggregate
         →Fused with Child Map/Filter/Project
@@ -14075,19 +14070,14 @@ Explained Query:
                           Key:
                             Project: #1
                             Map: list_index(#0{address}, 1)
-                          →Differential Join %0:mz_dataflow_addresses_per_worker[#0{id}] » %1:mz_dataflow_operators_per_worker[#0{id}]
-                            →Arrange (#0{id})
+                          →Differential Join %0:mz_dataflow_addresses_per_worker[#0{id}, 0] » %1:mz_dataflow_operators_per_worker[#0, #1]
+                            →Arrange (#0{id}, 0)
                               →Fused with Child Map/Filter/Project
                                 Project: #0, #2
                                 Filter: (#1{worker_id} = 0) AND (1 = list_length(#2{address})) AND (list_index(#2{address}, 1)) IS NOT NULL
                                   →Arranged mz_introspection.mz_dataflow_addresses_per_worker
                                     Key: (#0, #1)
-                            →Arrange (#0{id})
-                              →Fused with Child Map/Filter/Project
-                                Project: #0
-                                Filter: (#1{worker_id} = 0)
-                                  →Arranged mz_introspection.mz_dataflow_operators_per_worker
-                                    Key: (#0, #1)
+                            →Arranged mz_introspection.mz_dataflow_operators_per_worker
                     →Unarranged Raw Stream
                       →Arranged l1
     →Return
@@ -14103,20 +14093,16 @@ Explained Query:
 
 Used Indexes:
   - mz_internal.mz_compute_dependencies_ind (*** full scan ***)
-  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***)
+  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (differential join)
   - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***)
-  - mz_introspection.mz_compute_exports_per_worker_s2_primary_idx (*** full scan ***)
+  - mz_introspection.mz_compute_exports_per_worker_s2_primary_idx (differential join)
   - mz_introspection.mz_compute_error_counts_raw_s2_primary_idx (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
 Notices:
-  - Notice: Index mz_introspection.mz_compute_exports_per_worker_s2_primary_idx on mz_compute_exports_per_worker(export_id, worker_id) is too wide to use for literal equalities `worker_id = 0`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id).
   - Notice: Index mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx on mz_dataflow_addresses_per_worker(id, worker_id) is too wide to use for literal equalities `worker_id = 0`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id, list_length(address)).
-  - Notice: Index mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx on mz_dataflow_operators_per_worker(id, worker_id) is too wide to use for literal equalities `worker_id = 0`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id).
 
 EOF
 
@@ -14126,17 +14112,12 @@ EXPLAIN SELECT * FROM "mz_introspection"."mz_compute_error_counts_per_worker";
 Explained Query:
   →With
     cte l0 =
-      →Differential Join %1:mz_compute_exports_per_worker[#0{export_id}] » %0:mz_compute_dependencies[#0{object_id}]
-        →Arrange (#0{object_id})
+      →Differential Join %0:mz_compute_dependencies[#0{object_id}, 0] » %1:mz_compute_exports_per_worker[#0, #1]
+        →Arrange (#0{object_id}, 0)
           →Fused with Parent Map/Filter/Project
             Project: #1, #0
             →Arranged mz_internal.mz_compute_dependencies
-        →Arrange (#0{export_id})
-          →Fused with Child Map/Filter/Project
-            Project: #0, #2
-            Filter: (#1{worker_id} = 0)
-              →Arranged mz_introspection.mz_compute_exports_per_worker
-                Key: (#0, #1)
+        →Arranged mz_introspection.mz_compute_exports_per_worker
     cte l1 =
       →Distinct GroupAggregate
         →Fused with Child Map/Filter/Project
@@ -14164,19 +14145,14 @@ Explained Query:
                           Key:
                             Project: #1
                             Map: list_index(#0{address}, 1)
-                          →Differential Join %0:mz_dataflow_addresses_per_worker[#0{id}] » %1:mz_dataflow_operators_per_worker[#0{id}]
-                            →Arrange (#0{id})
+                          →Differential Join %0:mz_dataflow_addresses_per_worker[#0{id}, 0] » %1:mz_dataflow_operators_per_worker[#0, #1]
+                            →Arrange (#0{id}, 0)
                               →Fused with Child Map/Filter/Project
                                 Project: #0, #2
                                 Filter: (#1{worker_id} = 0) AND (1 = list_length(#2{address})) AND (list_index(#2{address}, 1)) IS NOT NULL
                                   →Arranged mz_introspection.mz_dataflow_addresses_per_worker
                                     Key: (#0, #1)
-                            →Arrange (#0{id})
-                              →Fused with Child Map/Filter/Project
-                                Project: #0
-                                Filter: (#1{worker_id} = 0)
-                                  →Arranged mz_introspection.mz_dataflow_operators_per_worker
-                                    Key: (#0, #1)
+                            →Arranged mz_introspection.mz_dataflow_operators_per_worker
                     →Unarranged Raw Stream
                       →Arranged l1
     →Return
@@ -14184,20 +14160,16 @@ Explained Query:
 
 Used Indexes:
   - mz_internal.mz_compute_dependencies_ind (*** full scan ***)
-  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***)
+  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (differential join)
   - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***)
-  - mz_introspection.mz_compute_exports_per_worker_s2_primary_idx (*** full scan ***)
+  - mz_introspection.mz_compute_exports_per_worker_s2_primary_idx (differential join)
   - mz_introspection.mz_compute_error_counts_raw_s2_primary_idx (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
 Notices:
-  - Notice: Index mz_introspection.mz_compute_exports_per_worker_s2_primary_idx on mz_compute_exports_per_worker(export_id, worker_id) is too wide to use for literal equalities `worker_id = 0`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id).
   - Notice: Index mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx on mz_dataflow_addresses_per_worker(id, worker_id) is too wide to use for literal equalities `worker_id = 0`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id, list_length(address)).
-  - Notice: Index mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx on mz_dataflow_operators_per_worker(id, worker_id) is too wide to use for literal equalities `worker_id = 0`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id).
 
 EOF
 
@@ -14359,13 +14331,9 @@ Explained Query:
         Simple aggregates: count(*)
         →Arranged mz_introspection.mz_arrangement_batcher_allocations_raw
     cte l9 =
-      →Fused with Child Map/Filter/Project
-        Project: #0, #2
-        Filter: (#1{worker_id} = 0)
-          →Arranged mz_introspection.mz_dataflow_operators_per_worker
-            Key: (#0, #1)
+      →Arranged mz_introspection.mz_dataflow_operators_per_worker
     cte l10 =
-      →One-Shot Delta Join [%0:l9 » %1:mz_dataflow_addresses_per_worker[#0{id}] » %2:mz_dataflow_addresses_per_worker[list_index(#1{address}, 1)] » %3:l9[#0{id}]]
+      →One-Shot Delta Join [%0:mz_dataflow_operators_per_worker » %1:mz_dataflow_addresses_per_worker[#0{id}] » %2:mz_dataflow_addresses_per_worker[list_index(#1{address}, 1)] » %3:l9[#0, #1]]
         path %0:
           after %1:
             Project: #0..=#2
@@ -14373,7 +14341,9 @@ Explained Query:
         →Unarranged Raw Stream
           →Fused with Child Map/Filter/Project
             Project: #0
-              →Read l9
+            Filter: (#1{worker_id} = 0)
+              →Arranged mz_introspection.mz_dataflow_operators_per_worker
+                Key: (#0, #1)
         →Arrange (#0{id}) (list_index(#1{address}, 1))
           →Fused with Child Map/Filter/Project
             Project: #0, #2
@@ -14386,8 +14356,7 @@ Explained Query:
             Filter: (#1{worker_id} = 0) AND (1 = list_length(#2{address})) AND (list_index(#2{address}, 1)) IS NOT NULL
               →Arranged mz_introspection.mz_dataflow_addresses_per_worker
                 Key: (#0, #1)
-        →Arrange (#0{id})
-          →Stream l9
+        →Arranged l9
     cte l11 =
       →Fused with Child Map/Filter/Project
         Project: #0, #1
@@ -14404,12 +14373,12 @@ Explained Query:
           Simple aggregates: sum(case when ((case when (#4) IS NULL then null else #3 end) IS NULL AND (case when (#12) IS NULL then null else #11 end) IS NULL) then null else (case when (#4) IS NULL then 0 else coalesce(#3, 0) end + case when (#12) IS NULL then 0 else coalesce(#11, 0) end) end), sum(case when (#2) IS NULL then null else #1 end), sum(case when ((case when (#6) IS NULL then null else #5 end) IS NULL AND (case when (#14) IS NULL then null else #13 end) IS NULL) then null else (case when (#6) IS NULL then 0 else coalesce(#5, 0) end + case when (#14) IS NULL then 0 else coalesce(#13, 0) end) end), sum(case when ((case when (#8) IS NULL then null else #7 end) IS NULL AND (case when (#16) IS NULL then null else #15 end) IS NULL) then null else (case when (#8) IS NULL then 0 else coalesce(#7, 0) end + case when (#16) IS NULL then 0 else coalesce(#15, 0) end) end), sum(case when ((case when (#10) IS NULL then null else #9 end) IS NULL AND (case when (#18) IS NULL then null else #17 end) IS NULL) then null else (case when (#10) IS NULL then 0 else coalesce(#9, 0) end + case when (#18) IS NULL then 0 else coalesce(#17, 0) end) end)
           Key:
             Project: #0
-          →One-Shot Delta Join [%0:mz_dataflow_operators_per_worker[#0, #1] » %1[#0, #1] » %2[#0, #1] » %3[#0, #1] » %4[#0, #1] » %5[#0, #1] » %6[#0, #1] » %7[#0, #1] » %8[#0, #1] » %9[#0, #1]]
+          →One-Shot Delta Join [%0:l9[#0, #1] » %1[#0, #1] » %2[#0, #1] » %3[#0, #1] » %4[#0, #1] » %5[#0, #1] » %6[#0, #1] » %7[#0, #1] » %8[#0, #1] » %9[#0, #1]]
             path %0:
               after %9:
                 Project: #0, #2..=#19
                 Filter: ((case when (#3) IS NULL then null else #2 end) IS NOT NULL OR (case when ((case when (#5) IS NULL then null else #4 end) IS NULL AND (case when (#13) IS NULL then null else #12 end) IS NULL) then null else (case when (#5) IS NULL then 0 else coalesce(#4, 0) end + case when (#13) IS NULL then 0 else coalesce(#12, 0) end) end) IS NOT NULL OR (case when ((case when (#7) IS NULL then null else #6 end) IS NULL AND (case when (#15) IS NULL then null else #14 end) IS NULL) then null else (case when (#7) IS NULL then 0 else coalesce(#6, 0) end + case when (#15) IS NULL then 0 else coalesce(#14, 0) end) end) IS NOT NULL OR (case when ((case when (#9) IS NULL then null else #8 end) IS NULL AND (case when (#17) IS NULL then null else #16 end) IS NULL) then null else (case when (#9) IS NULL then 0 else coalesce(#8, 0) end + case when (#17) IS NULL then 0 else coalesce(#16, 0) end) end) IS NOT NULL OR (case when ((case when (#11) IS NULL then null else #10 end) IS NULL AND (case when (#19) IS NULL then null else #18 end) IS NULL) then null else (case when (#11) IS NULL then 0 else coalesce(#10, 0) end + case when (#19) IS NULL then 0 else coalesce(#18, 0) end) end) IS NOT NULL)
-            →Arranged mz_introspection.mz_dataflow_operators_per_worker
+            →Arranged l9
             →Arrange (#0, #1)
               →Union
                 →Fused with Child Map/Filter/Project
@@ -14606,7 +14575,7 @@ Explained Query:
                 →Read l12
 
 Used Indexes:
-  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***, delta join 1st input (full scan))
+  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***, delta join lookup, delta join 1st input (full scan))
   - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_arrangement_batches_raw_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_arrangement_records_raw_s2_primary_idx (*** full scan ***)
@@ -14636,47 +14605,37 @@ EXPLAIN SELECT * FROM "mz_introspection"."mz_dataflow_channel_operators";
 Explained Query:
   →With
     cte l0 =
-      →Fused with Child Map/Filter/Project
-        Filter: (#1 = 0)
-          →Arranged mz_introspection.mz_dataflow_addresses_per_worker
-            Key: (#0, #1)
-    cte l1 =
-      →Differential Join %0:l0[#0{id}] » %1:mz_dataflow_operators_per_worker[#0{id}]
-        →Arrange (#0{id})
-          →Stream l0
-        →Arrange (#0{id})
+      →Differential Join %0:mz_dataflow_addresses_per_worker[#0{id}, 0] » %1:mz_dataflow_operators_per_worker[#0, #1]
+        →Arrange (#0{id}, 0)
           →Fused with Child Map/Filter/Project
-            Project: #0
-            Filter: (#1{worker_id} = 0)
-              →Arranged mz_introspection.mz_dataflow_operators_per_worker
+            Filter: (#1 = 0)
+              →Arranged mz_introspection.mz_dataflow_addresses_per_worker
                 Key: (#0, #1)
-    cte l2 =
-      →Differential Join %0:mz_dataflow_channels_per_worker[#0{id}] » %1:l0[#0{id}]
+        →Arranged mz_introspection.mz_dataflow_operators_per_worker
+    cte l1 =
+      →Differential Join %0:mz_dataflow_channels_per_worker[#0{id}, 0] » %1:mz_dataflow_addresses_per_worker[#0, #1]
         after %1:
-          Project: #0, #3, #5, #6
-          Map: (#4{address} || #1{from_index}), (#4{address} || #2{to_index})
-        →Arrange (#0{id})
+          Project: #0, #4, #6, #7
+          Map: (#5{address} || #2{from_index}), (#5{address} || #3{to_index})
+        →Arrange (#0{id}, 0)
           →Fused with Child Map/Filter/Project
             Project: #0, #2, #4, #6
             Filter: (#1{worker_id} = 0)
               →Arranged mz_introspection.mz_dataflow_channels_per_worker
                 Key: (#0, #1)
-        →Arrange (#0{id})
-          →Fused with Child Map/Filter/Project
-            Project: #0, #2
-              →Read l0
-    cte l3 =
+        →Arranged mz_introspection.mz_dataflow_addresses_per_worker
+    cte l2 =
       →Negate Diffs
         →Fused with Child Map/Filter/Project
           Project: #1, #2
-            →Read l1
-    cte l4 =
+            →Read l0
+    cte l3 =
       →Fused with Child Map/Filter/Project
         Project: #0, #2, #3
         Map: true
-          →Read l1
+          →Read l0
   →Return
-    →One-Shot Delta Join [%0:l2 » %1[#1] » %2[#1]]
+    →One-Shot Delta Join [%0:l1 » %1[#1] » %2[#1]]
       path %0:
         after %1:
           Project: #1, #2, #0, #3, #6
@@ -14685,53 +14644,51 @@ Explained Query:
           Project: #1, #4, #3, #7, #0, #2
           Map: case when (#6) IS NULL then null else #5 end
       →Unarranged Raw Stream
-        →Stream l2
+        →Stream l1
       →Arrange (#1)
         →Union
-          →Stream l4
+          →Stream l3
           →Map/Filter/Project
             Project: #2, #1, #3
             Map: null, null
               →Threshold Diffs #0, #1
                 →Arrange (#0, #1)
                   →Union
-                    →Stream l3
+                    →Stream l2
                     →Map/Filter/Project
                       Project: #1, #0
                       Map: 0
                         →Distinct GroupAggregate
                           →Fused with Child Map/Filter/Project
                             Project: #2
-                              →Read l2
+                              →Read l1
       →Arrange (#1)
         →Union
-          →Stream l4
+          →Stream l3
           →Map/Filter/Project
             Project: #2, #1, #3
             Map: null, null
               →Threshold Diffs #0, #1
                 →Arrange (#0, #1)
                   →Union
-                    →Stream l3
+                    →Stream l2
                     →Map/Filter/Project
                       Project: #1, #0
                       Map: 0
                         →Distinct GroupAggregate
                           →Fused with Child Map/Filter/Project
                             Project: #3
-                              →Read l2
+                              →Read l1
 
 Used Indexes:
-  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***)
+  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (differential join)
   - mz_introspection.mz_dataflow_channels_per_worker_s2_primary_idx (*** full scan ***)
-  - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***)
+  - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***, differential join)
 
 Target cluster: mz_catalog_server
 
 Notices:
   - Notice: Index mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx on mz_dataflow_addresses_per_worker(id, worker_id) is too wide to use for literal equalities `worker_id = 0`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id).
-  - Notice: Index mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx on mz_dataflow_operators_per_worker(id, worker_id) is too wide to use for literal equalities `worker_id = 0`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id).
   - Notice: Index mz_introspection.mz_dataflow_channels_per_worker_s2_primary_idx on mz_dataflow_channels_per_worker(id, worker_id) is too wide to use for literal equalities `worker_id = 0`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id).
@@ -14861,37 +14818,33 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_introspection"."mz_dataflow_operator_dataflows";
 ----
 Explained Query:
-  →With
-    cte l0 =
-      →Arrange (#0{id})
-        →Fused with Child Map/Filter/Project
-          Project: #0, #2
-          Filter: (#1{worker_id} = 0)
-            →Arranged mz_introspection.mz_dataflow_operators_per_worker
-              Key: (#0, #1)
-  →Return
-    →One-Shot Delta Join [%0:l0[#0{id}] » %1:mz_dataflow_addresses_per_worker[#0{id}] » %2:mz_dataflow_addresses_per_worker[list_index(#1{address}, 1)] » %3:l0[#0{id}]]
-      path %0:
-        after %1:
-          Project: #0..=#3
-          Map: list_index(#2{address}, 1)
-      →Arranged l0
-      →Arrange (#0{id}) (list_index(#1{address}, 1))
-        →Fused with Child Map/Filter/Project
-          Project: #0, #2
-          Filter: (#1{worker_id} = 0) AND (list_index(#2{address}, 1)) IS NOT NULL
-            →Arranged mz_introspection.mz_dataflow_addresses_per_worker
-              Key: (#0, #1)
-      →Arrange (#0{id}) (list_index(#1{address}, 1))
-        →Fused with Child Map/Filter/Project
-          Project: #0, #2
-          Filter: (#1{worker_id} = 0) AND (1 = list_length(#2{address})) AND (list_index(#2{address}, 1)) IS NOT NULL
-            →Arranged mz_introspection.mz_dataflow_addresses_per_worker
-              Key: (#0, #1)
-      →Arranged l0
+  →One-Shot Delta Join [%0:mz_dataflow_operators_per_worker » %1:mz_dataflow_addresses_per_worker[#0{id}] » %2:mz_dataflow_addresses_per_worker[list_index(#1{address}, 1)] » %3:mz_dataflow_operators_per_worker[#0, #1]]
+    path %0:
+      after %1:
+        Project: #0..=#3
+        Map: list_index(#2{address}, 1)
+    →Unarranged Raw Stream
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2
+        Filter: (#1{worker_id} = 0)
+          →Arranged mz_introspection.mz_dataflow_operators_per_worker
+            Key: (#0, #1)
+    →Arrange (#0{id}) (list_index(#1{address}, 1))
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2
+        Filter: (#1{worker_id} = 0) AND (list_index(#2{address}, 1)) IS NOT NULL
+          →Arranged mz_introspection.mz_dataflow_addresses_per_worker
+            Key: (#0, #1)
+    →Arrange (#0{id}) (list_index(#1{address}, 1))
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2
+        Filter: (#1{worker_id} = 0) AND (1 = list_length(#2{address})) AND (list_index(#2{address}, 1)) IS NOT NULL
+          →Arranged mz_introspection.mz_dataflow_addresses_per_worker
+            Key: (#0, #1)
+    →Arranged mz_introspection.mz_dataflow_operators_per_worker
 
 Used Indexes:
-  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***)
+  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***, delta join lookup)
   - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***)
 
 Target cluster: mz_catalog_server
@@ -14946,19 +14899,14 @@ EXPLAIN SELECT * FROM "mz_introspection"."mz_dataflow_operator_parents";
 Explained Query:
   →With
     cte l0 =
-      →Differential Join %0:mz_dataflow_addresses_per_worker[#0{id}] » %1:mz_dataflow_operators_per_worker[#0{id}]
-        →Arrange (#0{id})
+      →Differential Join %0:mz_dataflow_addresses_per_worker[#0{id}, 0] » %1:mz_dataflow_operators_per_worker[#0, #1]
+        →Arrange (#0{id}, 0)
           →Fused with Child Map/Filter/Project
             Project: #0, #2
             Filter: (#1{worker_id} = 0)
               →Arranged mz_introspection.mz_dataflow_addresses_per_worker
                 Key: (#0, #1)
-        →Arrange (#0{id})
-          →Fused with Child Map/Filter/Project
-            Project: #0
-            Filter: (#1{worker_id} = 0)
-              →Arranged mz_introspection.mz_dataflow_operators_per_worker
-                Key: (#0, #1)
+        →Arranged mz_introspection.mz_dataflow_operators_per_worker
   →Return
     →Differential Join %0:l0[#1{parent_address}] » %1:l0[#1{address}]
       →Arrange (#1{parent_address})
@@ -14970,15 +14918,13 @@ Explained Query:
         →Stream l0
 
 Used Indexes:
-  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***)
+  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (differential join)
   - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
 Notices:
   - Notice: Index mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx on mz_dataflow_addresses_per_worker(id, worker_id) is too wide to use for literal equalities `worker_id = 0`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id).
-  - Notice: Index mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx on mz_dataflow_operators_per_worker(id, worker_id) is too wide to use for literal equalities `worker_id = 0`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id).
 
 EOF
@@ -15086,25 +15032,20 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_introspection"."mz_dataflows";
 ----
 Explained Query:
-  →Differential Join %0:mz_dataflow_addresses_per_worker[#0{id}] » %1:mz_dataflow_operators_per_worker[#0{id}]
+  →Differential Join %0:mz_dataflow_addresses_per_worker[#0{id}, 0] » %1:mz_dataflow_operators_per_worker[#0, #1]
     after %1:
-      Project: #3, #2
-      Map: list_index(#1{address}, 1)
-    →Arrange (#0{id})
+      Project: #4, #3
+      Map: list_index(#2{address}, 1)
+    →Arrange (#0{id}, 0)
       →Fused with Child Map/Filter/Project
         Project: #0, #2
         Filter: (#1{worker_id} = 0) AND (1 = list_length(#2{address}))
           →Arranged mz_introspection.mz_dataflow_addresses_per_worker
             Key: (#0, #1)
-    →Arrange (#0{id})
-      →Fused with Child Map/Filter/Project
-        Project: #0, #2
-        Filter: (#1{worker_id} = 0)
-          →Arranged mz_introspection.mz_dataflow_operators_per_worker
-            Key: (#0, #1)
+    →Arranged mz_introspection.mz_dataflow_operators_per_worker
 
 Used Indexes:
-  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***)
+  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (differential join)
   - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***)
 
 Target cluster: mz_catalog_server
@@ -15112,8 +15053,6 @@ Target cluster: mz_catalog_server
 Notices:
   - Notice: Index mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx on mz_dataflow_addresses_per_worker(id, worker_id) is too wide to use for literal equalities `worker_id = 0`.
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id, list_length(address)).
-  - Notice: Index mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx on mz_dataflow_operators_per_worker(id, worker_id) is too wide to use for literal equalities `worker_id = 0`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (worker_id).
 
 EOF
 
@@ -15179,21 +15118,19 @@ Explained Query:
         Simple aggregates: count(*)
         →Arranged mz_introspection.mz_arrangement_batcher_allocations_raw
     cte l9 =
-      →Fused with Child Map/Filter/Project
-        Project: #0, #2
-        Filter: (#1{worker_id} = 0)
-          →Arranged mz_introspection.mz_dataflow_operators_per_worker
-            Key: (#0, #1)
+      →Arranged mz_introspection.mz_dataflow_operators_per_worker
     cte l10 =
-      →Arrange (#0{id})
-        →Stream l9
-    cte l11 =
-      →One-Shot Delta Join [%0:l10[#0{id}] » %1:mz_dataflow_addresses_per_worker[#0{id}] » %2:mz_dataflow_addresses_per_worker[list_index(#1{address}, 1)] » %3:l10[#0{id}]]
+      →One-Shot Delta Join [%0:mz_dataflow_operators_per_worker » %1:mz_dataflow_addresses_per_worker[#0{id}] » %2:mz_dataflow_addresses_per_worker[list_index(#1{address}, 1)] » %3:l9[#0, #1]]
         path %0:
           after %1:
             Project: #0..=#3
             Map: list_index(#2{address}, 1)
-        →Arranged l10
+        →Unarranged Raw Stream
+          →Fused with Child Map/Filter/Project
+            Project: #0, #2
+            Filter: (#1{worker_id} = 0)
+              →Arranged mz_introspection.mz_dataflow_operators_per_worker
+                Key: (#0, #1)
         →Arrange (#0{id}) (list_index(#1{address}, 1))
           →Fused with Child Map/Filter/Project
             Project: #0, #2
@@ -15206,20 +15143,20 @@ Explained Query:
             Filter: (#1{worker_id} = 0) AND (1 = list_length(#2{address})) AND (list_index(#2{address}, 1)) IS NOT NULL
               →Arranged mz_introspection.mz_dataflow_addresses_per_worker
                 Key: (#0, #1)
-        →Arranged l10
-    cte l12 =
+        →Arranged l9
+    cte l11 =
       →Fused with Child Map/Filter/Project
         Project: #0, #2
         Filter: (#1{worker_id} = 0)
           →Arranged mz_introspection.mz_dataflow_addresses_per_worker
             Key: (#0, #1)
-    cte l13 =
+    cte l12 =
       →Fused with Child Map/Filter/Project
         Project: #0, #1
           →Arranged mz_introspection.mz_dataflow_operators_per_worker
             Key: (#0, #1)
-    cte l14 =
-      →One-Shot Delta Join [%0:l11 » %4[#0] » %1:l12[#0{id}] » %2:l12[#1{address}] » %3:l9[#0{id}]]
+    cte l13 =
+      →One-Shot Delta Join [%0:l10 » %4[#0] » %1:l11[#0{id}] » %2:l11[#1{address}] » %3:l9[#0, #1]]
         path %0:
           after %4:
             Project: #0, #1, #4, #5
@@ -15228,25 +15165,22 @@ Explained Query:
           →Fused with Child Map/Filter/Project
             Project: #0, #3
             Filter: ((#1{name} = "Arranged TopK input") OR (#1{name} = "Arrange ReduceMinsMaxes") OR (#1{name} = "Arranged MinsMaxesHierarchical input"))
-              →Read l11
+              →Read l10
         →Arrange (#0{id}) (list_slice_linear(#1{address}, 1, integer_to_bigint((list_length(#1{address}) - 1))))
-          →Stream l12
+          →Stream l11
         →Arrange (#0{id}) (#1{address})
-          →Stream l12
-        →Arrange (#0{id})
-          →Fused with Child Map/Filter/Project
-            Project: #0
-              →Read l9
+          →Stream l11
+        →Arranged l9
         →Accumulable GroupAggregate
           Simple aggregates: sum(case when ((case when (#2) IS NULL then null else #1 end) IS NULL AND (case when (#6) IS NULL then null else #5 end) IS NULL) then null else (case when (#2) IS NULL then 0 else coalesce(#1, 0) end + case when (#6) IS NULL then 0 else coalesce(#5, 0) end) end), sum(case when ((case when (#4) IS NULL then null else #3 end) IS NULL AND (case when (#8) IS NULL then null else #7 end) IS NULL) then null else (case when (#4) IS NULL then 0 else coalesce(#3, 0) end + case when (#8) IS NULL then 0 else coalesce(#7, 0) end) end)
           Key:
             Project: #0
-          →One-Shot Delta Join [%0:mz_dataflow_operators_per_worker[#0, #1] » %1[#0, #1] » %2[#0, #1] » %3[#0, #1] » %4[#0, #1] » %5[#0, #1] » %6[#0, #1] » %7[#0, #1] » %8[#0, #1] » %9[#0, #1]]
+          →One-Shot Delta Join [%0:l9[#0, #1] » %1[#0, #1] » %2[#0, #1] » %3[#0, #1] » %4[#0, #1] » %5[#0, #1] » %6[#0, #1] » %7[#0, #1] » %8[#0, #1] » %9[#0, #1]]
             path %0:
               after %9:
                 Project: #0, #4..=#7, #12..=#15
                 Filter: ((case when (#3) IS NULL then null else #2 end) IS NOT NULL OR (case when ((case when (#5) IS NULL then null else #4 end) IS NULL AND (case when (#13) IS NULL then null else #12 end) IS NULL) then null else (case when (#5) IS NULL then 0 else coalesce(#4, 0) end + case when (#13) IS NULL then 0 else coalesce(#12, 0) end) end) IS NOT NULL OR (case when ((case when (#7) IS NULL then null else #6 end) IS NULL AND (case when (#15) IS NULL then null else #14 end) IS NULL) then null else (case when (#7) IS NULL then 0 else coalesce(#6, 0) end + case when (#15) IS NULL then 0 else coalesce(#14, 0) end) end) IS NOT NULL OR (case when ((case when (#9) IS NULL then null else #8 end) IS NULL AND (case when (#17) IS NULL then null else #16 end) IS NULL) then null else (case when (#9) IS NULL then 0 else coalesce(#8, 0) end + case when (#17) IS NULL then 0 else coalesce(#16, 0) end) end) IS NOT NULL OR (case when ((case when (#11) IS NULL then null else #10 end) IS NULL AND (case when (#19) IS NULL then null else #18 end) IS NULL) then null else (case when (#11) IS NULL then 0 else coalesce(#10, 0) end + case when (#19) IS NULL then 0 else coalesce(#18, 0) end) end) IS NOT NULL)
-            →Arranged mz_introspection.mz_dataflow_operators_per_worker
+            →Arranged l9
             →Arrange (#0, #1)
               →Union
                 →Fused with Child Map/Filter/Project
@@ -15265,7 +15199,7 @@ Explained Query:
                               Project: #0, #1
                                 →Arranged l0
                                   Key: (#0, #1)
-                          →Stream l13
+                          →Stream l12
             →Arrange (#0, #1)
               →Union
                 →Fused with Child Map/Filter/Project
@@ -15284,7 +15218,7 @@ Explained Query:
                               Project: #0, #1
                                 →Arranged l1
                                   Key: (#0, #1)
-                          →Stream l13
+                          →Stream l12
             →Arrange (#0, #1)
               →Union
                 →Fused with Child Map/Filter/Project
@@ -15303,7 +15237,7 @@ Explained Query:
                               Project: #0, #1
                                 →Arranged l2
                                   Key: (#0, #1)
-                          →Stream l13
+                          →Stream l12
             →Arrange (#0, #1)
               →Union
                 →Fused with Child Map/Filter/Project
@@ -15322,7 +15256,7 @@ Explained Query:
                               Project: #0, #1
                                 →Arranged l3
                                   Key: (#0, #1)
-                          →Stream l13
+                          →Stream l12
             →Arrange (#0, #1)
               →Union
                 →Fused with Child Map/Filter/Project
@@ -15341,7 +15275,7 @@ Explained Query:
                               Project: #0, #1
                                 →Arranged l4
                                   Key: (#0, #1)
-                          →Stream l13
+                          →Stream l12
             →Arrange (#0, #1)
               →Union
                 →Fused with Child Map/Filter/Project
@@ -15360,7 +15294,7 @@ Explained Query:
                               Project: #0, #1
                                 →Arranged l5
                                   Key: (#0, #1)
-                          →Stream l13
+                          →Stream l12
             →Arrange (#0, #1)
               →Union
                 →Fused with Child Map/Filter/Project
@@ -15379,7 +15313,7 @@ Explained Query:
                               Project: #0, #1
                                 →Arranged l6
                                   Key: (#0, #1)
-                          →Stream l13
+                          →Stream l12
             →Arrange (#0, #1)
               →Union
                 →Fused with Child Map/Filter/Project
@@ -15398,7 +15332,7 @@ Explained Query:
                               Project: #0, #1
                                 →Arranged l7
                                   Key: (#0, #1)
-                          →Stream l13
+                          →Stream l12
             →Arrange (#0, #1)
               →Union
                 →Fused with Child Map/Filter/Project
@@ -15417,9 +15351,9 @@ Explained Query:
                               Project: #0, #1
                                 →Arranged l8
                                   Key: (#0, #1)
-                          →Stream l13
+                          →Stream l12
   →Return
-    →One-Shot Delta Join [%0[#0, #1] » %1[#0, #1] » %2:l11[#0{id}, #3{dataflow_id}]]
+    →One-Shot Delta Join [%0[#0, #1] » %1[#0, #1] » %2:l10[#0{id}, #3{dataflow_id}]]
       path %0:
         after %1:
           Project: #0..=#5
@@ -15428,17 +15362,17 @@ Explained Query:
         Simple aggregates: count(*), sum(#2{size})
         Key:
           Project: #0, #1
-        →One-Shot Delta Join [%0:l14 » %2[#0, #1] » %1:l14[#0{id}..=#2{region_id}]]
+        →One-Shot Delta Join [%0:l13 » %2[#0, #1] » %1:l13[#0{id}..=#2{region_id}]]
           path %0:
             after %1:
               Project: #1, #2, #5
               Filter: (#3{id} != #0{id}) AND (bigint_to_numeric(#4{records}) >= (bigint_to_numeric(#6{records}) * 0.85))
           →Unarranged Raw Stream
-            →Stream l14
+            →Stream l13
           →Arrange (#0{id}..=#2{region_id})
             →Fused with Child Map/Filter/Project
               Project: #0..=#3
-                →Read l14
+                →Read l13
           →Arrange (#0..=#2)
             →Consolidating Monotonic GroupAggregate
               Aggregations: min
@@ -15446,17 +15380,17 @@ Explained Query:
                 Project: #1, #2
               →Fused with Child Map/Filter/Project
                 Project: #0..=#2
-                  →Read l14
+                  →Read l13
       →Accumulable GroupAggregate
         Simple aggregates: count(*)
         →Fused with Child Map/Filter/Project
           Project: #1, #2
-            →Read l14
+            →Read l13
       →Arrange (#0{id}, #3{dataflow_id})
-        →Stream l11
+        →Stream l10
 
 Used Indexes:
-  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***, delta join 1st input (full scan))
+  - mz_introspection.mz_dataflow_operators_per_worker_s2_primary_idx (*** full scan ***, delta join lookup, delta join 1st input (full scan))
   - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_arrangement_batches_raw_s2_primary_idx (*** full scan ***)
   - mz_introspection.mz_arrangement_records_raw_s2_primary_idx (*** full scan ***)

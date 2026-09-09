@@ -1,0 +1,445 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for the join-level index key completion in LiteralConstraints: an index
+# key covered partly by literal equalities and partly by the enclosing join's
+# equivalences should still be usable as a lookup rather than degrading to a
+# full scan.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_partial_literal_index_lookups TO true;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t(a int, b int, v int);
+
+statement ok
+CREATE TABLE m(k int, a int);
+
+statement ok
+INSERT INTO t VALUES (1,7,10), (1,8,20), (1,9,30), (2,7,40), (1,7,5), (NULL,7,100), (1,NULL,50);
+
+statement ok
+INSERT INTO m VALUES (1,1), (2,2);
+
+# Results before any index exists, so the transform cannot fire. Every query
+# below is repeated once the indexes are in place and must agree.
+query II
+SELECT t.a, sum(t.v) FROM t
+WHERE t.a = (SELECT a FROM m WHERE m.k = 1) AND t.b IN (7, 8)
+GROUP BY t.a;
+----
+1  35
+
+query II
+SELECT t.a, sum(t.v) FROM t
+WHERE t.a = (SELECT a FROM m WHERE m.k = 1) AND t.b IN (7, 7)
+GROUP BY t.a;
+----
+1  15
+
+query II
+SELECT t.a, sum(t.v) FROM t
+WHERE t.a = (SELECT a FROM m WHERE m.k = 99) AND t.b IN (7, 8)
+GROUP BY t.a;
+----
+
+query II rowsort
+SELECT t.a, sum(t.v) FROM t, m
+WHERE t.a = m.a AND t.b IN (7, 8)
+GROUP BY t.a;
+----
+1  35
+2  40
+
+query II rowsort
+SELECT t.a, sum(t.v) FROM t, m
+WHERE t.a = m.a AND t.b = 7
+GROUP BY t.a;
+----
+1  15
+2  40
+
+statement ok
+CREATE INDEX t_a_b ON t(a, b);
+
+statement ok
+CREATE INDEX m_k ON m(k);
+
+query II
+SELECT t.a, sum(t.v) FROM t
+WHERE t.a = (SELECT a FROM m WHERE m.k = 1) AND t.b IN (7, 8)
+GROUP BY t.a;
+----
+1  35
+
+query II
+SELECT t.a, sum(t.v) FROM t
+WHERE t.a = (SELECT a FROM m WHERE m.k = 1) AND t.b IN (7, 7)
+GROUP BY t.a;
+----
+1  15
+
+query II
+SELECT t.a, sum(t.v) FROM t
+WHERE t.a = (SELECT a FROM m WHERE m.k = 99) AND t.b IN (7, 8)
+GROUP BY t.a;
+----
+
+# The lookup values are crossed into the binding input, so a non-unique join key
+# on that side must not multiply rows.
+query II rowsort
+SELECT t.a, sum(t.v) FROM t, m
+WHERE t.a = m.a AND t.b IN (7, 8)
+GROUP BY t.a;
+----
+1  35
+2  40
+
+query II rowsort
+SELECT t.a, sum(t.v) FROM t, m
+WHERE t.a = m.a AND t.b = 7
+GROUP BY t.a;
+----
+1  15
+2  40
+
+# A single literal needs no lookup collection: the value goes in as a join
+# equivalence, so the index is probed with no Constant and no CrossJoin.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT t.a, sum(t.v) FROM t, m
+WHERE t.a = m.a AND t.b = 7
+GROUP BY t.a;
+----
+Explained Query:
+  Reduce group_by=[#0{a}] aggregates=[sum(#1{v})]
+    Project (#0{a}, #2{v})
+      Join on=(#0{a} = #3{a} AND #1{b} = 7) type=differential
+        ArrangeBy keys=[[#0{a}, #1{b}]]
+          ReadIndex on=t t_a_b=[differential join]
+        ArrangeBy keys=[[#0{a}, 7]]
+          Project (#1{a})
+            Filter (#1{a}) IS NOT NULL
+              ReadIndex on=m m_k=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.t_a_b (differential join)
+  - materialize.public.m_k (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# The index is used with its full key, and the redundant filter on the literal
+# equalities is gone.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT t.a, sum(t.v) FROM t
+WHERE t.a = (SELECT a FROM m WHERE m.k = 1) AND t.b IN (7, 8)
+GROUP BY t.a;
+----
+Explained Query:
+  With
+    cte l0 =
+      Project (#1{a})
+        ReadIndex on=materialize.public.m m_k=[lookup value=(1)]
+  Return
+    Reduce group_by=[#0{a}] aggregates=[sum(#1{v})]
+      Project (#0{a}, #2{v})
+        Join on=(#0{a} = #3{a} AND #1{b} = #4) type=differential
+          ArrangeBy keys=[[#0{a}, #1{b}]]
+            ReadIndex on=t t_a_b=[differential join]
+          ArrangeBy keys=[[#0{a}, #1]]
+            CrossJoin type=differential
+              ArrangeBy keys=[[]]
+                Union
+                  Filter (#0{a}) IS NOT NULL
+                    Get l0
+                  Project (#1)
+                    FlatMap guard_subquery_size(#0{count})
+                      Reduce aggregates=[count(*)]
+                        Project ()
+                          Get l0
+              ArrangeBy keys=[[]]
+                Constant
+                  - (7)
+                  - (8)
+
+Used Indexes:
+  - materialize.public.t_a_b (differential join)
+  - materialize.public.m_k (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+# With both key fields given as literals, the `Get` case handles it and the join
+# rewrite must stay out of the way.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT t.a, sum(t.v) FROM t WHERE t.a = 1 AND t.b IN (7, 8) GROUP BY t.a;
+----
+Explained Query:
+  Project (#1, #0{sum_v})
+    Map (1)
+      Reduce aggregates=[sum(#0{v})]
+        Project (#2{v})
+          ReadIndex on=materialize.public.t t_a_b=[lookup values=[(1, 7); (1, 8)]]
+
+Used Indexes:
+  - materialize.public.t_a_b (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+# Nothing binds the remaining key field, so the full scan stands and the notice
+# is still the right advice.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT t.a, sum(t.v) FROM t WHERE t.b IN (7, 8) GROUP BY t.a;
+----
+Explained Query:
+  Reduce group_by=[#0{a}] aggregates=[sum(#1{v})]
+    Project (#0{a}, #2{v})
+      Filter ((#1{b} = 7) OR (#1{b} = 8))
+        ReadIndex on=t t_a_b=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.t_a_b (*** full scan ***)
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Index materialize.public.t_a_b on t(a, b) is too wide to use for literal equalities `b IN (7, 8)`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (b).
+
+EOF
+
+statement ok
+CREATE TABLE u(a int, w int);
+
+statement ok
+INSERT INTO u VALUES (1, 100), (2, 200);
+
+# Three inputs, one literal. The literal enters as an equivalence, which every
+# delta path can see, so each lookup into `t` uses the completed key and the
+# index is probed from both directions.
+query II rowsort
+SELECT t.a, sum(t.v) FROM t, m, u
+WHERE t.a = m.a AND t.a = u.a AND t.b = 7
+GROUP BY t.a;
+----
+1  15
+2  40
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT t.a, sum(t.v) FROM t, m, u
+WHERE t.a = m.a AND t.a = u.a AND t.b = 7
+GROUP BY t.a;
+----
+Explained Query:
+  Reduce group_by=[#0{a}] aggregates=[sum(#1{v})]
+    Project (#0{a}, #2{v})
+      Join on=(#0{a} = #3{a} = #4{a} AND #1{b} = 7) type=delta
+        ArrangeBy keys=[[#0{a}, #1{b}]]
+          ReadIndex on=t t_a_b=[delta join 1st input (full scan)]
+        ArrangeBy keys=[[#0{a}]]
+          Project (#1{a})
+            Filter (#1{a}) IS NOT NULL
+              ReadIndex on=m m_k=[*** full scan ***]
+        ArrangeBy keys=[[#0{a}]]
+          Project (#0{a})
+            Filter (#0{a}) IS NOT NULL
+              ReadStorage materialize.public.u
+
+Source materialize.public.u
+  filter=((#0{a}) IS NOT NULL)
+
+Used Indexes:
+  - materialize.public.t_a_b (delta join 1st input (full scan))
+  - materialize.public.m_k (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Three inputs, two values. The values would live only in the binder's cross
+# product, so the path from `u` would still look `t` up by `a` alone and the
+# index could not be lifted. The rewrite declines and the plan is the flag-off
+# one, notice included.
+query II rowsort
+SELECT t.a, sum(t.v) FROM t, m, u
+WHERE t.a = m.a AND t.a = u.a AND t.b IN (7, 8)
+GROUP BY t.a;
+----
+1  35
+2  40
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT t.a, sum(t.v) FROM t, m, u
+WHERE t.a = m.a AND t.a = u.a AND t.b IN (7, 8)
+GROUP BY t.a;
+----
+Explained Query:
+  Reduce group_by=[#0{a}] aggregates=[sum(#1{v})]
+    Project (#0{a}, #1{v})
+      Join on=(#0{a} = #2{a} = #3{a}) type=delta
+        ArrangeBy keys=[[#0{a}]]
+          Project (#0{a}, #2{v})
+            Filter (#0{a}) IS NOT NULL AND ((#1{b} = 7) OR (#1{b} = 8))
+              ReadIndex on=t t_a_b=[*** full scan ***]
+        ArrangeBy keys=[[#0{a}]]
+          Project (#1{a})
+            Filter (#1{a}) IS NOT NULL
+              ReadIndex on=m m_k=[*** full scan ***]
+        ArrangeBy keys=[[#0{a}]]
+          Project (#0{a})
+            Filter (#0{a}) IS NOT NULL
+              ReadStorage materialize.public.u
+
+Source materialize.public.u
+  filter=((#0{a}) IS NOT NULL)
+
+Used Indexes:
+  - materialize.public.t_a_b (*** full scan ***)
+  - materialize.public.m_k (*** full scan ***)
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Index materialize.public.t_a_b on t(a, b) is too wide to use for literal equalities `b IN (7, 8)`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (b).
+
+EOF
+
+# With the flag off the original query is a full scan with the notice.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_partial_literal_index_lookups TO false;
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
+SELECT t.a, sum(t.v) FROM t
+WHERE t.a = (SELECT a FROM m WHERE m.k = 1) AND t.b IN (7, 8)
+GROUP BY t.a;
+----
+Explained Query:
+  With
+    cte l0 =
+      Project (#1{a})
+        ReadIndex on=materialize.public.m m_k=[lookup value=(1)]
+  Return
+    Reduce group_by=[#0{a}] aggregates=[sum(#1{v})]
+      Project (#0{a}, #1{v})
+        Join on=(#0{a} = #2{a}) type=differential
+          ArrangeBy keys=[[#0{a}]]
+            Project (#0{a}, #2{v})
+              Filter (#0{a}) IS NOT NULL AND ((#1{b} = 7) OR (#1{b} = 8))
+                ReadIndex on=t t_a_b=[*** full scan ***]
+          ArrangeBy keys=[[#0{a}]]
+            Union
+              Filter (#0{a}) IS NOT NULL
+                Get l0
+              Project (#1)
+                FlatMap guard_subquery_size(#0{count})
+                  Reduce aggregates=[count(*)]
+                    Project ()
+                      Get l0
+
+Used Indexes:
+  - materialize.public.t_a_b (*** full scan ***)
+  - materialize.public.m_k (lookup)
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Index materialize.public.t_a_b on t(a, b) is too wide to use for literal equalities `b IN (7, 8)`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (b).
+
+EOF
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_partial_literal_index_lookups TO true;
+----
+COMPLETE 0
+
+# A maintained dataflow over a rewritten join, kept correct under updates. The
+# literal-bound input can be a delta path's source here, which lowering handles
+# through a different mechanism than a lookup key.
+statement ok
+CREATE VIEW v_partial AS
+SELECT t.a, sum(t.v) AS s FROM t
+WHERE t.a = (SELECT a FROM m WHERE m.k = 1) AND t.b IN (7, 8)
+GROUP BY t.a;
+
+statement ok
+CREATE INDEX v_partial_idx ON v_partial(a);
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR INDEX v_partial_idx;
+----
+materialize.public.v_partial_idx:
+  ArrangeBy keys=[[#0{a}]]
+    ReadGlobalFromSameDataflow materialize.public.v_partial
+
+materialize.public.v_partial:
+  With
+    cte l0 =
+      Project (#1{a})
+        ReadIndex on=materialize.public.m m_k=[lookup value=(1)]
+  Return
+    Reduce group_by=[#0{a}] aggregates=[sum(#1{v})]
+      Project (#0{a}, #2{v})
+        Join on=(#0{a} = #3{a} AND #1{b} = #4) type=differential
+          ArrangeBy keys=[[#0{a}, #1{b}]]
+            ReadIndex on=t t_a_b=[differential join]
+          ArrangeBy keys=[[#0{a}, #1]]
+            CrossJoin type=differential
+              ArrangeBy keys=[[]]
+                Union
+                  Filter (#0{a}) IS NOT NULL
+                    Get l0
+                  Project (#1)
+                    FlatMap guard_subquery_size(#0{count})
+                      Reduce aggregates=[count(*)]
+                        Project ()
+                          Get l0
+              ArrangeBy keys=[[]]
+                Constant
+                  - (7)
+                  - (8)
+
+Used Indexes:
+  - materialize.public.t_a_b (differential join)
+  - materialize.public.m_k (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+query II
+SELECT * FROM v_partial;
+----
+1  35
+
+statement ok
+INSERT INTO t VALUES (1, 8, 1000);
+
+query II
+SELECT * FROM v_partial;
+----
+1  1035

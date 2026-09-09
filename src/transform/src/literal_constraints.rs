@@ -17,20 +17,29 @@
 //! to
 //! `SELECT f1, f2, f3 FROM t, (SELECT * FROM (VALUES (lit1, lit2))) as filter_list
 //!  WHERE t.f1 = filter_list.column1 AND t.f2 = filter_list.column2`
+//!
+//! That rewrite needs the literals to cover every field of some index key. When
+//! they cover only part of one, and the `Get` sits inside a join whose
+//! equivalences bind the rest, we instead complete the key in place so that
+//! `JoinImplementation` can probe the index. See
+//! `LiteralConstraints::complete_join_index_key`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
-use mz_expr::JoinImplementation::IndexedFilter;
+use mz_expr::JoinImplementation::{IndexedFilter, Unimplemented};
 use mz_expr::canonicalize::canonicalize_predicates;
 use mz_expr::func::variadic::{And, Or};
 use mz_expr::visit::{Visit, VisitChildren};
-use mz_expr::{BinaryFunc, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, VariadicFunc};
+use mz_expr::{
+    BinaryFunc, Columns, Id, JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr,
+    VariadicFunc,
+};
 use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::vec::swap_remove_multiple;
-use mz_repr::{Diff, GlobalId, ReprRelationType, Row};
+use mz_repr::{Diff, GlobalId, ReprColumnType, ReprRelationType, Row};
 
 use crate::TransformCtx;
 use crate::canonicalize_mfp::CanonicalizeMfp;
@@ -68,6 +77,21 @@ impl LiteralConstraints {
         transform_ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         let mut mfp = MapFilterProject::extract_non_errors_from_expr_mut(relation);
+
+        // Has to happen before recursing: the rewrite needs the literal
+        // equalities as Filters on the join's inputs, which the `Get` case
+        // below may remove.
+        if transform_ctx.features.enable_partial_literal_index_lookups {
+            if let Some(restore) = Self::complete_join_index_key(relation, transform_ctx)? {
+                let (map, filter, project) = mfp.as_map_filter_project();
+                mfp = MapFilterProject::new(relation.arity())
+                    .project(restore)
+                    .map(map)
+                    .filter(filter)
+                    .project(project);
+            }
+        }
+
         relation.try_visit_mut_children(|e| self.action(e, transform_ctx))?;
 
         if let MirRelationExpr::Get {
@@ -285,16 +309,6 @@ impl LiteralConstraints {
         }
     }
 
-    /// Detects literal constraints in an MFP on top of a Get of `id`, and a matching index that can
-    /// be used to speed up the Filter of the MFP.
-    ///
-    /// For example, if there is an index on `(f1, f2)`, and the Filter is
-    /// `(f1 = 3 AND f2 = 5) OR (f1 = 7 AND f2 = 9)`, it returns `Some([f1, f2], [[3,5], [7,9]])`.
-    ///
-    /// We can use an index if each argument of the OR includes a literal constraint on each of the
-    /// key fields of the index. Extra predicates inside the OR arguments are ok.
-    ///
-    /// Returns (idx_id, idx_key, values to lookup in the index).
     fn detect_literal_constraints(
         mfp: &MapFilterProject,
         get_id: GlobalId,
@@ -752,6 +766,380 @@ impl LiteralConstraints {
         }
         sum
     }
+
+    /// Completes an index key that literal equalities cover only partly, when
+    /// `relation` is a join whose equivalences bind the rest of that key.
+    ///
+    /// An arrangement can only be probed with a complete key, so the `Get` case
+    /// of [LiteralConstraints::action] declines an index whose key the literals
+    /// cover only partly, leaving a full scan. Inside a join the missing key
+    /// fields are often bound anyway, through an equivalence with another
+    /// input, and then all that stands in the way is that the covered fields
+    /// are not stated in a form the join can see. This states them: the covered
+    /// fields become output columns of the indexed input, and the values they
+    /// are pinned to enter the join as equivalences. `JoinImplementation` then
+    /// finds every field of the key bound and can pick the index.
+    ///
+    /// Returns the projection that restores the join's original output columns.
+    /// `None` means the join was left alone.
+    ///
+    /// NOTE: Whether the index is actually probed is decided later, by
+    /// `JoinImplementation`. Should the order decline it, the rewrite has cost
+    /// a widened projection, for a lookup collection a replicated binder, and
+    /// the too-wide notice the `Get` case would otherwise have given.
+    fn complete_join_index_key(
+        relation: &mut MirRelationExpr,
+        transform_ctx: &TransformCtx,
+    ) -> Result<Option<Vec<usize>>, crate::TransformError> {
+        let MirRelationExpr::Join {
+            inputs,
+            equivalences,
+            implementation: Unimplemented,
+        } = relation
+        else {
+            return Ok(None);
+        };
+        // A single input has no equivalences that could bind the rest of a key.
+        if inputs.len() < 2 {
+            return Ok(None);
+        }
+
+        let input_types = inputs.iter().map(|i| i.typ()).collect_vec();
+        let input_mapper = JoinInputMapper::new_from_input_types(&input_types);
+
+        let mut candidates = Vec::new();
+        for i in 0..inputs.len() {
+            candidates.extend(Self::find_partial_key_lookup(
+                i,
+                inputs,
+                &input_mapper,
+                equivalences,
+                transform_ctx,
+            )?);
+        }
+        // The widest key is the most selective lookup.
+        // TODO: Only one input per join is completed, and this transform runs
+        // once, so a join with two eligible inputs only ever gets the first.
+        let Some(lookup) = candidates.into_iter().max_by_key(|lookup| lookup.key_len) else {
+            return Ok(None);
+        };
+
+        Ok(Some(Self::splice_in_key_bindings(
+            inputs,
+            equivalences,
+            &input_mapper,
+            &lookup,
+        )))
+    }
+
+    /// Looks for an index on join input `i` whose key is covered partly by
+    /// literal equalities in the input's own filter and partly by the join's
+    /// equivalences.
+    ///
+    /// Only plain-column key fields are considered. That is the shape user
+    /// indexes almost always have, and it keeps the correspondence between
+    /// `Get` columns and join columns a projection lookup rather than an
+    /// expression match.
+    fn find_partial_key_lookup(
+        i: usize,
+        inputs: &[MirRelationExpr],
+        input_mapper: &JoinInputMapper,
+        equivalences: &[Vec<MirScalarExpr>],
+        transform_ctx: &TransformCtx,
+    ) -> Result<Option<PartialKeyLookup>, crate::TransformError> {
+        let (mfp, inner) = MapFilterProject::extract_non_errors_from_expr(&inputs[i]);
+        let MirRelationExpr::Get {
+            id: Id::Global(get_id),
+            ..
+        } = inner
+        else {
+            return Ok(None);
+        };
+        let inner_typ = inner.typ();
+
+        // The same preparation the `Get` case does, for the same reasons.
+        let mut prepared = mfp.clone();
+        Self::inline_literal_constraints(&mut prepared);
+        Self::list_of_predicates_to_and_of_predicates(&mut prepared);
+        Self::distribute_and_over_or(&mut prepared)?;
+        Self::unary_and(&mut prepared);
+        let removed_contradicting_or_args = Self::remove_impossible_or_args(&mut prepared)?;
+        let or_args = Self::get_or_args(&prepared);
+        if or_args.is_empty() {
+            return Ok(None);
+        }
+
+        // Completing a key is only ever an improvement over a full scan. When
+        // some index *is* fully covered the `Get` case turns the input into an
+        // `IndexedFilter`, and re-arranging that by a wider key trades an
+        // existing arrangement for a new one. This is the same condition under
+        // which the `Get` case reports an index as too wide.
+        if transform_ctx
+            .indexes
+            .indexes_on(*get_id)
+            .any(|(_, key)| matches!(Self::match_index(key, &or_args), IndexMatch::Usable(..)))
+        {
+            return Ok(None);
+        }
+
+        let bound_by = Self::join_bound_columns(i, input_mapper, equivalences);
+        // Every other input that the join equates with any column of this one.
+        let all_binders: BTreeSet<usize> = bound_by.values().flatten().copied().collect();
+        // The output column of input `i` that carries `Get` column `c`, if any.
+        // Rewriting the input's MFP below preserves its output, so a position
+        // this reports stays valid for the rewritten MFP too.
+        let out_col = |c: usize| mfp.projection.iter().position(|p| *p == c);
+        let key_col = |e: &MirScalarExpr| match e {
+            MirScalarExpr::Column(c, _) => Some(*c),
+            _ => None,
+        };
+
+        let best = transform_ctx
+            .indexes
+            .indexes_on(*get_id)
+            .filter_map(|(_index_id, key)| {
+                let key_cols = key.iter().map(key_col).collect::<Option<Vec<_>>>()?;
+                // `Usable` is the `Get` case's own job, and `UnusableNoSubset`
+                // leaves nothing to complete.
+                let IndexMatch::UnusableTooWide(literal_key) = Self::match_index(key, &or_args)
+                else {
+                    return None;
+                };
+
+                // Every key field the literals do not cover has to be visible
+                // to the join and equated there with another input. `binders`
+                // ends up as the inputs that bind *all* of them.
+                let mut binders: Option<BTreeSet<usize>> = None;
+                for (pos, key_field) in key.iter().enumerate() {
+                    if literal_key.contains(key_field) {
+                        continue;
+                    }
+                    let binding = out_col(key_cols[pos]).and_then(|oc| bound_by.get(&oc))?;
+                    binders = Some(match binders {
+                        None => binding.clone(),
+                        Some(prev) => prev.intersection(binding).copied().collect(),
+                    });
+                }
+                let binders = binders?;
+                // An input that equates with this one but leaves some uncovered
+                // field unbound would still look it up by a key the index does
+                // not have, and `implement_arrangements` lifts an input's MFP
+                // only when every key it needs is on the index. See the NOTE on
+                // `complete_join_index_key` for what that costs.
+                if binders != all_binders {
+                    return None;
+                }
+
+                // `literal_key` came out of `UnusableTooWide`, so this matches
+                // by construction.
+                let IndexMatch::Usable(literal_values, _) =
+                    Self::match_index(&literal_key, &or_args)
+                else {
+                    return None;
+                };
+                // Contradicting constraints make the whole relation empty.
+                // Leave that rewrite to the `Get` case.
+                if literal_values.is_empty() {
+                    return None;
+                }
+
+                let values = if let Ok(row) = literal_values.iter().exactly_one() {
+                    LookupValues::Literals(
+                        row.iter()
+                            .zip_eq(literal_key.iter())
+                            .map(|(datum, key_field)| {
+                                MirScalarExpr::literal_ok(
+                                    datum,
+                                    key_field.typ(&inner_typ.column_types).scalar_type,
+                                )
+                            })
+                            .collect(),
+                    )
+                } else {
+                    // The values live only in the binder's cross product, so a
+                    // second equating input would still look this one up by a
+                    // partial key.
+                    // TODO: Bound the number of values, or weigh it against the
+                    // binder's cardinality, since the binder is replicated once
+                    // per value.
+                    let binder = *binders.iter().exactly_one().ok()?;
+                    LookupValues::Collection {
+                        binder,
+                        types: literal_key
+                            .iter()
+                            .map(|key_field| {
+                                key_field
+                                    .typ(&inner_typ.column_types)
+                                    .scalar_type
+                                    .nullable(false)
+                            })
+                            .collect(),
+                        rows: literal_values,
+                    }
+                };
+
+                // The equivalences added below pin the covered key fields to
+                // their values, so the input's own literal constraints become
+                // redundant and are dropped. This is also what keeps the `Get`
+                // case from reporting the index as too wide once recursion
+                // reaches it: there is no literal constraint left to report on.
+                let mut input_mfp = {
+                    let mut stripped = prepared.clone();
+                    if Self::remove_literal_constraints(&mut stripped, &literal_key)
+                        || removed_contradicting_or_args
+                    {
+                        Self::undo_preparation(&mut stripped, &mfp, inner, inner_typ.clone());
+                        stripped
+                    } else {
+                        mfp.clone()
+                    }
+                };
+
+                // Expose the covered key fields, in `literal_key` order so that
+                // they line up with the values.
+                let key_out_cols = literal_key
+                    .iter()
+                    .map(|key_field| {
+                        let c = key_col(key_field).expect("`literal_key` is a subset of `key`");
+                        out_col(c).unwrap_or_else(|| {
+                            input_mfp.projection.push(c);
+                            input_mfp.projection.len() - 1
+                        })
+                    })
+                    .collect();
+
+                Some(PartialKeyLookup {
+                    input: i,
+                    key_len: key.len(),
+                    values,
+                    input_mfp,
+                    key_out_cols,
+                })
+            })
+            .max_by_key(|lookup| lookup.key_len);
+        Ok(best)
+    }
+
+    /// For each output column of input `i` (local to it), the other inputs that
+    /// the join equates that column with.
+    fn join_bound_columns(
+        i: usize,
+        input_mapper: &JoinInputMapper,
+        equivalences: &[Vec<MirScalarExpr>],
+    ) -> BTreeMap<usize, BTreeSet<usize>> {
+        let mut bound: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
+        for class in equivalences {
+            let binders = class
+                .iter()
+                .filter_map(|e| input_mapper.single_input(e))
+                .filter(|j| *j != i)
+                .collect::<BTreeSet<_>>();
+            if binders.is_empty() {
+                continue;
+            }
+            for e in class {
+                if input_mapper.single_input(e) == Some(i) {
+                    if let MirScalarExpr::Column(c, _) = input_mapper.map_expr_to_local(e.clone()) {
+                        bound.entry(c).or_default().extend(binders.iter().copied());
+                    }
+                }
+            }
+        }
+        bound
+    }
+
+    /// Installs `lookup` into the join: widens the indexed input so that the
+    /// covered key fields are output columns, brings in the values those fields
+    /// are pinned to, and equates the two. Returns the projection that restores
+    /// the join's original output columns.
+    ///
+    /// A [LookupValues::Collection] is crossed *into* the binder rather than
+    /// added as a sibling input because a join order can only reach the
+    /// arrangement once a single placed input supplies every field of the key.
+    /// As a sibling the values would be reachable only through the indexed
+    /// input itself, so no order could bind the whole key before placing it.
+    /// The cost is that the binder is replicated once per lookup value.
+    fn splice_in_key_bindings(
+        inputs: &mut [MirRelationExpr],
+        equivalences: &mut Vec<Vec<MirScalarExpr>>,
+        input_mapper: &JoinInputMapper,
+        lookup: &PartialKeyLookup,
+    ) -> Vec<usize> {
+        let i = lookup.input;
+        let old_arity = |k: usize| input_mapper.input_arity(k);
+        let exposed = lookup.input_mfp.projection.len() - old_arity(i);
+        let (binder, values_width) = match &lookup.values {
+            LookupValues::Literals(_) => (None, 0),
+            LookupValues::Collection { binder, types, .. } => (Some(*binder), types.len()),
+        };
+
+        // Both inputs only grow by columns appended at their end, so every
+        // original column keeps its position local to its own input and only
+        // the input offsets move.
+        let new_start = (0..inputs.len())
+            .scan(0, |acc, k| {
+                let start = *acc;
+                *acc += old_arity(k)
+                    + if k == i { exposed } else { 0 }
+                    + if Some(k) == binder { values_width } else { 0 };
+                Some(start)
+            })
+            .collect_vec();
+        let relocate = |c: usize| {
+            let (local, k) = input_mapper.map_column_to_local(c);
+            new_start[k] + local
+        };
+
+        for expr in equivalences.iter_mut().flatten() {
+            expr.visit_columns(|c| *c = relocate(*c));
+        }
+
+        // With nothing to expose and nothing removed from the filter the MFP
+        // is unchanged, and rebuilding it would only reshuffle nodes.
+        if exposed > 0 || binder.is_some() {
+            let (_, inner) = MapFilterProject::extract_non_errors_from_expr(&inputs[i]);
+            let mut indexed_input = inner.clone();
+            CanonicalizeMfp::rebuild_mfp(lookup.input_mfp.clone(), &mut indexed_input);
+            inputs[i] = indexed_input;
+        }
+
+        if let LookupValues::Collection {
+            binder,
+            rows,
+            types,
+        } = &lookup.values
+        {
+            let lookup_values = MirRelationExpr::Constant {
+                rows: Ok(rows.iter().map(|row| (row.clone(), Diff::ONE)).collect()),
+                typ: ReprRelationType {
+                    column_types: types.clone(),
+                    // (See the note on the `filter_list` type in the `Get`
+                    // case for why the key is stated explicitly.)
+                    keys: vec![(0..types.len()).collect()],
+                },
+            };
+            inputs[*binder] = MirRelationExpr::Join {
+                inputs: vec![inputs[*binder].take_dangerous(), lookup_values],
+                equivalences: Vec::new(),
+                implementation: Unimplemented,
+            };
+        }
+
+        for (p, key_out_col) in lookup.key_out_cols.iter().enumerate() {
+            let value = match &lookup.values {
+                LookupValues::Literals(literals) => literals[p].clone(),
+                LookupValues::Collection { binder, .. } => {
+                    MirScalarExpr::column(new_start[*binder] + old_arity(*binder) + p)
+                }
+            };
+            equivalences.push(vec![
+                MirScalarExpr::column(new_start[i] + key_out_col),
+                value,
+            ]);
+        }
+
+        (0..input_mapper.total_columns()).map(relocate).collect()
+    }
 }
 
 /// Whether an index is usable to speed up a Filter with literal constraints.
@@ -775,4 +1163,41 @@ enum IndexMatch {
     /// The index is unusable. Moreover, none of its key fields could be used as an alternate index
     /// to speed up this filter.
     UnusableNoSubset,
+}
+
+/// An index on one join input whose key [LiteralConstraints::complete_join_index_key]
+/// can complete.
+#[derive(Debug)]
+struct PartialKeyLookup {
+    /// The join input holding the indexed `Get`.
+    input: usize,
+    /// Number of fields in the index key. Only used to prefer the widest key.
+    key_len: usize,
+    /// The values the literal-covered key fields are pinned to.
+    values: LookupValues,
+    /// Replacement MFP for `input`, exposing every key field the literals
+    /// cover. It only ever appends to the original projection, so the join's
+    /// existing columns keep their positions.
+    input_mfp: MapFilterProject,
+    /// For each value in `values`, in that order, the output column of `input`
+    /// under `input_mfp` that carries the key field it constrains.
+    key_out_cols: Vec<usize>,
+}
+
+/// How the values of the literal-covered key fields reach the join.
+#[derive(Debug)]
+enum LookupValues {
+    /// A single value per covered key field, so each one can go in as a join
+    /// equivalence with the literal itself.
+    Literals(Vec<MirScalarExpr>),
+    /// Several values, which cannot be one equivalence and so have to enter the
+    /// join as a collection crossed into `binder`.
+    Collection {
+        /// The input that binds every key field the literals do not cover.
+        /// Never the indexed input itself, so the two inputs that grow are
+        /// always distinct.
+        binder: usize,
+        rows: Vec<Row>,
+        types: Vec<ReprColumnType>,
+    },
 }
